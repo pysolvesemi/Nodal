@@ -1,0 +1,100 @@
+name: Core CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+      - 'increment/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    name: contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Validate contracts, formatting, and online lock provenance
+        run: ./nodal check --contracts-only --online-toolchain
+
+  scala:
+    name: scala
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Restore verified Scala dependency caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-scala-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', 'toolchains/lock.json') }}
+          restore-keys: |
+            nodal-scala-${{ runner.os }}-
+
+      - name: Compile and test Scala core
+        run: ./nodal core scala
+
+  native:
+    name: native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Restore locked native download cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
+
+      - name: Install locked native toolchain
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+
+      - name: Configure, build, and test native core
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain"
+
+  required:
+    name: required
+    if: always()
+    needs:
+      - contracts
+      - scala
+      - native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Require every Core CI job
+        env:
+          CONTRACTS_RESULT: ${{ needs.contracts.result }}
+          SCALA_RESULT: ${{ needs.scala.result }}
+          NATIVE_RESULT: ${{ needs.native.result }}
+        run: |
+          test "${CONTRACTS_RESULT}" = success
+          test "${SCALA_RESULT}" = success
+          test "${NATIVE_RESULT}" = success

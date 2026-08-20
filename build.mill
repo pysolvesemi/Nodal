@@ -4,7 +4,7 @@
 package build
 
 import mill.*
-import mill.api.{BuildCtx, DefaultTaskModule, Discover, ExternalModule}
+import mill.api.BuildCtx
 import mill.javalib.JavaModule
 import mill.scalalib.*
 import mill.util.Jvm
@@ -24,9 +24,7 @@ trait NodalScalaModule extends ScalaModule:
     "-Werror",
   )
 
-object scalafix extends ExternalModule with JavaModule with DefaultTaskModule:
-  def defaultTask(): String = "check"
-
+object scalafix extends JavaModule:
   def scalafixClasspath: T[Seq[PathRef]] = Task {
     defaultResolver().classpath(
       Seq(mvn"ch.epfl.scala:scalafix-cli_3.8.4:${Versions.scalafix}")
@@ -71,8 +69,6 @@ object scalafix extends ExternalModule with JavaModule with DefaultTaskModule:
       classPath = scalafixClasspath(),
     )
   }
-
-  lazy val millDiscover = Discover[this.type]
 
 object core extends Module:
   object integrations extends NodalScalaModule

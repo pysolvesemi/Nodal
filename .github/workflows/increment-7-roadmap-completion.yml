@@ -1,0 +1,59 @@
+name: Increment 7 roadmap completion
+
+on:
+  push:
+    branches:
+      - increment/7-unified-developer-commands
+
+permissions:
+  contents: write
+
+jobs:
+  complete-roadmap:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Mark Increment 7 complete
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('docs/roadmap/nodal-development-todo.md')
+          text = path.read_text(encoding='utf-8')
+
+          old_revision = '**Revision:** 0.8  '
+          old_heading = '- [ ] **Increment 7 — Unified developer commands**'
+          new_heading = '- [x] **Increment 7 — Unified developer commands**'
+          description = '  - Provide stable commands for bootstrap, core Scala build, core native build, full check, clean, and toolchain diagnostics. Reserve command namespaces for future independently selectable library checks. The same core commands must run locally and in CI.'
+          evidence = '  - Evidence: [`nodal`](../../nodal), [`scripts/nodal.py`](../../scripts/nodal.py), [`docs/development/commands.md`](../development/commands.md), [`scripts/check_developer_commands.py`](../../scripts/check_developer_commands.py), [`tests/developer/`](../../tests/developer/), implementation commit [`f24a074`](https://github.com/pysolvesemi/Nodal/commit/f24a07461d075a16c9967bdec37fb551d5f66f05), test-isolation fix [`080cfd3`](https://github.com/pysolvesemi/Nodal/commit/080cfd38f64e06751ece5c7ca0c432575db4c2fc), and successful validation run [`32367451896`](https://github.com/pysolvesemi/Nodal/actions/runs/32367451896).'
+
+          for expected, label in (
+              (old_revision, 'revision 0.8'),
+              (old_heading, 'unchecked Increment 7 heading'),
+              (description, 'Increment 7 description'),
+          ):
+              if text.count(expected) != 1:
+                  raise SystemExit(f'expected exactly one {label}')
+
+          text = text.replace(old_revision, '**Revision:** 0.9  ', 1)
+          text = text.replace(old_heading, new_heading, 1)
+          text = text.replace(description, description + '\n' + evidence, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Commit roadmap evidence and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -- .github/workflows/increment-7-roadmap-completion.yml
+          git add -- docs/roadmap/nodal-development-todo.md
+          git commit -m 'docs: mark increment 7 complete'
+          git push origin "HEAD:${GITHUB_REF_NAME}"

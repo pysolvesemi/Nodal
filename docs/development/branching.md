@@ -108,3 +108,12 @@ The checked contract is stored in:
 ```
 
 Core CI validates the bootstrap mode before the integration branch is created.
+
+## Bootstrap contract evidence
+
+The direct-ref contract was activated by commit
+[`2028648`](https://github.com/pysolvesemi/Nodal/commit/20286487b758bc60c74b2c18a704770fc00c24f4)
+after the complete Increment 8 validation run
+[`32398325941`](https://github.com/pysolvesemi/Nodal/actions/runs/32398325941)
+passed. The normal Increment 8 workflow was restored to read-only permissions
+before creating `dev`.

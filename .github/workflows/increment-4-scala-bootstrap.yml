@@ -1,0 +1,34 @@
+name: Increment 4 Scala bootstrap validation
+
+on:
+  push:
+    branches:
+      - increment/4-modern-scala3-build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scala-bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate architecture and pins
+        run: |
+          python3 scripts/check_architecture.py
+          python3 scripts/check_scala_bootstrap.py
+          python3 -m unittest discover -s tests/architecture -p 'test_*.py'
+          python3 -m unittest discover -s tests/build -p 'test_*.py'
+
+      - name: Report managed Java version
+        run: ./mill java -version
+
+      - name: Compile every Scala module
+        run: ./mill __.compile
+
+      - name: Run bootstrap smoke tests
+        run: ./mill core.scala.testkit.test

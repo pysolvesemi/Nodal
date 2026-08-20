@@ -1,0 +1,19 @@
+#!/usr/bin/env sh
+set -eu
+
+MILL_VERSION="$(tr '\r' '\n' < "$(dirname "$0")/.mill-version" | head -n 1)"
+CACHE_ROOT="${XDG_CACHE_HOME:-${HOME}/.cache}/nodal/mill"
+BOOTSTRAP="${CACHE_ROOT}/mill-${MILL_VERSION}.sh"
+URL="https://repo1.maven.org/maven2/com/lihaoyi/mill-dist/${MILL_VERSION}/mill-dist-${MILL_VERSION}-mill.sh"
+
+if [ ! -s "${BOOTSTRAP}" ]; then
+  mkdir -p "${CACHE_ROOT}"
+  TEMP="${BOOTSTRAP}.tmp.$$"
+  trap 'rm -f "${TEMP}"' EXIT HUP INT TERM
+  curl --fail --location --proto '=https' --tlsv1.2 "${URL}" --output "${TEMP}"
+  chmod 0755 "${TEMP}"
+  mv "${TEMP}" "${BOOTSTRAP}"
+  trap - EXIT HUP INT TERM
+fi
+
+exec "${BOOTSTRAP}" "$@"

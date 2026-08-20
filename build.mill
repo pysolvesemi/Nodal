@@ -1,0 +1,46 @@
+//| mill-version: 1.1.7
+//| mill-jvm-version: zulu:25
+
+package build
+
+import mill.*
+import scalalib.*
+
+object Versions:
+  val scala3 = "3.8.4"
+
+trait NodalScalaModule extends ScalaModule:
+  def scalaVersion = Versions.scala3
+
+  def scalacOptions = Seq(
+    "-deprecation",
+    "-feature",
+    "-unchecked",
+    "-Wunused:all",
+    "-Werror",
+  )
+
+object core extends Module:
+  object integrations extends NodalScalaModule
+
+  object scala extends Module:
+    object api extends NodalScalaModule
+
+    object frontend extends NodalScalaModule:
+      def moduleDeps = Seq(api)
+
+    object bridge extends NodalScalaModule:
+      def moduleDeps = Seq(frontend, api)
+
+    object sim extends NodalScalaModule:
+      def moduleDeps = Seq(bridge, api, core.integrations)
+
+    object cli extends NodalScalaModule:
+      def moduleDeps = Seq(sim, bridge, frontend, api)
+
+    object testkit extends NodalScalaModule:
+      def moduleDeps = Seq(cli, sim, bridge, frontend, api)
+
+      object test extends ScalaTests:
+        def mvnDeps = Seq(mvn"com.lihaoyi::utest:0.9.1")
+        def testFramework = "utest.runner.Framework"

@@ -1,0 +1,12 @@
+# Mill and Scala tooling
+out/
+.bsp/
+.bloop/
+.metals/
+.scala-build/
+
+# IDEs and local files
+.idea/
+.vscode/
+*.iml
+.DS_Store

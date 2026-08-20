@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 0.1  
+**Revision:** 0.2  
 **Created:** 2026-08-20  
 **Status:** Active roadmap  
 **Primary language target:** Verilog-AMS 2023  
@@ -25,6 +25,10 @@ The initial implementation will be built from scratch with modern tooling. It wi
 - Keep backend syntax out of the core IR wherever possible so a future SystemVerilog-AMS backend can be added without redesigning the frontend.
 - Generate deterministic, readable HDL suitable for review, simulation, and golden testing.
 - Keep the Scala frontend and native compiler in one monorepo initially, with clean module boundaries so they can be distributed independently later.
+- Keep all language, elaboration, compiler, backend, simulator-adapter, and core test infrastructure under the top-level `core/` path.
+- Reserve the separate top-level `libraries/` path for optional reusable Nodal packages that may be shared across independent user projects in the future.
+- Nodal core must never depend on a Nodal library. A library may depend only on published core APIs and approved extension contracts, never on core implementation internals.
+- Do not implement or bundle reusable design libraries in the initial core roadmap. Establish only the directory, dependency, packaging, compatibility, and publication architecture needed to add them safely later.
 
 ## Public API direction
 
@@ -37,6 +41,8 @@ The gate must enforce these principles:
 - Add no `Nodal` prefix merely for branding.
 - Keep Scala-specific ceremony out of ordinary model definitions.
 - Keep the source language independent of a particular output backend.
+- Keep language-required constructs in core; keep optional reusable components, models, interfaces, helpers, and verification packages out of core.
+- Make the future library-author surface an explicit, versioned subset of the public core API rather than exposing frontend or compiler internals.
 - Use compile-positive and compile-negative fixtures to freeze syntax, types, diagnostics, and imports.
 - After the v0.1 API gate is approved, any incompatible API change requires a new versioned design gate and migration note.
 
@@ -50,6 +56,31 @@ The gate must enforce these principles:
 - No compiler pass may depend on unstable frontend object identity or source traversal order.
 - Every user-visible diagnostic must carry a stable error code and source location when available.
 - Every backend must declare its supported feature profile and reject unsupported constructs explicitly.
+- Enforce the dependency direction `libraries -> core`; any `core -> libraries` source, build, test, packaging, or generated dependency is an architecture violation.
+- Empty future-library directories must not be committed merely as placeholders.
+
+## Core and future library boundary
+
+The top-level paths have different responsibilities:
+
+```text
+user project
+    ├── depends directly on Nodal core
+    └── may select zero or more Nodal libraries
+                                  │
+                                  └── depend on public Nodal core APIs
+
+Nodal core  -X->  Nodal libraries
+```
+
+- `core/` is the language implementation and mandatory developer/runtime tooling: public language API, elaboration, MLIR bridge, compiler, backends, diagnostics, simulation API, and simulator adapters.
+- `libraries/` is reserved for optional reusable source packages such as device models, behavioral blocks, interfaces, connect rules, verification helpers, and domain-specific model collections.
+- A user must be able to compile a Nodal project with core alone and no library checkout or artifact.
+- Each future library must have its own source root, tests, documentation, artifact identity, semantic version, core compatibility range, and license metadata.
+- Libraries must compile through the same public entry points available to external user projects. They receive no privileged access to `internal` packages or native compiler implementation details.
+- Language and standards conformance features required to compile or emit Verilog-A/Verilog-AMS belong to core. Optional reusable design content belongs to libraries.
+- Libraries may initially live in this monorepo, but their dependency and publication contracts must allow them to move to independent repositories without changing Nodal core.
+- Actual reusable library development is deferred to a separate future roadmap after the core public API and packaging contracts are proven.
 
 ## Target scalable repository structure
 
@@ -57,75 +88,85 @@ The gate must enforce these principles:
 Nodal/
 ├── .github/
 │   └── workflows/                 # CI, release, dependency and conformance jobs
-├── build.mill                     # Scala multi-module build and orchestration
+├── build.mill                     # Monorepo orchestration and dependency boundaries
 ├── mill                           # Pinned Mill bootstrap wrapper
-├── CMakeLists.txt                 # Native compiler root
+├── CMakeLists.txt                 # Native core compiler root
 ├── CMakePresets.json              # Reproducible native configure/build presets
 ├── cmake/                         # Shared CMake modules
 ├── toolchains/
 │   ├── lock.json                  # Scala/JDK/Mill/LLVM/CIRCT/CMake toolchain pins
 │   ├── checksums/                 # Download integrity metadata
 │   └── README.md                  # Supported host and bootstrap instructions
-├── scala/
-│   ├── core/                      # Public types and target-neutral user API
-│   ├── frontend/                  # Elaboration, hierarchy, naming and validation
-│   ├── bridge/                    # Frontend-to-MLIR serialization and nodalc invocation
-│   ├── cli/                       # JVM-side command-line entry points
-│   ├── sim/                       # Scala simulation and regression API
-│   └── testkit/                   # Compile fixtures and reusable test support
-├── compiler/
-│   ├── include/nodal/
-│   │   ├── Dialect/Nodal/         # MLIR dialect, operations, types and attributes
-│   │   ├── Analysis/              # Domain, connectivity and semantic analyses
-│   │   ├── Transforms/            # Canonicalization and optimization passes
-│   │   ├── Conversion/            # Lowering and backend conversions
-│   │   └── Translation/           # Verilog-A and Verilog-AMS emission interfaces
-│   ├── lib/
-│   │   ├── Dialect/Nodal/
-│   │   ├── Analysis/
-│   │   ├── Transforms/
-│   │   ├── Conversion/
-│   │   └── Translation/
-│   ├── tools/
-│   │   └── nodalc/                # Native compiler driver
-│   └── test/
-│       ├── Dialect/               # Parser, printer and verifier tests
-│       ├── Analysis/
-│       ├── Transforms/
-│       ├── Conversion/
-│       └── Translation/           # FileCheck and golden backend tests
-├── integrations/
-│   ├── openvaf/                   # Verilog-A compiler adapter and feature probes
-│   ├── ngspice/                   # Open-source analog simulation adapter
-│   └── simulators/                # Optional commercial Verilog-AMS adapters
+├── core/
+│   ├── scala/
+│   │   ├── api/                   # Public types and target-neutral user API
+│   │   ├── frontend/              # Elaboration, hierarchy, naming and validation
+│   │   ├── bridge/                # Frontend-to-MLIR serialization and nodalc invocation
+│   │   ├── cli/                   # JVM-side command-line entry points
+│   │   ├── sim/                   # Scala simulation and regression API
+│   │   └── testkit/               # Compile fixtures and reusable core test support
+│   ├── compiler/
+│   │   ├── include/nodal/
+│   │   │   ├── Dialect/Nodal/     # MLIR dialect, operations, types and attributes
+│   │   │   ├── Analysis/          # Domain, connectivity and semantic analyses
+│   │   │   ├── Transforms/        # Canonicalization and optimization passes
+│   │   │   ├── Conversion/        # Lowering and backend conversions
+│   │   │   └── Translation/       # Verilog-A and Verilog-AMS emission interfaces
+│   │   ├── lib/
+│   │   │   ├── Dialect/Nodal/
+│   │   │   ├── Analysis/
+│   │   │   ├── Transforms/
+│   │   │   ├── Conversion/
+│   │   │   └── Translation/
+│   │   ├── tools/
+│   │   │   └── nodalc/            # Native compiler driver
+│   │   └── test/
+│   │       ├── Dialect/           # Parser, printer and verifier tests
+│   │       ├── Analysis/
+│   │       ├── Transforms/
+│   │       ├── Conversion/
+│   │       └── Translation/       # FileCheck and golden backend tests
+│   └── integrations/
+│       ├── openvaf/               # Verilog-A compiler adapter and feature probes
+│       ├── ngspice/               # Open-source analog simulation adapter
+│       └── simulators/            # Optional commercial Verilog-AMS adapters
+├── libraries/                     # Reserved; not populated by the initial core roadmap
+│   ├── std/                       # Future optional standard/convenience packages
+│   ├── models/                    # Future reusable device and behavioral models
+│   ├── interfaces/                # Future interfaces, disciplines and connect packages
+│   └── verification/              # Future reusable testbench and verification packages
 ├── examples/
-│   ├── analog/                    # RC, RLC, diode, amplifier, oscillator, etc.
-│   └── mixed-signal/              # ADC, DAC, comparator, PLL and interface examples
+│   ├── analog/                    # Core-language RC, RLC, diode, amplifier examples
+│   ├── mixed-signal/              # Core-language ADC, DAC, comparator and PLL examples
+│   └── external-library/          # Future consumer fixtures using only published APIs
 ├── tests/
 │   ├── api/                       # Frozen public API compile contracts
+│   ├── architecture/              # Core/library and module dependency checks
 │   ├── golden/                    # Deterministic generated HDL
 │   ├── integration/               # Scala -> MLIR -> HDL vertical tests
 │   ├── simulation/                # Open-source and optional commercial regressions
 │   └── conformance/               # Language-profile and standards-oriented tests
 ├── docs/
-│   ├── architecture/              # ADRs and compiler architecture
+│   ├── architecture/              # ADRs and compiler/library architecture
 │   ├── design-gates/              # Versioned API and semantic approvals
 │   ├── language-reference/        # Nodal language and API reference
 │   ├── tutorials/                 # User-focused examples
-│   └── roadmap/                   # This incremental plan
-├── packaging/                     # JAR, native binaries, archives and installers
+│   └── roadmap/                   # Incremental plans
+├── packaging/
+│   ├── core/                      # Core JARs, native binaries and distributions
+│   └── libraries/                 # Future independent library publication metadata
 └── scripts/                       # Bootstrap, lint, release and developer utilities
 ```
 
-Empty directories should not be committed merely to match this tree. Each directory is created when its first real increment needs it.
+The `libraries/` and `packaging/libraries/` paths are architectural reservations, not current implementation commitments. Empty directories should not be committed merely to match this tree. Each directory is created when its first real increment needs it.
 
 ## Milestones
 
-- **M0 — Foundation:** reproducible Scala/native builds, CI, and frozen public API.
+- **M0 — Foundation:** reproducible Scala/native builds, CI, frozen public API, and enforced core/library boundaries.
 - **M1 — First vertical slice:** a Scala Nodal RC model lowers through MLIR and emits validated Verilog-A.
 - **M2 — Analog preview:** useful Verilog-A subset with open-source compilation and simulation regression.
 - **M3 — AMS preview:** digital, analog, cross-domain constructs, and Verilog-AMS emission.
-- **M4 — Scalable release:** packaged compiler, language reference, stable extension points, and compatibility policy.
+- **M4 — Scalable core release:** packaged compiler, language reference, stable extension points, library-author contract, and compatibility policy.
 
 # Incremental roadmap
 
@@ -135,40 +176,40 @@ Empty directories should not be committed merely to match this tree. Each direct
   - Add this checkbox-based roadmap, fixed architectural direction, milestone boundaries, and target repository structure as the initial repository commit.
 
 - [ ] **Increment 1 — Project charter and standards baseline**
-  - Add `README.md`, project goals, non-goals, terminology, supported abstraction levels, Verilog-AMS 2023 baseline, analog-only Verilog-A profile, and an explicit statement that SystemVerilog-AMS is a future backend target rather than an initial dependency.
+  - Add `README.md`, project goals, non-goals, terminology, supported abstraction levels, Verilog-AMS 2023 baseline, analog-only Verilog-A profile, the core-versus-library scope boundary, and an explicit statement that SystemVerilog-AMS is a future backend target rather than an initial dependency.
 
 - [ ] **Increment 2 — Architecture decision records**
-  - Record the Scala frontend/native compiler split, MLIR as authoritative IR, out-of-tree Nodal dialect, selective CIRCT reuse, textual MLIR process boundary for the first implementation, and backend capability profiles.
+  - Record the Scala frontend/native compiler split, MLIR as authoritative IR, out-of-tree Nodal dialect, selective CIRCT reuse, textual MLIR process boundary for the first implementation, backend capability profiles, top-level `core/` versus `libraries/` separation, and the enforced one-way `libraries -> core` dependency rule.
 
 - [ ] **Increment 3 — Scalable repository skeleton**
-  - Create only the directories and module descriptors required for the initial build. Add ownership boundaries and dependency-direction rules preventing compiler code from depending on frontend internals.
+  - Create only the `core/` directories and module descriptors required for the initial build. Reserve `libraries/` in architecture/build conventions without creating empty library modules. Add ownership boundaries and automated dependency-direction rules preventing compiler code from depending on frontend internals and all core code from depending on future libraries.
 
 - [ ] **Increment 4 — Modern Scala 3 build bootstrap**
-  - Re-check the newest stable Scala 3 release, then pin it with JDK 25 and a current Mill 1.x wrapper. Add `scala/core`, `scala/frontend`, `scala/bridge`, `scala/cli`, and test modules with one passing smoke test. Do not add Scala 2 cross-builds.
+  - Re-check the newest stable Scala 3 release, then pin it with JDK 25 and a current Mill 1.x wrapper. Add `core/scala/api`, `core/scala/frontend`, `core/scala/bridge`, `core/scala/cli`, and core test modules with one passing smoke test. Do not add Scala 2 cross-builds.
 
 - [ ] **Increment 5 — LLVM/MLIR/CIRCT toolchain lock**
   - Select and pin a compatible LLVM/MLIR/CIRCT revision pair, CMake and Ninja requirements, checksums, source-build fallback, and prebuilt-toolchain discovery. Avoid unpinned `main` dependencies.
 
 - [ ] **Increment 6 — Native compiler bootstrap**
-  - Add the out-of-tree CMake project, link MLIR/CIRCT, and produce `nodalc --version` plus a native unit-test target without defining language semantics yet.
+  - Add the out-of-tree CMake project under `core/compiler`, link MLIR/CIRCT, and produce `nodalc --version` plus a native unit-test target without defining language semantics yet.
 
 - [ ] **Increment 7 — Unified developer commands**
-  - Provide stable commands for bootstrap, Scala build, native build, full check, clean, and toolchain diagnostics. The same commands must run locally and in CI.
+  - Provide stable commands for bootstrap, core Scala build, core native build, full check, clean, and toolchain diagnostics. Reserve command namespaces for future independently selectable library checks. The same core commands must run locally and in CI.
 
 - [ ] **Increment 8 — Continuous integration baseline**
-  - Add Linux CI for Scala compilation/tests, native compilation/tests, formatting, and toolchain-lock validation. Cache dependencies without caching unverified generated outputs. Add a scheduled dependency-report job that proposes rather than silently applies compiler upgrades.
+  - Add Linux CI for Scala compilation/tests, native compilation/tests, formatting, toolchain-lock validation, and core/library dependency-boundary enforcement. Cache dependencies without caching unverified generated outputs. Add a scheduled dependency-report job that proposes rather than silently applies compiler upgrades.
 
 - [ ] **Increment 9 — Formatting, linting and contribution rules**
-  - Add Scalafmt/Scalafix, ClangFormat/ClangTidy where compatible with LLVM style, Markdown checks, commit/PR expectations, and a rule that public API changes require a design gate.
+  - Add Scalafmt/Scalafix, ClangFormat/ClangTidy where compatible with LLVM style, Markdown checks, commit/PR expectations, package-visibility checks, and rules that public API or core/library boundary changes require a design gate.
 
 - [ ] **Increment 10 — Public API candidate prototypes**
-  - Create non-functional compile prototypes for representative resistor, RC filter, comparator, ADC, DAC, hierarchy, parameter override, analog event, and mixed-signal modules. Compare alternatives while keeping the API short and close to Verilog-AMS.
+  - Create non-functional compile prototypes for representative resistor, RC filter, comparator, ADC, DAC, hierarchy, parameter override, analog event, mixed-signal modules, and an external reusable module authored only against proposed public core APIs. Compare alternatives while keeping the API short and close to Verilog-AMS.
 
 - [ ] **Increment 11 — Public API design gate and v0.1 freeze**
-  - Publish `docs/design-gates/NodalPublicApi-DG-v0.1.md` with exact imports, names, operators, construction rules, backend entry points, examples, rejected alternatives, compatibility policy, and SHA-256. Freeze the approved API before substantial implementation.
+  - Publish `docs/design-gates/NodalPublicApi-DG-v0.1.md` with exact imports, names, operators, construction rules, backend entry points, examples, rejected alternatives, compatibility policy, core-only API, and the versioned subset permitted to future library authors. Freeze the approved API before substantial implementation.
 
 - [ ] **Increment 12 — Public API contract fixtures**
-  - Turn the approved examples into compile-positive and compile-negative tests. Require stable diagnostic codes for prohibited or ambiguous API usage.
+  - Turn the approved examples into compile-positive and compile-negative tests, including an external-library consumer fixture with no internal-package access. Require stable diagnostic codes for prohibited or ambiguous API usage.
 
 ## Phase 1 — Compiler vertical slice
 
@@ -284,8 +325,8 @@ Empty directories should not be committed merely to match this tree. Each direct
 - [ ] **Increment 48 — Waveform and result model**
   - Parse simulator outputs into typed time/frequency/sweep data, preserve units, support streaming large results, and provide comparison/assertion utilities with numeric tolerance policies.
 
-- [ ] **Increment 49 — Analog regression library**
-  - Add RC/RLC, diode, controlled source, amplifier, comparator, oscillator/VCO, and parameter-sweep examples covering equations, events, hierarchy, and failure diagnostics.
+- [ ] **Increment 49 — Analog regression suite**
+  - Add RC/RLC, diode, controlled source, amplifier, comparator, oscillator/VCO, and parameter-sweep examples covering equations, events, hierarchy, and failure diagnostics. Keep these as core regression fixtures rather than publishing them as a reusable user library.
 
 - [ ] **Increment 50 — Cross-tool analog portability checks**
   - Define optional adapters for a second compatible simulator/tool, compare supported results within declared tolerances, and distinguish language bugs from simulator capability differences.
@@ -342,8 +383,8 @@ Empty directories should not be committed merely to match this tree. Each direct
 
 ## Phase 5 — Extensibility, scale, documentation and release
 
-- [ ] **Increment 67 — Compiler pass and extension API**
-  - Stabilize pass registration, dialect interfaces, analysis preservation, pipeline configuration, custom lint hooks, and out-of-tree extension examples without exposing unstable compiler internals as public API.
+- [ ] **Increment 67 — Compiler pass, extension and library-author API**
+  - Stabilize pass registration, dialect interfaces, analysis preservation, pipeline configuration, custom lint hooks, and out-of-tree extension examples without exposing unstable compiler internals as public API. Define the minimal supported core surface available to future library authors.
 
 - [ ] **Increment 68 — Versioned IR and bridge compatibility**
   - Add Nodal dialect/bridge version metadata, upgrade diagnostics, textual and bytecode compatibility policy, test fixtures for old supported versions, and explicit rejection of unknown future versions.
@@ -351,17 +392,17 @@ Empty directories should not be committed merely to match this tree. Each direct
 - [ ] **Increment 69 — Incremental build and compiler caching**
   - Cache elaboration, normalized MLIR, native compilation, and backend outputs by content/toolchain/profile hashes. Prove cache correctness and deterministic invalidation before enabling CI reuse.
 
-- [ ] **Increment 70 — Library and package publication model**
-  - Define reusable Nodal libraries, Maven coordinates for Scala artifacts, native compiler discovery/download, model-resource packaging, dependency/version conflict policy, and offline use.
+- [ ] **Increment 70 — Future library architecture and publication contract**
+  - Define the reserved top-level `libraries/` module convention, independent Maven coordinates, optional native/model resources, per-library versioning, core compatibility ranges, dependency-conflict policy, license metadata, offline use, and the rule that libraries compile only through public core APIs. Add an external-library fixture proving the contract, but do not implement or publish an official reusable model library in this roadmap.
 
 - [ ] **Increment 71 — Complete language reference and API documentation**
-  - Generate Scala API docs plus a Nodal language reference covering syntax, semantics, domains, diagnostics, backend profiles, simulator support, and migration rules.
+  - Generate Scala API docs plus a Nodal language reference covering syntax, semantics, domains, diagnostics, backend profiles, simulator support, core/library ownership rules, library-author compatibility boundaries, and migration rules.
 
-- [ ] **Increment 72 — Tutorials and reusable model library**
-  - Add progressive analog and AMS tutorials, design patterns, anti-patterns, reusable primitive models, and examples that are continuously compiled and simulated where tooling permits.
+- [ ] **Increment 72 — Tutorials and cross-project reuse examples**
+  - Add progressive analog and AMS tutorials, design patterns, anti-patterns, and standalone consumer-project examples. Demonstrate how a separately built example package can reuse public Nodal core APIs without treating that example as an official Nodal library.
 
-- [ ] **Increment 73 — Cross-platform packaging**
-  - Produce checksummed Scala artifacts and native compiler bundles for supported Linux and macOS targets first, with a documented Windows strategy and source-build fallback.
+- [ ] **Increment 73 — Cross-platform core packaging**
+  - Produce checksummed core Scala artifacts and native compiler bundles for supported Linux and macOS targets first, with a documented Windows strategy, source-build fallback, and stable hooks for separately published future libraries.
 
 - [ ] **Increment 74 — Reproducible release, provenance and SBOM**
   - Add release automation, signed/checksummed artifacts where infrastructure permits, dependency SBOM, toolchain provenance, license inventory, and rebuild verification.
@@ -370,13 +411,17 @@ Empty directories should not be committed merely to match this tree. Each direct
   - Benchmark elaboration, MLIR size, pass time, memory, HDL generation, hierarchy scaling, and simulation-launch overhead. Add regression thresholds based on measured baselines rather than guesses.
 
 - [ ] **Increment 76 — Public API v1 review and compatibility policy**
-  - Review the v0.1 freeze against implemented experience, approve only justified revisions through a versioned design gate, define semantic versioning, deprecation rules, and source-compatibility tests.
+  - Review the v0.1 freeze against implemented experience, approve only justified revisions through a versioned design gate, define semantic versioning, deprecation rules, source-compatibility tests, and the compatibility guarantees provided to independently versioned libraries.
 
-- [ ] **Increment 77 — Nodal preview release**
-  - Publish the first supported preview with frozen API revision, compiler/toolchain pins, Verilog-A and Verilog-AMS capability matrices, installation instructions, examples, known limitations, and reproducible release evidence.
+- [ ] **Increment 77 — Nodal core preview release**
+  - Publish the first supported core preview with frozen API revision, compiler/toolchain pins, Verilog-A and Verilog-AMS capability matrices, installation instructions, examples, known limitations, library-author contract, and reproducible release evidence. No reusable model library is required for this release.
 
 - [ ] **Increment 78 — Future SystemVerilog-AMS backend research gate**
   - Reassess the then-current Accellera/IEEE standard status, map Nodal IR coverage, identify required dialect changes, and approve or reject implementation through a separate design gate. Do not speculate new syntax into the stable API before this review.
+
+## Deferred reusable library roadmap
+
+No official reusable component/model library is implemented by Increments 0–78. After the Nodal core API, extension surface, package model, and preview release are proven, reusable libraries may receive their own independently approved checkbox roadmap. That future roadmap may populate `libraries/` in this monorepo or use separate repositories while preserving the same public-core dependency contract.
 
 ## Roadmap maintenance
 

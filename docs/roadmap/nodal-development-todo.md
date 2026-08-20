@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 0.7  
+**Revision:** 0.8  
 **Created:** 2026-08-20  
 **Status:** Active roadmap  
 **Primary language target:** Verilog-AMS 2023  
@@ -195,8 +195,9 @@ The `libraries/` and `packaging/libraries/` paths are architectural reservations
   - Select and pin a compatible LLVM/MLIR/CIRCT revision pair, CMake and Ninja requirements, checksums, source-build fallback, and prebuilt-toolchain discovery. Avoid unpinned `main` dependencies.
   - Evidence: [`toolchains/lock.json`](../../toolchains/lock.json), [`toolchains/README.md`](../../toolchains/README.md), [`scripts/check_native_toolchain.py`](../../scripts/check_native_toolchain.py), [`scripts/bootstrap_native_toolchain.py`](../../scripts/bootstrap_native_toolchain.py), commit [`7ea7c2b`](https://github.com/pysolvesemi/Nodal/commit/7ea7c2b6ea8993f9de58e528cc916d7ac7655272), and successful validation run [`32355110533`](https://github.com/pysolvesemi/Nodal/actions/runs/32355110533).
 
-- [ ] **Increment 6 — Native compiler bootstrap**
+- [x] **Increment 6 — Native compiler bootstrap**
   - Add the out-of-tree CMake project under `core/compiler`, link MLIR/CIRCT, and produce `nodalc --version` plus a native unit-test target without defining language semantics yet.
+  - Evidence: [`CMakeLists.txt`](../../CMakeLists.txt), [`core/compiler/tools/nodalc/`](../../core/compiler/tools/nodalc/), [`core/compiler/test/`](../../core/compiler/test/), [`docs/development/native-compiler.md`](../development/native-compiler.md), [`scripts/check_native_compiler_bootstrap.py`](../../scripts/check_native_compiler_bootstrap.py), implementation commit [`72f1d8e`](https://github.com/pysolvesemi/Nodal/commit/72f1d8e3603e94dfd1c22a509b6d9c4438cbac2f), ABI-normalization commit [`1f4a785`](https://github.com/pysolvesemi/Nodal/commit/1f4a785efd99a3d6c2e5b10bb1dd61d2bb9739e8), and successful validation run [`32359466870`](https://github.com/pysolvesemi/Nodal/actions/runs/32359466870).
 
 - [ ] **Increment 7 — Unified developer commands**
   - Provide stable commands for bootstrap, core Scala build, core native build, full check, clean, and toolchain diagnostics. Reserve command namespaces for future independently selectable library checks. The same core commands must run locally and in CI.

@@ -53,9 +53,10 @@ runs the aggregate `check-nodal-native` target.
 ```
 
 The full check runs architecture, Scala bootstrap, native lock, native compiler,
-and developer-command contracts; all Python unit-test suites; the Scala core
-build/tests; and the native core build/tests. `--online-toolchain` additionally
-checks the pinned upstream release and checksum provenance.
+developer-command, formatting-baseline, and CI-baseline contracts; all Python
+unit-test suites; the Scala core build/tests; and the native core build/tests.
+`--online-toolchain` additionally checks the pinned upstream release and
+checksum provenance.
 
 A native toolchain must already be installed. This separation keeps downloads
 explicit:
@@ -64,6 +65,16 @@ explicit:
 ./nodal bootstrap
 ./nodal check
 ```
+
+For CI job decomposition or a fast local policy pass, run only contracts and
+Python suites:
+
+```bash
+./nodal check --contracts-only
+./nodal check --contracts-only --online-toolchain
+```
+
+This skips Scala and native compilation; it does not weaken any contract check.
 
 ### Diagnose the toolchain
 
@@ -120,6 +131,15 @@ must not duplicate the underlying Mill, CMake, CTest, or toolchain-bootstrap
 command sequences. This keeps local and CI behavior aligned as the repository
 grows.
 
+The generic Core CI workflow uses:
+
+```bash
+./nodal check --contracts-only --online-toolchain
+./nodal core scala
+./nodal bootstrap --mode prebuilt --prefix <runner-toolchain>
+./nodal core native --toolchain <runner-toolchain>
+```
+
 ## Contract validation
 
 The command surface is guarded by both structural and behavioral tests:
@@ -132,5 +152,5 @@ python3 -m unittest discover -s tests/developer -p 'test_*.py'
 The structural checker verifies wrappers, command namespaces, documentation,
 CI delegation, and the absence of a core-to-library dependency. Behavioral
 tests exercise argument forwarding, Scala and native command plans, complete
-check composition, deterministic toolchain discovery, safe cleaning, toolchain
-diagnostics, and the reserved library response.
+and contracts-only check composition, deterministic toolchain discovery, safe
+cleaning, toolchain diagnostics, and the reserved library response.

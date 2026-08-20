@@ -1,0 +1,35 @@
+{
+  "version": 2,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "native-release",
+      "displayName": "Nodal native compiler (Release)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/native/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NODAL_ENABLE_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "native-release",
+      "configurePreset": "native-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "native-release",
+      "configurePreset": "native-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

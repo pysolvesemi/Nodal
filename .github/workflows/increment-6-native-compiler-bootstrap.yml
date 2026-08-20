@@ -1,0 +1,112 @@
+name: Increment 6 native compiler bootstrap
+
+on:
+  push:
+    branches:
+      - increment/6-native-compiler-bootstrap
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  native-compiler-bootstrap:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      FORCE_COLOR: '0'
+      GITHUB_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Publish pending commit status
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state='pending' \
+            -f context='increment-6/native-compiler-bootstrap' \
+            -f description='Native compiler bootstrap validation is running' \
+            -f target_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Validate repository contracts
+        shell: bash
+        run: |
+          python3 scripts/check_architecture.py
+          python3 scripts/check_scala_bootstrap.py
+          python3 scripts/check_native_toolchain.py
+          python3 scripts/check_native_toolchain.py --online
+          python3 scripts/check_native_compiler_bootstrap.py
+          python3 -m unittest discover -s tests/architecture -p 'test_*.py'
+          python3 -m unittest discover -s tests/build -p 'test_*.py'
+          python3 -m unittest discover -s tests/toolchain -p 'test_*.py'
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+
+      - name: Install locked native toolchain
+        shell: bash
+        run: |
+          mkdir -p .validation
+          python3 scripts/bootstrap_native_toolchain.py install \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --json > .validation/native-toolchain.json
+          python3 scripts/bootstrap_native_toolchain.py status \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --require
+          echo "NODAL_NATIVE_TOOLCHAIN=${RUNNER_TEMP}/nodal-native-toolchain" >> "${GITHUB_ENV}"
+
+      - name: Configure native compiler
+        run: cmake --preset native-release
+
+      - name: Build native compiler and unit tests
+        run: cmake --build --preset native-release
+
+      - name: Verify nodalc version contract
+        shell: bash
+        run: |
+          out/native/release/bin/nodalc --version | tee .validation/nodalc-version.txt
+          grep -F 'nodalc 0.0.0-dev' .validation/nodalc-version.txt
+          grep -F 'Nodal native toolchain: nodal-native-2026.08.20' .validation/nodalc-version.txt
+          grep -F 'CIRCT release: firtool-1.154.0' .validation/nodalc-version.txt
+          grep -F 'CIRCT commit: 87898a876f730a2ebc607dc9b83da487cba49119' .validation/nodalc-version.txt
+          grep -F 'LLVM/MLIR commit: b1c56fb53a9c76d6b045ede49083b647ae049ffe' .validation/nodalc-version.txt
+
+      - name: Run native tests
+        shell: bash
+        run: |
+          ctest --preset native-release
+          cmake --build out/native/release --target check-nodal-native
+
+      - name: Run Scala regression
+        shell: bash
+        run: |
+          ./mill __.compile
+          ./mill core.scala.testkit.test
+
+      - name: Publish final commit status
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if [ "${JOB_STATUS}" = "success" ]; then
+            state=success
+            description='Native compiler bootstrap validation passed'
+          else
+            state=failure
+            description='Native compiler bootstrap validation failed'
+          fi
+          gh api \
+            --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="${state}" \
+            -f context='increment-6/native-compiler-bootstrap' \
+            -f description="${description}" \
+            -f target_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

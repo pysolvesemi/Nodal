@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: core-ci-${{ github.workflow }}-${{ github.ref }}
@@ -91,6 +92,30 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      - name: Publish aggregate push status
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTRACTS_RESULT: ${{ needs.contracts.result }}
+          SCALA_RESULT: ${{ needs.scala.result }}
+          NATIVE_RESULT: ${{ needs.native.result }}
+        run: |
+          state=success
+          description='Core CI passed'
+          if [ "${CONTRACTS_RESULT}" != success ] || \
+             [ "${SCALA_RESULT}" != success ] || \
+             [ "${NATIVE_RESULT}" != success ]; then
+            state=failure
+            description='Core CI failed'
+          fi
+          gh api \
+            --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="${state}" \
+            -f context='core-ci/required' \
+            -f description="${description}" \
+            -f target_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
       - name: Require every Core CI job
         env:
           CONTRACTS_RESULT: ${{ needs.contracts.result }}

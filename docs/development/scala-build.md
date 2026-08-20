@@ -38,7 +38,8 @@ The Scala dependency graph mirrors the checked architecture graph. `core.compile
 ./mill core.scala.testkit.test
 python3 scripts/check_scala_bootstrap.py
 python3 scripts/check_architecture.py
-python3 -m unittest discover -s tests -p 'test_*.py'
+python3 -m unittest discover -s tests/architecture -p 'test_*.py'
+python3 -m unittest discover -s tests/build -p 'test_*.py'
 ```
 
 On Windows, use `mill.bat` in place of `./mill`.

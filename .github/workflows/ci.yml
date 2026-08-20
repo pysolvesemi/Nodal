@@ -3,9 +3,11 @@ name: Core CI
 on:
   pull_request:
     branches:
+      - dev
       - main
   push:
     branches:
+      - dev
       - main
       - 'increment/**'
   workflow_dispatch:

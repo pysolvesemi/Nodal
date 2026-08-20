@@ -20,6 +20,14 @@ import bootstrap_native_toolchain as BOOTSTRAP  # noqa: E402
 
 
 class NativeToolchainBootstrapTests(unittest.TestCase):
+    def isolated_discovery_environment(self, root: Path):
+        """Keep discovery tests independent of developer and CI toolchain state."""
+        return mock.patch.dict(
+            os.environ,
+            {"XDG_CACHE_HOME": str(root / "cache")},
+            clear=True,
+        )
+
     def test_source_plan_is_fully_pinned(self) -> None:
         lock = LOCK.load_lock(REPOSITORY_ROOT)
         plan = BOOTSTRAP.plan_install(
@@ -63,44 +71,54 @@ class NativeToolchainBootstrapTests(unittest.TestCase):
     def test_discovery_accepts_matching_manifest(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        prefix = Path(temporary.name) / "native"
+        temporary_root = Path(temporary.name)
+        prefix = temporary_root / "native"
         lock = LOCK.load_lock(REPOSITORY_ROOT)
         self._create_fake_install(prefix, lock)
-        found, rejected = BOOTSTRAP.discover(
-            REPOSITORY_ROOT,
-            lock,
-            explicit=prefix,
-            host=("linux", "x86_64"),
-        )
+        with self.isolated_discovery_environment(temporary_root):
+            found, rejected = BOOTSTRAP.discover(
+                REPOSITORY_ROOT,
+                lock,
+                explicit=prefix,
+                host=("linux", "x86_64"),
+            )
         self.assertEqual(found, prefix.resolve())
         self.assertEqual(rejected, {})
 
     def test_discovery_rejects_mismatched_manifest(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        prefix = Path(temporary.name) / "native"
+        temporary_root = Path(temporary.name)
+        prefix = temporary_root / "native"
         lock = LOCK.load_lock(REPOSITORY_ROOT)
         self._create_fake_install(prefix, lock)
         manifest = prefix / LOCK.MANIFEST_NAME
         value = json.loads(manifest.read_text(encoding="utf-8"))
         value["llvm_commit"] = "0" * 40
         manifest.write_text(json.dumps(value), encoding="utf-8")
-        found, rejected = BOOTSTRAP.discover(
-            REPOSITORY_ROOT,
-            lock,
-            explicit=prefix,
-            host=("linux", "x86_64"),
-        )
+        with self.isolated_discovery_environment(temporary_root):
+            found, rejected = BOOTSTRAP.discover(
+                REPOSITORY_ROOT,
+                lock,
+                explicit=prefix,
+                host=("linux", "x86_64"),
+            )
         self.assertIsNone(found)
         self.assertIn(str(prefix.resolve()), rejected)
 
     def test_direct_environment_path_precedes_cache(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        prefix = Path(temporary.name) / "explicit"
+        temporary_root = Path(temporary.name)
+        prefix = temporary_root / "explicit"
         lock = LOCK.load_lock(REPOSITORY_ROOT)
         with mock.patch.dict(
-            os.environ, {"NODAL_NATIVE_TOOLCHAIN": str(prefix)}, clear=False
+            os.environ,
+            {
+                "NODAL_NATIVE_TOOLCHAIN": str(prefix),
+                "XDG_CACHE_HOME": str(temporary_root / "cache"),
+            },
+            clear=True,
         ):
             candidates = BOOTSTRAP.candidate_prefixes(
                 REPOSITORY_ROOT, lock, host=("linux", "x86_64")

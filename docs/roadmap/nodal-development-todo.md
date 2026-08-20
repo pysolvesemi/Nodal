@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 0.9  
+**Revision:** 1.0  
 **Created:** 2026-08-20  
 **Status:** Active roadmap  
 **Primary language target:** Verilog-AMS 2023  
@@ -203,8 +203,9 @@ The `libraries/` and `packaging/libraries/` paths are architectural reservations
   - Provide stable commands for bootstrap, core Scala build, core native build, full check, clean, and toolchain diagnostics. Reserve command namespaces for future independently selectable library checks. The same core commands must run locally and in CI.
   - Evidence: [`nodal`](../../nodal), [`scripts/nodal.py`](../../scripts/nodal.py), [`docs/development/commands.md`](../development/commands.md), [`scripts/check_developer_commands.py`](../../scripts/check_developer_commands.py), [`tests/developer/`](../../tests/developer/), implementation commit [`f24a074`](https://github.com/pysolvesemi/Nodal/commit/f24a07461d075a16c9967bdec37fb551d5f66f05), test-isolation fix [`080cfd3`](https://github.com/pysolvesemi/Nodal/commit/080cfd38f64e06751ece5c7ca0c432575db4c2fc), and successful validation run [`32367451896`](https://github.com/pysolvesemi/Nodal/actions/runs/32367451896).
 
-- [ ] **Increment 8 — Continuous integration baseline**
+- [x] **Increment 8 — Continuous integration baseline**
   - Add Linux CI for Scala compilation/tests, native compilation/tests, formatting, toolchain-lock validation, and core/library dependency-boundary enforcement. Cache dependencies without caching unverified generated outputs. Add a scheduled dependency-report job that proposes rather than silently applies compiler upgrades.
+  - Evidence: [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml), [`.github/workflows/dependency-report.yml`](../../.github/workflows/dependency-report.yml), [`scripts/check_ci_baseline.py`](../../scripts/check_ci_baseline.py), [`scripts/check_format_baseline.py`](../../scripts/check_format_baseline.py), [`scripts/dependency_report.py`](../../scripts/dependency_report.py), [`tests/ci/`](../../tests/ci/), [`docs/development/ci.md`](../development/ci.md), [`docs/development/branching.md`](../development/branching.md), implementation commit [`69c31a5`](https://github.com/pysolvesemi/Nodal/commit/69c31a5f4340688dff01a41911ca0a885153bb11), and successful completion validation run [`32396716336`](https://github.com/pysolvesemi/Nodal/actions/runs/32396716336).
 
 - [ ] **Increment 9 — Formatting, linting and contribution rules**
   - Add Scalafmt/Scalafix, ClangFormat/ClangTidy where compatible with LLVM style, Markdown checks, commit/PR expectations, package-visibility checks, and rules that public API or core/library boundary changes require a design gate.

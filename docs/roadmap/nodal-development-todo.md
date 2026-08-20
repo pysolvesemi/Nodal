@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 0.2  
+**Revision:** 0.3  
 **Created:** 2026-08-20  
 **Status:** Active roadmap  
 **Primary language target:** Verilog-AMS 2023  
@@ -175,8 +175,9 @@ The `libraries/` and `packaging/libraries/` paths are architectural reservations
 - [x] **Increment 0 — Roadmap bootstrap**
   - Add this checkbox-based roadmap, fixed architectural direction, milestone boundaries, and target repository structure as the initial repository commit.
 
-- [ ] **Increment 1 — Project charter and standards baseline**
+- [x] **Increment 1 — Project charter and standards baseline**
   - Add `README.md`, project goals, non-goals, terminology, supported abstraction levels, Verilog-AMS 2023 baseline, analog-only Verilog-A profile, the core-versus-library scope boundary, and an explicit statement that SystemVerilog-AMS is a future backend target rather than an initial dependency.
+  - Evidence: [`README.md`](../../README.md) and commit [`cb4c55f`](https://github.com/pysolvesemi/Nodal/commit/cb4c55f2e12305be3e92b66df0b499b1d4932c2c).
 
 - [ ] **Increment 2 — Architecture decision records**
   - Record the Scala frontend/native compiler split, MLIR as authoritative IR, out-of-tree Nodal dialect, selective CIRCT reuse, textual MLIR process boundary for the first implementation, backend capability profiles, top-level `core/` versus `libraries/` separation, and the enforced one-way `libraries -> core` dependency rule.

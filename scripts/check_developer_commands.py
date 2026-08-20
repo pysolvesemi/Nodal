@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the Increment 7 unified developer command contract."""
+"""Validate the unified Nodal developer command contract."""
 
 from __future__ import annotations
 
@@ -125,13 +125,16 @@ def check_repository(root: Path) -> list[Problem]:
         "NODAL-DEV-CHECK-008",
     )
 
-    if "scripts/nodal.py" not in shell or 'exec python3' not in shell:
+    if "scripts/nodal.py" not in shell or "exec python3" not in shell:
         problems.append(
             Problem("NODAL-DEV-CHECK-009", "POSIX wrapper must delegate to scripts/nodal.py")
         )
     if "scripts\\nodal.py" not in batch or "%~dp0" not in batch:
         problems.append(
-            Problem("NODAL-DEV-CHECK-010", "Windows wrapper must delegate to scripts\\nodal.py")
+            Problem(
+                "NODAL-DEV-CHECK-010",
+                "Windows wrapper must delegate to scripts\\nodal.py",
+            )
         )
     try:
         if (root / "nodal").is_file() and not ((root / "nodal").stat().st_mode & 0o111):
@@ -170,8 +173,13 @@ def check_repository(root: Path) -> list[Problem]:
         'check_native_toolchain.py"',
         'check_native_compiler_bootstrap.py"',
         'check_developer_commands.py"',
+        'check_formatting_baseline.py"',
+        'check_ci_baseline.py"',
         'core.scala.testkit.test"',
         'check-nodal-native"',
+        '"ci"',
+        'if args.contracts_only:',
+        '"--contracts-only"',
         'NODAL-DEV-004',
         'if args.toolchains:',
     )
@@ -200,6 +208,7 @@ def check_repository(root: Path) -> list[Problem]:
         "./nodal core scala",
         "./nodal core native",
         "./nodal check",
+        "./nodal check --contracts-only",
         "./nodal clean",
         "./nodal toolchain doctor",
         "./nodal library check",
@@ -244,6 +253,7 @@ def check_repository(root: Path) -> list[Problem]:
         "test_core_scala_uses_repository_mill_wrapper",
         "test_core_native_uses_managed_toolchain",
         "test_full_check_includes_all_contract_suites",
+        "test_contract_only_check_skips_builds",
         "test_clean_preserves_toolchains_by_default",
         "test_library_namespace_is_reserved",
     )

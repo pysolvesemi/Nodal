@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 0.6  
+**Revision:** 0.7  
 **Created:** 2026-08-20  
 **Status:** Active roadmap  
 **Primary language target:** Verilog-AMS 2023  
@@ -191,8 +191,9 @@ The `libraries/` and `packaging/libraries/` paths are architectural reservations
   - Re-check the newest stable Scala 3 release, then pin it with JDK 25 and a current Mill 1.x wrapper. Add `core/scala/api`, `core/scala/frontend`, `core/scala/bridge`, `core/scala/cli`, and core test modules with one passing smoke test. Do not add Scala 2 cross-builds.
   - Evidence: [`build.mill`](../../build.mill), [`docs/development/scala-build.md`](../development/scala-build.md), commit [`95b8c91`](https://github.com/pysolvesemi/Nodal/commit/95b8c9155bb92890c04c9e42b68fdf7677432a10), and successful validation run [`32350691664`](https://github.com/pysolvesemi/Nodal/actions/runs/32350691664).
 
-- [ ] **Increment 5 — LLVM/MLIR/CIRCT toolchain lock**
+- [x] **Increment 5 — LLVM/MLIR/CIRCT toolchain lock**
   - Select and pin a compatible LLVM/MLIR/CIRCT revision pair, CMake and Ninja requirements, checksums, source-build fallback, and prebuilt-toolchain discovery. Avoid unpinned `main` dependencies.
+  - Evidence: [`toolchains/lock.json`](../../toolchains/lock.json), [`toolchains/README.md`](../../toolchains/README.md), [`scripts/check_native_toolchain.py`](../../scripts/check_native_toolchain.py), [`scripts/bootstrap_native_toolchain.py`](../../scripts/bootstrap_native_toolchain.py), commit [`7ea7c2b`](https://github.com/pysolvesemi/Nodal/commit/7ea7c2b6ea8993f9de58e528cc916d7ac7655272), and successful validation run [`32355110533`](https://github.com/pysolvesemi/Nodal/actions/runs/32355110533).
 
 - [ ] **Increment 6 — Native compiler bootstrap**
   - Add the out-of-tree CMake project under `core/compiler`, link MLIR/CIRCT, and produce `nodalc --version` plus a native unit-test target without defining language semantics yet.

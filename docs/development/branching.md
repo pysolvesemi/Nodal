@@ -109,3 +109,5 @@ The checked contract is stored in:
 ```text
 .github/branch-policy.json
 ```
+
+CI validates the bootstrap mode before the integration branch is created.

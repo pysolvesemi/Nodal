@@ -1,7 +1,7 @@
 # Continuous integration baseline
 
 Increment 8 establishes one generic **Core CI** workflow for every increment
-branch and every pull request into the protected trunk.
+branch and every pull request into either protected permanent branch.
 
 ## Required gate
 
@@ -37,13 +37,13 @@ the command composition in one implementation.
 
 Core CI runs on:
 
+- every push to `dev`;
 - every push to `main`;
 - every push to `increment/**`;
-- every pull request targeting `main`;
+- every pull request targeting `dev` or `main`;
 - explicit manual dispatch.
 
-The protected-trunk policy requires the aggregate `Core CI / required` result
-before a pull request can merge.
+Both protected branches require `Core CI / required` before merge.
 
 ## Cache policy
 
@@ -93,7 +93,7 @@ It has `contents: read` and `issues: write` permissions. It cannot commit, push,
 edit the lock, or open an upgrade pull request. CIRCT candidates require a
 manual compatible LLVM-submodule derivation and regenerated checksums.
 
-The workflow uses modern Node 24 based action generations:
+The workflow uses modern action generations:
 
 ```text
 actions/checkout@v6
@@ -101,9 +101,10 @@ actions/cache@v5
 actions/upload-artifact@v7
 ```
 
-Because GitHub schedules workflows from the default branch, the weekly report
-becomes active when Increment 8 is integrated into `main`. It is also available
-for manual dispatch after integration.
+GitHub schedules workflows from the repository default branch. After the
+bootstrap integration, `dev` should become the default branch so weekly reports
+and ordinary contributor pull requests use the active integration baseline.
+`main` remains the protected milestone-release branch.
 
 ## Contract validation
 

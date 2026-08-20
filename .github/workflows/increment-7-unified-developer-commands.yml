@@ -1,0 +1,101 @@
+name: Increment 7 unified developer commands
+
+on:
+  push:
+    branches:
+      - increment/7-unified-developer-commands
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  unified-developer-commands:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      FORCE_COLOR: '0'
+      GITHUB_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Publish pending commit status
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state='pending' \
+            -f context='increment-7/unified-developer-commands' \
+            -f description='Unified developer command validation is running' \
+            -f target_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Validate command contract and help surfaces
+        shell: bash
+        run: |
+          python3 scripts/check_developer_commands.py
+          python3 -m unittest discover -s tests/developer -p 'test_*.py'
+          ./nodal --help
+          ./nodal core --help
+          ./nodal toolchain --help
+          ./nodal library --help
+          set +e
+          ./nodal library check reserved-fixture
+          status=$?
+          set -e
+          test "${status}" -eq 2
+
+      - name: Bootstrap locked native toolchain through nodal
+        shell: bash
+        run: |
+          mkdir -p .validation
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --json | tee .validation/increment-7-bootstrap.json
+          echo "NODAL_NATIVE_TOOLCHAIN=${RUNNER_TEMP}/nodal-native-toolchain" >> "${GITHUB_ENV}"
+
+      - name: Diagnose toolchain through nodal
+        shell: bash
+        run: |
+          ./nodal toolchain doctor \
+            --online \
+            --require \
+            --toolchain "${NODAL_NATIVE_TOOLCHAIN}"
+
+      - name: Run complete core check through nodal
+        shell: bash
+        run: |
+          ./nodal check \
+            --online-toolchain \
+            --toolchain "${NODAL_NATIVE_TOOLCHAIN}"
+
+      - name: Verify non-destructive clean plan
+        run: ./nodal clean --dry-run
+
+      - name: Publish final commit status
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if [ "${JOB_STATUS}" = "success" ]; then
+            state=success
+            description='Unified developer command validation passed'
+          else
+            state=failure
+            description='Unified developer command validation failed'
+          fi
+          gh api \
+            --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="${state}" \
+            -f context='increment-7/unified-developer-commands' \
+            -f description="${description}" \
+            -f target_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

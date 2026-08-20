@@ -21,6 +21,14 @@
 /scripts/bootstrap_native_toolchain.py @pysolvesemi
 /tests/toolchain/ @pysolvesemi
 
+# Unified developer command surface.
+/nodal @pysolvesemi
+/nodal.bat @pysolvesemi
+/scripts/nodal.py @pysolvesemi
+/scripts/check_developer_commands.py @pysolvesemi
+/tests/developer/ @pysolvesemi
+/docs/development/commands.md @pysolvesemi
+
 # Future libraries remain separately reviewable when they are introduced.
 /libraries/ @pysolvesemi
 /packaging/libraries/ @pysolvesemi

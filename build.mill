@@ -45,22 +45,31 @@ object scalafix extends ExternalModule with JavaModule with DefaultTaskModule:
       "core/integrations",
     )
 
-  private def invoke(checkOnly: Boolean): Unit =
+  private def invoke(
+      checkOnly: Boolean,
+      classPath: Seq[PathRef],
+  )(using mill.api.TaskCtx): Unit =
     Jvm.callProcess(
       "scalafix.cli.Cli",
       scalafixArguments(checkOnly),
-      classPath = scalafixClasspath().map(_.path),
+      classPath = classPath.map(_.path),
       cwd = BuildCtx.workspaceRoot,
       stdin = os.Inherit,
       stdout = os.Inherit,
     )
 
   def check(): Command[Unit] = Task.Command {
-    invoke(checkOnly = true)
+    invoke(
+      checkOnly = true,
+      classPath = scalafixClasspath(),
+    )
   }
 
   def fix(): Command[Unit] = Task.Command {
-    invoke(checkOnly = false)
+    invoke(
+      checkOnly = false,
+      classPath = scalafixClasspath(),
+    )
   }
 
   lazy val millDiscover = Discover[this.type]

@@ -1,0 +1,121 @@
+name: Increment 8 roadmap completion
+
+on:
+  push:
+    branches:
+      - increment/8-ci-baseline
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  statuses: write
+
+jobs:
+  complete-roadmap:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      FORCE_COLOR: '0'
+      GITHUB_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Publish pending completion status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state='pending' \
+            -f context='increment-8/roadmap-completion' \
+            -f description='Increment 8 completion validation is running' \
+            -f target_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore verified Scala dependency caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: increment-8-completion-scala-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', 'toolchains/lock.json') }}
+          restore-keys: |
+            increment-8-completion-scala-${{ runner.os }}-
+
+      - name: Restore locked native download cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: increment-8-completion-native-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
+
+      - name: Install locked native toolchain
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          echo "NODAL_NATIVE_TOOLCHAIN=${RUNNER_TEMP}/nodal-native-toolchain" >> "${GITHUB_ENV}"
+
+      - name: Run complete Increment 8 gate
+        run: |
+          ./nodal check \
+            --online-toolchain \
+            --toolchain "${NODAL_NATIVE_TOOLCHAIN}"
+
+      - name: Mark Increment 8 complete
+        env:
+          IMPLEMENTATION_SHA: ${{ github.sha }}
+          VALIDATION_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path('docs/roadmap/nodal-development-todo.md')
+          text = path.read_text(encoding='utf-8')
+
+          old_revision = '**Revision:** 0.9  '
+          new_revision = '**Revision:** 1.0  '
+          old_block = '''- [ ] **Increment 8 — Continuous integration baseline**
+            - Add Linux CI for Scala compilation/tests, native compilation/tests, formatting, toolchain-lock validation, and core/library dependency-boundary enforcement. Cache dependencies without caching unverified generated outputs. Add a scheduled dependency-report job that proposes rather than silently applies compiler upgrades.'''
+
+          sha = os.environ['IMPLEMENTATION_SHA']
+          run_id = os.environ['VALIDATION_RUN_ID']
+          new_block = f'''- [x] **Increment 8 — Continuous integration baseline**
+            - Add Linux CI for Scala compilation/tests, native compilation/tests, formatting, toolchain-lock validation, and core/library dependency-boundary enforcement. Cache dependencies without caching unverified generated outputs. Add a scheduled dependency-report job that proposes rather than silently applies compiler upgrades.
+            - Evidence: [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml), [`.github/workflows/dependency-report.yml`](../../.github/workflows/dependency-report.yml), [`scripts/check_ci_baseline.py`](../../scripts/check_ci_baseline.py), [`scripts/check_format_baseline.py`](../../scripts/check_format_baseline.py), [`scripts/dependency_report.py`](../../scripts/dependency_report.py), [`tests/ci/`](../../tests/ci/), [`docs/development/ci.md`](../development/ci.md), [`docs/development/branching.md`](../development/branching.md), implementation commit [`{sha[:7]}`](https://github.com/pysolvesemi/Nodal/commit/{sha}), and successful completion validation run [`{run_id}`](https://github.com/pysolvesemi/Nodal/actions/runs/{run_id}).'''
+
+          if text.count(old_revision) != 1:
+              raise SystemExit('expected exactly one roadmap revision 0.9 marker')
+          if text.count(old_block) != 1:
+              raise SystemExit('expected exactly one unchecked Increment 8 block')
+
+          text = text.replace(old_revision, new_revision, 1)
+          text = text.replace(old_block, new_block, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Commit completion evidence and remove one-shot workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -- .github/workflows/increment-8-roadmap-completion.yml
+          git add -- docs/roadmap/nodal-development-todo.md
+          git commit -m 'docs: mark increment 8 complete'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Publish successful completion status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state='success' \
+            -f context='increment-8/roadmap-completion' \
+            -f description='Increment 8 completion validation passed' \
+            -f target_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

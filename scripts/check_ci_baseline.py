@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the Increment 8 generic CI, cache, report, and branch-policy contracts."""
+"""Validate the Increment 8 CI, cache, report, and branch-policy contracts."""
 
 from __future__ import annotations
 
@@ -49,11 +49,20 @@ class Problem:
         return f"{self.code}: {self.message}"
 
 
-def _read(path: Path, problems: list[Problem], code: str) -> str:
+def _read(
+    path: Path,
+    problems: list[Problem],
+    code: str,
+) -> str:
     try:
         return path.read_text(encoding="utf-8")
     except OSError as exc:
-        problems.append(Problem(code, f"cannot read {path}: {exc}"))
+        problems.append(
+            Problem(
+                code,
+                f"cannot read {path}: {exc}",
+            )
+        )
         return ""
 
 
@@ -69,7 +78,10 @@ def _cache_blocks(workflow: str) -> list[str]:
             continue
         if start is not None:
             current_indent = len(line) - len(line.lstrip())
-            if line.lstrip().startswith("- name:") and current_indent <= indentation:
+            if (
+                line.lstrip().startswith("- name:")
+                and current_indent <= indentation
+            ):
                 blocks.append("\n".join(lines[start:index]))
                 start = None
     if start is not None:
@@ -101,32 +113,63 @@ def _cache_paths(block: str) -> set[str]:
     return paths
 
 
+def _lookup(value: object, *path: str) -> object:
+    current = value
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
 def check_repository(root: Path) -> list[Problem]:
     root = root.resolve()
     problems: list[Problem] = []
 
     for relative in EXPECTED_FILES:
         if not (root / relative).is_file():
-            problems.append(Problem("NODAL-CI-001", f"missing CI baseline file: {relative}"))
+            problems.append(
+                Problem(
+                    "NODAL-CI-001",
+                    f"missing CI baseline file: {relative}",
+                )
+            )
 
     core_ci = _read(
-        root / ".github/workflows/ci.yml", problems, "NODAL-CI-002"
+        root / ".github/workflows/ci.yml",
+        problems,
+        "NODAL-CI-002",
     )
     dependency = _read(
         root / ".github/workflows/dependency-report.yml",
         problems,
         "NODAL-CI-003",
     )
-    command = _read(root / "scripts/nodal.py", problems, "NODAL-CI-004")
-    docs = _read(root / "docs/development/ci.md", problems, "NODAL-CI-005")
-    branching = _read(
-        root / "docs/development/branching.md", problems, "NODAL-CI-006"
+    command = _read(
+        root / "scripts/nodal.py",
+        problems,
+        "NODAL-CI-004",
     )
-    codeowners = _read(root / ".github/CODEOWNERS", problems, "NODAL-CI-007")
+    docs = _read(
+        root / "docs/development/ci.md",
+        problems,
+        "NODAL-CI-005",
+    )
+    branching = _read(
+        root / "docs/development/branching.md",
+        problems,
+        "NODAL-CI-006",
+    )
+    codeowners = _read(
+        root / ".github/CODEOWNERS",
+        problems,
+        "NODAL-CI-007",
+    )
 
     required_core_ci = (
         "name: Core CI",
         "pull_request:",
+        "- dev",
         "- main",
         "- 'increment/**'",
         "workflow_dispatch:",
@@ -137,19 +180,29 @@ def check_repository(root: Path) -> list[Problem]:
         "./nodal bootstrap",
         "./nodal core native",
         "name: required",
-        "needs:",
         "CONTRACTS_RESULT",
         "SCALA_RESULT",
         "NATIVE_RESULT",
     )
     for fragment in required_core_ci:
         if fragment not in core_ci:
-            problems.append(Problem("NODAL-CI-008", f"Core CI lacks: {fragment}"))
+            problems.append(
+                Problem(
+                    "NODAL-CI-008",
+                    f"Core CI lacks: {fragment}",
+                )
+            )
 
     blocks = _cache_blocks(core_ci)
     if len(blocks) != 2:
         problems.append(
-            Problem("NODAL-CI-009", f"Core CI must define exactly two dependency caches, found {len(blocks)}")
+            Problem(
+                "NODAL-CI-009",
+                (
+                    "Core CI must define exactly two "
+                    f"dependency caches, found {len(blocks)}"
+                ),
+            )
         )
     observed_paths: set[str] = set()
     for block in blocks:
@@ -158,19 +211,32 @@ def check_repository(root: Path) -> list[Problem]:
         for path in paths:
             if path not in ALLOWED_CACHE_PATHS:
                 problems.append(
-                    Problem("NODAL-CI-010", f"unapproved CI cache path: {path}")
+                    Problem(
+                        "NODAL-CI-010",
+                        f"unapproved CI cache path: {path}",
+                    )
                 )
-            if any(fragment in path for fragment in FORBIDDEN_CACHE_FRAGMENTS):
+            if any(
+                fragment in path
+                for fragment in FORBIDDEN_CACHE_FRAGMENTS
+            ):
                 problems.append(
-                    Problem("NODAL-CI-011", f"generated output must not be cached: {path}")
+                    Problem(
+                        "NODAL-CI-011",
+                        (
+                            "generated output must not "
+                            f"be cached: {path}"
+                        ),
+                    )
                 )
     if observed_paths != ALLOWED_CACHE_PATHS:
-        missing = sorted(ALLOWED_CACHE_PATHS - observed_paths)
-        extra = sorted(observed_paths - ALLOWED_CACHE_PATHS)
         problems.append(
             Problem(
                 "NODAL-CI-012",
-                f"CI cache contract mismatch; missing={missing}, extra={extra}",
+                (
+                    "CI cache contract mismatch; "
+                    f"observed={sorted(observed_paths)}"
+                ),
             )
         )
 
@@ -190,7 +256,13 @@ def check_repository(root: Path) -> list[Problem]:
     for fragment in required_dependency:
         if fragment not in dependency:
             problems.append(
-                Problem("NODAL-CI-013", f"dependency report workflow lacks: {fragment}")
+                Problem(
+                    "NODAL-CI-013",
+                    (
+                        "dependency report workflow "
+                        f"lacks: {fragment}"
+                    ),
+                )
             )
     for forbidden in (
         "contents: write",
@@ -204,7 +276,11 @@ def check_repository(root: Path) -> list[Problem]:
             problems.append(
                 Problem(
                     "NODAL-CI-014",
-                    f"dependency report must propose rather than apply changes: {forbidden}",
+                    (
+                        "dependency report must propose "
+                        "rather than apply changes: "
+                        f"{forbidden}"
+                    ),
                 )
             )
 
@@ -217,33 +293,46 @@ def check_repository(root: Path) -> list[Problem]:
             )
         )
     except json.JSONDecodeError as exc:
-        problems.append(Problem("NODAL-CI-016", f"invalid branch policy JSON: {exc}"))
+        problems.append(
+            Problem(
+                "NODAL-CI-016",
+                f"invalid branch policy JSON: {exc}",
+            )
+        )
     else:
         expected_policy = {
-            ("strategy",): "protected-trunk",
-            ("integration_branch",): "main",
+            ("strategy",):
+                "protected-integration-and-release",
+            ("development_branch",): "dev",
             ("release_branch",): "main",
-            ("policy", "direct_push_to_main"): False,
-            ("policy", "pull_request_required"): True,
-            ("policy", "required_status_check"): "Core CI / required",
-            ("policy", "future_increment_merge_method"): "squash",
-            ("bootstrap", "head"): "increment/8-ci-baseline",
-            ("bootstrap", "base"): "main",
+            ("repository_default_branch_after_bootstrap",):
+                "dev",
+            ("branches", "dev", "direct_push"): False,
+            ("branches", "dev", "pull_request_required"):
+                True,
+            ("branches", "dev", "required_status_check"):
+                "Core CI / required",
+            ("branches", "dev", "normal_merge_method"):
+                "squash",
+            ("branches", "main", "direct_push"): False,
+            ("branches", "main", "allowed_source_branch"):
+                "dev",
+            ("bootstrap", "pull_request_head"):
+                "increment/8-ci-baseline",
+            ("bootstrap", "pull_request_base"): "dev",
             ("bootstrap", "merge_method"): "merge",
-            ("dev_branch", "create_now"): False,
         }
         for path, expected in expected_policy.items():
-            value = policy
-            for key in path:
-                if not isinstance(value, dict):
-                    value = None
-                    break
-                value = value.get(key)
+            value = _lookup(policy, *path)
             if value != expected:
                 problems.append(
                     Problem(
                         "NODAL-CI-017",
-                        f"branch policy {'.'.join(path)} is {value!r}, expected {expected!r}",
+                        (
+                            f"branch policy {'.'.join(path)} "
+                            f"is {value!r}, expected "
+                            f"{expected!r}"
+                        ),
                     )
                 )
 
@@ -257,7 +346,13 @@ def check_repository(root: Path) -> list[Problem]:
     for fragment in required_command:
         if fragment not in command:
             problems.append(
-                Problem("NODAL-CI-018", f"unified command lacks CI integration: {fragment}")
+                Problem(
+                    "NODAL-CI-018",
+                    (
+                        "unified command lacks CI "
+                        f"integration: {fragment}"
+                    ),
+                )
             )
 
     for fragment in (
@@ -270,20 +365,33 @@ def check_repository(root: Path) -> list[Problem]:
     ):
         if fragment not in docs:
             problems.append(
-                Problem("NODAL-CI-019", f"CI documentation lacks: {fragment}")
+                Problem(
+                    "NODAL-CI-019",
+                    (
+                        "CI documentation lacks: "
+                        f"{fragment}"
+                    ),
+                )
             )
 
     for fragment in (
-        "protected trunk",
-        "no long-lived `dev` branch",
+        "protected integration branch",
+        "protected milestone-release branch",
         "increment/8-ci-baseline",
         "merge commit",
         "squash",
-        "milestone tag",
+        "default branch",
+        "after Increment 12",
     ):
         if fragment not in branching:
             problems.append(
-                Problem("NODAL-CI-020", f"branching documentation lacks: {fragment}")
+                Problem(
+                    "NODAL-CI-020",
+                    (
+                        "branching documentation lacks: "
+                        f"{fragment}"
+                    ),
+                )
             )
 
     for fragment in (
@@ -295,7 +403,13 @@ def check_repository(root: Path) -> list[Problem]:
     ):
         if fragment not in codeowners:
             problems.append(
-                Problem("NODAL-CI-021", f"CODEOWNERS lacks CI ownership: {fragment}")
+                Problem(
+                    "NODAL-CI-021",
+                    (
+                        "CODEOWNERS lacks CI ownership: "
+                        f"{fragment}"
+                    ),
+                )
             )
 
     return problems
@@ -303,14 +417,24 @@ def check_repository(root: Path) -> list[Problem]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=Path(__file__).resolve().parents[1],
+    )
     args = parser.parse_args(argv)
 
     problems = check_repository(args.root)
     for problem in problems:
         print(problem, file=sys.stderr)
     if problems:
-        print(f"CI baseline check failed with {len(problems)} problem(s)", file=sys.stderr)
+        print(
+            (
+                "CI baseline check failed with "
+                f"{len(problems)} problem(s)"
+            ),
+            file=sys.stderr,
+        )
         return 1
     print("CI baseline check passed")
     return 0

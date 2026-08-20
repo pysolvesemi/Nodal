@@ -159,10 +159,19 @@ def _contract_commands(root: Path, *, online_toolchain: bool) -> list[list[str]]
         _python(root, "check_native_toolchain.py"),
         _python(root, "check_native_compiler_bootstrap.py"),
         _python(root, "check_developer_commands.py"),
+        _python(root, "check_formatting_baseline.py"),
+        _python(root, "check_ci_baseline.py"),
     ]
     if online_toolchain:
         commands.append(_python(root, "check_native_toolchain.py", "--online"))
-    for suite in ("architecture", "build", "toolchain", "compiler", "developer"):
+    for suite in (
+        "architecture",
+        "build",
+        "toolchain",
+        "compiler",
+        "developer",
+        "ci",
+    ):
         commands.append(
             [
                 sys.executable,
@@ -181,6 +190,8 @@ def _contract_commands(root: Path, *, online_toolchain: bool) -> list[list[str]]
 def command_check(args: argparse.Namespace, root: Path, runner: Runner) -> int:
     for command in _contract_commands(root, online_toolchain=args.online_toolchain):
         runner.run(command)
+    if args.contracts_only:
+        return 0
     command_core_scala(args, root, runner)
     command_core_native(args, root, runner)
     return 0
@@ -235,7 +246,11 @@ def command_toolchain_doctor(
         explicit=args.toolchain,
         require=args.require,
     )
-    for command in ((sys.executable, "--version"), ("cmake", "--version"), ("ninja", "--version")):
+    for command in (
+        (sys.executable, "--version"),
+        ("cmake", "--version"),
+        ("ninja", "--version"),
+    ):
         runner.run(command)
     if toolchain is None:
         print("managed native toolchain: not installed")
@@ -286,6 +301,11 @@ def create_parser() -> argparse.ArgumentParser:
     )
     check.add_argument("--toolchain", type=Path)
     check.add_argument("--online-toolchain", action="store_true")
+    check.add_argument(
+        "--contracts-only",
+        action="store_true",
+        help="run contracts and Python suites without Scala/native builds",
+    )
     check.set_defaults(handler=command_check)
 
     clean = subcommands.add_parser("clean", help="remove generated core outputs")

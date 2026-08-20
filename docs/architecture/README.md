@@ -1,0 +1,36 @@
+# Nodal Architecture Decisions
+
+This directory contains the accepted architectural decisions for Nodal core.
+
+Architecture decision records (ADRs) define durable boundaries that later increments must implement and test. They are not substitutes for the public API design gates or detailed language semantics.
+
+## Status values
+
+- **Proposed:** under review and not binding.
+- **Accepted:** binding for subsequent increments.
+- **Superseded:** replaced by a newer ADR that links back to the earlier decision.
+- **Deprecated:** retained for history but no longer recommended.
+
+Accepted ADRs must not be edited to reverse their decision. A material change requires a new ADR that supersedes the old one. Clarifications that do not alter the decision may be added with a dated amendment.
+
+## Accepted records
+
+| ADR | Decision |
+| --- | --- |
+| [0001](0001-scala-frontend-native-compiler-split.md) | Split the Scala 3 construction frontend from the native MLIR/CIRCT compiler. |
+| [0002](0002-mlir-authoritative-ir-and-nodal-dialect.md) | Make MLIR the authoritative compiler IR and define Nodal as an out-of-tree dialect. |
+| [0003](0003-selective-circt-reuse.md) | Reuse CIRCT selectively where its digital semantics match; do not use FIRRTL as Nodal's primary IR. |
+| [0004](0004-versioned-textual-mlir-bridge.md) | Start with a versioned textual-MLIR process boundary between Scala and `nodalc`. |
+| [0005](0005-backend-capability-profiles.md) | Use explicit backend capability profiles with no silent semantic fallback. |
+| [0006](0006-core-library-boundary.md) | Separate mandatory core from optional reusable libraries with one-way dependencies. |
+
+## Decision hierarchy
+
+When two documents appear to conflict, use this order:
+
+1. an approved, versioned public API or semantic design gate;
+2. the newest accepted ADR;
+3. the project charter in the root `README.md`;
+4. the incremental roadmap.
+
+An ADR may constrain a later design gate, but it must not invent public syntax unless the ADR explicitly owns that syntax and the public API gate approves it.

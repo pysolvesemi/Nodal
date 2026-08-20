@@ -1,0 +1,122 @@
+name: Apply Increment 8 implementation
+
+on:
+  push:
+    branches:
+      - increment/8-ci-baseline
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Extract verified Increment 8 payload
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import io
+          import tarfile
+          from pathlib import Path
+
+          encoded = "".join(
+              path.read_text(encoding="utf-8")
+              for path in sorted(Path(".github/increment8").glob("payload-*.b64"))
+          )
+          encoded = "".join(encoded.split())
+          payload = base64.b64decode(encoded, validate=True)
+          expected_sha256 = "e49aeb6b659a42f142ce01148035a448e0437c8a17cff34a7d44f2f8bca03f47"
+          actual_sha256 = hashlib.sha256(payload).hexdigest()
+          if actual_sha256 != expected_sha256:
+              raise SystemExit(f"Increment 8 payload SHA-256 mismatch: {actual_sha256}")
+
+          expected = {
+              '.github/CODEOWNERS',
+              '.github/branch-policy.json',
+              '.github/workflows/ci.yml',
+              '.github/workflows/dependency-report.yml',
+              'docs/development/branching.md',
+              'docs/development/ci.md',
+              'docs/development/commands.md',
+              'scripts/check_ci_baseline.py',
+              'scripts/check_developer_commands.py',
+              'scripts/check_formatting_baseline.py',
+              'scripts/dependency_report.py',
+              'scripts/nodal.py',
+              'tests/ci/README.md',
+              'tests/ci/test_ci_baseline.py',
+              'tests/ci/test_dependency_report.py',
+              'tests/ci/test_formatting_baseline.py',
+              'tests/developer/test_developer_command_contract.py',
+              'tests/developer/test_developer_commands.py',
+          }
+          with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+              files = {member.name for member in archive.getmembers() if member.isfile()}
+              if files != expected:
+                  raise SystemExit(f"Increment 8 payload paths mismatch: {sorted(files ^ expected)}")
+              for member in archive.getmembers():
+                  path = Path(member.name)
+                  if path.is_absolute() or ".." in path.parts:
+                      raise SystemExit(f"unsafe payload path: {member.name}")
+                  if member.issym() or member.islnk() or member.isdev():
+                      raise SystemExit(f"unsafe payload member: {member.name}")
+              archive.extractall(".")
+          PY
+          chmod +x \
+            scripts/check_ci_baseline.py \
+            scripts/check_developer_commands.py \
+            scripts/check_formatting_baseline.py \
+            scripts/dependency_report.py \
+            scripts/nodal.py
+
+      - name: Validate implementation before commit
+        shell: bash
+        run: |
+          python3 scripts/check_developer_commands.py
+          python3 scripts/check_ci_baseline.py
+          python3 scripts/check_formatting_baseline.py
+          python3 -m unittest discover -s tests/developer -p 'test_*.py'
+          python3 -m unittest discover -s tests/ci -p 'test_*.py'
+
+      - name: Commit implementation and remove transport files
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -r -- \
+            .github/increment8 \
+            .github/workflows/increment-8-apply.yml
+          git add -- \
+            .github/CODEOWNERS \
+            .github/branch-policy.json \
+            .github/workflows/ci.yml \
+            .github/workflows/dependency-report.yml \
+            docs/development/branching.md \
+            docs/development/ci.md \
+            docs/development/commands.md \
+            scripts/check_ci_baseline.py \
+            scripts/check_developer_commands.py \
+            scripts/check_formatting_baseline.py \
+            scripts/dependency_report.py \
+            scripts/nodal.py \
+            tests/ci/README.md \
+            tests/ci/test_ci_baseline.py \
+            tests/ci/test_dependency_report.py \
+            tests/ci/test_formatting_baseline.py \
+            tests/developer/test_developer_command_contract.py \
+            tests/developer/test_developer_commands.py
+          git diff --cached --check
+          git commit -m 'ci: add continuous integration baseline'
+          git push origin "HEAD:${GITHUB_REF_NAME}"

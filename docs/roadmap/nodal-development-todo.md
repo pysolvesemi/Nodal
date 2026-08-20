@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 0.4  
+**Revision:** 0.5  
 **Created:** 2026-08-20  
 **Status:** Active roadmap  
 **Primary language target:** Verilog-AMS 2023  
@@ -183,8 +183,9 @@ The `libraries/` and `packaging/libraries/` paths are architectural reservations
   - Record the Scala frontend/native compiler split, MLIR as authoritative IR, out-of-tree Nodal dialect, selective CIRCT reuse, textual MLIR process boundary for the first implementation, backend capability profiles, top-level `core/` versus `libraries/` separation, and the enforced one-way `libraries -> core` dependency rule.
   - Evidence: [`docs/architecture/README.md`](../architecture/README.md) and commit [`8052eca`](https://github.com/pysolvesemi/Nodal/commit/8052eca5de87244566f84d7d776d513991ef2e83).
 
-- [ ] **Increment 3 — Scalable repository skeleton**
+- [x] **Increment 3 — Scalable repository skeleton**
   - Create only the `core/` directories and module descriptors required for the initial build. Reserve `libraries/` in architecture/build conventions without creating empty library modules. Add ownership boundaries and automated dependency-direction rules preventing compiler code from depending on frontend internals and all core code from depending on future libraries.
+  - Evidence: [`core/modules.toml`](../../core/modules.toml), [`scripts/check_architecture.py`](../../scripts/check_architecture.py), [`tests/architecture/`](../../tests/architecture/), and commit [`300d389`](https://github.com/pysolvesemi/Nodal/commit/300d38949d2152af1c310caf528d0aea81eb0063).
 
 - [ ] **Increment 4 — Modern Scala 3 build bootstrap**
   - Re-check the newest stable Scala 3 release, then pin it with JDK 25 and a current Mill 1.x wrapper. Add `core/scala/api`, `core/scala/frontend`, `core/scala/bridge`, `core/scala/cli`, and core test modules with one passing smoke test. Do not add Scala 2 cross-builds.

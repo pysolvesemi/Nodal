@@ -119,3 +119,18 @@ GitHub Actions invokes the same `./nodal` commands documented above. Workflows
 must not duplicate the underlying Mill, CMake, CTest, or toolchain-bootstrap
 command sequences. This keeps local and CI behavior aligned as the repository
 grows.
+
+## Contract validation
+
+The command surface is guarded by both structural and behavioral tests:
+
+```bash
+python3 scripts/check_developer_commands.py
+python3 -m unittest discover -s tests/developer -p 'test_*.py'
+```
+
+The structural checker verifies wrappers, command namespaces, documentation,
+CI delegation, and the absence of a core-to-library dependency. Behavioral
+tests exercise argument forwarding, Scala and native command plans, complete
+check composition, deterministic toolchain discovery, safe cleaning, toolchain
+diagnostics, and the reserved library response.

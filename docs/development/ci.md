@@ -72,7 +72,8 @@ $RUNNER_TEMP/nodal-lint-toolchain
 ```
 
 The native archive cache remains checksum-verified before extraction. Every job
-rebuilds outputs and reruns checks.
+rebuilds outputs and reruns checks. Cache restoration can improve performance,
+but it never substitutes for validation evidence from the current commit.
 
 ## Language-specific gates
 

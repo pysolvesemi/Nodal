@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 0.3  
+**Revision:** 0.4  
 **Created:** 2026-08-20  
 **Status:** Active roadmap  
 **Primary language target:** Verilog-AMS 2023  
@@ -179,8 +179,9 @@ The `libraries/` and `packaging/libraries/` paths are architectural reservations
   - Add `README.md`, project goals, non-goals, terminology, supported abstraction levels, Verilog-AMS 2023 baseline, analog-only Verilog-A profile, the core-versus-library scope boundary, and an explicit statement that SystemVerilog-AMS is a future backend target rather than an initial dependency.
   - Evidence: [`README.md`](../../README.md) and commit [`cb4c55f`](https://github.com/pysolvesemi/Nodal/commit/cb4c55f2e12305be3e92b66df0b499b1d4932c2c).
 
-- [ ] **Increment 2 — Architecture decision records**
+- [x] **Increment 2 — Architecture decision records**
   - Record the Scala frontend/native compiler split, MLIR as authoritative IR, out-of-tree Nodal dialect, selective CIRCT reuse, textual MLIR process boundary for the first implementation, backend capability profiles, top-level `core/` versus `libraries/` separation, and the enforced one-way `libraries -> core` dependency rule.
+  - Evidence: [`docs/architecture/README.md`](../architecture/README.md) and commit [`8052eca`](https://github.com/pysolvesemi/Nodal/commit/8052eca5de87244566f84d7d776d513991ef2e83).
 
 - [ ] **Increment 3 — Scalable repository skeleton**
   - Create only the `core/` directories and module descriptors required for the initial build. Reserve `libraries/` in architecture/build conventions without creating empty library modules. Add ownership boundaries and automated dependency-direction rules preventing compiler code from depending on frontend internals and all core code from depending on future libraries.

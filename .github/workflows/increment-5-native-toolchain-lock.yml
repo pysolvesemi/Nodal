@@ -1,0 +1,128 @@
+name: Increment 5 native toolchain lock validation
+
+on:
+  push:
+    branches:
+      - increment/5-native-toolchain-lock
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  native-toolchain-lock:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      FORCE_COLOR: '0'
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Publish pending commit status
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state='pending' \
+            -f context='increment-5/native-toolchain-lock' \
+            -f description='Native toolchain lock validation is running' \
+            -f target_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Run validation suite
+        shell: bash
+        run: |
+          set +e
+          mkdir -p .validation
+          : > .validation/results
+
+          run_check() {
+            local slug="$1"
+            local label="$2"
+            shift 2
+            "$@" > ".validation/${slug}.log" 2>&1
+            local status=$?
+            printf '%s|%s|%s\n' "$slug" "$label" "$status" >> .validation/results
+          }
+
+          run_check architecture "Architecture checker" \
+            python3 scripts/check_architecture.py
+          run_check scala-pins "Scala bootstrap pin checker" \
+            python3 scripts/check_scala_bootstrap.py
+          run_check native-lock "Native lock offline checker" \
+            python3 scripts/check_native_toolchain.py
+          run_check native-lock-online "Native lock online provenance" \
+            python3 scripts/check_native_toolchain.py --online
+          run_check architecture-tests "Architecture unit tests" \
+            python3 -m unittest discover -s tests/architecture -p 'test_*.py'
+          run_check scala-tests "Scala bootstrap unit tests" \
+            python3 -m unittest discover -s tests/build -p 'test_*.py'
+          run_check toolchain-tests "Native toolchain unit tests" \
+            python3 -m unittest discover -s tests/toolchain -p 'test_*.py'
+          run_check cmake-version "CMake host version" \
+            cmake --version
+          run_check ninja-version "Ninja host version" \
+            ninja --version
+          run_check discovery "Managed toolchain discovery" \
+            python3 scripts/bootstrap_native_toolchain.py status --json
+          run_check prebuilt-plan "Locked prebuilt install plan" \
+            python3 scripts/bootstrap_native_toolchain.py plan --mode auto --json
+          run_check source-plan "Locked source fallback plan" \
+            python3 scripts/bootstrap_native_toolchain.py plan --mode source --json
+          run_check scala-compile "Compile every Scala module" \
+            ./mill __.compile
+          run_check scala-smoke "Scala bootstrap smoke tests" \
+            ./mill core.scala.testkit.test
+
+          overall=0
+          while IFS='|' read -r slug label status; do
+            if [ "$status" -ne 0 ]; then
+              overall=1
+            fi
+          done < .validation/results
+          printf '%s\n' "$overall" > .validation/exit-code
+
+          echo 'Validation summary:'
+          while IFS='|' read -r slug label status; do
+            if [ "$status" -eq 0 ]; then result='PASS'; else result="FAIL (${status})"; fi
+            printf '  %-38s %s\n' "$label" "$result"
+          done < .validation/results
+
+          while IFS='|' read -r slug label status; do
+            echo
+            echo "===== ${label} ====="
+            cat ".validation/${slug}.log"
+          done < .validation/results
+
+      - name: Publish final commit status
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f .validation/exit-code ] && [ "$(cat .validation/exit-code)" -eq 0 ]; then
+            state=success
+            description='Native toolchain lock validation passed'
+          else
+            state=failure
+            description='Native toolchain lock validation failed'
+          fi
+          gh api \
+            --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="$state" \
+            -f context='increment-5/native-toolchain-lock' \
+            -f description="$description" \
+            -f target_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+      - name: Propagate validation result
+        if: always()
+        shell: bash
+        run: |
+          test -f .validation/exit-code
+          exit "$(cat .validation/exit-code)"

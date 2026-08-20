@@ -5,6 +5,11 @@ out/
 .metals/
 .scala-build/
 
+# Native compiler/toolchain bootstrap
+.toolchains/
+.native-build/
+.validation/
+
 # IDEs and local files
 .idea/
 .vscode/

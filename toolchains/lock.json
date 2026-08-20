@@ -1,0 +1,99 @@
+{
+  "schema": 1,
+  "lock_id": "nodal-native-2026.08.20",
+  "generated_at": "2026-08-20",
+  "policy": {
+    "immutable_revisions_only": true,
+    "circt_llvm_pair_source": "circt-submodule",
+    "release_assets_require_sha256": true,
+    "source_build_fallback_required": true,
+    "allow_unpinned_default_branch": false
+  },
+  "scala": {
+    "version": "3.8.4",
+    "mill_version": "1.1.7",
+    "jvm": "zulu:25",
+    "utest_version": "0.9.1"
+  },
+  "native": {
+    "circt": {
+      "repository": "https://github.com/llvm/circt.git",
+      "release_tag": "firtool-1.154.0",
+      "release_date": "2026-07-27",
+      "commit": "87898a876f730a2ebc607dc9b83da487cba49119",
+      "llvm_submodule_commit": "b1c56fb53a9c76d6b045ede49083b647ae049ffe"
+    },
+    "llvm": {
+      "repository": "https://github.com/llvm/llvm-project.git",
+      "commit": "b1c56fb53a9c76d6b045ede49083b647ae049ffe",
+      "package_version": "23.0.0git"
+    },
+    "requirements": {
+      "python_minimum": "3.11.0",
+      "cmake_minimum": "3.20.0",
+      "cmake_preferred": "3.31.0",
+      "ninja_minimum": "1.10.0",
+      "cxx_standard": 17
+    },
+    "source_build": {
+      "generator": "Ninja",
+      "build_type": "Release",
+      "llvm_enable_projects": [
+        "mlir"
+      ],
+      "llvm_targets_to_build": [
+        "host"
+      ],
+      "llvm_enable_assertions": true,
+      "circt_slang_frontend_enabled": false,
+      "circt_python_bindings_enabled": false
+    }
+  },
+  "assets": [
+    {
+      "id": "circt-full-shared-linux-x64",
+      "kind": "prebuilt",
+      "host": {
+        "os": "linux",
+        "arch": "x86_64"
+      },
+      "filename": "circt-full-shared-linux-x64.tar.gz",
+      "url": "https://github.com/llvm/circt/releases/download/firtool-1.154.0/circt-full-shared-linux-x64.tar.gz",
+      "sha256": "2e3ed6051c43773b002c88c1172cb71f1430b71106835e6b4b5d5b631569fe28",
+      "checksum_file": "toolchains/checksums/circt-full-shared-linux-x64.tar.gz.sha256"
+    },
+    {
+      "id": "circt-full-shared-macos-arm64",
+      "kind": "prebuilt",
+      "host": {
+        "os": "macos",
+        "arch": "aarch64"
+      },
+      "filename": "circt-full-shared-macos-arm64.tar.gz",
+      "url": "https://github.com/llvm/circt/releases/download/firtool-1.154.0/circt-full-shared-macos-arm64.tar.gz",
+      "sha256": "30340491c03af24e2222c64fdbffd0051dbf50d35e0817bd92ec87ee9f586348",
+      "checksum_file": "toolchains/checksums/circt-full-shared-macos-arm64.tar.gz.sha256"
+    },
+    {
+      "id": "circt-full-shared-macos-x64",
+      "kind": "prebuilt",
+      "host": {
+        "os": "macos",
+        "arch": "x86_64"
+      },
+      "filename": "circt-full-shared-macos-x64.tar.gz",
+      "url": "https://github.com/llvm/circt/releases/download/firtool-1.154.0/circt-full-shared-macos-x64.tar.gz",
+      "sha256": "3e499fcf3e91e183e3fc8945a511485547339afdf984c97e7d848556e575d312",
+      "checksum_file": "toolchains/checksums/circt-full-shared-macos-x64.tar.gz.sha256"
+    },
+    {
+      "id": "circt-full-sources",
+      "kind": "source",
+      "host": null,
+      "filename": "circt-full-sources.tar.gz",
+      "url": "https://github.com/llvm/circt/releases/download/firtool-1.154.0/circt-full-sources.tar.gz",
+      "sha256": "77fddafcadf5a806b5e12d204ff6099377d80a680bb1884b5fc907bfcb1ae1c4",
+      "checksum_file": "toolchains/checksums/circt-full-sources.tar.gz.sha256"
+    }
+  ]
+}

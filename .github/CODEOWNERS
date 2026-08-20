@@ -12,9 +12,14 @@
 /core/**/module.toml @pysolvesemi
 /docs/architecture/ @pysolvesemi
 
-# Dependency-boundary enforcement.
+# Dependency-boundary and toolchain enforcement.
 /scripts/check_architecture.py @pysolvesemi
 /tests/architecture/ @pysolvesemi
+/toolchains/ @pysolvesemi
+/scripts/toolchain_lock.py @pysolvesemi
+/scripts/check_native_toolchain.py @pysolvesemi
+/scripts/bootstrap_native_toolchain.py @pysolvesemi
+/tests/toolchain/ @pysolvesemi
 
 # Future libraries remain separately reviewable when they are introduced.
 /libraries/ @pysolvesemi

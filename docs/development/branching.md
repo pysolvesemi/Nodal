@@ -1,80 +1,88 @@
 # Branch and merge policy
 
-Nodal uses a **protected trunk** rather than a long-lived integration branch.
+Nodal uses separate protected integration and release branches.
 
 ## Branch roles
 
 ```text
 increment/<number>-<slug>
           |
-          | pull request, Core CI green
+          | pull request, Core CI green, squash merge
           v
-        main
+         dev                         default development branch
           |
-          +-- milestone tag / release
+          | milestone promotion pull request, Core CI green
+          v
+        main                         locked release branch
+          |
+          +-- annotated or signed milestone tag
 ```
 
-`main` is both the integration and release-history branch. It is locked against
-direct pushes, force pushes, and deletion. All implementation changes arrive by
-pull request after the required `Core CI / required` gate succeeds.
-
-Stable releases are identified by an annotated or signed milestone tag. Keeping
-release identity in tags avoids maintaining a second branch that contains the
-same integration history.
-
-## Why there is no long-lived `dev` branch
-
-A separate `dev` branch is not needed for the current one-increment-at-a-time
-workflow. It would:
-
-- duplicate integration state;
-- make contributors choose between two permanent bases;
-- postpone CI and scheduled dependency workflows that GitHub reads from the
-  default branch;
-- create recurring `dev`-to-`main` promotion merges;
-- make it less obvious which green commit is the current project baseline.
-
-A `dev` or release-train branch may be introduced later only through an accepted
-ADR if parallel incompatible trains create a demonstrated need.
+- `dev` is the continuously integrated development branch and should become the
+  repository default branch after the bootstrap integration.
+- `main` is the milestone-release branch. It changes only through a promotion
+  pull request whose source is `dev`.
+- Both branches reject direct pushes, force pushes, and deletion.
 
 ## Bootstrap integration after Increment 8
 
 The repository currently has Increments 1–8 as a linear, independently
 validated stack above the original `main` roadmap commit.
 
-The one-time bootstrap pull request should be:
+After Increment 8 Core CI succeeds, perform the one-time bootstrap:
 
-```text
-head: increment/8-ci-baseline
-base: main
-method: merge commit
-```
+1. create `dev` from the current `main` commit;
+2. open one pull request with head `increment/8-ci-baseline` and base `dev`;
+3. require `Core CI / required`;
+4. merge with a merge commit;
+5. change the GitHub default branch from `main` to `dev`;
+6. enable the documented protection rules on both branches.
 
 The merge commit preserves all existing increment commits and their evidence.
 Squashing this bootstrap would collapse the independently validated history into
-one large commit, so the bootstrap is the only planned exception to the normal
-squash policy.
+one large commit, so the bootstrap is the only exception to the normal
+increment squash policy.
+
+No bootstrap branch, pull request, or merge is created merely by documenting
+this policy. Integration is a separate authorized repository action.
 
 ## Normal increment flow
 
-After the bootstrap merge:
+After bootstrap:
 
-1. update local `main`;
-2. create `increment/<number>-<slug>` from current `main`;
+1. update local `dev`;
+2. create `increment/<number>-<slug>` from current `dev`;
 3. implement exactly one roadmap increment;
 4. push the increment branch;
-5. open a pull request into `main`;
+5. open a pull request into `dev`;
 6. require `Core CI / required`;
 7. squash-merge the increment;
 8. delete the merged increment branch;
-9. start the next increment from the new `main`.
+9. start the next increment from the new `dev`.
 
-This gives one reviewable commit per future increment while keeping `main`
-continuously buildable.
+This gives one reviewable integration commit per future increment while keeping
+`dev` continuously buildable.
 
-## Main protection settings
+## Milestone promotion flow
 
-Configure the GitHub ruleset for `main` to require:
+Promote `dev` to `main` only when a roadmap milestone is complete:
+
+| Milestone | Promotion gate |
+| --- | --- |
+| M0 — Foundation | after Increment 12 |
+| M1 — First vertical slice | after Increment 23 |
+| M2 — Analog preview | after Increment 50 |
+| M3 — AMS preview | after Increment 66 |
+| M4 — Scalable core release | after Increment 77 |
+
+A promotion uses a pull request from `dev` to `main`, requires the same Core CI
+gate, and uses a merge commit. After merge, create the corresponding annotated
+or signed milestone tag. Hotfix branches are out of scope until the first
+release exists.
+
+## Protection settings
+
+Configure the GitHub ruleset for `dev` to require:
 
 - pull requests;
 - `Core CI / required`;
@@ -83,16 +91,16 @@ Configure the GitHub ruleset for `main` to require:
 - no branch deletion;
 - squash merge for normal increment pull requests.
 
+Configure `main` with the same restrictions, plus the policy that the pull
+request source is `dev` and promotion occurs only at a completed milestone.
+
 For a single maintainer, an approval count of zero is acceptable initially as
 long as pull requests and required checks are mandatory. Increase the approval
 requirement when additional maintainers join.
 
-## Releases
+## Machine-readable policy
 
-Create a milestone tag only after the relevant roadmap gate is complete. The
-planned early tags align with M0, M1, M2, M3, and M4 rather than every increment.
-
-The machine-readable policy is stored in:
+The checked contract is stored in:
 
 ```text
 .github/branch-policy.json

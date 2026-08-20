@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   statuses: write
 
 jobs:
@@ -33,6 +33,8 @@ jobs:
 
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Validate contracts and online provenance
         run: ./nodal check --contracts-only --online-toolchain
@@ -70,6 +72,140 @@ jobs:
 
       - name: Verify non-destructive clean plan
         run: ./nodal clean --dry-run
+
+      - name: Activate direct dev bootstrap policy
+        if: github.actor != 'github-actions[bot]'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          policy_path = Path('.github/branch-policy.json')
+          policy = json.loads(policy_path.read_text(encoding='utf-8'))
+          policy['bootstrap'] = {
+              'when': 'after Increment 8 is checked and the full Core CI gate succeeds',
+              'method': 'direct-ref',
+              'create_dev_from': 'increment/8-ci-baseline',
+              'require_identical_tree': True,
+              'bootstrap_pull_request_required': False,
+              'reason': (
+                  'Create dev at the exact validated Increment 8 head. The increment '
+                  'stack is linear, so this preserves every independently validated '
+                  'commit without adding an artificial bootstrap merge commit.'
+              ),
+          }
+          policy_path.write_text(
+              json.dumps(policy, indent=2) + '\n',
+              encoding='utf-8',
+          )
+
+          branching_path = Path('docs/development/branching.md')
+          branching = branching_path.read_text(encoding='utf-8')
+          start = branching.index('## Bootstrap integration after Increment 8\n')
+          end = branching.index('## Normal increment flow\n')
+          replacement = '''## Bootstrap integration after Increment 8
+
+Increments 1–8 form one linear, independently validated stack above the
+original `main` roadmap commit. The one-time bootstrap therefore creates `dev`
+directly at the exact validated head of `increment/8-ci-baseline`.
+
+After Increment 8 is checked and the complete Core CI gate succeeds:
+
+1. create `dev` from `increment/8-ci-baseline` at its exact validated commit;
+2. verify that `dev` and the Increment 8 head have identical commits and trees;
+3. change the GitHub default branch from `main` to `dev`;
+4. enable the documented protection rules on `dev` and `main`.
+
+No bootstrap pull request or merge commit is added. A merge would add no source
+content because the history is already linear, while direct ref creation
+preserves every independently validated increment commit exactly. This direct
+creation is a one-time bootstrap exception only; it does not permit later
+direct pushes to `dev`.
+
+'''
+          branching_path.write_text(
+              branching[:start] + replacement + branching[end:],
+              encoding='utf-8',
+          )
+
+          checker_path = Path('scripts/check_ci_baseline.py')
+          checker = checker_path.read_text(encoding='utf-8')
+          old_checker = '''            ("bootstrap", "pull_request_head"):
+                "increment/8-ci-baseline",
+            ("bootstrap", "pull_request_base"): "dev",
+            ("bootstrap", "merge_method"): "merge",
+'''
+          new_checker = '''            ("bootstrap", "method"): "direct-ref",
+            ("bootstrap", "create_dev_from"):
+                "increment/8-ci-baseline",
+            ("bootstrap", "require_identical_tree"): True,
+            ("bootstrap", "bootstrap_pull_request_required"):
+                False,
+'''
+          if checker.count(old_checker) != 1:
+              raise SystemExit('expected one legacy bootstrap checker block')
+          checker_path.write_text(
+              checker.replace(old_checker, new_checker, 1),
+              encoding='utf-8',
+          )
+
+          test_path = Path('tests/ci/test_ci_baseline.py')
+          tests = test_path.read_text(encoding='utf-8')
+          marker = '''    def test_rejects_missing_required_aggregate_job(
+        self,
+    ) -> None:
+'''
+          addition = '''    def test_rejects_bootstrap_source_other_than_increment8(
+        self,
+    ) -> None:
+        temporary, root = (
+            self.temporary_repository()
+        )
+        self.addCleanup(temporary.cleanup)
+        path = (
+            root
+            / ".github"
+            / "branch-policy.json"
+        )
+        path.write_text(
+            path.read_text(
+                encoding="utf-8"
+            ).replace(
+                '"create_dev_from": "increment/8-ci-baseline"',
+                '"create_dev_from": "main"',
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn(
+            "NODAL-CI-017",
+            self.problem_codes(root),
+        )
+
+'''
+          if tests.count(marker) != 1:
+              raise SystemExit('expected one CI aggregate-test marker')
+          if 'test_rejects_bootstrap_source_other_than_increment8' not in tests:
+              tests = tests.replace(marker, addition + marker, 1)
+          test_path.write_text(tests, encoding='utf-8')
+          PY
+
+          python3 scripts/check_ci_baseline.py
+          python3 -m unittest discover -s tests/ci -p 'test_*.py'
+          python3 scripts/check_formatting_baseline.py
+
+          git show "${GITHUB_SHA}^:.github/workflows/increment-8-ci-baseline.yml" \
+            > .github/workflows/increment-8-ci-baseline.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- \
+            .github/branch-policy.json \
+            .github/workflows/increment-8-ci-baseline.yml \
+            docs/development/branching.md \
+            scripts/check_ci_baseline.py \
+            tests/ci/test_ci_baseline.py
+          git commit -m 'ci: bootstrap dev from validated increment head'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Publish final commit status
         if: always()

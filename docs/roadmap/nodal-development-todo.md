@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 0.5  
+**Revision:** 0.6  
 **Created:** 2026-08-20  
 **Status:** Active roadmap  
 **Primary language target:** Verilog-AMS 2023  
@@ -187,8 +187,9 @@ The `libraries/` and `packaging/libraries/` paths are architectural reservations
   - Create only the `core/` directories and module descriptors required for the initial build. Reserve `libraries/` in architecture/build conventions without creating empty library modules. Add ownership boundaries and automated dependency-direction rules preventing compiler code from depending on frontend internals and all core code from depending on future libraries.
   - Evidence: [`core/modules.toml`](../../core/modules.toml), [`scripts/check_architecture.py`](../../scripts/check_architecture.py), [`tests/architecture/`](../../tests/architecture/), and commit [`300d389`](https://github.com/pysolvesemi/Nodal/commit/300d38949d2152af1c310caf528d0aea81eb0063).
 
-- [ ] **Increment 4 — Modern Scala 3 build bootstrap**
+- [x] **Increment 4 — Modern Scala 3 build bootstrap**
   - Re-check the newest stable Scala 3 release, then pin it with JDK 25 and a current Mill 1.x wrapper. Add `core/scala/api`, `core/scala/frontend`, `core/scala/bridge`, `core/scala/cli`, and core test modules with one passing smoke test. Do not add Scala 2 cross-builds.
+  - Evidence: [`build.mill`](../../build.mill), [`docs/development/scala-build.md`](../development/scala-build.md), commit [`95b8c91`](https://github.com/pysolvesemi/Nodal/commit/95b8c9155bb92890c04c9e42b68fdf7677432a10), and successful validation run [`32350691664`](https://github.com/pysolvesemi/Nodal/actions/runs/32350691664).
 
 - [ ] **Increment 5 — LLVM/MLIR/CIRCT toolchain lock**
   - Select and pin a compatible LLVM/MLIR/CIRCT revision pair, CMake and Ninja requirements, checksums, source-build fallback, and prebuilt-toolchain discovery. Avoid unpinned `main` dependencies.

@@ -90,12 +90,56 @@ set(LLVM_DIR "${NODAL_NATIVE_TOOLCHAIN}/lib/cmake/llvm" CACHE PATH "" FORCE)
 
 find_package(CIRCT REQUIRED CONFIG)
 
+# Match the libstdc++ ABI used to build the locked LLVM/CIRCT package. LLVM's
+# exported definitions carry the authoritative value. HandleLLVMOptions will
+# add it once for Nodal targets, so remove the exported duplicate before the
+# root project applies the remaining LLVM_DEFINITIONS.
+set(_nodal_llvm_definitions ${LLVM_DEFINITIONS})
+list(LENGTH _nodal_llvm_definitions _nodal_llvm_definition_count)
+if(_nodal_llvm_definition_count EQUAL 1)
+  list(GET _nodal_llvm_definitions 0 _nodal_only_llvm_definition)
+  if(_nodal_only_llvm_definition MATCHES "[ \t]")
+    separate_arguments(
+      _nodal_llvm_definitions NATIVE_COMMAND "${_nodal_only_llvm_definition}"
+    )
+  endif()
+endif()
+
+set(_nodal_glibcxx_abi "")
+foreach(_definition IN LISTS _nodal_llvm_definitions)
+  if(_definition MATCHES "^-D_GLIBCXX_USE_CXX11_ABI=([01])$")
+    set(_nodal_glibcxx_abi_candidate "${CMAKE_MATCH_1}")
+    if(NOT _nodal_glibcxx_abi STREQUAL "" AND
+       NOT _nodal_glibcxx_abi STREQUAL _nodal_glibcxx_abi_candidate)
+      message(FATAL_ERROR
+        "Locked LLVM package exports conflicting _GLIBCXX_USE_CXX11_ABI values")
+    endif()
+    set(_nodal_glibcxx_abi "${_nodal_glibcxx_abi_candidate}")
+  endif()
+endforeach()
+
+if(NOT _nodal_glibcxx_abi STREQUAL "")
+  if(_nodal_glibcxx_abi STREQUAL "1")
+    set(_nodal_glibcxx_abi_bool ON)
+  else()
+    set(_nodal_glibcxx_abi_bool OFF)
+  endif()
+  set(GLIBCXX_USE_CXX11_ABI "${_nodal_glibcxx_abi_bool}" CACHE BOOL
+      "Match the libstdc++ ABI of the locked LLVM/CIRCT package" FORCE)
+  list(FILTER _nodal_llvm_definitions EXCLUDE REGEX
+       "^-D_GLIBCXX_USE_CXX11_ABI=[01]$")
+  set(LLVM_DEFINITIONS ${_nodal_llvm_definitions})
+endif()
+
 set(CMAKE_BUILD_RPATH "${NODAL_NATIVE_TOOLCHAIN}/lib")
 set(CMAKE_INSTALL_RPATH "${NODAL_NATIVE_TOOLCHAIN}/lib")
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 message(STATUS "Nodal native lock: ${NODAL_NATIVE_LOCK_ID}")
 message(STATUS "Nodal CIRCT release: ${NODAL_CIRCT_RELEASE_TAG}")
+if(NOT _nodal_glibcxx_abi STREQUAL "")
+  message(STATUS "Nodal libstdc++ C++11 ABI: ${_nodal_glibcxx_abi}")
+endif()
 message(STATUS "Using CIRCTConfig.cmake in: ${CIRCT_DIR}")
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")

@@ -27,6 +27,13 @@ export NODAL_NATIVE_TOOLCHAIN=/absolute/path/to/nodal-native-2026.08.20-<host>
 CMake rejects a directory that lacks `.nodal-toolchain.json`, has different
 CIRCT/LLVM commits, or is missing the exported CIRCT, MLIR, and LLVM packages.
 
+The exported LLVM definitions also select the libstdc++ C++11 ABI used by the
+locked binaries. Nodal applies that value through `HandleLLVMOptions` and
+removes the duplicate exported macro before compiling its own targets. This
+prevents silent host-default ABI drift and avoids normalizing a macro
+redefinition warning. The Increment 6 workflow treats such a warning as a
+failure.
+
 ## Configure, build, and test
 
 ```bash

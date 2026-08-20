@@ -51,6 +51,19 @@ class NativeCompilerBootstrapCheckTests(unittest.TestCase):
         )
         self.assertIn("NODAL-COMPILER-009", self.problem_codes(root))
 
+    def test_rejects_missing_abi_alignment(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "cmake/NodalToolchain.cmake"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "list(FILTER _nodal_llvm_definitions EXCLUDE REGEX",
+                "list(FILTER _nodal_llvm_definitions INCLUDE REGEX",
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-COMPILER-020", self.problem_codes(root))
+
     def test_rejects_missing_circt_link(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
@@ -82,6 +95,18 @@ class NativeCompilerBootstrapCheckTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertIn("NODAL-COMPILER-012", self.problem_codes(root))
+
+    def test_rejects_missing_abi_warning_gate(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / ".github/workflows/increment-6-native-compiler-bootstrap.yml"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "native-build.log", "unchecked-build.log"
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-COMPILER-019", self.problem_codes(root))
 
 
 if __name__ == "__main__":

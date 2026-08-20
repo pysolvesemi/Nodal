@@ -119,6 +119,21 @@ def check_repository(root: Path) -> list[Problem]:
                 Problem("NODAL-COMPILER-009", f"toolchain CMake lacks: {fragment}")
             )
 
+    required_abi_alignment = (
+        "_GLIBCXX_USE_CXX11_ABI=([01])",
+        "set(GLIBCXX_USE_CXX11_ABI",
+        "list(FILTER _nodal_llvm_definitions EXCLUDE REGEX",
+        "set(LLVM_DEFINITIONS ${_nodal_llvm_definitions})",
+    )
+    for fragment in required_abi_alignment:
+        if fragment not in toolchain:
+            problems.append(
+                Problem(
+                    "NODAL-COMPILER-020",
+                    f"native toolchain ABI alignment lacks: {fragment}",
+                )
+            )
+
     required_links = (
         "add_llvm_executable(nodalc",
         "NodalSupport",
@@ -210,6 +225,8 @@ def check_repository(root: Path) -> list[Problem]:
         "nodalc --version",
         "ctest --preset native-release",
         "check_native_compiler_bootstrap.py",
+        "native-build.log",
+        "_GLIBCXX_USE_CXX11_ABI.*redefined",
     )
     for fragment in required_workflow:
         if fragment not in workflow:

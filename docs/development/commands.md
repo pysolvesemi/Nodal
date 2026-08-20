@@ -1,18 +1,15 @@
 # Unified developer commands
 
-Increment 7 defines one stable command surface for local development and CI:
+Nodal exposes one stable command surface for local development and CI:
 
 ```text
 nodal
 ```
 
 Use `./nodal` on Linux and macOS and `nodal.bat` on Windows. Both wrappers call
-the same Python standard-library implementation in `scripts/nodal.py`; build
-logic is not duplicated in the wrappers or CI workflows.
+the same Python standard-library implementation in `scripts/nodal.py`.
 
-## Command contract
-
-### Bootstrap the locked native toolchain
+## Native compiler toolchain
 
 ```bash
 ./nodal bootstrap
@@ -21,62 +18,91 @@ logic is not duplicated in the wrappers or CI workflows.
 ./nodal bootstrap --dry-run --json
 ```
 
-This delegates to the checked and checksum-verified native toolchain installer.
-It never selects an unpinned system LLVM, MLIR, or CIRCT installation.
+The command installs or validates the checksum-locked LLVM/MLIR/CIRCT stack.
 
-### Build and test Scala core
+## Style and lint toolchain
+
+```bash
+./nodal style bootstrap
+./nodal style bootstrap --prefix /absolute/lint/path
+./nodal style bootstrap --dry-run --json
+```
+
+This creates an isolated environment containing the exact clang-format and
+clang-tidy versions in `toolchains/lint-lock.json`. Scalafmt and Scalafix are
+resolved through the pinned Mill build.
+
+Check all language and contribution rules:
+
+```bash
+./nodal style check
+./nodal style check --lint-toolchain /absolute/lint/path
+./nodal style check --base-ref origin/dev
+```
+
+Apply deterministic source rewrites:
+
+```bash
+./nodal style fix
+./nodal style fix --lint-toolchain /absolute/lint/path
+```
+
+`style fix` applies Scalafmt, Scalafix, and ClangFormat only. Markdown,
+visibility, pull-request, and design-gate violations must be corrected
+explicitly.
+
+## Build and test Scala core
 
 ```bash
 ./nodal core scala
 ```
 
 This compiles every Scala module through the repository Mill wrapper and runs
-the Scala core smoke tests.
+the Scala smoke tests.
 
-### Build and test native core
+## Build, lint, and test native core
 
 ```bash
 ./nodal core native
 ./nodal core native --toolchain /absolute/toolchain/path
+./nodal core native --lint-toolchain /absolute/lint/path
 ```
 
-The command requires a managed installation matching `toolchains/lock.json`,
-configures the `native-release` CMake preset, builds `nodalc`, runs CTest, and
-runs the aggregate `check-nodal-native` target.
+The command configures the `native-release` CMake preset, builds `nodalc`, runs
+CTest and `check-nodal-native`, and runs ClangTidy when a validated lint
+toolchain is selected.
 
-### Run the complete core check
+## Complete core gate
 
 ```bash
 ./nodal check
 ./nodal check --online-toolchain
 ./nodal check --toolchain /absolute/toolchain/path
+./nodal check --lint-toolchain /absolute/lint/path
+./nodal check --base-ref origin/dev
 ```
 
-The full check runs architecture, Scala bootstrap, native lock, native compiler,
-developer-command, formatting-baseline, and CI-baseline contracts; all Python
-unit-test suites; the Scala core build/tests; and the native core build/tests.
-`--online-toolchain` additionally checks the pinned upstream release and
-checksum provenance.
-
-A native toolchain must already be installed. This separation keeps downloads
-explicit:
+The full check runs architecture, toolchain, compiler, developer-command, CI,
+formatting, lint, Markdown, package-visibility, contribution-policy, Scala, and
+native validation. Install both toolchains before running it:
 
 ```bash
 ./nodal bootstrap
-./nodal check
+./nodal style bootstrap
+./nodal check --base-ref origin/dev
 ```
 
-For CI job decomposition or a fast local policy pass, run only contracts and
-Python suites:
+For CI job decomposition or a fast local policy pass:
 
 ```bash
-./nodal check --contracts-only
-./nodal check --contracts-only --online-toolchain
+./nodal check --contracts-only --lint-toolchain /absolute/lint/path
+./nodal check --contracts-only --online-toolchain --base-ref origin/dev
 ```
 
-This skips Scala and native compilation; it does not weaken any contract check.
+This skips Scala compilation and the native build, but still runs Scalafmt,
+Scalafix, ClangFormat, Markdown, visibility, and contribution-policy checks.
 
-### Diagnose the toolchain
+## Diagnose the native toolchain
 
 ```bash
 ./nodal toolchain doctor
@@ -84,10 +110,7 @@ This skips Scala and native compilation; it does not weaken any contract check.
 ./nodal toolchain doctor --toolchain /absolute/toolchain/path
 ```
 
-The doctor validates the lock, optionally verifies online provenance, checks
-Python/CMake/Ninja availability, and reports the selected managed installation.
-
-### Clean generated outputs
+## Clean generated outputs
 
 ```bash
 ./nodal clean
@@ -95,62 +118,38 @@ Python/CMake/Ninja availability, and reports the selected managed installation.
 ./nodal clean --toolchains
 ```
 
-The default removes generated build, validation, BSP, and IDE-index outputs but
-preserves downloaded toolchains. `--toolchains` additionally removes only the
-repository-local `.toolchains/` path. The cleaner refuses paths resolving
-outside the repository.
+The default preserves downloaded toolchains. `--toolchains` additionally removes
+only the repository-local `.toolchains/` path. The cleaner refuses paths
+resolving outside the repository.
 
 ## Reserved library namespace
-
-The command namespace is reserved now so future reusable packages can receive
-independent checks without changing core command names:
 
 ```bash
 ./nodal library check <library-id>
 ```
 
-No library is implemented in the current roadmap. Until a future library
-roadmap approves the behavior, the command exits with:
-
-```text
-NODAL-DEV-004
-```
-
-The unified command does not create, discover, build, or depend on a
-`libraries/` directory. The architectural direction remains one-way:
-
-```text
-future libraries -> published Nodal core APIs
-Nodal core       -X-> future libraries
-```
+No library is implemented in the current roadmap. The command currently exits
+with `NODAL-DEV-004` and does not create or consume a `libraries/` directory.
 
 ## CI rule
 
-GitHub Actions invokes the same `./nodal` commands documented above. Workflows
-must not duplicate the underlying Mill, CMake, CTest, or toolchain-bootstrap
-command sequences. This keeps local and CI behavior aligned as the repository
-grows.
-
-The generic Core CI workflow uses:
+GitHub Actions invokes the same public commands. Workflows must not duplicate
+the underlying Mill, CMake, CTest, formatter, linter, or bootstrap sequences.
+The generic workflow uses:
 
 ```bash
-./nodal check --contracts-only --online-toolchain
+./nodal style bootstrap --prefix <runner-lint-toolchain>
+./nodal check --contracts-only --online-toolchain \
+  --lint-toolchain <runner-lint-toolchain> --base-ref <base>
 ./nodal core scala
-./nodal bootstrap --mode prebuilt --prefix <runner-toolchain>
-./nodal core native --toolchain <runner-toolchain>
+./nodal bootstrap --mode prebuilt --prefix <runner-native-toolchain>
+./nodal core native --toolchain <runner-native-toolchain> \
+  --lint-toolchain <runner-lint-toolchain>
 ```
 
 ## Contract validation
-
-The command surface is guarded by both structural and behavioral tests:
 
 ```bash
 python3 scripts/check_developer_commands.py
 python3 -m unittest discover -s tests/developer -p 'test_*.py'
 ```
-
-The structural checker verifies wrappers, command namespaces, documentation,
-CI delegation, and the absence of a core-to-library dependency. Behavioral
-tests exercise argument forwarding, Scala and native command plans, complete
-and contracts-only check composition, deterministic toolchain discovery, safe
-cleaning, toolchain diagnostics, and the reserved library response.

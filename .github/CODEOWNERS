@@ -29,6 +29,23 @@
 /tests/developer/ @pysolvesemi
 /docs/development/commands.md @pysolvesemi
 
+# Formatting, linting, visibility, and contribution policy.
+/.scalafmt.conf @pysolvesemi
+/.scalafix.conf @pysolvesemi
+/.clang-format @pysolvesemi
+/.clang-tidy @pysolvesemi
+/.github/change-policy.json @pysolvesemi
+/.github/pull_request_template.md @pysolvesemi
+/CONTRIBUTING.md @pysolvesemi
+/scripts/bootstrap_lint_toolchain.py @pysolvesemi
+/scripts/run_clang_tools.py @pysolvesemi
+/scripts/check_markdown.py @pysolvesemi
+/scripts/check_package_visibility.py @pysolvesemi
+/scripts/check_contribution_policy.py @pysolvesemi
+/scripts/check_increment9.py @pysolvesemi
+/tests/lint/ @pysolvesemi
+/docs/development/style-and-contributions.md @pysolvesemi
+
 # Continuous integration, branch policy, and update reporting.
 /.github/workflows/ @pysolvesemi
 /.github/branch-policy.json @pysolvesemi

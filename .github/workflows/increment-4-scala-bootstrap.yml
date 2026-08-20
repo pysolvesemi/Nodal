@@ -17,6 +17,19 @@ jobs:
     env:
       FORCE_COLOR: '0'
     steps:
+      - name: Publish pending commit status
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state='pending' \
+            -f context='increment-4/scala-bootstrap' \
+            -f description='Scala 3 bootstrap validation is running' \
+            -f target_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
       - name: Check out repository
         uses: actions/checkout@v6
 
@@ -71,7 +84,7 @@ jobs:
             cat ".validation/${slug}.log"
           done < .validation/results
 
-      - name: Publish commit status
+      - name: Publish final commit status
         if: always()
         shell: bash
         env:

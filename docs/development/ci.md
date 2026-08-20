@@ -50,7 +50,8 @@ title, body-section, and promotion rules.
 
 ## Cache policy
 
-Only immutable or re-verifiable dependency downloads are cached:
+GitHub Actions uses `actions/cache@v5` only for immutable or re-verifiable
+dependency downloads:
 
 ```text
 ~/.cache/coursier
@@ -58,8 +59,8 @@ Only immutable or re-verifiable dependency downloads are cached:
 ~/.cache/nodal/downloads
 ```
 
-Generated build outputs and installed toolchains are never cached as validation
-evidence:
+The generated build outputs and installed toolchains are never cached as
+validation evidence:
 
 ```text
 out/

@@ -29,6 +29,16 @@
 /tests/developer/ @pysolvesemi
 /docs/development/commands.md @pysolvesemi
 
+# Continuous integration, branch policy, and update reporting.
+/.github/workflows/ @pysolvesemi
+/.github/branch-policy.json @pysolvesemi
+/scripts/check_ci_baseline.py @pysolvesemi
+/scripts/check_formatting_baseline.py @pysolvesemi
+/scripts/dependency_report.py @pysolvesemi
+/tests/ci/ @pysolvesemi
+/docs/development/ci.md @pysolvesemi
+/docs/development/branching.md @pysolvesemi
+
 # Future libraries remain separately reviewable when they are introduced.
 /libraries/ @pysolvesemi
 /packaging/libraries/ @pysolvesemi

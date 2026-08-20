@@ -51,6 +51,19 @@ class NativeCompilerBootstrapCheckTests(unittest.TestCase):
         )
         self.assertIn("NODAL-COMPILER-009", self.problem_codes(root))
 
+    def test_rejects_missing_definition_normalization(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "cmake/NodalToolchain.cmake"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "list(REMOVE_DUPLICATES _nodal_llvm_definitions)",
+                "# duplicate removal intentionally deleted",
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-COMPILER-020", self.problem_codes(root))
+
     def test_rejects_missing_abi_alignment(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)

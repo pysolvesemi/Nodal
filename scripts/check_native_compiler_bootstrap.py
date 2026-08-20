@@ -120,6 +120,10 @@ def check_repository(root: Path) -> list[Problem]:
             )
 
     required_abi_alignment = (
+        "foreach(_raw_definition IN LISTS LLVM_DEFINITIONS)",
+        "separate_arguments(",
+        "_definition_tokens NATIVE_COMMAND",
+        "list(REMOVE_DUPLICATES _nodal_llvm_definitions)",
         "_GLIBCXX_USE_CXX11_ABI=([01])",
         "set(GLIBCXX_USE_CXX11_ABI",
         "list(FILTER _nodal_llvm_definitions EXCLUDE REGEX",

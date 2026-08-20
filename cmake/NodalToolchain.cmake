@@ -90,20 +90,21 @@ set(LLVM_DIR "${NODAL_NATIVE_TOOLCHAIN}/lib/cmake/llvm" CACHE PATH "" FORCE)
 
 find_package(CIRCT REQUIRED CONFIG)
 
-# Match the libstdc++ ABI used to build the locked LLVM/CIRCT package. LLVM's
-# exported definitions carry the authoritative value. HandleLLVMOptions will
-# add it once for Nodal targets, so remove the exported duplicate before the
-# root project applies the remaining LLVM_DEFINITIONS.
-set(_nodal_llvm_definitions ${LLVM_DEFINITIONS})
-list(LENGTH _nodal_llvm_definitions _nodal_llvm_definition_count)
-if(_nodal_llvm_definition_count EQUAL 1)
-  list(GET _nodal_llvm_definitions 0 _nodal_only_llvm_definition)
-  if(_nodal_only_llvm_definition MATCHES "[ \t]")
+# Match the libstdc++ ABI used to build the locked LLVM/CIRCT package. Some
+# binary exports combine several -D tokens into one CMake list element, so
+# normalize every element before reading the ABI value or applying definitions.
+set(_nodal_llvm_definitions)
+foreach(_raw_definition IN LISTS LLVM_DEFINITIONS)
+  if(_raw_definition MATCHES "[ \t]")
     separate_arguments(
-      _nodal_llvm_definitions NATIVE_COMMAND "${_nodal_only_llvm_definition}"
+      _definition_tokens NATIVE_COMMAND "${_raw_definition}"
     )
+    list(APPEND _nodal_llvm_definitions ${_definition_tokens})
+  else()
+    list(APPEND _nodal_llvm_definitions "${_raw_definition}")
   endif()
-endif()
+endforeach()
+list(REMOVE_DUPLICATES _nodal_llvm_definitions)
 
 set(_nodal_glibcxx_abi "")
 foreach(_definition IN LISTS _nodal_llvm_definitions)
@@ -118,6 +119,8 @@ foreach(_definition IN LISTS _nodal_llvm_definitions)
   endif()
 endforeach()
 
+# HandleLLVMOptions adds the ABI macro once using this cache value. Remove the
+# exported copy so Nodal never invokes the compiler with duplicate definitions.
 if(NOT _nodal_glibcxx_abi STREQUAL "")
   if(_nodal_glibcxx_abi STREQUAL "1")
     set(_nodal_glibcxx_abi_bool ON)
@@ -128,8 +131,8 @@ if(NOT _nodal_glibcxx_abi STREQUAL "")
       "Match the libstdc++ ABI of the locked LLVM/CIRCT package" FORCE)
   list(FILTER _nodal_llvm_definitions EXCLUDE REGEX
        "^-D_GLIBCXX_USE_CXX11_ABI=[01]$")
-  set(LLVM_DEFINITIONS ${_nodal_llvm_definitions})
 endif()
+set(LLVM_DEFINITIONS ${_nodal_llvm_definitions})
 
 set(CMAKE_BUILD_RPATH "${NODAL_NATIVE_TOOLCHAIN}/lib")
 set(CMAKE_INSTALL_RPATH "${NODAL_NATIVE_TOOLCHAIN}/lib")

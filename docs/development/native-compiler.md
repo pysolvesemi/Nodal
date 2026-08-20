@@ -28,11 +28,12 @@ CMake rejects a directory that lacks `.nodal-toolchain.json`, has different
 CIRCT/LLVM commits, or is missing the exported CIRCT, MLIR, and LLVM packages.
 
 The exported LLVM definitions also select the libstdc++ C++11 ABI used by the
-locked binaries. Nodal applies that value through `HandleLLVMOptions` and
-removes the duplicate exported macro before compiling its own targets. This
-prevents silent host-default ABI drift and avoids normalizing a macro
-redefinition warning. The Increment 6 workflow treats such a warning as a
-failure.
+locked binaries. Some upstream binary packages combine several `-D` flags in a
+single CMake list element, so Nodal tokenizes every exported element, removes
+duplicates, captures the locked ABI value, and then lets `HandleLLVMOptions`
+apply that ABI macro exactly once. This prevents silent host-default ABI drift
+and avoids malformed or repeated compiler definitions. The Increment 6 workflow
+prints the compile command and treats an ABI macro redefinition as a failure.
 
 ## Configure, build, and test
 

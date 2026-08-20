@@ -1,0 +1,9 @@
+schema = 1
+id = "core.compiler"
+path = "core/compiler"
+kind = "native"
+role = "authoritative-compiler"
+visibility = "internal"
+owner = "@pysolvesemi"
+description = "Out-of-tree Nodal MLIR dialect, analyses, passes, translations, and native nodalc driver."
+dependencies = []

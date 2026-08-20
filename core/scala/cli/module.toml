@@ -1,0 +1,9 @@
+schema = 1
+id = "core.scala.cli"
+path = "core/scala/cli"
+kind = "scala"
+role = "cli"
+visibility = "public"
+owner = "@pysolvesemi"
+description = "JVM command-line entry points for elaboration, compilation, emission, and simulation orchestration."
+dependencies = ["core.scala.api", "core.scala.frontend", "core.scala.bridge", "core.scala.sim"]

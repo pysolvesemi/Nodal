@@ -1,0 +1,9 @@
+schema = 1
+id = "core.scala.api"
+path = "core/scala/api"
+kind = "scala"
+role = "public-api"
+visibility = "public"
+owner = "@pysolvesemi"
+description = "Backend-neutral Nodal language types and the future frozen public API."
+dependencies = []

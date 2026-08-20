@@ -1,0 +1,9 @@
+schema = 1
+id = "core.scala.frontend"
+path = "core/scala/frontend"
+kind = "scala"
+role = "frontend"
+visibility = "internal"
+owner = "@pysolvesemi"
+description = "Elaboration, hierarchy, deterministic naming inputs, source locations, and frontend validation."
+dependencies = ["core.scala.api"]

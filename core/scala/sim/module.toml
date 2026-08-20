@@ -1,0 +1,9 @@
+schema = 1
+id = "core.scala.sim"
+path = "core/scala/sim"
+kind = "scala"
+role = "simulation-api"
+visibility = "public"
+owner = "@pysolvesemi"
+description = "Public simulation and regression API built above compiler and simulator adapter contracts."
+dependencies = ["core.scala.api", "core.scala.bridge", "core.integrations"]

@@ -1,0 +1,9 @@
+schema = 1
+id = "core.scala.bridge"
+path = "core/scala/bridge"
+kind = "scala"
+role = "bridge"
+visibility = "internal"
+owner = "@pysolvesemi"
+description = "Versioned Scala-to-MLIR serialization and native nodalc process invocation."
+dependencies = ["core.scala.api", "core.scala.frontend"]

@@ -1,0 +1,9 @@
+schema = 1
+id = "core.scala.testkit"
+path = "core/scala/testkit"
+kind = "scala"
+role = "test-support"
+visibility = "test-support"
+owner = "@pysolvesemi"
+description = "Compile fixtures and reusable support for core API, bridge, and simulation tests."
+dependencies = ["core.scala.api", "core.scala.frontend", "core.scala.bridge", "core.scala.sim", "core.scala.cli"]

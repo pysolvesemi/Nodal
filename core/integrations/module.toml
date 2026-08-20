@@ -1,0 +1,9 @@
+schema = 1
+id = "core.integrations"
+path = "core/integrations"
+kind = "integration"
+role = "simulator-adapters"
+visibility = "internal"
+owner = "@pysolvesemi"
+description = "Adapters for external Verilog-A/Verilog-AMS compilers and simulators."
+dependencies = []

@@ -1,0 +1,22 @@
+schema = 1
+core_root = "core"
+reserved_library_root = "libraries"
+future_library_descriptor = "library.toml"
+future_library_module_prefix = "libraries."
+
+descriptors = [
+  "core/scala/api/module.toml",
+  "core/scala/frontend/module.toml",
+  "core/scala/bridge/module.toml",
+  "core/integrations/module.toml",
+  "core/scala/sim/module.toml",
+  "core/scala/cli/module.toml",
+  "core/scala/testkit/module.toml",
+  "core/compiler/module.toml",
+]
+
+[policy]
+allow_core_to_libraries = false
+allow_compiler_to_frontend = false
+allow_dependency_cycles = false
+allow_empty_library_placeholders = false

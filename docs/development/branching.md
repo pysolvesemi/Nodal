@@ -1,6 +1,10 @@
 # Branch and merge policy
 
-Nodal uses separate protected integration and release branches.
+Nodal uses a protected integration branch and a protected milestone-release
+branch:
+
+- `dev` is the protected integration branch.
+- `main` is the protected milestone-release branch.
 
 ## Branch roles
 

@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 0.8  
+**Revision:** 0.9  
 **Created:** 2026-08-20  
 **Status:** Active roadmap  
 **Primary language target:** Verilog-AMS 2023  
@@ -199,8 +199,9 @@ The `libraries/` and `packaging/libraries/` paths are architectural reservations
   - Add the out-of-tree CMake project under `core/compiler`, link MLIR/CIRCT, and produce `nodalc --version` plus a native unit-test target without defining language semantics yet.
   - Evidence: [`CMakeLists.txt`](../../CMakeLists.txt), [`core/compiler/tools/nodalc/`](../../core/compiler/tools/nodalc/), [`core/compiler/test/`](../../core/compiler/test/), [`docs/development/native-compiler.md`](../development/native-compiler.md), [`scripts/check_native_compiler_bootstrap.py`](../../scripts/check_native_compiler_bootstrap.py), implementation commit [`72f1d8e`](https://github.com/pysolvesemi/Nodal/commit/72f1d8e3603e94dfd1c22a509b6d9c4438cbac2f), ABI-normalization commit [`1f4a785`](https://github.com/pysolvesemi/Nodal/commit/1f4a785efd99a3d6c2e5b10bb1dd61d2bb9739e8), and successful validation run [`32359466870`](https://github.com/pysolvesemi/Nodal/actions/runs/32359466870).
 
-- [ ] **Increment 7 — Unified developer commands**
+- [x] **Increment 7 — Unified developer commands**
   - Provide stable commands for bootstrap, core Scala build, core native build, full check, clean, and toolchain diagnostics. Reserve command namespaces for future independently selectable library checks. The same core commands must run locally and in CI.
+  - Evidence: [`nodal`](../../nodal), [`scripts/nodal.py`](../../scripts/nodal.py), [`docs/development/commands.md`](../development/commands.md), [`scripts/check_developer_commands.py`](../../scripts/check_developer_commands.py), [`tests/developer/`](../../tests/developer/), implementation commit [`f24a074`](https://github.com/pysolvesemi/Nodal/commit/f24a07461d075a16c9967bdec37fb551d5f66f05), test-isolation fix [`080cfd3`](https://github.com/pysolvesemi/Nodal/commit/080cfd38f64e06751ece5c7ca0c432575db4c2fc), and successful validation run [`32367451896`](https://github.com/pysolvesemi/Nodal/actions/runs/32367451896).
 
 - [ ] **Increment 8 — Continuous integration baseline**
   - Add Linux CI for Scala compilation/tests, native compilation/tests, formatting, toolchain-lock validation, and core/library dependency-boundary enforcement. Cache dependencies without caching unverified generated outputs. Add a scheduled dependency-report job that proposes rather than silently applies compiler upgrades.

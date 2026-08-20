@@ -103,6 +103,16 @@ def check_repository(root: Path) -> list[Problem]:
                 Problem("NODAL-COMPILER-008", f"top-level CMake lacks: {fragment}")
             )
 
+    if "include(HandleLLVMOptions)\n\n# LLVM helper modules" not in top or (
+        "nodal_normalize_llvm_definitions()\n\ninclude_directories" not in top
+    ):
+        problems.append(
+            Problem(
+                "NODAL-COMPILER-020",
+                "LLVM definitions must be normalized after LLVM helper modules",
+            )
+        )
+
     required_toolchain = (
         "toolchains/lock.json",
         ".nodal-toolchain.json",
@@ -120,6 +130,7 @@ def check_repository(root: Path) -> list[Problem]:
             )
 
     required_abi_alignment = (
+        "function(nodal_normalize_llvm_definitions)",
         "foreach(_raw_definition IN LISTS LLVM_DEFINITIONS)",
         "separate_arguments(",
         "_definition_tokens NATIVE_COMMAND",
@@ -127,7 +138,8 @@ def check_repository(root: Path) -> list[Problem]:
         "_GLIBCXX_USE_CXX11_ABI=([01])",
         "set(GLIBCXX_USE_CXX11_ABI",
         "list(FILTER _nodal_llvm_definitions EXCLUDE REGEX",
-        "set(LLVM_DEFINITIONS ${_nodal_llvm_definitions})",
+        "set(LLVM_DEFINITIONS ${_nodal_llvm_definitions} PARENT_SCOPE)",
+        "nodal_normalize_llvm_definitions()",
     )
     for fragment in required_abi_alignment:
         if fragment not in toolchain:

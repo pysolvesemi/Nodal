@@ -31,6 +31,10 @@ include(AddMLIR)
 include(AddCIRCT)
 include(HandleLLVMOptions)
 
+# LLVM helper modules may repopulate LLVM_DEFINITIONS after package discovery.
+# Normalize again immediately before applying them to Nodal's directory scope.
+nodal_normalize_llvm_definitions()
+
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${CIRCT_INCLUDE_DIRS})

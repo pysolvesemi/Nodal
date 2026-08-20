@@ -29,11 +29,14 @@ CIRCT/LLVM commits, or is missing the exported CIRCT, MLIR, and LLVM packages.
 
 The exported LLVM definitions also select the libstdc++ C++11 ABI used by the
 locked binaries. Some upstream binary packages combine several `-D` flags in a
-single CMake list element, so Nodal tokenizes every exported element, removes
-duplicates, captures the locked ABI value, and then lets `HandleLLVMOptions`
-apply that ABI macro exactly once. This prevents silent host-default ABI drift
-and avoids malformed or repeated compiler definitions. The Increment 6 workflow
-prints the compile command and treats an ABI macro redefinition as a failure.
+single CMake list element, and LLVM helper modules may repopulate that variable
+after package discovery. Nodal therefore tokenizes and deduplicates the
+exported definitions both immediately after discovery and again after loading
+the LLVM helper modules. It captures the locked ABI value and lets
+`HandleLLVMOptions` apply that macro exactly once. This prevents silent
+host-default ABI drift and avoids malformed or repeated compiler definitions.
+The Increment 6 workflow prints the compile command and treats an ABI macro
+redefinition as a failure.
 
 ## Configure, build, and test
 

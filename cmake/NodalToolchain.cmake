@@ -9,6 +9,54 @@ function(_nodal_json_get output json_text)
   set(${output} "${value}" PARENT_SCOPE)
 endfunction()
 
+# Canonicalize the definitions exported by LLVM binary packages. The helper is
+# intentionally reusable because LLVM's CMake modules may repopulate the
+# variable after the initial find_package call.
+function(nodal_normalize_llvm_definitions)
+  set(_nodal_llvm_definitions)
+  foreach(_raw_definition IN LISTS LLVM_DEFINITIONS)
+    if(_raw_definition MATCHES "[ \t]")
+      separate_arguments(
+        _definition_tokens NATIVE_COMMAND "${_raw_definition}"
+      )
+      list(APPEND _nodal_llvm_definitions ${_definition_tokens})
+    else()
+      list(APPEND _nodal_llvm_definitions "${_raw_definition}")
+    endif()
+  endforeach()
+  list(REMOVE_DUPLICATES _nodal_llvm_definitions)
+
+  set(_nodal_glibcxx_abi "${NODAL_GLIBCXX_ABI}")
+  foreach(_definition IN LISTS _nodal_llvm_definitions)
+    if(_definition MATCHES "^-D_GLIBCXX_USE_CXX11_ABI=([01])$")
+      set(_nodal_glibcxx_abi_candidate "${CMAKE_MATCH_1}")
+      if(NOT _nodal_glibcxx_abi STREQUAL "" AND
+         NOT _nodal_glibcxx_abi STREQUAL _nodal_glibcxx_abi_candidate)
+        message(FATAL_ERROR
+          "Locked LLVM package exports conflicting _GLIBCXX_USE_CXX11_ABI values")
+      endif()
+      set(_nodal_glibcxx_abi "${_nodal_glibcxx_abi_candidate}")
+    endif()
+  endforeach()
+
+  # HandleLLVMOptions adds the ABI macro once using this cache value. Remove
+  # every exported copy so Nodal never invokes the compiler with duplicates.
+  if(NOT _nodal_glibcxx_abi STREQUAL "")
+    if(_nodal_glibcxx_abi STREQUAL "1")
+      set(_nodal_glibcxx_abi_bool ON)
+    else()
+      set(_nodal_glibcxx_abi_bool OFF)
+    endif()
+    set(GLIBCXX_USE_CXX11_ABI "${_nodal_glibcxx_abi_bool}" CACHE BOOL
+        "Match the libstdc++ ABI of the locked LLVM/CIRCT package" FORCE)
+    list(FILTER _nodal_llvm_definitions EXCLUDE REGEX
+         "^-D_GLIBCXX_USE_CXX11_ABI=[01]$")
+  endif()
+
+  set(LLVM_DEFINITIONS ${_nodal_llvm_definitions} PARENT_SCOPE)
+  set(NODAL_GLIBCXX_ABI "${_nodal_glibcxx_abi}" PARENT_SCOPE)
+endfunction()
+
 file(READ "${NODAL_REPOSITORY_ROOT}/toolchains/lock.json" NODAL_TOOLCHAIN_LOCK_JSON)
 _nodal_json_get(NODAL_NATIVE_LOCK_ID "${NODAL_TOOLCHAIN_LOCK_JSON}" lock_id)
 _nodal_json_get(NODAL_CIRCT_RELEASE_TAG "${NODAL_TOOLCHAIN_LOCK_JSON}" native circt release_tag)
@@ -89,50 +137,7 @@ set(MLIR_DIR "${NODAL_NATIVE_TOOLCHAIN}/lib/cmake/mlir" CACHE PATH "" FORCE)
 set(LLVM_DIR "${NODAL_NATIVE_TOOLCHAIN}/lib/cmake/llvm" CACHE PATH "" FORCE)
 
 find_package(CIRCT REQUIRED CONFIG)
-
-# Match the libstdc++ ABI used to build the locked LLVM/CIRCT package. Some
-# binary exports combine several -D tokens into one CMake list element, so
-# normalize every element before reading the ABI value or applying definitions.
-set(_nodal_llvm_definitions)
-foreach(_raw_definition IN LISTS LLVM_DEFINITIONS)
-  if(_raw_definition MATCHES "[ \t]")
-    separate_arguments(
-      _definition_tokens NATIVE_COMMAND "${_raw_definition}"
-    )
-    list(APPEND _nodal_llvm_definitions ${_definition_tokens})
-  else()
-    list(APPEND _nodal_llvm_definitions "${_raw_definition}")
-  endif()
-endforeach()
-list(REMOVE_DUPLICATES _nodal_llvm_definitions)
-
-set(_nodal_glibcxx_abi "")
-foreach(_definition IN LISTS _nodal_llvm_definitions)
-  if(_definition MATCHES "^-D_GLIBCXX_USE_CXX11_ABI=([01])$")
-    set(_nodal_glibcxx_abi_candidate "${CMAKE_MATCH_1}")
-    if(NOT _nodal_glibcxx_abi STREQUAL "" AND
-       NOT _nodal_glibcxx_abi STREQUAL _nodal_glibcxx_abi_candidate)
-      message(FATAL_ERROR
-        "Locked LLVM package exports conflicting _GLIBCXX_USE_CXX11_ABI values")
-    endif()
-    set(_nodal_glibcxx_abi "${_nodal_glibcxx_abi_candidate}")
-  endif()
-endforeach()
-
-# HandleLLVMOptions adds the ABI macro once using this cache value. Remove the
-# exported copy so Nodal never invokes the compiler with duplicate definitions.
-if(NOT _nodal_glibcxx_abi STREQUAL "")
-  if(_nodal_glibcxx_abi STREQUAL "1")
-    set(_nodal_glibcxx_abi_bool ON)
-  else()
-    set(_nodal_glibcxx_abi_bool OFF)
-  endif()
-  set(GLIBCXX_USE_CXX11_ABI "${_nodal_glibcxx_abi_bool}" CACHE BOOL
-      "Match the libstdc++ ABI of the locked LLVM/CIRCT package" FORCE)
-  list(FILTER _nodal_llvm_definitions EXCLUDE REGEX
-       "^-D_GLIBCXX_USE_CXX11_ABI=[01]$")
-endif()
-set(LLVM_DEFINITIONS ${_nodal_llvm_definitions})
+nodal_normalize_llvm_definitions()
 
 set(CMAKE_BUILD_RPATH "${NODAL_NATIVE_TOOLCHAIN}/lib")
 set(CMAKE_INSTALL_RPATH "${NODAL_NATIVE_TOOLCHAIN}/lib")
@@ -140,8 +145,8 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 message(STATUS "Nodal native lock: ${NODAL_NATIVE_LOCK_ID}")
 message(STATUS "Nodal CIRCT release: ${NODAL_CIRCT_RELEASE_TAG}")
-if(NOT _nodal_glibcxx_abi STREQUAL "")
-  message(STATUS "Nodal libstdc++ C++11 ABI: ${_nodal_glibcxx_abi}")
+if(NOT NODAL_GLIBCXX_ABI STREQUAL "")
+  message(STATUS "Nodal libstdc++ C++11 ABI: ${NODAL_GLIBCXX_ABI}")
 endif()
 message(STATUS "Using CIRCTConfig.cmake in: ${CIRCT_DIR}")
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")

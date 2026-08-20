@@ -51,6 +51,19 @@ class NativeCompilerBootstrapCheckTests(unittest.TestCase):
         )
         self.assertIn("NODAL-COMPILER-009", self.problem_codes(root))
 
+    def test_rejects_missing_post_include_normalization(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "CMakeLists.txt"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "nodal_normalize_llvm_definitions()\n\ninclude_directories",
+                "include_directories",
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-COMPILER-020", self.problem_codes(root))
+
     def test_rejects_missing_definition_normalization(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)

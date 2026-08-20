@@ -1,0 +1,398 @@
+# Nodal Incremental Development TODO
+
+**Revision:** 0.1  
+**Created:** 2026-08-20  
+**Status:** Active roadmap  
+**Primary language target:** Verilog-AMS 2023  
+**Analog-only compatibility target:** Verilog-A  
+
+## Mission
+
+Nodal is a modern Scala 3 hardware-construction language for analog and mixed-signal design and modeling. It shall provide a short public API that stays as close as practical to Verilog-AMS terminology and semantics, while using MLIR/CIRCT as the compiler foundation.
+
+The initial implementation will be built from scratch with modern tooling. It will not carry Scala 2, old-JDK, FIRRTL, Chisel, SpinalHDL, or legacy Nodal compatibility requirements.
+
+## Fixed project direction
+
+- Use the latest stable Scala 3 release available when the toolchain bootstrap increment is implemented. The bootstrap reference on 2026-08-20 is Scala 3.8.4.
+- Use the official Scala 3 compiler on a modern JVM. The bootstrap reference is JDK 25.
+- Use a pinned Mill 1.x wrapper for the Scala multi-module build.
+- Use CMake, Ninja, LLVM, MLIR, and CIRCT for the native compiler. Pin a mutually compatible LLVM/CIRCT revision pair in a checked-in toolchain lock.
+- Define an out-of-tree `nodal` MLIR dialect. Do not fork CIRCT unless a later design gate proves that an upstream extension is necessary.
+- Reuse CIRCT `hw`, `comb`, `seq`, `sv`, and related dialects for digital constructs when their semantics fit. Do not force analog semantics into FIRRTL or digital-only dialects.
+- Treat MLIR as the authoritative compiler IR. The Scala frontend may keep a small elaboration model, but it must lower into MLIR before semantic compiler passes or HDL emission.
+- Generate Verilog-AMS as the first complete backend. Generate Verilog-A from the analog-only capability profile.
+- Keep backend syntax out of the core IR wherever possible so a future SystemVerilog-AMS backend can be added without redesigning the frontend.
+- Generate deterministic, readable HDL suitable for review, simulation, and golden testing.
+- Keep the Scala frontend and native compiler in one monorepo initially, with clean module boundaries so they can be distributed independently later.
+
+## Public API direction
+
+The exact API will be frozen by a dedicated design-gate increment before substantial language implementation.
+
+The gate must enforce these principles:
+
+- Prefer short names such as `Module`, `Param`, `Electrical`, `Real`, `Integer`, `Bool`, `Bits`, and `UInt`; avoid names such as `NodalComponent` in normal user code.
+- Preserve established Verilog-AMS terms where Scala syntax permits: `analog`, `initial`, `always`, `discipline`, `nature`, `V`, `I`, `ddt`, `idt`, `cross`, `timer`, `transition`, and `<+`.
+- Add no `Nodal` prefix merely for branding.
+- Keep Scala-specific ceremony out of ordinary model definitions.
+- Keep the source language independent of a particular output backend.
+- Use compile-positive and compile-negative fixtures to freeze syntax, types, diagnostics, and imports.
+- After the v0.1 API gate is approved, any incompatible API change requires a new versioned design gate and migration note.
+
+## Development rules
+
+- Implement one increment at a time on a dedicated branch.
+- An increment is complete only after code, tests, documentation, and CI evidence are present.
+- Mark an increment `[x]` only in the same change that completes it.
+- Do not silently broaden an increment. Add a new increment when new work is discovered.
+- Keep generated files out of source control unless they are intentional golden fixtures.
+- No compiler pass may depend on unstable frontend object identity or source traversal order.
+- Every user-visible diagnostic must carry a stable error code and source location when available.
+- Every backend must declare its supported feature profile and reject unsupported constructs explicitly.
+
+## Target scalable repository structure
+
+```text
+Nodal/
+├── .github/
+│   └── workflows/                 # CI, release, dependency and conformance jobs
+├── build.mill                     # Scala multi-module build and orchestration
+├── mill                           # Pinned Mill bootstrap wrapper
+├── CMakeLists.txt                 # Native compiler root
+├── CMakePresets.json              # Reproducible native configure/build presets
+├── cmake/                         # Shared CMake modules
+├── toolchains/
+│   ├── lock.json                  # Scala/JDK/Mill/LLVM/CIRCT/CMake toolchain pins
+│   ├── checksums/                 # Download integrity metadata
+│   └── README.md                  # Supported host and bootstrap instructions
+├── scala/
+│   ├── core/                      # Public types and target-neutral user API
+│   ├── frontend/                  # Elaboration, hierarchy, naming and validation
+│   ├── bridge/                    # Frontend-to-MLIR serialization and nodalc invocation
+│   ├── cli/                       # JVM-side command-line entry points
+│   ├── sim/                       # Scala simulation and regression API
+│   └── testkit/                   # Compile fixtures and reusable test support
+├── compiler/
+│   ├── include/nodal/
+│   │   ├── Dialect/Nodal/         # MLIR dialect, operations, types and attributes
+│   │   ├── Analysis/              # Domain, connectivity and semantic analyses
+│   │   ├── Transforms/            # Canonicalization and optimization passes
+│   │   ├── Conversion/            # Lowering and backend conversions
+│   │   └── Translation/           # Verilog-A and Verilog-AMS emission interfaces
+│   ├── lib/
+│   │   ├── Dialect/Nodal/
+│   │   ├── Analysis/
+│   │   ├── Transforms/
+│   │   ├── Conversion/
+│   │   └── Translation/
+│   ├── tools/
+│   │   └── nodalc/                # Native compiler driver
+│   └── test/
+│       ├── Dialect/               # Parser, printer and verifier tests
+│       ├── Analysis/
+│       ├── Transforms/
+│       ├── Conversion/
+│       └── Translation/           # FileCheck and golden backend tests
+├── integrations/
+│   ├── openvaf/                   # Verilog-A compiler adapter and feature probes
+│   ├── ngspice/                   # Open-source analog simulation adapter
+│   └── simulators/                # Optional commercial Verilog-AMS adapters
+├── examples/
+│   ├── analog/                    # RC, RLC, diode, amplifier, oscillator, etc.
+│   └── mixed-signal/              # ADC, DAC, comparator, PLL and interface examples
+├── tests/
+│   ├── api/                       # Frozen public API compile contracts
+│   ├── golden/                    # Deterministic generated HDL
+│   ├── integration/               # Scala -> MLIR -> HDL vertical tests
+│   ├── simulation/                # Open-source and optional commercial regressions
+│   └── conformance/               # Language-profile and standards-oriented tests
+├── docs/
+│   ├── architecture/              # ADRs and compiler architecture
+│   ├── design-gates/              # Versioned API and semantic approvals
+│   ├── language-reference/        # Nodal language and API reference
+│   ├── tutorials/                 # User-focused examples
+│   └── roadmap/                   # This incremental plan
+├── packaging/                     # JAR, native binaries, archives and installers
+└── scripts/                       # Bootstrap, lint, release and developer utilities
+```
+
+Empty directories should not be committed merely to match this tree. Each directory is created when its first real increment needs it.
+
+## Milestones
+
+- **M0 — Foundation:** reproducible Scala/native builds, CI, and frozen public API.
+- **M1 — First vertical slice:** a Scala Nodal RC model lowers through MLIR and emits validated Verilog-A.
+- **M2 — Analog preview:** useful Verilog-A subset with open-source compilation and simulation regression.
+- **M3 — AMS preview:** digital, analog, cross-domain constructs, and Verilog-AMS emission.
+- **M4 — Scalable release:** packaged compiler, language reference, stable extension points, and compatibility policy.
+
+# Incremental roadmap
+
+## Phase 0 — Repository, toolchains, architecture and API contract
+
+- [x] **Increment 0 — Roadmap bootstrap**
+  - Add this checkbox-based roadmap, fixed architectural direction, milestone boundaries, and target repository structure as the initial repository commit.
+
+- [ ] **Increment 1 — Project charter and standards baseline**
+  - Add `README.md`, project goals, non-goals, terminology, supported abstraction levels, Verilog-AMS 2023 baseline, analog-only Verilog-A profile, and an explicit statement that SystemVerilog-AMS is a future backend target rather than an initial dependency.
+
+- [ ] **Increment 2 — Architecture decision records**
+  - Record the Scala frontend/native compiler split, MLIR as authoritative IR, out-of-tree Nodal dialect, selective CIRCT reuse, textual MLIR process boundary for the first implementation, and backend capability profiles.
+
+- [ ] **Increment 3 — Scalable repository skeleton**
+  - Create only the directories and module descriptors required for the initial build. Add ownership boundaries and dependency-direction rules preventing compiler code from depending on frontend internals.
+
+- [ ] **Increment 4 — Modern Scala 3 build bootstrap**
+  - Re-check the newest stable Scala 3 release, then pin it with JDK 25 and a current Mill 1.x wrapper. Add `scala/core`, `scala/frontend`, `scala/bridge`, `scala/cli`, and test modules with one passing smoke test. Do not add Scala 2 cross-builds.
+
+- [ ] **Increment 5 — LLVM/MLIR/CIRCT toolchain lock**
+  - Select and pin a compatible LLVM/MLIR/CIRCT revision pair, CMake and Ninja requirements, checksums, source-build fallback, and prebuilt-toolchain discovery. Avoid unpinned `main` dependencies.
+
+- [ ] **Increment 6 — Native compiler bootstrap**
+  - Add the out-of-tree CMake project, link MLIR/CIRCT, and produce `nodalc --version` plus a native unit-test target without defining language semantics yet.
+
+- [ ] **Increment 7 — Unified developer commands**
+  - Provide stable commands for bootstrap, Scala build, native build, full check, clean, and toolchain diagnostics. The same commands must run locally and in CI.
+
+- [ ] **Increment 8 — Continuous integration baseline**
+  - Add Linux CI for Scala compilation/tests, native compilation/tests, formatting, and toolchain-lock validation. Cache dependencies without caching unverified generated outputs. Add a scheduled dependency-report job that proposes rather than silently applies compiler upgrades.
+
+- [ ] **Increment 9 — Formatting, linting and contribution rules**
+  - Add Scalafmt/Scalafix, ClangFormat/ClangTidy where compatible with LLVM style, Markdown checks, commit/PR expectations, and a rule that public API changes require a design gate.
+
+- [ ] **Increment 10 — Public API candidate prototypes**
+  - Create non-functional compile prototypes for representative resistor, RC filter, comparator, ADC, DAC, hierarchy, parameter override, analog event, and mixed-signal modules. Compare alternatives while keeping the API short and close to Verilog-AMS.
+
+- [ ] **Increment 11 — Public API design gate and v0.1 freeze**
+  - Publish `docs/design-gates/NodalPublicApi-DG-v0.1.md` with exact imports, names, operators, construction rules, backend entry points, examples, rejected alternatives, compatibility policy, and SHA-256. Freeze the approved API before substantial implementation.
+
+- [ ] **Increment 12 — Public API contract fixtures**
+  - Turn the approved examples into compile-positive and compile-negative tests. Require stable diagnostic codes for prohibited or ambiguous API usage.
+
+## Phase 1 — Compiler vertical slice
+
+- [ ] **Increment 13 — Elaboration context and module hierarchy kernel**
+  - Implement deterministic module construction, parent/child scopes, declaration ownership, duplicate detection, and lifecycle rules behind the frozen API.
+
+- [ ] **Increment 14 — Source locations and deterministic naming**
+  - Capture Scala source locations with Scala 3 inline/macro support where useful. Define explicit-name, inferred-name, generated-name, collision, and anonymous-expression policies independent of JVM object identity.
+
+- [ ] **Increment 15 — Nodal MLIR dialect skeleton**
+  - Define and register the `nodal` dialect with TableGen organization, dialect documentation generation, generic parser/printer support, and one verified placeholder operation.
+
+- [ ] **Increment 16 — Core MLIR module, port and parameter model**
+  - Add target-neutral module, port, symbol, instance-reference, parameter declaration, and parameter-reference operations/types. Reuse `hw` constructs only after semantic comparison is documented.
+
+- [ ] **Increment 17 — Scala-to-MLIR bridge**
+  - Lower the elaborated Scala model to deterministic textual MLIR with source locations and invoke `nodalc` through stdin/files. Define a versioned bridge protocol and clear process-failure diagnostics.
+
+- [ ] **Increment 18 — Native parse, verify and pass pipeline**
+  - Make `nodalc` parse Nodal MLIR, run registered verifiers/passes, print normalized IR, and expose explicit pass-pipeline options suitable for lit/FileCheck tests.
+
+- [ ] **Increment 19 — Cross-layer diagnostic mapping**
+  - Map MLIR diagnostics back to Scala source locations and stable Nodal error codes. Cover parser, verifier, pass, backend, and external-tool failures.
+
+- [ ] **Increment 20 — Backend framework and capability profiles**
+  - Add translation registration, output-file handling, deterministic formatting, `verilog-a` and `verilog-ams` capability profiles, and explicit unsupported-feature diagnostics.
+
+- [ ] **Increment 21 — Minimal analog expression and contribution IR**
+  - Add real literals, parameter references, arithmetic expressions, one electrical potential access, an analog region, and a contribution operation sufficient for a minimal RC equation.
+
+- [ ] **Increment 22 — RC filter end-to-end vertical slice**
+  - Compile a Scala RC filter through elaboration, Nodal MLIR, verification, and Verilog-A emission. Add exact golden HDL and failure tests.
+
+- [ ] **Increment 23 — Deterministic output and reproducibility contract**
+  - Prove repeated builds and different valid source traversal orders generate byte-identical normalized MLIR and HDL. Record normalization rules for whitespace, declarations, symbols, parameters, and expressions.
+
+## Phase 2 — Analog language and Verilog-A profile
+
+- [ ] **Increment 24 — Natures and disciplines**
+  - Model nature units, access functions, tolerances, discipline domains, potential/flow association, declarations, imports, and compatibility checks.
+
+- [ ] **Increment 25 — Electrical nodes, nets and branches**
+  - Implement scalar nodes, ground/reference behavior, implicit and named branches, port directions, connectivity, aliases, and branch ownership verification.
+
+- [ ] **Increment 26 — Parameters, constants, ranges and units**
+  - Add real/integer/string parameters as supported by the target profile, `from`/`exclude` constraints, constant expressions, parameter overrides, unit-aware Scala literals, and lossless HDL rendering.
+
+- [ ] **Increment 27 — Analog numeric types and expression typing**
+  - Define real/integer promotion, physical-quantity compatibility, comparison/logical results, conditional expressions, invalid mixed-domain operations, and constant folding boundaries.
+
+- [ ] **Increment 28 — Potential and flow access functions**
+  - Implement `V(...)`, `I(...)`, discipline-specific access functions, one-node/two-node forms, branch access, probes, and semantic validation.
+
+- [ ] **Increment 29 — Analog blocks and contribution semantics**
+  - Implement analog regions, `<+`, potential/flow contributions, direct and indirect contributions where supported, equation participation, ordering rules, and illegal procedural-use checks.
+
+- [ ] **Increment 30 — Analog variables and procedural assignment**
+  - Add local real/integer variables, initialization rules, procedural assignment distinct from contribution, declaration scopes, read-before-write diagnostics, and backend lowering.
+
+- [ ] **Increment 31 — Analog control flow**
+  - Add `if`/`else`, `case`, bounded loops, `break`/`continue` where supported, static versus runtime condition rules, and control-flow verification.
+
+- [ ] **Increment 32 — Differential and integral operators**
+  - Implement `ddt`, `idt`, initial conditions, nesting/context restrictions, analysis-dependent legality, and simplification rules without changing equation semantics.
+
+- [ ] **Increment 33 — Time and waveform operators**
+  - Add `transition`, `slew`, `absdelay`, `$abstime`, `$bound_step`, optional arguments, units, continuity constraints, and unsupported-context diagnostics.
+
+- [ ] **Increment 34 — Analog events**
+  - Add `cross`, `above`, `timer`, `initial_step`, `final_step`, event OR-composition, direction/tolerance arguments, event-controlled statements, and deterministic emission.
+
+- [ ] **Increment 35 — Mathematical and simulator functions**
+  - Add a versioned function registry for standard math functions, analysis queries, temperature/frequency access, arity/type checking, constant evaluation, and backend spelling.
+
+- [ ] **Increment 36 — Noise operators**
+  - Implement white, flicker, and table-driven noise constructs with analysis restrictions, optional naming, unit validation, and feature-profile checks.
+
+- [ ] **Increment 37 — Laplace and discrete transfer operators**
+  - Add supported Laplace/Z-domain forms, coefficient arrays, constant-expression requirements, denominator checks, and readable deterministic generation.
+
+- [ ] **Increment 38 — User-defined analog functions**
+  - Add typed function declarations, arguments, local variables, return semantics, recursion policy, name resolution, overload policy, and backend lowering.
+
+- [ ] **Increment 39 — Analog hierarchy and parameterized instances**
+  - Implement module instances, named port connections, parameter overrides, arrays where legal, hierarchy validation, unresolved references, and recursive-instantiation diagnostics.
+
+- [ ] **Increment 40 — Arrays and elaboration-time generation**
+  - Add fixed-size arrays, indexing, slices supported by the language profile, Scala elaboration loops, target generate constructs where needed, and static-bound validation.
+
+- [ ] **Increment 41 — Analysis state and environmental constructs**
+  - Add analysis-dependent behavior, temperature/environment access, initial/final semantics, and a documented portability policy for simulator-specific system functions.
+
+- [ ] **Increment 42 — Analog canonicalization passes**
+  - Add safe constant folding, algebraic canonicalization, dead declaration removal, branch/access normalization, and common-expression handling with tests proving no semantic reordering of contributions.
+
+- [ ] **Increment 43 — Analog semantic lint suite**
+  - Detect floating nodes where determinable, inconsistent disciplines, illegal branch use, dimension/unit mistakes, unreachable events, discontinuity hazards, suspicious parameter ranges, and backend portability risks.
+
+- [ ] **Increment 44 — Verilog-A capability profile and feature matrix**
+  - Define exactly which Nodal constructs can emit `.va`, reject digital/AMS-only constructs before translation, document simulator portability, and publish a machine-readable feature matrix.
+
+## Phase 3 — Open-source analog validation and testbench support
+
+- [ ] **Increment 45 — OpenVAF compile validation**
+  - Add version detection, supported-feature probes, generated-model compilation, expected unsupported-feature classification, and CI artifacts for OpenVAF diagnostics.
+
+- [ ] **Increment 46 — ngspice simulation harness**
+  - Add OSDI loading, generated SPICE testbench support, transient/DC/AC invocation, timeout/error handling, reproducible output capture, and a CI smoke simulation.
+
+- [ ] **Increment 47 — Scala simulation API v0.1**
+  - Add a compact API for model compilation, source creation, analyses, parameter sweeps, measurements, tolerances, and assertions without hiding the underlying simulator command/evidence.
+
+- [ ] **Increment 48 — Waveform and result model**
+  - Parse simulator outputs into typed time/frequency/sweep data, preserve units, support streaming large results, and provide comparison/assertion utilities with numeric tolerance policies.
+
+- [ ] **Increment 49 — Analog regression library**
+  - Add RC/RLC, diode, controlled source, amplifier, comparator, oscillator/VCO, and parameter-sweep examples covering equations, events, hierarchy, and failure diagnostics.
+
+- [ ] **Increment 50 — Cross-tool analog portability checks**
+  - Define optional adapters for a second compatible simulator/tool, compare supported results within declared tolerances, and distinguish language bugs from simulator capability differences.
+
+## Phase 4 — Digital semantics, mixed signal and Verilog-AMS
+
+- [ ] **Increment 51 — Digital type and port layer**
+  - Add logic/bit, signed/unsigned vectors, integers, reals, nets/variables, directions, four-state policy, and lowering to CIRCT `hw` types where semantically correct.
+
+- [ ] **Increment 52 — Digital combinational expressions and continuous assignments**
+  - Add arithmetic, logical, bitwise, comparison, concatenation, extraction, conditional expressions, width/sign rules, and continuous assignment using CIRCT `comb`/`sv` constructs where applicable.
+
+- [ ] **Increment 53 — Digital procedural blocks and assignments**
+  - Add `initial`, `always`, blocking/nonblocking assignments, procedural variables, control flow, and legality checks while keeping the public API close to Verilog-AMS.
+
+- [ ] **Increment 54 — Digital events, clocks, delays and scheduling contract**
+  - Add edge events, event expressions, delays supported by Verilog-AMS, clock/reset helpers only when they do not distort language semantics, and document the digital/analog scheduling boundary.
+
+- [ ] **Increment 55 — Digital hierarchy and parameterization**
+  - Add digital/mixed module instances, parameter propagation, connections, generate behavior, and reuse of CIRCT hardware symbols without duplicating Nodal hierarchy concepts.
+
+- [ ] **Increment 56 — Discrete real and mixed-signal net types**
+  - Model `real`, `wreal` or applicable Verilog-AMS equivalents, resolution behavior, directionality, sampling/update semantics, and portability profiles.
+
+- [ ] **Increment 57 — Analog/digital access and conversion semantics**
+  - Add legal cross-domain reads, sampled values, thresholds, quantization, transition shaping, event synchronization, and strict diagnostics for implicit unsafe conversion.
+
+- [ ] **Increment 58 — Connect modules and connect rules**
+  - Implement connect-module declarations, connect rules, discipline insertion, direction and resolution analysis, hierarchy-wide application, and conflict diagnostics.
+
+- [ ] **Increment 59 — Mixed-domain verifier and scheduling analysis**
+  - Verify analog/digital region legality, connection domains, event feedback, conversion loops, multiple drivers, contribution/assignment misuse, and simulator-profile restrictions.
+
+- [ ] **Increment 60 — Complete Verilog-AMS backend skeleton**
+  - Emit modules containing analog and digital declarations/regions, disciplines, connect constructs, hierarchy, parameters, and stable source mapping. Keep analog-only output on the separate Verilog-A profile.
+
+- [ ] **Increment 61 — ADC and DAC mixed-signal vertical slices**
+  - Compile and simulate or compile-check representative clocked ADC and digitally controlled DAC models, including events, quantization, transition behavior, parameters, hierarchy, and generated golden Verilog-AMS.
+
+- [ ] **Increment 62 — PLL/comparator mixed-signal vertical slice**
+  - Add a realistic control-loop example that exercises analog state, digital events, cross-domain conversion, feedback, and backend diagnostics.
+
+- [ ] **Increment 63 — Verilog-AMS simulator adapter interface**
+  - Define pluggable adapters for available commercial simulators, environment discovery, compile/elaborate/run phases, licensing-safe CI behavior, log normalization, and optional local regression execution.
+
+- [ ] **Increment 64 — Portable and full AMS profiles**
+  - Publish machine-readable feature profiles for portable Verilog-AMS, full standard-oriented output, simulator-specific extensions, and future SystemVerilog-AMS preparation. Reject accidental profile leakage.
+
+- [ ] **Increment 65 — UVM-MS interoperability hooks**
+  - Add generated metadata, wrappers, or interface files needed to integrate Nodal models into UVM-MS environments without implementing a separate verification methodology inside Nodal.
+
+- [ ] **Increment 66 — Verilog-AMS conformance suite**
+  - Build standards-oriented positive/negative tests, parser/emitter round trips where practical, feature coverage reporting, and simulator-result classification without copying restricted specification text.
+
+## Phase 5 — Extensibility, scale, documentation and release
+
+- [ ] **Increment 67 — Compiler pass and extension API**
+  - Stabilize pass registration, dialect interfaces, analysis preservation, pipeline configuration, custom lint hooks, and out-of-tree extension examples without exposing unstable compiler internals as public API.
+
+- [ ] **Increment 68 — Versioned IR and bridge compatibility**
+  - Add Nodal dialect/bridge version metadata, upgrade diagnostics, textual and bytecode compatibility policy, test fixtures for old supported versions, and explicit rejection of unknown future versions.
+
+- [ ] **Increment 69 — Incremental build and compiler caching**
+  - Cache elaboration, normalized MLIR, native compilation, and backend outputs by content/toolchain/profile hashes. Prove cache correctness and deterministic invalidation before enabling CI reuse.
+
+- [ ] **Increment 70 — Library and package publication model**
+  - Define reusable Nodal libraries, Maven coordinates for Scala artifacts, native compiler discovery/download, model-resource packaging, dependency/version conflict policy, and offline use.
+
+- [ ] **Increment 71 — Complete language reference and API documentation**
+  - Generate Scala API docs plus a Nodal language reference covering syntax, semantics, domains, diagnostics, backend profiles, simulator support, and migration rules.
+
+- [ ] **Increment 72 — Tutorials and reusable model library**
+  - Add progressive analog and AMS tutorials, design patterns, anti-patterns, reusable primitive models, and examples that are continuously compiled and simulated where tooling permits.
+
+- [ ] **Increment 73 — Cross-platform packaging**
+  - Produce checksummed Scala artifacts and native compiler bundles for supported Linux and macOS targets first, with a documented Windows strategy and source-build fallback.
+
+- [ ] **Increment 74 — Reproducible release, provenance and SBOM**
+  - Add release automation, signed/checksummed artifacts where infrastructure permits, dependency SBOM, toolchain provenance, license inventory, and rebuild verification.
+
+- [ ] **Increment 75 — Performance and scalability benchmarks**
+  - Benchmark elaboration, MLIR size, pass time, memory, HDL generation, hierarchy scaling, and simulation-launch overhead. Add regression thresholds based on measured baselines rather than guesses.
+
+- [ ] **Increment 76 — Public API v1 review and compatibility policy**
+  - Review the v0.1 freeze against implemented experience, approve only justified revisions through a versioned design gate, define semantic versioning, deprecation rules, and source-compatibility tests.
+
+- [ ] **Increment 77 — Nodal preview release**
+  - Publish the first supported preview with frozen API revision, compiler/toolchain pins, Verilog-A and Verilog-AMS capability matrices, installation instructions, examples, known limitations, and reproducible release evidence.
+
+- [ ] **Increment 78 — Future SystemVerilog-AMS backend research gate**
+  - Reassess the then-current Accellera/IEEE standard status, map Nodal IR coverage, identify required dialect changes, and approve or reject implementation through a separate design gate. Do not speculate new syntax into the stable API before this review.
+
+## Roadmap maintenance
+
+When an increment is completed:
+
+1. Change only that increment from `[ ]` to `[x]`.
+2. Add links to the implementation PR/commit and evidence under the increment.
+3. Record any approved scope change in a versioned ADR or design gate.
+4. Keep the next increment recommendation aligned with the first unchecked prerequisite, unless an explicitly independent increment is selected.
+5. Never mark an increment complete based only on generated output; retain source, tests, diagnostics, and reproducible commands.
+
+## Initial references
+
+- Scala 3 current releases: <https://www.scala-lang.org/download/>
+- Mill build tool: <https://mill-build.org/>
+- MLIR dialect definition documentation: <https://mlir.llvm.org/docs/DefiningDialects/>
+- CIRCT dialect documentation: <https://circt.llvm.org/docs/Dialects/>
+- Verilog-AMS standards: <https://accellera.org/downloads/standards/v-ams>
+- SystemVerilog-AMS working group: <https://accellera.org/activities/working-groups/systemverilog-ams>

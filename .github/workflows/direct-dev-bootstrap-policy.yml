@@ -4,13 +4,13 @@ on:
   push:
     branches:
       - increment/8-ci-baseline
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   update-policy:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 

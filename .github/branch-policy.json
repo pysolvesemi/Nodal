@@ -1,30 +1,48 @@
 {
   "schema": 1,
-  "strategy": "protected-trunk",
-  "integration_branch": "main",
+  "strategy": "protected-integration-and-release",
+  "development_branch": "dev",
   "release_branch": "main",
   "feature_branch_pattern": "increment/<number>-<slug>",
-  "policy": {
-    "direct_push_to_main": false,
-    "force_push_to_main": false,
-    "delete_main": false,
-    "pull_request_required": true,
-    "required_status_check": "Core CI / required",
-    "require_conversation_resolution": true,
-    "require_linear_history_after_bootstrap": true,
-    "future_increment_merge_method": "squash",
-    "release_marker": "signed-or-annotated milestone tag"
+  "repository_default_branch_after_bootstrap": "dev",
+  "branches": {
+    "dev": {
+      "role": "integration",
+      "direct_push": false,
+      "force_push": false,
+      "deletion": false,
+      "pull_request_required": true,
+      "required_status_check": "Core CI / required",
+      "require_conversation_resolution": true,
+      "normal_merge_method": "squash",
+      "normal_source_pattern": "increment/**"
+    },
+    "main": {
+      "role": "milestone-release",
+      "direct_push": false,
+      "force_push": false,
+      "deletion": false,
+      "pull_request_required": true,
+      "required_status_check": "Core CI / required",
+      "require_conversation_resolution": true,
+      "allowed_source_branch": "dev",
+      "merge_method": "merge",
+      "release_gate": "completed roadmap milestone plus annotated or signed tag"
+    }
   },
   "bootstrap": {
-    "head": "increment/8-ci-baseline",
-    "base": "main",
+    "when": "after Increment 8 Core CI succeeds",
+    "create_dev_from": "main",
+    "pull_request_head": "increment/8-ci-baseline",
+    "pull_request_base": "dev",
     "merge_method": "merge",
-    "reason": "Preserve the independently validated Increment 1-8 commit history while establishing the protected trunk.",
-    "after_bootstrap": "Create each increment branch from current main and squash-merge only after Core CI passes."
+    "reason": "Preserve the independently validated Increment 1-8 commit history while establishing the protected integration branch."
   },
-  "dev_branch": {
-    "create_now": false,
-    "reason": "A long-lived dev branch would duplicate integration state and delay default-branch CI and scheduled dependency reporting.",
-    "future_gate": "Introduce only through an accepted ADR if concurrent release trains require it."
+  "milestone_promotions": {
+    "M0": "after Increment 12",
+    "M1": "after Increment 23",
+    "M2": "after Increment 50",
+    "M3": "after Increment 66",
+    "M4": "after Increment 77"
   }
 }

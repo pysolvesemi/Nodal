@@ -1,0 +1,60 @@
+name: Increment 6 roadmap completion
+
+on:
+  push:
+    branches:
+      - increment/6-native-compiler-bootstrap
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  complete-roadmap:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Mark Increment 6 complete
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('docs/roadmap/nodal-development-todo.md')
+          text = path.read_text(encoding='utf-8')
+
+          old_revision = '**Revision:** 0.7  '
+          new_revision = '**Revision:** 0.8  '
+          old_increment = '''- [ ] **Increment 6 — Native compiler bootstrap**
+            - Add the out-of-tree CMake project under `core/compiler`, link MLIR/CIRCT, and produce `nodalc --version` plus a native unit-test target without defining language semantics yet.'''
+          new_increment = '''- [x] **Increment 6 — Native compiler bootstrap**
+            - Add the out-of-tree CMake project under `core/compiler`, link MLIR/CIRCT, and produce `nodalc --version` plus a native unit-test target without defining language semantics yet.
+            - Evidence: [`CMakeLists.txt`](../../CMakeLists.txt), [`core/compiler/tools/nodalc/`](../../core/compiler/tools/nodalc/), [`core/compiler/test/`](../../core/compiler/test/), [`docs/development/native-compiler.md`](../development/native-compiler.md), [`scripts/check_native_compiler_bootstrap.py`](../../scripts/check_native_compiler_bootstrap.py), implementation commit [`72f1d8e`](https://github.com/pysolvesemi/Nodal/commit/72f1d8e3603e94dfd1c22a509b6d9c4438cbac2f), ABI-normalization commit [`1f4a785`](https://github.com/pysolvesemi/Nodal/commit/1f4a785efd99a3d6c2e5b10bb1dd61d2bb9739e8), and successful validation run [`32359466870`](https://github.com/pysolvesemi/Nodal/actions/runs/32359466870).'''
+
+          if text.count(old_revision) != 1:
+              raise SystemExit('expected exactly one roadmap revision 0.7 marker')
+          if text.count(old_increment) != 1:
+              raise SystemExit('expected exactly one unchecked Increment 6 block')
+
+          text = text.replace(old_revision, new_revision, 1)
+          text = text.replace(old_increment, new_increment, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Commit roadmap evidence and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -- .github/workflows/increment-6-roadmap-completion.yml
+          git add -- docs/roadmap/nodal-development-todo.md
+          git diff --cached --check
+          git commit -m 'docs: mark increment 6 complete'
+          git push origin "HEAD:${GITHUB_REF_NAME}"

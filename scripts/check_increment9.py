@@ -130,9 +130,9 @@ def check_repository(root: Path) -> list[Problem]:
     for fragment in (
         'val scalafix = "0.14.7"',
         "ch.epfl.scala:scalafix-cli_3.8.4",
-        "object scalafix extends ExternalModule",
-        'def check(): Command[Unit]',
-        'def fix(): Command[Unit]',
+        "object scalafix extends JavaModule",
+        "def check():",
+        "def fix():",
     ):
         if fragment not in build:
             problems.append(Problem("NODAL-INC9-019", f"build.mill lacks Scalafix integration: {fragment}"))

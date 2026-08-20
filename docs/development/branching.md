@@ -30,25 +30,22 @@ increment/<number>-<slug>
 
 ## Bootstrap integration after Increment 8
 
-The repository currently has Increments 1–8 as a linear, independently
-validated stack above the original `main` roadmap commit.
+Increments 1–8 form one linear, independently validated stack above the
+original `main` roadmap commit. The one-time bootstrap therefore creates `dev`
+directly at the exact validated head of `increment/8-ci-baseline`.
 
-After Increment 8 Core CI succeeds, perform the one-time bootstrap:
+After Increment 8 is checked and the complete Core CI gate succeeds:
 
-1. create `dev` from the current `main` commit;
-2. open one pull request with head `increment/8-ci-baseline` and base `dev`;
-3. require `Core CI / required`;
-4. merge with a merge commit;
-5. change the GitHub default branch from `main` to `dev`;
-6. enable the documented protection rules on both branches.
+1. create `dev` from `increment/8-ci-baseline` at its exact validated commit;
+2. verify that `dev` and the Increment 8 head have identical commits and trees;
+3. change the GitHub default branch from `main` to `dev`;
+4. enable the documented protection rules on `dev` and `main`.
 
-The merge commit preserves all existing increment commits and their evidence.
-Squashing this bootstrap would collapse the independently validated history into
-one large commit, so the bootstrap is the only exception to the normal
-increment squash policy.
-
-No bootstrap branch, pull request, or merge is created merely by documenting
-this policy. Integration is a separate authorized repository action.
+No bootstrap pull request or merge commit is added. A merge would add no source
+content because the history is already linear, while direct ref creation
+preserves every independently validated increment commit exactly. This direct
+creation is a one-time bootstrap exception only; it does not permit later
+direct pushes to `dev`.
 
 ## Normal increment flow
 

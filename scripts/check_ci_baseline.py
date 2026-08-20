@@ -317,10 +317,12 @@ def check_repository(root: Path) -> list[Problem]:
             ("branches", "main", "direct_push"): False,
             ("branches", "main", "allowed_source_branch"):
                 "dev",
-            ("bootstrap", "pull_request_head"):
+            ("bootstrap", "method"): "direct-ref",
+            ("bootstrap", "create_dev_from"):
                 "increment/8-ci-baseline",
-            ("bootstrap", "pull_request_base"): "dev",
-            ("bootstrap", "merge_method"): "merge",
+            ("bootstrap", "require_identical_tree"): True,
+            ("bootstrap", "bootstrap_pull_request_required"):
+                False,
         }
         for path, expected in expected_policy.items():
             value = _lookup(policy, *path)

@@ -31,12 +31,12 @@
     }
   },
   "bootstrap": {
-    "when": "after Increment 8 Core CI succeeds",
-    "create_dev_from": "main",
-    "pull_request_head": "increment/8-ci-baseline",
-    "pull_request_base": "dev",
-    "merge_method": "merge",
-    "reason": "Preserve the independently validated Increment 1-8 commit history while establishing the protected integration branch."
+    "when": "after Increment 8 is checked and the full Core CI gate succeeds",
+    "method": "direct-ref",
+    "create_dev_from": "increment/8-ci-baseline",
+    "require_identical_tree": true,
+    "bootstrap_pull_request_required": false,
+    "reason": "Create dev at the exact validated Increment 8 head. The increment stack is linear, so this preserves every independently validated commit without adding an artificial bootstrap merge commit."
   },
   "milestone_promotions": {
     "M0": "after Increment 12",

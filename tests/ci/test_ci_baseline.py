@@ -204,6 +204,32 @@ class CiBaselineCheckTests(unittest.TestCase):
             self.problem_codes(root),
         )
 
+    def test_rejects_bootstrap_source_other_than_increment8(
+        self,
+    ) -> None:
+        temporary, root = (
+            self.temporary_repository()
+        )
+        self.addCleanup(temporary.cleanup)
+        path = (
+            root
+            / ".github"
+            / "branch-policy.json"
+        )
+        path.write_text(
+            path.read_text(
+                encoding="utf-8"
+            ).replace(
+                '"create_dev_from": "increment/8-ci-baseline"',
+                '"create_dev_from": "main"',
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn(
+            "NODAL-CI-017",
+            self.problem_codes(root),
+        )
+
     def test_rejects_missing_required_aggregate_job(
         self,
     ) -> None:

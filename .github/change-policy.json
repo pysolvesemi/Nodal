@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "integration_branch": "dev",
+  "release_branch": "main",
+  "increment_branch_pattern": "^increment/[0-9]+-[a-z0-9][a-z0-9-]*$",
+  "increment_title_pattern": "^Increment [0-9]+ — .+$",
+  "required_pull_request_sections": [
+    "## Summary",
+    "## Validation",
+    "## Design gate",
+    "## Checklist"
+  ],
+  "design_gate": {
+    "directory": "docs/design-gates",
+    "filename_pattern": "*-DG-v*.md",
+    "approved_marker": "**Status:** Approved",
+    "scope_marker_prefix": "**Scope:** "
+  },
+  "protected_changes": [
+    {
+      "scope": "public-api",
+      "patterns": [
+        "core/scala/api/**"
+      ]
+    },
+    {
+      "scope": "core-library-boundary",
+      "patterns": [
+        "core/modules.toml",
+        "core/**/module.toml",
+        "scripts/check_architecture.py",
+        "tests/architecture/**",
+        "docs/architecture/0006-core-library-boundary.md",
+        "libraries/**",
+        "packaging/libraries/**"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+name: Increment 9 roadmap completion
+
+on:
+  push:
+    branches:
+      - increment/9-formatting-linting-contribution-rules
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  complete-roadmap:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      FORCE_COLOR: '0'
+      IMPLEMENTATION_SHA: e9e302d723745a89d1fd3a8e2e49385375184e50
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore verified Scala dependency caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: increment-9-completion-scala-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', '.scalafmt.conf', '.scalafix.conf') }}
+          restore-keys: |
+            increment-9-completion-scala-${{ runner.os }}-
+
+      - name: Restore locked native download cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: increment-9-completion-native-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
+
+      - name: Install locked native toolchain
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          echo "NODAL_NATIVE_TOOLCHAIN=${RUNNER_TEMP}/nodal-native-toolchain" >> "${GITHUB_ENV}"
+
+      - name: Run complete Increment 9 gate
+        run: |
+          ./nodal check \
+            --online-toolchain \
+            --toolchain "${NODAL_NATIVE_TOOLCHAIN}"
+
+      - name: Resolve pull request number
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          number="$(gh pr list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --head "${GITHUB_REF_NAME}" \
+            --base dev \
+            --state open \
+            --json number \
+            --jq '.[0].number')"
+          test -n "${number}"
+          echo "number=${number}" >> "${GITHUB_OUTPUT}"
+
+      - name: Mark Increment 9 complete
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          implementation = os.environ['IMPLEMENTATION_SHA']
+          pr_number = os.environ['PR_NUMBER']
+          path = Path('docs/roadmap/nodal-development-todo.md')
+          text = path.read_text(encoding='utf-8')
+
+          old_revision = '**Revision:** 1.0  '
+          old_block = '''- [ ] **Increment 9 — Formatting, linting and contribution rules**
+            - Add Scalafmt/Scalafix, ClangFormat/ClangTidy where compatible with LLVM style, Markdown checks, commit/PR expectations, package-visibility checks, and rules that public API or core/library boundary changes require a design gate.'''
+
+          if old_block in text:
+              if text.count(old_revision) != 1:
+                  raise SystemExit('expected exactly one roadmap revision 1.0 marker')
+
+              candidates = [
+                  '.scalafmt.conf',
+                  '.scalafix.conf',
+                  '.clang-format',
+                  '.clang-tidy',
+                  '.markdownlint-cli2.jsonc',
+                  'CONTRIBUTING.md',
+                  '.github/pull_request_template.md',
+                  'scripts/check_contribution_rules.py',
+                  'scripts/check_style.py',
+                  'scripts/check_formatting.py',
+                  'tests/style',
+                  'tests/contribution',
+              ]
+              links = []
+              for candidate in candidates:
+                  target = Path(candidate)
+                  if target.exists():
+                      prefix = '../../' if not candidate.startswith('docs/') else '../'
+                      links.append(f'[`{candidate}`]({prefix}{candidate})')
+              links.extend([
+                  f'implementation commit [`{implementation[:7]}`](https://github.com/{repo}/commit/{implementation})',
+                  f'pull request [#{pr_number}](https://github.com/{repo}/pull/{pr_number})',
+              ])
+              evidence = ', '.join(links)
+              new_block = f'''- [x] **Increment 9 — Formatting, linting and contribution rules**
+            - Add Scalafmt/Scalafix, ClangFormat/ClangTidy where compatible with LLVM style, Markdown checks, commit/PR expectations, package-visibility checks, and rules that public API or core/library boundary changes require a design gate.
+            - Evidence: {evidence}.'''
+              text = text.replace(old_revision, '**Revision:** 1.1  ', 1)
+              text = text.replace(old_block, new_block, 1)
+              path.write_text(text, encoding='utf-8')
+          elif '- [x] **Increment 9 — Formatting, linting and contribution rules**' not in text:
+              raise SystemExit('unexpected Increment 9 roadmap state')
+          PY
+
+      - name: Recheck style and contracts after roadmap update
+        run: |
+          ./nodal style check
+          ./nodal check --contracts-only --online-toolchain
+
+      - name: Commit completion evidence and remove one-shot workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -- .github/workflows/increment-9-roadmap-completion.yml
+          git add -- docs/roadmap/nodal-development-todo.md
+          git diff --cached --check
+          git commit -m 'docs: mark increment 9 complete'
+          git push origin "HEAD:${GITHUB_REF_NAME}"

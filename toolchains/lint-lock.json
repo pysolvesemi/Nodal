@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "lock_id": "nodal-lint-2026.08.21",
+  "python_minimum": "3.11.0",
+  "scala": {
+    "scalafmt_version": "3.11.5",
+    "scalafix_version": "0.14.7",
+    "scalafix_scala_version": "3.8.4"
+  },
+  "native": {
+    "clang_format": {
+      "package": "clang-format",
+      "version": "22.1.8",
+      "executable": "clang-format"
+    },
+    "clang_tidy": {
+      "package": "clang-tidy",
+      "version": "22.1.8",
+      "executable": "clang-tidy"
+    }
+  }
+}

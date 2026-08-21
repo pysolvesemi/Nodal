@@ -99,6 +99,37 @@ def _managed_toolchain(
     return Path(str(found)).expanduser().resolve()
 
 
+def _managed_lint_toolchain(
+    root: Path,
+    runner: Runner,
+    *,
+    explicit: Path | None,
+    require: bool,
+) -> Path | None:
+    command = _python(root, "bootstrap_lint_toolchain.py", "status", "--json")
+    if explicit is not None:
+        command.extend(("--toolchain", str(explicit)))
+    if require:
+        command.append("--require")
+    completed = runner.run(command, capture_output=True)
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise DeveloperCommandError(
+            "NODAL-DEV-007",
+            f"lint toolchain status returned invalid JSON: {exc}",
+        ) from exc
+    found = payload.get("found")
+    if found is None:
+        if require:
+            raise DeveloperCommandError(
+                "NODAL-DEV-008",
+                "no validated lint toolchain was found; run './nodal style bootstrap' first",
+            )
+        return None
+    return Path(str(found)).expanduser().resolve()
+
+
 def command_bootstrap(args: argparse.Namespace, root: Path, runner: Runner) -> int:
     command = _python(
         root,
@@ -149,6 +180,99 @@ def command_core_native(args: argparse.Namespace, root: Path, runner: Runner) ->
         ),
         env=env,
     )
+    lint_toolchain = _managed_lint_toolchain(
+        root,
+        runner,
+        explicit=getattr(args, "lint_toolchain", None),
+        require=False,
+    )
+    if lint_toolchain is not None:
+        runner.run(
+            _python(
+                root,
+                "run_clang_tools.py",
+                "tidy",
+                "--toolchain",
+                str(lint_toolchain),
+                "--build-dir",
+                str(root / "out" / "native" / "release"),
+            )
+        )
+    return 0
+
+
+def command_style_bootstrap(args: argparse.Namespace, root: Path, runner: Runner) -> int:
+    command = _python(root, "bootstrap_lint_toolchain.py", "install")
+    if args.prefix is not None:
+        command.extend(("--prefix", str(args.prefix)))
+    if args.force:
+        command.append("--force")
+    if args.dry_run:
+        command.append("--dry-run")
+    if args.json:
+        command.append("--json")
+    runner.run(command)
+    return 0
+
+
+def _style_policy_commands(root: Path, base_ref: str | None) -> list[list[str]]:
+    contribution = _python(root, "check_contribution_policy.py")
+    if base_ref:
+        contribution.extend(("--base-ref", base_ref))
+    return [
+        _python(root, "check_markdown.py"),
+        _python(root, "check_package_visibility.py"),
+        contribution,
+    ]
+
+
+def command_style_check(args: argparse.Namespace, root: Path, runner: Runner) -> int:
+    lint_toolchain = _managed_lint_toolchain(
+        root,
+        runner,
+        explicit=args.lint_toolchain,
+        require=True,
+    )
+    assert lint_toolchain is not None
+    for command in _style_policy_commands(root, args.base_ref):
+        runner.run(command)
+    runner.run(_mill(root, "mill.scalalib.scalafmt/checkFormatAll"))
+    runner.run(_mill(root, "scalafix.check"))
+    runner.run(
+        _python(
+            root,
+            "run_clang_tools.py",
+            "format",
+            "--check",
+            "--toolchain",
+            str(lint_toolchain),
+        )
+    )
+    return 0
+
+
+def command_style_fix(args: argparse.Namespace, root: Path, runner: Runner) -> int:
+    lint_toolchain = _managed_lint_toolchain(
+        root,
+        runner,
+        explicit=args.lint_toolchain,
+        require=True,
+    )
+    assert lint_toolchain is not None
+    runner.run(_mill(root, "mill.scalalib.scalafmt/reformatAll"))
+    runner.run(_mill(root, "scalafix.fix"))
+    runner.run(
+        _python(
+            root,
+            "run_clang_tools.py",
+            "format",
+            "--fix",
+            "--toolchain",
+            str(lint_toolchain),
+        )
+    )
+    for command in _style_policy_commands(root, None)[:2]:
+        runner.run(command)
     return 0
 
 
@@ -161,6 +285,7 @@ def _contract_commands(root: Path, *, online_toolchain: bool) -> list[list[str]]
         _python(root, "check_developer_commands.py"),
         _python(root, "check_formatting_baseline.py"),
         _python(root, "check_ci_baseline.py"),
+        _python(root, "check_increment9.py"),
     ]
     if online_toolchain:
         commands.append(_python(root, "check_native_toolchain.py", "--online"))
@@ -171,6 +296,7 @@ def _contract_commands(root: Path, *, online_toolchain: bool) -> list[list[str]]
         "compiler",
         "developer",
         "ci",
+        "lint",
     ):
         commands.append(
             [
@@ -190,6 +316,7 @@ def _contract_commands(root: Path, *, online_toolchain: bool) -> list[list[str]]
 def command_check(args: argparse.Namespace, root: Path, runner: Runner) -> int:
     for command in _contract_commands(root, online_toolchain=args.online_toolchain):
         runner.run(command)
+    command_style_check(args, root, runner)
     if args.contracts_only:
         return 0
     command_core_scala(args, root, runner)
@@ -291,20 +418,47 @@ def create_parser() -> argparse.ArgumentParser:
     core_scala = core_commands.add_parser("scala", help="compile and test Scala core")
     core_scala.set_defaults(handler=command_core_scala)
     core_native = core_commands.add_parser(
-        "native", help="configure, build, and test native core"
+        "native", help="configure, build, lint, and test native core"
     )
     core_native.add_argument("--toolchain", type=Path)
+    core_native.add_argument("--lint-toolchain", type=Path)
     core_native.set_defaults(handler=command_core_native)
 
+    style = subcommands.add_parser(
+        "style", help="bootstrap, check, or apply formatting and lint rules"
+    )
+    style_commands = style.add_subparsers(dest="style_command", required=True)
+    style_bootstrap = style_commands.add_parser(
+        "bootstrap", help="install pinned clang-format and clang-tidy tools"
+    )
+    style_bootstrap.add_argument("--prefix", type=Path)
+    style_bootstrap.add_argument("--force", action="store_true")
+    style_bootstrap.add_argument("--dry-run", action="store_true")
+    style_bootstrap.add_argument("--json", action="store_true")
+    style_bootstrap.set_defaults(handler=command_style_bootstrap)
+    style_check = style_commands.add_parser(
+        "check", help="check Scala, native, Markdown, visibility, and policy rules"
+    )
+    style_check.add_argument("--lint-toolchain", type=Path)
+    style_check.add_argument("--base-ref")
+    style_check.set_defaults(handler=command_style_check)
+    style_fix = style_commands.add_parser(
+        "fix", help="apply deterministic Scala and native formatting fixes"
+    )
+    style_fix.add_argument("--lint-toolchain", type=Path)
+    style_fix.set_defaults(handler=command_style_fix)
+
     check = subcommands.add_parser(
-        "check", help="run all core contracts, builds, and tests"
+        "check", help="run all core contracts, builds, lints, and tests"
     )
     check.add_argument("--toolchain", type=Path)
+    check.add_argument("--lint-toolchain", type=Path)
+    check.add_argument("--base-ref")
     check.add_argument("--online-toolchain", action="store_true")
     check.add_argument(
         "--contracts-only",
         action="store_true",
-        help="run contracts and Python suites without Scala/native builds",
+        help="run contracts, style gates, and Python suites without Scala/native builds",
     )
     check.set_defaults(handler=command_check)
 

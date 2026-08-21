@@ -1,6 +1,7 @@
 #include "nodal/Support/Version.h"
 
 #include "nodal/Support/NodalVersion.inc"
+
 #include "llvm/Support/raw_ostream.h"
 
 namespace nodal {
@@ -15,9 +16,7 @@ llvm::StringRef getCirctCommit() { return NODAL_CIRCT_COMMIT; }
 
 llvm::StringRef getLlvmCommit() { return NODAL_LLVM_COMMIT; }
 
-llvm::StringRef getLlvmPackageVersion() {
-  return NODAL_LLVM_PACKAGE_VERSION;
-}
+llvm::StringRef getLlvmPackageVersion() { return NODAL_LLVM_PACKAGE_VERSION; }
 
 void printVersion(llvm::raw_ostream &os) {
   os << "nodalc " << getNodalVersion() << '\n';

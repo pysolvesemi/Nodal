@@ -4,10 +4,14 @@
 package build
 
 import mill.*
-import scalalib.*
+import mill.api.BuildCtx
+import mill.javalib.JavaModule
+import mill.scalalib.*
+import mill.util.Jvm
 
 object Versions:
   val scala3 = "3.8.4"
+  val scalafix = "0.14.7"
 
 trait NodalScalaModule extends ScalaModule:
   def scalaVersion = Versions.scala3
@@ -19,6 +23,52 @@ trait NodalScalaModule extends ScalaModule:
     "-Wunused:all",
     "-Werror",
   )
+
+object scalafix extends JavaModule:
+  def scalafixClasspath: T[Seq[PathRef]] = Task {
+    defaultResolver().classpath(
+      Seq(mvn"ch.epfl.scala:scalafix-cli_3.8.4:${Versions.scalafix}")
+    )
+  }
+
+  private def scalafixArguments(checkOnly: Boolean): Seq[String] =
+    Seq(
+      "--config",
+      ".scalafix.conf",
+      "--scala-version",
+      Versions.scala3,
+      "--syntactic",
+    ) ++ (if checkOnly then Seq("--check") else Seq.empty) ++ Seq(
+      "core/scala",
+      "core/integrations",
+    )
+
+  private def invoke(
+      checkOnly: Boolean,
+      classPath: Seq[PathRef],
+  )(using mill.api.TaskCtx): Unit =
+    Jvm.callProcess(
+      "scalafix.cli.Cli",
+      scalafixArguments(checkOnly),
+      classPath = classPath.map(_.path),
+      cwd = BuildCtx.workspaceRoot,
+      stdin = os.Inherit,
+      stdout = os.Inherit,
+    )
+
+  def check(): Command[Unit] = Task.Command {
+    invoke(
+      checkOnly = true,
+      classPath = scalafixClasspath(),
+    )
+  }
+
+  def fix(): Command[Unit] = Task.Command {
+    invoke(
+      checkOnly = false,
+      classPath = scalafixClasspath(),
+    )
+  }
 
 object core extends Module:
   object integrations extends NodalScalaModule

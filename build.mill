@@ -41,6 +41,7 @@ object scalafix extends JavaModule:
     ) ++ (if checkOnly then Seq("--check") else Seq.empty) ++ Seq(
       "core/scala",
       "core/integrations",
+      "examples",
     )
 
   private def invoke(
@@ -94,3 +95,10 @@ object core extends Module:
       object test extends ScalaTests:
         def mvnDeps = Seq(mvn"com.lihaoyi::utest:0.9.1")
         def testFramework = "utest.runner.Framework"
+
+object examples extends Module:
+  object externalLibrary extends NodalScalaModule:
+    def moduleDeps = Seq(core.scala.api)
+
+  object publicApiCandidates extends NodalScalaModule:
+    def moduleDeps = Seq(core.scala.api, externalLibrary)

@@ -1,0 +1,58 @@
+name: Apply scalable plugin architecture roadmap
+
+on:
+  push:
+    branches:
+      - increment/13-scalable-plugin-architecture-roadmap
+
+permissions:
+  contents: write
+
+jobs:
+  apply-roadmap:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out roadmap branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/13-scalable-plugin-architecture-roadmap
+          fetch-depth: 0
+
+      - name: Apply roadmap transformation
+        run: python3 scripts/update_plugin_architecture_roadmap.py
+
+      - name: Validate durable documents
+        shell: bash
+        run: |
+          python3 scripts/check_markdown.py
+          python3 scripts/check_formatting_baseline.py
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          for path in sorted(Path("docs/roadmap").glob("*.json")):
+              json.loads(path.read_text(encoding="utf-8"))
+          print("roadmap JSON validation passed")
+          PY
+
+      - name: Commit transformed roadmap and remove helper
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm \
+            .github/workflows/apply-plugin-architecture-roadmap.yml \
+            scripts/update_plugin_architecture_roadmap.py
+          git add -- \
+            docs/architecture/0010-digital-verilog-open-source-verification.md \
+            docs/architecture/0011-ams-fpga-approximation-validation.md \
+            docs/roadmap/ams-fpga-validation-plan.md \
+            docs/roadmap/ams-fpga-validation-surface.json \
+            docs/roadmap/digital-verilog-open-source-verification-plan.md \
+            docs/roadmap/nodal-development-todo.md
+          git diff --cached --check
+          git commit -m 'docs: plan scalable Nodal plugin architecture'
+          git push origin HEAD:increment/13-scalable-plugin-architecture-roadmap

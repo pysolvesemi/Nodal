@@ -3,7 +3,7 @@ name: Increment 11 public API v0.1 freeze
 on:
   push:
     branches:
-      - increment/11-public-api-v0.1-freeze
+      - increment/11-public-api-design-gate-v0-1
   workflow_dispatch:
 
 permissions:

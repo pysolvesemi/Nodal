@@ -55,12 +55,11 @@ def nature(name: String): Nature = new Nature(name)
 def discipline(name: String, potential: Nature, flow: Nature): NamedDiscipline =
   new NamedDiscipline(name, potential, flow)
 
-/**
- * Frozen v0.1 HDL parameter reference.
- *
- * A Param is preserved as a Verilog-A or Verilog-AMS parameter by default. It is not a Scala
- * elaboration constant and it may participate in backend-constant expressions and widths.
- */
+/** Frozen v0.1 HDL parameter reference.
+  *
+  * A Param is preserved as a Verilog-A or Verilog-AMS parameter by default. It is not a Scala
+  * elaboration constant and it may participate in backend-constant expressions and widths.
+  */
 final class Param[A <: Data] private[nodal] (val default: Expr[A]) extends Expr[A]
 
 /** Frozen v0.1 digital signal or port. */

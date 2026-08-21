@@ -1,0 +1,87 @@
+name: Prepare Increment 11 public API freeze
+
+on:
+  push:
+    branches:
+      - increment/11-public-api-design-gate-v0.1
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/11-public-api-design-gate-v0.1
+
+      - name: Integrate Increment 11 contracts
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              Path("scripts/nodal.py"): (
+                  (
+                      '        _python(root, "check_increment10.py"),\n',
+                      '        _python(root, "check_increment10.py"),\n'
+                      '        _python(root, "check_increment11.py"),\n',
+                  ),
+              ),
+              Path("scripts/check_developer_commands.py"): (
+                  (
+                      '        \'check_increment10.py"\',\n',
+                      '        \'check_increment10.py"\',\n'
+                      '        \'check_increment11.py"\',\n',
+                  ),
+              ),
+              Path("tests/developer/test_developer_commands.py"): (
+                  (
+                      '            "check_increment10.py",\n',
+                      '            "check_increment10.py",\n'
+                      '            "check_increment11.py",\n',
+                  ),
+                  (
+                      '        self.assertTrue(any("check_increment10.py" in command for command in rendered))\n'
+                      '        self.assertTrue(any("tests/lint" in command for command in rendered))\n',
+                      '        self.assertTrue(any("check_increment10.py" in command for command in rendered))\n'
+                      '        self.assertTrue(any("check_increment11.py" in command for command in rendered))\n'
+                      '        self.assertTrue(any("tests/lint" in command for command in rendered))\n',
+                  ),
+              ),
+          }
+
+          for path, edits in replacements.items():
+              text = path.read_text(encoding="utf-8")
+              for old, new in edits:
+                  if old not in text:
+                      raise SystemExit(
+                          f"missing Increment 11 integration anchor in {path}: {old!r}"
+                      )
+                  text = text.replace(old, new, 1)
+              path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Format frozen Scala API and examples
+        run: ./mill mill.scalalib.scalafmt/reformatAll
+
+      - name: Commit integrated freeze
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            core/scala/api/src/nodal/CandidateApi.scala \
+            examples/publicApiCandidates/src/prototypes/candidates/MixedSignalCandidates.scala \
+            examples/publicApiCandidates/src/prototypes/candidates/BackendEntryPoint.scala \
+            scripts/nodal.py \
+            scripts/check_developer_commands.py \
+            tests/developer/test_developer_commands.py
+          git diff --cached --quiet && exit 0
+          git commit -m 'style: integrate and format Increment 11 API freeze'
+          git push origin HEAD:increment/11-public-api-design-gate-v0.1

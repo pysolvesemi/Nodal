@@ -39,10 +39,10 @@
     "reason": "Create dev at the exact validated Increment 8 head. The increment stack is linear, so this preserves every independently validated commit without adding an artificial bootstrap merge commit."
   },
   "milestone_promotions": {
-    "M0": "after Increment 12",
-    "M1": "after Increment 23",
-    "M2": "after Increment 50",
-    "M3": "after Increment 66",
-    "M4": "after Increment 77"
+    "M0": "after Increment 14",
+    "M1": "after Increment 25",
+    "M2": "after Increment 52",
+    "M3": "after Increment 74",
+    "M4": "after Increment 85"
   }
 }

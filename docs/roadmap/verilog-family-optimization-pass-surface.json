@@ -1,0 +1,305 @@
+{
+  "schema": 1,
+  "status": "roadmap-freeze-candidate",
+  "roadmap_revision": "1.7",
+  "formal_gate_increment": 85,
+  "architecture": "typed-ir-declared-effect-verified-transactional-pass-pipeline",
+  "documents": {
+    "architecture_adr": "docs/architecture/0013-versioned-verilog-family-optimization-passes.md",
+    "implementation_plan": "docs/roadmap/verilog-family-optimization-pass-plan.md",
+    "common_plugin_plan": "docs/roadmap/plugin-spi-v0.1-plan.md",
+    "main_roadmap": "docs/roadmap/nodal-development-todo.md"
+  },
+  "binding_rule": "Optimize the highest valid typed representation, declare every semantic effect, verify every mutation, and commit only a validated candidate.",
+  "candidate_public_types": [
+    "OptimizationPipeline",
+    "OptimizationProfile",
+    "PassRef",
+    "PassId",
+    "PassVersion",
+    "PassStage",
+    "PassKind",
+    "SemanticEffect",
+    "VerificationPolicy",
+    "ProofPolicy",
+    "HdlFamily",
+    "TargetProfile",
+    "OptimizationResult",
+    "PassEvidence"
+  ],
+  "hdl_families": [
+    "HdlFamily.Nodal",
+    "HdlFamily.Digital",
+    "HdlFamily.Verilog",
+    "HdlFamily.VerilogA",
+    "HdlFamily.VerilogAMS"
+  ],
+  "typed_representations": [
+    "nodal-ir",
+    "nodal-digital-ir",
+    "approved-circt-ir",
+    "nodal-hdl-verilog/1",
+    "nodal-hdl-veriloga/1",
+    "nodal-hdl-verilogams/1"
+  ],
+  "extension_points": [
+    "nodal.pre-canonicalize",
+    "nodal.post-canonicalize",
+    "nodal.pre-target-lowering",
+    "nodal.post-target-lowering",
+    "digital.pre-circt-lowering",
+    "digital.post-circt-lowering",
+    "digital.pre-verilog-legalize",
+    "verilog.pre-legalize",
+    "verilog.post-legalize",
+    "verilog.pre-emit",
+    "veriloga.pre-legalize",
+    "veriloga.post-legalize",
+    "veriloga.pre-emit",
+    "verilogams.pre-legalize",
+    "verilogams.post-legalize",
+    "verilogams.pre-emit",
+    "hdl.post-emit-format",
+    "report-only"
+  ],
+  "pass_kinds": [
+    "analysis",
+    "lint",
+    "canonicalization",
+    "optimization",
+    "legalization",
+    "lowering",
+    "instrumentation",
+    "formatting",
+    "report"
+  ],
+  "semantic_effects": [
+    "read-only",
+    "representation-preserving",
+    "behavior-equivalent",
+    "latency-equivalent",
+    "protocol-equivalent",
+    "profile-legalizing",
+    "instrumenting",
+    "specializing"
+  ],
+  "built_in_profiles": [
+    "none",
+    "debug",
+    "portable",
+    "area",
+    "performance",
+    "power",
+    "simulation",
+    "formal",
+    "custom"
+  ],
+  "post_emission_text_policy": {
+    "semantic_transforms_allowed": false,
+    "allowed": [
+      "whitespace",
+      "line wrapping",
+      "comment formatting",
+      "deterministic banners",
+      "source map finalization",
+      "artifact packaging"
+    ],
+    "semantic_external_text_transform_requires": [
+      "out of process execution",
+      "reparse into supported typed representation",
+      "core structural verification",
+      "core semantic verification",
+      "family specific proof policy",
+      "source map validation",
+      "transactional acceptance"
+    ]
+  },
+  "default_preservation": [
+    "symbolic parameters and ranges",
+    "named parameter overrides",
+    "one module per structural shape",
+    "finite width arithmetic",
+    "signedness overflow rounding and conversion",
+    "clock and reset domain ownership",
+    "CDC and RDC structure and provenance",
+    "protocol ordering capacity throughput and backpressure",
+    "published fixed or bounded latency",
+    "automatic pipeline transaction identity and sideband alignment",
+    "physical dimensions and discipline compatibility",
+    "analog state contributions events and initialization",
+    "mixed signal sample and drive boundaries",
+    "memory and external operation contracts",
+    "target capability profile legality",
+    "stable names and source origins"
+  ],
+  "specialization_policy": {
+    "explicit_opt_in_required": true,
+    "default_parameterized_flow_may_specialize": false,
+    "specialization_manifest_required": true,
+    "clone_per_parameter_value_default": false
+  },
+  "transactional_execution": [
+    "snapshot or hash accepted input",
+    "run isolated candidate transform",
+    "parse candidate",
+    "run structural verifier",
+    "run core semantic verifiers",
+    "run required equivalence differential simulation or formal checks",
+    "validate source maps and artifacts",
+    "accept candidate or discard candidate"
+  ],
+  "failure_must_rollback": [
+    "crash",
+    "timeout",
+    "cancellation",
+    "malformed response",
+    "version mismatch",
+    "undeclared construct",
+    "verifier failure",
+    "proof failure",
+    "source map corruption",
+    "nondeterministic replay",
+    "undeclared analysis invalidation",
+    "unauthorized specialization",
+    "capability profile violation"
+  ],
+  "digital_verification": [
+    "Nodal verification",
+    "MLIR and CIRCT verification",
+    "normalized IR fingerprints",
+    "CIRCT LEC where applicable",
+    "Yosys equivalence",
+    "Verilator differential simulation",
+    "Icarus differential simulation",
+    "SBY safety cover induction and selected liveness",
+    "parameter envelope matrices",
+    "latency aware pipeline equivalence",
+    "protocol aware elastic equivalence",
+    "CDC RDC and reset structure checks"
+  ],
+  "yosys_interop": {
+    "role": "external optimization engine",
+    "defines_nodal_semantics": false,
+    "supports_loaded_yosys_plugins": true,
+    "required_evidence": [
+      "Yosys build ID",
+      "loaded plugin hashes",
+      "script and pass order",
+      "normalized options",
+      "environment",
+      "input and output hashes",
+      "deterministic seed where relevant",
+      "synthesis and equivalence logs",
+      "result artifact",
+      "Nodal reparse and verification"
+    ]
+  },
+  "veriloga_verification": [
+    "typed target IR verification",
+    "dimension and unit verification",
+    "nature discipline node and branch verification",
+    "contribution state event and initialization verification",
+    "narrow symbolic or algebraic equivalence where sound",
+    "normalized equation comparison",
+    "OpenVAF compilation",
+    "ngspice differential regression",
+    "optional second simulator",
+    "declared validation envelope and tolerances"
+  ],
+  "verilogams_verification": [
+    "all Verilog A verification",
+    "digital equivalence and formal checks",
+    "clock reset domain and CDC RDC verification",
+    "connect rule and resolution verification",
+    "mixed signal sampling and drive verification",
+    "pipeline protocol and latency verification",
+    "AMS differential simulation",
+    "backend portability profile verification"
+  ],
+  "source_mapping": {
+    "required": true,
+    "origin_chain": [
+      "Nodal source",
+      "input IR node",
+      "pass ID and output IR node",
+      "target HDL node",
+      "emitted file range",
+      "external tool diagnostics and evidence"
+    ],
+    "relations": [
+      "one to one",
+      "one to many",
+      "many to one",
+      "removed node"
+    ]
+  },
+  "ordering": {
+    "inputs": [
+      "extension point order",
+      "before and after relations",
+      "analysis dependencies",
+      "conflicts and replacements",
+      "profile owned ordering"
+    ],
+    "forbidden_inputs": [
+      "discovery order",
+      "plugin load order",
+      "classpath order",
+      "filesystem order",
+      "hash map iteration",
+      "JVM object identity"
+    ],
+    "ambiguous_noncommuting_order_is_error": true
+  },
+  "determinism_and_cache_inputs": [
+    "resolved pass graph and total order",
+    "pass and plugin versions and artifact hashes",
+    "normalized options",
+    "input and output IR versions and hashes",
+    "target family and profile",
+    "analysis preservation and invalidation",
+    "toolchain and external tool build IDs",
+    "proof policy scripts seeds and evidence hashes",
+    "source map version",
+    "trust and isolation mode"
+  ],
+  "trust_classes": [
+    "manifest-only",
+    "process-isolated",
+    "trusted-native",
+    "trusted-scala"
+  ],
+  "candidate_cli": [
+    "nodal passes list",
+    "nodal passes inspect",
+    "nodal passes graph",
+    "nodal passes resolve",
+    "nodal passes explain",
+    "nodal passes lock",
+    "nodal passes run",
+    "nodal passes verify",
+    "nodal passes replay",
+    "nodal passes diff"
+  ],
+  "increments": {
+    "85": "optimization pass architecture gate and contracts",
+    "86": "versioned target HDL IR and transactional pass manager",
+    "87": "digital Verilog optimization plugins and Yosys interoperability",
+    "88": "Verilog A and Verilog AMS optimization plugins and bounded validation"
+  },
+  "required_evidence": [
+    "approved optimization pass design gate",
+    "versioned target HDL representation schemas",
+    "stable extension point contracts",
+    "positive and negative pass fixtures",
+    "transactional rollback evidence",
+    "parameterization preservation evidence",
+    "source map preservation evidence",
+    "digital equivalence evidence",
+    "analog and AMS differential evidence",
+    "resolved pass graph and lockfile",
+    "deterministic replay",
+    "plugin conformance results",
+    "green CI"
+  ]
+}

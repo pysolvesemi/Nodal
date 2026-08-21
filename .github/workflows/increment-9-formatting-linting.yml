@@ -97,11 +97,9 @@ jobs:
           )
           path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
           PY
-          git rm .github/workflows/complete-increment9-roadmap.yml
-          git checkout HEAD^ -- .github/workflows/increment-9-formatting-linting.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add docs/roadmap/nodal-development-todo.md .github/workflows/increment-9-formatting-linting.yml
+          git add docs/roadmap/nodal-development-todo.md
           git commit -m 'docs: complete Increment 9 roadmap evidence'
           git push origin HEAD:increment/9-formatting-linting-contribution-rules
 

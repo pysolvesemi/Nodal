@@ -29,8 +29,11 @@ Accepted ADRs must not be edited to reverse their decision. A material change re
 | [0011](0011-ams-fpga-approximation-validation.md) | Validate supported AMS behavior on FPGA only through an explicit discrete-time, finite-precision approximation with separate reference, quantization, RTL, and hardware evidence. |
 | [0012](0012-versioned-capability-plugin-architecture.md) | Use explicit manifests, a typed capability graph, deterministic phases, local design hosts, separate Scala/native/process boundaries, lockfiles, trust policy, and retained plugin provenance. |
 | [0013](0013-structured-hdl-optimization-pass-architecture.md) | Use structured digital/Verilog-A/Verilog-AMS target IR, explicit locked pass pipelines, declared semantic effects, mandatory re-verification, and digital/AMS-appropriate proof evidence. |
+| [0014](0014-target-neutral-formal-verification.md) | Preserve future user-authored formal properties in target-neutral, domain-aware IR and execute them through capability-checked proof-engine adapters with retained evidence. |
 
 ADR 0012 owns general plugin discovery, resolution, loading, trust, lifecycle, and provenance. ADR 0013 layers the target-HDL-specific structured representations, pass profiles, preservation rules, and proof obligations on that common plugin foundation. Installing either a plugin or pass is inert until the project resolves and explicitly selects it in a locked plan.
+
+ADR 0014 specializes ADR 0010 and ADR 0012 for deferred user-authored formal verification: Nodal owns property/domain/reset/task semantics, while CIRCT lowering, SBY/Yosys, and future engines remain capability-checked implementation and adapter layers.
 
 ## Proposed records
 

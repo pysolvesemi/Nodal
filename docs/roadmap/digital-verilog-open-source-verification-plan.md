@@ -2,7 +2,9 @@
 
 **Status:** Normative roadmap target
 **Architecture:** [ADR 0010](../architecture/0010-digital-verilog-open-source-verification.md)
-**Public API freeze:** Increment 15 unified v0.3 gate
+**Public API freeze:** Increment 15 unified v0.3 backend-profile gate
+
+**Future user-authored formal gate:** Increment 109
 
 ## Goal
 
@@ -218,7 +220,9 @@ Pipeline equivalence tracks transaction identity, valid/bubble state, sidebands,
 
 ## SBY formal plan
 
-Required formal tasks include:
+Increment 67 covers compiler-generated and core-library formal readiness; it does not freeze a user-authored formal API.
+
+Required internal formal tasks include:
 
 - bounded safety proofs;
 - induction/unbounded safety where feasible;
@@ -238,6 +242,20 @@ Initial reusable property suites prove:
 - no output before a valid input transaction.
 
 Formal syntax remains within the open-source frontend capability profile. Unsupported SVA is lowered to simpler assertions or a sidecar harness, or rejected with a stable diagnostic.
+
+## Future user-authored formal verification boundary
+
+[ADR 0014](../architecture/0014-target-neutral-formal-verification.md), [`formal-verification-v0.1-plan.md`](formal-verification-v0.1-plan.md), and [`formal-verification-v0.1-surface.json`](formal-verification-v0.1-surface.json) reserve the deferred public formal capability.
+
+The architecture keeps these layers separate:
+
+- target-neutral property authoring and domain/reset semantics;
+- Nodal/CIRCT formal IR and capability verification;
+- portable immediate/monitor/sidecar or future SVA lowering;
+- SBY/Yosys and future commercial/research proof-engine adapters;
+- normalized proof, vacuity, coverage, counterexample, and replay evidence.
+
+Increment 67 must retain stable property/source/domain/task metadata and proof-adapter evidence for compiler-generated properties, but it must not expose raw SVA strings, SBY files, or engine options as public language semantics. User-authored assert/assume/cover, sampled history, symbolic values, harnesses, contracts, and task APIs remain inert until Increment 109's design gate is approved.
 
 ## Differential regression
 
@@ -308,7 +326,7 @@ Implement:
 - differential smoke suite;
 - optional cocotb runner.
 
-### Synthesis, equivalence, and formal
+### Synthesis, equivalence, and core formal readiness
 
 Implement:
 
@@ -316,6 +334,10 @@ Implement:
 - RTL/netlist equivalence;
 - SBY harness generation and property libraries;
 - CI artifacts and failure triage.
+
+### Deferred user-authored formal verification
+
+After the public formal gate, implement target-neutral properties, harness/contracts, symbolic values, sampled history, bounded temporal semantics, pluggable proof tasks, vacuity/coverage, typed counterexample replay, and property-library conformance through Increments 109-113. This work is not a prerequisite for the initial digital/AMS preview.
 
 ## Exit criteria
 

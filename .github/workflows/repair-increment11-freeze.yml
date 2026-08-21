@@ -1,4 +1,4 @@
-name: Repair Increment 11 public API freeze integration
+name: Repair Increment 11 design-gate lifecycle policy
 
 on:
   push:
@@ -12,353 +12,165 @@ jobs:
   repair:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - name: Check out branch
         uses: actions/checkout@v6
         with:
           ref: increment/11-public-api-v0.1-freeze
 
-      - name: Apply idempotent frozen API integration
+      - name: Add explicit superseded-gate lifecycle support
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          from textwrap import dedent
+          import json
 
-          def insert_after(path: str, anchor: str, addition: str) -> None:
-              target = Path(path)
-              text = target.read_text(encoding="utf-8")
-              if addition in text:
-                  return
-              if anchor not in text:
-                  raise SystemExit(f"missing anchor in {path}: {anchor!r}")
-              target.write_text(text.replace(anchor, anchor + addition, 1), encoding="utf-8")
+          policy_path = Path('.github/change-policy.json')
+          policy = json.loads(policy_path.read_text(encoding='utf-8'))
+          gate = policy['design_gate']
+          gate['superseded_marker'] = '**Status:** Superseded'
+          gate['superseded_by_prefix'] = '**Superseded by:**'
+          policy_path.write_text(json.dumps(policy, indent=2) + '\n', encoding='utf-8')
 
-          api_path = Path("core/scala/api/src/nodal/CandidateApi.scala")
-          api = api_path.read_text(encoding="utf-8")
-          api = api.replace(
-              "/** Marker hierarchy for the Increment 10 compile-only public API candidates. */",
-              "/** Public marker hierarchy frozen by Nodal API v0.1. Implementations remain inert. */",
-          )
-          if "def apply(width: Expr[Integer]): DataType[Bits]" not in api:
-              api = api.replace(
-                  "  def apply(width: Int): DataType[Bits] = new WidthDataType[Bits](width)\n",
-                  "  def apply(width: Int): DataType[Bits] = new WidthDataType[Bits](width)\n"
-                  "  def apply(width: Expr[Integer]): DataType[Bits] = new WidthDataType[Bits](width)\n",
-                  1,
-              )
-          if "def apply(width: Expr[Integer]): DataType[UInt]" not in api:
-              api = api.replace(
-                  "  def apply(width: Int): DataType[UInt] = new WidthDataType[UInt](width)\n",
-                  "  def apply(width: Int): DataType[UInt] = new WidthDataType[UInt](width)\n"
-                  "  def apply(width: Expr[Integer]): DataType[UInt] = new WidthDataType[UInt](width)\n",
-                  1,
-              )
-          api = api.replace(
-              "private final class WidthDataType[A <: Data](width: Int) extends DataType[A]:",
-              "private final class WidthDataType[A <: Data](width: Any) extends DataType[A]:",
-          )
-          api = api.replace("protected final def input[", "protected final def in[")
-          api = api.replace("protected final def output[", "protected final def out[")
-          if "def toUInt(value: Expr[Real], width: Expr[Integer])" not in api:
-              anchor = (
-                  "def toUInt(value: Expr[Real], width: Int): Expr[UInt] =\n"
-                  "  CandidateRuntime.expr(value, width)\n"
-              )
-              addition = (
-                  "\ndef toUInt(value: Expr[Real], width: Expr[Integer]): Expr[UInt] =\n"
-                  "  CandidateRuntime.expr(value, width)\n"
-              )
-              if anchor not in api:
-                  raise SystemExit("missing toUInt(Int) anchor in CandidateApi.scala")
-              api = api.replace(anchor, anchor + addition, 1)
-          api_path.write_text(api, encoding="utf-8")
+          checker_path = Path('scripts/check_contribution_policy.py')
+          checker = checker_path.read_text(encoding='utf-8')
+          old_fields = '''    approved_marker = gate.get("approved_marker")
+    scope_prefix = gate.get("scope_marker_prefix")
+    if not all(isinstance(value, str) and value for value in (directory, filename_pattern, approved_marker, scope_prefix)):
+        problems.append(Problem("NODAL-POLICY-002", "change-policy design-gate fields are invalid"))
+        return
+'''
+          new_fields = '''    approved_marker = gate.get("approved_marker")
+    superseded_marker = gate.get("superseded_marker")
+    superseded_by_prefix = gate.get("superseded_by_prefix")
+    scope_prefix = gate.get("scope_marker_prefix")
+    if not all(
+        isinstance(value, str) and value
+        for value in (
+            directory,
+            filename_pattern,
+            approved_marker,
+            superseded_marker,
+            superseded_by_prefix,
+            scope_prefix,
+        )
+    ):
+        problems.append(Problem("NODAL-POLICY-002", "change-policy design-gate fields are invalid"))
+        return
+'''
+          if old_fields not in checker:
+              raise SystemExit('design-gate field anchor not found')
+          checker = checker.replace(old_fields, new_fields, 1)
 
-          Path(
-              "examples/publicApiCandidates/src/prototypes/candidates/AnalogCandidates.scala"
-          ).write_text(
-              dedent(
-                  """\
-                  package prototypes.candidates
+          old_status = '''        if approved_marker not in content:
+            problems.append(Problem("NODAL-POLICY-004", f"design gate is not approved: {relative}"))
+            continue
+        for line in content.splitlines():
+            if line.startswith(scope_prefix):
+                approved_scopes.add(line.removeprefix(scope_prefix).strip())
+'''
+          new_status = '''        if superseded_marker in content:
+            if superseded_by_prefix not in content:
+                problems.append(
+                    Problem(
+                        "NODAL-POLICY-016",
+                        f"superseded design gate lacks replacement reference: {relative}",
+                    )
+                )
+            continue
+        if approved_marker not in content:
+            problems.append(Problem("NODAL-POLICY-004", f"design gate is not approved: {relative}"))
+            continue
+        for line in content.splitlines():
+            if line.startswith(scope_prefix):
+                approved_scopes.add(line.removeprefix(scope_prefix).strip())
+'''
+          if old_status not in checker:
+              raise SystemExit('design-gate status anchor not found')
+          checker_path.write_text(checker.replace(old_status, new_status, 1), encoding='utf-8')
 
-                  import nodal.*
+          tests_path = Path('tests/lint/test_increment9.py')
+          tests = tests_path.read_text(encoding='utf-8')
+          anchor = '''        self.assertEqual(problems, [])
 
-                  final class Resistor(defaultResistance: Expr[Real] = 1.0.kOhm) extends Module:
-                    val p = inout(Electrical)
-                    val n = inout(Electrical)
-                    val resistance = param(defaultResistance)
+    def test_pull_request_metadata_is_checked(self) -> None:
+'''
+          addition = '''        self.assertEqual(problems, [])
 
-                    analog:
-                      V(p, n) <+ resistance * I(p, n)
+    def test_superseded_gate_is_accepted_with_approved_replacement(self) -> None:
+        temporary, root = self.policy_fixture()
+        self.addCleanup(temporary.cleanup)
+        gate_dir = root / "docs/design-gates"
+        gate_dir.mkdir(parents=True)
+        old_gate = gate_dir / "NodalPublicApiCandidates-DG-v0.1.md"
+        old_gate.write_text(
+            "# Old gate\\n\\n**Status:** Superseded\\n**Scope:** public-api\\n"
+            "**Superseded by:** NodalPublicApi-DG-v0.1.md\\n",
+            encoding="utf-8",
+        )
+        replacement = gate_dir / "NodalPublicApi-DG-v0.1.md"
+        replacement.write_text(
+            "# Replacement\\n\\n**Status:** Approved\\n**Scope:** public-api\\n",
+            encoding="utf-8",
+        )
+        problems = POLICY.check_repository(
+            root,
+            changed_files=[
+                "core/scala/api/src/nodal/Module.scala",
+                "docs/design-gates/NodalPublicApiCandidates-DG-v0.1.md",
+                "docs/design-gates/NodalPublicApi-DG-v0.1.md",
+            ],
+        )
+        self.assertEqual(problems, [])
 
-                  final class Capacitor(defaultCapacitance: Expr[Real] = 1.0.pF) extends Module:
-                    val p = inout(Electrical)
-                    val n = inout(Electrical)
-                    val capacitance = param(defaultCapacitance)
+    def test_superseded_gate_requires_replacement_reference(self) -> None:
+        temporary, root = self.policy_fixture()
+        self.addCleanup(temporary.cleanup)
+        gate_dir = root / "docs/design-gates"
+        gate_dir.mkdir(parents=True)
+        old_gate = gate_dir / "NodalPublicApiCandidates-DG-v0.1.md"
+        old_gate.write_text(
+            "# Old gate\\n\\n**Status:** Superseded\\n**Scope:** public-api\\n",
+            encoding="utf-8",
+        )
+        replacement = gate_dir / "NodalPublicApi-DG-v0.1.md"
+        replacement.write_text(
+            "# Replacement\\n\\n**Status:** Approved\\n**Scope:** public-api\\n",
+            encoding="utf-8",
+        )
+        problems = POLICY.check_repository(
+            root,
+            changed_files=[
+                "core/scala/api/src/nodal/Module.scala",
+                "docs/design-gates/NodalPublicApiCandidates-DG-v0.1.md",
+                "docs/design-gates/NodalPublicApi-DG-v0.1.md",
+            ],
+        )
+        self.assertIn("NODAL-POLICY-016", {problem.code for problem in problems})
 
-                    analog:
-                      I(p, n) <+ capacitance * ddt(V(p, n))
-
-                  final class RcFilter extends Module:
-                    val input = inout(Electrical)
-                    val output = inout(Electrical)
-                    val common = inout(Electrical)
-                    val resistance = param(1.0.kOhm)
-                    val capacitance = param(10.0.pF)
-
-                    private val resistor = instance(new Resistor()).param(_.resistance, resistance)
-                    private val capacitor = instance(new Capacitor()).param(_.capacitance, capacitance)
-
-                    connect(input, resistor(_.p))
-                    connect(resistor(_.n), output)
-                    connect(output, capacitor(_.p))
-                    connect(capacitor(_.n), common)
-
-                  final class Comparator extends Module:
-                    val positive = in(Electrical)
-                    val negative = in(Electrical)
-                    val result = out(Bool)
-                    val offset = param(0.0.V)
-
-                    analog:
-                      on(cross(V(positive, negative) - offset)):
-                        result := V(positive, negative) > offset
-
-                  final class AnalogEventSampler extends Module:
-                    val input = in(Electrical)
-                    val common = in(Electrical)
-                    val crossed = out(Bool)
-                    val threshold = param(0.5.V)
-                    val samplePeriod = param(10.0.ns)
-                    private val sampled = variable(Real, 0.0.V)
-
-                    initial:
-                      crossed := false.B
-
-                    analog:
-                      on(cross(V(input, common) - threshold, Edge.Rising)):
-                        crossed := true.B
-                      on(timer(0.0.ns, samplePeriod)):
-                        sampled := V(input, common)
-                  """
-              ),
-              encoding="utf-8",
-          )
-
-          Path(
-              "examples/publicApiCandidates/src/prototypes/candidates/MixedSignalCandidates.scala"
-          ).write_text(
-              dedent(
-                  """\
-                  package prototypes.candidates
-
-                  import nodal.*
-
-                  final class Adc extends Module:
-                    val width = param(12.integer)
-                    val analogInput = in(Electrical)
-                    val common = in(Electrical)
-                    val sampleClock = in(Bool)
-                    val code = out(UInt(width))
-                    val fullScale = param(1.0.V)
-
-                    always(sampleClock.rising):
-                      code := toUInt(V(analogInput, common) / fullScale, width)
-
-                  final class Dac(val width: Int = 12) extends Module:
-                    val code = in(UInt(width))
-                    val analogOutput = out(Electrical)
-                    val common = in(Electrical)
-                    val fullScale = param(1.0.V)
-
-                    analog:
-                      V(analogOutput, common) <+ transition(
-                        toReal(code) * fullScale / ((1 << width) - 1).real,
-                        0.0.ns,
-                        1.0.ns,
-                        1.0.ns,
-                      )
-
-                  final class MixedSignalHold(val width: Int = 10) extends Module:
-                    val analogInput = in(Electrical)
-                    val common = in(Electrical)
-                    val capture = in(Bool)
-                    val code = out(UInt(width))
-                    val threshold = param(0.25.V)
-                    private val held = variable(Real, 0.0.V)
-
-                    analog:
-                      on(cross(V(analogInput, common) - threshold, Edge.Either)):
-                        held := V(analogInput, common)
-
-                    always(capture.rising):
-                      code := toUInt(held, width)
-
-                  final class HierarchyAndOverride extends Module:
-                    val input = inout(Electrical)
-                    val output = inout(Electrical)
-                    val common = inout(Electrical)
-                    val cutoffResistance = param(2.0.kOhm)
-                    val cutoffCapacitance = param(22.0.pF)
-
-                    private val filter =
-                      instance(new RcFilter)
-                        .param(_.resistance, cutoffResistance)
-                        .param(_.capacitance, cutoffCapacitance)
-
-                    connect(input, filter(_.input))
-                    connect(output, filter(_.output))
-                    connect(common, filter(_.common))
-                  """
-              ),
-              encoding="utf-8",
-          )
-
-          Path("examples/externalLibrary/src/external/reuse/GainStage.scala").write_text(
-              dedent(
-                  """\
-                  package external.reuse
-
-                  import nodal.*
-
-                  /** Reusable module authored only against the frozen public core API. */
-                  final class GainStage(defaultGain: Expr[Real] = 2.0.real) extends Module:
-                    val input = in(Electrical)
-                    val output = out(Electrical)
-                    val common = inout(Electrical)
-                    val gain = param(defaultGain)
-
-                    analog:
-                      V(output, common) <+ gain * V(input, common)
-                  """
-              ),
-              encoding="utf-8",
-          )
-
-          Path(
-              "examples/publicApiCandidates/src/prototypes/candidates/ExternalReuseCandidate.scala"
-          ).write_text(
-              dedent(
-                  """\
-                  package prototypes.candidates
-
-                  import external.reuse.GainStage
-                  import nodal.*
-
-                  final class ExternalReuseCandidate extends Module:
-                    val input = inout(Electrical)
-                    val output = inout(Electrical)
-                    val common = inout(Electrical)
-                    val gain = param(4.0.real)
-
-                    private val stage = instance(new GainStage()).param(_.gain, gain)
-
-                    connect(input, stage(_.input))
-                    connect(output, stage(_.output))
-                    connect(common, stage(_.common))
-                  """
-              ),
-              encoding="utf-8",
-          )
-
-          candidate_gate = Path("docs/design-gates/NodalPublicApiCandidates-DG-v0.1.md")
-          candidate = candidate_gate.read_text(encoding="utf-8")
-          candidate = candidate.replace("**Status:** Approved", "**Status:** Superseded", 1)
-          superseded = (
-              "**Superseded by:** [`NodalPublicApi-DG v0.1`](NodalPublicApi-DG-v0.1.md)\n"
-          )
-          if superseded not in candidate:
-              anchor = "**Approved by:** Repository owner instruction to implement Increment 10 on 2026-08-21\n"
-              if anchor not in candidate:
-                  raise SystemExit("candidate gate approval anchor not found")
-              candidate = candidate.replace(anchor, anchor + superseded, 1)
-          candidate_gate.write_text(candidate, encoding="utf-8")
-
-          guide_path = Path("docs/development/public-api-candidates.md")
-          guide = guide_path.read_text(encoding="utf-8")
-          notice = (
-              "> **Superseded by Increment 11:** the accepted surface is frozen by "
-              "[`NodalPublicApi-DG-v0.1.md`](../design-gates/NodalPublicApi-DG-v0.1.md). "
-              "This page remains the comparison record.\n\n"
-          )
-          if notice not in guide:
-              guide = guide.replace(
-                  "# Public API candidate prototypes\n\n",
-                  "# Public API candidate prototypes\n\n" + notice,
-                  1,
-              )
-          guide_path.write_text(guide, encoding="utf-8")
-
-          insert_after(
-              "scripts/nodal.py",
-              '        _python(root, "check_increment10.py"),\n',
-              '        _python(root, "check_increment11.py"),\n',
-          )
-          insert_after(
-              "scripts/check_developer_commands.py",
-              '        \'check_increment10.py"\',\n',
-              '        \'check_increment11.py"\',\n',
-          )
-          insert_after(
-              "tests/developer/test_developer_commands.py",
-              '            "check_increment10.py",\n',
-              '            "check_increment11.py",\n',
-          )
-          insert_after(
-              "tests/developer/test_developer_commands.py",
-              '        self.assertTrue(any("check_increment10.py" in command for command in rendered))\n',
-              '        self.assertTrue(any("check_increment11.py" in command for command in rendered))\n',
-          )
-
-          inc10_path = Path("scripts/check_increment10.py")
-          inc10 = inc10_path.read_text(encoding="utf-8")
-          inc10 = inc10.replace('            "**Status:** Approved",', '            "**Status:** Superseded",')
-          inc10_path.write_text(inc10, encoding="utf-8")
-
-          codeowners_path = Path(".github/CODEOWNERS")
-          codeowners = codeowners_path.read_text(encoding="utf-8")
-          for line in (
-              "/core/scala/api/public-api-v0.1.json @pysolvesemi\n",
-              "/scripts/check_increment11.py @pysolvesemi\n",
-              "/tests/api/ @pysolvesemi\n",
-              "/docs/language-reference/public-api-v0.1.md @pysolvesemi\n",
-          ):
-              if line not in codeowners:
-                  codeowners += line
-          codeowners_path.write_text(codeowners, encoding="utf-8")
+    def test_pull_request_metadata_is_checked(self) -> None:
+'''
+          if anchor not in tests:
+              raise SystemExit('lint test insertion anchor not found')
+          tests_path.write_text(tests.replace(anchor, addition, 1), encoding='utf-8')
           PY
 
-      - name: Canonically format Scala sources
-        run: ./mill mill.scalalib.scalafmt/reformatAll
-
-      - name: Compile frozen API and examples
-        run: ./mill __.compile
-
-      - name: Run API and developer contracts
+      - name: Validate lifecycle policy repair
         run: |
+          python3 -m unittest discover -s tests/lint -p 'test_*.py'
+          python3 scripts/check_contribution_policy.py --base-ref origin/dev
           python3 scripts/check_increment10.py
           python3 scripts/check_increment11.py
-          python3 -m unittest discover -s tests/api -p 'test_*.py'
-          python3 -m unittest discover -s tests/developer -p 'test_*.py'
 
-      - name: Commit repaired freeze integration
+      - name: Commit lifecycle policy repair
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add \
-            .github/CODEOWNERS \
-            core/scala/api/src/nodal/CandidateApi.scala \
-            examples \
-            docs/design-gates/NodalPublicApiCandidates-DG-v0.1.md \
-            docs/development/public-api-candidates.md \
-            scripts/nodal.py \
-            scripts/check_developer_commands.py \
-            scripts/check_increment10.py \
-            tests/developer/test_developer_commands.py
-          if git diff --cached --quiet; then
-            exit 0
-          fi
-          git commit -m 'api: apply Nodal public API v0.1 freeze'
+            .github/change-policy.json \
+            scripts/check_contribution_policy.py \
+            tests/lint/test_increment9.py
+          git commit -m 'policy: support superseded design gates'
           git push origin HEAD:increment/11-public-api-v0.1-freeze

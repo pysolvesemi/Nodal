@@ -1,0 +1,215 @@
+{
+  "schema": 1,
+  "status": "roadmap-freeze-candidate",
+  "roadmap_revision": "1.7",
+  "formal_gate_increment": 83,
+  "architecture": "structured-target-ir-declared-effects-mandatory-reverification-proof-evidence",
+  "documents": {
+    "architecture_adr": "docs/architecture/0013-structured-hdl-optimization-pass-architecture.md",
+    "implementation_plan": "docs/roadmap/target-hdl-optimization-pass-v0.1-plan.md",
+    "general_plugin_plan": "docs/roadmap/plugin-spi-v0.1-plan.md",
+    "main_roadmap": "docs/roadmap/nodal-development-todo.md"
+  },
+  "pass_layers": [
+    "target-neutral-nodal-ir",
+    "digital-target-ir",
+    "verilog-a-target-ir",
+    "verilog-ams-target-ir",
+    "render-only",
+    "reparse"
+  ],
+  "target_families": [
+    "portable-verilog",
+    "verilog-a",
+    "verilog-ams"
+  ],
+  "candidate_extension_points": [
+    "before-digital-target-lowering",
+    "after-digital-target-lowering",
+    "before-verilog-render",
+    "after-verilog-reparse",
+    "before-analog-target-lowering",
+    "after-verilog-a-target-lowering",
+    "before-verilog-a-render",
+    "after-verilog-a-reparse",
+    "after-verilog-ams-target-lowering",
+    "before-verilog-ams-render",
+    "after-verilog-ams-reparse",
+    "render-only",
+    "report-only"
+  ],
+  "candidate_optimization_profiles": [
+    "none",
+    "canonical",
+    "portable",
+    "simulation",
+    "synthesis",
+    "formal",
+    "fpga",
+    "custom"
+  ],
+  "pass_descriptor_fields": [
+    "stable pass id",
+    "semantic version",
+    "plugin id and version",
+    "pass SPI version",
+    "target family and profile",
+    "structured target IR version",
+    "extension point",
+    "required capabilities and invariants",
+    "normalized options schema",
+    "input and output dialects or node kinds",
+    "required preserved invalidated and produced analyses",
+    "parameterization hierarchy naming and source map effects",
+    "semantic preservation declarations",
+    "proof or validation classes",
+    "artifact and report outputs",
+    "deterministic and cacheable declaration"
+  ],
+  "preserved_property_categories": [
+    "types and widths",
+    "signedness overflow and rounding",
+    "symbolic parameters and legal envelopes",
+    "one module per structural implementation",
+    "hierarchy ports names and source maps",
+    "clock reset CDC and RDC",
+    "protocol ordering latency throughput and capacity",
+    "memory and external operation contracts",
+    "physical dimensions",
+    "analog branches and contributions",
+    "events tolerances initialization and discontinuities",
+    "noise identity and analyses",
+    "mixed signal conversions and connect rules",
+    "backend capability profile"
+  ],
+  "proof_classes": [
+    "Structural",
+    "DigitalEquivalence",
+    "AnalogInvariant",
+    "AnalogDifferential",
+    "BackendCapability"
+  ],
+  "digital_evidence": [
+    "Yosys combinational or sequential equivalence",
+    "parameter elaboration matrices",
+    "latency aware transaction equivalence",
+    "protocol aware elastic equivalence",
+    "SBY safety cover and liveness",
+    "Verilator and Icarus differential regression"
+  ],
+  "analog_ams_evidence": [
+    "typed equation and contribution invariants",
+    "dimension and branch access preservation",
+    "event tolerance and initial condition preservation",
+    "normalized target IR equivalence for approved rewrites",
+    "DC AC transient noise and event differential validation",
+    "cross simulator portability checks",
+    "explicit rejection without sound validation"
+  ],
+  "parameterization": {
+    "preserve_symbolic_parameters_by_default": true,
+    "preserve_target_generate_by_default": true,
+    "preserve_named_overrides_by_default": true,
+    "one_module_per_structure_default": true,
+    "silent_clone_per_value": false,
+    "explicit_specialization_requires_distinct_identity": true,
+    "specialization_requires_equivalence": true
+  },
+  "selection": {
+    "installation_enables_pass": false,
+    "backend_auto_selects_optimization_profile": false,
+    "explicit_profile_or_pipeline_required": true,
+    "discovery_executes_code": false,
+    "pass_order_uses_discovery_order": false,
+    "lockfile_required_for_release_and_ci": true
+  },
+  "text_boundary": {
+    "raw_semantic_text_filters_supported": false,
+    "render_only_changes_allowed": true,
+    "semantic_post_render_requires_reparse": true,
+    "semantic_post_render_requires_reverification": true,
+    "semantic_post_render_requires_proof": true
+  },
+  "candidate_digital_passes": [
+    "constant propagation under symbolic parameter rules",
+    "dead logic removal",
+    "mux and logic canonicalization",
+    "safe common subexpression elimination",
+    "process normalization",
+    "memory inference normalization",
+    "parameter and generate normalization",
+    "hierarchy cleanup without interface change",
+    "pipeline owned bounded retiming",
+    "portable Verilog cleanup",
+    "explicit synthesis attribute and target mapping",
+    "locked external Yosys pass pipeline"
+  ],
+  "candidate_analog_ams_passes": [
+    "dimension safe constant folding",
+    "parameter expression normalization",
+    "dead declaration removal",
+    "branch and access canonicalization",
+    "contribution grouping with equation identity",
+    "approved algebraic rewrites with domain checks",
+    "event condition simplification preserving tolerance and direction",
+    "connect rule and discipline canonicalization",
+    "explicit simulator portability lowering",
+    "deterministic render normalization"
+  ],
+  "forbidden_or_separately_gated_changes": [
+    "arbitrary semantic raw text rewrite",
+    "automatic execution of installed pass",
+    "disable core target verifiers",
+    "erase clock reset CDC or RDC provenance",
+    "silent width signedness overflow or rounding change",
+    "silent latency capacity or transaction ordering change",
+    "retime user owned state",
+    "drop analog contribution or connect rule",
+    "change event time tolerance initialization noise or analyses without approved rule",
+    "silent analog approximation",
+    "implicit symbolic parameter specialization",
+    "capability profile escape"
+  ],
+  "process_and_native": {
+    "trusted_native_requires_exact_toolchain_build": true,
+    "out_of_process_target_ir_protocol": true,
+    "transactional_acceptance": true,
+    "crash_timeout_or_malformed_output_rejected": true,
+    "external_tool_scripts_locked": true
+  },
+  "provenance_and_cache_inputs": [
+    "backend and profile",
+    "optimization profile",
+    "ordered pass graph and pipeline hash",
+    "plugin artifacts and trust class",
+    "normalized pass options",
+    "target IR versions",
+    "analysis preservation and invalidation",
+    "before and after hashes and statistics",
+    "proof and differential evidence",
+    "external tools commands versions seeds and tolerances",
+    "source map transformations",
+    "determinism and cacheability declaration"
+  ],
+  "increments": {
+    "83": "target HDL optimization pass gate and contracts",
+    "84": "structured target IR and deterministic pass manager",
+    "85": "digital Verilog optimization plugins and proof matrix",
+    "86": "Verilog A and Verilog AMS optimization plugins and semantic validation"
+  },
+  "required_evidence": [
+    "approved target HDL pass design gate",
+    "frozen pass descriptor and extension points",
+    "structured digital and analog AMS target representations",
+    "deterministic locked pass graph",
+    "symbolic parameter preservation",
+    "source map preservation",
+    "digital equivalence and formal evidence",
+    "analog AMS invariant and differential evidence",
+    "render reparse enforcement",
+    "native and process crash isolation",
+    "cache and provenance integration",
+    "out of tree conformance plugin",
+    "green CI"
+  ]
+}

@@ -108,6 +108,10 @@ The backend publishes separate feature sets for:
 
 `Backend.Auto` selects the synthesizable profile unless the user explicitly requests a simulation/formal profile.
 
+## Target-HDL optimization integration
+
+Digital optimization passes use [ADR 0013](../architecture/0013-structured-hdl-optimization-pass-architecture.md) and [`target-hdl-optimization-pass-v0.1-plan.md`](target-hdl-optimization-pass-v0.1-plan.md). Generated RTL optimization is explicit, locked, parameter/source-map preserving, and verified with the same Verilator, Icarus, Yosys equivalence, parameter-matrix, latency/protocol-aware, and SBY evidence required by the selected pass profile. Installing a pass does not alter the digital backend or `Backend.Auto`.
+
 ## Open-source toolchain lock
 
 The repository pins tested versions and checksums for:

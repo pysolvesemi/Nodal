@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.6",
+  "roadmap_revision": "1.7",
   "formal_freeze_increment": 79,
   "architecture": "explicit-plugin-plan-typed-capability-graph-deterministic-phases-isolated-boundaries-retained-provenance",
   "documents": {
@@ -134,7 +134,16 @@
     "analysis_preservation_declared": true,
     "mandatory_core_reverification": true,
     "out_of_process_transform_protocol": true,
-    "stable_cpp_abi_across_toolchains": false
+    "stable_cpp_abi_across_toolchains": false,
+    "target_hdl_pass_spi": {
+      "architecture": "docs/architecture/0013-structured-hdl-optimization-pass-architecture.md",
+      "plan": "docs/roadmap/target-hdl-optimization-pass-v0.1-plan.md",
+      "surface": "docs/roadmap/target-hdl-optimization-pass-v0.1-surface.json",
+      "separate_structured_target_contract": true,
+      "raw_semantic_text_filters": false,
+      "mandatory_reverification": true,
+      "proof_obligation_required": true
+    }
   },
   "backend_plugins": {
     "stable_backend_id": true,
@@ -223,9 +232,13 @@
     "79": "SPI gate and contract fixtures",
     "80": "manifest resolver, capability graph, lockfile, and CLI",
     "81": "local design composition host",
-    "82": "native compiler plugin loader and extension points",
-    "83": "backend and external tool-adapter plugins",
-    "84": "packaging, trust, provenance, caching, conformance, and reference plugins"
+    "82": "native compiler plugin loader and generic extension points",
+    "83": "target HDL optimization pass gate and contracts",
+    "84": "structured target IR and deterministic pass manager",
+    "85": "digital Verilog optimization plugins and proof matrix",
+    "86": "Verilog A and Verilog AMS optimization plugins and semantic validation",
+    "87": "backend and external tool-adapter plugins",
+    "88": "packaging, trust, provenance, caching, conformance, and reference plugins"
   },
   "required_evidence": [
     "plugin SPI design gate",

@@ -1,12 +1,13 @@
 # Core semantics public API v0.3 freeze plan
 
-**Status:** Normative roadmap target  
-**Architecture:** [ADR 0009](../architecture/0009-core-semantic-contracts.md)  
-**Unified formal freeze:** Increment 15 design gate with automatic pipeline API  
+**Status:** Normative roadmap target
+**Architecture:** [ADR 0009](../architecture/0009-core-semantic-contracts.md)
+**Enum/FSM architecture:** [ADR 0015](../architecture/0015-native-scala-enum-and-hierarchical-fsm.md)
+**Unified formal freeze:** Increment 15 design gate with automatic pipeline API
 
 ## Goal
 
-Freeze the language semantics that clock/reset domains, symbolic parameterization, reusable interfaces, analog equations, memories, external blocks, and automatic pipelines depend on.
+Freeze the language semantics that clock/reset domains, symbolic parameterization, native enums, reusable FSM/statecharts, reusable interfaces, analog equations, memories, external blocks, and automatic pipelines depend on.
 
 The architectural rule is:
 
@@ -127,6 +128,39 @@ A narrowing assignment without one of these policies is a compile error.
 - unsized Scala numeric values do not silently become backend-dependent HDL literals;
 - symbolic widths participate in type checking and generated declarations;
 - constant folding preserves width, signedness, overflow, and dimension semantics.
+
+## Native enums and FSM/statechart semantics
+
+[ADR 0015](../architecture/0015-native-scala-enum-and-hierarchical-fsm.md), [`enum-fsm-api-v0.3-plan.md`](enum-fsm-api-v0.3-plan.md), and [`enum-fsm-api-v0.3-surface.json`](enum-fsm-api-v0.3-surface.json) define the mandatory Increment 13 candidates.
+
+Preferred enum direction:
+
+```scala
+enum Mode derives HwEnum:
+  case Idle, Read, Write, Error
+
+val mode = in(Mode.hw)
+val state = Reg(Mode.Idle)
+```
+
+The v0.3 gate freezes semantic case identity, canonical ABI encoding, sparse/custom maps, safe decode, exhaustive selection, ports/parameters/aggregates/protocols/memories, and target mappings. Scala ordinal is never the HDL code.
+
+Portable Verilog and Verilog-AMS emit vector/integer storage plus member `localparam`s. Future SystemVerilog emits native typed enums with identical explicit values. Enum configuration parameters remain overrideable module parameters; enum member meanings remain non-overridable.
+
+Preferred FSM direction:
+
+```scala
+val controller = fsm(initial = ControlState.Idle):
+  state(ControlState.Idle):
+    on(start).goto(ControlState.Run)
+  state(ControlState.Run):
+    exclusive:
+      on(done).goto(ControlState.Idle)
+      on(fault).goto(ControlState.Error)
+```
+
+The gate freezes flat/manual and high-level FSM semantics, entry/active/exit/transition actions, reset/no-hidden-boot behavior, exclusive versus priority transitions, illegal-state policy, local storage encoding independent of enum ABI, typed status, reusable immutable definitions, nested/parallel/timed machines, finite structural recursion, explicit bounded runtime call stacks, graph diagnostics, reports, source maps, and formal readiness.
+
 
 ## Directionless aggregates
 
@@ -321,6 +355,7 @@ Automatic-pipeline API v0.3 depends on this contract:
 - physical quantities do not enter digital scheduling without explicit sampling;
 - effectful operations and memories move only under declared contracts;
 - parameterized schedules require finite envelopes.
+- enum codes and FSM state/action/transition/completion boundaries remain exact typed scheduling barriers unless a separately verified transformation contract permits movement or recoding.
 
 Therefore Increment 15 freezes this plan and the automatic-pipeline plan in one versioned gate rather than approving either independently.
 
@@ -332,6 +367,9 @@ Increment 13 must compile candidates covering:
 - symbolic parameters in widths, lengths, and generate loops;
 - dynamic values separated from shape values;
 - full-width unsigned and signed arithmetic;
+- native Scala enums with default and sparse/custom encodings;
+- enum ports/parameters/aggregates/vectors/memories/protocols, safe decode, and exhaustive selection;
+- manual and high-level flat FSMs plus reusable nested/parallel/timed/finite-recursive definitions and bounded-stack candidates;
 - every explicit narrowing/overflow policy;
 - directionless nested aggregates and vectors;
 - exact plain, `Valid`, and `Stream` ports/connections;
@@ -348,6 +386,9 @@ Required failures include:
 - parameter used as Scala `if`/loop/list length;
 - runtime signal used as width/generate bound;
 - implicit narrowing or signedness change;
+- Scala ordinal used as enum ABI or invalid/duplicate enum code;
+- implicit bits-to-enum/cross-enum conversion or ignored sparse-decode validity;
+- non-exhaustive switch, overlapping transitions, missing initial state, hidden boot assumption, invalid local encoding, or unbounded FSM recursion;
 - aggregate field mismatch or silent field loss;
 - protocol conversion without an adapter;
 - domain crossing through direct connection;
@@ -369,7 +410,9 @@ The unified v0.3 gate may be approved only when:
 6. memory and external effects have enough metadata to bound scheduling;
 7. automatic-pipeline candidates compile against the same types and rules;
 8. external-library fixtures use only the frozen public subset;
-9. the machine-readable manifest, migration notes, diagnostics, and CI are green.
+9. native enum ABI, safe decode, exhaustive selection, portable localparam mapping, and future SystemVerilog numeric parity are proven;
+10. flat and reusable hierarchical/parallel/timed/bounded-recursive FSM candidates have unambiguous reset, transition, encoding, report, and diagnostic contracts;
+11. the machine-readable manifest, migration notes, diagnostics, and CI are green.
 
 ## References
 
@@ -377,3 +420,7 @@ The unified v0.3 gate may be approved only when:
 - Chisel connection operators: <https://www.chisel-lang.org/docs/explanations/connectable>
 - SpinalHDL stream and flow concepts: <https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Libraries/stream.html>
 - CIRCT ESI channels: <https://circt.llvm.org/docs/Dialects/ESI/>
+- Chisel enums: <https://www.chisel-lang.org/docs/explanations/chisel-enum>
+- Chisel FSM cookbook: <https://www.chisel-lang.org/docs/cookbooks/cookbook#how-do-i-create-a-finite-state-machine-fsm>
+- SpinalHDL enums: <https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Data%20types/enum.html>
+- SpinalHDL FSM library: <https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Libraries/fsm.html>

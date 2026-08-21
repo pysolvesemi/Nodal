@@ -1,0 +1,221 @@
+{
+  "schema": 1,
+  "status": "roadmap-freeze-candidate",
+  "roadmap_revision": "1.9",
+  "formal_freeze_increment": 15,
+  "architecture": "native-scala-enum-stable-abi-typed-reusable-statechart",
+  "documents": {
+    "architecture": "docs/architecture/0015-native-scala-enum-and-hierarchical-fsm.md",
+    "plan": "docs/roadmap/enum-fsm-api-v0.3-plan.md",
+    "core_semantics_plan": "docs/roadmap/core-semantics-api-v0.3-plan.md",
+    "main_roadmap": "docs/roadmap/nodal-development-todo.md"
+  },
+  "enum_declaration": {
+    "preferred": "enum Mode derives HwEnum",
+    "preferred_type_use": "Mode.hw",
+    "fallback_if_macro_prototype_fails": "EnumType[Mode]",
+    "scala_ordinal_is_hardware_encoding": false,
+    "enum_cases_are_typed_hardware_literals": true,
+    "separate_compilation_required": true,
+    "external_library_use_required": true
+  },
+  "enum_encoding": {
+    "canonical_interface_encoding_is_distinct_from_local_fsm_encoding": true,
+    "default": "Sequential",
+    "policies": [
+      "Sequential",
+      "OneHot",
+      "Gray",
+      "Custom"
+    ],
+    "initial_signed_encoding_support": false,
+    "duplicate_codes_allowed": false,
+    "minimum_width": 1,
+    "encoding_hash_required": true,
+    "source_reorder_of_default_public_enum_is_abi_change": true
+  },
+  "enum_operations": [
+    "asBits",
+    "safe decode",
+    "explicit unsafe decode",
+    "isValid",
+    "isOneOf",
+    "case inventory",
+    "encoded width",
+    "exhaustive switch"
+  ],
+  "enum_safety": {
+    "implicit_bits_to_enum": false,
+    "implicit_cross_enum_cast": false,
+    "sparse_decode_requires_validity_or_policy": true,
+    "enum_arithmetic_requires_explicit_conversion": true,
+    "exhaustive_selection_checked": true
+  },
+  "backend_mapping": {
+    "portable_verilog": {
+      "native_enum": false,
+      "member_declaration": "module-local localparam",
+      "storage": "vector or integer by context",
+      "enum_configuration_parameter": "overrideable module parameter with canonical numeric encoding",
+      "systemverilog_syntax_allowed": false
+    },
+    "future_systemverilog": {
+      "native_enum": true,
+      "shape": "typedef enum logic [width-1:0] with explicit values",
+      "private_enum": "module-local typedef",
+      "cross_module_enum": "deterministic generated package or separately gated fallback",
+      "compile_order_manifest": true
+    },
+    "verilog_a": {
+      "native_enum": false,
+      "member_declaration": "localparam integer or vector according to profile"
+    },
+    "verilog_ams": {
+      "native_enum": false,
+      "digital_state": "vector plus localparam",
+      "analog_mode_parameter": "integer-compatible canonical encoding"
+    }
+  },
+  "fsm_layers": [
+    "manual enum register and exhaustive switch",
+    "typed high-level statechart"
+  ],
+  "flat_fsm_candidates": [
+    "fsm",
+    "state",
+    "entry",
+    "active",
+    "exit",
+    "on",
+    "goto",
+    "terminal",
+    "exclusive",
+    "priority"
+  ],
+  "flat_fsm_semantics": {
+    "implicit_lexical_clock_domain": true,
+    "explicit_initial_state": true,
+    "hidden_boot_state": false,
+    "entry_on_reset_is_explicit_policy": true,
+    "exclusive_transitions_by_default": true,
+    "priority_requires_explicit_region": true,
+    "typed_state_introspection": true,
+    "illegal_state_policy_is_explicit": true
+  },
+  "fsm_storage_encodings": [
+    "Compact",
+    "OneHot",
+    "Gray",
+    "Custom",
+    "Auto"
+  ],
+  "fsm_encoding_rules": {
+    "public_enum_abi_preserved": true,
+    "gray_transition_graph_verified": true,
+    "one_hot_legality_checked": true,
+    "auto_is_explicit_locked_and_reported": true,
+    "recoding_requires_declared_optimization_effect": true
+  },
+  "illegal_state_candidates": [
+    "Assert",
+    "Recover(initial)",
+    "Trap(errorState)",
+    "Unchecked"
+  ],
+  "reusable_fsm": {
+    "candidate_definition": "FsmDef[S]",
+    "immutable_graph": true,
+    "explicit_runtime_bindings": true,
+    "implicit_dynamic_capture": false,
+    "multiple_instances": true,
+    "typed_completion_result": true,
+    "fragment_candidate": "FsmFragment",
+    "plugin_contributions_are_append_only_before_close": true
+  },
+  "hierarchy": {
+    "nested_submachines": true,
+    "parallel_regions": true,
+    "join_policies": [
+      "All",
+      "Any",
+      "First with explicit priority and tie behavior"
+    ],
+    "timed_states": true,
+    "protocol_aware_waits": true,
+    "default_lowering_preserves_machine_boundaries": true,
+    "flattening_is_verified_optimization_pass": true
+  },
+  "recursion": {
+    "finite_elaboration_structural_recursion": true,
+    "unbounded_structural_recursion": false,
+    "runtime_recursion_is_implicit": false,
+    "bounded_runtime_call_return_candidate": "FsmProcedure with explicit stackDepth and overflow policy"
+  },
+  "graph_verification": [
+    "unique initial state",
+    "state and enum coverage",
+    "unreachable states",
+    "accidental dead ends",
+    "transition overlap",
+    "foreign transition targets",
+    "action multiple drivers",
+    "reset conflicts",
+    "nested completion paths",
+    "parallel join deadlocks",
+    "recursion cycles and bounds",
+    "encoding legality and Gray adjacency",
+    "illegal-state policy",
+    "clock reset CDC RDC compatibility",
+    "pipeline and effect barriers",
+    "backend capability"
+  ],
+  "required_reports": [
+    "enum inventory",
+    "canonical encoding map",
+    "enum ABI hash",
+    "FSM graph",
+    "local storage encoding",
+    "reset and illegal-state policy",
+    "hierarchy and parallel-region tree",
+    "generated counters and bounded stacks",
+    "coverage IDs",
+    "source and optimized-origin map",
+    "optional DOT and JSON graph"
+  ],
+  "formal_readiness": [
+    "legal enum encoding",
+    "one-hot invariant",
+    "allowed transition relation",
+    "reset convergence",
+    "no unintended deadlock",
+    "completion cover",
+    "bounded stack overflow underflow",
+    "counterexample semantic state reconstruction"
+  ],
+  "increment_integration": {
+    "13": "candidate compilation and architecture comparison",
+    "15": "unified public API v0.3 freeze",
+    "19": "target-neutral enum and statechart IR",
+    "22": "diagnostics",
+    "54": "enum type and ABI implementation",
+    "56": "enum registers exhaustive switches and flat FSMs",
+    "58": "reusable hierarchical parallel timed and bounded-recursive FSM composition",
+    "65": "portable Verilog localparam lowering",
+    "67": "compiler-generated formal readiness",
+    "72": "Verilog-AMS lowering",
+    "99": "future SystemVerilog native enum and package research gate"
+  },
+  "required_evidence": [
+    "native-scala-enum-prototype",
+    "separate-compilation-and-external-library-fixture",
+    "portable-verilog-localparam-golden",
+    "future-systemverilog-enum-contract",
+    "safe-decode-negative-fixtures",
+    "flat-fsm-contract-fixtures",
+    "hierarchical-parallel-timed-fsm-fixtures",
+    "finite-recursion-and-bounded-stack-fixtures",
+    "graph-and-encoding-reports",
+    "stable-diagnostics",
+    "green-ci"
+  ]
+}

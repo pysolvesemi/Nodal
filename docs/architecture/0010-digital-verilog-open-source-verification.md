@@ -94,6 +94,13 @@ The digital backend publishes separate capability flags for:
 
 `Backend.Auto` defaults to the synthesizable portable profile for a digital-only design. Simulation-only features require an explicit profile or option so synthesis cannot accidentally ignore behavior.
 
+## Enum and FSM representation
+
+[ADR 0015](0015-native-scala-enum-and-hierarchical-fsm.md) defines semantic enums and typed reusable statecharts. Portable Verilog emits enum members as module-local `localparam`s, stores values in vectors/integers, and retains enum/FSM manifests and source maps. Local FSM recoding does not change canonical enum values at module boundaries.
+
+The digital verification matrix checks legal enum encodings, safe decode, exhaustive selection, localparam/value parity, state reachability, allowed transitions, one-hot/Gray/custom encoding contracts, illegal-state behavior, hierarchy/parallel completion, bounded-stack safety, reset convergence, and equivalence across verified recoding or flattening passes.
+
+
 ## Open-source verification stack
 
 ### Frontend and lint gate

@@ -48,6 +48,7 @@ A design is digital-only when its entire reachable hierarchy contains only const
 Legal categories include:
 
 - digital scalar/vector/aggregate ports and signals;
+- native semantic enums, canonical enum encodings, safe decode, and manual/high-level FSM/statechart constructs;
 - parameters, symbolic widths, target generate, and hierarchy;
 - implicit clock/reset domains;
 - registers, memories, state machines, and assertions;
@@ -75,6 +76,7 @@ The required output is a conservative synthesizable IEEE 1364-2005-style subset.
 ### Required constructs
 
 - modules, ports, parameters, local parameters, and named overrides;
+- enum member localparams, vector/integer enum storage, enum configuration parameters, and flat/hierarchical/parallel FSM state/action/completion logic;
 - deterministic generated hierarchy and parameterized ranges;
 - wires, registers, memories, continuous assignments, and procedural logic;
 - explicit inferred clock/reset ports and reset behavior;
@@ -97,6 +99,19 @@ The required profile does not depend on:
 - unsupported real-number or AMS constructs.
 
 High-level `Bundle`, `Valid`, and `Stream` values are flattened deterministically for Verilog output while their structural metadata remains in sidecar manifests.
+
+## Enum and FSM lowering
+
+The portable profile follows [ADR 0015](../architecture/0015-native-scala-enum-and-hierarchical-fsm.md):
+
+- enum members are non-overridable module-local `localparam`s;
+- enum ports/signals/memories use canonical vectors or integers;
+- enum-valued module configuration remains an overrideable parameter with legal-value metadata;
+- local FSM compact/one-hot/Gray/custom/Auto encoding is implementation metadata and cannot change public enum ABI;
+- nested/parallel/timed/bounded-procedure FSMs lower to explicit state, completion, counter, join, and stack logic;
+- state/case names, transitions, encodings, source maps, and coverage IDs remain in sidecar manifests;
+- future SystemVerilog native enum emission is a separate capability gate but must preserve the same numeric values.
+
 
 ## Capability profiles
 
@@ -164,6 +179,7 @@ Required digital support:
 - randomized reset assertion/release and reset-order testing;
 - `Valid`/`Stream` drivers, monitors, scoreboards, stalls, and bubbles;
 - transaction IDs and latency-aware pipeline checking;
+- typed enum signal access, legal-value checking, semantic state/transition traces, nested/parallel machine status, and state/transition coverage;
 - deterministic random seeds;
 - timeouts, normalized logs, waveforms, and coverage artifacts.
 
@@ -215,6 +231,7 @@ Yosys equivalence flows compare:
 - supported parameter instantiations against the same parameterized source;
 - post-synthesis generic netlists against source RTL;
 - fixed-latency automatic pipelines against latency-aligned reference behavior.
+- enum/FSM behavior before and after approved recoding, hierarchy flattening, minimization, or synthesis, aligned by semantic state/transition identity rather than raw encoded bits.
 
 Pipeline equivalence tracks transaction identity, valid/bubble state, sidebands, reset, and published latency. Elastic pipelines require protocol-level safety/equivalence properties rather than same-cycle output equality.
 
@@ -240,6 +257,7 @@ Initial reusable property suites prove:
 - fixed pipeline latency and sideband alignment;
 - CDC/RDC wrapper assumptions and guarantees;
 - no output before a valid input transaction.
+- legal enum/state encoding, one-hot invariants, allowed FSM transition relations, reset convergence, no unintended deadlock, nested/parallel completion, and bounded call-stack overflow/underflow safety.
 
 Formal syntax remains within the open-source frontend capability profile. Unsupported SVA is lowered to simpler assertions or a sidecar harness, or rejected with a stable diagnostic.
 
@@ -312,6 +330,7 @@ Implement:
 - digital-only analysis;
 - portable Verilog translation;
 - aggregate/protocol flattening;
+- canonical enum/localparam lowering and manual/flat/hierarchical/parallel/timed/bounded-procedure FSM lowering;
 - parameterized hierarchy and generate;
 - source maps and construct manifests;
 - deterministic output and golden tests.

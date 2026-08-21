@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.7",
+  "roadmap_revision": "1.9",
   "formal_gate_increment": 83,
   "architecture": "structured-target-ir-declared-effects-mandatory-reverification-proof-evidence",
   "documents": {

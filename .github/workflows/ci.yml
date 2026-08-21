@@ -116,11 +116,9 @@ jobs:
   prepare-verilog-family-optimization-roadmap:
     name: prepare Verilog-family optimization roadmap
     if: >-
-      github.actor != 'github-actions[bot]' &&
-      ((github.event_name == 'pull_request' &&
-        github.head_ref == 'increment/13-verilog-family-optimization-pass-roadmap') ||
-       (github.event_name == 'push' &&
-        github.ref_name == 'increment/13-verilog-family-optimization-pass-roadmap'))
+      github.event_name == 'pull_request' &&
+      github.head_ref == 'increment/13-verilog-family-optimization-pass-roadmap' &&
+      github.actor != 'github-actions[bot]'
     permissions:
       contents: write
     runs-on: ubuntu-24.04
@@ -171,12 +169,13 @@ jobs:
           print("roadmap JSON validation passed")
           PY
 
-      - name: Commit transformed roadmap and restore permanent CI
+      - name: Commit transformed roadmap and remove one-time helpers
         shell: bash
         run: |
           git fetch --no-tags origin dev:refs/remotes/origin/dev
-          git checkout origin/dev -- .github/workflows/ci.yml
+          git checkout b6e8570a8b46847e3cf0424054d74ec11b28946e -- .github/workflows/ci.yml
           git rm \
+            .github/optimization-roadmap-trigger.txt \
             .github/workflows/apply-verilog-family-optimization-roadmap.yml \
             scripts/update_verilog_family_optimization_roadmap.py
           git config user.name 'github-actions[bot]'

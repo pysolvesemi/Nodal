@@ -30,15 +30,20 @@ jobs:
       - name: Apply enum and FSM roadmap transformation
         run: python3 scripts/update_enum_fsm_roadmap.py
 
-      - name: Normalize new Markdown whitespace
+      - name: Normalize modified Markdown whitespace
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
           for relative in (
+              "docs/architecture/README.md",
+              "docs/architecture/0010-digital-verilog-open-source-verification.md",
               "docs/architecture/0015-native-scala-enum-and-hierarchical-fsm.md",
+              "docs/roadmap/core-semantics-api-v0.3-plan.md",
+              "docs/roadmap/digital-verilog-open-source-verification-plan.md",
               "docs/roadmap/enum-fsm-api-v0.3-plan.md",
+              "docs/roadmap/nodal-development-todo.md",
           ):
               path = Path(relative)
               lines = [line.rstrip() for line in path.read_text(encoding="utf-8").splitlines()]

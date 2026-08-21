@@ -68,5 +68,12 @@
     "equivalence-proofs",
     "formal-proofs",
     "green-ci"
-  ]
+  ],
+  "ams_fpga_approximation": {
+    "backend_auto_may_select": false,
+    "explicit_transform_required": true,
+    "architecture": "docs/architecture/0011-ams-fpga-approximation-validation.md",
+    "plan": "docs/roadmap/ams-fpga-validation-plan.md",
+    "post_transform_backend": "Backend.Verilog"
+  }
 }

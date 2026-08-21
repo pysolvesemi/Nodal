@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.4
+**Revision:** 1.5
 **Created:** 2026-08-20
 **Updated:** 2026-08-21
 **Status:** Active roadmap
@@ -37,6 +37,10 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Classify memory, external, analog, stateful, observational, and side-effecting operations explicitly so scheduling, optimization, and verification never guess latency or purity.
 - Classify complete designs as digital-only, analog-only, or mixed-signal. `Backend.Auto` selects the narrowest compatible backend, including portable Verilog for digital-only designs.
 - Verify generated pure-digital HDL through a pinned open-source matrix using Verilator, Icarus Verilog, Yosys, SBY, and optional cocotb interoperability.
+- Treat AMS-to-FPGA validation as an explicit discrete-time, finite-precision approximation transformation. `Backend.Auto` must never select it and no report may present it as direct synthesis of general Verilog-AMS.
+- Require sample period, solver, state/reset, fixed-point, range, rounding/overflow, multi-rate/event, validation-envelope, error-budget, and target-FPGA contracts before generating an approximation.
+- Preserve separate evidence for AMS-reference error, discretization/model-reduction error, fixed-point error, RTL implementation, FPGA timing/resources, and hardware-in-the-loop runtime.
+- Reuse portable Verilog, automatic pipelines, clock/reset domains, CDC/RDC, Verilator/Icarus, Yosys, SBY, and an open Yosys+nextpnr target for FPGA approximation validation; vendor flows remain optional adapters.
 
 ## Public API direction
 
@@ -48,6 +52,8 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Provide explicit lossy numeric conversions such as truncate, wrap, saturate, and checked resize; never narrow or reinterpret signedness silently.
 - Treat `Valid[T]` and `Stream[T]` as general protocol types shared by ports, hierarchy, memories, simulation, and automatic pipelines.
 - Add `Backend.Auto` and `Backend.Verilog` for pure-digital output while retaining explicit `Backend.VerilogA` and `Backend.VerilogAMS` profiles.
+- Keep AMS approximation separate from backend selection. A future `FpgaApproximation`-class public contract must be explicitly requested, produce a digital approximation artifact, and only then use `Backend.Verilog`.
+- Freeze the AMS-to-FPGA capability profile, solver/numeric/envelope contracts, claims language, diagnostics, and validation evidence through a dedicated post-preview design gate before implementation.
 - Use compile-positive and compile-negative fixtures to freeze public names, types, construction forms, imports, and diagnostics.
 - Keep ordinary model source backend-neutral and exclude frontend/compiler internals from the future library-author subset.
 - Any incompatible public API change after a freeze requires a new versioned design gate and migration note.
@@ -312,6 +318,60 @@ Open-source verification exercises generated HDL rather than a separate frontend
 Required CI retains tool versions, commands, hashes, logs, waveforms, synthesis reports, equivalence results, and counterexamples. A future explicit SystemVerilog profile may be added separately; it cannot replace the portable Verilog path.
 
 
+## AMS-to-FPGA approximation architecture
+
+The binding architecture is [ADR 0011](../architecture/0011-ams-fpga-approximation-validation.md). The complete capability, solver, numeric, validation, FPGA implementation, and HIL plan is in [`ams-fpga-validation-plan.md`](ams-fpga-validation-plan.md), with a machine-readable candidate in [`ams-fpga-validation-surface.json`](ams-fpga-validation-surface.json).
+
+Nodal adopts:
+
+> **Reference AMS semantics, explicit approximation contract, bounded evidence, synthesizable realization.**
+
+An FPGA cannot execute general continuous-time Verilog-A/Verilog-AMS behavior directly. Nodal may instead transform a supported analog or mixed-signal model into an explicitly sampled, discrete-time, finite-precision digital approximation.
+
+Candidate direction:
+
+```scala
+val approximation = FpgaApproximation(
+  domain = fpga,
+  samplePeriod = 10.ns,
+  solver = Solver.Trapezoidal,
+  numeric = FixedPointPolicy.Auto(
+    error = ErrorBudget(absolute = 1.mV, relative = 0.1.percent),
+    rounding = Rounding.NearestEven,
+    overflow = Overflow.Saturate
+  ),
+  envelope = ValidationEnvelope(...),
+  target = FpgaTarget.Open("reference")
+)
+
+val hardwareModel = Nodal.approximate(new ControlledPlant, approximation)
+val rtl = Nodal.emit(hardwareModel, EmitOptions(backend = Backend.Verilog))
+```
+
+Exact names are deferred to Increment 91. Binding rules are:
+
+- approximation is explicit and never selected by `Backend.Auto`;
+- the original Verilog-A/Verilog-AMS or high-precision Nodal result remains the reference;
+- the initial supported subset normalizes into deterministic state-space, transfer-function, or explicit-ODE recurrences;
+- arbitrary DAEs/algebraic loops, hidden state, adaptive time, unsupported stiff systems, transistor/PVT/parasitic behavior, unsupported noise, and sub-sample ideal events fail explicitly;
+- sample period, solver, state/reset, fixed-point formats, ranges, rounding/overflow, rate relationships, event policy, target, and validation envelope are versioned contract inputs;
+- one schedule and numeric/resource plan must cover the legal symbolic parameter envelope; clone-per-value specialization is not the default;
+- automatic pipelines may meet sample deadlines but cannot change recurrence, numeric, protocol, clock/reset, or event semantics;
+- multi-rate partitions use explicit hold/interpolation/decimation/rate bridges and preserve CDC/RDC provenance;
+- placed hardware must complete each update before its sample deadline.
+
+The validation ladder remains separate:
+
+1. AMS reference versus high-precision discrete reference;
+2. high-precision discrete versus bit-accurate fixed-point reference;
+3. fixed-point reference versus generated RTL using simulation/equivalence/formal;
+4. RTL/netlist versus placed FPGA hardware and HIL traces.
+
+Passing FPGA hardware does not erase a discretization or quantization mismatch. Reports retain model/tool hashes, parameters, solver, sample rates, numeric formats, stimuli, tolerances, resource/timing results, bitstream/board identity, and explicit limitations.
+
+This capability validates the generated approximation, digital control, sequencing, calibration, and supported closed-loop behavior inside the declared envelope. It does not by itself validate transistor physics, unmodeled parasitics/PVT/mismatch, continuous-time behavior between samples, unmodeled noise/jitter, or behavior outside the envelope.
+
+
 ## Core and future library boundary
 
 ```text
@@ -371,6 +431,7 @@ Empty future-library directories are not committed merely as placeholders.
 - **M2 — Analog preview:** useful Verilog-A subset with open-source compilation and simulation regression.
 - **M3 — Digital/AMS preview:** implicit-domain digital state, automatic fixed/valid/elastic pipelines, portable Verilog with open-source simulation/synthesis/formal verification, CDC/RDC-safe clock/reset architecture, mixed-signal crossings, and Verilog-AMS emission.
 - **M4 — Scalable core release:** packaged compiler, complete reference, stable extension points, library-author contract, and compatibility policy.
+- **M5 — FPGA-accelerated AMS validation:** explicit sampled/fixed-point approximation, four-level reference evidence, open FPGA implementation, HIL runtime, and a published capability/limitations matrix.
 
 # Incremental roadmap
 
@@ -696,9 +757,50 @@ Empty future-library directories are not committed merely as placeholders.
 - [ ] **Increment 90 — Future SystemVerilog-AMS backend research gate**
   - Reassess the current standard, map IR coverage, identify required changes, and approve or reject implementation through a separate gate without speculating syntax into the stable API.
 
+## Phase 6 — FPGA-accelerated AMS approximation and hardware validation
+
+- [ ] **Increment 91 — AMS-to-FPGA approximation capability gate and API contracts**
+  - Use [ADR 0011](../architecture/0011-ams-fpga-approximation-validation.md), [`ams-fpga-validation-plan.md`](ams-fpga-validation-plan.md), and [`ams-fpga-validation-surface.json`](ams-fpga-validation-surface.json) as the mandatory architecture and candidate.
+  - Compile candidate approximation, solver, sample/rate, numeric, range, error-budget, validation-envelope, target, and HIL contracts. Prove `Backend.Auto` never selects approximation and that unsupported AMS constructs fail with stable source-located diagnostics.
+  - Publish `NodalAmsFpgaApproximation-DG-v0.4.md`, compatibility/migration rules, a machine-readable frozen surface, external-library fixtures, claims language, and complete positive/negative contracts before implementation.
+
+- [ ] **Increment 92 — Analog normalization and sampled-state IR**
+  - Normalize supported linear state-space, transfer-function, and explicit-ODE models into target-neutral state/update IR with dimensions, parameters, inputs/outputs, algebraic dependencies, events, initial conditions, and authoritative reference links.
+  - Diagnose unresolved DAEs/algebraic loops, hidden state, unsupported nonlinearities, unsupported analyses, and constructs that cannot form a deterministic sampled recurrence.
+
+- [ ] **Increment 93 — Solver and discrete-time recurrence generation**
+  - Implement the approved forward/backward Euler, trapezoidal/Tustin, exact-ZOH, and custom-solver contracts only for supported model classes.
+  - Generate deterministic coefficients and recurrence IR, high-precision software references, initialization/reset behavior, stability/conditioning evidence, bounded iteration/convergence rules, latency/resource models, and failure diagnostics.
+
+- [ ] **Increment 94 — Range, fixed-point, quantization, and error-budget analysis**
+  - Add physical scaling, range assertions/inference, explicit/automatic fixed-point formats, guard bits, rounding, overflow, coefficient quantization, state/intermediate formats, and accumulated error accounting.
+  - Generate bit-accurate references and Level B evidence; reject unbounded state, uncovered ranges, impossible error/resource policies, or implicit numeric choices.
+
+- [ ] **Increment 95 — Multi-rate, sampled-event, and real-time scheduling**
+  - Implement rational multi-rate partitions, sample/hold, interpolation, decimation, sampled/interpolated event detection, buffering, timestamps, update ordering, and rate/clock bridges.
+  - Integrate `ClockDomain`, reset, CDC/RDC, `Valid`/`Stream`, memories, and automatic pipelines. Prove each sample deadline and diagnose infeasible real-time schedules.
+
+- [ ] **Increment 96 — Synthesizable FPGA approximation backend**
+  - Lower the discrete fixed-point model into ordinary Nodal digital IR and reuse symbolic parameters, hierarchy, memories, clock/reset, protocols, automatic pipelines, CDC/RDC, and `Backend.Verilog`.
+  - Emit deterministic portable Verilog, source maps, recurrence/numeric/rate/schedule manifests, capability limitations, simulation/formal hooks, and exact golden fixtures.
+
+- [ ] **Increment 97 — Differential, equivalence, and formal validation ladder**
+  - Implement Level A AMS-reference versus high-precision-discrete comparison and Level B high-precision versus fixed-point comparison using declared waveform/state/event/frequency metrics and envelopes.
+  - Implement Level C Verilator/Icarus regression, Yosys equivalence, and SBY properties for recurrence, reset, protocols, multi-rate scheduling, range/overflow, latency, and deadlines. Preserve failures and counterexamples by error class.
+
+- [ ] **Increment 98 — Open-source FPGA implementation and target evidence**
+  - Select and pin at least one complete open FPGA target using Yosys, nextpnr, constraints, an open bitstream packer/programmer, deterministic seeds, and reproducible board metadata.
+  - Run synthesis, placement, routing, timing, bitstream generation, utilization, DSP/memory accounting, and post-route sample-deadline checks. Add optional vendor adapters without making them normative.
+
+- [ ] **Increment 99 — Hardware-in-the-loop runtime, vertical slices, and capability matrix**
+  - Add deterministic start/stop/reset, timestamped sampled streams, parameter loading, trace capture, status/deadline/overflow reporting, reproducible host transport, and optional external ADC/DAC board profiles.
+  - Complete RC/RLC, controlled-plant, comparator/ADC/DAC, and PLL/control-loop vertical slices through all four validation levels.
+  - Publish supported/unsupported constructs, validation envelopes, approximation/error limits, resource/timing results, board/bitstream evidence, claims language, and the M5 FPGA-accelerated AMS validation release package.
+
+
 ## Deferred reusable library roadmap
 
-No official reusable model/component library is implemented by Increments 0-90. After the core API, extension surface, packaging model, and preview release are proven, independently approved library roadmaps may populate `libraries/` or separate repositories while preserving the public-core dependency contract.
+No official reusable model/component library is implemented by Increments 0-99. After the core API, extension surface, packaging model, and preview release are proven, independently approved library roadmaps may populate `libraries/` or separate repositories while preserving the public-core dependency contract.
 
 ## Roadmap maintenance
 
@@ -734,5 +836,7 @@ When an increment is completed:
 - Yosys Verilog frontend: <https://yosyshq.readthedocs.io/projects/yosys/en/stable/cmd/index_frontends.html>
 - SBY formal verification: <https://yosyshq.readthedocs.io/projects/sby/en/stable/>
 - cocotb simulator support: <https://docs.cocotb.org/en/stable/simulator_support.html>
+- nextpnr portable FPGA place and route: <https://github.com/YosysHQ/nextpnr>
+- Yosys FPGA synthesis documentation: <https://yosyshq.readthedocs.io/projects/yosys/en/stable/>
 - Verilog-AMS standards: <https://accellera.org/downloads/standards/v-ams>
 - SystemVerilog-AMS working group: <https://accellera.org/activities/working-groups/systemverilog-ams>

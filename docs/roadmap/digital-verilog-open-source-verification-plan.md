@@ -31,6 +31,8 @@ Backend.VerilogAMS
 
 The selected backend and classification evidence are included in the emission result and build manifest.
 
+`Backend.Auto` does not discretize or approximate analog/mixed-signal content. The explicit AMS-to-FPGA transformation is planned separately in [`ams-fpga-validation-plan.md`](ams-fpga-validation-plan.md); its resulting digital artifact may then use this portable Verilog flow.
+
 An explicit `Backend.Verilog` request rejects analog or mixed-signal constructs before translation. Backend selection never depends on which tools happen to be installed.
 
 A future `Backend.SystemVerilog` profile may be added separately. Portable Verilog is the initial required profile because the native Yosys frontend supports a broad Verilog-2005 subset and a narrower SystemVerilog subset.

@@ -26,6 +26,7 @@ Accepted ADRs must not be edited to reverse their decision. A material change re
 | [0007](0007-implicit-clock-reset-domains.md) | Use implicit local clock/reset domains for ordinary state, explicit CDC/RDC crossings, and explicit emitted HDL. |
 | [0009](0009-core-semantic-contracts.md) | Distinguish elaboration/symbolic/runtime stages, use lossless numeric defaults, directionless protocol payloads, exact connections, physical dimensions, and declared effects. |
 | [0010](0010-digital-verilog-open-source-verification.md) | Infer the narrowest compatible backend, emit portable Verilog for digital-only designs, and verify generated RTL with open-source lint, simulation, synthesis, equivalence, and formal tools. |
+| [0011](0011-ams-fpga-approximation-validation.md) | Validate supported AMS behavior on FPGA only through an explicit discrete-time, finite-precision approximation with separate reference, quantization, RTL, and hardware evidence. |
 
 ## Proposed records
 

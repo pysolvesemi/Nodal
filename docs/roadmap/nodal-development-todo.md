@@ -359,7 +359,7 @@ val hardwareModel = Nodal.approximate(new ControlledPlant, approximation)
 val rtl = Nodal.emit(hardwareModel, EmitOptions(backend = Backend.Verilog))
 ```
 
-Exact names are deferred to Increment 91. Binding rules are:
+Exact names are deferred to Increment 96. Binding rules are:
 
 - approximation is explicit and never selected by `Backend.Auto`;
 - the original Verilog-A/Verilog-AMS or high-precision Nodal result remains the reference;

@@ -1,0 +1,243 @@
+{
+  "schema": 1,
+  "status": "roadmap-freeze-candidate",
+  "roadmap_revision": "1.6",
+  "formal_freeze_increment": 79,
+  "architecture": "explicit-plugin-plan-typed-capability-graph-deterministic-phases-isolated-boundaries-retained-provenance",
+  "documents": {
+    "architecture_adr": "docs/architecture/0012-versioned-capability-plugin-architecture.md",
+    "freeze_plan": "docs/roadmap/plugin-spi-v0.1-plan.md",
+    "main_roadmap": "docs/roadmap/nodal-development-todo.md"
+  },
+  "plugin_kinds": [
+    "DesignPlugin",
+    "FrontendPlugin",
+    "CompilerPlugin",
+    "BackendPlugin",
+    "ToolAdapterPlugin"
+  ],
+  "library_is_plugin": false,
+  "identity": {
+    "plugin_id": "stable globally qualified string",
+    "plugin_version": "semantic version",
+    "capability_id": "stable globally qualified string",
+    "capability_version": "independently versioned integer or semantic version",
+    "runtime_identity_from_scala_class": false,
+    "multiple_instances_require_qualifier": true
+  },
+  "manifest": {
+    "discovery_executes_code": false,
+    "required_fields": [
+      "schema",
+      "id",
+      "version",
+      "plugin SPI version",
+      "Nodal compatibility range",
+      "facets",
+      "provided capabilities",
+      "required capabilities",
+      "conflicts/replacements",
+      "options schema",
+      "artifact hashes",
+      "license/provenance",
+      "trust/isolation policy"
+    ],
+    "native_fields": [
+      "native plugin ABI",
+      "exact Nodal build id",
+      "exact LLVM/MLIR/CIRCT toolchain build id",
+      "platform/architecture",
+      "entry point"
+    ],
+    "process_fields": [
+      "process protocol version",
+      "executable",
+      "timeout/cancellation",
+      "artifact contract"
+    ]
+  },
+  "capability_cardinality": [
+    "ExactlyOne",
+    "ZeroOrOne",
+    "OneOrMore",
+    "ZeroOrMore",
+    "Qualified",
+    "ContributionSet",
+    "ContributionSequence"
+  ],
+  "resolution": {
+    "explicit_project_plugin_list": true,
+    "classpath_scanning": false,
+    "directory_auto_discovery": false,
+    "manifest_first": true,
+    "code_load_after_resolution": true,
+    "cycles_are_errors": true,
+    "ambiguous_provider_is_error": true,
+    "first_provider_wins": false,
+    "canonical_tie_break": "stable plugin id and instance qualifier",
+    "lockfile": "nodal.plugins.lock",
+    "offline_locked_mode_for_release": true
+  },
+  "lifecycle": [
+    "discover",
+    "resolve",
+    "configure",
+    "declare",
+    "elaborate",
+    "transform",
+    "verify",
+    "emit",
+    "run",
+    "report"
+  ],
+  "design_host": {
+    "scope": "explicit local host",
+    "process_global_registry": false,
+    "concrete_plugin_lookup": false,
+    "direct_cross_plugin_mutation": false,
+    "public_retain_release_ordering": false,
+    "typed_capabilities": true,
+    "append_only_contributions": true,
+    "phase_specific_contexts": true,
+    "nested_host_implicit_service_inheritance": false,
+    "source_and_plugin_provenance": true
+  },
+  "frontend_plugins": {
+    "allowed": [
+      "namespaced metadata/annotation schemas",
+      "external operation contracts",
+      "typed attributes",
+      "diagnostics and lints",
+      "design-host capability types",
+      "public construction helpers"
+    ],
+    "may_override_core_semantics": false,
+    "may_replace_core_types_or_operators": false
+  },
+  "compiler_plugins": {
+    "native_mechanisms": [
+      "MLIR pass plugin API",
+      "MLIR dialect plugin API"
+    ],
+    "named_extension_points": [
+      "after-bridge-parse",
+      "after-core-structural-verify",
+      "after-type-domain-effect-analysis",
+      "before-canonicalize",
+      "after-canonicalize",
+      "before-target-lowering",
+      "after-target-lowering",
+      "before-backend-verify",
+      "report-only"
+    ],
+    "exact_native_toolchain_match": true,
+    "analysis_preservation_declared": true,
+    "mandatory_core_reverification": true,
+    "out_of_process_transform_protocol": true,
+    "stable_cpp_abi_across_toolchains": false
+  },
+  "backend_plugins": {
+    "stable_backend_id": true,
+    "capability_profile_required": true,
+    "explicit_selection_initially": true,
+    "automatic_backend_selection_from_installation": false,
+    "deterministic_artifact_contract": true,
+    "source_mapping_required": true
+  },
+  "tool_adapters": {
+    "execution": "out-of-process",
+    "kinds": [
+      "simulator",
+      "synthesis",
+      "formal",
+      "fpga-place-route",
+      "bitstream",
+      "programmer",
+      "board-runtime",
+      "hil-transport",
+      "waveform-converter",
+      "reporter"
+    ],
+    "language_semantics_provider": false,
+    "versioned_process_protocol": true,
+    "normalized_logs_and_artifacts": true,
+    "timeout_and_cancellation": true
+  },
+  "trust": {
+    "classes": [
+      "manifest-only",
+      "process-isolated",
+      "trusted-scala",
+      "trusted-native"
+    ],
+    "explicit_enablement": true,
+    "checksums": true,
+    "optional_signatures": true,
+    "license_and_sbom": true,
+    "automatic_download_and_execution": false
+  },
+  "determinism": {
+    "plugin_plan_is_compiler_input": true,
+    "plugin_graph_hash_in_cache_keys": true,
+    "load_order_permutation_tests": true,
+    "plugin_options_serializable": true,
+    "nondeterministic_plugins_in_shared_cache": false,
+    "plugin_provenance_in_build_manifest": true
+  },
+  "packaging": {
+    "coordinated_facets": [
+      "Scala 3 Maven artifact",
+      "native platform shared library",
+      "external process executable",
+      "schemas/support files",
+      "manifest/checksums/license/SBOM"
+    ],
+    "optional_top_level_root": "plugins/",
+    "core_depends_on_plugins": false,
+    "plugins_may_depend_on_public_core": true,
+    "plugins_may_optionally_depend_on_libraries": true,
+    "libraries_depend_on_plugin_implementations": false
+  },
+  "developer_commands": [
+    "nodal plugins list",
+    "nodal plugins resolve",
+    "nodal plugins check",
+    "nodal plugins graph",
+    "nodal plugins explain",
+    "nodal plugins lock",
+    "nodal plugins inspect"
+  ],
+  "forbidden_public_contracts": [
+    "concrete plugin class service identity",
+    "process-global plugin host",
+    "direct mutable access to another plugin",
+    "manual public retain/release phase ordering",
+    "implicit first provider selection",
+    "classpath or environment auto-discovery",
+    "plugin override of core language semantics",
+    "plugin backend silently participating in Backend.Auto",
+    "stable native C++ ABI promise across toolchains",
+    "hidden reverse dependency from core to plugin"
+  ],
+  "implementation_increments": {
+    "79": "SPI gate and contract fixtures",
+    "80": "manifest resolver, capability graph, lockfile, and CLI",
+    "81": "local design composition host",
+    "82": "native compiler plugin loader and extension points",
+    "83": "backend and external tool-adapter plugins",
+    "84": "packaging, trust, provenance, caching, conformance, and reference plugins"
+  },
+  "required_evidence": [
+    "plugin SPI design gate",
+    "machine-readable frozen SPI surface",
+    "manifest and lockfile schemas",
+    "positive and negative capability fixtures",
+    "load-order permutation determinism",
+    "native ABI mismatch fixtures",
+    "process crash/timeout isolation",
+    "out-of-tree design/pass/dialect/backend/tool plugins",
+    "external library plus separately enabled plugin fixture",
+    "plugin provenance and cache-key evidence",
+    "green CI"
+  ]
+}

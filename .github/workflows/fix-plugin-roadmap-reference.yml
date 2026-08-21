@@ -1,0 +1,46 @@
+name: Fix plugin roadmap reference
+
+on:
+  push:
+    branches:
+      - increment/13-scalable-plugin-architecture-roadmap
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/13-scalable-plugin-architecture-roadmap
+
+      - name: Fix shifted AMS gate reference
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("docs/roadmap/nodal-development-todo.md")
+          text = path.read_text(encoding="utf-8")
+          old = "Exact names are deferred to Increment 91."
+          new = "Exact names are deferred to Increment 96."
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one outdated reference, found {text.count(old)}")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Commit fix and remove helper
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/fix-plugin-roadmap-reference.yml
+          git add -- docs/roadmap/nodal-development-todo.md
+          git commit -m 'docs: fix shifted AMS plugin roadmap reference'
+          git push origin HEAD:increment/13-scalable-plugin-architecture-roadmap

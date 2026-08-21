@@ -134,7 +134,26 @@ jobs:
           fetch-depth: 0
 
       - name: Apply future formal-verification roadmap transformation
-        run: python3 scripts/update_future_formal_verification_roadmap.py
+        shell: bash
+        run: |
+          python3 scripts/update_future_formal_verification_roadmap.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("docs/roadmap/digital-verilog-open-source-verification-plan.md")
+          text = path.read_text(encoding="utf-8")
+          old = (
+              "**Public API freeze:** Increment 15 unified v0.3 backend-profile gate  \n"
+              "**Future user-authored formal gate:** Increment 109"
+          )
+          new = (
+              "**Public API freeze:** Increment 15 unified v0.3 backend-profile gate\n\n"
+              "**Future user-authored formal gate:** Increment 109"
+          )
+          if old not in text:
+              raise SystemExit("expected generated formal gate metadata not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
 
       - name: Validate durable documents and roadmap surfaces
         shell: bash

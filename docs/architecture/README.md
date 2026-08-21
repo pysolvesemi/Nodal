@@ -1,6 +1,6 @@
 # Nodal Architecture Decisions
 
-This directory contains the accepted architectural decisions for Nodal core.
+This directory contains the accepted and proposed architectural decisions for Nodal core.
 
 Architecture decision records (ADRs) define durable boundaries that later increments must implement and test. They are not substitutes for the public API design gates or detailed language semantics.
 
@@ -24,6 +24,12 @@ Accepted ADRs must not be edited to reverse their decision. A material change re
 | [0005](0005-backend-capability-profiles.md) | Use explicit backend capability profiles with no silent semantic fallback. |
 | [0006](0006-core-library-boundary.md) | Separate mandatory core from optional reusable libraries with one-way dependencies. |
 | [0007](0007-implicit-clock-reset-domains.md) | Use implicit local clock/reset domains for ordinary state, explicit CDC/RDC crossings, and explicit emitted HDL. |
+
+## Proposed records
+
+| ADR | Recommendation |
+| --- | --- |
+| [0008](0008-automatic-pipeline-architecture.md) | Use protocol-typed automatic pipeline regions with compiler scheduling, automatic alignment, explicit latency/throughput contracts, parameter-envelope safety, and bounded retiming. |
 
 ## Decision hierarchy
 

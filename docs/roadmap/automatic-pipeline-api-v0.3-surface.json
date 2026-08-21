@@ -1,0 +1,144 @@
+{
+  "schema": 1,
+  "api_version": "0.3-candidate",
+  "status": "candidate",
+  "decision_increment": 14,
+  "architecture": "docs/architecture/0008-automatic-pipeline-architecture.md",
+  "plan": "docs/roadmap/automatic-pipeline-api-v0.3-plan.md",
+  "principle": "explicit transaction semantics, automatic stage placement, reviewable schedules",
+  "entry_points": {
+    "automatic": "pipe",
+    "explicit_delay": "delay"
+  },
+  "protocols": {
+    "fixed_rate": "plain transaction",
+    "valid_only": "Valid[T]",
+    "elastic": "Stream[T]",
+    "implicit_conversion": false
+  },
+  "candidate_policy_types": {
+    "latency": [
+      "Latency.Auto",
+      "Latency.Exact(cycles)",
+      "Latency.Range(min,max)"
+    ],
+    "throughput": [
+      "Throughput.EveryCycle"
+    ],
+    "ready_path": [
+      "ReadyPath.Auto",
+      "ReadyPath.Combinational",
+      "ReadyPath.Registered"
+    ],
+    "aggregate": "PipelinePolicy"
+  },
+  "candidate_constraints": [
+    "stage(value)",
+    "sameStage { ... }"
+  ],
+  "initial_scheduler": {
+    "graph": "acyclic feed-forward",
+    "clock_domains": 1,
+    "initiation_interval": 1,
+    "automatic_sideband_alignment": true,
+    "automatic_reconvergence_balancing": true,
+    "resource_sharing": false,
+    "loop_pipelining": false,
+    "arithmetic_reassociation": false,
+    "general_hls": false
+  },
+  "capture": {
+    "dynamic_values_must_enter_transaction": true,
+    "parameters_and_constants_are_static": true,
+    "unrelated_live_reads": "error",
+    "one_input_one_output_in_order": true
+  },
+  "clock_reset": {
+    "captures_current_clock_domain": true,
+    "cdc_rdc_inside_region": false,
+    "payload_register_reset": "none by default",
+    "valid_and_control_reset": "current domain contract",
+    "automatic_clock_creation": false
+  },
+  "latency_contract": {
+    "fixed_and_valid_published_interface": "exact or bounded",
+    "elastic": [
+      "minimum latency",
+      "capacity",
+      "throughput",
+      "fall-through",
+      "ready-path behavior"
+    ],
+    "unconstrained_auto_at_published_boundary": false
+  },
+  "elastic_contract": {
+    "stall_stability": true,
+    "no_loss": true,
+    "no_duplication": true,
+    "no_reordering": true,
+    "automatic_buffers": [
+      "elastic register",
+      "skid buffer",
+      "registered-ready cut"
+    ]
+  },
+  "timing": {
+    "model_required_for_frequency_claim": true,
+    "model_dimensions": [
+      "width",
+      "signedness",
+      "target profile",
+      "implementation",
+      "fixed latency",
+      "uncertainty"
+    ],
+    "estimate_is_timing_closure": false,
+    "synthesis_feedback_may_violate_exact_latency": false
+  },
+  "parameterization": {
+    "native_parameterized_module_required": true,
+    "clone_per_parameter_value": false,
+    "automatic_schedule_requires_finite_envelope": true,
+    "single_envelope_safe_schedule": true,
+    "fallbacks": [
+      "explicit stage boundaries",
+      "checked timing assumption",
+      "concrete compilation"
+    ]
+  },
+  "retiming_barriers": [
+    "user state",
+    "CDC/RDC bridge",
+    "analog sample/drive boundary",
+    "memory without movable contract",
+    "external side effect",
+    "commit barrier",
+    "observability anchor",
+    "hard stage constraint"
+  ],
+  "initially_rejected_inside_transform": [
+    "analog contribution",
+    "module construction",
+    "opaque side effect",
+    "unordered memory write",
+    "cross-domain operation"
+  ],
+  "evidence": [
+    "compile-positive fixtures",
+    "compile-negative fixtures",
+    "deterministic schedule report",
+    "latency and capacity report",
+    "schedule hash",
+    "normalized IR",
+    "golden Verilog-AMS",
+    "formal transaction properties",
+    "randomized bubble and backpressure regression"
+  ],
+  "selective_circt_evaluation": [
+    "pipeline.unscheduled",
+    "pipeline.scheduled",
+    "esi channel buffers",
+    "seq",
+    "sv"
+  ]
+}

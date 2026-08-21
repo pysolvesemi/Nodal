@@ -1,0 +1,58 @@
+name: Apply AMS FPGA validation roadmap
+
+on:
+  push:
+    branches:
+      - increment/13-ams-fpga-validation-roadmap
+
+permissions:
+  contents: write
+
+jobs:
+  apply-roadmap:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out roadmap branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/13-ams-fpga-validation-roadmap
+          fetch-depth: 0
+
+      - name: Apply roadmap transformation
+        run: python3 scripts/update_ams_fpga_validation_roadmap.py
+
+      - name: Validate durable documents
+        shell: bash
+        run: |
+          python3 scripts/check_markdown.py
+          python3 scripts/check_formatting_baseline.py
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          for path in sorted(Path("docs/roadmap").glob("*.json")):
+              json.loads(path.read_text(encoding="utf-8"))
+          json.loads(Path(".github/branch-policy.json").read_text(encoding="utf-8"))
+          print("AMS FPGA roadmap JSON validation passed")
+          PY
+
+      - name: Commit durable roadmap and remove helper
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm \
+            .github/workflows/apply-ams-fpga-validation-roadmap.yml \
+            scripts/update_ams_fpga_validation_roadmap.py
+          git add -- \
+            .github/branch-policy.json \
+            docs/architecture/0010-digital-verilog-open-source-verification.md \
+            docs/roadmap/digital-backend-v0.3-surface.json \
+            docs/roadmap/digital-verilog-open-source-verification-plan.md \
+            docs/roadmap/nodal-development-todo.md
+          git diff --cached --check
+          git commit -m 'docs: add AMS-to-FPGA approximation validation roadmap'
+          git push origin HEAD:increment/13-ams-fpga-validation-roadmap

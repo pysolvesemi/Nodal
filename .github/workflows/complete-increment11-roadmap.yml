@@ -1,0 +1,122 @@
+name: Complete Increment 11 roadmap evidence
+
+on:
+  push:
+    branches:
+      - increment/11-public-api-v0.1-freeze
+
+permissions:
+  contents: write
+
+jobs:
+  complete:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      FORCE_COLOR: '0'
+      GITHUB_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/11-public-api-v0.1-freeze
+          fetch-depth: 0
+
+      - name: Determine whether completion is ready
+        id: ready
+        shell: bash
+        run: |
+          if grep -Fq -- '- [x] **Increment 11 — Public API design gate and v0.1 freeze**' \
+            docs/roadmap/nodal-development-todo.md; then
+            echo 'value=false' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if ! grep -Fq 'protected final def in[' \
+            core/scala/api/src/nodal/CandidateApi.scala; then
+            echo 'value=false' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if ! grep -Fq 'check_increment11.py' scripts/nodal.py; then
+            echo 'value=false' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo 'value=true' >> "${GITHUB_OUTPUT}"
+
+      - name: Fetch integration base
+        if: steps.ready.outputs.value == 'true'
+        run: git fetch --no-tags origin dev:refs/remotes/origin/dev
+
+      - name: Restore verified Scala dependency caches
+        if: steps.ready.outputs.value == 'true'
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: increment-11-complete-scala-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', '.scalafmt.conf', '.scalafix.conf', 'core/scala/api/public-api-v0.1.json') }}
+          restore-keys: |
+            increment-11-complete-scala-${{ runner.os }}-
+
+      - name: Restore locked native download cache
+        if: steps.ready.outputs.value == 'true'
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: increment-11-complete-native-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
+
+      - name: Install locked toolchains
+        if: steps.ready.outputs.value == 'true'
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate complete Increment 11 tree
+        if: steps.ready.outputs.value == 'true'
+        run: |
+          ./nodal check \
+            --online-toolchain \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+
+      - name: Record roadmap completion and evidence
+        if: steps.ready.outputs.value == 'true'
+        shell: bash
+        env:
+          VALIDATED_SHA: ${{ github.sha }}
+          VALIDATION_RUN: ${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path("docs/roadmap/nodal-development-todo.md")
+          text = path.read_text(encoding="utf-8")
+          start_marker = "- [ ] **Increment 11 — Public API design gate and v0.1 freeze**"
+          next_marker = "\n\n- [ ] **Increment 12 — Public API contract fixtures**"
+          start = text.find(start_marker)
+          if start < 0:
+              raise SystemExit("unchecked Increment 11 marker not found")
+          end = text.find(next_marker, start)
+          if end < 0:
+              raise SystemExit("Increment 12 boundary not found")
+          sha = os.environ["VALIDATED_SHA"]
+          run = os.environ["VALIDATION_RUN"]
+          replacement = "\n".join(
+              (
+                  "- [x] **Increment 11 — Public API design gate and v0.1 freeze**",
+                  "  - Publish `docs/design-gates/NodalPublicApi-DG-v0.1.md` with exact imports, names, operators, construction rules, backend entry points, examples, rejected alternatives, compatibility policy, core-only API, and the versioned subset permitted to future library authors. Freeze the approved API before substantial implementation.",
+                  "  - Evidence: [`NodalPublicApi-DG-v0.1.md`](../design-gates/NodalPublicApi-DG-v0.1.md), [`public-api-v0.1.json`](../../core/scala/api/public-api-v0.1.json), [`public-api-v0.1.md`](../language-reference/public-api-v0.1.md), [`CompilerApi.scala`](../../core/scala/api/src/nodal/CompilerApi.scala), [`scripts/check_increment11.py`](../../scripts/check_increment11.py), [`tests/api/test_increment11.py`](../../tests/api/test_increment11.py), validated implementation commit [`" + sha[:7] + "`](https://github.com/pysolvesemi/Nodal/commit/" + sha + "), and successful full validation run [`" + run + "`](https://github.com/pysolvesemi/Nodal/actions/runs/" + run + ").",
+              )
+          )
+          path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/roadmap/nodal-development-todo.md
+          git commit -m 'docs: complete Increment 11 roadmap evidence'
+          git push origin HEAD:increment/11-public-api-v0.1-freeze

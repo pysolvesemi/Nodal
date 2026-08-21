@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "status": "roadmap-freeze-candidate",
+  "roadmap_revision": "1.4",
+  "roadmap_last_increment": 90,
+  "formal_freeze_increment": 15,
+  "architecture": "narrowest-compatible-backend-open-source-generated-hdl-verification",
+  "documents": {
+    "architecture_adr": "docs/architecture/0010-digital-verilog-open-source-verification.md",
+    "verification_plan": "docs/roadmap/digital-verilog-open-source-verification-plan.md",
+    "main_roadmap": "docs/roadmap/nodal-development-todo.md"
+  },
+  "design_kinds": [
+    "DigitalOnly",
+    "AnalogOnly",
+    "MixedSignal",
+    "Unsupported"
+  ],
+  "backends": [
+    "Backend.Auto",
+    "Backend.Verilog",
+    "Backend.VerilogA",
+    "Backend.VerilogAMS"
+  ],
+  "future_optional_backend": "Backend.SystemVerilog through a separate capability gate",
+  "auto_selection": {
+    "DigitalOnly": "Backend.Verilog",
+    "AnalogOnly": "Backend.VerilogA",
+    "MixedSignal": "Backend.VerilogAMS"
+  },
+  "digital_profiles": [
+    "digital-verilog-synth",
+    "digital-verilog-sim",
+    "digital-verilog-formal"
+  ],
+  "portable_verilog": {
+    "baseline": "IEEE-1364-2005-style-subset",
+    "systemverilog_required": false,
+    "aggregate_boundary_strategy": "deterministic-flattening",
+    "parameterized_module_cloning": false
+  },
+  "open_source_tools": {
+    "lint_and_fast_simulation": "Verilator",
+    "event_simulation": "Icarus Verilog",
+    "synthesis_and_equivalence": "Yosys",
+    "formal_driver": "SBY",
+    "optional_python_interop": "cocotb"
+  },
+  "required_digital_checks": [
+    "classification",
+    "deterministic emission",
+    "Verilator lint",
+    "Verilator simulation",
+    "Icarus parse and simulation",
+    "Yosys synthesis and check",
+    "Yosys equivalence",
+    "SBY safety and cover",
+    "waveform and log artifacts"
+  ],
+  "required_evidence": [
+    "backend-auto-public-api-freeze",
+    "portable-verilog-capability-profile",
+    "classification-manifest",
+    "open-source-toolchain-lock",
+    "digital-golden-fixtures",
+    "simulation-regressions",
+    "synthesis-reports",
+    "equivalence-proofs",
+    "formal-proofs",
+    "green-ci"
+  ]
+}

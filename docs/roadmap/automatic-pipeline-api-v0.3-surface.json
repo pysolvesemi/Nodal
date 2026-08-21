@@ -2,9 +2,15 @@
   "schema": 1,
   "api_version": "0.3-candidate",
   "status": "candidate",
-  "decision_increment": 14,
+  "decision_increment": 15,
   "architecture": "docs/architecture/0008-automatic-pipeline-architecture.md",
   "plan": "docs/roadmap/automatic-pipeline-api-v0.3-plan.md",
+  "semantic_dependency": {
+    "architecture": "docs/architecture/0009-core-semantic-contracts.md",
+    "plan": "docs/roadmap/core-semantics-api-v0.3-plan.md",
+    "surface": "docs/roadmap/core-semantics-api-v0.3-surface.json",
+    "unified_gate": "NodalCoreSemanticsPipelineApi-DG-v0.3.md"
+  },
   "principle": "explicit transaction semantics, automatic stage placement, reviewable schedules",
   "entry_points": {
     "automatic": "pipe",
@@ -52,6 +58,17 @@
     "parameters_and_constants_are_static": true,
     "unrelated_live_reads": "error",
     "one_input_one_output_in_order": true
+  },
+  "semantic_dependencies": {
+    "value_stages": "explicit",
+    "numeric_arithmetic": "lossless by default",
+    "implicit_narrowing": false,
+    "directionless_payloads": true,
+    "connection": "exact",
+    "physical_dimensions": true,
+    "effect_contract_required": true,
+    "memory_latency_contract_required": true,
+    "external_operation_contract_required": true
   },
   "clock_reset": {
     "captures_current_clock_domain": true,
@@ -131,6 +148,7 @@
     "schedule hash",
     "normalized IR",
     "golden Verilog-AMS",
+    "golden portable Verilog for digital-only fixtures",
     "formal transaction properties",
     "randomized bubble and backpressure regression"
   ],

@@ -1,18 +1,20 @@
 # Automatic Pipeline Public API v0.3 Candidate Plan
 
-**Status:** Candidate for Increment 13 comparison and Increment 14 freeze  
-**Architecture:** [ADR 0008](../architecture/0008-automatic-pipeline-architecture.md)  
+**Status:** Candidate for Increment 14 comparison and unified Increment 15 freeze
+**Architecture:** [ADR 0008](../architecture/0008-automatic-pipeline-architecture.md)
 **Machine-readable candidate:** [`automatic-pipeline-api-v0.3-surface.json`](automatic-pipeline-api-v0.3-surface.json)
+**Semantic foundation:** [ADR 0009](../architecture/0009-core-semantic-contracts.md), [`core-semantics-api-v0.3-plan.md`](core-semantics-api-v0.3-plan.md), and [`core-semantics-api-v0.3-surface.json`](core-semantics-api-v0.3-surface.json)
+**Unified gate:** `NodalCoreSemanticsPipelineApi-DG-v0.3.md`
 
 ## Goal
 
 Freeze a small, user-friendly automatic-pipeline API before implementing a scheduler. Nodal should remove repetitive stage-register and sideband plumbing while keeping transaction, clock/reset, latency, backpressure, parameterization, arithmetic, and side-effect semantics explicit.
 
-The API is for deterministic hardware pipelining, not general high-level synthesis.
+The API is for deterministic hardware pipelining, not general high-level synthesis. It inherits Increment 13's staged-value, lossless-numeric, directionless-aggregate, exact-connection, physical-quantity, memory, and effect contracts; the pipeline API is not frozen independently of those semantics.
 
 ## Prior-art boundary
 
-The Increment 13 comparison must compile representative versions of:
+The Increment 14 comparison must compile representative versions of:
 
 - Chisel-style fixed delay with `Pipe`/`ShiftRegister` and elastic buffering with `Queue`/`Decoupled`;
 - SpinalHDL-style payload/node/link/builder graphs and manual stage-link retiming;
@@ -99,7 +101,7 @@ final case class PipelinePolicy(
 )
 ```
 
-The compile prototype may refine constructor shape and defaults. Increment 14 freezes exact spellings.
+The compile prototype may refine constructor shape and defaults. Increment 15 freezes exact spellings.
 
 ## Candidate constraints
 
@@ -176,7 +178,7 @@ The compiler must:
 - Crossings use the frozen `Cdc`/`Rdc` API before or after the region.
 - Payload registers are resetless by default.
 - Valid, occupancy, and control state follow the current domain reset policy.
-- Reset dominates flush, stall, enable, and normal update; Increment 14 freezes the complete priority table.
+- Reset dominates flush, stall, enable, and normal update; Increment 15 freezes the complete priority table.
 - Automatic scheduling never creates a clock or physical gate.
 
 ## Parameterized HDL contract
@@ -199,7 +201,7 @@ val y = pipe(
 
 The schedule is fixed for the legal envelope; emitted widths remain symbolic. If no safe envelope exists, the compiler requires explicit cuts, a checked assumption, or a concrete compilation. It must not silently clone the module per width.
 
-The exact envelope API is compared in Increment 13 and frozen in Increment 14.
+The exact envelope API is compared in Increment 14 and frozen in Increment 14.
 
 ## Operators, memories, and controls
 
@@ -224,7 +226,7 @@ The initial automatic transform remains pure feed-forward dataflow. Analog contr
 
 ## Required diagnostics
 
-Increment 14 freezes stable codes for at least:
+Increment 15 freezes stable codes for at least:
 
 - missing current clock domain;
 - cross-domain value in a pipeline;
@@ -271,20 +273,20 @@ Increment 14 freezes stable codes for at least:
 
 ## Staged implementation increments
 
-- **Increment 13:** candidate prototypes and architecture comparison.
-- **Increment 14:** v0.3 design gate, manifest, migration notes, and compile contracts.
-- **Increment 58:** transaction graph and latency-provenance IR.
-- **Increment 59:** fixed-rate and valid-only scheduling.
-- **Increment 60:** elastic ready/valid synthesis.
-- **Increment 61:** timing/resource models and target-driven partitioning.
-- **Increment 62:** controls, anchors, memories, and multi-cycle units.
-- **Increment 63:** hierarchy, schedule stability, reports, and bounded retiming.
-- **Increment 68:** Verilog-AMS backend integration.
-- **Increment 69:** ADC/DAC mixed-signal proof.
+- **Increment 14:** candidate prototypes and architecture comparison.
+- **Increment 15:** v0.3 design gate, manifest, migration notes, and compile contracts.
+- **Increment 59:** transaction graph and latency-provenance IR.
+- **Increment 60:** fixed-rate and valid-only scheduling.
+- **Increment 61:** elastic ready/valid synthesis.
+- **Increment 62:** timing/resource models and target-driven partitioning.
+- **Increment 63:** controls, anchors, memories, and multi-cycle units.
+- **Increment 64:** hierarchy, schedule stability, reports, and bounded retiming.
+- **Increment 72:** Verilog-AMS backend integration.
+- **Increment 73:** ADC/DAC mixed-signal proof.
 
 ## Freeze exit criteria
 
-Increment 14 is complete only when:
+The unified Increment 15 gate is complete only when:
 
 1. the public API design gate is approved;
 2. exact names, overloads, types, defaults, and imports are listed in a machine-readable manifest;

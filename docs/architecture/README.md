@@ -1,6 +1,6 @@
 # Nodal Architecture Decisions
 
-This directory contains the accepted architectural decisions for Nodal core.
+This directory contains the accepted and proposed architectural decisions for Nodal core.
 
 Architecture decision records (ADRs) define durable boundaries that later increments must implement and test. They are not substitutes for the public API design gates or detailed language semantics.
 
@@ -23,6 +23,12 @@ Accepted ADRs must not be edited to reverse their decision. A material change re
 | [0004](0004-versioned-textual-mlir-bridge.md) | Start with a versioned textual-MLIR process boundary between Scala and `nodalc`. |
 | [0005](0005-backend-capability-profiles.md) | Use explicit backend capability profiles with no silent semantic fallback. |
 | [0006](0006-core-library-boundary.md) | Separate mandatory core from optional reusable libraries with one-way dependencies. |
+
+## Proposed records
+
+| ADR | Recommendation |
+| --- | --- |
+| [0007](0007-implicit-clock-reset-domains.md) | Use implicit lexical clock/reset domains for ordinary sequential logic and require explicit CDC/RDC and mixed-signal crossings. |
 
 ## Decision hierarchy
 

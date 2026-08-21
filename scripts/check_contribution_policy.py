@@ -87,8 +87,20 @@ def _check_design_gates(
     directory = gate.get("directory")
     filename_pattern = gate.get("filename_pattern")
     approved_marker = gate.get("approved_marker")
+    superseded_marker = gate.get("superseded_marker")
+    superseded_by_prefix = gate.get("superseded_by_prefix")
     scope_prefix = gate.get("scope_marker_prefix")
-    if not all(isinstance(value, str) and value for value in (directory, filename_pattern, approved_marker, scope_prefix)):
+    if not all(
+        isinstance(value, str) and value
+        for value in (
+            directory,
+            filename_pattern,
+            approved_marker,
+            superseded_marker,
+            superseded_by_prefix,
+            scope_prefix,
+        )
+    ):
         problems.append(Problem("NODAL-POLICY-002", "change-policy design-gate fields are invalid"))
         return
 
@@ -113,6 +125,15 @@ def _check_design_gates(
             content = path.read_text(encoding="utf-8")
         except OSError as exc:
             problems.append(Problem("NODAL-POLICY-003", f"cannot read design gate {relative}: {exc}"))
+            continue
+        if superseded_marker in content:
+            if superseded_by_prefix not in content:
+                problems.append(
+                    Problem(
+                        "NODAL-POLICY-016",
+                        f"superseded design gate lacks replacement reference: {relative}",
+                    )
+                )
             continue
         if approved_marker not in content:
             problems.append(Problem("NODAL-POLICY-004", f"design gate is not approved: {relative}"))

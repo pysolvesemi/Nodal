@@ -14,6 +14,8 @@
     "directory": "docs/design-gates",
     "filename_pattern": "*-DG-v*.md",
     "approved_marker": "**Status:** Approved",
+    "superseded_marker": "**Status:** Superseded",
+    "superseded_by_prefix": "**Superseded by:**",
     "scope_marker_prefix": "**Scope:** "
   },
   "protected_changes": [

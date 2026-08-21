@@ -32,6 +32,9 @@ Accepted ADRs must not be edited to reverse their decision. A material change re
 | [0014](0014-target-neutral-formal-verification.md) | Preserve future user-authored formal properties in target-neutral, domain-aware IR and execute them through capability-checked proof-engine adapters with retained evidence. |
 | [0015](0015-native-scala-enum-and-hierarchical-fsm.md) | Use native Scala 3 enums with stable canonical HDL encoding and typed reusable hierarchical/parallel FSM graphs with explicit reset, priority, recursion bounds, reports, and proof contracts. |
 | [0016](0016-signed-types-and-staged-loops.md) | Preserve signed finite-width type semantics and distinguish Scala elaboration, symbolic structural generate, and bounded hardware-iteration loops through verified Verilog-family lowering. |
+| [0017](0017-semantic-multidimensional-values-and-target-layouts.md) | Use semantic parameterized multidimensional shaped values, explicit structural-versus-memory intent, deterministic flattening, and target-aware Verilog/SystemVerilog layouts. |
+| [0018](0018-expression-materialization-and-semantic-naming.md) | Inline safe pure expressions, materialize only for declared reasons, and derive deterministic semantic names and expression-level source maps for required objects. |
+| [0019](0019-mandatory-pre-emission-hardware-quality-gates.md) | Require transactional staged internal verification and independent target lint/synthesis evidence before generated HDL is accepted. |
 
 ADR 0012 owns general plugin discovery, resolution, loading, trust, lifecycle, and provenance. ADR 0013 layers the target-HDL-specific structured representations, pass profiles, preservation rules, and proof obligations on that common plugin foundation. Installing either a plugin or pass is inert until the project resolves and explicitly selects it in a locked plan.
 

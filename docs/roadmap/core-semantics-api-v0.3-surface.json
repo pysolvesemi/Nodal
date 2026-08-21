@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.10",
+  "roadmap_revision": "1.11",
   "formal_freeze_increment": 15,
   "architecture": "explicit-stage-lossless-value-exact-connection-dimension-safe-declared-effect",
   "documents": {
@@ -10,7 +10,8 @@
     "pipeline_plan": "docs/roadmap/automatic-pipeline-api-v0.3-plan.md",
     "main_roadmap": "docs/roadmap/nodal-development-todo.md",
     "enum_fsm_plan": "docs/roadmap/enum-fsm-api-v0.3-plan.md",
-    "signed_loop_plan": "docs/roadmap/signed-loop-api-v0.3-plan.md"
+    "signed_loop_plan": "docs/roadmap/signed-loop-api-v0.3-plan.md",
+    "shaped_values_naming_quality_plan": "docs/roadmap/shaped-values-naming-quality-v0.3-plan.md"
   },
   "value_stages": {
     "elaboration": [
@@ -136,6 +137,9 @@
   ],
   "required_evidence": [
     "core-semantic-candidate-compilation",
+    "mandatory-quality-gate-negative-fixtures",
+    "inline-materialization-naming-equivalence",
+    "shaped-value-layout-candidate-compilation",
     "signed-loop-candidate-compilation",
     "enum-fsm-candidate-compilation",
     "automatic-pipeline-candidate-compilation",
@@ -178,6 +182,20 @@
       "bounded-hardware-iteration"
     ],
     "runtime_or_unbounded_loop_initial_support": false,
+    "formal_freeze_increment": 15
+  },
+  "shaped_values_naming_quality": {
+    "shape_architecture": "docs/architecture/0017-semantic-multidimensional-values-and-target-layouts.md",
+    "naming_architecture": "docs/architecture/0018-expression-materialization-and-semantic-naming.md",
+    "quality_architecture": "docs/architecture/0019-mandatory-pre-emission-hardware-quality-gates.md",
+    "parameterized_multidimensional_Vec": true,
+    "Vec_is_structural_and_Mem_is_addressable": true,
+    "portable_verilog_layout": "flat packed carrier",
+    "future_systemverilog_layout": "unpacked multidimensional array of packed elements",
+    "safe_expression_inlining": true,
+    "semantic_state_and_temporary_names": true,
+    "mandatory_internal_checks": true,
+    "transactional_accepted_emission": true,
     "formal_freeze_increment": 15
   }
 }

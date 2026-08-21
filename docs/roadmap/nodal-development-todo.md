@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.10
+**Revision:** 1.11
 **Created:** 2026-08-20
 **Updated:** 2026-08-21
 **Status:** Active roadmap
@@ -38,6 +38,10 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Separate canonical enum interface encoding from local FSM storage encoding. Preserve one stable numeric mapping across portable Verilog localparams, Verilog-A/Verilog-AMS constants, and future SystemVerilog native enums.
 - Model control as typed FSM/statechart graphs with explicit reset, transition priority, illegal-state, hierarchy, parallel, timing, completion, recursion-bound, source-map, and proof contracts rather than mutable backend-style process objects.
 - Keep aggregate payloads directionless; apply direction at ports, use plain/`Valid`/`Stream` protocol types consistently, and require exact direct connections with typed adapters for intentional conversion.
+- Represent multidimensional structural values with semantic rank, parameterized dimensions, stable row-major indexing, and explicit target layouts. Keep `Vec` structural and `Mem` addressable; target unpacked-array syntax never defines memory semantics.
+- Map portable-Verilog multidimensional ports to deterministic flat packed carriers and future SystemVerilog ports to unpacked multidimensional arrays of packed elements by default, with explicit packed-layout interoperability when requested.
+- Keep pure combinational expressions in typed DAG form and inline compiler-generated single-use expressions whenever exact width/sign/four-state semantics permit. Materialize only for a declared reason and give every required net/state a deterministic semantic name.
+- Reject invalid hardware through mandatory staged construction, semantic-graph, MLIR, target-legalization, reparse, lint, and synthesis gates before an HDL artifact is accepted. Core safety verifiers cannot be disabled by plugins or optimization passes.
 - Preserve physical dimensions for analog and mixed-signal quantities and reject incompatible equations before HDL generation without exposing verbose unit types in normal source.
 - Classify memory, external, analog, stateful, observational, and side-effecting operations explicitly so scheduling, optimization, and verification never guess latency or purity.
 - Classify complete designs as digital-only, analog-only, or mixed-signal. `Backend.Auto` selects the narrowest compatible backend, including portable Verilog for digital-only designs.
@@ -72,6 +76,8 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Provide explicit lossy numeric conversions such as truncate, wrap, saturate, and checked resize; never narrow or reinterpret signedness silently.
 - Freeze exact `SInt` declaration/literal/parameter/memory/expression rules, numeric conversion versus bit reinterpretation, mixed-sign diagnostics, arithmetic/logical shifts, and portable Verilog/future SystemVerilog signed lowering in public API v0.3.
 - Keep ordinary Scala `for` for elaboration, reserve `generate(...)` for symbolic structural replication, and freeze a separate concise bounded hardware-loop operation plus collection `map`/`reduce` candidates. Reject runtime trip counts and unbounded `while` in the initial synthesizable contract.
+- Freeze a parameterized multidimensional `Vec` shape/index/flatten/reshape contract, explicit `Vec` versus `Mem` storage semantics, and target layout policies for portable-Verilog flat carriers and future-SystemVerilog unpacked/packed ports.
+- Freeze emission configuration candidates for safe expression inlining, readable/debug/tool-friendly materialization, semantic naming, source-span maps, and Fast/Default/Release quality profiles with typed waivers that cannot suppress mandatory safety checks.
 - Treat `Valid[T]` and `Stream[T]` as general protocol types shared by ports, hierarchy, memories, simulation, and automatic pipelines.
 - Add `Backend.Auto` and `Backend.Verilog` for pure-digital output while retaining explicit `Backend.VerilogA` and `Backend.VerilogAMS` profiles.
 - Keep AMS approximation separate from backend selection. A future `FpgaApproximation`-class public contract must be explicitly requested, produce a digital approximation artifact, and only then use `Backend.Verilog`.
@@ -296,6 +302,37 @@ Loops have three categories:
 3. a distinct bounded hardware-loop candidate such as `loop(...)` describes repeated operations inside one combinational or clocked region and may lower deterministically to a procedural HDL `for` or verified unrolled operations.
 
 A bounded hardware loop has a finite static/symbolic-static trip count. It cannot create modules or ports, use a runtime signal as its trip count, hide multiple cycles, or contain unbounded/data-dependent termination. Multi-cycle iteration uses explicit FSM/statechart, pipeline, stream, memory, or iterative-operation contracts.
+
+
+## Multidimensional shaped-value and target-layout architecture
+
+The binding architecture is [ADR 0017](../architecture/0017-semantic-multidimensional-values-and-target-layouts.md). Exact shape/layout candidates and freeze criteria are in [`shaped-values-naming-quality-v0.3-plan.md`](shaped-values-naming-quality-v0.3-plan.md), with a machine-readable candidate in [`shaped-values-naming-quality-v0.3-surface.json`](shaped-values-naming-quality-v0.3-surface.json).
+
+Nodal adopts:
+
+> **Shape is semantic, layout is explicit evidence, and target syntax never decides whether a value is a memory.**
+
+A parameterized multidimensional `Vec` has static rank, positive elaboration/symbolic dimensions, zero-based row-major indexing, exact element type, and deterministic flatten/reshape formulas. `Vec` remains structural; `Mem` alone owns addressable-storage latency, ports, collision, initialization, and mapping semantics.
+
+Portable Verilog lowers a shaped module boundary to one flat packed carrier plus verified element/index views. A flattened `Vec[SInt]` carrier is signless and signed element accesses use deterministic signed views because portable Verilog cannot declare each flattened element independently signed. Future SystemVerilog defaults to unpacked multidimensional ports of packed signed/unsigned elements and may use an explicit packed-dimensional layout for serialization/interoperability.
+
+
+## Expression materialization and semantic naming architecture
+
+The binding architecture is [ADR 0018](../architecture/0018-expression-materialization-and-semantic-naming.md). Nodal adopts:
+
+> **Do not name an expression merely because the compiler has a node; name only storage, sharing, observability, legality, or an explicit user boundary.**
+
+The default candidate inlines pure single-use expressions while preserving the exact typed operation tree. Shared/observable/target-required values are materialized with reason codes. All emitted state receives a deterministic name derived from explicit/source names, destination role, subsystem role, source origin, or stable digest—not traversal-number `_zz` chains. Expression-level source maps survive inlining.
+
+
+## Mandatory pre-emission quality-gate architecture
+
+The binding architecture is [ADR 0019](../architecture/0019-mandatory-pre-emission-hardware-quality-gates.md). Nodal adopts:
+
+> **Reject invalid hardware at the highest semantic layer, reverify after every lowering, and accept emitted HDL only with retained evidence.**
+
+Mandatory internal checks cover scope/hierarchy, connections/drivers, widths/signs/shapes, latches, combinational loops, state/reset, CDC/RDC, protocols, parameters/generate/loops, enums/FSMs, pipelines, memories/effects, units/analog/mixed signal, and target capability. Generated HDL is then reparsed and independently checked with the selected Verilator/Icarus/Yosys/OpenVAF/simulator profile. Failed or partial output is diagnostic-only, and plugins cannot disable core verifiers.
 
 
 ## Enum and reusable FSM architecture
@@ -663,11 +700,11 @@ Empty future-library or plugin directories are not committed merely as placehold
 
 ## Milestones
 
-- **M0 — Foundation:** reproducible builds, CI, clock/reset plus unified core-semantics/automatic-pipeline API freezes, digital-backend selection contract, and enforced core/library boundaries.
+- **M0 — Foundation:** reproducible builds, CI, clock/reset plus unified core-semantics/automatic-pipeline API freezes, shaped-value/layout and naming/materialization contracts, mandatory quality-gate policy, digital-backend selection contract, and enforced core/library boundaries.
 - **M1 — First vertical slice:** Scala RC model lowers through MLIR and emits validated Verilog-A.
 - **M2 — Analog preview:** useful Verilog-A subset with open-source compilation and simulation regression.
-- **M3 — Digital/AMS preview:** implicit-domain digital state, exact signed finite-width types, elaboration/generate/bounded hardware loops, native typed enums, reusable hierarchical/parallel FSMs, automatic fixed/valid/elastic pipelines, portable Verilog with open-source simulation/synthesis/equivalence and compiler-generated formal verification, CDC/RDC-safe clock/reset architecture, mixed-signal crossings, and Verilog-AMS emission.
-- **M4 — Scalable core release:** packaged compiler, complete reference, frozen plugin and target-HDL pass SPIs, deterministic extension/pass graphs, optimization proof evidence, conformance kits, library-author contract, and compatibility policy.
+- **M3 — Digital/AMS preview:** implicit-domain digital state, exact signed finite-width types, parameterized multidimensional shaped values, elaboration/generate/bounded hardware loops, native typed enums, reusable hierarchical/parallel FSMs, automatic fixed/valid/elastic pipelines, readable HDL without avoidable anonymous-wire chains, portable Verilog with mandatory internal checks plus open-source lint/simulation/synthesis/equivalence and compiler-generated formal verification, CDC/RDC-safe clock/reset architecture, mixed-signal crossings, and Verilog-AMS emission.
+- **M4 — Scalable core release:** packaged compiler, complete reference, frozen plugin and target-HDL pass SPIs, deterministic extension/pass graphs, optimization proof evidence, machine-readable check coverage and waiver inventory, conformance kits, library-author contract, and compatibility policy.
 - **M5 — FPGA-accelerated AMS validation:** explicit sampled/fixed-point approximation, four-level reference evidence, open FPGA implementation, HIL runtime, and a published capability/limitations matrix.
 - **M6 — User-authored formal verification extension:** frozen formal property API, target-neutral property IR, compositional harness/contracts, pluggable proof engines, vacuity/coverage, typed counterexample replay, property libraries, and conformance evidence.
 
@@ -736,6 +773,8 @@ Empty future-library or plugin directories are not committed merely as placehold
   - Compile and compare elaboration-only Scala values, symbolic `Param`/constant/width/range/generate values, and dynamic hardware values. Compile ordinary Scala elaboration loops, symbolic structural `generate(...)`, a distinct bounded hardware-loop candidate, and vector `map`/`reduce` forms; freeze stage/bound/body legality and dynamic/unbounded-loop diagnostics.
   - Compile lossless unsigned/signed arithmetic, `Bits`/`UInt`/`SInt` declarations, signed/negative literals, signed parameters/localparams/memories/aggregates, symbolic width rules, numeric conversion versus reinterpretation, arithmetic/logical shifts, explicit extend/truncate/wrap/saturate/checked-resize/signedness conversions, and negative mixed-sign/implicit-narrowing fixtures.
   - Compile directionless nested aggregates/vectors, exact port/connection semantics, typed adapters/views, and general plain/`Valid`/`Stream` protocols.
+  - Compile rank-one through rank-four `Vec` candidates with positive Scala/symbolic parameter dimensions, multidimensional indexing/slicing/flatten/reshape/map/zip/reduce, signed elements, exact shape connections, explicit `Vec` versus `Mem`, portable-Verilog flat layout, and future-SystemVerilog unpacked/packed layout policies.
+  - Compile `TemporaryPolicy`/`NamingPolicy`/`CheckProfile` candidates, safe inlining of pure expression chains, shared/observable/target-required materialization, explicit names versus keep/debug intent, deterministic sink-affinity register names, typed waivers, and negative latch/loop/driver/hierarchy/shape/profile fixtures from ADRs 0018-0019.
   - Compile dimension-safe analog quantities and negative unit equations without exposing verbose dimension types in ordinary source.
   - Compile explicit memory and external-operation contracts covering read latency, read-under-write, masks, ordering, domains, effects, throughput, and model availability. Reject unknown latency/effect in movable pipeline regions.
   - Include an external-library consumer using only public candidate APIs; keep frontend/backend behavior inert.
@@ -749,36 +788,36 @@ Empty future-library or plugin directories are not committed merely as placehold
 
 - [ ] **Increment 15 — Unified core semantics and automatic pipeline public API v0.3 freeze**
   - Publish `docs/design-gates/NodalCoreSemanticsPipelineApi-DG-v0.3.md`, migration notes, and an updated machine-readable public API manifest using ADRs 0009/0008 and both v0.3 candidate plans/surfaces.
-  - Freeze value stages; ordinary Scala elaboration loops; symbolic target `generate`; bounded hardware iteration and collection operations; `Bits`/`UInt`/`SInt`; exact signed declaration/literal/parameter/memory/expression/shift/conversion/reinterpretation and Verilog-family lowering rules; lossless numeric/width semantics; explicit lossy conversions; directionless aggregates; exact connections/adapters; plain/`Valid`/`Stream`; physical quantities; memory/external effect contracts; native Scala enums; canonical enum ABI/safe decode/exhaustive selection; flat and reusable hierarchical/parallel/timed/bounded-recursive FSMs; local FSM encoding/illegal-state policies; `pipe`/`delay`; latency/throughput/ready policy; stage constraints; parameter-envelope scheduling; and schedule evidence.
+  - Freeze value stages; ordinary Scala elaboration loops; symbolic target `generate`; bounded hardware iteration and collection operations; `Bits`/`UInt`/`SInt`; exact signed declaration/literal/parameter/memory/expression/shift/conversion/reinterpretation and Verilog-family lowering rules; lossless numeric/width semantics; explicit lossy conversions; directionless aggregates; parameterized multidimensional `Vec` shape/index/flatten/reshape and target layout; explicit `Vec` versus `Mem`; exact connections/adapters; plain/`Valid`/`Stream`; physical quantities; memory/external effect contracts; native Scala enums; canonical enum ABI/safe decode/exhaustive selection; flat and reusable hierarchical/parallel/timed/bounded-recursive FSMs; local FSM encoding/illegal-state policies; safe expression inlining, materialization reasons, semantic naming, source-span maps, Fast/Default/Release check profiles and typed waivers; `pipe`/`delay`; latency/throughput/ready policy; stage constraints; parameter-envelope scheduling; and schedule evidence.
   - Freeze `Backend.Auto`, `Backend.Verilog`, design-kind reporting, and explicit synth/sim/formal digital profiles from ADR 0010 and the digital-backend candidate.
   - Add positive and negative compile contracts for every candidate category, including external-library use, stable diagnostic codes/source locations, and v0.1/v0.2 migration behavior.
   - Keep elaboration, scheduler, digital backend, and simulator behavior inert. Mark this increment `[x]` only when the unified gate, manifests, fixtures, diagnostics, and CI satisfy all linked exit criteria.
 
 ## Phase 1 — Compiler vertical slice
 
-- [ ] **Increment 16 — Elaboration, hierarchy, and lexical domain-context kernel**
-  - Implement deterministic module construction, ownership, lifecycle, default-domain requirements, lexical domain stack, single-domain inheritance, named multi-domain requirements, typed bindings, and root-domain validation without public Scala implicits, globals, thread-locals, or JVM identity.
+- [ ] **Increment 16 — Elaboration, hierarchy, shape, and lexical domain-context kernel**
+  - Implement deterministic module construction, ownership, lifecycle, shaped-value rank/dimension capture, structural `Vec` versus `Mem` intent, transactional construction close, default-domain requirements, lexical domain stack, single-domain inheritance, named multi-domain requirements, typed bindings, and root-domain validation without public Scala implicits, globals, thread-locals, or JVM identity.
 
-- [ ] **Increment 17 — Source locations and deterministic naming**
-  - Capture Scala source locations and define stable names for modules, declarations, domains, generated clock/reset ports, synchronizers, FIFOs, reset controllers, crossings, and anonymous expressions.
+- [ ] **Increment 17 — Source spans, semantic naming, and origin graph**
+  - Capture Scala declaration/member names and expression spans; build stable origin/sink-affinity metadata; define deterministic names for modules, declarations, shaped elements/views, domains, generated clock/reset ports, synchronizers, FIFOs, reset controllers, crossings, pipeline/FSM state, anonymous registers, and required temporaries. Prohibit traversal-counter-only normal names and retain expression-level source maps when nodes are inlined.
 
 - [ ] **Increment 18 — Nodal MLIR dialect skeleton**
   - Register the out-of-tree dialect, TableGen organization/docs, generic parser/printer, and a verified placeholder operation.
 
 - [ ] **Increment 19 — Core MLIR module, port, parameter, and domain model**
-  - Add target-neutral modules, ports, symbols, instances, symbolic parameters, signless/unsigned/signed finite-width types and constants, structural generate regions, bounded hardware-iteration regions with typed induction variables/effects, semantic enum types/cases/canonical encodings, FSM definitions/regions/states/transitions/actions/completion/encoding policies, domain requirements/bindings, clock/reset relationships, state ownership, timing provenance, and crossing operations/types. Reuse CIRCT only after semantic comparison.
+  - Add target-neutral modules, ports, symbols, instances, symbolic parameters, signless/unsigned/signed finite-width types and constants, ranked shaped types with symbolic dimensions, canonical index/flatten/layout and structural-storage metadata, expression origin/materialization/observability metadata, structural generate regions, bounded hardware-iteration regions with typed induction variables/effects, semantic enum types/cases/canonical encodings, FSM definitions/regions/states/transitions/actions/completion/encoding policies, domain requirements/bindings, clock/reset relationships, state ownership, timing provenance, and crossing operations/types. Reuse CIRCT only after semantic comparison.
 
 - [ ] **Increment 20 — Scala-to-MLIR bridge**
   - Lower deterministic construction state to versioned textual MLIR with source locations and invoke `nodalc` through a clear process protocol.
 
-- [ ] **Increment 21 — Native parse, verify, and pass pipeline**
-  - Parse Nodal MLIR, run registered verifiers/passes, print normalized IR, and expose explicit lit/FileCheck-friendly pipelines.
+- [ ] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**
+  - Parse Nodal MLIR; implement mandatory construction-closure, driver/assignment coverage, latch, combinational-cycle, hierarchy, width/sign/shape/layout/storage, parameter/generate/loop, enum/FSM, clock/reset/CDC/RDC, protocol/pipeline, memory/effect, analog/mixed-signal, and target-capability verifiers; run registered passes with analysis invalidation/reverification; print normalized IR; and expose explicit lit/FileCheck-friendly gate pipelines. Preserve the last accepted state transactionally on failure.
 
 - [ ] **Increment 22 — Cross-layer diagnostic mapping**
-  - Map parser, verifier, pass, backend, external-tool, signed literal/conversion/mixed-sign/width/shift errors, loop stage/bound/body/dependency/effect/profile errors, enum encoding/decode/exhaustiveness, FSM graph/transition/recursion/illegal-state, domain-binding, CDC, RDC, gate/mux, and waiver diagnostics back to Scala locations and stable codes.
+  - Map construction, driver/latch/cycle/hierarchy, shape/rank/layout/storage/index, materialization/naming/source-span, parser, verifier, pass, backend, external-tool, signed literal/conversion/mixed-sign/width/shift, loop stage/bound/body/dependency/effect/profile, enum encoding/decode/exhaustiveness, FSM graph/transition/recursion/illegal-state, domain-binding, CDC, RDC, gate/mux, protocol/pipeline, memory/effect, analog/mixed-signal, and waiver diagnostics back to Scala locations, hierarchy/index paths, and stable codes.
 
 - [ ] **Increment 23 — Backend framework and capability profiles**
-  - Add translation registration, deterministic output handling, `verilog-a`/`verilog-ams` profiles, and explicit unsupported-feature errors.
+  - Add translation registration, deterministic output handling, profile-owned shaped-value layouts, expression materialization/naming and CheckProfile configuration, transactional target verification/reparse hooks, `verilog-a`/`verilog-ams` profiles, and explicit unsupported-feature errors.
 
 - [ ] **Increment 24 — Minimal analog expression and contribution IR**
   - Add real literals, parameter references, arithmetic, electrical potential access, analog region, and contribution sufficient for a minimal RC equation.
@@ -787,7 +826,7 @@ Empty future-library or plugin directories are not committed merely as placehold
   - Compile Scala RC through construction, Nodal MLIR, verification, and Verilog-A emission with exact golden output and failures.
 
 - [ ] **Increment 26 — Deterministic output and reproducibility contract**
-  - Prove byte-identical MLIR, HDL, domain manifests, and CDC/RDC reports across repeated builds and valid traversal orders.
+  - Prove byte-identical MLIR, HDL, shape/layout and storage manifests, materialization decisions/reasons, semantic names, expression source maps, check inventories/waivers, domain manifests, and CDC/RDC reports across repeated builds and valid traversal orders.
 
 ## Phase 2 — Analog language and Verilog-A profile
 
@@ -839,8 +878,8 @@ Empty future-library or plugin directories are not committed merely as placehold
 - [ ] **Increment 42 — Analog hierarchy and parameterized instances**
   - Implement instances, named ports, symbolic overrides, legal arrays, hierarchy verification, and recursion errors.
 
-- [ ] **Increment 43 — Arrays and elaboration-time generation**
-  - Implement fixed arrays, indexing/slices, Scala elaboration loops, target generate constructs, and static bounds.
+- [ ] **Increment 43 — Analog arrays, shaped values, and elaboration-time generation**
+  - Implement legal fixed/symbolic analog arrays under ADR 0017 shape/index rules, analog-object capability restrictions, indexing/slices, Scala elaboration loops, target generate constructs, static bounds, target layout checks, and explicit rejection of illegal analog flattening or memory inference.
 
 - [ ] **Increment 44 — Analysis state and environmental constructs**
   - Implement analysis-dependent behavior, temperature/environment access, initial/final semantics, and portability policy.
@@ -877,10 +916,10 @@ Empty future-library or plugin directories are not committed merely as placehold
 ## Phase 4 — Digital semantics, portable Verilog, open-source verification, mixed signal, and Verilog-AMS
 
 - [ ] **Increment 54 — Digital signed/unsigned type, literal, native enum ABI, and port layer**
-  - Add bit/logic, signless `Bits`, unsigned `UInt`, two's-complement `SInt`, exact signed/negative literals, signed parameters/localparams, signed aggregate fields and memory elements, numeric conversion versus bit reinterpretation, integers, reals, nets/variables, directions, four-state policy, native Scala enum derivation, semantic enum types/cases, canonical sequential/one-hot/Gray/custom encodings, safe decode, exhaustive selection, enum aggregates/protocols/parameters/memories, ABI hashes, and compatible CIRCT/Nodal lowering.
+  - Add bit/logic, signless `Bits`, unsigned `UInt`, two's-complement `SInt`, exact signed/negative literals, signed parameters/localparams, signed aggregate fields and memory elements, ranked parameterized `Vec` and nested shaped values, canonical row-major indexing/flattening and exact shape connections, structural storage versus `Mem`, numeric conversion versus bit reinterpretation, integers, reals, nets/variables, directions, four-state policy, native Scala enum derivation, semantic enum types/cases, canonical sequential/one-hot/Gray/custom encodings, safe decode, exhaustive selection, enum aggregates/protocols/parameters/memories, ABI hashes, and compatible CIRCT/Nodal lowering.
 
 - [ ] **Increment 55 — Digital expressions, bounded hardware iteration, and continuous assignments**
-  - Add arithmetic, logic, bitwise, comparisons, concatenation, extraction, conditionals, exact width/sign and mixed-sign rules, arithmetic/logical shifts, explicit signed casts/conversions, continuous assignment, typed hardware `map`/`zip`/`reduce`/`fold`/`scan`, and bounded hardware iteration with finite static/symbolic bounds, ordered effects, dependency/index/driver checks, and deterministic unrolled versus procedural-loop lowering candidates. Reject runtime trip counts, structural declarations, hidden multi-cycle behavior, and unbounded/data-dependent loops.
+  - Add typed expression DAGs with arithmetic, logic, bitwise, comparisons, concatenation, extraction, conditionals, multidimensional index/slice/flatten/reshape, exact width/sign/shape and mixed-sign rules, arithmetic/logical shifts, explicit signed casts/conversions, continuous assignment, typed hardware `map`/`zip`/`reduce`/`fold`/`scan`, safe single-use inlining, shared/observable/target-required materialization with reason codes, and bounded hardware iteration with finite static/symbolic bounds, ordered effects, dependency/index/driver checks, and deterministic unrolled versus procedural-loop lowering candidates. Reject runtime trip counts, structural declarations, hidden multi-cycle behavior, unbounded/data-dependent loops, accidental flat-carrier arithmetic, latches, and combinational cycles.
 
 - [ ] **Increment 56 — Implicit-domain registers, enum state, and flat FSM semantics**
   - Implement `Reg`, `RegNext`, reset/uninitialized state, enum registers, exhaustive switches, `when` priority, enables, manual FSMs, concise high-level flat FSMs, entry/active/exit/transition actions, exclusive/priority transitions, terminal/completion states, local compact/one-hot/Gray/custom/Auto encoding, illegal-state policies, graph diagnostics, memory-port ownership, and CIRCT/Nodal sequential lowering without exposing normal `always` syntax or hidden boot state.
@@ -889,7 +928,7 @@ Empty future-library or plugin directories are not committed merely as placehold
   - Implement domain construction/application, external/default/generated binding, relationship graphs, reset policies, async-assert/sync-release, timing provenance, all semantic CDC/RDC operations, gates/muxes, waivers, and restricted low-level processes.
 
 - [ ] **Increment 58 — Domain-aware hierarchy, reusable statecharts, and bounded recursive control**
-  - Implement default-domain inheritance, typed named-domain binding, inferred clock/reset ports, symbolic parameters, domain-polymorphic modules, structural `generate` regions with symbolic bounds/nested legal generation, deterministic index-aware hierarchy naming, and deterministic variants only for material edge/reset differences. Keep ordinary Scala loops elaboration-only and preserve native target generate instead of clone-per-value specialization.
+  - Implement default-domain inheritance, typed named-domain binding, inferred clock/reset ports, symbolic parameters, domain-polymorphic modules, parameterized shaped ports/instances, structural `generate` regions with symbolic bounds/nested legal generation, deterministic index-aware hierarchy and sink-affinity state naming, and deterministic variants only for material edge/reset differences. Keep ordinary Scala loops elaboration-only and preserve native target generate instead of clone-per-value specialization.
   - Implement immutable reusable `FsmDef`/fragment candidates, explicit runtime bindings, nested submachines, typed completion/cancellation, parallel join policies, timed/protocol-aware states, finite elaboration recursion, and explicit bounded call/return stack contracts with overflow/underflow, reset, domain, report, and proof metadata. Reject unbounded recursion and accidental dynamic capture.
 
 - [ ] **Increment 59 — Pipeline transaction graph, latency provenance, and IR contract**
@@ -914,17 +953,17 @@ Empty future-library or plugin directories are not committed merely as placehold
 
 - [ ] **Increment 65 — Digital-only classification, Backend.Auto, and portable Verilog backend**
   - Implement transitive digital-only/analog-only/mixed-signal classification, construct inventories, deterministic `Backend.Auto` selection, explicit capability rejection, and machine-readable selection evidence.
-  - Emit the portable synthesizable Verilog profile with exact signed vector ports/wires/registers/parameters/localparams/memories/aggregate fields, explicitly sized signed literals, typed shifts/casts, structural `genvar` generate loops, bounded procedural `for` loops or verified unrolled equivalents, symbolic parameters/generate, hierarchy, flattened aggregates/protocols, canonical enum vectors and member `localparam`s, enum configuration parameters, flat/hierarchical/parallel FSM state and completion logic, clocks/resets, memories, CDC/RDC, automatic pipelines, black boxes, assertions/formal hooks, signed/loop/enum/FSM manifests, source maps, deterministic formatting, and exact golden fixtures.
+  - Emit the portable synthesizable Verilog profile with exact signed vector ports/wires/registers/parameters/localparams/memories/aggregate fields, explicitly sized signed literals, typed shifts/casts, parameterized multidimensional `Vec` ports as canonical flat packed carriers, verified row-major offset/slice/reshape formulas, deterministic signed element views, structural `Vec` versus `Mem` evidence, structural `genvar` generate loops, bounded procedural `for` loops or verified unrolled equivalents, symbolic parameters/generate, hierarchy, flattened aggregates/protocols, canonical enum vectors and member `localparam`s, enum configuration parameters, flat/hierarchical/parallel FSM state and completion logic, clocks/resets, memories, CDC/RDC, automatic pipelines, black boxes, assertions/formal hooks, safe expression inlining and semantic temporary/state naming, materialization/shape/storage/signed/loop/enum/FSM manifests, expression-level source maps, deterministic formatting, target reparse, and exact golden fixtures.
   - Keep broad SystemVerilog optional and separately gated; portable Verilog remains required for open-source interoperability.
 
 - [ ] **Increment 66 — Open-source digital lint, simulation, waveforms, and cocotb interoperability**
-  - Pin and integrate Verilator and Icarus Verilog; run independent parse/elaboration, strong lint, fast compiled simulation, event-driven smoke simulation, normalized diagnostics, deterministic seeds, VCD/FST waveforms, and supported coverage.
+  - Pin and integrate Verilator and Icarus Verilog; run independent parse/elaboration, strong lint, fast compiled simulation, event-driven smoke simulation, normalized diagnostics, deterministic seeds, VCD/FST waveforms, supported coverage, multidimensional flat-layout/index/reshape fixtures, signed-element-view tests, no-avoidable-anonymous-wire goldens, and source-map correlation for inlined expressions.
   - Extend the Scala simulation API with typed signed/unsigned/bit-container and aggregate/protocol access, clock/reset-domain stimulus, multiple clocks, randomized reset release, `Valid`/`Stream` drivers/monitors/scoreboards, signed boundary/shift/comparison checks, procedural-versus-unrolled loop differential fixtures, stalls/bubbles, latency-aware checking, timeouts, caching, and artifacts.
   - Add optional cocotb metadata/runner support for Icarus and Verilator without making Python or cocotb define Nodal semantics.
 
 - [ ] **Increment 67 — Yosys synthesis/equivalence and core SBY formal-readiness infrastructure**
-  - Pin and integrate Yosys, SBY, and selected solvers. Run hierarchy/process/memory checks, target-neutral synthesis, inferred-latch/loop/black-box diagnostics, normalized netlist emission, statistics, and parameter elaboration matrices.
-  - Add RTL-to-optimized/netlist equivalence, including signed width/extension/cast/shift checks, generate/procedural/unrolled-loop equivalence and index-bound properties, latency-aware fixed-pipeline, and protocol-aware elastic checks.
+  - Pin and integrate Yosys, SBY, and selected solvers. Run hierarchy/process/memory/driver checks, target-neutral synthesis, inferred-latch/combinational-loop/black-box diagnostics, structural-`Vec` unexpected-memory-inference audit, normalized netlist emission, statistics, and parameter/shape/layout/generate elaboration matrices.
+  - Add RTL-to-optimized/netlist equivalence, including signed width/extension/cast/shift checks, multidimensional flatten/unpack/index/reshape and inline-versus-debug materialization equivalence, generate/procedural/unrolled-loop equivalence and index-bound properties, latency-aware fixed-pipeline, and protocol-aware elastic checks.
   - Add compiler-generated bounded/unbounded safety, cover, and selected liveness property suites for registers, resets, `Valid`/`Stream`, FIFOs, handshakes, synchronizers, CDC/RDC wrappers, and automatic pipelines. Retain traces and counterexamples as CI evidence.
   - Preserve stable property IDs, source maps, domain/reset/parameter metadata, normalized tasks, and adapter evidence in forms compatible with [ADR 0014](../architecture/0014-target-neutral-formal-verification.md). Generate core enum/FSM legality, one-hot, allowed-transition, reset-convergence, deadlock, completion, and bounded-stack checks. Use portable hooks or sidecar harnesses without freezing a user-authored formal API or binding Nodal semantics to SVA/SBY syntax.
 
@@ -938,10 +977,10 @@ Empty future-library or plugin directories are not committed merely as placehold
   - Implement declarations, rules, discipline insertion, direction/resolution analysis, hierarchy-wide application, and conflicts.
 
 - [ ] **Increment 71 — Mixed-domain, CDC/RDC, and scheduling verifier**
-  - Verify domain bindings, direct/combinational crossings, multi-bit misuse, pulses, reconvergence, reset release/reconvergence, generated clocks, gates/muxes, analog/digital legality, conversion loops, drivers, waivers, and profile restrictions.
+  - Verify domain bindings, direct/combinational crossings, multi-bit misuse, pulses, reconvergence, reset release/reconvergence, generated clocks, gates/muxes, analog/digital legality, conversion loops, aggregate/shaped driver paths, latches, combinational/ready loops, structural-storage intent, drivers, waivers, and profile restrictions.
 
 - [ ] **Increment 72 — Complete Verilog-AMS backend skeleton**
-  - Emit explicit inferred clock/reset ports; signed digital vectors/parameters/literals/casts; structural generate and bounded procedural/unrolled loops; canonical enum localparams/vectors; flat, nested, parallel, timed, and bounded-procedure FSM state/action/completion logic; event processes lowered from high-level state and automatic schedules; fixed/valid/elastic pipeline registers and control; synchronizers/FIFOs; reset logic; gates/muxes; analog/digital declarations; disciplines; connect constructs; hierarchy; parameters; signed/loop/enum/FSM/latency/schedule metadata; and source maps.
+  - Emit explicit inferred clock/reset ports; signed digital vectors/parameters/literals/casts; parameterized multidimensional digital values using the portable flat ABI and signed element views; structural generate and bounded procedural/unrolled loops; canonical enum localparams/vectors; flat, nested, parallel, timed, and bounded-procedure FSM state/action/completion logic; event processes lowered from high-level state and automatic schedules; fixed/valid/elastic pipeline registers and control; synchronizers/FIFOs; reset logic; gates/muxes; analog/digital declarations; disciplines; connect constructs; hierarchy; parameters; safe expression inlining and deterministic semantic state/temporary names; shape/layout/storage/materialization/check/signed/loop/enum/FSM/latency/schedule metadata; expression-level source maps; and mandatory target verification/reparse evidence.
 
 - [ ] **Increment 73 — ADC and DAC mixed-signal vertical slices**
   - Compile/check or simulate ADC/DAC models using implicit domains, typed mode/state enums, reusable hierarchical FSM control, automatically scheduled fixed and elastic digital datapaths, explicit sampling/drive, legal CDC, reset policies, parameter-envelope-safe scheduling, hierarchy, enum/FSM/pipeline/CDC/RDC reports, and deterministic parameterized Verilog-AMS.
@@ -986,18 +1025,18 @@ Empty future-library or plugin directories are not committed merely as placehold
 
 - [ ] **Increment 83 — Target-HDL optimization pass gate and SPI v0.1 contracts**
   - Use [ADR 0013](../architecture/0013-structured-hdl-optimization-pass-architecture.md), [`target-hdl-optimization-pass-v0.1-plan.md`](target-hdl-optimization-pass-v0.1-plan.md), and [`target-hdl-optimization-pass-v0.1-surface.json`](target-hdl-optimization-pass-v0.1-surface.json) as the mandatory architecture and candidate.
-  - Compile descriptors/manifests for target-neutral, digital, Verilog-A, Verilog-AMS, render-only, and reparse passes; stable pass IDs; target/profile/IR versions; extension points; ordering/conflicts; options; preservation/invalidation; proof classes; parameterization/source-map effects; profiles; native/process facets; and evidence artifacts.
+  - Compile descriptors/manifests for target-neutral, digital, Verilog-A, Verilog-AMS, render-only, and reparse passes; stable pass IDs; target/profile/IR versions; extension points; ordering/conflicts; options; preservation/invalidation; proof classes; parameterization, shaped-value/layout/storage, expression-materialization/naming/source-map, driver/latch/cycle/check-inventory effects; profiles; native/process facets; and evidence artifacts.
   - Publish `NodalTargetHdlOptimizationPass-DG-v0.1.md`, a machine-readable frozen pass SPI, pass/profile lockfile schemas, compatibility/trust policy, and positive/negative fixtures with stable diagnostics.
   - Prove installation changes no output, `Backend.Auto` remains independent, raw semantic text cannot bypass reparse/reverification, and frontend/backend/pass execution remains inert until later increments.
 
 - [ ] **Increment 84 — Structured target IR and deterministic optimization pass manager**
-  - Implement verified digital target IR using CIRCT where semantically appropriate plus Nodal-owned contracts, and typed Verilog-A/Verilog-AMS target IR preserving disciplines/nodes/branches/contributions/dimensions/continuous-time operators/events/noise/analyses/digital state/conversions/connect rules/capabilities/hierarchy/source maps.
+  - Implement verified digital target IR using CIRCT where semantically appropriate plus Nodal-owned shaped-value/layout/storage, expression-origin/materialization/naming, and mandatory-check contracts, and typed Verilog-A/Verilog-AMS target IR preserving disciplines/nodes/branches/contributions/dimensions/continuous-time operators/events/noise/analyses/digital state/conversions/connect rules/capabilities/hierarchy/source maps.
   - Implement deterministic locked pass resolution/execution, native/process loading through Increment 82, analysis invalidation/recomputation, mandatory target verification, transactional crash-safe acceptance, render-only and verified reparse boundaries, source-map updates, diagnostics, pass reports, cache/provenance integration, and pass/pipeline inspection commands.
   - Add out-of-tree target-pass fixtures and declaration-order/load-order permutation tests producing identical verified target IR, HDL, diagnostics, reports, and pipeline hashes.
 
 - [ ] **Increment 85 — Digital Verilog optimization plugins and equivalence/formal proof matrix**
   - Implement built-in/reference plugins for parameter-aware constant/dead-logic cleanup, mux/logic/process/memory/generate normalization, safe common-subexpression elimination, hierarchy/portability cleanup, pipeline-owned bounded retiming, explicit synthesis attributes/target mapping, and locked external Yosys pass pipelines.
-  - Preserve widths/signedness/overflow, numeric-conversion versus reinterpretation, signed literal/shift/comparison semantics, elaboration/generate/hardware-loop category, iteration/reduction order, index bounds, deterministic unroll/procedural choice, symbolic parameters/generate, one-module-per-structure, hierarchy, clocks/resets/CDC/RDC, protocol ordering, latency/throughput/capacity, user-owned state, memories/effects, source maps, and portable-Verilog capabilities unless an explicit separately named transformation contract permits a verified change.
+  - Preserve widths/signedness/overflow, numeric-conversion versus reinterpretation, signed literal/shift/comparison semantics, ranked shapes/dimensions/index/flatten/layout and structural-storage class, expression tree/materialization/naming/observability and source spans, elaboration/generate/hardware-loop category, iteration/reduction order, index bounds, deterministic unroll/procedural choice, symbolic parameters/generate, one-module-per-structure, hierarchy, clocks/resets/CDC/RDC, protocol ordering, latency/throughput/capacity, user-owned state, memories/effects, mandatory check results, source maps, and portable-Verilog capabilities unless an explicit separately named transformation contract permits a verified change.
   - Require Verilator/Icarus differential regression, Yosys combinational/sequential and latency/protocol-aware equivalence, parameter-envelope matrices, selected SBY properties, deterministic before/after reports, and exact golden/profile fixtures.
 
 - [ ] **Increment 86 — Verilog-A/Verilog-AMS optimization plugins and semantic validation**
@@ -1025,7 +1064,7 @@ Empty future-library or plugin directories are not committed merely as placehold
   - Define passive library module conventions, Maven coordinates, resources, independent versions, core ranges, conflicts, licenses, offline use, and external public-API-only fixtures. Keep executable companion plugins separately packaged and explicitly enabled.
 
 - [ ] **Increment 92 — Complete language, plugin SPI, and API documentation**
-  - Cover value staging; Scala elaboration, symbolic generate, and bounded hardware loops; signed/unsigned/signless declarations/literals/conversions/backend mapping; numeric/width/overflow; aggregates/connections/protocols; quantities/effects; domains/CDC/RDC/reset; automatic pipelines; portable Verilog/backend inference; open-source verification; mixed-signal boundaries; plugin manifests/capabilities/lifecycle/loaders/adapters/trust/lockfiles; diagnostics; libraries; and migration.
+  - Cover value staging; Scala elaboration, symbolic generate, and bounded hardware loops; signed/unsigned/signless declarations/literals/conversions/backend mapping; parameterized multidimensional `Vec`, shape/index/flatten/reshape, layout and `Vec`/`Mem`; expression inlining/materialization/naming/source maps; mandatory check profiles/inventory/waivers/transactional emission; numeric/width/overflow; aggregates/connections/protocols; quantities/effects; domains/CDC/RDC/reset; automatic pipelines; portable Verilog/backend inference; open-source verification; mixed-signal boundaries; plugin manifests/capabilities/lifecycle/loaders/adapters/trust/lockfiles; diagnostics; libraries; and migration.
 
 - [ ] **Increment 93 — Tutorials, plugin-author guides, and cross-project reuse examples**
   - Add progressive analog/AMS/domain tutorials, patterns/anti-patterns, standalone external consumers, and out-of-tree design/compiler/backend/tool plugin author tutorials with conformance commands.
@@ -1037,16 +1076,16 @@ Empty future-library or plugin directories are not committed merely as placehold
   - Add release automation, checksums/signatures where possible, dependency/plugin SBOM, plugin lockfile and graph provenance, toolchain/pass/adapter evidence, license inventory, and rebuild verification.
 
 - [ ] **Increment 96 — Performance and scalability benchmarks**
-  - Benchmark construction, MLIR, semantic analyses, automatic pipelines, domains/CDC/RDC, portable Verilog, open-source verification, plugin manifest resolution, capability graphs, design-host contributions, native/process plugin overhead, cache behavior, pass time, memory, hierarchy, and regression launch.
+  - Benchmark construction, ranked shape algebra and parameter matrices, expression inlining/materialization and source-map size, naming stability, mandatory check phases/path reconstruction, MLIR, semantic analyses, automatic pipelines, domains/CDC/RDC, portable Verilog, open-source verification, plugin manifest resolution, capability graphs, design-host contributions, native/process plugin overhead, cache behavior, pass time, memory, hierarchy, and regression launch.
 
 - [ ] **Increment 97 — Public API and plugin SPI v1 review**
-  - Review v0.1/v0.2/v0.3 APIs and plugin SPI implementation experience, including capability identity/cardinality, phase contexts, native/process compatibility, trust, determinism, plugin/library boundaries, implicit domains, pipelines, backend inference, and low-level escape. Approve only justified changes and define semantic versioning/deprecation/source/SPI compatibility.
+  - Review v0.1/v0.2/v0.3 APIs and plugin SPI implementation experience, including shaped values/layout/storage, expression materialization/naming/source maps, check profiles/inventory/waivers, capability identity/cardinality, phase contexts, native/process compatibility, trust, determinism, plugin/library boundaries, implicit domains, pipelines, backend inference, and low-level escape. Approve only justified changes and define semantic versioning/deprecation/source/SPI compatibility.
 
 - [ ] **Increment 98 — Nodal core preview release**
-  - Publish the supported preview with frozen public API and plugin SPI revisions, toolchain pins, portable Verilog/Verilog-A/Verilog-AMS matrices, open-source verification evidence, plugin conformance kit, installation, examples, known limitations, library/plugin-author contracts, and reproducible provenance.
+  - Publish the supported preview with frozen public API and plugin SPI revisions, toolchain pins, shaped-value/layout and naming/materialization manifests, machine-readable mandatory-check coverage/waiver inventory, portable Verilog/Verilog-A/Verilog-AMS matrices, open-source verification evidence, plugin conformance kit, installation, examples, known limitations, library/plugin-author contracts, and reproducible provenance.
 
 - [ ] **Increment 99 — Future SystemVerilog/SystemVerilog-AMS backend research gate**
-  - Reassess the current standards and tool support; map IR/plugin/backend coverage; evaluate exact `logic signed`/signed parameter/localparam/packed-field/array/memory/function/loop-variable lowering and parity with portable Verilog, native `typedef enum logic` emission, design-level enum packages/compile-order manifests, enum-typed ports/parameters/aggregates/memories, structural generate and procedural-loop lowering, statechart lowering, and compatibility with portable-Verilog numeric mappings; identify required changes; and approve or reject implementation through a separate gate without speculating syntax into the stable API.
+  - Reassess the current standards and tool support; map IR/plugin/backend coverage; evaluate exact `logic signed`/signed parameter/localparam/packed-field/array/memory/function/loop-variable lowering and parity with portable Verilog; default unpacked multidimensional array ports of packed elements, optional multidimensional packed layouts, parameterized dimensions, tool/profile compatibility, wrapper/ABI manifests, and signed-element parity with flat portable carriers; native `typedef enum logic` emission, design-level enum packages/compile-order manifests, enum-typed ports/parameters/aggregates/memories; structural generate and procedural-loop lowering; statechart lowering; and compatibility with portable-Verilog numeric mappings; identify required changes; and approve or reject implementation through a separate gate without speculating syntax into the stable API.
 
 ## Phase 6 — FPGA-accelerated AMS approximation and hardware validation
 
@@ -1159,6 +1198,10 @@ When an increment is completed:
 - SpinalHDL pipeline library: <https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Libraries/Pipeline/index.html>
 - CIRCT pipeline dialect: <https://circt.llvm.org/docs/Dialects/Pipeline/>
 - CIRCT ESI channel buffers: <https://circt.llvm.org/docs/Dialects/ESI/>
+- Accellera SystemVerilog arrays and ports: <https://www.accellera.org/images/eda/vlog-pp/0438.html>
+- Yosys arrays and memories: <https://yosyshq.readthedocs.io/projects/yosys/en/stable/CHAPTER_Basics.html>
+- SpinalHDL design errors: <https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Design%20errors/index.html>
+- CIRCT passes and combinational-cycle checks: <https://circt.llvm.org/docs/Passes/>
 - SpinalHDL formal verification: <https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Formal%20verification/index.html>
 - CIRCT Verif dialect: <https://circt.llvm.org/docs/Dialects/Verif/>
 - CIRCT LTL dialect: <https://circt.llvm.org/docs/Dialects/LTL/>

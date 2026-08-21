@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.10",
+  "roadmap_revision": "1.11",
   "roadmap_last_increment": 113,
   "architecture": "narrowest-compatible-backend-open-source-generated-hdl-verification",
   "documents": {
@@ -129,5 +129,20 @@
       "procedural versus unrolled equivalence",
       "index bounds and no out-of-range access"
     ]
+  },
+  "shaped_values_naming_quality": {
+    "portable_verilog_multidimensional_port": "flat packed carrier",
+    "future_systemverilog_default": "unpacked multidimensional port",
+    "future_systemverilog_optional": "packed multidimensional layout",
+    "signed_flat_elements": "signed element views",
+    "unexpected_Vec_memory_inference_audited": true,
+    "temporary_default": "InlineSafe",
+    "traversal_counter_names_normal": false,
+    "check_profiles": [
+      "Fast",
+      "Default",
+      "Release"
+    ],
+    "mandatory_safety_checks_disableable": false
   }
 }

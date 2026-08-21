@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.10",
+  "roadmap_revision": "1.11",
   "formal_freeze_increment": 15,
   "architecture": "signedness-is-type-loop-kind-is-staging",
   "documents": {
@@ -148,5 +148,12 @@
     "external-library consumer",
     "stable diagnostics and source maps",
     "green CI"
-  ]
+  ],
+  "multidimensional_signed_elements": {
+    "semantic_element_type": "SInt",
+    "portable_flat_carrier": "signless",
+    "portable_element_access": "signed element view",
+    "future_systemverilog_element": "packed signed element in unpacked dimensions",
+    "whole_flat_carrier_is_one_signed_integer": false
+  }
 }

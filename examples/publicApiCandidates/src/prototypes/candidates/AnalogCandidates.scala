@@ -19,8 +19,8 @@ final class Capacitor(defaultCapacitance: Expr[Real] = 1.0.pF) extends Module:
     I(p, n) <+ capacitance * ddt(V(p, n))
 
 final class RcFilter extends Module:
-  val input = inout(Electrical)
-  val output = inout(Electrical)
+  val source = inout(Electrical)
+  val sink = inout(Electrical)
   val common = inout(Electrical)
   val resistance = param(1.0.kOhm)
   val capacitance = param(10.0.pF)
@@ -28,9 +28,9 @@ final class RcFilter extends Module:
   private val resistor = instance(new Resistor()).param(_.resistance, resistance)
   private val capacitor = instance(new Capacitor()).param(_.capacitance, capacitance)
 
-  connect(input, resistor(_.p))
-  connect(resistor(_.n), output)
-  connect(output, capacitor(_.p))
+  connect(source, resistor(_.p))
+  connect(resistor(_.n), sink)
+  connect(sink, capacitor(_.p))
   connect(capacitor(_.n), common)
 
 final class Comparator extends Module:
@@ -44,7 +44,7 @@ final class Comparator extends Module:
       result := V(positive, negative) > offset
 
 final class AnalogEventSampler extends Module:
-  val input = input(Electrical)
+  val analogInput = input(Electrical)
   val common = input(Electrical)
   val crossed = output(Bool)
   val threshold = param(0.5.V)
@@ -55,7 +55,7 @@ final class AnalogEventSampler extends Module:
     crossed := false.B
 
   analog:
-    on(cross(V(input, common) - threshold, Edge.Rising)):
+    on(cross(V(analogInput, common) - threshold, Edge.Rising)):
       crossed := true.B
     on(timer(0.0.ns, samplePeriod)):
-      sampled := V(input, common)
+      sampled := V(analogInput, common)

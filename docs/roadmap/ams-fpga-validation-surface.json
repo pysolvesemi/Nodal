@@ -1,13 +1,14 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.6",
-  "formal_gate_increment": 96,
+  "roadmap_revision": "1.7",
+  "formal_gate_increment": 100,
   "architecture": "reference-ams-explicit-approximation-bounded-evidence-synthesizable-realization",
   "documents": {
     "architecture_adr": "docs/architecture/0011-ams-fpga-approximation-validation.md",
     "implementation_plan": "docs/roadmap/ams-fpga-validation-plan.md",
-    "main_roadmap": "docs/roadmap/nodal-development-todo.md"
+    "main_roadmap": "docs/roadmap/nodal-development-todo.md",
+    "target_hdl_pass_plan": "docs/roadmap/target-hdl-optimization-pass-v0.1-plan.md"
   },
   "selection": {
     "explicit_opt_in_required": true,
@@ -146,15 +147,15 @@
     ]
   },
   "increments": {
-    "96": "capability gate and API contracts",
-    "97": "analog normalization and sampled state IR",
-    "98": "solver and recurrence generation",
-    "99": "range fixed point quantization and error analysis",
-    "100": "multi rate event and real time scheduling",
-    "101": "synthesizable FPGA approximation backend",
-    "102": "differential equivalence and formal validation ladder",
-    "103": "open source FPGA implementation and target evidence",
-    "104": "hardware in the loop vertical slices and capability matrix"
+    "100": "capability gate and API contracts",
+    "101": "analog normalization and sampled state IR",
+    "102": "solver and recurrence generation",
+    "103": "range fixed point quantization and error analysis",
+    "104": "multi rate event and real time scheduling",
+    "105": "synthesizable FPGA approximation backend",
+    "106": "differential equivalence and formal validation ladder",
+    "107": "open source FPGA implementation and target evidence",
+    "108": "hardware in the loop vertical slices and capability matrix"
   },
   "required_evidence": [
     "explicit approximation request",
@@ -187,5 +188,11 @@
       "HIL transport"
     ],
     "architecture": "docs/architecture/0012-versioned-capability-plugin-architecture.md"
+  },
+  "optimization_pass_boundary": {
+    "reference_ams_uses_structured_pass_spi": true,
+    "generated_digital_approximation_uses_structured_pass_spi": true,
+    "optimization_may_introduce_approximation": false,
+    "optimization_may_change_claims_silently": false
   }
 }

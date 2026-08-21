@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.6
+**Revision:** 1.7
 **Created:** 2026-08-20
 **Updated:** 2026-08-21
 **Status:** Active roadmap
@@ -47,6 +47,10 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Wrap MLIR pass/dialect plugin mechanisms with Nodal SPI, IR, toolchain-build, namespace, analysis-preservation, and mandatory re-verification contracts.
 - Run simulator, synthesis, formal, FPGA, programmer, board, and HIL adapters through a versioned out-of-process plugin protocol with normalized artifacts and retained provenance.
 - Make plugin graph, artifact, option, phase, pass, process-protocol, trust, and toolchain hashes part of deterministic build manifests and cache keys.
+- Support plug-and-play Verilog, Verilog-A, and Verilog-AMS optimization through structured target-IR passes layered on the plugin SPI; arbitrary semantic raw-text filters are not an optimization contract.
+- Require every target-HDL pass to declare target/profile/IR compatibility, semantic preservation and analysis invalidation, parameter/hierarchy/source-map effects, determinism, and proof/validation obligations.
+- Keep backend selection separate from optimization profile selection. Installing a pass never executes it, changes `Backend.Auto`, or alters generated hardware without an explicit locked pipeline.
+- Preserve symbolic parameters, one-module-per-structure, clock/reset and CDC/RDC, protocols/latency, physical dimensions, contributions/events/noise/connect rules, and source provenance through target optimization unless an explicit separately verified transformation contract says otherwise.
 
 ## Public API direction
 
@@ -64,6 +68,9 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Keep plugin identity independent of Scala implementation classes. Consumers depend on stable capability IDs and interfaces, never `host[ConcretePlugin]` or implicit first-provider selection.
 - Require explicit project plugin configuration, compatibility resolution, lockfiles, checksums/trust policy, and offline locked mode; do not scan arbitrary classpaths or directories for executable extensions.
 - Plugins may add namespaced, approved extensions but cannot override core language semantics, safety verifiers, width/unit/domain rules, or silently participate in `Backend.Auto`.
+- Add a separately versioned target-HDL optimization-pass SPI with stable pass IDs, explicit extension points/profiles, normalized options, locked deterministic ordering, structured digital/analog/AMS IR, and proof-carrying evidence.
+- Provide explicit optimization profiles such as none/canonical/portable/simulation/synthesis/formal/FPGA/custom while keeping the exact profile and pass graph visible in `EmitOptions`, project configuration, lockfiles, manifests, reports, and cache keys.
+- Semantic post-render transforms must reparse into the approved target representation, restore source/capability metadata, run mandatory verification, and satisfy the pass proof obligation; render-only plugins may change formatting but not parsed meaning.
 - Keep Scala/native in-process plugins trusted and explicitly enabled; prefer process isolation for external tools and long-lived transform/backend integrations.
 - Use compile-positive and compile-negative fixtures to freeze public names, types, construction forms, imports, and diagnostics.
 - Keep ordinary model source backend-neutral and exclude frontend/compiler internals from the future library-author subset.
@@ -452,6 +459,34 @@ Exact syntax is deferred to Increment 79. Binding rules are:
 The plugin SPI gate freezes manifest and lockfile schemas, capability cardinality, local design-host behavior, native/process compatibility, diagnostics, trust classes, and extension boundaries before implementation.
 
 
+## Target-HDL optimization-pass architecture
+
+The binding architecture is [ADR 0013](../architecture/0013-structured-hdl-optimization-pass-architecture.md). The complete pass descriptor, extension-point, structured-IR, preservation, proof, profile, diagnostics, and conformance plan is in [`target-hdl-optimization-pass-v0.1-plan.md`](target-hdl-optimization-pass-v0.1-plan.md), with a machine-readable candidate in [`target-hdl-optimization-pass-v0.1-surface.json`](target-hdl-optimization-pass-v0.1-surface.json).
+
+Nodal adopts:
+
+> **Optimize structured target IR, declare semantic effects, reverify every boundary, and retain proof evidence.**
+
+The target-pass layer is separate from backend selection and builds on the general plugin SPI. Pass kinds are target-neutral Nodal IR, digital target IR, Verilog-A target IR, Verilog-AMS target IR, render-only, and verified reparse passes.
+
+Binding rules are:
+
+- installed passes never execute automatically and never silently join an optimization profile;
+- pass identity is a stable ID/version, not an implementation class name;
+- pass order comes from locked extension points, dependencies, before/after constraints, conflicts, and deterministic resolution—not discovery or shared-library order;
+- digital target IR selectively reuses CIRCT `hw`/`comb`/`seq`/`sv` plus Nodal-owned contracts;
+- Verilog-A/Verilog-AMS target IR remains typed and preserves natures, disciplines, nodes, branches, access functions, dimensions, parameters, contributions, continuous-time operators, events/tolerances, noise/analysis identity, digital state, conversions, connect rules, capabilities, hierarchy, and source maps;
+- raw semantic text rewriting is rejected unless output is reparsed, reverified, remapped, and proven under the same contract as a structured pass;
+- every pass declares required/preserved/invalidated analyses and effects on types/widths, signedness/overflow, parameters/generate, hierarchy/ports, domains/CDC/RDC, protocols/latency, memories/effects, dimensions, contributions/events/noise/connect rules, mixed-signal provenance, source maps, and backend capabilities;
+- ordinary profiles preserve symbolic parameters and one module per structural implementation; specialization is explicit, receives distinct identity, and requires case-specific equivalence;
+- digital optimization uses Yosys equivalence, parameter matrices, latency/protocol-aware checks, SBY, and Verilator/Icarus regression as required;
+- analog/AMS optimization uses typed equation/contribution/event/noise/connect-rule invariants plus required DC/AC/transient/noise/event differential validation and explicit rejection when no sound method exists;
+- `Backend.Auto` selects only a backend; a separately explicit optimization profile selects a versioned pass pipeline;
+- pass pipeline, options, IR versions, before/after hashes, source-map changes, analysis invalidation, proof evidence, tool versions/commands, and deterministic pipeline hash participate in manifests, provenance, release evidence, and caches.
+
+Candidate profiles are none, canonical, portable, simulation, synthesis, formal, FPGA, and custom. Exact names, configuration APIs, descriptors, extension points, diagnostics, and lockfile fields are frozen by Increment 83 before execution is implemented.
+
+
 ## Core, plugin, and future library boundary
 
 ```text
@@ -516,7 +551,7 @@ Empty future-library or plugin directories are not committed merely as placehold
 - **M1 — First vertical slice:** Scala RC model lowers through MLIR and emits validated Verilog-A.
 - **M2 — Analog preview:** useful Verilog-A subset with open-source compilation and simulation regression.
 - **M3 — Digital/AMS preview:** implicit-domain digital state, automatic fixed/valid/elastic pipelines, portable Verilog with open-source simulation/synthesis/formal verification, CDC/RDC-safe clock/reset architecture, mixed-signal crossings, and Verilog-AMS emission.
-- **M4 — Scalable core release:** packaged compiler, complete reference, frozen plugin SPI, deterministic extension graph, conformance kit, library-author contract, and compatibility policy.
+- **M4 — Scalable core release:** packaged compiler, complete reference, frozen plugin and target-HDL pass SPIs, deterministic extension/pass graphs, optimization proof evidence, conformance kits, library-author contract, and compatibility policy.
 - **M5 — FPGA-accelerated AMS validation:** explicit sampled/fixed-point approximation, four-level reference evidence, open FPGA implementation, HIL runtime, and a published capability/limitations matrix.
 
 # Incremental roadmap
@@ -805,7 +840,7 @@ Empty future-library or plugin directories are not committed merely as placehold
 - [ ] **Increment 78 — Verilog-AMS conformance suite**
   - Build standards-oriented positive/negative tests, practical round trips, feature coverage, and simulator-result classification.
 
-## Phase 5 — Plugins, extensibility, scale, documentation, and release
+## Phase 5 — Plugins, target-HDL optimization, extensibility, scale, documentation, and release
 
 - [ ] **Increment 79 — Plugin architecture gate and SPI v0.1 contracts**
   - Use [ADR 0012](../architecture/0012-versioned-capability-plugin-architecture.md), [`plugin-spi-v0.1-plan.md`](plugin-spi-v0.1-plan.md), and [`plugin-spi-v0.1-surface.json`](plugin-spi-v0.1-surface.json) as the mandatory architecture and candidate.
@@ -828,85 +863,106 @@ Empty future-library or plugin directories are not committed merely as placehold
   - Add out-of-process transform protocol for isolated/longer-lived extensions, with versioned IR exchange, diagnostics, output hashes, cancellation, timeout, crash, and malformed-response handling.
   - Provide out-of-tree pass, analysis, dialect, verifier, and transform fixtures using no private core APIs.
 
-- [ ] **Increment 83 — Backend and external tool-adapter plugins**
+- [ ] **Increment 83 — Target-HDL optimization pass gate and SPI v0.1 contracts**
+  - Use [ADR 0013](../architecture/0013-structured-hdl-optimization-pass-architecture.md), [`target-hdl-optimization-pass-v0.1-plan.md`](target-hdl-optimization-pass-v0.1-plan.md), and [`target-hdl-optimization-pass-v0.1-surface.json`](target-hdl-optimization-pass-v0.1-surface.json) as the mandatory architecture and candidate.
+  - Compile descriptors/manifests for target-neutral, digital, Verilog-A, Verilog-AMS, render-only, and reparse passes; stable pass IDs; target/profile/IR versions; extension points; ordering/conflicts; options; preservation/invalidation; proof classes; parameterization/source-map effects; profiles; native/process facets; and evidence artifacts.
+  - Publish `NodalTargetHdlOptimizationPass-DG-v0.1.md`, a machine-readable frozen pass SPI, pass/profile lockfile schemas, compatibility/trust policy, and positive/negative fixtures with stable diagnostics.
+  - Prove installation changes no output, `Backend.Auto` remains independent, raw semantic text cannot bypass reparse/reverification, and frontend/backend/pass execution remains inert until later increments.
+
+- [ ] **Increment 84 — Structured target IR and deterministic optimization pass manager**
+  - Implement verified digital target IR using CIRCT where semantically appropriate plus Nodal-owned contracts, and typed Verilog-A/Verilog-AMS target IR preserving disciplines/nodes/branches/contributions/dimensions/continuous-time operators/events/noise/analyses/digital state/conversions/connect rules/capabilities/hierarchy/source maps.
+  - Implement deterministic locked pass resolution/execution, native/process loading through Increment 82, analysis invalidation/recomputation, mandatory target verification, transactional crash-safe acceptance, render-only and verified reparse boundaries, source-map updates, diagnostics, pass reports, cache/provenance integration, and pass/pipeline inspection commands.
+  - Add out-of-tree target-pass fixtures and declaration-order/load-order permutation tests producing identical verified target IR, HDL, diagnostics, reports, and pipeline hashes.
+
+- [ ] **Increment 85 — Digital Verilog optimization plugins and equivalence/formal proof matrix**
+  - Implement built-in/reference plugins for parameter-aware constant/dead-logic cleanup, mux/logic/process/memory/generate normalization, safe common-subexpression elimination, hierarchy/portability cleanup, pipeline-owned bounded retiming, explicit synthesis attributes/target mapping, and locked external Yosys pass pipelines.
+  - Preserve widths/signedness/overflow, symbolic parameters/generate, one-module-per-structure, hierarchy, clocks/resets/CDC/RDC, protocol ordering, latency/throughput/capacity, user-owned state, memories/effects, source maps, and portable-Verilog capabilities unless an explicit separately named transformation contract permits a verified change.
+  - Require Verilator/Icarus differential regression, Yosys combinational/sequential and latency/protocol-aware equivalence, parameter-envelope matrices, selected SBY properties, deterministic before/after reports, and exact golden/profile fixtures.
+
+- [ ] **Increment 86 — Verilog-A/Verilog-AMS optimization plugins and semantic validation**
+  - Implement built-in/reference plugins for dimension-safe constant/parameter folding, dead declaration removal, branch/access/contribution canonicalization, approved algebraic identities with domain/singularity checks, event-condition simplification preserving direction/tolerance, connect-rule/discipline portability rewriting, and deterministic render normalization.
+  - Prohibit unapproved contribution deletion/reordering, equation reassociation across discontinuities/singularities, movement of continuous-time/delay/Laplace/Z operators, changes to event timing/tolerance/initialization/noise/analysis identity, silent approximation, mixed-signal scheduling changes, and raw semantic text substitution.
+  - Require typed target-IR invariants and normalized equivalence for approved rewrites plus relevant DC/AC/transient/noise/event differential suites, cross-tool portability evidence, source-map/provenance checks, deterministic golden fixtures, and explicit rejection where no sound validation method exists.
+
+- [ ] **Increment 87 — Backend and external tool-adapter plugins**
   - Implement explicit third-party backend registration, capability profiles, options/artifact/source-map contracts, deterministic selection, and rejection before translation. Keep plugin backends out of `Backend.Auto` by default.
   - Implement one versioned out-of-process adapter/evidence protocol for simulators, synthesis, formal, FPGA place/route, bitstreams, programmers, boards, HIL, waveforms, and reporters.
   - Migrate built-in external adapters to the common protocol while preserving licensing-safe CI and the rule that external tools never define language semantics.
 
-- [ ] **Increment 84 — Plugin packaging, trust, provenance, caching, and conformance**
+- [ ] **Increment 88 — Plugin packaging, trust, provenance, caching, and conformance**
   - Define coordinated Scala/Maven, native-platform, process-executable, schema/support-file, checksum/signature, license, SBOM, and provenance packaging with explicit trusted-Scala/trusted-native/process-isolated policies.
   - Integrate plugin graphs, artifacts, options, pass order, external commands, and outputs into incremental caching, release provenance, reproducibility, and offline resolution.
   - Publish a plugin conformance kit plus out-of-tree design, frontend-lint, MLIR pass/dialect, backend, and tool-adapter reference plugins. Prove compatibility failures, crash isolation, load-order determinism, and no hidden core dependency.
 
-- [ ] **Increment 85 — Versioned IR and bridge compatibility**
+- [ ] **Increment 89 — Versioned IR and bridge compatibility**
   - Add Nodal dialect/bridge/plugin-plan version metadata, supported upgrades, old-version fixtures, plugin extension-point compatibility, and explicit unknown-future-version rejection.
 
-- [ ] **Increment 86 — Incremental build and compiler caching**
+- [ ] **Increment 90 — Incremental build and compiler caching**
   - Cache construction, normalized MLIR, plugin resolution/transforms, native compilation, reports, and backend/tool outputs by content/toolchain/profile/plugin-plan hashes with proven invalidation.
 
-- [ ] **Increment 87 — Future library architecture and publication contract**
+- [ ] **Increment 91 — Future library architecture and publication contract**
   - Define passive library module conventions, Maven coordinates, resources, independent versions, core ranges, conflicts, licenses, offline use, and external public-API-only fixtures. Keep executable companion plugins separately packaged and explicitly enabled.
 
-- [ ] **Increment 88 — Complete language, plugin SPI, and API documentation**
+- [ ] **Increment 92 — Complete language, plugin SPI, and API documentation**
   - Cover value staging and generate, numeric/width/overflow, aggregates/connections/protocols, quantities/effects, domains/CDC/RDC/reset, automatic pipelines, portable Verilog/backend inference, open-source verification, mixed-signal boundaries, plugin manifests/capabilities/lifecycle/loaders/adapters/trust/lockfiles, diagnostics, libraries, and migration.
 
-- [ ] **Increment 89 — Tutorials, plugin-author guides, and cross-project reuse examples**
+- [ ] **Increment 93 — Tutorials, plugin-author guides, and cross-project reuse examples**
   - Add progressive analog/AMS/domain tutorials, patterns/anti-patterns, standalone external consumers, and out-of-tree design/compiler/backend/tool plugin author tutorials with conformance commands.
 
-- [ ] **Increment 90 — Cross-platform core and plugin packaging**
+- [ ] **Increment 94 — Cross-platform core and plugin packaging**
   - Produce checksummed core Scala/native bundles for supported Linux/macOS first, Windows strategy and source fallback, plus plugin bundle/platform conventions and stable hooks for independently published libraries/plugins.
 
-- [ ] **Increment 91 — Reproducible release, provenance, plugin lockfiles, and SBOM**
+- [ ] **Increment 95 — Reproducible release, provenance, plugin lockfiles, and SBOM**
   - Add release automation, checksums/signatures where possible, dependency/plugin SBOM, plugin lockfile and graph provenance, toolchain/pass/adapter evidence, license inventory, and rebuild verification.
 
-- [ ] **Increment 92 — Performance and scalability benchmarks**
+- [ ] **Increment 96 — Performance and scalability benchmarks**
   - Benchmark construction, MLIR, semantic analyses, automatic pipelines, domains/CDC/RDC, portable Verilog, open-source verification, plugin manifest resolution, capability graphs, design-host contributions, native/process plugin overhead, cache behavior, pass time, memory, hierarchy, and regression launch.
 
-- [ ] **Increment 93 — Public API and plugin SPI v1 review**
+- [ ] **Increment 97 — Public API and plugin SPI v1 review**
   - Review v0.1/v0.2/v0.3 APIs and plugin SPI implementation experience, including capability identity/cardinality, phase contexts, native/process compatibility, trust, determinism, plugin/library boundaries, implicit domains, pipelines, backend inference, and low-level escape. Approve only justified changes and define semantic versioning/deprecation/source/SPI compatibility.
 
-- [ ] **Increment 94 — Nodal core preview release**
+- [ ] **Increment 98 — Nodal core preview release**
   - Publish the supported preview with frozen public API and plugin SPI revisions, toolchain pins, portable Verilog/Verilog-A/Verilog-AMS matrices, open-source verification evidence, plugin conformance kit, installation, examples, known limitations, library/plugin-author contracts, and reproducible provenance.
 
-- [ ] **Increment 95 — Future SystemVerilog-AMS backend research gate**
+- [ ] **Increment 99 — Future SystemVerilog-AMS backend research gate**
   - Reassess the current standard, map IR/plugin/backend coverage, identify required changes, and approve or reject implementation through a separate gate without speculating syntax into the stable API.
 
 ## Phase 6 — FPGA-accelerated AMS approximation and hardware validation
 
-- [ ] **Increment 96 — AMS-to-FPGA approximation capability gate and API contracts**
+- [ ] **Increment 100 — AMS-to-FPGA approximation capability gate and API contracts**
   - Use [ADR 0011](../architecture/0011-ams-fpga-approximation-validation.md), [`ams-fpga-validation-plan.md`](ams-fpga-validation-plan.md), and [`ams-fpga-validation-surface.json`](ams-fpga-validation-surface.json) as the mandatory architecture and candidate.
   - Compile candidate approximation, solver, sample/rate, numeric, range, error-budget, validation-envelope, target, and HIL contracts. Prove `Backend.Auto` never selects approximation and that unsupported AMS constructs fail with stable source-located diagnostics.
   - Publish `NodalAmsFpgaApproximation-DG-v0.4.md`, compatibility/migration rules, a machine-readable frozen surface, external-library fixtures, claims language, and complete positive/negative contracts before implementation.
 
-- [ ] **Increment 97 — Analog normalization and sampled-state IR**
+- [ ] **Increment 101 — Analog normalization and sampled-state IR**
   - Normalize supported linear state-space, transfer-function, and explicit-ODE models into target-neutral state/update IR with dimensions, parameters, inputs/outputs, algebraic dependencies, events, initial conditions, and authoritative reference links.
   - Diagnose unresolved DAEs/algebraic loops, hidden state, unsupported nonlinearities, unsupported analyses, and constructs that cannot form a deterministic sampled recurrence.
 
-- [ ] **Increment 98 — Solver and discrete-time recurrence generation**
+- [ ] **Increment 102 — Solver and discrete-time recurrence generation**
   - Implement the approved forward/backward Euler, trapezoidal/Tustin, exact-ZOH, and custom-solver contracts only for supported model classes.
   - Generate deterministic coefficients and recurrence IR, high-precision software references, initialization/reset behavior, stability/conditioning evidence, bounded iteration/convergence rules, latency/resource models, and failure diagnostics.
 
-- [ ] **Increment 99 — Range, fixed-point, quantization, and error-budget analysis**
+- [ ] **Increment 103 — Range, fixed-point, quantization, and error-budget analysis**
   - Add physical scaling, range assertions/inference, explicit/automatic fixed-point formats, guard bits, rounding, overflow, coefficient quantization, state/intermediate formats, and accumulated error accounting.
   - Generate bit-accurate references and Level B evidence; reject unbounded state, uncovered ranges, impossible error/resource policies, or implicit numeric choices.
 
-- [ ] **Increment 100 — Multi-rate, sampled-event, and real-time scheduling**
+- [ ] **Increment 104 — Multi-rate, sampled-event, and real-time scheduling**
   - Implement rational multi-rate partitions, sample/hold, interpolation, decimation, sampled/interpolated event detection, buffering, timestamps, update ordering, and rate/clock bridges.
   - Integrate `ClockDomain`, reset, CDC/RDC, `Valid`/`Stream`, memories, and automatic pipelines. Prove each sample deadline and diagnose infeasible real-time schedules.
 
-- [ ] **Increment 101 — Synthesizable FPGA approximation backend**
+- [ ] **Increment 105 — Synthesizable FPGA approximation backend**
   - Lower the discrete fixed-point model into ordinary Nodal digital IR and reuse symbolic parameters, hierarchy, memories, clock/reset, protocols, automatic pipelines, CDC/RDC, and `Backend.Verilog`.
   - Emit deterministic portable Verilog, source maps, recurrence/numeric/rate/schedule manifests, capability limitations, simulation/formal hooks, and exact golden fixtures.
 
-- [ ] **Increment 102 — Differential, equivalence, and formal validation ladder**
+- [ ] **Increment 106 — Differential, equivalence, and formal validation ladder**
   - Implement Level A AMS-reference versus high-precision-discrete comparison and Level B high-precision versus fixed-point comparison using declared waveform/state/event/frequency metrics and envelopes.
   - Implement Level C Verilator/Icarus regression, Yosys equivalence, and SBY properties for recurrence, reset, protocols, multi-rate scheduling, range/overflow, latency, and deadlines. Preserve failures and counterexamples by error class.
 
-- [ ] **Increment 103 — Open-source FPGA implementation and target evidence**
+- [ ] **Increment 107 — Open-source FPGA implementation and target evidence**
   - Select and pin at least one complete open FPGA target using Yosys, nextpnr, constraints, an open bitstream packer/programmer, deterministic seeds, and reproducible board metadata.
   - Run synthesis, placement, routing, timing, bitstream generation, utilization, DSP/memory accounting, and post-route sample-deadline checks. Add optional vendor adapters without making them normative.
 
-- [ ] **Increment 104 — Hardware-in-the-loop runtime, vertical slices, and capability matrix**
+- [ ] **Increment 108 — Hardware-in-the-loop runtime, vertical slices, and capability matrix**
   - Add deterministic start/stop/reset, timestamped sampled streams, parameter loading, trace capture, status/deadline/overflow reporting, reproducible host transport, and optional external ADC/DAC board profiles.
   - Complete RC/RLC, controlled-plant, comparator/ADC/DAC, and PLL/control-loop vertical slices through all four validation levels.
   - Publish supported/unsupported constructs, validation envelopes, approximation/error limits, resource/timing results, board/bitstream evidence, claims language, and the M5 FPGA-accelerated AMS validation release package.
@@ -931,6 +987,8 @@ When an increment is completed:
 - Scala 3 releases: <https://www.scala-lang.org/download/>
 - Mill: <https://mill-build.org/>
 - MLIR dialect definitions: <https://mlir.llvm.org/docs/DefiningDialects/>
+- MLIR pass plugin API: <https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Tools/Plugins/PassPlugin.h>
+- MLIR dialect plugin API: <https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Tools/Plugins/DialectPlugin.h>
 - CIRCT dialects: <https://circt.llvm.org/docs/Dialects/>
 - Chisel modules and implicit clock/reset: <https://www.chisel-lang.org/docs/explanations/modules>
 - Chisel sequential circuits: <https://www.chisel-lang.org/docs/explanations/sequential-circuits>

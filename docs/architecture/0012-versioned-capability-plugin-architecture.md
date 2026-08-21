@@ -116,6 +116,8 @@ For longer-lived compatibility or isolation, Nodal also supports a versioned out
 
 Native plugins cannot silently weaken core verifiers. Core verification runs after plugin transformations at required boundaries.
 
+Target-specific Verilog, Verilog-A, and Verilog-AMS optimization passes use the separate structured pass contract in [ADR 0013](0013-structured-hdl-optimization-pass-architecture.md). The general plugin SPI owns manifest resolution, loading, trust, phases, and provenance; the target-pass SPI owns structured target representations, pass extension points, semantic preservation, render/reparse boundaries, optimization profiles, and proof obligations.
+
 ### Backend plugins
 
 A backend plugin registers:
@@ -464,10 +466,11 @@ Diagnostics must cover:
 - Increment 80 implements manifest discovery, graph resolution, lockfiles, and developer inspection commands.
 - Increment 81 implements the local `DesignHost`, typed capabilities, contribution points, and deterministic phase contexts.
 - Increment 82 implements MLIR pass/dialect/analysis plugin loading and named compiler extension points.
-- Increment 83 implements backend registration and the out-of-process tool-adapter protocol.
-- Increment 84 completes packaging, trust, provenance, cache integration, conformance tests, and out-of-tree reference plugins.
-- Increment 85 continues with versioned IR and bridge compatibility after plugin boundaries are established.
-- Increment 87 defines the separate future library publication contract.
+- Increments 83-86 freeze and implement structured target-HDL optimization passes, deterministic pass management, digital equivalence/formal evidence, and Verilog-A/Verilog-AMS semantic validation.
+- Increment 87 implements backend registration and the out-of-process tool-adapter protocol.
+- Increment 88 completes packaging, trust, provenance, cache integration, conformance tests, and out-of-tree reference plugins.
+- Increment 89 continues with versioned IR and bridge compatibility after plugin boundaries are established.
+- Increment 91 defines the separate future library publication contract.
 
 ## References reviewed
 
@@ -479,3 +482,4 @@ Diagnostics must cover:
 - MLIR pass plugin API: <https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Tools/Plugins/PassPlugin.h>
 - MLIR dialect plugin API: <https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Tools/Plugins/DialectPlugin.h>
 - MLIR standalone plugin example: <https://github.com/llvm/llvm-project/blob/main/mlir/examples/standalone/standalone-plugin/standalone-plugin.cpp>
+- Nodal target-HDL pass architecture: [ADR 0013](0013-structured-hdl-optimization-pass-architecture.md)

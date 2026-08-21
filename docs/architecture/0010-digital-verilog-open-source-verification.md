@@ -139,6 +139,8 @@ Synthesis is a semantic gate, not merely a syntax check. Unexpected latch infere
 
 ### Equivalence
 
+Approved plug-and-play digital optimization passes follow [ADR 0013](0013-structured-hdl-optimization-pass-architecture.md): they operate on verified structured digital target IR or through locked reparse adapters, preserve symbolic parameters/domains/protocols/source maps, and carry explicit equivalence/formal obligations.
+
 Yosys-based equivalence checks compare:
 
 - deterministic generated RTL before and after approved optimization;

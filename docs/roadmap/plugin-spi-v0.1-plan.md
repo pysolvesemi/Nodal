@@ -218,6 +218,8 @@ Registers one or more:
 
 The initial native loader wraps MLIR pass/dialect plugin APIs and validates a Nodal manifest before registration.
 
+Target-specific Verilog, Verilog-A, and Verilog-AMS optimization uses the layered contract in [ADR 0013](../architecture/0013-structured-hdl-optimization-pass-architecture.md) and [`target-hdl-optimization-pass-v0.1-plan.md`](target-hdl-optimization-pass-v0.1-plan.md). The general plugin SPI supplies loading, trust, compatibility, phases, lockfiles, and provenance; the target-pass SPI supplies structured target IR, pass descriptors/profiles, semantic preservation, and proof obligations.
+
 ### `BackendPlugin`
 
 Registers a stable backend ID and capability profile. Third-party backend selection is explicit in v0.1.
@@ -654,14 +656,16 @@ Increment 79 freezes codes/categories for at least:
 - [ ] Enforce exact native toolchain build compatibility.
 - [ ] Add out-of-process transform protocol and crash/malformed-response isolation.
 
-### Increment 83 — Backend and external tool-adapter plugins
+Target-HDL optimization delivery is defined separately by Increments 83-86 in [`target-hdl-optimization-pass-v0.1-plan.md`](target-hdl-optimization-pass-v0.1-plan.md).
+
+### Increment 87 — Backend and external tool-adapter plugins
 
 - [ ] Implement explicit backend registration, capability profiles, artifact contracts, and source maps.
 - [ ] Keep plugin backends out of `Backend.Auto` by default.
 - [ ] Implement the shared external process/evidence protocol for simulator, synthesis, formal, FPGA, programmer, board, and HIL adapters.
 - [ ] Migrate core adapters to the common protocol without making external tools define semantics.
 
-### Increment 84 — Packaging, trust, provenance, caching, and conformance
+### Increment 88 — Packaging, trust, provenance, caching, and conformance
 
 - [ ] Define coordinated Scala/native/process bundles, platform variants, Maven/native/process artifact metadata, checksums/signatures, licenses, and SBOMs.
 - [ ] Implement trust policies, offline resolution, process limits, and explicit in-process enablement.
@@ -694,3 +698,4 @@ Increment 79 may be checked only when:
 - MLIR pass plugin API: <https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Tools/Plugins/PassPlugin.h>
 - MLIR dialect plugin API: <https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Tools/Plugins/DialectPlugin.h>
 - MLIR standalone plugin example: <https://github.com/llvm/llvm-project/blob/main/mlir/examples/standalone/standalone-plugin/standalone-plugin.cpp>
+- Nodal target-HDL optimization pass plan: [`target-hdl-optimization-pass-v0.1-plan.md`](target-hdl-optimization-pass-v0.1-plan.md)

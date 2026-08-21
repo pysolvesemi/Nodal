@@ -194,7 +194,7 @@ jobs:
         run: |
           git fetch --no-tags origin dev:refs/remotes/origin/dev
           git checkout origin/dev -- .github/workflows/ci.yml
-          git rm \
+          git rm -f \
             .github/workflows/apply-target-hdl-optimization-roadmap.yml \
             scripts/update_target_hdl_optimization_roadmap.py
           git config user.name 'github-actions[bot]'

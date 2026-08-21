@@ -1,0 +1,391 @@
+name: Apply Increment 11 public API freeze
+
+on:
+  push:
+    branches:
+      - increment/11-public-api-v0.1-freeze
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/11-public-api-v0.1-freeze
+
+      - name: Apply frozen API source and contract updates
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"missing expected Increment 11 anchor in {path}: {old!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          api = Path("core/scala/api/src/nodal/CandidateApi.scala")
+          text = api.read_text(encoding="utf-8")
+          text = text.replace(
+              "/** Marker hierarchy for the Increment 10 compile-only public API candidates. */",
+              "/** Public marker hierarchy frozen by Nodal API v0.1. Implementations remain inert. */",
+              1,
+          )
+          old_widths = """object Bits:
+            def apply(width: Int): DataType[Bits] = new WidthDataType[Bits](width)
+
+          object UInt:
+            def apply(width: Int): DataType[UInt] = new WidthDataType[UInt](width)
+
+          private final class WidthDataType[A <: Data](width: Int) extends DataType[A]:
+            CandidateRuntime.statement(width)
+          """.replace("          ", "")
+          new_widths = """object Bits:
+            def apply(width: Int): DataType[Bits] = new WidthDataType[Bits](width)
+            def apply(width: Expr[Integer]): DataType[Bits] = new WidthDataType[Bits](width)
+
+          object UInt:
+            def apply(width: Int): DataType[UInt] = new WidthDataType[UInt](width)
+            def apply(width: Expr[Integer]): DataType[UInt] = new WidthDataType[UInt](width)
+
+          private final class WidthDataType[A <: Data](width: Any) extends DataType[A]:
+            CandidateRuntime.statement(width)
+          """.replace("          ", "")
+          if old_widths not in text:
+              raise SystemExit("missing width descriptor anchor in CandidateApi.scala")
+          text = text.replace(old_widths, new_widths, 1)
+          old_ports = """  protected final def input[A <: Data](dataType: DataType[A]): Signal[A] =
+            new Signal(dataType)
+
+            protected final def output[A <: Data](dataType: DataType[A]): Signal[A] =
+            new Signal(dataType)
+
+            protected final def input[D <: Discipline](discipline: D): Node[D] =
+            new Node(discipline)
+
+            protected final def output[D <: Discipline](discipline: D): Node[D] =
+            new Node(discipline)
+          """.replace("            ", "  ")
+          new_ports = """  protected final def in[A <: Data](dataType: DataType[A]): Signal[A] =
+            new Signal(dataType)
+
+            protected final def out[A <: Data](dataType: DataType[A]): Signal[A] =
+            new Signal(dataType)
+
+            protected final def in[D <: Discipline](discipline: D): Node[D] =
+            new Node(discipline)
+
+            protected final def out[D <: Discipline](discipline: D): Node[D] =
+            new Node(discipline)
+          """.replace("            ", "  ")
+          if old_ports not in text:
+              raise SystemExit("missing port declaration anchor in CandidateApi.scala")
+          text = text.replace(old_ports, new_ports, 1)
+          old_to_uint = """def toUInt(value: Expr[Real], width: Int): Expr[UInt] =
+            CandidateRuntime.expr(value, width)
+
+          def toReal(value: Expr[UInt]): Expr[Real] = CandidateRuntime.expr(value)
+          """.replace("          ", "")
+          new_to_uint = """def toUInt(value: Expr[Real], width: Int): Expr[UInt] =
+            CandidateRuntime.expr(value, width)
+
+          def toUInt(value: Expr[Real], width: Expr[Integer]): Expr[UInt] =
+            CandidateRuntime.expr(value, width)
+
+          def toReal(value: Expr[UInt]): Expr[Real] = CandidateRuntime.expr(value)
+          """.replace("          ", "")
+          if old_to_uint not in text:
+              raise SystemExit("missing toUInt anchor in CandidateApi.scala")
+          api.write_text(text.replace(old_to_uint, new_to_uint, 1), encoding="utf-8")
+
+          Path(
+              "examples/publicApiCandidates/src/prototypes/candidates/AnalogCandidates.scala"
+          ).write_text(
+              """package prototypes.candidates
+
+          import nodal.*
+
+          final class Resistor(defaultResistance: Expr[Real] = 1.0.kOhm) extends Module:
+            val p = inout(Electrical)
+            val n = inout(Electrical)
+            val resistance = param(defaultResistance)
+
+            analog:
+              V(p, n) <+ resistance * I(p, n)
+
+          final class Capacitor(defaultCapacitance: Expr[Real] = 1.0.pF) extends Module:
+            val p = inout(Electrical)
+            val n = inout(Electrical)
+            val capacitance = param(defaultCapacitance)
+
+            analog:
+              I(p, n) <+ capacitance * ddt(V(p, n))
+
+          final class RcFilter extends Module:
+            val input = inout(Electrical)
+            val output = inout(Electrical)
+            val common = inout(Electrical)
+            val resistance = param(1.0.kOhm)
+            val capacitance = param(10.0.pF)
+
+            private val resistor = instance(new Resistor()).param(_.resistance, resistance)
+            private val capacitor = instance(new Capacitor()).param(_.capacitance, capacitance)
+
+            connect(input, resistor(_.p))
+            connect(resistor(_.n), output)
+            connect(output, capacitor(_.p))
+            connect(capacitor(_.n), common)
+
+          final class Comparator extends Module:
+            val positive = in(Electrical)
+            val negative = in(Electrical)
+            val result = out(Bool)
+            val offset = param(0.0.V)
+
+            analog:
+              on(cross(V(positive, negative) - offset)):
+                result := V(positive, negative) > offset
+
+          final class AnalogEventSampler extends Module:
+            val input = in(Electrical)
+            val common = in(Electrical)
+            val crossed = out(Bool)
+            val threshold = param(0.5.V)
+            val samplePeriod = param(10.0.ns)
+            private val sampled = variable(Real, 0.0.V)
+
+            initial:
+              crossed := false.B
+
+            analog:
+              on(cross(V(input, common) - threshold, Edge.Rising)):
+                crossed := true.B
+              on(timer(0.0.ns, samplePeriod)):
+                sampled := V(input, common)
+          """.replace("          ", ""),
+              encoding="utf-8",
+          )
+
+          Path(
+              "examples/publicApiCandidates/src/prototypes/candidates/MixedSignalCandidates.scala"
+          ).write_text(
+              """package prototypes.candidates
+
+          import nodal.*
+
+          final class Adc extends Module:
+            val width = param(12.integer)
+            val analogInput = in(Electrical)
+            val common = in(Electrical)
+            val sampleClock = in(Bool)
+            val code = out(UInt(width))
+            val fullScale = param(1.0.V)
+
+            always(sampleClock.rising):
+              code := toUInt(V(analogInput, common) / fullScale, width)
+
+          final class Dac(val width: Int = 12) extends Module:
+            val code = in(UInt(width))
+            val analogOutput = out(Electrical)
+            val common = in(Electrical)
+            val fullScale = param(1.0.V)
+
+            analog:
+              V(analogOutput, common) <+ transition(
+                toReal(code) * fullScale / ((1 << width) - 1).real,
+                0.0.ns,
+                1.0.ns,
+                1.0.ns,
+              )
+
+          final class MixedSignalHold(val width: Int = 10) extends Module:
+            val analogInput = in(Electrical)
+            val common = in(Electrical)
+            val capture = in(Bool)
+            val code = out(UInt(width))
+            val threshold = param(0.25.V)
+            private val held = variable(Real, 0.0.V)
+
+            analog:
+              on(cross(V(analogInput, common) - threshold, Edge.Either)):
+                held := V(analogInput, common)
+
+            always(capture.rising):
+              code := toUInt(held, width)
+
+          final class HierarchyAndOverride extends Module:
+            val input = inout(Electrical)
+            val output = inout(Electrical)
+            val common = inout(Electrical)
+            val cutoffResistance = param(2.0.kOhm)
+            val cutoffCapacitance = param(22.0.pF)
+
+            private val filter =
+              instance(new RcFilter)
+                .param(_.resistance, cutoffResistance)
+                .param(_.capacitance, cutoffCapacitance)
+
+            connect(input, filter(_.input))
+            connect(output, filter(_.output))
+            connect(common, filter(_.common))
+          """.replace("          ", ""),
+              encoding="utf-8",
+          )
+
+          Path("examples/externalLibrary/src/external/reuse/GainStage.scala").write_text(
+              """package external.reuse
+
+          import nodal.*
+
+          /** Reusable module authored only against the frozen public core API. */
+          final class GainStage(defaultGain: Expr[Real] = 2.0.real) extends Module:
+            val input = in(Electrical)
+            val output = out(Electrical)
+            val common = inout(Electrical)
+            val gain = param(defaultGain)
+
+            analog:
+              V(output, common) <+ gain * V(input, common)
+          """.replace("          ", ""),
+              encoding="utf-8",
+          )
+
+          Path(
+              "examples/publicApiCandidates/src/prototypes/candidates/ExternalReuseCandidate.scala"
+          ).write_text(
+              """package prototypes.candidates
+
+          import external.reuse.GainStage
+          import nodal.*
+
+          final class ExternalReuseCandidate extends Module:
+            val input = inout(Electrical)
+            val output = inout(Electrical)
+            val common = inout(Electrical)
+            val gain = param(4.0.real)
+
+            private val stage = instance(new GainStage()).param(_.gain, gain)
+
+            connect(input, stage(_.input))
+            connect(output, stage(_.output))
+            connect(common, stage(_.common))
+          """.replace("          ", ""),
+              encoding="utf-8",
+          )
+
+          candidate_gate = Path("docs/design-gates/NodalPublicApiCandidates-DG-v0.1.md")
+          candidate_text = candidate_gate.read_text(encoding="utf-8")
+          if "**Status:** Approved" not in candidate_text:
+              raise SystemExit("candidate gate does not have the expected approved status")
+          candidate_text = candidate_text.replace(
+              "**Status:** Approved",
+              "**Status:** Superseded",
+              1,
+          )
+          heading_end = "**Approved by:** Repository owner instruction to implement Increment 10 on 2026-08-21\n"
+          if heading_end not in candidate_text:
+              raise SystemExit("candidate gate approval anchor not found")
+          candidate_text = candidate_text.replace(
+              heading_end,
+              heading_end
+              + "**Superseded by:** [`NodalPublicApi-DG v0.1`](NodalPublicApi-DG-v0.1.md)\n",
+              1,
+          )
+          candidate_gate.write_text(candidate_text, encoding="utf-8")
+
+          guide = Path("docs/development/public-api-candidates.md")
+          guide_text = guide.read_text(encoding="utf-8")
+          notice = (
+              "> **Superseded by Increment 11:** the accepted surface is frozen by "
+              "[`NodalPublicApi-DG-v0.1.md`](../design-gates/NodalPublicApi-DG-v0.1.md). "
+              "This page remains the comparison record.\n\n"
+          )
+          if notice not in guide_text:
+              guide_text = guide_text.replace(
+                  "# Public API candidate prototypes\n\n",
+                  "# Public API candidate prototypes\n\n" + notice,
+                  1,
+              )
+          guide.write_text(guide_text, encoding="utf-8")
+
+          replace_once(
+              "scripts/nodal.py",
+              '        _python(root, "check_increment10.py"),\n',
+              '        _python(root, "check_increment10.py"),\n'
+              '        _python(root, "check_increment11.py"),\n',
+          )
+          replace_once(
+              "scripts/check_developer_commands.py",
+              '        \'check_increment10.py"\',\n',
+              '        \'check_increment10.py"\',\n'
+              '        \'check_increment11.py"\',\n',
+          )
+          replace_once(
+              "tests/developer/test_developer_commands.py",
+              '            "check_increment10.py",\n',
+              '            "check_increment10.py",\n'
+              '            "check_increment11.py",\n',
+          )
+          replace_once(
+              "tests/developer/test_developer_commands.py",
+              '        self.assertTrue(any("check_increment10.py" in command for command in rendered))\n',
+              '        self.assertTrue(any("check_increment10.py" in command for command in rendered))\n'
+              '        self.assertTrue(any("check_increment11.py" in command for command in rendered))\n',
+          )
+          replace_once(
+              "scripts/check_increment10.py",
+              '            "**Status:** Approved",\n',
+              '            "**Status:** Superseded",\n',
+          )
+
+          codeowners = Path(".github/CODEOWNERS")
+          ownership = """/core/scala/api/public-api-v0.1.json @pysolvesemi
+          /scripts/check_increment11.py @pysolvesemi
+          /tests/api/ @pysolvesemi
+          /docs/language-reference/public-api-v0.1.md @pysolvesemi
+          """.replace("          ", "")
+          owner_text = codeowners.read_text(encoding="utf-8")
+          for line in ownership.splitlines(keepends=True):
+              if line and line not in owner_text:
+                  owner_text += line
+          codeowners.write_text(owner_text, encoding="utf-8")
+          PY
+
+      - name: Canonically format Scala sources
+        run: ./mill mill.scalalib.scalafmt/reformatAll
+
+      - name: Compile frozen API and examples
+        run: ./mill __.compile
+
+      - name: Run API contract suites
+        run: |
+          python3 scripts/check_increment10.py
+          python3 scripts/check_increment11.py
+          python3 -m unittest discover -s tests/api -p 'test_*.py'
+          python3 -m unittest discover -s tests/developer -p 'test_*.py'
+
+      - name: Commit frozen API integration
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            .github/CODEOWNERS \
+            core/scala/api/src/nodal/CandidateApi.scala \
+            examples \
+            docs/design-gates/NodalPublicApiCandidates-DG-v0.1.md \
+            docs/development/public-api-candidates.md \
+            scripts/nodal.py \
+            scripts/check_developer_commands.py \
+            scripts/check_increment10.py \
+            tests/developer/test_developer_commands.py
+          git commit -m 'api: apply Nodal public API v0.1 freeze'
+          git push origin HEAD:increment/11-public-api-v0.1-freeze

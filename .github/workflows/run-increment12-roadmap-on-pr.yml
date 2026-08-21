@@ -42,6 +42,8 @@ jobs:
           exec(compile(code, '<increment12-roadmap-transform>', 'exec'))
           PY
 
+          sed -i '3s/[[:space:]]*$//' docs/roadmap/nodal-development-todo.md
+
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm \

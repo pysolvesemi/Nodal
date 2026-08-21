@@ -1,10 +1,10 @@
 # Public API prototype outcome
 
-Increment 10 evaluated source ergonomics with compile-only prototypes. Increment 11 has now frozen the accepted v0.1 source shape in `docs/design-gates/NodalPublicApi-DG-v0.1.md` and `core/scala/api/public-api-v0.1.json`.
+Increment 10 evaluated source ergonomics with compile-only prototypes. The files compile but do not elaborate hardware, build MLIR, emit HDL, or simulate behavior. Increment 11 has now frozen the accepted v0.1 source shape in `docs/design-gates/NodalPublicApi-DG-v0.1.md` and `core/scala/api/public-api-v0.1.json`.
 
-The Scala files remain intentionally non-functional: they compile the source contract but do not yet elaborate hardware, build MLIR, emit HDL, or simulate behavior. Later increments implement those semantics behind the frozen API.
+The Scala placeholders remain intentionally non-functional. Later increments implement semantics behind the frozen API.
 
-## Accepted outcome
+## Candidate comparison
 
 | Concern | Frozen v0.1 form | Rejected primary alternative |
 | --- | --- | --- |
@@ -22,7 +22,7 @@ The Scala files remain intentionally non-functional: they compile the source con
 
 ## Parameterized generation proof shape
 
-The compile examples now distinguish HDL parameters from Scala elaboration values:
+The compile examples distinguish HDL parameters from Scala elaboration values:
 
 ```scala
 final class Adc extends Module:

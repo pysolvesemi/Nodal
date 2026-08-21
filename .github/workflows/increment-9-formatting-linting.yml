@@ -63,6 +63,11 @@ jobs:
           ./nodal style bootstrap \
             --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
 
+      - name: Print canonical Scalafmt diff
+        run: |
+          ./mill mill.scalalib.scalafmt/formatAll
+          git diff --exit-code -- core/scala/sim/src/nodal/bootstrap/sim/SimulationPlan.scala
+
       - name: Run complete Increment 9 gate
         run: |
           ./nodal check \

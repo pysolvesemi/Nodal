@@ -1,0 +1,146 @@
+{
+  "schema": 1,
+  "status": "roadmap-freeze-candidate",
+  "roadmap_revision": "1.4",
+  "formal_freeze_increment": 15,
+  "architecture": "explicit-stage-lossless-value-exact-connection-dimension-safe-declared-effect",
+  "documents": {
+    "architecture_adr": "docs/architecture/0009-core-semantic-contracts.md",
+    "freeze_plan": "docs/roadmap/core-semantics-api-v0.3-plan.md",
+    "pipeline_plan": "docs/roadmap/automatic-pipeline-api-v0.3-plan.md",
+    "main_roadmap": "docs/roadmap/nodal-development-todo.md"
+  },
+  "value_stages": {
+    "elaboration": [
+      "scala.Int",
+      "scala.Boolean",
+      "scala.String",
+      "scala.Seq",
+      "user configuration objects"
+    ],
+    "symbolic": [
+      "Param",
+      "symbolic width",
+      "symbolic length",
+      "symbolic range",
+      "generate index"
+    ],
+    "dynamic": [
+      "port",
+      "wire",
+      "register",
+      "memory data",
+      "protocol payload",
+      "sampled analog value"
+    ],
+    "target_generate": "generate"
+  },
+  "numeric": {
+    "types": [
+      "Bool",
+      "Bits",
+      "UInt",
+      "SInt"
+    ],
+    "default_arithmetic": "lossless-finite-width",
+    "implicit_narrowing": false,
+    "implicit_signedness_change": false,
+    "explicit_size_policies": [
+      "extend",
+      "truncate",
+      "wrap",
+      "saturate",
+      "resizeChecked"
+    ],
+    "signedness_operations": [
+      "toSigned",
+      "toUnsigned"
+    ]
+  },
+  "aggregates": {
+    "directionless_payload": true,
+    "candidate_base": "Bundle",
+    "boundary_direction": [
+      "in",
+      "out",
+      "inout"
+    ],
+    "transport": [
+      "plain",
+      "Valid",
+      "Stream"
+    ],
+    "direct_connection": "exact",
+    "adapter_candidates": [
+      "via",
+      "viewAs"
+    ]
+  },
+  "quantities": {
+    "dimension_checked": true,
+    "dimensions": [
+      "dimensionless",
+      "voltage",
+      "current",
+      "resistance",
+      "capacitance",
+      "charge",
+      "time",
+      "frequency",
+      "power"
+    ],
+    "operators": [
+      "add-compatible",
+      "subtract-compatible",
+      "multiply-derived",
+      "divide-derived",
+      "ddt-divide-time",
+      "idt-multiply-time",
+      "compare-compatible"
+    ]
+  },
+  "effects": [
+    "Pure",
+    "Stateful",
+    "Memory",
+    "Analog",
+    "Event",
+    "Observation",
+    "External",
+    "SideEffect"
+  ],
+  "memory_contract": [
+    "depth",
+    "element type",
+    "read mode",
+    "read latency",
+    "read-under-write",
+    "write masks",
+    "port domains",
+    "collision behavior",
+    "initialization capability"
+  ],
+  "external_operation_contract": [
+    "types and protocols",
+    "latency",
+    "throughput",
+    "domain and reset",
+    "effect",
+    "ordering",
+    "simulation model",
+    "synthesis model",
+    "formal model",
+    "parameter envelope"
+  ],
+  "required_evidence": [
+    "core-semantic-candidate-compilation",
+    "automatic-pipeline-candidate-compilation",
+    "unified-public-api-v0.3-design-gate",
+    "machine-readable-public-api-manifest",
+    "compile-positive-fixtures",
+    "compile-negative-fixtures",
+    "external-library-fixture",
+    "stable-diagnostic-codes",
+    "green-ci"
+  ]
+}

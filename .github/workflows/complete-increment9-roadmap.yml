@@ -18,7 +18,7 @@ jobs:
         with:
           ref: increment/9-formatting-linting-contribution-rules
 
-      - name: Record completed roadmap evidence
+      - name: Record evidence and remove this helper
         shell: bash
         run: |
           python3 - <<'PY'
@@ -26,17 +26,20 @@ jobs:
 
           path = Path("docs/roadmap/nodal-development-todo.md")
           text = path.read_text(encoding="utf-8")
-          old = """- [ ] **Increment 9 — Formatting, linting and contribution rules**
+          start_marker = "- [ ] **Increment 9 — Formatting, linting and contribution rules**"
+          next_marker = "\n\n- [ ] **Increment 10 — Public API candidate prototypes**"
+          start = text.find(start_marker)
+          if start < 0:
+              raise SystemExit("unchecked Increment 9 marker not found")
+          end = text.find(next_marker, start)
+          if end < 0:
+              raise SystemExit("Increment 10 boundary not found")
+          replacement = """- [x] **Increment 9 — Formatting, linting and contribution rules**
   - Add Scalafmt/Scalafix, ClangFormat/ClangTidy where compatible with LLVM style, Markdown checks, commit/PR expectations, package-visibility checks, and rules that public API or core/library boundary changes require a design gate.
-"""
-          new = """- [x] **Increment 9 — Formatting, linting and contribution rules**
-  - Add Scalafmt/Scalafix, ClangFormat/ClangTidy where compatible with LLVM style, Markdown checks, commit/PR expectations, package-visibility checks, and rules that public API or core/library boundary changes require a design gate.
-  - Evidence: [`.scalafmt.conf`](../../.scalafmt.conf), [`.scalafix.conf`](../../.scalafix.conf), [`.clang-format`](../../.clang-format), [`.clang-tidy`](../../.clang-tidy), [`CONTRIBUTING.md`](../../CONTRIBUTING.md), [`scripts/check_increment9.py`](../../scripts/check_increment9.py), [`tests/lint/`](../../tests/lint/), [`docs/development/style-and-contributions.md`](../development/style-and-contributions.md), completion commit [`80ab4e0`](https://github.com/pysolvesemi/Nodal/commit/80ab4e0764efb82cedf0adff87b1912b8ffd0f21), and successful validation run [`32444753017`](https://github.com/pysolvesemi/Nodal/actions/runs/32444753017).
-"""
-          if old not in text:
-              raise SystemExit("Increment 9 roadmap block did not match expected unchecked form")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+  - Evidence: [`.scalafmt.conf`](../../.scalafmt.conf), [`.scalafix.conf`](../../.scalafix.conf), [`.clang-format`](../../.clang-format), [`.clang-tidy`](../../.clang-tidy), [`CONTRIBUTING.md`](../../CONTRIBUTING.md), [`scripts/check_increment9.py`](../../scripts/check_increment9.py), [`tests/lint/`](../../tests/lint/), [`docs/development/style-and-contributions.md`](../development/style-and-contributions.md), completion commit [`80ab4e0`](https://github.com/pysolvesemi/Nodal/commit/80ab4e0764efb82cedf0adff87b1912b8ffd0f21), and successful validation run [`32444753017`](https://github.com/pysolvesemi/Nodal/actions/runs/32444753017)."""
+          path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
           PY
+          git rm .github/workflows/complete-increment9-roadmap.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add docs/roadmap/nodal-development-todo.md

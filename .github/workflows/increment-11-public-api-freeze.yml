@@ -1,0 +1,93 @@
+name: Increment 11 public API design gate and v0.1 freeze
+
+on:
+  push:
+    branches:
+      - increment/11-public-api-design-gate-v0.1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  increment-11:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      FORCE_COLOR: '0'
+      GITHUB_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Publish pending commit status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state='pending' \
+            -f context='increment-11/public-api-freeze' \
+            -f description='Increment 11 validation is running' \
+            -f target_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch integration base
+        run: git fetch --no-tags origin dev:refs/remotes/origin/dev
+
+      - name: Restore verified Scala dependency caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: increment-11-scala-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', '.scalafmt.conf', '.scalafix.conf', 'core/scala/api/public-api-v0.1.json') }}
+          restore-keys: |
+            increment-11-scala-${{ runner.os }}-
+
+      - name: Restore locked native download cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: increment-11-native-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
+
+      - name: Install locked toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Run complete Increment 11 gate
+        run: |
+          ./nodal check \
+            --online-toolchain \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+
+      - name: Publish final commit status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if [ "${JOB_STATUS}" = success ]; then
+            state=success
+            description='Increment 11 validation passed'
+          else
+            state=failure
+            description='Increment 11 validation failed'
+          fi
+          gh api \
+            --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="${state}" \
+            -f context='increment-11/public-api-freeze' \
+            -f description="${description}" \
+            -f target_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

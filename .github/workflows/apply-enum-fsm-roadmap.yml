@@ -1,0 +1,77 @@
+name: Apply enum and FSM roadmap
+
+on:
+  push:
+    branches:
+      - increment/13-enum-fsm-architecture-roadmap
+
+permissions:
+  contents: write
+
+jobs:
+  apply-roadmap:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out roadmap branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/13-enum-fsm-architecture-roadmap
+          fetch-depth: 0
+
+      - name: Apply enum and FSM roadmap transformation
+        run: python3 scripts/update_enum_fsm_roadmap.py
+
+      - name: Normalize new Markdown whitespace
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          for relative in (
+              "docs/architecture/0015-native-scala-enum-and-hierarchical-fsm.md",
+              "docs/roadmap/enum-fsm-api-v0.3-plan.md",
+          ):
+              path = Path(relative)
+              lines = [line.rstrip() for line in path.read_text(encoding="utf-8").splitlines()]
+              path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Validate durable documents and surfaces
+        shell: bash
+        run: |
+          python3 scripts/check_markdown.py
+          python3 scripts/check_formatting_baseline.py
+          python3 scripts/check_architecture.py
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          for path in sorted(Path("docs/roadmap").glob("*.json")):
+              json.loads(path.read_text(encoding="utf-8"))
+          print("roadmap JSON validation passed")
+          PY
+
+      - name: Commit durable roadmap and remove preparation helpers
+        shell: bash
+        run: |
+          git rm \
+            .github/workflows/apply-enum-fsm-roadmap.yml \
+            scripts/update_enum_fsm_roadmap.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- \
+            docs/architecture/README.md \
+            docs/architecture/0010-digital-verilog-open-source-verification.md \
+            docs/architecture/0015-native-scala-enum-and-hierarchical-fsm.md \
+            docs/roadmap/core-semantics-api-v0.3-plan.md \
+            docs/roadmap/digital-verilog-open-source-verification-plan.md \
+            docs/roadmap/enum-fsm-api-v0.3-plan.md \
+            docs/roadmap/enum-fsm-api-v0.3-surface.json \
+            docs/roadmap/nodal-development-todo.md \
+            docs/roadmap/*.json
+          git diff --cached --check
+          git commit -m 'docs: freeze enum and reusable FSM architecture target'
+          git push origin HEAD:increment/13-enum-fsm-architecture-roadmap

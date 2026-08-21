@@ -24,6 +24,8 @@ Accepted ADRs must not be edited to reverse their decision. A material change re
 | [0005](0005-backend-capability-profiles.md) | Use explicit backend capability profiles with no silent semantic fallback. |
 | [0006](0006-core-library-boundary.md) | Separate mandatory core from optional reusable libraries with one-way dependencies. |
 | [0007](0007-implicit-clock-reset-domains.md) | Use implicit local clock/reset domains for ordinary state, explicit CDC/RDC crossings, and explicit emitted HDL. |
+| [0009](0009-core-semantic-contracts.md) | Distinguish elaboration/symbolic/runtime stages, use lossless numeric defaults, directionless protocol payloads, exact connections, physical dimensions, and declared effects. |
+| [0010](0010-digital-verilog-open-source-verification.md) | Infer the narrowest compatible backend, emit portable Verilog for digital-only designs, and verify generated RTL with open-source lint, simulation, synthesis, equivalence, and formal tools. |
 
 ## Proposed records
 

@@ -29,14 +29,17 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import textwrap
 
           workflow = Path('.github/workflows/apply-increment12-clock-reset-roadmap.yml')
           lines = workflow.read_text(encoding='utf-8').splitlines()
           start = next(i for i, line in enumerate(lines) if line.strip() == "python3 - <<'PY'")
           end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'PY')
-          code = textwrap.dedent('\n'.join(lines[start + 1:end]))
-          exec(compile(code, str(workflow), 'exec'))
+          yaml_indent = ' ' * 10
+          code = '\n'.join(
+              line[len(yaml_indent):] if line.startswith(yaml_indent) else line
+              for line in lines[start + 1:end]
+          )
+          exec(compile(code, '<increment12-roadmap-transform>', 'exec'))
           PY
 
           git config user.name 'github-actions[bot]'

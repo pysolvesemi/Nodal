@@ -69,6 +69,7 @@ class Increment9Tests(unittest.TestCase):
         problems = POLICY.check_repository(
             root,
             changed_files=["core/scala/api/src/nodal/Module.scala"],
+            event_name="unit_test",
         )
         self.assertIn("NODAL-POLICY-005", {problem.code for problem in problems})
 
@@ -87,6 +88,7 @@ class Increment9Tests(unittest.TestCase):
                 "core/scala/api/src/nodal/Module.scala",
                 "docs/design-gates/NodalPublicApi-DG-v0.1.md",
             ],
+            event_name="unit_test",
         )
         self.assertEqual(problems, [])
 
@@ -113,6 +115,7 @@ class Increment9Tests(unittest.TestCase):
                 "docs/design-gates/NodalPublicApiCandidates-DG-v0.1.md",
                 "docs/design-gates/NodalPublicApi-DG-v0.1.md",
             ],
+            event_name="unit_test",
         )
         self.assertEqual(problems, [])
 
@@ -138,6 +141,7 @@ class Increment9Tests(unittest.TestCase):
                 "docs/design-gates/NodalPublicApiCandidates-DG-v0.1.md",
                 "docs/design-gates/NodalPublicApi-DG-v0.1.md",
             ],
+            event_name="unit_test",
         )
         self.assertIn("NODAL-POLICY-016", {problem.code for problem in problems})
 

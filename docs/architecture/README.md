@@ -27,6 +27,7 @@ Accepted ADRs must not be edited to reverse their decision. A material change re
 | [0009](0009-core-semantic-contracts.md) | Distinguish elaboration/symbolic/runtime stages, use lossless numeric defaults, directionless protocol payloads, exact connections, physical dimensions, and declared effects. |
 | [0010](0010-digital-verilog-open-source-verification.md) | Infer the narrowest compatible backend, emit portable Verilog for digital-only designs, and verify generated RTL with open-source lint, simulation, synthesis, equivalence, and formal tools. |
 | [0011](0011-ams-fpga-approximation-validation.md) | Validate supported AMS behavior on FPGA only through an explicit discrete-time, finite-precision approximation with separate reference, quantization, RTL, and hardware evidence. |
+| [0012](0012-versioned-capability-plugin-architecture.md) | Use manifest-first, versioned capability graphs with local design hosts, deterministic phases, isolated compiler/backend/tool boundaries, lockfiles, and retained plugin provenance. |
 
 ## Proposed records
 

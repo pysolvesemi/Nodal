@@ -245,12 +245,37 @@ def validate() -> None:
     print("Verilog-family optimization roadmap update validated")
 
 
+def restore_helper_source() -> None:
+    """Undo the workflow's one-line anchor patch before helper deletion."""
+
+    path = Path(__file__)
+    text = path.read_text(encoding="utf-8")
+    actual = "".join(
+        (
+            "| [0012](0012-versioned-capability-plugin-architecture.md) | Use manifest-first, ",
+            "versioned capability graphs with local design hosts, deterministic phases, ",
+            "isolated compiler/backend/tool boundaries, lockfiles, and retained plugin provenance. |",
+        )
+    )
+    candidate = "".join(
+        (
+            "| [0012](0012-versioned-capability-plugin-architecture.md) | Use a manifest-first, ",
+            "versioned typed-capability graph with local design hosts, deterministic phases, ",
+            "lockfiles, native/process compatibility, and separate plugin/library boundaries. |",
+        )
+    )
+    if actual not in text:
+        raise SystemExit("workflow architecture anchor patch was not present for restoration")
+    path.write_text(text.replace(actual, candidate, 1), encoding="utf-8")
+
+
 def main() -> None:
     update_roadmap()
     update_index()
     update_shifted_docs()
     update_json_and_policy()
     validate()
+    restore_helper_source()
 
 
 if __name__ == "__main__":

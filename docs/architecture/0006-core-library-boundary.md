@@ -68,6 +68,24 @@ The architecture will be enforced progressively:
 
 Generated files or tests cannot create a hidden reverse dependency.
 
+## 2026-08-21 extension clarification
+
+[ADR 0012](0012-versioned-capability-plugin-architecture.md) distinguishes executable plugins from source/model libraries.
+
+A library remains passive reusable source/data content. A plugin is explicitly enabled executable extension code with lifecycle, compatibility, trust, and provenance requirements. Optional plugin bundles may use a reserved `plugins/` root or independent repositories, but they remain outside mandatory core.
+
+The extended dependency direction is:
+
+```text
+libraries ───────────────► published core APIs
+plugins ─────────────────► published core SPI/APIs
+plugins ── optional ─────► published libraries
+core ──X─────────────────► libraries or plugins
+libraries ──X────────────► plugin implementations
+```
+
+A library may publish a separate companion plugin artifact, but installing the library does not execute that plugin and does not implicitly enable it.
+
 ## Consequences
 
 ### Positive
@@ -77,6 +95,7 @@ Generated files or tests cannot create a hidden reverse dependency.
 - A reusable package developed in this monorepo behaves like a real external consumer.
 - Users install only the packages they need.
 - Future libraries can move to independent repositories.
+- Executable extensions receive stronger trust and compatibility controls than passive model packages.
 
 ### Costs
 
@@ -84,6 +103,7 @@ Generated files or tests cannot create a hidden reverse dependency.
 - Shared API changes require compatibility discipline.
 - Cross-repository testing and version matrices become necessary after libraries exist.
 - Some helpers must be promoted deliberately into stable core extension APIs.
+- A project that ships both models and executable extensions may publish separate coordinated artifacts.
 
 ## Rejected alternatives
 
@@ -91,11 +111,12 @@ Generated files or tests cannot create a hidden reverse dependency.
 - **Let core use a standard library internally:** creates a reverse dependency and prevents core-only use.
 - **Delay the boundary until the first library:** risks accidentally exposing internals and entangling build paths.
 - **Require every library to remain in the monorepo:** unnecessarily restricts ownership and publication.
+- **Treat every library as an automatically loaded plugin:** executes code unexpectedly and conflates source compatibility with plugin SPI/ABI compatibility.
 
 ## Follow-up increments
 
 - Increment 3 creates the scalable core skeleton and boundary rules.
 - Increment 8 adds CI enforcement.
 - Increments 10–12 validate the external library-author surface.
-- Increment 67 stabilizes extension/library-author APIs.
-- Increment 70 defines future library publication contracts.
+- Increments 79–84 freeze and implement the plugin SPI, capability graph, loaders, adapters, packaging, trust, and conformance.
+- Increment 87 defines the future library publication contract separately from plugin packaging.

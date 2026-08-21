@@ -4,7 +4,7 @@
 
 **Architecture:** [ADR 0011](../architecture/0011-ams-fpga-approximation-validation.md)
 
-**Formal capability gate:** Increment 91
+**Formal capability gate:** Increment 96
 
 **Machine-readable candidate:** [`ams-fpga-validation-surface.json`](ams-fpga-validation-surface.json)
 
@@ -20,6 +20,8 @@ The FPGA artifact validates the declared hardware approximation. It is not direc
 The binding rule is:
 
 > **Reference AMS semantics, explicit approximation contract, bounded evidence, synthesizable realization.**
+
+The compiler-owned approximation semantics are not plugins. FPGA targets, place/route, bitstream, programmer, board, and HIL integrations use the explicit tool-adapter plugin protocol from [ADR 0012](../architecture/0012-versioned-capability-plugin-architecture.md) and [`plugin-spi-v0.1-plan.md`](plugin-spi-v0.1-plan.md).
 
 ## Architectural boundary
 
@@ -54,7 +56,7 @@ val emission = Nodal.emit(
 )
 ```
 
-The exact names and constructor shapes are candidates. Increment 91 freezes the public capability profile and API after compile-positive and compile-negative evaluation.
+The exact names and constructor shapes are candidates. Increment 96 freezes the public capability profile and API after compile-positive and compile-negative evaluation.
 
 ## Required contract categories
 
@@ -274,7 +276,7 @@ The target profile records:
 - achieved timing and slack;
 - board I/O and transport resources.
 
-The architecture does not mandate a particular first board in this planning increment. Increment 98 selects and pins at least one fully open reference target. Vendor adapters are optional and separately versioned.
+The architecture does not mandate a particular first board in this planning increment. Increment 103 selects and pins at least one fully open reference target. Vendor adapters are optional and separately versioned.
 
 ## Hardware-in-the-loop
 
@@ -323,7 +325,7 @@ Proves multi-rate behavior, phase/event metrics, generated clocks or timebase mo
 
 ## Incremental delivery plan
 
-### Increment 91 — AMS-to-FPGA approximation capability gate and API contracts
+### Increment 96 — AMS-to-FPGA approximation capability gate and API contracts
 
 - [ ] Accept the exact capability boundary from ADR 0011.
 - [ ] Compile candidate approximation, solver, numeric, envelope, target, and validation APIs.
@@ -331,51 +333,51 @@ Proves multi-rate behavior, phase/event metrics, generated clocks or timebase mo
 - [ ] Prove that `Backend.Auto` never selects approximation.
 - [ ] Add external-library and unsupported-construct fixtures.
 
-### Increment 92 — Analog normalization and sampled-state IR
+### Increment 97 — Analog normalization and sampled-state IR
 
 - [ ] Normalize supported state-space, transfer-function, and explicit-ODE models into target-neutral state/update IR.
 - [ ] Identify state, inputs, outputs, algebraic dependencies, events, units, parameters, and unsupported loops/hidden state.
 - [ ] Preserve source mapping and authoritative AMS-reference links.
 
-### Increment 93 — Solver and discrete-time recurrence generation
+### Increment 98 — Solver and discrete-time recurrence generation
 
 - [ ] Implement approved explicit/implicit/linear discretization methods.
 - [ ] Generate coefficients and recurrence IR deterministically.
 - [ ] Verify stability/conditioning, iteration/convergence, initialization, reset, and failure policy.
 - [ ] Produce high-precision software reference models and golden recurrence evidence.
 
-### Increment 94 — Range, fixed-point, quantization, and error-budget analysis
+### Increment 99 — Range, fixed-point, quantization, and error-budget analysis
 
 - [ ] Add range assertions/inference, physical scaling, explicit and automatic fixed-point formats, rounding, overflow, guard bits, and coefficient quantization.
 - [ ] Generate bit-accurate reference models and Level B differential evidence.
 - [ ] Reject unsatisfied error/resource policies and unbounded states.
 
-### Increment 95 — Multi-rate, sampled-event, and real-time scheduling
+### Increment 100 — Multi-rate, sampled-event, and real-time scheduling
 
 - [ ] Implement rational multi-rate partitions, holds/interpolation/decimation, event detection/interpolation, buffers, and timestamp alignment.
 - [ ] Integrate `ClockDomain`, CDC/RDC, `Valid`/`Stream`, memories, and automatic pipelines.
 - [ ] Prove per-sample deadlines and report infeasible schedules.
 
-### Increment 96 — Synthesizable FPGA approximation backend
+### Increment 101 — Synthesizable FPGA approximation backend
 
 - [ ] Lower the discrete fixed-point model into ordinary Nodal digital IR.
 - [ ] Reuse `Backend.Verilog`, symbolic parameters, hierarchy, memories, clock/reset, automatic pipelines, and deterministic source maps.
 - [ ] Emit approximation, numeric, schedule, rate, and limitation manifests plus golden portable Verilog.
 
-### Increment 97 — Differential, equivalence, and formal validation ladder
+### Increment 102 — Differential, equivalence, and formal validation ladder
 
 - [ ] Implement Level A and B waveform/state/event/frequency comparison with declared envelopes and tolerances.
 - [ ] Implement Level C Verilator/Icarus regression, Yosys equivalence, and SBY properties for recurrence, reset, rate control, protocols, overflow, and deadlines.
 - [ ] Preserve failures and counterexamples by error class.
 
-### Increment 98 — Open-source FPGA implementation and target evidence
+### Increment 103 — Open-source FPGA implementation and target evidence
 
 - [ ] Pin Yosys, nextpnr, a fully open device/board flow, constraints, packer, and programmer.
 - [ ] Run synthesis, placement, routing, timing, bitstream generation, utilization, and deterministic seed/manifest checks.
 - [ ] Add optional vendor-tool adapters without making them normative.
 - [ ] Require real-time sample feasibility after place and route.
 
-### Increment 99 — Hardware-in-the-loop runtime, vertical slices, and capability matrix
+### Increment 104 — Hardware-in-the-loop runtime, vertical slices, and capability matrix
 
 - [ ] Add board/host runtime, sampled streaming, configuration, trace capture, status, reproducible test bundles, and optional external ADC/DAC profiles.
 - [ ] Complete RC/RLC, controlled-plant, comparator/ADC/DAC, and PLL/control-loop vertical slices.

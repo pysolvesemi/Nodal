@@ -171,6 +171,12 @@ Core digital fixtures run through more than one tool when practical:
 
 This matrix reduces dependence on one parser or simulator implementation.
 
+## Plugin adapter boundary
+
+[ADR 0012](0012-versioned-capability-plugin-architecture.md) standardizes external simulator, synthesis, formal, FPGA, waveform, and reporting integrations as versioned out-of-process tool-adapter plugins. Built-in adapters use the same manifest, capability, process, evidence, trust, and provenance envelope as third-party adapters.
+
+Adapter selection is explicit and locked. Installing an adapter must not change `Backend.Auto`, language semantics, or required verification profiles silently.
+
 ## CI tiers
 
 ### Required pull-request gate

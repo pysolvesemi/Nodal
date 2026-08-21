@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.5
+**Revision:** 1.6
 **Created:** 2026-08-20
 **Updated:** 2026-08-21
 **Status:** Active roadmap
@@ -41,6 +41,12 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Require sample period, solver, state/reset, fixed-point, range, rounding/overflow, multi-rate/event, validation-envelope, error-budget, and target-FPGA contracts before generating an approximation.
 - Preserve separate evidence for AMS-reference error, discretization/model-reduction error, fixed-point error, RTL implementation, FPGA timing/resources, and hardware-in-the-loop runtime.
 - Reuse portable Verilog, automatic pipelines, clock/reset domains, CDC/RDC, Verilator/Icarus, Yosys, SBY, and an open Yosys+nextpnr target for FPGA approximation validation; vendor flows remain optional adapters.
+- Separate passive reusable libraries from executable plugins. Installing a model library must not implicitly execute or enable a plugin.
+- Resolve plugins from explicit manifests into a versioned typed capability graph and lockfile before loading Scala classes, native libraries, or external processes.
+- Use local `DesignHost` scopes, stable capability IDs, explicit cardinality/qualifiers, append-only contributions, and deterministic phases instead of concrete-plugin lookup, global service registries, mutable cross-plugin access, or public retain/release ordering.
+- Wrap MLIR pass/dialect plugin mechanisms with Nodal SPI, IR, toolchain-build, namespace, analysis-preservation, and mandatory re-verification contracts.
+- Run simulator, synthesis, formal, FPGA, programmer, board, and HIL adapters through a versioned out-of-process plugin protocol with normalized artifacts and retained provenance.
+- Make plugin graph, artifact, option, phase, pass, process-protocol, trust, and toolchain hashes part of deterministic build manifests and cache keys.
 
 ## Public API direction
 
@@ -54,6 +60,11 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Add `Backend.Auto` and `Backend.Verilog` for pure-digital output while retaining explicit `Backend.VerilogA` and `Backend.VerilogAMS` profiles.
 - Keep AMS approximation separate from backend selection. A future `FpgaApproximation`-class public contract must be explicitly requested, produce a digital approximation artifact, and only then use `Backend.Verilog`.
 - Freeze the AMS-to-FPGA capability profile, solver/numeric/envelope contracts, claims language, diagnostics, and validation evidence through a dedicated post-preview design gate before implementation.
+- Add a separately versioned plugin SPI candidate covering `DesignPlugin`, local `DesignHost`, stable `CapabilityKey`/`ContributionKey`, plugin descriptors/manifests, immutable `PluginPlan`, backend IDs, and process-adapter descriptors.
+- Keep plugin identity independent of Scala implementation classes. Consumers depend on stable capability IDs and interfaces, never `host[ConcretePlugin]` or implicit first-provider selection.
+- Require explicit project plugin configuration, compatibility resolution, lockfiles, checksums/trust policy, and offline locked mode; do not scan arbitrary classpaths or directories for executable extensions.
+- Plugins may add namespaced, approved extensions but cannot override core language semantics, safety verifiers, width/unit/domain rules, or silently participate in `Backend.Auto`.
+- Keep Scala/native in-process plugins trusted and explicitly enabled; prefer process isolation for external tools and long-lived transform/backend integrations.
 - Use compile-positive and compile-negative fixtures to freeze public names, types, construction forms, imports, and diagnostics.
 - Keep ordinary model source backend-neutral and exclude frontend/compiler internals from the future library-author subset.
 - Any incompatible public API change after a freeze requires a new versioned design gate and migration note.
@@ -348,7 +359,7 @@ val hardwareModel = Nodal.approximate(new ControlledPlant, approximation)
 val rtl = Nodal.emit(hardwareModel, EmitOptions(backend = Backend.Verilog))
 ```
 
-Exact names are deferred to Increment 91. Binding rules are:
+Exact names are deferred to Increment 96. Binding rules are:
 
 - approximation is explicit and never selected by `Backend.Auto`;
 - the original Verilog-A/Verilog-AMS or high-precision Nodal result remains the reference;
@@ -372,23 +383,97 @@ Passing FPGA hardware does not erase a discretization or quantization mismatch. 
 This capability validates the generated approximation, digital control, sequencing, calibration, and supported closed-loop behavior inside the declared envelope. It does not by itself validate transistor physics, unmodeled parasitics/PVT/mismatch, continuous-time behavior between samples, unmodeled noise/jitter, or behavior outside the envelope.
 
 
-## Core and future library boundary
+## Plugin and extension architecture
+
+The binding architecture is [ADR 0012](../architecture/0012-versioned-capability-plugin-architecture.md). The complete SPI, manifest, capability, lifecycle, compatibility, packaging, and conformance plan is in [`plugin-spi-v0.1-plan.md`](plugin-spi-v0.1-plan.md), with a machine-readable candidate in [`plugin-spi-v0.1-surface.json`](plugin-spi-v0.1-surface.json).
+
+Nodal adopts:
+
+> **Explicit plugin plan, typed capability graph, deterministic phases, isolated extension boundaries, retained provenance.**
+
+VexiiRiscv proves that an almost-empty hardware host can compose a large architecture from plugins, typed services, and phased contributions. Nodal retains local host composition, optional/multiple services, and late aggregation, but replaces runtime class identity, mutable cross-plugin access, manual retain/release ordering, and in-process-only loading with versioned manifests, stable capability keys, deterministic resolution, lockfiles, phase contexts, and separate Scala/native/process boundaries.
+
+Plugin categories are:
+
+- `DesignPlugin`: local configurable design/subsystem composition through public Nodal APIs;
+- `FrontendPlugin`: approved namespaced metadata, external-operation, attribute, lint, diagnostic, and helper descriptors;
+- `CompilerPlugin`: MLIR passes, analyses, dialects, verifiers, and named compiler extension points;
+- `BackendPlugin`: explicitly selected output backend and capability profile;
+- `ToolAdapterPlugin`: out-of-process simulator, synthesis, formal, FPGA, programmer, board, HIL, waveform, or reporting integration.
+
+A reusable model library is not a plugin. It remains passive source/data content. A project may publish a separately enabled companion plugin with its own identity and compatibility contract.
+
+Directional design-composition shape:
+
+```scala
+object FetchService extends CapabilityKey[FetchApi](
+  id = "com.example.cpu.fetch",
+  version = 1,
+  cardinality = ExactlyOne
+)
+
+object DecodeRules extends ContributionKey[DecodeRule](
+  id = "com.example.cpu.decode-rules",
+  version = 1
+)
+
+final class BranchPlugin(config: BranchConfig) extends DesignPlugin:
+  override val descriptor =
+    plugin("com.example.nodal.branch", version = "1.0.0")
+      .requires(FetchService)
+      .contributes(DecodeRules)
+
+  override def declare(ctx: DeclareContext): Unit =
+    ctx.contribute(DecodeRules, branchRules(config))
+
+  override def elaborate(ctx: ElaborateContext): Unit =
+    val fetch = ctx.require(FetchService)
+    // Construct hardware through public Nodal APIs.
+
+val subsystem = DesignHost(
+  plugins = Seq(FetchPlugin(...), DecodePlugin(...), BranchPlugin(...))
+).build()
+```
+
+Exact syntax is deferred to Increment 79. Binding rules are:
+
+- plugin and capability identities are stable globally qualified strings with independent versions;
+- provider cardinality, qualifier, conflicts, replacements, options, and compatibility are resolved before executable code loads;
+- a local host owns one immutable plugin plan and capability scope; nested hosts import/export capabilities explicitly;
+- design contributions are typed, append-only, source-located, and closed at declared phases;
+- discovery and resolution execute no plugin code;
+- lifecycle phases are `discover`, `resolve`, `configure`, `declare`, `elaborate`, `transform`, `verify`, `emit`, `run`, and `report`;
+- native plugins wrap MLIR pass/dialect plugin APIs and require exact pinned Nodal/LLVM/MLIR/CIRCT build compatibility;
+- out-of-process transforms and tool adapters use versioned protocols and cannot leave partially accepted compiler state after crash, timeout, or malformed output;
+- third-party backends are explicit in SPI v0.1 and do not silently join `Backend.Auto`;
+- plugin graph/order/options/artifact/toolchain/process hashes participate in build manifests, provenance, release evidence, and cache invalidation;
+- classpath scanning, process-global hosts, concrete-plugin lookup, direct mutable access, public retain/release ordering, core-semantic override, and hidden core-to-plugin dependency are rejected.
+
+The plugin SPI gate freezes manifest and lockfile schemas, capability cardinality, local design-host behavior, native/process compatibility, diagnostics, trust classes, and extension boundaries before implementation.
+
+
+## Core, plugin, and future library boundary
 
 ```text
 user project
     ├── depends directly on Nodal core
-    └── may select zero or more independently versioned Nodal libraries
-                                      │
-                                      └── depend only on published core APIs
+    ├── may select zero or more passive Nodal libraries
+    └── may explicitly enable zero or more executable Nodal plugins
 
-Nodal core  -X->  Nodal libraries
+libraries ───────────────► published core APIs
+plugins ─────────────────► published core SPI/APIs
+plugins ── optional ─────► published libraries
+core ──X─────────────────► libraries or plugins
+libraries ──X────────────► plugin implementations
 ```
 
-- `core/` contains the language API, construction frontend, MLIR bridge/compiler, diagnostics, backends, simulation API, adapters, and mandatory tests.
-- `libraries/` is reserved for optional reusable models, interfaces, helpers, and verification packages.
-- A core-only project must compile without a library checkout or artifact.
-- Future libraries receive no privileged access to `internal`, frontend, compiler, backend, or simulator implementation packages.
-- Each library will have independent source roots, tests, documentation, artifact identity, semantic version, core compatibility range, and license metadata.
+- `core/` contains the language/API, plugin SPI and resolver, construction frontend, MLIR bridge/compiler, diagnostics, built-in backends, simulation API, adapters, and mandatory tests.
+- `libraries/` is reserved for optional passive reusable models, interfaces, helpers, and verification packages.
+- `plugins/` is reserved for optional executable extension bundles or conformance fixtures; production plugins may live in independent repositories.
+- A core-only project must compile with no library or plugin checkout/artifact.
+- Future libraries and plugins receive no privileged access to `internal`, frontend, compiler, backend, or simulator implementation packages beyond their approved SPI/API.
+- Installing a library does not enable executable plugin code. A companion plugin has a distinct artifact identity and explicit project configuration.
+- Each library or plugin owns independent source roots, tests, documentation, semantic version, compatibility range, license/provenance, and publication metadata.
 
 ## Target scalable repository structure
 
@@ -415,14 +500,15 @@ Nodal/
 │   │   └── test/                  # lit/FileCheck/native tests
 │   └── integrations/              # OpenVAF, ngspice, commercial adapters
 ├── libraries/                     # Reserved for future optional packages
+├── plugins/                       # Reserved for optional executable extension bundles
 ├── examples/                      # Analog, mixed-signal, external consumers
 ├── tests/                         # API, architecture, golden, integration, simulation
 ├── docs/                          # ADRs, gates, reference, tutorials, roadmap
-├── packaging/                     # Core and future independent library publication
+├── packaging/                     # Core, library, and plugin publication/provenance
 └── scripts/                       # Bootstrap, lint, checks, release utilities
 ```
 
-Empty future-library directories are not committed merely as placeholders.
+Empty future-library or plugin directories are not committed merely as placeholders.
 
 ## Milestones
 
@@ -430,7 +516,7 @@ Empty future-library directories are not committed merely as placeholders.
 - **M1 — First vertical slice:** Scala RC model lowers through MLIR and emits validated Verilog-A.
 - **M2 — Analog preview:** useful Verilog-A subset with open-source compilation and simulation regression.
 - **M3 — Digital/AMS preview:** implicit-domain digital state, automatic fixed/valid/elastic pipelines, portable Verilog with open-source simulation/synthesis/formal verification, CDC/RDC-safe clock/reset architecture, mixed-signal crossings, and Verilog-AMS emission.
-- **M4 — Scalable core release:** packaged compiler, complete reference, stable extension points, library-author contract, and compatibility policy.
+- **M4 — Scalable core release:** packaged compiler, complete reference, frozen plugin SPI, deterministic extension graph, conformance kit, library-author contract, and compatibility policy.
 - **M5 — FPGA-accelerated AMS validation:** explicit sampled/fixed-point approximation, four-level reference evidence, open FPGA implementation, HIL runtime, and a published capability/limitations matrix.
 
 # Incremental roadmap
@@ -719,80 +805,108 @@ Empty future-library directories are not committed merely as placeholders.
 - [ ] **Increment 78 — Verilog-AMS conformance suite**
   - Build standards-oriented positive/negative tests, practical round trips, feature coverage, and simulator-result classification.
 
-## Phase 5 — Extensibility, scale, documentation, and release
+## Phase 5 — Plugins, extensibility, scale, documentation, and release
 
-- [ ] **Increment 79 — Compiler pass, extension, and library-author API**
-  - Stabilize pass registration, dialect interfaces, analysis preservation, custom lints, out-of-tree examples, and the minimal supported library-author surface.
+- [ ] **Increment 79 — Plugin architecture gate and SPI v0.1 contracts**
+  - Use [ADR 0012](../architecture/0012-versioned-capability-plugin-architecture.md), [`plugin-spi-v0.1-plan.md`](plugin-spi-v0.1-plan.md), and [`plugin-spi-v0.1-surface.json`](plugin-spi-v0.1-surface.json) as the mandatory architecture and candidate.
+  - Compile plugin descriptors/manifests, stable plugin/capability IDs, versions, cardinalities, qualifiers, `DesignPlugin`, local `DesignHost`, typed services/contributions, phase contexts, backend IDs, native/process descriptors, and library-versus-plugin separation.
+  - Publish `NodalPluginSpi-DG-v0.1.md`, manifest/lockfile schemas, compatibility/trust policy, machine-readable frozen SPI, and positive/negative fixtures with stable diagnostics.
+  - Keep loaders and plugin execution inert. Mark this increment `[x]` only after every SPI freeze criterion in the detailed plan passes CI.
 
-- [ ] **Increment 80 — Versioned IR and bridge compatibility**
-  - Add version metadata, supported upgrades, old-version fixtures, and explicit unknown-future-version rejection.
+- [ ] **Increment 80 — Manifest resolver, capability graph, lockfile, and plugin CLI**
+  - Implement manifest-only discovery without code execution; validate SPI/core/API/IR/bridge/toolchain ranges, provided/required capability versions, cardinality, qualifiers, conflicts, replacements, platform artifacts, trust, and option schemas.
+  - Resolve a canonical immutable plugin plan, reject ambiguity and cycles, generate `nodal.plugins.lock`, and include graph/artifact/options hashes in build manifests and cache keys.
+  - Add `nodal plugins list/resolve/check/graph/explain/lock/inspect` with human and machine-readable evidence plus offline locked mode.
 
-- [ ] **Increment 81 — Incremental build and compiler caching**
-  - Cache construction, normalized MLIR, native compilation, reports, and backend outputs by content/toolchain/profile hashes with proven invalidation.
+- [ ] **Increment 81 — Local design composition host and typed contribution system**
+  - Implement local `DesignHost` scopes, phase-specific contexts, stable capability keys, exactly-one/optional/many/qualified providers, contribution sets/sequences, close phases, nested explicit import/export, stable plugin instance qualifiers, names, and provenance.
+  - Prohibit process-global registries, concrete-plugin lookup, direct mutable cross-plugin access, public retain/release ordering, implicit first-provider selection, and undeclared contributions.
+  - Add configurable digital/mixed-signal subsystem fixtures, multiple instances, nested hosts, conflict/cycle diagnostics, and declaration-order permutation tests producing identical IR/HDL/reports.
 
-- [ ] **Increment 82 — Future library architecture and publication contract**
-  - Define module conventions, Maven coordinates, resources, independent versions, core ranges, conflicts, licenses, offline use, and external public-API-only fixtures without publishing an official library yet.
+- [ ] **Increment 82 — Native compiler plugin loader and versioned extension points**
+  - Wrap MLIR pass and dialect plugin APIs with Nodal manifest validation, exact native ABI/toolchain-build matching, plugin-owned namespaces, analysis preservation/invalidation, named versioned pipeline extension points, normalized pass evidence, and mandatory core re-verification.
+  - Add out-of-process transform protocol for isolated/longer-lived extensions, with versioned IR exchange, diagnostics, output hashes, cancellation, timeout, crash, and malformed-response handling.
+  - Provide out-of-tree pass, analysis, dialect, verifier, and transform fixtures using no private core APIs.
 
-- [ ] **Increment 83 — Complete language reference and API documentation**
-  - Cover value staging and target generate, numeric/width/overflow rules, directionless aggregates, exact adapters/connections, physical quantities, effects/memory/external contracts, domains/CDC/RDC/reset, automatic pipeline protocols/policies/evidence, portable Verilog and backend inference, open-source simulation/synthesis/formal flows, mixed-signal boundaries, diagnostics, profiles, libraries, and migration.
+- [ ] **Increment 83 — Backend and external tool-adapter plugins**
+  - Implement explicit third-party backend registration, capability profiles, options/artifact/source-map contracts, deterministic selection, and rejection before translation. Keep plugin backends out of `Backend.Auto` by default.
+  - Implement one versioned out-of-process adapter/evidence protocol for simulators, synthesis, formal, FPGA place/route, bitstreams, programmers, boards, HIL, waveforms, and reporters.
+  - Migrate built-in external adapters to the common protocol while preserving licensing-safe CI and the rule that external tools never define language semantics.
 
-- [ ] **Increment 84 — Tutorials and cross-project reuse examples**
-  - Add progressive analog/AMS/domain tutorials, patterns, anti-patterns, and standalone external consumer projects.
+- [ ] **Increment 84 — Plugin packaging, trust, provenance, caching, and conformance**
+  - Define coordinated Scala/Maven, native-platform, process-executable, schema/support-file, checksum/signature, license, SBOM, and provenance packaging with explicit trusted-Scala/trusted-native/process-isolated policies.
+  - Integrate plugin graphs, artifacts, options, pass order, external commands, and outputs into incremental caching, release provenance, reproducibility, and offline resolution.
+  - Publish a plugin conformance kit plus out-of-tree design, frontend-lint, MLIR pass/dialect, backend, and tool-adapter reference plugins. Prove compatibility failures, crash isolation, load-order determinism, and no hidden core dependency.
 
-- [ ] **Increment 85 — Cross-platform core packaging**
-  - Produce checksummed Scala/native bundles for supported Linux/macOS first, with Windows strategy, source fallback, and future library hooks.
+- [ ] **Increment 85 — Versioned IR and bridge compatibility**
+  - Add Nodal dialect/bridge/plugin-plan version metadata, supported upgrades, old-version fixtures, plugin extension-point compatibility, and explicit unknown-future-version rejection.
 
-- [ ] **Increment 86 — Reproducible release, provenance, and SBOM**
-  - Add release automation, checksums/signatures where possible, dependency SBOM, toolchain provenance, licenses, and rebuild verification.
+- [ ] **Increment 86 — Incremental build and compiler caching**
+  - Cache construction, normalized MLIR, plugin resolution/transforms, native compilation, reports, and backend/tool outputs by content/toolchain/profile/plugin-plan hashes with proven invalidation.
 
-- [ ] **Increment 87 — Performance and scalability benchmarks**
-  - Benchmark construction, MLIR size, symbolic staging/type/dimension/effect analysis, pipeline graph construction and scheduling, parameter envelopes, sideband/elastic control, domain provenance and CDC/RDC, portable Verilog emission, Verilator/Icarus simulation, Yosys synthesis/equivalence, SBY proofs, pass time, memory, hierarchy, caching, and regression launch overhead.
+- [ ] **Increment 87 — Future library architecture and publication contract**
+  - Define passive library module conventions, Maven coordinates, resources, independent versions, core ranges, conflicts, licenses, offline use, and external public-API-only fixtures. Keep executable companion plugins separately packaged and explicitly enabled.
 
-- [ ] **Increment 88 — Public API v1 review and compatibility policy**
-  - Review v0.1/v0.2/v0.3 implementation experience, value staging, numeric safety, interfaces/protocols, quantities/effects, implicit domains, resets/crossings, automatic pipeline contracts, backend inference/portable Verilog, schedule stability, and low-level escape; approve only justified changes and define semantic versioning, deprecation, and source compatibility.
+- [ ] **Increment 88 — Complete language, plugin SPI, and API documentation**
+  - Cover value staging and generate, numeric/width/overflow, aggregates/connections/protocols, quantities/effects, domains/CDC/RDC/reset, automatic pipelines, portable Verilog/backend inference, open-source verification, mixed-signal boundaries, plugin manifests/capabilities/lifecycle/loaders/adapters/trust/lockfiles, diagnostics, libraries, and migration.
 
-- [ ] **Increment 89 — Nodal core preview release**
-  - Publish the supported preview with frozen API revision, toolchain pins, portable Verilog/Verilog-A/Verilog-AMS capability matrices, open-source lint/simulation/synthesis/formal evidence, installation, examples, known limitations, library-author contract, and reproducible provenance.
+- [ ] **Increment 89 — Tutorials, plugin-author guides, and cross-project reuse examples**
+  - Add progressive analog/AMS/domain tutorials, patterns/anti-patterns, standalone external consumers, and out-of-tree design/compiler/backend/tool plugin author tutorials with conformance commands.
 
-- [ ] **Increment 90 — Future SystemVerilog-AMS backend research gate**
-  - Reassess the current standard, map IR coverage, identify required changes, and approve or reject implementation through a separate gate without speculating syntax into the stable API.
+- [ ] **Increment 90 — Cross-platform core and plugin packaging**
+  - Produce checksummed core Scala/native bundles for supported Linux/macOS first, Windows strategy and source fallback, plus plugin bundle/platform conventions and stable hooks for independently published libraries/plugins.
+
+- [ ] **Increment 91 — Reproducible release, provenance, plugin lockfiles, and SBOM**
+  - Add release automation, checksums/signatures where possible, dependency/plugin SBOM, plugin lockfile and graph provenance, toolchain/pass/adapter evidence, license inventory, and rebuild verification.
+
+- [ ] **Increment 92 — Performance and scalability benchmarks**
+  - Benchmark construction, MLIR, semantic analyses, automatic pipelines, domains/CDC/RDC, portable Verilog, open-source verification, plugin manifest resolution, capability graphs, design-host contributions, native/process plugin overhead, cache behavior, pass time, memory, hierarchy, and regression launch.
+
+- [ ] **Increment 93 — Public API and plugin SPI v1 review**
+  - Review v0.1/v0.2/v0.3 APIs and plugin SPI implementation experience, including capability identity/cardinality, phase contexts, native/process compatibility, trust, determinism, plugin/library boundaries, implicit domains, pipelines, backend inference, and low-level escape. Approve only justified changes and define semantic versioning/deprecation/source/SPI compatibility.
+
+- [ ] **Increment 94 — Nodal core preview release**
+  - Publish the supported preview with frozen public API and plugin SPI revisions, toolchain pins, portable Verilog/Verilog-A/Verilog-AMS matrices, open-source verification evidence, plugin conformance kit, installation, examples, known limitations, library/plugin-author contracts, and reproducible provenance.
+
+- [ ] **Increment 95 — Future SystemVerilog-AMS backend research gate**
+  - Reassess the current standard, map IR/plugin/backend coverage, identify required changes, and approve or reject implementation through a separate gate without speculating syntax into the stable API.
 
 ## Phase 6 — FPGA-accelerated AMS approximation and hardware validation
 
-- [ ] **Increment 91 — AMS-to-FPGA approximation capability gate and API contracts**
+- [ ] **Increment 96 — AMS-to-FPGA approximation capability gate and API contracts**
   - Use [ADR 0011](../architecture/0011-ams-fpga-approximation-validation.md), [`ams-fpga-validation-plan.md`](ams-fpga-validation-plan.md), and [`ams-fpga-validation-surface.json`](ams-fpga-validation-surface.json) as the mandatory architecture and candidate.
   - Compile candidate approximation, solver, sample/rate, numeric, range, error-budget, validation-envelope, target, and HIL contracts. Prove `Backend.Auto` never selects approximation and that unsupported AMS constructs fail with stable source-located diagnostics.
   - Publish `NodalAmsFpgaApproximation-DG-v0.4.md`, compatibility/migration rules, a machine-readable frozen surface, external-library fixtures, claims language, and complete positive/negative contracts before implementation.
 
-- [ ] **Increment 92 — Analog normalization and sampled-state IR**
+- [ ] **Increment 97 — Analog normalization and sampled-state IR**
   - Normalize supported linear state-space, transfer-function, and explicit-ODE models into target-neutral state/update IR with dimensions, parameters, inputs/outputs, algebraic dependencies, events, initial conditions, and authoritative reference links.
   - Diagnose unresolved DAEs/algebraic loops, hidden state, unsupported nonlinearities, unsupported analyses, and constructs that cannot form a deterministic sampled recurrence.
 
-- [ ] **Increment 93 — Solver and discrete-time recurrence generation**
+- [ ] **Increment 98 — Solver and discrete-time recurrence generation**
   - Implement the approved forward/backward Euler, trapezoidal/Tustin, exact-ZOH, and custom-solver contracts only for supported model classes.
   - Generate deterministic coefficients and recurrence IR, high-precision software references, initialization/reset behavior, stability/conditioning evidence, bounded iteration/convergence rules, latency/resource models, and failure diagnostics.
 
-- [ ] **Increment 94 — Range, fixed-point, quantization, and error-budget analysis**
+- [ ] **Increment 99 — Range, fixed-point, quantization, and error-budget analysis**
   - Add physical scaling, range assertions/inference, explicit/automatic fixed-point formats, guard bits, rounding, overflow, coefficient quantization, state/intermediate formats, and accumulated error accounting.
   - Generate bit-accurate references and Level B evidence; reject unbounded state, uncovered ranges, impossible error/resource policies, or implicit numeric choices.
 
-- [ ] **Increment 95 — Multi-rate, sampled-event, and real-time scheduling**
+- [ ] **Increment 100 — Multi-rate, sampled-event, and real-time scheduling**
   - Implement rational multi-rate partitions, sample/hold, interpolation, decimation, sampled/interpolated event detection, buffering, timestamps, update ordering, and rate/clock bridges.
   - Integrate `ClockDomain`, reset, CDC/RDC, `Valid`/`Stream`, memories, and automatic pipelines. Prove each sample deadline and diagnose infeasible real-time schedules.
 
-- [ ] **Increment 96 — Synthesizable FPGA approximation backend**
+- [ ] **Increment 101 — Synthesizable FPGA approximation backend**
   - Lower the discrete fixed-point model into ordinary Nodal digital IR and reuse symbolic parameters, hierarchy, memories, clock/reset, protocols, automatic pipelines, CDC/RDC, and `Backend.Verilog`.
   - Emit deterministic portable Verilog, source maps, recurrence/numeric/rate/schedule manifests, capability limitations, simulation/formal hooks, and exact golden fixtures.
 
-- [ ] **Increment 97 — Differential, equivalence, and formal validation ladder**
+- [ ] **Increment 102 — Differential, equivalence, and formal validation ladder**
   - Implement Level A AMS-reference versus high-precision-discrete comparison and Level B high-precision versus fixed-point comparison using declared waveform/state/event/frequency metrics and envelopes.
   - Implement Level C Verilator/Icarus regression, Yosys equivalence, and SBY properties for recurrence, reset, protocols, multi-rate scheduling, range/overflow, latency, and deadlines. Preserve failures and counterexamples by error class.
 
-- [ ] **Increment 98 — Open-source FPGA implementation and target evidence**
+- [ ] **Increment 103 — Open-source FPGA implementation and target evidence**
   - Select and pin at least one complete open FPGA target using Yosys, nextpnr, constraints, an open bitstream packer/programmer, deterministic seeds, and reproducible board metadata.
   - Run synthesis, placement, routing, timing, bitstream generation, utilization, DSP/memory accounting, and post-route sample-deadline checks. Add optional vendor adapters without making them normative.
 
-- [ ] **Increment 99 — Hardware-in-the-loop runtime, vertical slices, and capability matrix**
+- [ ] **Increment 104 — Hardware-in-the-loop runtime, vertical slices, and capability matrix**
   - Add deterministic start/stop/reset, timestamped sampled streams, parameter loading, trace capture, status/deadline/overflow reporting, reproducible host transport, and optional external ADC/DAC board profiles.
   - Complete RC/RLC, controlled-plant, comparator/ADC/DAC, and PLL/control-loop vertical slices through all four validation levels.
   - Publish supported/unsupported constructs, validation envelopes, approximation/error limits, resource/timing results, board/bitstream evidence, claims language, and the M5 FPGA-accelerated AMS validation release package.
@@ -800,7 +914,7 @@ Empty future-library directories are not committed merely as placeholders.
 
 ## Deferred reusable library roadmap
 
-No official reusable model/component library is implemented by Increments 0-99. After the core API, extension surface, packaging model, and preview release are proven, independently approved library roadmaps may populate `libraries/` or separate repositories while preserving the public-core dependency contract.
+No official reusable model/component library or production plugin is implemented by Increments 0-104. After the core API, extension surface, packaging model, and preview release are proven, independently approved library/plugin roadmaps may populate `libraries/`, `plugins/`, or separate repositories while preserving the public-core dependency contract.
 
 ## Roadmap maintenance
 
@@ -838,5 +952,11 @@ When an increment is completed:
 - cocotb simulator support: <https://docs.cocotb.org/en/stable/simulator_support.html>
 - nextpnr portable FPGA place and route: <https://github.com/YosysHQ/nextpnr>
 - Yosys FPGA synthesis documentation: <https://yosyshq.readthedocs.io/projects/yosys/en/stable/>
+- VexiiRiscv plugin host: <https://github.com/SpinalHDL/VexiiRiscv/blob/dev/src/main/scala/vexiiriscv/VexiiRiscv.scala>
+- VexiiRiscv typed plugin services: <https://github.com/SpinalHDL/VexiiRiscv/blob/dev/src/main/scala/vexiiriscv/execute/BranchPlugin.scala>
+- SpinalHDL PluginHost: <https://github.com/SpinalHDL/SpinalHDL/blob/dev/lib/src/main/scala/spinal/lib/misc/plugin/Host.scala>
+- SpinalHDL FiberPlugin lifecycle: <https://github.com/SpinalHDL/SpinalHDL/blob/dev/lib/src/main/scala/spinal/lib/misc/plugin/Fiber.scala>
+- MLIR pass plugin API: <https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Tools/Plugins/PassPlugin.h>
+- MLIR dialect plugin API: <https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Tools/Plugins/DialectPlugin.h>
 - Verilog-AMS standards: <https://accellera.org/downloads/standards/v-ams>
 - SystemVerilog-AMS working group: <https://accellera.org/activities/working-groups/systemverilog-ams>

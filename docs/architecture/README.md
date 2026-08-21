@@ -13,6 +13,8 @@ Architecture decision records (ADRs) define durable boundaries that later increm
 
 Accepted ADRs must not be edited to reverse their decision. A material change requires a new ADR that supersedes the old one. Clarifications that do not alter the decision may be added with a dated amendment.
 
+A proposed ADR may guide roadmap planning, but public syntax or compatibility changes become binding only through the referenced approved design gate.
+
 ## Accepted records
 
 | ADR | Decision |

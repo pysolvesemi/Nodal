@@ -5,9 +5,9 @@ import nodal.bootstrap.bridge.TextualMlir
 import nodal.bootstrap.integrations.ToolStatus
 
 final case class SimulationPlan(
-    module: BootstrapModule,
-    payload: TextualMlir,
-    tool: ToolStatus,
+  module: BootstrapModule,
+  payload: TextualMlir,
+  tool: ToolStatus,
 )
 
 object SimulationPlan:

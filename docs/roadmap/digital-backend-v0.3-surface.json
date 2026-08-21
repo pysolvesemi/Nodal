@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.4",
+  "roadmap_revision": "1.7",
   "roadmap_last_increment": 90,
   "formal_freeze_increment": 15,
   "architecture": "narrowest-compatible-backend-open-source-generated-hdl-verification",

@@ -240,12 +240,12 @@ A plugin target cannot weaken the declared approximation envelope, error budget,
 
 ## Follow-up increments
 
-- Increment 96 freezes the approximation capability profile, candidate API, diagnostics, and validation contract.
-- Increments 97-100 implement analog normalization, solver/discrete-time IR, fixed-point/range analysis, and multi-rate scheduling.
-- Increment 101 emits synthesizable portable Verilog for the approximation and integrates automatic pipelines.
-- Increment 102 implements the complete differential, equivalence, and formal validation ladder.
-- Increment 103 adds open-source FPGA synthesis, place/route, bitstream, and target evidence.
-- Increment 104 adds HIL runtime support, representative vertical slices, and the capability/limitations matrix.
+- Increment 100 freezes the approximation capability profile, candidate API, diagnostics, and validation contract.
+- Increments 101-104 implement analog normalization, solver/discrete-time IR, fixed-point/range analysis, and multi-rate scheduling.
+- Increment 105 emits synthesizable portable Verilog for the approximation and integrates automatic pipelines.
+- Increment 106 implements the complete differential, equivalence, and formal validation ladder.
+- Increment 107 adds open-source FPGA synthesis, place/route, bitstream, and target evidence.
+- Increment 108 adds HIL runtime support, representative vertical slices, and the capability/limitations matrix.
 
 ## References reviewed
 

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.6",
+  "roadmap_revision": "1.7",
   "formal_freeze_increment": 79,
   "architecture": "explicit-plugin-plan-typed-capability-graph-deterministic-phases-isolated-boundaries-retained-provenance",
   "documents": {
@@ -239,5 +239,12 @@
     "external library plus separately enabled plugin fixture",
     "plugin provenance and cache-key evidence",
     "green CI"
-  ]
+  ],
+  "verilog_family_optimization": {
+    "architecture": "docs/architecture/0013-versioned-verilog-family-optimization-passes.md",
+    "plan": "docs/roadmap/verilog-family-optimization-pass-plan.md",
+    "surface": "docs/roadmap/verilog-family-optimization-pass-surface.json",
+    "formal_gate_increment": 85,
+    "semantic_text_filters_allowed": false
+  }
 }

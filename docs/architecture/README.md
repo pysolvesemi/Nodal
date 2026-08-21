@@ -28,6 +28,7 @@ Accepted ADRs must not be edited to reverse their decision. A material change re
 | [0010](0010-digital-verilog-open-source-verification.md) | Infer the narrowest compatible backend, emit portable Verilog for digital-only designs, and verify generated RTL with open-source lint, simulation, synthesis, equivalence, and formal tools. |
 | [0011](0011-ams-fpga-approximation-validation.md) | Validate supported AMS behavior on FPGA only through an explicit discrete-time, finite-precision approximation with separate reference, quantization, RTL, and hardware evidence. |
 | [0012](0012-versioned-capability-plugin-architecture.md) | Use manifest-first, versioned capability graphs with local design hosts, deterministic phases, isolated compiler/backend/tool boundaries, lockfiles, and retained plugin provenance. |
+| [0013](0013-versioned-verilog-family-optimization-passes.md) | Use versioned typed IR, declared effects, transactional verification, and retained provenance for plug-and-play Verilog-family optimization passes. |
 
 ## Proposed records
 

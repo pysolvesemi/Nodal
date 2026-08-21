@@ -42,8 +42,8 @@ final class MixedSignalHold(val width: Int = 10) extends Module:
     code := toUInt(held, width)
 
 final class HierarchyAndOverride extends Module:
-  val input = inout(Electrical)
-  val output = inout(Electrical)
+  val source = inout(Electrical)
+  val sink = inout(Electrical)
   val common = inout(Electrical)
   val cutoffResistance = param(2.0.kOhm)
   val cutoffCapacitance = param(22.0.pF)
@@ -53,6 +53,6 @@ final class HierarchyAndOverride extends Module:
       .param(_.resistance, cutoffResistance)
       .param(_.capacitance, cutoffCapacitance)
 
-  connect(input, filter(_.input))
-  connect(output, filter(_.output))
+  connect(source, filter(_.source))
+  connect(sink, filter(_.sink))
   connect(common, filter(_.common))

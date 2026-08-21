@@ -4,13 +4,20 @@ on:
   push:
     branches:
       - increment/12-clock-reset-api-freeze-plan
+  pull_request:
+    branches:
+      - dev
+    types:
+      - opened
+      - synchronize
+      - reopened
 
 permissions:
   contents: write
 
 jobs:
   apply-roadmap:
-    if: github.actor != 'github-actions[bot]'
+    if: github.actor != 'github-actions[bot]' && (github.event_name != 'pull_request' || github.head_ref == 'increment/12-clock-reset-api-freeze-plan')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:

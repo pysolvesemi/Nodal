@@ -113,6 +113,49 @@ jobs:
             --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
             --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
 
+  prepare-clock-reset-roadmap:
+    name: prepare clock/reset roadmap
+    if: >-
+      github.event_name == 'push' &&
+      github.ref_name == 'increment/12-clock-reset-architecture-roadmap' &&
+      github.actor != 'github-actions[bot]'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out roadmap branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/12-clock-reset-architecture-roadmap
+          fetch-depth: 0
+
+      - name: Apply and validate roadmap update
+        shell: bash
+        run: |
+          python3 scripts/update_clock_reset_roadmap.py
+          python3 scripts/check_markdown.py
+          python3 scripts/check_formatting_baseline.py
+
+      - name: Commit roadmap and restore permanent CI
+        shell: bash
+        run: |
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
+          git checkout origin/dev -- .github/workflows/ci.yml
+          git rm \
+            .github/workflows/prepare-clock-reset-roadmap.yml \
+            scripts/update_clock_reset_roadmap.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            .github/workflows/ci.yml \
+            docs/architecture/0007-implicit-clock-reset-domains.md \
+            docs/roadmap/nodal-development-todo.md
+          git diff --cached --check
+          git commit -m 'docs: plan implicit clock and reset domain architecture'
+          git push origin HEAD:increment/12-clock-reset-architecture-roadmap
+
   required:
     name: required
     if: always()

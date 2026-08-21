@@ -5,6 +5,12 @@
 /core/scala/api/ @pysolvesemi
 /core/scala/sim/ @pysolvesemi
 /docs/design-gates/ @pysolvesemi
+/docs/language-reference/public-api-v0.1.md @pysolvesemi
+/scripts/check_increment10.py @pysolvesemi
+/scripts/check_increment11.py @pysolvesemi
+/tests/api/ @pysolvesemi
+/examples/externalLibrary/ @pysolvesemi
+/examples/publicApiCandidates/ @pysolvesemi
 
 # Compiler architecture and native implementation.
 /core/compiler/ @pysolvesemi

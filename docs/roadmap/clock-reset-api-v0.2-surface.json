@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "status": "roadmap-freeze-candidate",
+  "roadmap_revision": "1.2",
+  "formal_freeze_increment": 12,
+  "architecture": "implicit-local-domain-explicit-crossing-explicit-emitted-hdl",
+  "documents": {
+    "architecture_adr": "docs/architecture/0007-implicit-clock-reset-domains.md",
+    "freeze_plan": "docs/roadmap/clock-reset-api-v0.2-plan.md",
+    "main_roadmap": "docs/roadmap/nodal-development-todo.md"
+  },
+  "ordinary_state": {
+    "types": [
+      "Clock",
+      "Reset",
+      "ClockDomain",
+      "ClockEdge",
+      "ClockRelation",
+      "ResetPolicy",
+      "ResetPolarity"
+    ],
+    "domain_constructors": [
+      "ClockDomain.external",
+      "ClockDomain.from",
+      "ClockDomain.required",
+      "ClockDomain.generated"
+    ],
+    "state_constructors": [
+      "Reg",
+      "Reg.uninitialized",
+      "RegNext",
+      "RegNext.uninitialized"
+    ],
+    "control": [
+      "when",
+      "elsewhen",
+      "otherwise"
+    ],
+    "ordinary_always_allowed": false
+  },
+  "reset_policies": [
+    "ResetPolicy.None",
+    "ResetPolicy.Sync",
+    "ResetPolicy.Async",
+    "ResetPolicy.AsyncAssertSyncRelease"
+  ],
+  "crossings": {
+    "cdc": [
+      "Cdc.sync",
+      "Cdc.gray",
+      "Cdc.pulse",
+      "Cdc.handshake",
+      "Cdc.fifo",
+      "Cdc.waive"
+    ],
+    "rdc": [
+      "Rdc.sync",
+      "ResetController.combine"
+    ]
+  },
+  "clock_structure": [
+    "ClockGate",
+    "ClockMux.glitchless"
+  ],
+  "event_semantics": {
+    "analog": [
+      "analog",
+      "on(cross)",
+      "on(timer)"
+    ],
+    "low_level_escape": "nodal.lowlevel.process"
+  },
+  "required_evidence": [
+    "public-api-v0.2-design-gate",
+    "v0.1-to-v0.2-migration-note",
+    "machine-readable-public-api-manifest",
+    "compile-positive-fixtures",
+    "compile-negative-fixtures",
+    "external-library-fixture",
+    "stable-diagnostic-codes",
+    "green-ci"
+  ]
+}

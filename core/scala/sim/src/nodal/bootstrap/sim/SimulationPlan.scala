@@ -12,5 +12,5 @@ object SimulationPlan:
     SimulationPlan(
       module = module,
       payload = TextualMlir.from(module),
-      tool = ToolStatus.Unavailable("simulator integration is deferred"),
+      tool = ToolStatus.Unavailable("simulator integration is deferred")
     )

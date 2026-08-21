@@ -1,0 +1,39 @@
+name: Patch developer selector check
+
+on:
+  push:
+    branches:
+      - increment/9-formatting-linting-contribution-rules
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/9-formatting-linting-contribution-rules
+
+      - name: Update locked selector and commit
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/check_developer_commands.py")
+          text = path.read_text(encoding="utf-8")
+          old = "scalafix/check"
+          new = "scalafix.check"
+          if old not in text:
+              raise SystemExit(f"missing expected selector {old}")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/check_developer_commands.py
+          git commit -m 'fix(style): align developer selector contract'
+          git push origin HEAD:increment/9-formatting-linting-contribution-rules

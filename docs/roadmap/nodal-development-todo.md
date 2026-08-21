@@ -970,7 +970,7 @@ Empty future-library or plugin directories are not committed merely as placehold
 
 ## Deferred reusable library roadmap
 
-No official reusable model/component library or production plugin is implemented by Increments 0-104. After the core API, extension surface, packaging model, and preview release are proven, independently approved library/plugin roadmaps may populate `libraries/`, `plugins/`, or separate repositories while preserving the public-core dependency contract.
+No official reusable model/component library or production plugin is implemented by Increments 0-108. After the core API, extension surface, packaging model, and preview release are proven, independently approved library/plugin roadmaps may populate `libraries/`, `plugins/`, or separate repositories while preserving the public-core dependency contract.
 
 ## Roadmap maintenance
 

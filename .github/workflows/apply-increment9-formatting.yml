@@ -1,0 +1,35 @@
+name: Apply Increment 9 formatting
+
+on:
+  push:
+    branches:
+      - increment/9-formatting-linting-contribution-rules
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/9-formatting-linting-contribution-rules
+
+      - name: Install pinned lint tools
+        run: ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Apply repository formatting
+        run: ./nodal style fix --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Commit canonical formatting
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add core/compiler
+          git diff --cached --quiet && exit 0
+          git commit -m 'style: apply canonical native formatting'
+          git push origin HEAD:increment/9-formatting-linting-contribution-rules

@@ -343,7 +343,7 @@ def check_repository(root: Path) -> list[Problem]:
     _require(
         workflow,
         (
-            "increment/11-public-api-v0.1-freeze",
+            "increment/11-public-api-design-gate-v0-1",
             "increment-11/public-api-freeze",
             "./nodal check",
             "--base-ref origin/dev",

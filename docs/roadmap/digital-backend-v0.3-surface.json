@@ -2,6 +2,7 @@
   "schema": 1,
   "status": "roadmap-freeze-candidate",
   "roadmap_revision": "1.4",
+  "roadmap_last_increment": 90,
   "formal_freeze_increment": 15,
   "architecture": "narrowest-compatible-backend-open-source-generated-hdl-verification",
   "documents": {
@@ -21,6 +22,7 @@
     "Backend.VerilogA",
     "Backend.VerilogAMS"
   ],
+  "future_optional_backend": "Backend.SystemVerilog through a separate capability gate",
   "auto_selection": {
     "DigitalOnly": "Backend.Verilog",
     "AnalogOnly": "Backend.VerilogA",

@@ -1,0 +1,77 @@
+name: Apply Verilog-family optimization roadmap
+
+on:
+  push:
+    branches:
+      - increment/13-verilog-family-optimization-pass-roadmap
+
+permissions:
+  contents: write
+
+jobs:
+  apply-roadmap:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out roadmap branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/13-verilog-family-optimization-pass-roadmap
+          fetch-depth: 0
+
+      - name: Align transformation helper with current architecture index
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/update_verilog_family_optimization_roadmap.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''| [0012](0012-versioned-capability-plugin-architecture.md) | Use a manifest-first, versioned typed-capability graph with local design hosts, deterministic phases, lockfiles, native/process compatibility, and separate plugin/library boundaries. |'''
+          new = '''| [0012](0012-versioned-capability-plugin-architecture.md) | Use manifest-first, versioned capability graphs with local design hosts, deterministic phases, isolated compiler/backend/tool boundaries, lockfiles, and retained plugin provenance. |'''
+          if old not in text:
+              raise SystemExit("expected architecture-index helper anchor not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+
+      - name: Apply roadmap transformation
+        run: python3 scripts/update_verilog_family_optimization_roadmap.py
+
+      - name: Validate durable documents
+        shell: bash
+        run: |
+          python3 scripts/check_markdown.py
+          python3 scripts/check_formatting_baseline.py
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          for path in sorted(Path("docs/roadmap").glob("*.json")):
+              json.loads(path.read_text(encoding="utf-8"))
+          print("roadmap JSON validation passed")
+          PY
+
+      - name: Commit transformed roadmap and remove helpers
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm \
+            .github/workflows/apply-verilog-family-optimization-roadmap.yml \
+            scripts/update_verilog_family_optimization_roadmap.py
+          git add -- \
+            .github/branch-policy.json \
+            docs/architecture/README.md \
+            docs/architecture/0010-digital-verilog-open-source-verification.md \
+            docs/architecture/0011-ams-fpga-approximation-validation.md \
+            docs/architecture/0012-versioned-capability-plugin-architecture.md \
+            docs/roadmap/ams-fpga-validation-plan.md \
+            docs/roadmap/digital-verilog-open-source-verification-plan.md \
+            docs/roadmap/nodal-development-todo.md \
+            docs/roadmap/plugin-spi-v0.1-plan.md \
+            docs/roadmap/*.json
+          git diff --cached --check
+          git commit -m 'docs: plan plug-and-play Verilog-family optimization passes'
+          git push origin HEAD:increment/13-verilog-family-optimization-pass-roadmap

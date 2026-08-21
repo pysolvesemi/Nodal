@@ -35,10 +35,18 @@ jobs:
 
           path = Path("scripts/update_verilog_family_optimization_roadmap.py")
           text = path.read_text(encoding="utf-8")
-          old = '''| [0012](0012-versioned-capability-plugin-architecture.md) | Use a manifest-first, versioned typed-capability graph with local design hosts, deterministic phases, lockfiles, native/process compatibility, and separate plugin/library boundaries. |'''
-          new = '''| [0012](0012-versioned-capability-plugin-architecture.md) | Use manifest-first, versioned capability graphs with local design hosts, deterministic phases, isolated compiler/backend/tool boundaries, lockfiles, and retained plugin provenance. |'''
+          old = '''    anchor = (
+        "| [0012](0012-versioned-capability-plugin-architecture.md) | Use a manifest-first, "
+        "versioned typed-capability graph with local design hosts, deterministic phases, "
+        "lockfiles, native/process compatibility, and separate plugin/library boundaries. |"
+    )'''
+          new = '''    anchor = (
+        "| [0012](0012-versioned-capability-plugin-architecture.md) | Use manifest-first, "
+        "versioned capability graphs with local design hosts, deterministic phases, "
+        "isolated compiler/backend/tool boundaries, lockfiles, and retained plugin provenance. |"
+    )'''
           if old not in text:
-              raise SystemExit("expected architecture-index helper anchor not found")
+              raise SystemExit("expected architecture-index helper anchor block not found")
           path.write_text(text.replace(old, new, 1), encoding="utf-8")
           PY
 

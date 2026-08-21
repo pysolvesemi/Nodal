@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.0  
+**Revision:** 1.1
 **Created:** 2026-08-20  
 **Status:** Active roadmap  
 **Primary language target:** Verilog-AMS 2023  
@@ -24,6 +24,9 @@ The initial implementation will be built from scratch with modern tooling. It wi
 - Generate Verilog-AMS as the first complete backend. Generate Verilog-A from the analog-only capability profile.
 - Keep backend syntax out of the core IR wherever possible so a future SystemVerilog-AMS backend can be added without redesigning the frontend.
 - Generate deterministic, readable HDL suitable for review, simulation, and golden testing.
+- Model ordinary synchronous state with an implicit local clock/reset domain and high-level register/update constructs rather than source-level Verilog `always` blocks.
+- Make every clock-domain crossing and reset-domain crossing explicit through typed crossing primitives; retain domain provenance through hierarchy and IR so unsafe crossings are diagnosed before HDL generation.
+- Prefer clock enables over user-created clocks. Permit clock gates, clock muxes, generated clocks, and reset-tree transformations only through explicit primitives carrying implementation and timing metadata.
 - Keep the Scala frontend and native compiler in one monorepo initially, with clean module boundaries so they can be distributed independently later.
 - Keep all language, elaboration, compiler, backend, simulator-adapter, and core test infrastructure under the top-level `core/` path.
 - Reserve the separate top-level `libraries/` path for optional reusable Nodal packages that may be shared across independent user projects in the future.
@@ -37,7 +40,8 @@ The exact API will be frozen by a dedicated design-gate increment before substan
 The gate must enforce these principles:
 
 - Prefer short names such as `Module`, `Param`, `Electrical`, `Real`, `Integer`, `Bool`, `Bits`, and `UInt`; avoid names such as `NodalComponent` in normal user code.
-- Preserve established Verilog-AMS terms where Scala syntax permits: `analog`, `initial`, `always`, `discipline`, `nature`, `V`, `I`, `ddt`, `idt`, `cross`, `timer`, `transition`, and `<+`.
+- Preserve established analog and mixed-signal terms where Scala syntax permits: `analog`, `initial`, `on`, `discipline`, `nature`, `V`, `I`, `ddt`, `idt`, `cross`, `timer`, `transition`, and `<+`; do not copy Verilog event-process syntax into ordinary synchronous RTL.
+- Use concise high-level synchronous constructs such as `ClockDomain`, `Reg`, `RegNext`, and `when`. Reserve a low-level event/process escape hatch for behavior that genuinely cannot be represented by the domain-aware state model.
 - Add no `Nodal` prefix merely for branding.
 - Keep Scala-specific ceremony out of ordinary model definitions.
 - Keep the source language independent of a particular output backend.
@@ -45,6 +49,103 @@ The gate must enforce these principles:
 - Make the future library-author surface an explicit, versioned subset of the public core API rather than exposing frontend or compiler internals.
 - Use compile-positive and compile-negative fixtures to freeze syntax, types, diagnostics, and imports.
 - After the v0.1 API gate is approved, any incompatible API change requires a new versioned design gate and migration note.
+
+## Clock, reset, and timing-domain architecture
+
+Nodal adopts **implicit local domains, explicit crossings, and explicit emitted HDL**. Ordinary source creates state with high-level constructors; generated Verilog-AMS remains explicit about clock/reset ports and event processes.
+
+### Ordinary synchronous source
+
+The intended source shape is:
+
+```scala
+final class Counter extends Module:
+  val enable = in(Bool)
+  val value = out(UInt(8))
+
+  val count = Reg(0.U(8))
+  when(enable):
+    count := count + 1.U
+
+  value := count
+```
+
+The user does not write `always @(posedge ...)` for normal registers. `Reg`, `RegNext`, memories, state machines, and conditional updates capture the current domain. Increment 12 will freeze the exact public spellings after compile-positive and compile-negative evaluation.
+
+A secondary domain is introduced once and then applied lexically:
+
+```scala
+val pixel = ClockDomain.external(
+  "pixel",
+  reset = Reset.asyncAssertSyncRelease(activeLow = true),
+  frequency = 148.5.MHz,
+)
+
+pixel:
+  val x = Reg(0.U(12))
+  val pipe = instance(new PixelPipe)
+```
+
+The example is directional rather than an already frozen API. The design gate may refine names while preserving the architecture below.
+
+### Domain context and hierarchy
+
+- A module that creates synchronous state acquires a logical default-domain requirement. A child instance inherits the current domain unless its instantiation explicitly selects another domain.
+- Pure combinational and analog modules do not gain unused clock/reset ports. Emitted HDL materializes only the domain ports required by the module contract.
+- A root design must bind every unresolved domain requirement to external or generated clock/reset resources. A conventional `clock`/`reset` default may be offered only as an explicit emission policy, never by silently choosing reset semantics.
+- Domain application is a compiler-managed lexical stack, not a public Scala `implicit`, `given`, thread-local, or mutable global. This avoids Scala initialization-order leaks and keeps parallel elaboration deterministic.
+- A register, memory port, child instance, assertion, or sampler captures its domain when it is created. Later assignments cannot silently move state between domains.
+- Domain identity and generated names derive from stable source/hierarchy symbols rather than JVM object identity.
+
+### Domain metadata and relationships
+
+- A `ClockDomain` records its clock, active edge, optional frequency/period and phase, optional clock enable, reset contract, and implementation metadata.
+- Clock relationships and reset relationships are tracked separately. Sharing a clock does not make two independently released resets RDC-safe.
+- Supported clock relations include same, rationally derived, synchronous with known or unknown phase, mutually exclusive, asynchronous, and unknown. Unknown is treated conservatively.
+- Derived clocks must be created through domain operations that preserve ratio, phase, gating, mux, and source information. A manual relationship declaration is a checked design contract, not a way to suppress analysis silently.
+- Values carry timing provenance through combinational expressions, ports, hierarchy, memories, and mixed-signal boundaries. Constants and elaboration parameters are domain-neutral; state-derived values retain their producing domain.
+
+### CDC and RDC safety
+
+- A value may enter state in another domain only through an approved crossing operation or a proven-safe declared relationship.
+- The public architecture provides distinct crossing categories for a level bit or Gray value, pulse/event transfer, coherent request/acknowledge bundle, ready/valid stream through an asynchronous FIFO, reset synchronization, and an explicitly waived unsafe crossing. Candidate concise forms include `syncTo`, `pulseTo`, `handshakeTo`, `streamTo`, `resetTo`, and `unsafeCrossTo`.
+- A two-flop synchronizer is legal only for a single-bit level or a value proven to use an appropriate encoding. Applying it independently to an arbitrary multi-bit bus is an error.
+- The compiler diagnoses direct asynchronous sampling, unknown-domain consumption, combinational CDC paths, insufficient pulse width, synchronized/unsynchronized reconvergence, independently synchronized bus bits, unsafe generated clocks, and crossing primitives used with incompatible relationships.
+- `unsafeCrossTo` requires a source-located waiver, rationale, and report entry. It never removes provenance or makes downstream reconvergence checks disappear.
+- CDC primitives attach implementation attributes, formal assumptions, simulation checks, and timing-constraint intent so the generated structure and reports remain aligned.
+
+### Reset architecture
+
+- Reusable modules are reset-policy agnostic where target semantics permit. Domain binding selects synchronous reset, asynchronous reset, asynchronous assertion with synchronized release, power-on initialization, or no reset.
+- Reset polarity is normalized at the boundary; ordinary state code responds to the domain reset contract rather than repeatedly inverting reset signals.
+- Resettable state must declare its reset value. Resetless or intentionally uninitialized state must be explicit and is reported separately.
+- Asynchronous reset deassertion must be synchronized in each destination domain. The RDC pass checks reset crossings, release reconvergence, partial-reset dependencies, reset-tree mixing, and state observed while a related domain remains in reset.
+- Multiple reset causes are combined only through a reset-controller/tree primitive that preserves source, assertion, release, and destination-domain metadata.
+
+### Clock enables, gates, and muxes
+
+- Conditional state updates and domain clock-enable metadata are preferred over constructing clocks with Boolean expressions.
+- Arbitrary data-to-clock casts and combinational clock generation are errors.
+- Power-oriented clock gating and clock selection use explicit `ClockGate` and glitchless `ClockMux`-class primitives with technology mapping, generated-clock relationships, test-enable handling, and constraint metadata.
+- A gated or muxed clock creates a derived domain; it does not erase its parent relationship or bypass CDC analysis.
+
+### Analog and mixed-signal boundary
+
+- `analog` regions and `on(cross(...))` remain genuine analog/event semantics. Their existence does not justify exposing Verilog-style `always` as the normal digital state API.
+- Analog-to-digital observation uses an explicit sampler, threshold/comparator, or ADC boundary tied to a destination clock domain. Digital-to-analog updates similarly declare their source domain and transition policy.
+- The mixed-domain scheduler and verifier preserve analog event provenance separately from digital clock-domain provenance and reject implicit unsafe conversion in either direction.
+
+### Compiler and verification outputs
+
+The domain graph becomes a first-class compiler analysis that can produce:
+
+- early CDC and RDC diagnostics with source locations and stable codes;
+- a machine-readable clock/reset/domain manifest and crossing report;
+- generated-clock, asynchronous-group, false-path, and synchronizer intent for SDC/XDC-style constraints;
+- deterministic clock/reset ports and explicit backend processes;
+- simulation clock/reset stimulus, assertions, and randomized reset-release checks;
+- formal assumptions for synchronizers, handshakes, asynchronous FIFOs, clock muxes, and reset release;
+- hierarchy summaries showing which modules are combinational, analog, single-domain, or multi-domain.
 
 ## Development rules
 
@@ -162,10 +263,10 @@ The `libraries/` and `packaging/libraries/` paths are architectural reservations
 
 ## Milestones
 
-- **M0 — Foundation:** reproducible Scala/native builds, CI, frozen public API, and enforced core/library boundaries.
+- **M0 — Foundation:** reproducible Scala/native builds, CI, the corrected domain-aware public API, clock/reset architecture gate, and enforced core/library boundaries.
 - **M1 — First vertical slice:** a Scala Nodal RC model lowers through MLIR and emits validated Verilog-A.
 - **M2 — Analog preview:** useful Verilog-A subset with open-source compilation and simulation regression.
-- **M3 — AMS preview:** digital, analog, cross-domain constructs, and Verilog-AMS emission.
+- **M3 — AMS preview:** implicit-domain digital state, CDC/RDC-safe clock/reset architecture, analog/mixed-signal crossings, and Verilog-AMS emission.
 - **M4 — Scalable core release:** packaged compiler, language reference, stable extension points, library-author contract, and compatibility policy.
 
 # Incremental roadmap
@@ -219,22 +320,23 @@ The `libraries/` and `packaging/libraries/` paths are architectural reservations
   - Publish `docs/design-gates/NodalPublicApi-DG-v0.1.md` with exact imports, names, operators, construction rules, backend entry points, examples, rejected alternatives, compatibility policy, core-only API, and the versioned subset permitted to future library authors. Freeze the approved API before substantial implementation.
   - Evidence: [`NodalPublicApi-DG-v0.1.md`](../design-gates/NodalPublicApi-DG-v0.1.md), [`public-api-v0.1.json`](../../core/scala/api/public-api-v0.1.json), [`public-api-v0.1.md`](../language-reference/public-api-v0.1.md), [`CompilerApi.scala`](../../core/scala/api/src/nodal/CompilerApi.scala), [`scripts/check_increment11.py`](../../scripts/check_increment11.py), [`tests/api/test_increment11.py`](../../tests/api/test_increment11.py), validated implementation commit [`613b439`](https://github.com/pysolvesemi/Nodal/commit/613b439eaee72fb2a97cfa9b71231bb2b1467382), and successful full validation run [`32454472753`](https://github.com/pysolvesemi/Nodal/actions/runs/32454472753).
 
-- [ ] **Increment 12 — Public API contract fixtures**
-  - Turn the approved examples into compile-positive and compile-negative tests, including an external-library consumer fixture with no internal-package access. Require stable diagnostic codes for prohibited or ambiguous API usage.
+- [ ] **Increment 12 — Clock/reset architecture gate, public API v0.2 revision, and contract fixtures**
+  - Publish `docs/design-gates/NodalClockResetApi-DG-v0.2.md` and a migration note that supersede only the v0.1 ordinary synchronous/event subset. Freeze the implicit-local-domain and explicit-crossing architecture, exact `ClockDomain`/reset binding, `Reg`/`RegNext`/`when` syntax, child-domain inheritance, root-domain binding, CDC/RDC primitive categories, clock-gate/mux escape policy, analog-event separation, and diagnostics before frontend implementation.
+  - Turn the approved v0.2 examples into compile-positive and compile-negative tests, including default-domain reuse, multiple domains, derived clocks, reset-policy variants, legal single-bit/Gray/pulse/handshake/stream crossings, illegal direct or multi-bit crossings, reset-release failures, an external-library consumer with no internal-package access, and stable diagnostic codes for prohibited or ambiguous usage.
 
 ## Phase 1 — Compiler vertical slice
 
-- [ ] **Increment 13 — Elaboration context and module hierarchy kernel**
-  - Implement deterministic module construction, parent/child scopes, declaration ownership, duplicate detection, and lifecycle rules behind the frozen API.
+- [ ] **Increment 13 — Elaboration, hierarchy, and lexical domain-context kernel**
+  - Implement deterministic module construction, parent/child scopes, declaration and state ownership, the compiler-managed clock/reset-domain stack, child default-domain inheritance, explicit domain overrides, duplicate detection, root-domain requirements, and lifecycle rules behind the frozen API. Prohibit reliance on Scala implicits, thread-locals, mutable globals, or JVM object identity.
 
 - [ ] **Increment 14 — Source locations and deterministic naming**
-  - Capture Scala source locations with Scala 3 inline/macro support where useful. Define explicit-name, inferred-name, generated-name, collision, and anonymous-expression policies independent of JVM object identity.
+  - Capture Scala source locations with Scala 3 inline/macro support where useful. Define explicit-name, inferred-name, generated-name, collision, anonymous-expression, domain-symbol, generated clock/reset port, synchronizer, and crossing-instance naming policies independent of JVM object identity.
 
 - [ ] **Increment 15 — Nodal MLIR dialect skeleton**
   - Define and register the `nodal` dialect with TableGen organization, dialect documentation generation, generic parser/printer support, and one verified placeholder operation.
 
-- [ ] **Increment 16 — Core MLIR module, port and parameter model**
-  - Add target-neutral module, port, symbol, instance-reference, parameter declaration, and parameter-reference operations/types. Reuse `hw` constructs only after semantic comparison is documented.
+- [ ] **Increment 16 — Core MLIR module, port, parameter, and domain model**
+  - Add target-neutral module, port, symbol, instance-reference, parameter declaration/reference, clock/reset-domain requirement and binding, clock/reset relationship, state ownership, timing provenance, and crossing operations/types. Reuse `hw`, `seq`, and related CIRCT constructs only after semantic comparison preserves Nodal domain analysis.
 
 - [ ] **Increment 17 — Scala-to-MLIR bridge**
   - Lower the elaborated Scala model to deterministic textual MLIR with source locations and invoke `nodalc` through stdin/files. Define a versioned bridge protocol and clear process-failure diagnostics.
@@ -243,7 +345,7 @@ The `libraries/` and `packaging/libraries/` paths are architectural reservations
   - Make `nodalc` parse Nodal MLIR, run registered verifiers/passes, print normalized IR, and expose explicit pass-pipeline options suitable for lit/FileCheck tests.
 
 - [ ] **Increment 19 — Cross-layer diagnostic mapping**
-  - Map MLIR diagnostics back to Scala source locations and stable Nodal error codes. Cover parser, verifier, pass, backend, and external-tool failures.
+  - Map MLIR diagnostics back to Scala source locations and stable Nodal error codes. Cover parser, verifier, pass, backend, external-tool, domain-binding, CDC, RDC, clock-gating/mux, and unsafe-crossing waiver failures.
 
 - [ ] **Increment 20 — Backend framework and capability profiles**
   - Add translation registration, output-file handling, deterministic formatting, `verilog-a` and `verilog-ams` capability profiles, and explicit unsupported-feature diagnostics.
@@ -255,7 +357,7 @@ The `libraries/` and `packaging/libraries/` paths are architectural reservations
   - Compile a Scala RC filter through elaboration, Nodal MLIR, verification, and Verilog-A emission. Add exact golden HDL and failure tests.
 
 - [ ] **Increment 23 — Deterministic output and reproducibility contract**
-  - Prove repeated builds and different valid source traversal orders generate byte-identical normalized MLIR and HDL. Record normalization rules for whitespace, declarations, symbols, parameters, and expressions.
+  - Prove repeated builds and different valid source traversal orders generate byte-identical normalized MLIR, HDL, domain manifests, and CDC/RDC reports. Record normalization rules for whitespace, declarations, symbols, parameters, expressions, domain identities, generated ports, synchronizers, and crossing instances.
 
 ## Phase 2 — Analog language and Verilog-A profile
 
@@ -331,7 +433,7 @@ The `libraries/` and `packaging/libraries/` paths are architectural reservations
   - Add OSDI loading, generated SPICE testbench support, transient/DC/AC invocation, timeout/error handling, reproducible output capture, and a CI smoke simulation.
 
 - [ ] **Increment 47 — Scala simulation API v0.1**
-  - Add a compact API for model compilation, source creation, analyses, parameter sweeps, measurements, tolerances, and assertions without hiding the underlying simulator command/evidence.
+  - Add a compact API for model compilation, source creation, clock/reset-domain stimulus from frequency and reset contracts, asynchronous and related-clock scenarios, analyses, parameter sweeps, measurements, tolerances, and assertions without hiding the underlying simulator command/evidence.
 
 - [ ] **Increment 48 — Waveform and result model**
   - Parse simulator outputs into typed time/frequency/sweep data, preserve units, support streaming large results, and provide comparison/assertion utilities with numeric tolerance policies.
@@ -342,7 +444,7 @@ The `libraries/` and `packaging/libraries/` paths are architectural reservations
 - [ ] **Increment 50 — Cross-tool analog portability checks**
   - Define optional adapters for a second compatible simulator/tool, compare supported results within declared tolerances, and distinguish language bugs from simulator capability differences.
 
-## Phase 4 — Digital semantics, mixed signal and Verilog-AMS
+## Phase 4 — Digital semantics, clock/reset domains, mixed signal and Verilog-AMS
 
 - [ ] **Increment 51 — Digital type and port layer**
   - Add logic/bit, signed/unsigned vectors, integers, reals, nets/variables, directions, four-state policy, and lowering to CIRCT `hw` types where semantically correct.
@@ -350,32 +452,32 @@ The `libraries/` and `packaging/libraries/` paths are architectural reservations
 - [ ] **Increment 52 — Digital combinational expressions and continuous assignments**
   - Add arithmetic, logical, bitwise, comparison, concatenation, extraction, conditional expressions, width/sign rules, and continuous assignment using CIRCT `comb`/`sv` constructs where applicable.
 
-- [ ] **Increment 53 — Digital procedural blocks and assignments**
-  - Add `initial`, `always`, blocking/nonblocking assignments, procedural variables, control flow, and legality checks while keeping the public API close to Verilog-AMS.
+- [ ] **Increment 53 — Implicit-domain synchronous state and register semantics**
+  - Implement `Reg`, `RegNext`, reset values, explicit resetless/uninitialized state, conditional updates with `when`/`elsewhen`/`otherwise`, clock enables, state machines, and memory-port domain ownership. Lower ordinary synchronous source to CIRCT `seq`/`sv` and backend event processes without exposing `always` as the normal public API.
 
-- [ ] **Increment 54 — Digital events, clocks, delays and scheduling contract**
-  - Add edge events, event expressions, delays supported by Verilog-AMS, clock/reset helpers only when they do not distort language semantics, and document the digital/analog scheduling boundary.
+- [ ] **Increment 54 — Clock/reset domains, CDC/RDC primitives, and low-level event escape**
+  - Implement `ClockDomain` construction and lexical application, external/default/generated domain binding, clock and reset relationship graphs, synchronous/asynchronous reset policies, asynchronous-assert/synchronous-release handling, clock-enable preference, explicit gate/mux primitives, timing provenance propagation, CDC/RDC checking, and level/Gray, pulse, handshake, stream/async-FIFO, reset, and waived crossing operations. Add a clearly separated low-level event/process API only for genuine event-driven behavior and document the digital/analog scheduling boundary.
 
-- [ ] **Increment 55 — Digital hierarchy and parameterization**
-  - Add digital/mixed module instances, parameter propagation, connections, generate behavior, and reuse of CIRCT hardware symbols without duplicating Nodal hierarchy concepts.
+- [ ] **Increment 55 — Domain-aware digital hierarchy and parameterization**
+  - Add digital/mixed module instances, default-domain inheritance, explicit per-instance domain binding, inferred clock/reset port requirements, parameter propagation, connections, generate behavior, domain-polymorphic reusable modules, and reuse of CIRCT hardware symbols without duplicating Nodal hierarchy concepts. Require explicit adapters or deterministic policy wrappers for incompatible reset realizations rather than silent cloning.
 
 - [ ] **Increment 56 — Discrete real and mixed-signal net types**
   - Model `real`, `wreal` or applicable Verilog-AMS equivalents, resolution behavior, directionality, sampling/update semantics, and portability profiles.
 
 - [ ] **Increment 57 — Analog/digital access and conversion semantics**
-  - Add legal cross-domain reads, sampled values, thresholds, quantization, transition shaping, event synchronization, and strict diagnostics for implicit unsafe conversion.
+  - Add explicit destination-domain samplers, thresholds/comparators, quantization, source-domain-aware DAC updates, transition shaping, event synchronization, timing-provenance transfer, and strict diagnostics for implicit unsafe analog/digital or clock-domain conversion.
 
 - [ ] **Increment 58 — Connect modules and connect rules**
   - Implement connect-module declarations, connect rules, discipline insertion, direction and resolution analysis, hierarchy-wide application, and conflict diagnostics.
 
-- [ ] **Increment 59 — Mixed-domain verifier and scheduling analysis**
-  - Verify analog/digital region legality, connection domains, event feedback, conversion loops, multiple drivers, contribution/assignment misuse, and simulator-profile restrictions.
+- [ ] **Increment 59 — Mixed-domain, CDC/RDC, and scheduling verifier**
+  - Verify analog/digital region legality, clock/reset-domain bindings, direct and combinational crossings, multi-bit synchronizer misuse, pulse transfer, reconvergence, reset release and reset reconvergence, generated clock/gate/mux safety, connection domains, event feedback, conversion loops, multiple drivers, contribution/assignment misuse, unsafe-crossing waivers, and simulator-profile restrictions.
 
 - [ ] **Increment 60 — Complete Verilog-AMS backend skeleton**
-  - Emit modules containing analog and digital declarations/regions, disciplines, connect constructs, hierarchy, parameters, and stable source mapping. Keep analog-only output on the separate Verilog-A profile.
+  - Emit modules containing analog and digital declarations/regions, explicit inferred clock/reset ports, register/event processes lowered from the high-level state model, synchronizers and async FIFOs, disciplines, connect constructs, hierarchy, parameters, stable source mapping, and clock/reset metadata. Keep analog-only output on the separate Verilog-A profile.
 
 - [ ] **Increment 61 — ADC and DAC mixed-signal vertical slices**
-  - Compile and simulate or compile-check representative clocked ADC and digitally controlled DAC models, including events, quantization, transition behavior, parameters, hierarchy, and generated golden Verilog-AMS.
+  - Compile and simulate or compile-check representative ADC and digitally controlled DAC models using implicit clock domains, `Reg`-based state, explicit analog/digital sampling, a legal cross-domain transfer, reset-policy coverage, quantization, transition behavior, parameters, hierarchy, CDC/RDC reports, and generated golden Verilog-AMS.
 
 - [ ] **Increment 62 — PLL/comparator mixed-signal vertical slice**
   - Add a realistic control-loop example that exercises analog state, digital events, cross-domain conversion, feedback, and backend diagnostics.
@@ -407,7 +509,7 @@ The `libraries/` and `packaging/libraries/` paths are architectural reservations
   - Define the reserved top-level `libraries/` module convention, independent Maven coordinates, optional native/model resources, per-library versioning, core compatibility ranges, dependency-conflict policy, license metadata, offline use, and the rule that libraries compile only through public core APIs. Add an external-library fixture proving the contract, but do not implement or publish an official reusable model library in this roadmap.
 
 - [ ] **Increment 71 — Complete language reference and API documentation**
-  - Generate Scala API docs plus a Nodal language reference covering syntax, semantics, domains, diagnostics, backend profiles, simulator support, core/library ownership rules, library-author compatibility boundaries, and migration rules.
+  - Generate Scala API docs plus a Nodal language reference covering syntax, semantics, clock/reset/timing domains, CDC/RDC primitives and diagnostics, analog/mixed-signal boundaries, backend profiles, simulator support, generated constraints and reports, core/library ownership rules, library-author compatibility boundaries, and migration rules.
 
 - [ ] **Increment 72 — Tutorials and cross-project reuse examples**
   - Add progressive analog and AMS tutorials, design patterns, anti-patterns, and standalone consumer-project examples. Demonstrate how a separately built example package can reuse public Nodal core APIs without treating that example as an official Nodal library.
@@ -419,10 +521,10 @@ The `libraries/` and `packaging/libraries/` paths are architectural reservations
   - Add release automation, signed/checksummed artifacts where infrastructure permits, dependency SBOM, toolchain provenance, license inventory, and rebuild verification.
 
 - [ ] **Increment 75 — Performance and scalability benchmarks**
-  - Benchmark elaboration, MLIR size, pass time, memory, HDL generation, hierarchy scaling, and simulation-launch overhead. Add regression thresholds based on measured baselines rather than guesses.
+  - Benchmark elaboration, MLIR size, domain-provenance propagation, CDC/RDC and relationship analysis, report generation, pass time, memory, HDL generation, multi-domain hierarchy scaling, and simulation-launch overhead. Add regression thresholds based on measured baselines rather than guesses.
 
 - [ ] **Increment 76 — Public API v1 review and compatibility policy**
-  - Review the v0.1 freeze against implemented experience, approve only justified revisions through a versioned design gate, define semantic versioning, deprecation rules, source-compatibility tests, and the compatibility guarantees provided to independently versioned libraries.
+  - Review the v0.1 and v0.2 gates against implemented experience, including implicit domains, reset contracts, crossing primitives, and the low-level event escape. Approve only justified revisions through a versioned design gate, define semantic versioning, deprecation rules, source-compatibility tests, and the compatibility guarantees provided to independently versioned libraries.
 
 - [ ] **Increment 77 — Nodal core preview release**
   - Publish the first supported core preview with frozen API revision, compiler/toolchain pins, Verilog-A and Verilog-AMS capability matrices, installation instructions, examples, known limitations, library-author contract, and reproducible release evidence. No reusable model library is required for this release.
@@ -450,5 +552,9 @@ When an increment is completed:
 - Mill build tool: <https://mill-build.org/>
 - MLIR dialect definition documentation: <https://mlir.llvm.org/docs/DefiningDialects/>
 - CIRCT dialect documentation: <https://circt.llvm.org/docs/Dialects/>
+- Chisel sequential circuits and implicit clock/reset: <https://www.chisel-lang.org/docs/explanations/sequential-circuits>
+- Chisel multiple clock domains: <https://www.chisel-lang.org/docs/explanations/multi-clock>
+- SpinalHDL clock domains: <https://spinalhdl.github.io/SpinalDoc-RTD/dev/SpinalHDL/Structuring/clock_domain.html>
+- SpinalHDL clock crossing checks: <https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Design%20errors/clock_crossing_violation.html>
 - Verilog-AMS standards: <https://accellera.org/downloads/standards/v-ams>
 - SystemVerilog-AMS working group: <https://accellera.org/activities/working-groups/systemverilog-ams>

@@ -1,0 +1,42 @@
+name: Fix target-HDL roadmap range
+
+on:
+  push:
+    branches:
+      - increment/13-verilog-optimization-pass-roadmap
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out roadmap branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/13-verilog-optimization-pass-roadmap
+          fetch-depth: 0
+
+      - name: Correct final roadmap range and remove helper
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("docs/roadmap/nodal-development-todo.md")
+          text = path.read_text(encoding="utf-8")
+          old = "No official reusable model/component library or production plugin is implemented by Increments 0-104."
+          new = "No official reusable model/component library or production plugin is implemented by Increments 0-108."
+          if text.count(old) != 1:
+              raise SystemExit("roadmap range anchor did not match exactly once")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          git rm .github/workflows/fix-target-hdl-roadmap-range.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/roadmap/nodal-development-todo.md
+          git diff --cached --check
+          git commit -m 'docs: correct target-HDL roadmap completion range'
+          git push origin HEAD:increment/13-verilog-optimization-pass-roadmap

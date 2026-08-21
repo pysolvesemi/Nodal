@@ -133,7 +133,7 @@ jobs:
           ref: increment/13-verilog-optimization-pass-roadmap
           fetch-depth: 0
 
-      - name: Normalize transformer anchors
+      - name: Normalize transformer anchors and number preservation
         shell: bash
         run: |
           python3 - <<'PY'
@@ -149,11 +149,26 @@ jobs:
 
           script_path = Path("scripts/update_target_hdl_optimization_roadmap.py")
           script_text = script_path.read_text(encoding="utf-8")
+
           old_anchor = '"Passing FPGA hardware does not erase a discretization or quantization mismatch."'
           new_anchor = '"Passing a later level does not erase an earlier approximation error. Reports must preserve the full ladder."'
           if old_anchor not in script_text:
               raise SystemExit("AMS ADR transformer anchor did not match")
-          script_path.write_text(script_text.replace(old_anchor, new_anchor, 1), encoding="utf-8")
+          script_text = script_text.replace(old_anchor, new_anchor, 1)
+
+          old_logic = "            return str(map_increment(int(match.group(0))))"
+          new_logic = "\n".join(
+              (
+                  "            original = match.group(0)",
+                  "            original_number = int(original)",
+                  "            mapped = map_increment(original_number)",
+                  "            return original if mapped == original_number else str(mapped)",
+              )
+          )
+          if old_logic not in script_text:
+              raise SystemExit("increment renumber transformer logic did not match")
+          script_text = script_text.replace(old_logic, new_logic, 1)
+          script_path.write_text(script_text, encoding="utf-8")
           PY
 
       - name: Apply target-HDL pass roadmap transformation

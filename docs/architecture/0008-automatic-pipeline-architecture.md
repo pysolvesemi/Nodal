@@ -1,9 +1,9 @@
 # ADR 0008: Use protocol-typed automatic pipeline regions
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-21
 - **Scope:** Public pipeline API, scheduling IR, latency, throughput, backpressure, parameterization, and bounded retiming
-- **Decision target:** Increment 14 public API v0.3 gate
+- **Decision target:** Increment 15 public API v0.3 gate
 
 ## Context
 
@@ -12,6 +12,8 @@ Current Chisel provides explicit primitives such as `Pipe`, `ShiftRegister`, `Qu
 CIRCT provides unscheduled and scheduled pipeline operations and ESI channel buffers that may help the compiler implementation. Those dialects do not by themselves define Nodal's public protocol, reset, parameterization, latency, mixed-signal, diagnostic, and schedule-stability contracts.
 
 Nodal starts from a target-neutral MLIR layer and can expose a small transaction-oriented API while preserving a rich graph for scheduling, verification, reports, and deterministic Verilog-AMS generation.
+The pipeline architecture depends on [ADR 0009](0009-core-semantic-contracts.md): the scheduler consumes explicit value stages, lossless numeric semantics, directionless protocol payloads, exact connections, physical dimensions, and declared memory/external effects. Increment 15 freezes both public surfaces in one v0.3 gate.
+
 
 ## Recommendation
 
@@ -126,7 +128,7 @@ The pipeline subsystem must produce:
 
 - positive and negative public API fixtures;
 - deterministic schedule, latency, capacity, and critical-path reports;
-- normalized IR and golden Verilog-AMS;
+- normalized IR plus golden Verilog-AMS and portable Verilog for digital-only fixtures;
 - formal checks for transaction conservation, ordering, latency, stall stability, reset, and flush;
 - randomized bubble and backpressure regressions;
 - schedule hashes and change diagnostics when the toolchain, model, policy, or parameter envelope changes the microarchitecture.
@@ -161,11 +163,11 @@ The pipeline subsystem must produce:
 
 ## Follow-up increments
 
-- Increment 13 compiles and compares candidate source APIs.
-- Increment 14 freezes the v0.3 API and contract fixtures.
-- Increments 58-63 implement graph IR, fixed/valid scheduling, elastic transport, timing models, controls, hierarchy, reports, and bounded retiming.
-- Increment 68 integrates schedules into Verilog-AMS emission.
-- Increment 69 proves the model in ADC/DAC mixed-signal vertical slices.
+- Increment 14 compiles and compares candidate source APIs.
+- Increment 15 freezes the v0.3 API and contract fixtures.
+- Increments 59-64 implement graph IR, fixed/valid scheduling, elastic transport, timing models, controls, hierarchy, reports, and bounded retiming.
+- Increment 72 integrates schedules into Verilog-AMS emission.
+- Increment 73 proves the model in ADC/DAC mixed-signal vertical slices.
 
 ## References reviewed
 

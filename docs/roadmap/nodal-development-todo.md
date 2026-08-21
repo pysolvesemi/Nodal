@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.3
+**Revision:** 1.4
 **Created:** 2026-08-20
 **Updated:** 2026-08-21
 **Status:** Active roadmap
@@ -30,6 +30,13 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Prefer clock enables over user-created clocks. Generated clocks, physical clock gates, clock muxes, and reset trees require explicit primitives carrying relationship, mapping, and timing metadata.
 - Treat automatic pipelining as deterministic scheduling of an explicit feed-forward transaction graph, not opaque HLS. Never silently change arithmetic, ordering, protocol, clock/reset domains, resource sharing, side effects, or parameterized module identity.
 - Distinguish fixed-rate, valid-only, and elastic ready/valid pipelines in the type system. Insert and balance only pipeline-owned registers and protocol buffers inside an approved pipeline region.
+- Distinguish elaboration-only Scala values, symbolic HDL parameters/constants, and dynamic hardware values. Target-visible generation is explicit and never inferred from ordinary Scala control.
+- Use lossless finite-width arithmetic by default. Narrowing, wrap, truncation, saturation, checked resize, and signedness conversion require explicit intent.
+- Keep aggregate payloads directionless; apply direction at ports, use plain/`Valid`/`Stream` protocol types consistently, and require exact direct connections with typed adapters for intentional conversion.
+- Preserve physical dimensions for analog and mixed-signal quantities and reject incompatible equations before HDL generation without exposing verbose unit types in normal source.
+- Classify memory, external, analog, stateful, observational, and side-effecting operations explicitly so scheduling, optimization, and verification never guess latency or purity.
+- Classify complete designs as digital-only, analog-only, or mixed-signal. `Backend.Auto` selects the narrowest compatible backend, including portable Verilog for digital-only designs.
+- Verify generated pure-digital HDL through a pinned open-source matrix using Verilator, Icarus Verilog, Yosys, SBY, and optional cocotb interoperability.
 
 ## Public API direction
 
@@ -37,6 +44,10 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Preserve analog and mixed-signal terms such as `analog`, `initial`, `on`, `discipline`, `nature`, `V`, `I`, `ddt`, `idt`, `cross`, `timer`, `transition`, and `<+`.
 - Do not copy backend event-process syntax into ordinary synchronous source.
 - Provide a compact automatic-pipeline surface centered on `pipe`, `delay`, protocol-typed transactions, latency/throughput policies, automatic sideband alignment, and optional hard stage constraints. Do not expose node/link plumbing in ordinary datapath source.
+- Freeze value staging, lossless numeric/width rules, directionless aggregates, exact connections, physical quantities, memory/external effects, and automatic pipelines in one coherent public API v0.3 gate.
+- Provide explicit lossy numeric conversions such as truncate, wrap, saturate, and checked resize; never narrow or reinterpret signedness silently.
+- Treat `Valid[T]` and `Stream[T]` as general protocol types shared by ports, hierarchy, memories, simulation, and automatic pipelines.
+- Add `Backend.Auto` and `Backend.Verilog` for pure-digital output while retaining explicit `Backend.VerilogA` and `Backend.VerilogAMS` profiles.
 - Use compile-positive and compile-negative fixtures to freeze public names, types, construction forms, imports, and diagnostics.
 - Keep ordinary model source backend-neutral and exclude frontend/compiler internals from the future library-author subset.
 - Any incompatible public API change after a freeze requires a new versioned design gate and migration note.
@@ -186,9 +197,50 @@ Analog-to-digital observation requires an explicit destination-domain sampler, t
 
 True event-driven behavior that cannot be represented as domain-owned state is isolated under a `nodal.lowlevel.process(event)`-style escape. It is not the ordinary register API, cannot create untracked state, and cannot bypass CDC/RDC or mixed-domain verification.
 
+## Core semantic architecture
+
+The binding architecture is [ADR 0009](../architecture/0009-core-semantic-contracts.md). The exact candidate, compile matrix, and unified freeze criteria are in [`core-semantics-api-v0.3-plan.md`](core-semantics-api-v0.3-plan.md), with a machine-readable candidate in [`core-semantics-api-v0.3-surface.json`](core-semantics-api-v0.3-surface.json).
+
+Nodal adopts:
+
+> **Explicit stage, lossless value semantics, exact connection, dimension-safe quantity, declared effect.**
+
+### Value stages
+
+Nodal distinguishes:
+
+- ordinary Scala values used only during elaboration;
+- symbolic `Param`/constant/width/range/generate values preserved in target HDL;
+- dynamic ports, wires, registers, memories, protocols, and sampled analog values.
+
+A symbolic parameter is not a Scala `Int`; a runtime signal cannot control hardware shape. Target-visible replication uses an explicit symbolic `generate(...)` construct rather than an ordinary Scala loop.
+
+### Numeric and width policy
+
+Ordinary finite-width arithmetic retains mathematically required result bits. Narrowing and signedness changes require explicit policy through candidates such as `extend`, `truncate`, `wrap`, `saturate`, `resizeChecked`, `toSigned`, and `toUnsigned`.
+
+Assignment never silently truncates, wraps, saturates, or reinterprets. Automatic scheduling preserves the exact typed arithmetic graph and may not reassociate expressions or change overflow/rounding behavior.
+
+### Directionless aggregates and protocols
+
+Reusable aggregate payloads are directionless. `in(...)`, `out(...)`, and `inout(...)` apply direction at the boundary. Plain values, `Valid[T]`, and `Stream[T]` are shared transport types for ports, hierarchy, memories, simulation, and pipelines.
+
+Direct connection is exact: no implicit resize, field loss, protocol conversion, domain crossing, or latency insertion. Intentional transformation uses a typed adapter/view contract.
+
+### Physical quantities
+
+Voltage, current, resistance, capacitance, time, frequency, charge, power, and dimensionless values retain physical dimensions through expressions and symbolic parameters. Addition/comparison require compatible dimensions; multiplication/division and `ddt`/`idt` derive dimensions. Unit mistakes fail before HDL generation.
+
+### Effects, memories, and external operations
+
+The compiler distinguishes pure combinational work from state, memory, analog contribution, events/observation, external operations, and side effects. Only pure or explicitly movable operations may be scheduled or retimed.
+
+Memory declarations define read mode/latency, write masks, read-under-write, collision/ordering, domains, and initialization capability. External operations define type/protocol, latency, throughput, domain/reset, effect, ordering, and simulation/synthesis/formal models. Unknown behavior is a barrier, never a guessed default.
+
+
 ## Automatic pipeline architecture
 
-The proposed architecture is [ADR 0008](../architecture/0008-automatic-pipeline-architecture.md). The candidate API, staged delivery plan, and freeze criteria are in [`automatic-pipeline-api-v0.3-plan.md`](automatic-pipeline-api-v0.3-plan.md), with a machine-readable candidate in [`automatic-pipeline-api-v0.3-surface.json`](automatic-pipeline-api-v0.3-surface.json).
+The proposed architecture is [ADR 0008](../architecture/0008-automatic-pipeline-architecture.md). The candidate API, staged delivery plan, and freeze criteria are in [`automatic-pipeline-api-v0.3-plan.md`](automatic-pipeline-api-v0.3-plan.md), with a machine-readable candidate in [`automatic-pipeline-api-v0.3-surface.json`](automatic-pipeline-api-v0.3-surface.json). The pipeline candidate depends on ADR 0009 and the core-semantics v0.3 plan; Increment 15 freezes both surfaces in one gate.
 
 Nodal adopts:
 
@@ -229,7 +281,35 @@ Rules to freeze in public API v0.3:
 - schedule reports and hashes make inserted stages, buffers, alignment delays, model inputs, and microarchitecture changes reviewable;
 - general HLS, loop pipelining, silent sharing, arithmetic reassociation, and algorithm rewriting are outside the initial contract.
 
-Candidate controls are `pipe`, `delay`, `Latency.Auto`, `Latency.Exact`, `Latency.Range`, `Throughput.EveryCycle`, ready-path policy, `stage(value)` as a hard cut, `sameStage { ... }`, and typed fixed/variable-latency operator contracts. Increment 15 compares exact Scala forms; Increment 16 freezes the accepted surface and diagnostics before scheduler implementation.
+Candidate controls are `pipe`, `delay`, `Latency.Auto`, `Latency.Exact`, `Latency.Range`, `Throughput.EveryCycle`, ready-path policy, `stage(value)` as a hard cut, `sameStage { ... }`, and typed fixed/variable-latency operator contracts. Increment 14 compares exact pipeline forms against the Increment 13 semantic candidates; Increment 15 freezes the unified v0.3 surface and diagnostics before scheduler implementation.
+
+
+## Pure-digital backend and open-source verification
+
+The binding architecture is [ADR 0010](../architecture/0010-digital-verilog-open-source-verification.md). The complete tool, capability, simulation, synthesis, equivalence, formal, and CI plan is in [`digital-verilog-open-source-verification-plan.md`](digital-verilog-open-source-verification-plan.md), with the public candidate in [`digital-backend-v0.3-surface.json`](digital-backend-v0.3-surface.json).
+
+Nodal classifies each complete design as digital-only, analog-only, mixed-signal, or unsupported. The v0.3 backend candidate is:
+
+```scala
+Backend.Auto
+Backend.Verilog
+Backend.VerilogA
+Backend.VerilogAMS
+```
+
+`Backend.Auto` selects portable Verilog for digital-only designs, Verilog-A for analog-only designs, and Verilog-AMS for mixed-signal designs. Selection is deterministic and recorded in the emission manifest; it never depends on locally installed tools.
+
+The first digital profile is a conservative synthesizable Verilog-2005-style subset. High-level aggregates and protocols are flattened deterministically, while symbolic parameters, hierarchy, clocks/resets, CDC/RDC, memories, and automatic pipeline structures remain explicit and reviewable.
+
+Open-source verification exercises generated HDL rather than a separate frontend model:
+
+- Verilator for strong lint and fast compiled simulation;
+- Icarus Verilog for independent event-driven parse/elaboration/simulation;
+- Yosys for synthesis, structural checks, netlists, and equivalence;
+- SBY for safety, cover, induction, and selected liveness proofs;
+- optional cocotb interoperability alongside the primary Scala simulation API.
+
+Required CI retains tool versions, commands, hashes, logs, waveforms, synthesis reports, equivalence results, and counterexamples. A future explicit SystemVerilog profile may be added separately; it cannot replace the portable Verilog path.
 
 
 ## Core and future library boundary
@@ -286,10 +366,10 @@ Empty future-library directories are not committed merely as placeholders.
 
 ## Milestones
 
-- **M0 — Foundation:** reproducible builds, CI, clock/reset and automatic-pipeline API freezes, frozen contracts, and enforced core/library boundaries.
+- **M0 — Foundation:** reproducible builds, CI, clock/reset plus unified core-semantics/automatic-pipeline API freezes, digital-backend selection contract, and enforced core/library boundaries.
 - **M1 — First vertical slice:** Scala RC model lowers through MLIR and emits validated Verilog-A.
 - **M2 — Analog preview:** useful Verilog-A subset with open-source compilation and simulation regression.
-- **M3 — AMS preview:** implicit-domain digital state, automatic fixed/valid/elastic pipelines, CDC/RDC-safe clock/reset architecture, mixed-signal crossings, and Verilog-AMS emission.
+- **M3 — Digital/AMS preview:** implicit-domain digital state, automatic fixed/valid/elastic pipelines, portable Verilog with open-source simulation/synthesis/formal verification, CDC/RDC-safe clock/reset architecture, mixed-signal crossings, and Verilog-AMS emission.
 - **M4 — Scalable core release:** packaged compiler, complete reference, stable extension points, library-author contract, and compatibility policy.
 
 # Incremental roadmap
@@ -352,241 +432,268 @@ Empty future-library directories are not committed merely as placeholders.
   - Keep frontend/backend semantics inert. Mark this increment `[x]` only after every freeze exit criterion in the detailed plan passes CI.
 
 
-- [ ] **Increment 13 — Automatic pipeline candidate prototypes and architecture comparison**
-  - Add compile-only candidates for `pipe`, `delay`, plain/`Valid`/`Stream` protocols, exact/ranged/auto latency, throughput and ready-path policy, automatic sideband transport and reconvergence balancing, `stage`/`sameStage` constraints, schedule inspection, parameter envelopes, and fixed/variable-latency operator declarations.
-  - Compare current Chisel `Pipe`/`ShiftRegister`/`Queue`/`Decoupled`, current SpinalHDL `Node`/`Payload`/`Link`/`Builder`, and CIRCT `pipeline`/ESI. Retain their useful semantics without exposing lower-level graph plumbing as Nodal's ordinary API.
+- [ ] **Increment 13 — Core semantic candidate prototypes and architecture comparison**
+  - Use [ADR 0009](../architecture/0009-core-semantic-contracts.md), [`core-semantics-api-v0.3-plan.md`](core-semantics-api-v0.3-plan.md), and [`core-semantics-api-v0.3-surface.json`](core-semantics-api-v0.3-surface.json) as the mandatory candidate.
+  - Compile and compare elaboration-only Scala values, symbolic `Param`/constant/width/range/generate values, and dynamic hardware values. Freeze candidate target `generate(...)` behavior and stage-mixing diagnostics.
+  - Compile lossless unsigned/signed arithmetic, symbolic width rules, explicit extend/truncate/wrap/saturate/checked-resize/signedness conversions, and negative implicit-narrowing fixtures.
+  - Compile directionless nested aggregates/vectors, exact port/connection semantics, typed adapters/views, and general plain/`Valid`/`Stream` protocols.
+  - Compile dimension-safe analog quantities and negative unit equations without exposing verbose dimension types in ordinary source.
+  - Compile explicit memory and external-operation contracts covering read latency, read-under-write, masks, ordering, domains, effects, throughput, and model availability. Reject unknown latency/effect in movable pipeline regions.
+  - Include an external-library consumer using only public candidate APIs; keep frontend/backend behavior inert.
 
-- [ ] **Increment 14 — Automatic pipeline public API v0.3 freeze and contract fixtures**
-  - Use [ADR 0008](../architecture/0008-automatic-pipeline-architecture.md), [`automatic-pipeline-api-v0.3-plan.md`](automatic-pipeline-api-v0.3-plan.md), and [`automatic-pipeline-api-v0.3-surface.json`](automatic-pipeline-api-v0.3-surface.json) as the mandatory architecture and candidate.
-  - Publish `NodalAutomaticPipelineApi-DG-v0.3.md`, a migration note, and a machine-readable frozen public surface. Freeze protocol types, `pipe`/`delay`, latency/throughput/ready-path semantics, input capture, automatic alignment, anchors, reset priority, one-domain restriction, parameter-envelope behavior, published latency, schedule stability, side-effect barriers, and diagnostics before scheduler implementation.
-  - Add positive fixtures for fixed-rate, valid-only, elastic, exact/ranged/internal-auto latency, sideband/reconvergence alignment, hard constraints, envelope-safe parameterized HDL, fixed/variable-latency operators, and external-library use.
-  - Add negative fixtures for missing domains, hidden CDC/RDC, live external reads, protocol conversion, missing timing models, impossible latency, side effects, ready loops, unbounded timing parameters, clone-per-value requests, and conflicting constraints. Freeze stable codes and source locations.
+- [ ] **Increment 14 — Automatic pipeline candidate prototypes and architecture comparison**
+  - Compile `pipe`, `delay`, plain/`Valid`/`Stream` protocols, exact/ranged/auto latency, throughput and ready-path policy, automatic sideband transport and reconvergence balancing, `stage`/`sameStage`, schedule inspection, parameter envelopes, and fixed/variable-latency operators against Increment 13 semantics.
+  - Compare current Chisel `Pipe`/`ShiftRegister`/`Queue`/`Decoupled`, current SpinalHDL `Node`/`Payload`/`Link`/`Builder`, and CIRCT `pipeline`/ESI. Retain useful semantics without exposing lower-level graph plumbing.
+  - Prove that arithmetic, aggregate, protocol, quantity, memory, effect, clock/reset, CDC/RDC, and native parameterized-module contracts remain unchanged by the candidate scheduler surface.
+
+- [ ] **Increment 15 — Unified core semantics and automatic pipeline public API v0.3 freeze**
+  - Publish `docs/design-gates/NodalCoreSemanticsPipelineApi-DG-v0.3.md`, migration notes, and an updated machine-readable public API manifest using ADRs 0009/0008 and both v0.3 candidate plans/surfaces.
+  - Freeze value stages and target generate; lossless numeric/width/signedness rules; explicit lossy conversions; directionless aggregates; exact connections/adapters; plain/`Valid`/`Stream`; physical quantities; memory/external effect contracts; `pipe`/`delay`; latency/throughput/ready policy; stage constraints; parameter-envelope scheduling; and schedule evidence.
+  - Freeze `Backend.Auto`, `Backend.Verilog`, design-kind reporting, and explicit synth/sim/formal digital profiles from ADR 0010 and the digital-backend candidate.
+  - Add positive and negative compile contracts for every candidate category, including external-library use, stable diagnostic codes/source locations, and v0.1/v0.2 migration behavior.
+  - Keep elaboration, scheduler, digital backend, and simulator behavior inert. Mark this increment `[x]` only when the unified gate, manifests, fixtures, diagnostics, and CI satisfy all linked exit criteria.
 
 ## Phase 1 — Compiler vertical slice
 
-- [ ] **Increment 15 — Elaboration, hierarchy, and lexical domain-context kernel**
+- [ ] **Increment 16 — Elaboration, hierarchy, and lexical domain-context kernel**
   - Implement deterministic module construction, ownership, lifecycle, default-domain requirements, lexical domain stack, single-domain inheritance, named multi-domain requirements, typed bindings, and root-domain validation without public Scala implicits, globals, thread-locals, or JVM identity.
 
-- [ ] **Increment 16 — Source locations and deterministic naming**
+- [ ] **Increment 17 — Source locations and deterministic naming**
   - Capture Scala source locations and define stable names for modules, declarations, domains, generated clock/reset ports, synchronizers, FIFOs, reset controllers, crossings, and anonymous expressions.
 
-- [ ] **Increment 17 — Nodal MLIR dialect skeleton**
+- [ ] **Increment 18 — Nodal MLIR dialect skeleton**
   - Register the out-of-tree dialect, TableGen organization/docs, generic parser/printer, and a verified placeholder operation.
 
-- [ ] **Increment 18 — Core MLIR module, port, parameter, and domain model**
+- [ ] **Increment 19 — Core MLIR module, port, parameter, and domain model**
   - Add target-neutral modules, ports, symbols, instances, symbolic parameters, domain requirements/bindings, clock/reset relationships, state ownership, timing provenance, and crossing operations/types. Reuse CIRCT only after semantic comparison.
 
-- [ ] **Increment 19 — Scala-to-MLIR bridge**
+- [ ] **Increment 20 — Scala-to-MLIR bridge**
   - Lower deterministic construction state to versioned textual MLIR with source locations and invoke `nodalc` through a clear process protocol.
 
-- [ ] **Increment 20 — Native parse, verify, and pass pipeline**
+- [ ] **Increment 21 — Native parse, verify, and pass pipeline**
   - Parse Nodal MLIR, run registered verifiers/passes, print normalized IR, and expose explicit lit/FileCheck-friendly pipelines.
 
-- [ ] **Increment 21 — Cross-layer diagnostic mapping**
+- [ ] **Increment 22 — Cross-layer diagnostic mapping**
   - Map parser, verifier, pass, backend, external-tool, domain-binding, CDC, RDC, gate/mux, and waiver diagnostics back to Scala locations and stable codes.
 
-- [ ] **Increment 22 — Backend framework and capability profiles**
+- [ ] **Increment 23 — Backend framework and capability profiles**
   - Add translation registration, deterministic output handling, `verilog-a`/`verilog-ams` profiles, and explicit unsupported-feature errors.
 
-- [ ] **Increment 23 — Minimal analog expression and contribution IR**
+- [ ] **Increment 24 — Minimal analog expression and contribution IR**
   - Add real literals, parameter references, arithmetic, electrical potential access, analog region, and contribution sufficient for a minimal RC equation.
 
-- [ ] **Increment 24 — RC filter end-to-end vertical slice**
+- [ ] **Increment 25 — RC filter end-to-end vertical slice**
   - Compile Scala RC through construction, Nodal MLIR, verification, and Verilog-A emission with exact golden output and failures.
 
-- [ ] **Increment 25 — Deterministic output and reproducibility contract**
+- [ ] **Increment 26 — Deterministic output and reproducibility contract**
   - Prove byte-identical MLIR, HDL, domain manifests, and CDC/RDC reports across repeated builds and valid traversal orders.
 
 ## Phase 2 — Analog language and Verilog-A profile
 
-- [ ] **Increment 26 — Natures and disciplines**
+- [ ] **Increment 27 — Natures and disciplines**
   - Implement units, access functions, tolerances, domains, potential/flow associations, declarations, imports, and compatibility.
 
-- [ ] **Increment 27 — Electrical nodes, nets, and branches**
+- [ ] **Increment 28 — Electrical nodes, nets, and branches**
   - Implement scalar nodes, ground/reference behavior, implicit/named branches, directions, connectivity, aliases, and ownership.
 
-- [ ] **Increment 28 — Parameters, constants, ranges, and units**
+- [ ] **Increment 29 — Parameters, constants, ranges, and units**
   - Implement supported parameter kinds, constraints, constant expressions, overrides, unit-aware literals, and lossless native HDL rendering.
 
-- [ ] **Increment 29 — Analog numeric types and expression typing**
+- [ ] **Increment 30 — Analog numeric types and expression typing**
   - Define promotion, physical compatibility, comparisons/logical results, conditionals, invalid operations, and folding boundaries.
 
-- [ ] **Increment 30 — Potential and flow access functions**
+- [ ] **Increment 31 — Potential and flow access functions**
   - Implement `V`, `I`, discipline-specific access, one/two-node forms, branches, probes, and validation.
 
-- [ ] **Increment 31 — Analog blocks and contribution semantics**
+- [ ] **Increment 32 — Analog blocks and contribution semantics**
   - Implement analog regions, `<+`, potential/flow contributions, equation participation, ordering, and illegal procedural use.
 
-- [ ] **Increment 32 — Analog variables and procedural assignment**
+- [ ] **Increment 33 — Analog variables and procedural assignment**
   - Implement local variables, initialization, procedural assignment, scopes, read-before-write diagnostics, and lowering.
 
-- [ ] **Increment 33 — Analog control flow**
+- [ ] **Increment 34 — Analog control flow**
   - Implement conditionals, case, bounded loops, break/continue where supported, and static/runtime legality.
 
-- [ ] **Increment 34 — Differential and integral operators**
+- [ ] **Increment 35 — Differential and integral operators**
   - Implement `ddt`, `idt`, initial conditions, context restrictions, and semantics-preserving simplification.
 
-- [ ] **Increment 35 — Time and waveform operators**
+- [ ] **Increment 36 — Time and waveform operators**
   - Implement `transition`, `slew`, `absdelay`, `$abstime`, `$bound_step`, units, continuity, and diagnostics.
 
-- [ ] **Increment 36 — Analog events**
+- [ ] **Increment 37 — Analog events**
   - Implement `cross`, `above`, `timer`, initial/final step, event composition, tolerances, and controlled statements.
 
-- [ ] **Increment 37 — Mathematical and simulator functions**
+- [ ] **Increment 38 — Mathematical and simulator functions**
   - Add a versioned registry with type/arity checking, constant evaluation, analysis queries, and backend spelling.
 
-- [ ] **Increment 38 — Noise operators**
+- [ ] **Increment 39 — Noise operators**
   - Implement white, flicker, and table noise with analysis, naming, units, and capability checks.
 
-- [ ] **Increment 39 — Laplace and discrete transfer operators**
+- [ ] **Increment 40 — Laplace and discrete transfer operators**
   - Implement supported Laplace/Z-domain forms, coefficient arrays, constant requirements, denominator validation, and emission.
 
-- [ ] **Increment 40 — User-defined analog functions**
+- [ ] **Increment 41 — User-defined analog functions**
   - Implement typed declarations, arguments, locals, returns, recursion/overload policy, resolution, and lowering.
 
-- [ ] **Increment 41 — Analog hierarchy and parameterized instances**
+- [ ] **Increment 42 — Analog hierarchy and parameterized instances**
   - Implement instances, named ports, symbolic overrides, legal arrays, hierarchy verification, and recursion errors.
 
-- [ ] **Increment 42 — Arrays and elaboration-time generation**
+- [ ] **Increment 43 — Arrays and elaboration-time generation**
   - Implement fixed arrays, indexing/slices, Scala elaboration loops, target generate constructs, and static bounds.
 
-- [ ] **Increment 43 — Analysis state and environmental constructs**
+- [ ] **Increment 44 — Analysis state and environmental constructs**
   - Implement analysis-dependent behavior, temperature/environment access, initial/final semantics, and portability policy.
 
-- [ ] **Increment 44 — Analog canonicalization passes**
+- [ ] **Increment 45 — Analog canonicalization passes**
   - Implement safe folding, algebraic normalization, dead declaration removal, branch/access normalization, and no contribution reordering.
 
-- [ ] **Increment 45 — Analog semantic lint suite**
+- [ ] **Increment 46 — Analog semantic lint suite**
   - Detect floating nodes, discipline conflicts, branch misuse, unit errors, unreachable events, discontinuities, parameter risks, and portability hazards.
 
-- [ ] **Increment 46 — Verilog-A capability profile and feature matrix**
+- [ ] **Increment 47 — Verilog-A capability profile and feature matrix**
   - Publish exact `.va` coverage, reject AMS-only constructs early, document simulator portability, and expose machine-readable features.
 
 ## Phase 3 — Open-source analog validation and testbench support
 
-- [ ] **Increment 47 — OpenVAF compile validation**
+- [ ] **Increment 48 — OpenVAF compile validation**
   - Detect versions/features, compile generated models, classify expected limitations, and retain diagnostics.
 
-- [ ] **Increment 48 — ngspice simulation harness**
+- [ ] **Increment 49 — ngspice simulation harness**
   - Add OSDI loading, generated SPICE benches, transient/DC/AC runs, timeout/error handling, outputs, and CI smoke simulation.
 
-- [ ] **Increment 49 — Scala simulation API v0.1**
+- [ ] **Increment 50 — Scala simulation API v0.1**
   - Add compilation, source creation, clock/reset-domain stimulus, related/asynchronous clocks, analyses, sweeps, measurements, tolerances, and assertions without hiding tool evidence.
 
-- [ ] **Increment 50 — Waveform and result model**
+- [ ] **Increment 51 — Waveform and result model**
   - Parse typed time/frequency/sweep results, preserve units, stream large data, and provide comparison/assertion utilities.
 
-- [ ] **Increment 51 — Analog regression suite**
+- [ ] **Increment 52 — Analog regression suite**
   - Cover RC/RLC, diode, controlled source, amplifier, comparator, oscillator/VCO, hierarchy, events, sweeps, and failures as core fixtures.
 
-- [ ] **Increment 52 — Cross-tool analog portability checks**
+- [ ] **Increment 53 — Cross-tool analog portability checks**
   - Add an optional second tool adapter, tolerance-based comparisons, and language-versus-tool failure classification.
 
-## Phase 4 — Digital semantics, clock/reset domains, mixed signal, and Verilog-AMS
+## Phase 4 — Digital semantics, portable Verilog, open-source verification, mixed signal, and Verilog-AMS
 
-- [ ] **Increment 53 — Digital type and port layer**
+- [ ] **Increment 54 — Digital type and port layer**
   - Add bit/logic, signed/unsigned vectors, integers, reals, nets/variables, directions, four-state policy, and compatible CIRCT lowering.
 
-- [ ] **Increment 54 — Digital combinational expressions and continuous assignments**
+- [ ] **Increment 55 — Digital combinational expressions and continuous assignments**
   - Add arithmetic, logic, bitwise, comparisons, concatenation, extraction, conditionals, width/sign rules, and continuous assignment.
 
-- [ ] **Increment 55 — Implicit-domain synchronous state and register semantics**
+- [ ] **Increment 56 — Implicit-domain synchronous state and register semantics**
   - Implement `Reg`, `RegNext`, reset/uninitialized state, `when` priority, enables, state machines, memory-port ownership, and CIRCT sequential lowering without exposing normal `always` syntax.
 
-- [ ] **Increment 56 — Clock/reset domains, CDC/RDC primitives, and low-level event escape**
+- [ ] **Increment 57 — Clock/reset domains, CDC/RDC primitives, and low-level event escape**
   - Implement domain construction/application, external/default/generated binding, relationship graphs, reset policies, async-assert/sync-release, timing provenance, all semantic CDC/RDC operations, gates/muxes, waivers, and restricted low-level processes.
 
-- [ ] **Increment 57 — Domain-aware digital hierarchy and parameterization**
+- [ ] **Increment 58 — Domain-aware digital hierarchy and parameterization**
   - Implement default-domain inheritance, typed named-domain binding, inferred clock/reset ports, symbolic parameters, domain-polymorphic modules, generate behavior, and deterministic variants only for material edge/reset differences.
 
-- [ ] **Increment 58 — Pipeline transaction graph, latency provenance, and IR contract**
+- [ ] **Increment 59 — Pipeline transaction graph, latency provenance, and IR contract**
   - Represent fixed-rate, valid-only, and elastic regions as single-domain feed-forward transaction graphs with protocol tokens, transaction identity, stage/latency variables, sideband demand, reconvergence constraints, exact/ranged latency, hard anchors, reset/control policy, parameter envelopes, and operation delay/latency metadata. Document selective CIRCT reuse.
 
-- [ ] **Increment 59 — Fixed-rate and valid-only automatic scheduling**
+- [ ] **Increment 60 — Fixed-rate and valid-only automatic scheduling**
   - Schedule acyclic II=1 datapaths under exact/ranged/auto latency and target-period constraints; insert pipeline-owned registers, balance operands and sidebands, propagate `Valid` bubbles, preserve finite-width semantics, and emit deterministic schedules, reports, normalized IR, and golden Verilog-AMS.
 
-- [ ] **Increment 60 — Elastic automatic pipeline and backpressure synthesis**
+- [ ] **Increment 61 — Elastic automatic pipeline and backpressure synthesis**
   - Lower `Stream[T]` regions to full-throughput ready/valid stages with elastic registers, skid buffers, registered-ready cuts, bubble/stall propagation, capacity accounting, ready-loop checks, stall-stability assertions, and proofs of no loss, duplication, or reordering.
 
-- [ ] **Increment 61 — Timing/resource models and target-driven partitioning**
+- [ ] **Increment 62 — Timing/resource models and target-driven partitioning**
   - Add versioned generic, FPGA, ASIC, simulator, and user operation models covering width/sign-dependent delay, fixed multi-cycle latency, implementation choices, resource preferences, uncertainty, and finite parameter envelopes. Implement target scheduling with infeasibility diagnostics and optional synthesis-feedback import without claiming timing closure from estimates.
 
-- [ ] **Increment 62 — Pipeline controls, anchors, memories, and multi-cycle units**
+- [ ] **Increment 63 — Pipeline controls, anchors, memories, and multi-cycle units**
   - Freeze and implement typed flush/cancel/replay and commit barriers, reset/stall/enable priority, named hard cuts, same-stage groups, synchronous memory latency/ordering, fixed-latency blocks, and elastic wrappers for variable-latency units. Reject or isolate side effects that cannot move safely.
 
-- [ ] **Increment 63 — Hierarchical composition, schedule stability, and bounded retiming**
+- [ ] **Increment 64 — Hierarchical composition, schedule stability, and bounded retiming**
   - Compose regions/modules through explicit latency/protocol contracts, generate stable stage names and schedule hashes, diagnose latency drift, export reports/debug mappings, and retime only pipeline-owned registers inside declared boundaries—not across user state, CDC/RDC, analog boundaries, memories, side effects, parameter-envelope barriers, or observability anchors.
 
 
-- [ ] **Increment 64 — Discrete real and mixed-signal net types**
+
+- [ ] **Increment 65 — Digital-only classification, Backend.Auto, and portable Verilog backend**
+  - Implement transitive digital-only/analog-only/mixed-signal classification, construct inventories, deterministic `Backend.Auto` selection, explicit capability rejection, and machine-readable selection evidence.
+  - Emit the portable synthesizable Verilog profile with symbolic parameters/generate, hierarchy, flattened aggregates/protocols, clocks/resets, memories, CDC/RDC, automatic pipelines, black boxes, assertions/formal hooks, source maps, deterministic formatting, and exact golden fixtures.
+  - Keep broad SystemVerilog optional and separately gated; portable Verilog remains required for open-source interoperability.
+
+- [ ] **Increment 66 — Open-source digital lint, simulation, waveforms, and cocotb interoperability**
+  - Pin and integrate Verilator and Icarus Verilog; run independent parse/elaboration, strong lint, fast compiled simulation, event-driven smoke simulation, normalized diagnostics, deterministic seeds, VCD/FST waveforms, and supported coverage.
+  - Extend the Scala simulation API with typed digital/aggregate/protocol access, clock/reset-domain stimulus, multiple clocks, randomized reset release, `Valid`/`Stream` drivers/monitors/scoreboards, stalls/bubbles, latency-aware checking, timeouts, caching, and artifacts.
+  - Add optional cocotb metadata/runner support for Icarus and Verilator without making Python or cocotb define Nodal semantics.
+
+- [ ] **Increment 67 — Yosys synthesis/equivalence and SBY formal verification**
+  - Pin and integrate Yosys, SBY, and selected solvers. Run hierarchy/process/memory checks, target-neutral synthesis, inferred-latch/loop/black-box diagnostics, normalized netlist emission, statistics, and parameter elaboration matrices.
+  - Add RTL-to-optimized/netlist equivalence, including latency-aware fixed-pipeline and protocol-aware elastic checks.
+  - Add bounded/unbounded safety, cover, and selected liveness property suites for registers, resets, `Valid`/`Stream`, FIFOs, handshakes, synchronizers, CDC/RDC wrappers, and automatic pipelines. Retain traces and counterexamples as CI evidence.
+
+- [ ] **Increment 68 — Discrete real and mixed-signal net types**
   - Implement `real`, `wreal` or profile equivalents, resolution, direction, sampling/update semantics, and portability.
 
-- [ ] **Increment 65 — Analog/digital access and conversion semantics**
+- [ ] **Increment 69 — Analog/digital access and conversion semantics**
   - Implement destination-domain samplers, thresholds/comparators, quantization, source-domain-aware DAC updates, transition shaping, event synchronization, and provenance transfer.
 
-- [ ] **Increment 66 — Connect modules and connect rules**
+- [ ] **Increment 70 — Connect modules and connect rules**
   - Implement declarations, rules, discipline insertion, direction/resolution analysis, hierarchy-wide application, and conflicts.
 
-- [ ] **Increment 67 — Mixed-domain, CDC/RDC, and scheduling verifier**
+- [ ] **Increment 71 — Mixed-domain, CDC/RDC, and scheduling verifier**
   - Verify domain bindings, direct/combinational crossings, multi-bit misuse, pulses, reconvergence, reset release/reconvergence, generated clocks, gates/muxes, analog/digital legality, conversion loops, drivers, waivers, and profile restrictions.
 
-- [ ] **Increment 68 — Complete Verilog-AMS backend skeleton**
+- [ ] **Increment 72 — Complete Verilog-AMS backend skeleton**
   - Emit explicit inferred clock/reset ports, event processes lowered from high-level state and automatic schedules, fixed/valid/elastic pipeline registers and control, synchronizers/FIFOs, reset logic, gates/muxes, analog/digital declarations, disciplines, connect constructs, hierarchy, parameters, latency/schedule metadata, and source maps.
 
-- [ ] **Increment 69 — ADC and DAC mixed-signal vertical slices**
+- [ ] **Increment 73 — ADC and DAC mixed-signal vertical slices**
   - Compile/check or simulate ADC/DAC models using implicit domains, automatically scheduled fixed and elastic digital datapaths, explicit sampling/drive, legal CDC, reset policies, parameter-envelope-safe scheduling, hierarchy, pipeline/CDC/RDC reports, and deterministic parameterized Verilog-AMS.
 
-- [ ] **Increment 70 — PLL/comparator mixed-signal vertical slice**
+- [ ] **Increment 74 — PLL/comparator mixed-signal vertical slice**
   - Exercise analog state, generated clocks, digital events, cross-domain conversion, feedback, reset behavior, and diagnostics.
 
-- [ ] **Increment 71 — Verilog-AMS simulator adapter interface**
+- [ ] **Increment 75 — Verilog-AMS simulator adapter interface**
   - Define pluggable compile/elaborate/run adapters, discovery, licensing-safe CI, log normalization, and optional local regression.
 
-- [ ] **Increment 72 — Portable and full AMS profiles**
+- [ ] **Increment 76 — Portable and full AMS profiles**
   - Publish portable/full standard-oriented and simulator-extension profiles with machine-readable feature coverage and no accidental leakage.
 
-- [ ] **Increment 73 — UVM-MS interoperability hooks**
+- [ ] **Increment 77 — UVM-MS interoperability hooks**
   - Generate metadata, wrappers, or interfaces needed for UVM-MS integration without embedding a second verification methodology.
 
-- [ ] **Increment 74 — Verilog-AMS conformance suite**
+- [ ] **Increment 78 — Verilog-AMS conformance suite**
   - Build standards-oriented positive/negative tests, practical round trips, feature coverage, and simulator-result classification.
 
 ## Phase 5 — Extensibility, scale, documentation, and release
 
-- [ ] **Increment 75 — Compiler pass, extension, and library-author API**
+- [ ] **Increment 79 — Compiler pass, extension, and library-author API**
   - Stabilize pass registration, dialect interfaces, analysis preservation, custom lints, out-of-tree examples, and the minimal supported library-author surface.
 
-- [ ] **Increment 76 — Versioned IR and bridge compatibility**
+- [ ] **Increment 80 — Versioned IR and bridge compatibility**
   - Add version metadata, supported upgrades, old-version fixtures, and explicit unknown-future-version rejection.
 
-- [ ] **Increment 77 — Incremental build and compiler caching**
+- [ ] **Increment 81 — Incremental build and compiler caching**
   - Cache construction, normalized MLIR, native compilation, reports, and backend outputs by content/toolchain/profile hashes with proven invalidation.
 
-- [ ] **Increment 78 — Future library architecture and publication contract**
+- [ ] **Increment 82 — Future library architecture and publication contract**
   - Define module conventions, Maven coordinates, resources, independent versions, core ranges, conflicts, licenses, offline use, and external public-API-only fixtures without publishing an official library yet.
 
-- [ ] **Increment 79 — Complete language reference and API documentation**
-  - Cover syntax, semantics, domains, CDC/RDC, reset, automatic pipeline protocols/policies, latency/throughput and parameter-envelope contracts, stage controls, schedule reports/diagnostics, analog/mixed-signal boundaries, profiles, constraints, simulators, libraries, and migration.
+- [ ] **Increment 83 — Complete language reference and API documentation**
+  - Cover value staging and target generate, numeric/width/overflow rules, directionless aggregates, exact adapters/connections, physical quantities, effects/memory/external contracts, domains/CDC/RDC/reset, automatic pipeline protocols/policies/evidence, portable Verilog and backend inference, open-source simulation/synthesis/formal flows, mixed-signal boundaries, diagnostics, profiles, libraries, and migration.
 
-- [ ] **Increment 80 — Tutorials and cross-project reuse examples**
+- [ ] **Increment 84 — Tutorials and cross-project reuse examples**
   - Add progressive analog/AMS/domain tutorials, patterns, anti-patterns, and standalone external consumer projects.
 
-- [ ] **Increment 81 — Cross-platform core packaging**
+- [ ] **Increment 85 — Cross-platform core packaging**
   - Produce checksummed Scala/native bundles for supported Linux/macOS first, with Windows strategy, source fallback, and future library hooks.
 
-- [ ] **Increment 82 — Reproducible release, provenance, and SBOM**
+- [ ] **Increment 86 — Reproducible release, provenance, and SBOM**
   - Add release automation, checksums/signatures where possible, dependency SBOM, toolchain provenance, licenses, and rebuild verification.
 
-- [ ] **Increment 83 — Performance and scalability benchmarks**
-  - Benchmark construction, MLIR size, pipeline graph construction, scheduling/model lookup, parameter-envelope analysis, sideband and elastic-control generation, schedule reporting, domain provenance, CDC/RDC analysis, pass time, memory, HDL, multi-domain/pipeline hierarchy, caching, and simulation launch.
+- [ ] **Increment 87 — Performance and scalability benchmarks**
+  - Benchmark construction, MLIR size, symbolic staging/type/dimension/effect analysis, pipeline graph construction and scheduling, parameter envelopes, sideband/elastic control, domain provenance and CDC/RDC, portable Verilog emission, Verilator/Icarus simulation, Yosys synthesis/equivalence, SBY proofs, pass time, memory, hierarchy, caching, and regression launch overhead.
 
-- [ ] **Increment 84 — Public API v1 review and compatibility policy**
-  - Review v0.1/v0.2/v0.3 implementation experience, implicit domains, resets, crossings, automatic pipeline protocol/latency/parameter semantics, schedule stability, stage controls, and low-level escape; approve only justified changes and define semantic versioning, deprecation, and source compatibility.
+- [ ] **Increment 88 — Public API v1 review and compatibility policy**
+  - Review v0.1/v0.2/v0.3 implementation experience, value staging, numeric safety, interfaces/protocols, quantities/effects, implicit domains, resets/crossings, automatic pipeline contracts, backend inference/portable Verilog, schedule stability, and low-level escape; approve only justified changes and define semantic versioning, deprecation, and source compatibility.
 
-- [ ] **Increment 85 — Nodal core preview release**
-  - Publish the supported preview with frozen API revision, toolchain pins, capability matrices, installation, examples, known limitations, library-author contract, and reproducible evidence.
+- [ ] **Increment 89 — Nodal core preview release**
+  - Publish the supported preview with frozen API revision, toolchain pins, portable Verilog/Verilog-A/Verilog-AMS capability matrices, open-source lint/simulation/synthesis/formal evidence, installation, examples, known limitations, library-author contract, and reproducible provenance.
 
-- [ ] **Increment 86 — Future SystemVerilog-AMS backend research gate**
+- [ ] **Increment 90 — Future SystemVerilog-AMS backend research gate**
   - Reassess the current standard, map IR coverage, identify required changes, and approve or reject implementation through a separate gate without speculating syntax into the stable API.
 
 ## Deferred reusable library roadmap
@@ -619,5 +726,13 @@ When an increment is completed:
 - SpinalHDL pipeline library: <https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Libraries/Pipeline/index.html>
 - CIRCT pipeline dialect: <https://circt.llvm.org/docs/Dialects/Pipeline/>
 - CIRCT ESI channel buffers: <https://circt.llvm.org/docs/Dialects/ESI/>
+- Chisel width inference: <https://www.chisel-lang.org/docs/explanations/width-inference>
+- Chisel connectable API: <https://www.chisel-lang.org/docs/explanations/connectable>
+- SpinalHDL streams: <https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Libraries/stream.html>
+- Verilator guide: <https://verilator.org/guide/latest/>
+- Icarus Verilog flags: <https://steveicarus.github.io/iverilog/usage/command_line_flags.html>
+- Yosys Verilog frontend: <https://yosyshq.readthedocs.io/projects/yosys/en/stable/cmd/index_frontends.html>
+- SBY formal verification: <https://yosyshq.readthedocs.io/projects/sby/en/stable/>
+- cocotb simulator support: <https://docs.cocotb.org/en/stable/simulator_support.html>
 - Verilog-AMS standards: <https://accellera.org/downloads/standards/v-ams>
 - SystemVerilog-AMS working group: <https://accellera.org/activities/working-groups/systemverilog-ams>

@@ -176,11 +176,11 @@ This model supports early diagnostics, clock/reset inventories, crossing and wai
 ## Follow-up increments
 
 - Increment 12 freezes public API v0.2, migration, contracts, and stable diagnostics.
-- Increment 15 implements elaboration, hierarchy, and lexical domain context.
-- Increment 18 adds target-neutral domain and crossing constructs to Nodal MLIR.
-- Increments 55-57 implement state, CDC/RDC, and domain-aware hierarchy.
-- Increments 65, 67, and 68 implement mixed-signal transfer, verification, and Verilog-AMS lowering.
-- Increment 69 proves the architecture with ADC and DAC vertical slices.
+- Increment 16 implements elaboration, hierarchy, and lexical domain context.
+- Increment 19 adds target-neutral domain and crossing constructs to Nodal MLIR.
+- Increments 56-58 implement state, CDC/RDC, and domain-aware hierarchy.
+- Increments 69, 71, and 72 implement mixed-signal transfer, verification, and Verilog-AMS lowering.
+- Increment 73 proves the architecture with ADC and DAC vertical slices.
 
 ## References reviewed
 

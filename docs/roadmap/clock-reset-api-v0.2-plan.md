@@ -304,50 +304,50 @@ This escape is not part of the ordinary reusable-library subset, cannot create u
 - [ ] Freeze stable diagnostic codes and source locations.
 - [ ] Keep frontend behavior inert; this increment freezes contracts rather than implementing hardware semantics.
 
-### Increment 15 — Elaboration and lexical domain context
+### Increment 16 — Elaboration and lexical domain context
 
 - [ ] Implement deterministic domain-stack push/pop and state capture.
 - [ ] Implement default-domain requirements and single-domain child inheritance.
 - [ ] Implement named multi-domain requirements and typed instance binding.
 - [ ] Reject reliance on public Scala `implicit`/`given`, thread-local, mutable-global, or JVM-identity semantics.
 
-### Increment 16 — Source locations and deterministic domain naming
+### Increment 17 — Source locations and deterministic domain naming
 
 - [ ] Capture locations for domains, state, crossings, waivers, gates, and muxes.
 - [ ] Define stable external port, generated domain, synchronizer, FIFO, and reset-controller naming.
 
-### Increment 18 — Target-neutral domain IR
+### Increment 19 — Target-neutral domain IR
 
 - [ ] Add domain declarations/references, relationships, reset policy, state ownership, and timing provenance.
 - [ ] Add CDC/RDC and waiver operations.
 - [ ] Preserve the model when reusing CIRCT `hw`, `seq`, and `sv` constructs.
 
-### Increment 21 — Cross-layer diagnostics
+### Increment 22 — Cross-layer diagnostics
 
 - [ ] Map missing-domain, CDC, RDC, relation, gating, mux, and waiver diagnostics back to Scala sources.
 
-### Increment 55 — Register and next-state semantics
+### Increment 56 — Register and next-state semantics
 
 - [ ] Implement `Reg`, `RegNext`, resetless state, conditional update, enable, priority, and multiple-driver rules.
 - [ ] Lower high-level state to CIRCT sequential constructs without exposing backend process syntax.
 
-### Increment 56 — Domain, CDC/RDC, gate, mux, and escape implementation
+### Increment 57 — Domain, CDC/RDC, gate, mux, and escape implementation
 
 - [ ] Implement domain creation/application, reset policies, relationship graph, crossing structures, reset controllers, gates/muxes, and low-level escape restrictions.
 
-### Increment 57 — Domain-aware hierarchy
+### Increment 58 — Domain-aware hierarchy
 
 - [ ] Infer structural clock/reset ports.
 - [ ] Propagate default and named domains through parameterized hierarchy.
 - [ ] Generate deterministic structural variants only when edge/reset semantics materially differ.
 
-### Increments 65, 67, and 68 — Mixed-signal verification and backend
+### Increments 69, 71, and 72 — Mixed-signal verification and backend
 
 - [ ] Implement explicit sampling/drive provenance.
 - [ ] Run hierarchy-wide CDC/RDC and mixed-domain verification.
 - [ ] Emit explicit Verilog-AMS ports, event processes, reset logic, synchronizers, asynchronous FIFOs, gates, muxes, and metadata.
 
-### Increment 69 — ADC/DAC proof
+### Increment 73 — ADC/DAC proof
 
 - [ ] Demonstrate an ADC and DAC using implicit domains, reset policies, explicit mixed-signal sampling, legal CDC, reports, and deterministic parameterized Verilog-AMS.
 

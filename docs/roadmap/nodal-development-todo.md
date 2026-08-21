@@ -698,7 +698,7 @@ Empty future-library directories are not committed merely as placeholders.
 
 ## Deferred reusable library roadmap
 
-No official reusable model/component library is implemented by Increments 0-86. After the core API, extension surface, packaging model, and preview release are proven, independently approved library roadmaps may populate `libraries/` or separate repositories while preserving the public-core dependency contract.
+No official reusable model/component library is implemented by Increments 0-90. After the core API, extension surface, packaging model, and preview release are proven, independently approved library roadmaps may populate `libraries/` or separate repositories while preserving the public-core dependency contract.
 
 ## Roadmap maintenance
 

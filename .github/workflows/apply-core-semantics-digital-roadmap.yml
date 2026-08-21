@@ -34,6 +34,18 @@ jobs:
       - name: Apply roadmap transformation
         run: python3 scripts/update_core_semantics_digital_roadmap.py
 
+      - name: Normalize generated Markdown
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("docs/roadmap/automatic-pipeline-api-v0.3-plan.md")
+          text = path.read_text(encoding="utf-8")
+          normalized = "\n".join(line.rstrip() for line in text.splitlines()) + "\n"
+          path.write_text(normalized, encoding="utf-8")
+          PY
+
       - name: Validate durable documents
         shell: bash
         run: |

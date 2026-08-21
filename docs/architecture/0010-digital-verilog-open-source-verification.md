@@ -94,6 +94,13 @@ The digital backend publishes separate capability flags for:
 
 `Backend.Auto` defaults to the synthesizable portable profile for a digital-only design. Simulation-only features require an explicit profile or option so synthesis cannot accidentally ignore behavior.
 
+## Signed values and staged loops
+
+[ADR 0016](0016-signed-types-and-staged-loops.md) defines signed finite-width values and loop categories. Portable Verilog emits signed vectors/parameters/localparams, explicit signed literals, correct shifts/casts, structural generate loops, and bounded procedural loops or verified unrolled equivalents. Arbitrary-width `SInt` is never replaced with generic `integer`.
+
+The digital tool matrix checks signed width/extension/comparison/shift behavior, mixed-sign rejection, signed memories and aggregate fields, symbolic parameterized generate, index bounds, and procedural-versus-unrolled loop equivalence. A dynamic or unbounded loop is rejected before HDL emission rather than converted into a hidden multi-cycle controller.
+
+
 ## Enum and FSM representation
 
 [ADR 0015](0015-native-scala-enum-and-hierarchical-fsm.md) defines semantic enums and typed reusable statecharts. Portable Verilog emits enum members as module-local `localparam`s, stores values in vectors/integers, and retains enum/FSM manifests and source maps. Local FSM recoding does not change canonical enum values at module boundaries.

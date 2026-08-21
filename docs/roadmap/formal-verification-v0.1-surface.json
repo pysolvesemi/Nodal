@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "deferred-roadmap-candidate",
-  "roadmap_revision": "1.9",
+  "roadmap_revision": "1.10",
   "formal_gate_increment": 109,
   "implementation_increments": {
     "110": "target-neutral formal property IR, verifier, and lowering framework",

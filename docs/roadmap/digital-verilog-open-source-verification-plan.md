@@ -48,6 +48,8 @@ A design is digital-only when its entire reachable hierarchy contains only const
 Legal categories include:
 
 - digital scalar/vector/aggregate ports and signals;
+- signless `Bits`, unsigned `UInt`, signed `SInt`, signed parameters/memories/aggregate fields, and explicit signed conversions/literals/shifts;
+- elaboration-expanded structure, symbolic structural generate loops, and bounded hardware iteration with deterministic procedural/unrolled lowering;
 - native semantic enums, canonical enum encodings, safe decode, and manual/high-level FSM/statechart constructs;
 - parameters, symbolic widths, target generate, and hierarchy;
 - implicit clock/reset domains;
@@ -76,6 +78,7 @@ The required output is a conservative synthesizable IEEE 1364-2005-style subset.
 ### Required constructs
 
 - modules, ports, parameters, local parameters, and named overrides;
+- signed vector ports/wires/registers/parameters/localparams/memories/aggregate fields, explicitly sized signed literals, typed shifts/casts, structural `genvar` loops, and bounded procedural `for` loops or verified unrolled equivalents;
 - enum member localparams, vector/integer enum storage, enum configuration parameters, and flat/hierarchical/parallel FSM state/action/completion logic;
 - deterministic generated hierarchy and parameterized ranges;
 - wires, registers, memories, continuous assignments, and procedural logic;
@@ -99,6 +102,20 @@ The required profile does not depend on:
 - unsupported real-number or AMS constructs.
 
 High-level `Bundle`, `Valid`, and `Stream` values are flattened deterministically for Verilog output while their structural metadata remains in sidecar manifests.
+
+## Signed and loop lowering
+
+The portable profile follows [ADR 0016](../architecture/0016-signed-types-and-staged-loops.md):
+
+- `SInt(width)` becomes an exact-width signed vector, not an unbounded or generic integer;
+- signedness is retained on ports, nets, registers, parameters, localparams, memories, aggregate fields, generated helpers, and source metadata;
+- literals, extensions, comparisons, and arithmetic/logical shifts are emitted explicitly enough to avoid Verilog context-dependent changes;
+- casts are generated only from explicit Nodal numeric conversion or bit reinterpretation;
+- ordinary Scala loops are already elaborated and emit no loop syntax;
+- symbolic structural generation emits deterministic `genvar`/`generate for` constructs;
+- bounded hardware iteration emits a procedural `for` or verified unrolled operations according to a locked profile decision;
+- runtime/unbounded loops and hidden multi-cycle iteration are unsupported in the initial portable profile.
+
 
 ## Enum and FSM lowering
 
@@ -174,6 +191,7 @@ Required digital support:
 
 - deterministic compilation cache keyed by HDL/tool/profile hash;
 - typed scalar/vector/aggregate signal access through emitted metadata;
+- typed `Bits`/`UInt`/`SInt` access, signed boundary values, memory elements, literals, shifts, comparisons, and loop-index/source-map reconstruction;
 - clock/reset generation from `ClockDomain` contracts;
 - multiple clocks, phase/ratio relationships, and asynchronous scenarios;
 - randomized reset assertion/release and reset-order testing;
@@ -231,6 +249,7 @@ Yosys equivalence flows compare:
 - supported parameter instantiations against the same parameterized source;
 - post-synthesis generic netlists against source RTL;
 - fixed-latency automatic pipelines against latency-aligned reference behavior.
+- signed expression lowering and procedural-versus-unrolled/generate-normalized loop implementations against the same typed reference semantics.
 - enum/FSM behavior before and after approved recoding, hierarchy flattening, minimization, or synthesis, aligned by semantic state/transition identity rather than raw encoded bits.
 
 Pipeline equivalence tracks transaction identity, valid/bubble state, sidebands, reset, and published latency. Elastic pipelines require protocol-level safety/equivalence properties rather than same-cycle output equality.
@@ -257,6 +276,7 @@ Initial reusable property suites prove:
 - fixed pipeline latency and sideband alignment;
 - CDC/RDC wrapper assumptions and guarantees;
 - no output before a valid input transaction.
+- signed extension/cast/shift correctness, loop index bounds, finite parameter envelopes, no out-of-range access, and no unintended loop-carried combinational recurrence.
 - legal enum/state encoding, one-hot invariants, allowed FSM transition relations, reset convergence, no unintended deadlock, nested/parallel completion, and bounded call-stack overflow/underflow safety.
 
 Formal syntax remains within the open-source frontend capability profile. Unsupported SVA is lowered to simpler assertions or a sidecar harness, or rejected with a stable diagnostic.

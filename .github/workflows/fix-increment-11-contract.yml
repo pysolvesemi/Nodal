@@ -1,0 +1,39 @@
+name: Fix Increment 11 contract literal
+
+on:
+  push:
+    branches:
+      - increment/11-public-api-design-gate-v0.1
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/11-public-api-design-gate-v0.1
+
+      - name: Align checker with Markdown spelling
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/check_increment11.py")
+          text = path.read_text(encoding="utf-8")
+          old = '            "Param[A] is an HDL parameter reference",\n'
+          new = '            "`Param[A]` is an HDL parameter reference",\n'
+          if old not in text:
+              raise SystemExit("expected Increment 11 contract literal not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/check_increment11.py
+          git commit -m 'fix(api): align Increment 11 gate contract spelling'
+          git push origin HEAD:increment/11-public-api-design-gate-v0.1

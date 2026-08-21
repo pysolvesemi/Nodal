@@ -1,8 +1,14 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
+  "roadmap_revision": "1.2",
   "formal_freeze_increment": 12,
   "architecture": "implicit-local-domain-explicit-crossing-explicit-emitted-hdl",
+  "documents": {
+    "architecture_adr": "docs/architecture/0007-implicit-clock-reset-domains.md",
+    "freeze_plan": "docs/roadmap/clock-reset-api-v0.2-plan.md",
+    "main_roadmap": "docs/roadmap/nodal-development-todo.md"
+  },
   "ordinary_state": {
     "types": [
       "Clock",

@@ -1,3 +1,4 @@
+# Workflow registered on the preceding branch commit; this update triggers it.
 name: Apply enum and FSM roadmap
 
 on:

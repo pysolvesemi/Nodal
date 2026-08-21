@@ -1,0 +1,172 @@
+{
+  "schema": 1,
+  "status": "roadmap-freeze-candidate",
+  "roadmap_revision": "1.5",
+  "formal_gate_increment": 91,
+  "architecture": "reference-ams-explicit-approximation-bounded-evidence-synthesizable-realization",
+  "documents": {
+    "architecture_adr": "docs/architecture/0011-ams-fpga-approximation-validation.md",
+    "implementation_plan": "docs/roadmap/ams-fpga-validation-plan.md",
+    "main_roadmap": "docs/roadmap/nodal-development-todo.md"
+  },
+  "selection": {
+    "explicit_opt_in_required": true,
+    "backend_auto_may_select": false,
+    "authoritative_reference": [
+      "Verilog-A",
+      "Verilog-AMS",
+      "high-precision Nodal numerical reference"
+    ],
+    "post_transform_backend": "Backend.Verilog"
+  },
+  "candidate_public_types": [
+    "FpgaApproximation",
+    "ValidationEnvelope",
+    "ErrorBudget",
+    "FixedPointPolicy",
+    "FpgaTarget",
+    "Solver",
+    "Rounding",
+    "Overflow"
+  ],
+  "candidate_solvers": [
+    "Solver.ForwardEuler",
+    "Solver.BackwardEuler",
+    "Solver.Trapezoidal",
+    "Solver.Tustin",
+    "Solver.ExactZoh",
+    "Solver.Custom"
+  ],
+  "candidate_numeric_policies": [
+    "FixedPointPolicy.Explicit",
+    "FixedPointPolicy.Auto",
+    "Rounding.NearestEven",
+    "Rounding.TowardZero",
+    "Overflow.Saturate",
+    "Overflow.Trap",
+    "Overflow.Wrap"
+  ],
+  "initial_supported_model_classes": [
+    "linear state space",
+    "supported transfer function",
+    "explicit ordinary differential equation",
+    "bounded static nonlinearity",
+    "sampled comparator or threshold",
+    "ADC and DAC boundary",
+    "digital control around sampled plant",
+    "finite parameter envelope",
+    "supported sampled event"
+  ],
+  "initially_rejected_model_classes": [
+    "arbitrary differential algebraic system",
+    "unresolved algebraic loop",
+    "hidden state",
+    "adaptive or variable step",
+    "unsupported stiff system",
+    "transistor or device physics",
+    "parasitic mismatch or PVT model",
+    "unsupported analog noise",
+    "ideal impulse or discontinuity",
+    "event precision below sample contract",
+    "simulator analysis without FPGA meaning"
+  ],
+  "required_time_contract": [
+    "destination clock domain",
+    "FPGA clock frequency",
+    "sample period",
+    "cycles per sample",
+    "single or multi rate",
+    "rate relationships",
+    "input hold",
+    "output update",
+    "event policy",
+    "deadline policy"
+  ],
+  "required_numeric_contract": [
+    "physical dimension",
+    "scale",
+    "range",
+    "stored width",
+    "guard bits",
+    "rounding",
+    "overflow",
+    "coefficient quantization",
+    "accumulated error"
+  ],
+  "validation_levels": {
+    "A": "AMS reference versus high precision discrete reference",
+    "B": "high precision discrete versus bit accurate fixed point reference",
+    "C": "bit accurate fixed point reference versus generated RTL",
+    "D": "RTL or netlist versus placed FPGA hardware"
+  },
+  "candidate_metrics": [
+    "absolute waveform error",
+    "relative waveform error",
+    "RMS and percentile error",
+    "state and invariant error",
+    "gain and phase error",
+    "settling overshoot and steady state error",
+    "event time error",
+    "frequency response error",
+    "overflow and saturation coverage",
+    "latency jitter and deadline misses"
+  ],
+  "open_source_flow": {
+    "synthesis": "Yosys",
+    "place_and_route": "nextpnr",
+    "rtl_simulation": [
+      "Verilator",
+      "Icarus Verilog"
+    ],
+    "formal": "SBY",
+    "reference_target_required": true,
+    "vendor_tools_optional": true
+  },
+  "parameterization": {
+    "native_parameterized_module_preferred": true,
+    "clone_per_value_default": false,
+    "finite_envelope_required": true,
+    "single_schedule_and_numeric_plan_required": true,
+    "explicit_specialization_allowed": true
+  },
+  "claims": {
+    "validates": [
+      "declared digital approximation",
+      "digital control and sequencing",
+      "closed loop functional scenarios within envelope",
+      "fixed point recurrence",
+      "RTL and hardware runtime"
+    ],
+    "does_not_validate_by_itself": [
+      "physical transistor behavior",
+      "unmodeled parasitics PVT or mismatch",
+      "continuous time behavior between samples",
+      "unmodeled noise or jitter",
+      "behavior outside validation envelope"
+    ]
+  },
+  "increments": {
+    "91": "capability gate and API contracts",
+    "92": "analog normalization and sampled state IR",
+    "93": "solver and recurrence generation",
+    "94": "range fixed point quantization and error analysis",
+    "95": "multi rate event and real time scheduling",
+    "96": "synthesizable FPGA approximation backend",
+    "97": "differential equivalence and formal validation ladder",
+    "98": "open source FPGA implementation and target evidence",
+    "99": "hardware in the loop vertical slices and capability matrix"
+  },
+  "required_evidence": [
+    "explicit approximation request",
+    "machine readable capability profile",
+    "sample solver numeric and envelope manifest",
+    "Level A reference comparison",
+    "Level B fixed point comparison",
+    "Level C RTL equivalence and formal evidence",
+    "Level D placed hardware trace evidence",
+    "resource and timing reports",
+    "bitstream and board manifest",
+    "claims and limitations report",
+    "green CI"
+  ]
+}

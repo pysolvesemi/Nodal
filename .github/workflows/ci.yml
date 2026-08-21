@@ -133,19 +133,27 @@ jobs:
           ref: increment/13-verilog-optimization-pass-roadmap
           fetch-depth: 0
 
-      - name: Normalize ADR index anchor for transformer
+      - name: Normalize transformer anchors
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("docs/architecture/README.md")
-          text = path.read_text(encoding="utf-8")
-          old = "| [0012](0012-versioned-capability-plugin-architecture.md) | Use manifest-first, versioned capability graphs with local design hosts, deterministic phases, isolated compiler/backend/tool boundaries, lockfiles, and retained plugin provenance. |"
-          new = "| [0012](0012-versioned-capability-plugin-architecture.md) | Use explicit manifests, a typed capability graph, deterministic phases, local design hosts, separate Scala/native/process boundaries, lockfiles, trust policy, and retained plugin provenance. |"
-          if old not in text:
+          index_path = Path("docs/architecture/README.md")
+          index_text = index_path.read_text(encoding="utf-8")
+          old_index = "| [0012](0012-versioned-capability-plugin-architecture.md) | Use manifest-first, versioned capability graphs with local design hosts, deterministic phases, isolated compiler/backend/tool boundaries, lockfiles, and retained plugin provenance. |"
+          new_index = "| [0012](0012-versioned-capability-plugin-architecture.md) | Use explicit manifests, a typed capability graph, deterministic phases, local design hosts, separate Scala/native/process boundaries, lockfiles, trust policy, and retained plugin provenance. |"
+          if old_index not in index_text:
               raise SystemExit("ADR 0012 index anchor did not match")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          index_path.write_text(index_text.replace(old_index, new_index, 1), encoding="utf-8")
+
+          script_path = Path("scripts/update_target_hdl_optimization_roadmap.py")
+          script_text = script_path.read_text(encoding="utf-8")
+          old_anchor = '"Passing FPGA hardware does not erase a discretization or quantization mismatch."'
+          new_anchor = '"Passing a later level does not erase an earlier approximation error. Reports must preserve the full ladder."'
+          if old_anchor not in script_text:
+              raise SystemExit("AMS ADR transformer anchor did not match")
+          script_path.write_text(script_text.replace(old_anchor, new_anchor, 1), encoding="utf-8")
           PY
 
       - name: Apply target-HDL pass roadmap transformation

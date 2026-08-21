@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "deferred-roadmap-candidate",
-  "roadmap_revision": "1.8",
+  "roadmap_revision": "1.9",
   "formal_gate_increment": 109,
   "implementation_increments": {
     "110": "target-neutral formal property IR, verifier, and lowering framework",
@@ -176,5 +176,18 @@
     "public_formal_api_frozen": false,
     "must_preserve_future_property_ir_seam": true,
     "must_not_bake_sby_or_sva_into_public_semantics": true
+  },
+  "enum_fsm_readiness": {
+    "semantic_state_identity_preserved": true,
+    "compiler_generated_properties_in_increment_67": [
+      "legal enum and state encoding",
+      "one-hot invariant",
+      "allowed transitions",
+      "reset convergence",
+      "no unintended deadlock",
+      "nested and parallel completion",
+      "bounded stack overflow and underflow"
+    ],
+    "user_authored_properties_deferred_to_formal_gate": true
   }
 }

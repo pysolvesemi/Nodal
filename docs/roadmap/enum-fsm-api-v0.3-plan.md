@@ -1,8 +1,8 @@
 # Enum and reusable FSM public API v0.3 plan
 
-**Status:** Normative roadmap candidate  
-**Architecture:** [ADR 0015](../architecture/0015-native-scala-enum-and-hierarchical-fsm.md)  
-**Unified formal freeze:** Increment 15 design gate with core semantics and automatic pipelines  
+**Status:** Normative roadmap candidate
+**Architecture:** [ADR 0015](../architecture/0015-native-scala-enum-and-hierarchical-fsm.md)
+**Unified formal freeze:** Increment 15 design gate with core semantics and automatic pipelines
 **Machine-readable candidate:** [`enum-fsm-api-v0.3-surface.json`](enum-fsm-api-v0.3-surface.json)
 
 ## Goal

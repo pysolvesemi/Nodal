@@ -30,6 +30,7 @@ Accepted ADRs must not be edited to reverse their decision. A material change re
 | [0012](0012-versioned-capability-plugin-architecture.md) | Use explicit manifests, a typed capability graph, deterministic phases, local design hosts, separate Scala/native/process boundaries, lockfiles, trust policy, and retained plugin provenance. |
 | [0013](0013-structured-hdl-optimization-pass-architecture.md) | Use structured digital/Verilog-A/Verilog-AMS target IR, explicit locked pass pipelines, declared semantic effects, mandatory re-verification, and digital/AMS-appropriate proof evidence. |
 | [0014](0014-target-neutral-formal-verification.md) | Preserve future user-authored formal properties in target-neutral, domain-aware IR and execute them through capability-checked proof-engine adapters with retained evidence. |
+| [0015](0015-native-scala-enum-and-hierarchical-fsm.md) | Use native Scala 3 enums with stable canonical HDL encoding and typed reusable hierarchical/parallel FSM graphs with explicit reset, priority, recursion bounds, reports, and proof contracts. |
 
 ADR 0012 owns general plugin discovery, resolution, loading, trust, lifecycle, and provenance. ADR 0013 layers the target-HDL-specific structured representations, pass profiles, preservation rules, and proof obligations on that common plugin foundation. Installing either a plugin or pass is inert until the project resolves and explicitly selects it in a locked plan.
 

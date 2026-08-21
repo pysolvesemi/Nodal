@@ -1,14 +1,15 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.4",
+  "roadmap_revision": "1.9",
   "formal_freeze_increment": 15,
   "architecture": "explicit-stage-lossless-value-exact-connection-dimension-safe-declared-effect",
   "documents": {
     "architecture_adr": "docs/architecture/0009-core-semantic-contracts.md",
     "freeze_plan": "docs/roadmap/core-semantics-api-v0.3-plan.md",
     "pipeline_plan": "docs/roadmap/automatic-pipeline-api-v0.3-plan.md",
-    "main_roadmap": "docs/roadmap/nodal-development-todo.md"
+    "main_roadmap": "docs/roadmap/nodal-development-todo.md",
+    "enum_fsm_plan": "docs/roadmap/enum-fsm-api-v0.3-plan.md"
   },
   "value_stages": {
     "elaboration": [
@@ -134,6 +135,7 @@
   ],
   "required_evidence": [
     "core-semantic-candidate-compilation",
+    "enum-fsm-candidate-compilation",
     "automatic-pipeline-candidate-compilation",
     "unified-public-api-v0.3-design-gate",
     "machine-readable-public-api-manifest",
@@ -142,5 +144,19 @@
     "external-library-fixture",
     "stable-diagnostic-codes",
     "green-ci"
-  ]
+  ],
+  "enum_fsm": {
+    "architecture": "docs/architecture/0015-native-scala-enum-and-hierarchical-fsm.md",
+    "preferred_enum": "enum E derives HwEnum",
+    "preferred_type_use": "E.hw",
+    "canonical_encoding_separate_from_fsm_storage_encoding": true,
+    "portable_verilog_members": "localparam",
+    "future_systemverilog_members": "typedef enum logic with identical explicit values",
+    "safe_decode_required": true,
+    "exhaustive_switch_required": true,
+    "flat_and_reusable_statecharts": true,
+    "nested_parallel_timed_and_bounded_recursive": true,
+    "unbounded_recursion": false,
+    "formal_freeze_increment": 15
+  }
 }

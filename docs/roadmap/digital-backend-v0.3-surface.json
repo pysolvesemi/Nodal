@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.8",
+  "roadmap_revision": "1.9",
   "roadmap_last_increment": 113,
   "architecture": "narrowest-compatible-backend-open-source-generated-hdl-verification",
   "documents": {
@@ -93,6 +93,22 @@
       111,
       112,
       113
+    ]
+  },
+  "enum_fsm": {
+    "architecture": "docs/architecture/0015-native-scala-enum-and-hierarchical-fsm.md",
+    "portable_verilog_enum": "localparam plus vector/integer storage",
+    "enum_configuration": "module parameter with canonical numeric value",
+    "future_systemverilog_enum": "native typedef enum logic",
+    "local_fsm_recoding_preserves_public_enum_abi": true,
+    "hierarchical_parallel_timed_bounded_procedure_lowering": true,
+    "required_proofs": [
+      "legal encoding",
+      "safe decode",
+      "allowed transition relation",
+      "reset convergence",
+      "deadlock and completion",
+      "bounded stack safety"
     ]
   }
 }

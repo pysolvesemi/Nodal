@@ -166,7 +166,7 @@ def check_repository(root: Path) -> list[Problem]:
         'core.scala.testkit.test"',
         'check-nodal-native"',
         'mill.scalalib.scalafmt/checkFormatAll"',
-        'scalafix/check"',
+        'scalafix.check"',
         'run_clang_tools.py"',
         'if args.contracts_only:',
         'NODAL-DEV-004',

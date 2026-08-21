@@ -145,7 +145,7 @@ def check_repository(root: Path) -> list[Problem]:
         '"check_contribution_policy.py"',
         '"check_increment9.py"',
         '"mill.scalalib.scalafmt/checkFormatAll"',
-        '"scalafix/check"',
+        '"scalafix.check"',
         '"run_clang_tools.py"',
         '"lint"',
     ):

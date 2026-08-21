@@ -237,7 +237,7 @@ def command_style_check(args: argparse.Namespace, root: Path, runner: Runner) ->
     for command in _style_policy_commands(root, args.base_ref):
         runner.run(command)
     runner.run(_mill(root, "mill.scalalib.scalafmt/checkFormatAll"))
-    runner.run(_mill(root, "scalafix/check"))
+    runner.run(_mill(root, "scalafix.check"))
     runner.run(
         _python(
             root,
@@ -260,7 +260,7 @@ def command_style_fix(args: argparse.Namespace, root: Path, runner: Runner) -> i
     )
     assert lint_toolchain is not None
     runner.run(_mill(root, "mill.scalalib.scalafmt/reformatAll"))
-    runner.run(_mill(root, "scalafix/fix"))
+    runner.run(_mill(root, "scalafix.fix"))
     runner.run(
         _python(
             root,

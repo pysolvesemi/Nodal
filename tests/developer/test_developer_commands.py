@@ -176,7 +176,7 @@ class UnifiedDeveloperCommandTests(unittest.TestCase):
             "check_package_visibility.py",
             "check_contribution_policy.py --base-ref origin/dev",
             "mill.scalalib.scalafmt/checkFormatAll",
-            "scalafix/check",
+            "scalafix.check",
             "run_clang_tools.py format --check",
         ):
             self.assertTrue(any(fragment in command for command in rendered), fragment)
@@ -228,7 +228,7 @@ class UnifiedDeveloperCommandTests(unittest.TestCase):
         rendered = [" ".join(call[0]) for call in runner.calls]
         self.assertTrue(any("check_increment9.py" in command for command in rendered))
         self.assertTrue(any("tests/lint" in command for command in rendered))
-        self.assertTrue(any("scalafix/check" in command for command in rendered))
+        self.assertTrue(any("scalafix.check" in command for command in rendered))
         self.assertFalse(any("core.scala.testkit.test" in command for command in rendered))
         self.assertFalse(any(command.startswith("cmake ") for command in rendered))
         self.assertFalse(any(command.startswith("ctest ") for command in rendered))

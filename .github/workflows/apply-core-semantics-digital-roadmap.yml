@@ -4,13 +4,23 @@ on:
   push:
     branches:
       - increment/13-core-semantics-digital-verilog-roadmap
+  pull_request:
+    branches:
+      - dev
+    types:
+      - opened
+      - synchronize
+      - reopened
 
 permissions:
   contents: write
 
 jobs:
   apply-roadmap:
-    if: github.actor != 'github-actions[bot]'
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      (github.event_name != 'pull_request' ||
+       github.head_ref == 'increment/13-core-semantics-digital-verilog-roadmap')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 

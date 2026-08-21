@@ -1,17 +1,22 @@
-# Workflow registered on the preceding branch commit; this update triggers it.
 name: Apply enum and FSM roadmap
 
 on:
   push:
     branches:
       - increment/13-enum-fsm-architecture-roadmap
+  pull_request:
+    branches:
+      - dev
 
 permissions:
   contents: write
 
 jobs:
   apply-roadmap:
-    if: github.actor != 'github-actions[bot]'
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      (github.event_name != 'pull_request' ||
+       github.head_ref == 'increment/13-enum-fsm-architecture-roadmap')
     runs-on: ubuntu-24.04
     timeout-minutes: 25
 

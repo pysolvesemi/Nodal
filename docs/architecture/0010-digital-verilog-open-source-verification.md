@@ -42,6 +42,8 @@ Backend.VerilogAMS
 - analog-only → Verilog-A;
 - mixed-signal → Verilog-AMS.
 
+This selection performs no numerical or semantic approximation. In particular, `Backend.Auto` never converts analog or mixed-signal content into an FPGA model. AMS-to-FPGA validation is the explicit transformation defined by [ADR 0011](0011-ams-fpga-approximation-validation.md); only its resulting digital artifact may use the portable Verilog backend.
+
 An explicit backend override remains available, but capability verification runs before translation and rejects incompatible constructs. Automatic selection is reported in deterministic build evidence; it is not silent or dependent on tool availability.
 
 ## Digital design classification

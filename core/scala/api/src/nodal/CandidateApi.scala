@@ -202,9 +202,13 @@ extension (left: Expr[Real])
   infix def <+(value: Expr[Real]): Unit = FrozenApiRuntime.statement(left, value)
 
 extension (left: Expr[Integer])
+  @targetName("integerExpressionAdd")
   def +(right: Expr[Integer]): Expr[Integer] = FrozenApiRuntime.expr(left, right)
+  @targetName("integerExpressionSubtract")
   def -(right: Expr[Integer]): Expr[Integer] = FrozenApiRuntime.expr(left, right)
+  @targetName("integerExpressionMultiply")
   def *(right: Expr[Integer]): Expr[Integer] = FrozenApiRuntime.expr(left, right)
+  @targetName("integerExpressionDivide")
   def /(right: Expr[Integer]): Expr[Integer] = FrozenApiRuntime.expr(left, right)
   infix def **(right: Expr[Integer]): Expr[Integer] = FrozenApiRuntime.expr(left, right)
 

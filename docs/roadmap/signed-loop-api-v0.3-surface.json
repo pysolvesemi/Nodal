@@ -1,0 +1,152 @@
+{
+  "schema": 1,
+  "status": "roadmap-freeze-candidate",
+  "roadmap_revision": "1.10",
+  "formal_freeze_increment": 15,
+  "architecture": "signedness-is-type-loop-kind-is-staging",
+  "documents": {
+    "architecture": "docs/architecture/0016-signed-types-and-staged-loops.md",
+    "plan": "docs/roadmap/signed-loop-api-v0.3-plan.md",
+    "core_semantics_plan": "docs/roadmap/core-semantics-api-v0.3-plan.md",
+    "digital_backend_plan": "docs/roadmap/digital-verilog-open-source-verification-plan.md",
+    "main_roadmap": "docs/roadmap/nodal-development-todo.md"
+  },
+  "types": {
+    "Bits": "signless bit container",
+    "UInt": "unsigned finite-width integer",
+    "SInt": "two's-complement signed finite-width integer",
+    "Bool": "one-bit logical value"
+  },
+  "signed_semantics": {
+    "bits_arithmetic_implicit": false,
+    "mixed_uint_sint_implicit": false,
+    "implicit_signedness_change": false,
+    "implicit_narrowing": false,
+    "numeric_conversion_distinct_from_reinterpretation": true,
+    "unsigned_to_signed_numeric_may_add_sign_bit": true,
+    "signed_right_shift_distinguishes_arithmetic_and_logical": true,
+    "exact_width_sign_rules_frozen_in_increment_15": true
+  },
+  "signed_literal_candidates": [
+    "(-3).S(width)",
+    "SInt.literal(-3, width = width)"
+  ],
+  "conversion_candidates": [
+    "toSInt",
+    "toUIntChecked",
+    "asSInt",
+    "asUInt",
+    "asBits",
+    "extend",
+    "truncate",
+    "wrap",
+    "saturate",
+    "resizeChecked"
+  ],
+  "portable_verilog": {
+    "ports": "signed vectors",
+    "wires_and_registers": "signed vectors",
+    "parameters": "parameter signed [W-1:0]",
+    "localparams": "localparam signed [W-1:0]",
+    "arbitrary_width_uses_integer": false,
+    "sized_signed_literals_required_when_context_is_ambiguous": true,
+    "casts_only_from_explicit_nodal_semantics": [
+      "$signed",
+      "$unsigned"
+    ],
+    "aggregate_field_sign_preserved": true,
+    "memory_element_sign_preserved": true
+  },
+  "future_systemverilog": {
+    "ports_and_state": "logic signed [W-1:0]",
+    "parameters": "logic signed or equivalent exact-width signed parameter",
+    "packed_struct_array_memory_sign_preserved": true,
+    "int_substitutes_for_arbitrary_sint": false,
+    "numeric_parity_with_portable_verilog": true
+  },
+  "loop_categories": {
+    "elaboration": {
+      "source": "ordinary Scala for/foreach",
+      "bounds": "Scala elaboration values only",
+      "survives_as_target_loop": false
+    },
+    "generate": {
+      "candidate": "generate(range)(body)",
+      "kind": "structural target-visible repetition",
+      "bounds": "elaboration-static or symbolic parameter/constant",
+      "may_create_instances_and_declarations": true,
+      "portable_lowering": "genvar generate for",
+      "symbolic_parameterization_preserved": true
+    },
+    "bounded_hardware_iteration": {
+      "candidate": "loop(range)(body)",
+      "kind": "repeated operations inside one hardware region",
+      "bounds": "finite elaboration-static or symbolic-static",
+      "runtime_signal_trip_count": false,
+      "may_create_instances_and_ports": false,
+      "lowering": [
+        "verified unroll",
+        "procedural HDL for"
+      ],
+      "lowering_choice_deterministic_and_reported": true,
+      "clocked_iterations_consume_multiple_cycles": false,
+      "break_continue_unbounded_while_initially_supported": false
+    }
+  },
+  "collection_candidates": [
+    "map",
+    "zip",
+    "reduce",
+    "fold",
+    "scan"
+  ],
+  "loop_verification": [
+    "stage and bound legality",
+    "finite parameter envelope",
+    "index width sign and bounds",
+    "no dynamic trip count",
+    "no structural declarations in procedural loop",
+    "loop-carried combinational cycle detection",
+    "multiple-driver detection",
+    "memory ordering and collision semantics",
+    "effect and external-latency ordering",
+    "backend profile capability",
+    "source-map preservation",
+    "unrolled versus procedural equivalence"
+  ],
+  "optimization_rules": {
+    "unroll_reroll_fuse_split_require_declared_effect": true,
+    "signedness_and_order_preserved": true,
+    "automatic_pipeline_requires_finite_normalized_graph": true,
+    "implicit_resource_sharing": false,
+    "implicit_multi_cycle_iteration": false
+  },
+  "increment_integration": {
+    "13": "signed and loop candidate compilation",
+    "15": "unified public API v0.3 freeze",
+    "19": "target-neutral signed and loop IR",
+    "22": "signed and loop diagnostics",
+    "54": "signed type declaration literal parameter memory foundation",
+    "55": "signed expressions collection operations and bounded hardware iteration",
+    "58": "symbolic structural generate and naming",
+    "65": "portable Verilog signed and loop lowering",
+    "66": "lint simulation and waveform fixtures",
+    "67": "synthesis equivalence and formal readiness",
+    "72": "Verilog-AMS signed and loop lowering",
+    "85": "optimization preservation and proof matrix",
+    "99": "future SystemVerilog signed and loop research gate"
+  },
+  "required_evidence": [
+    "signed declaration literal conversion compile fixtures",
+    "mixed-sign negative fixtures",
+    "portable Verilog signed golden outputs",
+    "future SystemVerilog parity contract",
+    "elaboration generate and hardware-loop compile fixtures",
+    "symbolic parameterized generate golden output",
+    "procedural versus unrolled equivalence",
+    "dynamic and unbounded loop negative fixtures",
+    "external-library consumer",
+    "stable diagnostics and source maps",
+    "green CI"
+  ]
+}

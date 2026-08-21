@@ -204,6 +204,12 @@ It does not by itself validate:
 
 Reports and documentation must use **approximation**, **emulation**, or **hardware validation model** terminology, not claim direct FPGA synthesis of general Verilog-AMS.
 
+## Plugin adapter boundary
+
+The approximation transformation, sampled-state IR, solver semantics, numeric/error analysis, and validation ladder remain core compiler semantics. FPGA target databases, place/route flows, bitstream packers, programmers, board runtimes, external ADC/DAC profiles, and HIL transports use the versioned tool-adapter plugin protocol from [ADR 0012](0012-versioned-capability-plugin-architecture.md).
+
+A plugin target cannot weaken the declared approximation envelope, error budget, deadline proof, or claims language.
+
 ## Consequences
 
 ### Positive
@@ -234,12 +240,12 @@ Reports and documentation must use **approximation**, **emulation**, or **hardwa
 
 ## Follow-up increments
 
-- Increment 91 freezes the approximation capability profile, candidate API, diagnostics, and validation contract.
-- Increments 92-95 implement analog normalization, solver/discrete-time IR, fixed-point/range analysis, and multi-rate scheduling.
-- Increment 96 emits synthesizable portable Verilog for the approximation and integrates automatic pipelines.
-- Increment 97 implements the complete differential, equivalence, and formal validation ladder.
-- Increment 98 adds open-source FPGA synthesis, place/route, bitstream, and target evidence.
-- Increment 99 adds HIL runtime support, representative vertical slices, and the capability/limitations matrix.
+- Increment 96 freezes the approximation capability profile, candidate API, diagnostics, and validation contract.
+- Increments 97-100 implement analog normalization, solver/discrete-time IR, fixed-point/range analysis, and multi-rate scheduling.
+- Increment 101 emits synthesizable portable Verilog for the approximation and integrates automatic pipelines.
+- Increment 102 implements the complete differential, equivalence, and formal validation ladder.
+- Increment 103 adds open-source FPGA synthesis, place/route, bitstream, and target evidence.
+- Increment 104 adds HIL runtime support, representative vertical slices, and the capability/limitations matrix.
 
 ## References reviewed
 

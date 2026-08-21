@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.5",
-  "formal_gate_increment": 91,
+  "roadmap_revision": "1.6",
+  "formal_gate_increment": 96,
   "architecture": "reference-ams-explicit-approximation-bounded-evidence-synthesizable-realization",
   "documents": {
     "architecture_adr": "docs/architecture/0011-ams-fpga-approximation-validation.md",
@@ -146,15 +146,15 @@
     ]
   },
   "increments": {
-    "91": "capability gate and API contracts",
-    "92": "analog normalization and sampled state IR",
-    "93": "solver and recurrence generation",
-    "94": "range fixed point quantization and error analysis",
-    "95": "multi rate event and real time scheduling",
-    "96": "synthesizable FPGA approximation backend",
-    "97": "differential equivalence and formal validation ladder",
-    "98": "open source FPGA implementation and target evidence",
-    "99": "hardware in the loop vertical slices and capability matrix"
+    "96": "capability gate and API contracts",
+    "97": "analog normalization and sampled state IR",
+    "98": "solver and recurrence generation",
+    "99": "range fixed point quantization and error analysis",
+    "100": "multi rate event and real time scheduling",
+    "101": "synthesizable FPGA approximation backend",
+    "102": "differential equivalence and formal validation ladder",
+    "103": "open source FPGA implementation and target evidence",
+    "104": "hardware in the loop vertical slices and capability matrix"
   },
   "required_evidence": [
     "explicit approximation request",
@@ -168,5 +168,24 @@
     "bitstream and board manifest",
     "claims and limitations report",
     "green CI"
-  ]
+  ],
+  "plugin_boundary": {
+    "core_semantics": [
+      "approximation transformation",
+      "sampled state IR",
+      "solver and recurrence",
+      "fixed point and error analysis",
+      "validation ladder"
+    ],
+    "tool_adapter_plugins": [
+      "FPGA target",
+      "place and route",
+      "bitstream",
+      "programmer",
+      "board runtime",
+      "external ADC/DAC profile",
+      "HIL transport"
+    ],
+    "architecture": "docs/architecture/0012-versioned-capability-plugin-architecture.md"
+  }
 }

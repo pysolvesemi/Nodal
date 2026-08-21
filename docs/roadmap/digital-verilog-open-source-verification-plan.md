@@ -1,8 +1,8 @@
 # Pure-digital Verilog and open-source verification plan
 
-**Status:** Normative roadmap target  
-**Architecture:** [ADR 0010](../architecture/0010-digital-verilog-open-source-verification.md)  
-**Public API freeze:** Increment 15 unified v0.3 gate  
+**Status:** Normative roadmap target
+**Architecture:** [ADR 0010](../architecture/0010-digital-verilog-open-source-verification.md)
+**Public API freeze:** Increment 15 unified v0.3 gate
 
 ## Goal
 
@@ -11,6 +11,8 @@ Allow a Nodal design containing only digital constructs to emit portable synthes
 The design rule is:
 
 > **Infer the narrowest compatible backend, verify generated HDL through independent open-source tools, and retain evidence.**
+
+External simulators, synthesis/formal tools, FPGA flows, waveform tools, and reporters use the versioned tool-adapter plugin protocol from [ADR 0012](../architecture/0012-versioned-capability-plugin-architecture.md) and [`plugin-spi-v0.1-plan.md`](plugin-spi-v0.1-plan.md). Built-in adapters remain explicit, locked, and semantically equivalent to third-party adapters.
 
 ## Backend surface candidate
 

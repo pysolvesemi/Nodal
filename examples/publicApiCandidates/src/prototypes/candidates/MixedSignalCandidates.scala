@@ -23,7 +23,7 @@ final class Dac(val width: Int = 12) extends Module:
       toReal(code) * fullScale / ((1 << width) - 1).real,
       0.0.ns,
       1.0.ns,
-      1.0.ns,
+      1.0.ns
     )
 
 final class MixedSignalHold(val width: Int = 10) extends Module:

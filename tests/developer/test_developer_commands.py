@@ -204,9 +204,19 @@ class UnifiedDeveloperCommandTests(unittest.TestCase):
             "check_formatting_baseline.py",
             "check_ci_baseline.py",
             "check_increment9.py",
+            "check_increment10.py",
         ):
             self.assertTrue(any(script in command for command in rendered), script)
-        for suite in ("architecture", "build", "toolchain", "compiler", "developer", "ci", "lint"):
+        for suite in (
+            "architecture",
+            "build",
+            "toolchain",
+            "compiler",
+            "developer",
+            "ci",
+            "lint",
+            "api",
+        ):
             self.assertTrue(any(f"tests/{suite}" in command for command in rendered), suite)
         self.assertTrue(any("core.scala.testkit.test" in command for command in rendered))
         self.assertTrue(any("check-nodal-native" in command for command in rendered))
@@ -227,7 +237,9 @@ class UnifiedDeveloperCommandTests(unittest.TestCase):
         )
         rendered = [" ".join(call[0]) for call in runner.calls]
         self.assertTrue(any("check_increment9.py" in command for command in rendered))
+        self.assertTrue(any("check_increment10.py" in command for command in rendered))
         self.assertTrue(any("tests/lint" in command for command in rendered))
+        self.assertTrue(any("tests/api" in command for command in rendered))
         self.assertTrue(any("scalafix.check" in command for command in rendered))
         self.assertFalse(any("core.scala.testkit.test" in command for command in rendered))
         self.assertFalse(any(command.startswith("cmake ") for command in rendered))

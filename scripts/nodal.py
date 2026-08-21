@@ -286,6 +286,7 @@ def _contract_commands(root: Path, *, online_toolchain: bool) -> list[list[str]]
         _python(root, "check_formatting_baseline.py"),
         _python(root, "check_ci_baseline.py"),
         _python(root, "check_increment9.py"),
+        _python(root, "check_increment10.py"),
     ]
     if online_toolchain:
         commands.append(_python(root, "check_native_toolchain.py", "--online"))
@@ -297,6 +298,7 @@ def _contract_commands(root: Path, *, online_toolchain: bool) -> list[list[str]]
         "developer",
         "ci",
         "lint",
+        "api",
     ):
         commands.append(
             [

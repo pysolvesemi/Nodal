@@ -37,7 +37,7 @@ sealed trait Discipline
 final class NamedDiscipline private[nodal] (
     val name: String,
     val potential: Nature,
-    val flow: Nature,
+    val flow: Nature
 ) extends Discipline
 
 case object Electrical extends Discipline
@@ -62,7 +62,7 @@ final class Signal[A <: Data] private[nodal] (dataType: DataType[A]) extends Exp
 /** Candidate elaboration-time variable visible to behavioral blocks. */
 final class Variable[A <: Data] private[nodal] (
     dataType: DataType[A],
-    initialValue: Expr[A],
+    initialValue: Expr[A]
 ) extends Expr[A]:
   CandidateRuntime.statement(dataType, initialValue)
 
@@ -106,7 +106,7 @@ abstract class Module:
 
   protected final def variable[A <: Data](
       dataType: DataType[A],
-      initialValue: Expr[A],
+      initialValue: Expr[A]
   ): Variable[A] = new Variable(dataType, initialValue)
 
   protected final def instance[M <: Module](module: M): Instance[M] =
@@ -163,7 +163,7 @@ def transition(
     value: Expr[Real],
     delay: Expr[Real],
     rise: Expr[Real],
-    fall: Expr[Real],
+    fall: Expr[Real]
 ): Expr[Real] = CandidateRuntime.expr(value, delay, rise, fall)
 
 def toUInt(value: Expr[Real], width: Int): Expr[UInt] =

@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+"""Apply the approved planning update for Nodal clock/reset architecture."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+ROADMAP = ROOT / "docs/roadmap/nodal-development-todo.md"
+ADR = ROOT / "docs/architecture/0007-implicit-clock-reset-domains.md"
+
+
+def replace_once(text: str, old: str, new: str, *, label: str) -> str:
+    if old not in text:
+        raise SystemExit(f"missing {label} anchor: {old[:120]!r}")
+    return text.replace(old, new, 1)
+
+
+def bump_increment_references(text: str) -> str:
+    def bump_phase_zero(match: re.Match[str]) -> str:
+        number = int(match.group(1))
+        return f"Increment {number + 1}" if number >= 12 else match.group(0)
+
+    text = re.sub(r"\bIncrement (\d+)\b", bump_phase_zero, text)
+
+    def bump_phase_four(match: re.Match[str]) -> str:
+        number = int(match.group(1))
+        return f"Increment {number + 2}" if number >= 56 else match.group(0)
+
+    return re.sub(r"\bIncrement (\d+)\b", bump_phase_four, text)
+
+
+def update_roadmap() -> None:
+    text = ROADMAP.read_text(encoding="utf-8")
+    text = replace_once(text, "**Revision:** 1.0  ", "**Revision:** 1.1  ", label="revision")
+    text = bump_increment_references(text)
+    text = text.replace("Increments 0–78", "Increments 0–81")
+
+    text = replace_once(
+        text,
+        "- Generate deterministic, readable HDL suitable for review, simulation, and golden testing.\n",
+        "- Generate deterministic, readable HDL suitable for review, simulation, and golden testing.\n"
+        "- Use an implicit lexical `ClockDomain` for ordinary synchronous state. Registers, synchronous memories, and clocked child instances capture the current domain when created; the Verilog-AMS backend, not user source, introduces ordinary clock-edge process syntax.\n"
+        "- Make clock identity, reset policy, domain relation, CDC/RDC intent, and mixed-signal sampling first-class compiler information from elaboration through MLIR and emission.\n",
+        label="fixed direction",
+    )
+
+    text = replace_once(
+        text,
+        "The exact API will be frozen by a dedicated design-gate increment before substantial language implementation.\n",
+        "Increment 11 froze the initial v0.1 API. Before compile contracts and substantial digital implementation proceed, Increment 12 must amend the clock/reset portion through a v0.2 design gate so ordinary synchronous source is domain-based rather than a copy of Verilog event-controlled syntax.\n",
+        label="public API status",
+    )
+
+    text = replace_once(
+        text,
+        "- Preserve established Verilog-AMS terms where Scala syntax permits: `analog`, `initial`, `always`, `discipline`, `nature`, `V`, `I`, `ddt`, `idt`, `cross`, `timer`, `transition`, and `<+`.\n",
+        "- Preserve established analog Verilog-AMS terms where Scala syntax permits: `analog`, `discipline`, `nature`, `V`, `I`, `ddt`, `idt`, `cross`, `timer`, `transition`, and `<+`.\n"
+        "- Do not copy event-controlled RTL syntax into ordinary synchronous source. `always(clock.rising)` is not the primary API; use an implicit `ClockDomain` with `Reg`/`RegNext` and next-state assignments. Reserve `on(event)` or a separately gated low-level process API for true analog, asynchronous, delay, and simulation behavior.\n",
+        label="API principles",
+    )
+
+    clock_section = """## Clock, reset and crossing architecture direction
+
+The recommended architecture is recorded in [ADR 0007](../architecture/0007-implicit-clock-reset-domains.md) and must be converted into an approved design gate by Increment 12.
+
+- `Clock`, `Reset`, and `ClockDomain` are distinct semantic types; clocks and resets are not ordinary Boolean expressions.
+- Applying a `ClockDomain` creates a lexical elaboration context. Sequential state and clocked children capture the current domain at creation, and single-domain children inherit it through hierarchy.
+- Extending `Module` alone does not add clock/reset ports. Analog-only and combinational modules remain clockless; domain ports are materialized only for sequential state or clocked descendants.
+- Ordinary synchronous behavior uses `Reg`, `RegNext`, next-state assignment, and explicit enables. Reset behavior is attached to state, reset dominates enable, and resetless state is deliberate.
+- External reset polarity is separate from reset policy. The initial policies are no reset, synchronous, asynchronous, and asynchronous assertion with synchronized release; unsafe reset release and reset-domain crossings are diagnosed.
+- Domains carry stable identity and provenance plus same/alias, derived, synchronous, asynchronous, or unknown relations. Equal frequency alone never proves a safe crossing.
+- Direct use across unrelated domains is an error. Approved primitives cover single-bit/Gray synchronization, pulses, handshakes, asynchronous FIFOs/streams, reset bridges, and explicitly constrained synchronous transfers. Arbitrary multi-bit synchronization and generic crossing-suppression tags are rejected.
+- Prefer register enables to generated clocks. Divided, muxed, or gated clocks require dedicated primitives that preserve parent-domain and timing metadata.
+- Analog values enter digital state only through explicit sampling, threshold, or quantization in the destination domain. Digital values drive analog behavior through explicit hold/transition/connect semantics.
+- CDC, RDC, reset-tree, mixed-domain, and domain-inventory reports are compiler products derived from target-neutral IR before Verilog-AMS emission.
+
+The intended high-level shape is:
+
+```scala
+final class Adc extends Module:
+  val width = param(12.integer)
+  val input = in(Electrical)
+  val common = in(Electrical)
+  val code = out(UInt(width))
+
+  val codeReg = Reg(UInt(width), init = zero)
+  codeReg := quantize(sample(V(input, common)), width)
+  code := codeReg
+```
+
+A parent binds the domain once and ordinary children inherit it:
+
+```scala
+val core = ClockDomain.external(
+  clock = in(Clock),
+  reset = in(Reset.activeLow),
+  policy = ResetPolicy.AsyncAssertSyncRelease(stages = 2)
+)
+
+core:
+  val adc = instance(new Adc)
+```
+
+The spelling above is illustrative until Increment 12 approves the v0.2 API.
+
+"""
+    text = replace_once(
+        text,
+        "## Development rules\n",
+        clock_section + "## Development rules\n",
+        label="development rules",
+    )
+
+    text = replace_once(
+        text,
+        "- **M0 — Foundation:** reproducible Scala/native builds, CI, frozen public API, and enforced core/library boundaries.\n",
+        "- **M0 — Foundation:** reproducible Scala/native builds, CI, a clock/reset-corrected public API, and enforced core/library boundaries.\n",
+        label="M0",
+    )
+    text = replace_once(
+        text,
+        "- **M3 — AMS preview:** digital, analog, cross-domain constructs, and Verilog-AMS emission.\n",
+        "- **M3 — AMS preview:** digital and analog semantics, implicit clock/reset domains, CDC/RDC and mixed-domain verification, and Verilog-AMS emission.\n",
+        label="M3",
+    )
+
+    contract_heading = "- [ ] **Increment 13 — Public API contract fixtures**\n"
+    if contract_heading not in text:
+        raise SystemExit("renumbered Increment 13 heading not found")
+    new_increment = """- [ ] **Increment 12 — Clock/reset architecture design gate and public API v0.2 amendment**
+  - Convert ADR 0007 into an approved `NodalClockReset-DG-v0.1.md` and `NodalPublicApi-DG-v0.2.md`. Prototype and compare the exact `Clock`, `Reset`, `ResetPolicy`, `ClockDomain`, `Reg`, `RegNext`, domain-area, enable, generated-clock, crossing, and analog-sampling APIs. Supersede the ordinary synchronous use of `always(clock.rising)` while retaining explicit event constructs only for true analog/asynchronous semantics. Define migration from v0.1, reset/enable priority, lazy domain-port materialization, hierarchy inheritance, structural specialization rules, CDC/RDC diagnostics, approved bridges, waiver evidence, and external-library compatibility.
+
+"""
+    text = text.replace(contract_heading, new_increment + contract_heading, 1)
+
+    text = replace_once(
+        text,
+        "- [ ] **Increment 13 — Public API contract fixtures**\n"
+        "  - Turn the approved examples into compile-positive and compile-negative tests, including an external-library consumer fixture with no internal-package access. Require stable diagnostic codes for prohibited or ambiguous API usage.\n",
+        "- [ ] **Increment 13 — Public API contract fixtures**\n"
+        "  - Turn the approved v0.2 examples into compile-positive and compile-negative tests, including implicit single-domain state, explicit multi-domain areas, reset policies, domain inheritance, external-library consumption, and negative fixtures for missing domains, raw Boolean clocks/resets, ordinary `always(clock.rising)`, unsafe crossings, multi-bit synchronizer misuse, internal-package access, and ambiguous API usage. Require stable diagnostics.\n",
+        label="contract fixtures",
+    )
+
+    text = replace_once(
+        text,
+        "- [ ] **Increment 14 — Elaboration context and module hierarchy kernel**\n"
+        "  - Implement deterministic module construction, parent/child scopes, declaration ownership, duplicate detection, and lifecycle rules behind the frozen API.\n",
+        "- [ ] **Increment 14 — Elaboration context, hierarchy and ambient domain kernel**\n"
+        "  - Implement deterministic module construction, parent/child scopes, declaration ownership, duplicate detection, lifecycle rules, the lexical `ClockDomain` context stack, domain capture at state creation, child-domain inheritance, lazy clock/reset port materialization, and stable domain identity independent of JVM object identity.\n",
+        label="elaboration kernel",
+    )
+
+    text = replace_once(
+        text,
+        "- [ ] **Increment 17 — Core MLIR module, port and parameter model**\n"
+        "  - Add target-neutral module, port, symbol, instance-reference, parameter declaration, and parameter-reference operations/types. Reuse `hw` constructs only after semantic comparison is documented.\n",
+        "- [ ] **Increment 17 — Core MLIR module, port, parameter and domain model**\n"
+        "  - Add target-neutral module, port, symbol, instance-reference, parameter declaration, parameter-reference, clock/reset domain, domain-reference, relation, and state-ownership operations/types. Reuse CIRCT `hw`/`seq` constructs only after semantic comparison is documented, and retain Nodal metadata needed for CDC/RDC and Verilog-AMS emission.\n",
+        label="MLIR domain model",
+    )
+
+    text = replace_once(
+        text,
+        "## Phase 4 — Digital semantics, mixed signal and Verilog-AMS\n",
+        "## Phase 4 — Digital semantics, clock/reset domains, mixed signal and Verilog-AMS\n",
+        label="phase 4 heading",
+    )
+
+    text = replace_once(
+        text,
+        "- [ ] **Increment 54 — Digital procedural blocks and assignments**\n"
+        "  - Add `initial`, `always`, blocking/nonblocking assignments, procedural variables, control flow, and legality checks while keeping the public API close to Verilog-AMS.\n",
+        "- [ ] **Increment 54 — Digital sequential state and implicit-domain semantics**\n"
+        "  - Implement `Reg`, `RegNext`, reset values, resetless state, next-state assignment, default hold, enables, nested priority, synchronous memories, multiple-driver checks, and reset-over-enable ordering under the current implicit domain. Ordinary synchronous source must not require an `always(clock.rising)` block; backend event processes are a lowering detail.\n",
+        label="sequential semantics",
+    )
+
+    text = replace_once(
+        text,
+        "- [ ] **Increment 55 — Digital events, clocks, delays and scheduling contract**\n"
+        "  - Add edge events, event expressions, delays supported by Verilog-AMS, clock/reset helpers only when they do not distort language semantics, and document the digital/analog scheduling boundary.\n",
+        "- [ ] **Increment 55 — Clock/reset domain model and generated-clock provenance**\n"
+        "  - Implement typed `Clock`, `Reset`, `ResetPolicy`, and `ClockDomain`; external and named domains; lexical application; edge and polarity configuration; synchronous, asynchronous, and async-assert/sync-release reset behavior; reset controllers; optional frequency metadata; same/alias, derived, synchronous, asynchronous, and unknown relations; and dedicated divided, muxed, and gated-clock primitives. Prefer register enable to clock gating and preserve constraint metadata.\n",
+        label="domain model",
+    )
+
+    hierarchy_heading = "- [ ] **Increment 58 — Digital hierarchy and parameterization**\n"
+    if hierarchy_heading not in text:
+        raise SystemExit("renumbered digital hierarchy heading not found")
+    crossing_increments = """- [ ] **Increment 56 — CDC/RDC analysis and crossing primitives**
+  - Propagate domain and reset provenance through combinational expressions and hierarchy. Reject unsafe source-to-destination paths with stable diagnostics. Implement verified single-bit and Gray synchronizers, pulse/toggle bridges, request/acknowledge handshakes, asynchronous FIFOs/streams, reset bridges, explicitly constrained synchronous transfers, crossing reports, and evidence-bearing waivers. Reject generic suppression tags and ordinary multi-bit use of single-bit synchronizers.
+
+- [ ] **Increment 57 — Explicit asynchronous events, delays and process escape hatch**
+  - Add `initial` where semantically required, `on(event)` for true analog/asynchronous events, supported Verilog-AMS delays, explicit asynchronous controls, and a separately capability-gated low-level process API only for behavior that cannot be expressed with implicit-domain state. Define deterministic digital/analog scheduling and prohibit the escape hatch from bypassing domain, CDC/RDC, reset, or backend-profile verification.
+
+"""
+    text = text.replace(hierarchy_heading, crossing_increments + hierarchy_heading, 1)
+
+    text = replace_once(
+        text,
+        "- [ ] **Increment 58 — Digital hierarchy and parameterization**\n"
+        "  - Add digital/mixed module instances, parameter propagation, connections, generate behavior, and reuse of CIRCT hardware symbols without duplicating Nodal hierarchy concepts.\n",
+        "- [ ] **Increment 58 — Digital hierarchy, parameterization and domain propagation**\n"
+        "  - Add digital/mixed module instances, parameter propagation, connections, generate behavior, inherited single-domain binding, explicit named multi-domain boundaries, lazy clock/reset port threading, deterministic structural variants for materially different edge/reset policies, and reuse of CIRCT hardware symbols without duplicating Nodal hierarchy concepts or cloning by clock identity/frequency.\n",
+        label="digital hierarchy",
+    )
+
+    text = replace_once(
+        text,
+        "- [ ] **Increment 60 — Analog/digital access and conversion semantics**\n"
+        "  - Add legal cross-domain reads, sampled values, thresholds, quantization, transition shaping, event synchronization, and strict diagnostics for implicit unsafe conversion.\n",
+        "- [ ] **Increment 60 — Analog/digital sampling, hold and conversion semantics**\n"
+        "  - Add explicit destination-domain sampling, thresholds, quantization, source-domain hold/transition behavior, event synchronization, and strict diagnostics for direct or implicit analog/digital conversion. Preserve clock/reset and update-domain provenance through conversion and connect-rule insertion.\n",
+        label="mixed-signal conversion",
+    )
+
+    text = replace_once(
+        text,
+        "- [ ] **Increment 62 — Mixed-domain verifier and scheduling analysis**\n"
+        "  - Verify analog/digital region legality, connection domains, event feedback, conversion loops, multiple drivers, contribution/assignment misuse, and simulator-profile restrictions.\n",
+        "- [ ] **Increment 62 — Mixed-domain, CDC/RDC and scheduling verifier**\n"
+        "  - Verify analog/digital region legality, clock/reset ownership, domain relations, CDC and RDC structure, reset release, clock-stop/restart behavior, connection domains, event feedback, conversion loops, multiple drivers, contribution/assignment misuse, low-level process restrictions, and simulator-profile limitations.\n",
+        label="mixed-domain verifier",
+    )
+
+    text = replace_once(
+        text,
+        "- [ ] **Increment 63 — Complete Verilog-AMS backend skeleton**\n"
+        "  - Emit modules containing analog and digital declarations/regions, disciplines, connect constructs, hierarchy, parameters, and stable source mapping. Keep analog-only output on the separate Verilog-A profile.\n",
+        "- [ ] **Increment 63 — Complete Verilog-AMS backend skeleton**\n"
+        "  - Emit modules containing analog and digital declarations/regions, explicit clock and reset ports, lowered sequential event processes, reset/enable priority, synchronizers and crossing structures, disciplines, connect constructs, hierarchy, parameters, domain reports, and stable source mapping. Keep analog-only output on the separate Verilog-A profile.\n",
+        label="AMS backend",
+    )
+
+    text = replace_once(
+        text,
+        "- [ ] **Increment 64 — ADC and DAC mixed-signal vertical slices**\n"
+        "  - Compile and simulate or compile-check representative clocked ADC and digitally controlled DAC models, including events, quantization, transition behavior, parameters, hierarchy, and generated golden Verilog-AMS.\n",
+        "- [ ] **Increment 64 — ADC and DAC mixed-signal vertical slices**\n"
+        "  - Compile and simulate or compile-check representative ADC and digitally controlled DAC models using implicit clock domains rather than ordinary source-level clock-edge processes. Cover reset policies, explicit sampling/hold, quantization, transition behavior, parameters, hierarchy, CDC/RDC diagnostics, and generated golden Verilog-AMS.\n",
+        label="ADC/DAC slice",
+    )
+
+    text = replace_once(
+        text,
+        "- [ ] **Increment 65 — PLL/comparator mixed-signal vertical slice**\n"
+        "  - Add a realistic control-loop example that exercises analog state, digital events, cross-domain conversion, feedback, and backend diagnostics.\n",
+        "- [ ] **Increment 65 — PLL/comparator mixed-signal vertical slice**\n"
+        "  - Add a realistic control-loop example that exercises derived clock provenance, multiple clock/reset domains, reset sequencing, clock stop/restart, analog state, explicit cross-domain conversion, feedback, CDC/RDC analysis, and backend diagnostics.\n",
+        label="PLL slice",
+    )
+
+    ROADMAP.write_text(text, encoding="utf-8")
+
+
+def update_adr() -> None:
+    text = ADR.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "- Increments 54-56 implement sequential state, domains, CDC/RDC, hierarchy propagation, and parameterized digital structure.\n"
+        "- Increments 58 and 60 implement explicit mixed-signal transfers and cross-domain verification.\n"
+        "- Increment 62 proves the model with ADC and DAC vertical slices.\n",
+        "- Increments 54-58 implement sequential state, domain semantics, CDC/RDC, explicit asynchronous events, hierarchy propagation, and parameterized digital structure.\n"
+        "- Increments 60 and 62 implement explicit mixed-signal transfers and cross-domain verification.\n"
+        "- Increment 64 proves the model with ADC and DAC vertical slices.\n",
+        label="ADR follow-up increments",
+    )
+    ADR.write_text(text, encoding="utf-8")
+
+
+def main() -> None:
+    update_roadmap()
+    update_adr()
+    print("clock/reset roadmap update applied")
+
+
+if __name__ == "__main__":
+    main()

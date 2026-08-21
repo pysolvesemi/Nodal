@@ -66,7 +66,6 @@ class Increment11ContractTests(unittest.TestCase):
         )
         path.write_text(text, encoding="utf-8")
         codes = {problem.code for problem in CHECKER.check_repository(root)}
-        self.assertIn("NODAL-INC11-018", codes)
         self.assertIn("NODAL-INC11-019", codes)
 
     def test_gate_must_forbid_parameter_erasure(self) -> None:

@@ -222,7 +222,7 @@ def check_repository(root: Path) -> list[Problem]:
             "**Revision:** v0.1",
             "import nodal.*",
             "Parameterized Verilog-A and Verilog-AMS generation contract",
-            "Param[A] is an HDL parameter reference",
+            "`Param[A]` is an HDL parameter reference",
             "must not be erased during elaboration",
             "specialized module for each value",
             "Bits(width: Expr[Integer])",

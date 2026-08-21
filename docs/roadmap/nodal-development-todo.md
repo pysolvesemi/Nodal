@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.7
+**Revision:** 1.8
 **Created:** 2026-08-20
 **Updated:** 2026-08-21
 **Status:** Active roadmap
@@ -37,6 +37,9 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Classify memory, external, analog, stateful, observational, and side-effecting operations explicitly so scheduling, optimization, and verification never guess latency or purity.
 - Classify complete designs as digital-only, analog-only, or mixed-signal. `Backend.Auto` selects the narrowest compatible backend, including portable Verilog for digital-only designs.
 - Verify generated pure-digital HDL through a pinned open-source matrix using Verilator, Icarus Verilog, Yosys, SBY, and optional cocotb interoperability.
+- Keep future user-authored formal properties target-neutral and domain-aware in Nodal IR; do not make raw SVA strings, SBY files, or one solver define public semantics.
+- Separate formal property authoring, target lowering, harness generation, and proof-engine execution so formal-only constructs cannot silently alter synthesizable behavior or ordinary simulation.
+- Require explicit property IDs, clock/reset semantics, assumption scope, symbolic environment, proof task, result state, source mapping, vacuity/constraint evidence, and counterexample provenance before reporting a formal result.
 - Treat AMS-to-FPGA validation as an explicit discrete-time, finite-precision approximation transformation. `Backend.Auto` must never select it and no report may present it as direct synthesis of general Verilog-AMS.
 - Require sample period, solver, state/reset, fixed-point, range, rounding/overflow, multi-rate/event, validation-envelope, error-budget, and target-FPGA contracts before generating an approximation.
 - Preserve separate evidence for AMS-reference error, discretization/model-reduction error, fixed-point error, RTL implementation, FPGA timing/resources, and hardware-in-the-loop runtime.
@@ -72,6 +75,9 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Provide explicit optimization profiles such as none/canonical/portable/simulation/synthesis/formal/FPGA/custom while keeping the exact profile and pass graph visible in `EmitOptions`, project configuration, lockfiles, manifests, reports, and cache keys.
 - Semantic post-render transforms must reparse into the approved target representation, restore source/capability metadata, run mandatory verification, and satisfy the pass proof obligation; render-only plugins may change formatting but not parsed meaning.
 - Keep Scala/native in-process plugins trusted and explicitly enabled; prefer process isolation for external tools and long-lived transform/backend integrations.
+- Reserve a separately versioned future formal-verification API for assert/assume/cover, sampled history, symbolic values, harnesses, contracts, and proof tasks; exact names remain deferred to its design gate.
+- Keep Scala runtime assertions, simulation assertions, formal properties, and explicitly synthesized checkers distinct unless a frozen inclusion policy intentionally shares one invariant.
+- Keep proof-engine options behind normalized task/adaptor contracts; installing a formal adapter or property library never executes a proof or changes `Backend.Auto`.
 - Use compile-positive and compile-negative fixtures to freeze public names, types, construction forms, imports, and diagnostics.
 - Keep ordinary model source backend-neutral and exclude frontend/compiler internals from the future library-author subset.
 - Any incompatible public API change after a freeze requires a new versioned design gate and migration note.
@@ -336,6 +342,32 @@ Open-source verification exercises generated HDL rather than a separate frontend
 Required CI retains tool versions, commands, hashes, logs, waveforms, synthesis reports, equivalence results, and counterexamples. A future explicit SystemVerilog profile may be added separately; it cannot replace the portable Verilog path.
 
 
+## Future formal-verification architecture
+
+The binding architecture is [ADR 0014](../architecture/0014-target-neutral-formal-verification.md). The deferred public API, property-IR, harness, task, adapter, evidence, replay, and conformance plan is in [`formal-verification-v0.1-plan.md`](formal-verification-v0.1-plan.md), with a machine-readable candidate in [`formal-verification-v0.1-surface.json`](formal-verification-v0.1-surface.json).
+
+Nodal adopts:
+
+> **Author properties in Nodal semantics, preserve them in typed IR, lower only to declared tool capabilities, and retain proof and counterexample evidence.**
+
+The existing architecture is already scalable because MLIR is authoritative; clock/reset domains, CDC/RDC, protocols, parameters, effects, and source locations are explicit; the digital backend has a formal profile; tool adapters are versioned and isolated; and proof evidence participates in manifests and caches.
+
+The remaining future-facing contract is the user-authored property layer. It is intentionally deferred and must remain independent of SVA and SBY spelling. The future gate covers:
+
+- assert, assume, cover, property IDs/groups, and explicit simulation/formal inclusion;
+- lexical or explicit clock domains, sampled edges, reset enable/disable, and history validity;
+- `past`/edge/change/stability/init/history-validity operations and a bounded typed temporal subset;
+- symbolic sequence/constants, initial assumptions, fairness, parameter cases, and legal environment contracts;
+- sidecar or embedded harnesses, stable verification exports, memory/black-box/external-operation models, and compositional require/ensure contracts;
+- BMC, prove/induction, cover, and capability-gated liveness tasks through pluggable formal adapters;
+- per-property proven/failed/covered/inconclusive/unsupported/timeout/tool-error states;
+- vacuity, over-constraint, assumption, coverage, counterexample, source-map, and replay evidence.
+
+Nodal may selectively reuse CIRCT `verif` and `ltl` operations when the pinned revision preserves the frozen Nodal semantics. Nodal-owned formal operations remain valid where CIRCT or a selected runner lacks a required capability.
+
+Increment 67 remains limited to Yosys/SBY integration, compiler-generated hooks, equivalence, and core property suites. It must preserve the target-neutral property seam but does not freeze or implement a user-authored formal API. The deferred formal phase may be pulled forward once its listed prerequisites are complete; it is not required for the initial core preview or the AMS-to-FPGA milestone.
+
+
 ## AMS-to-FPGA approximation architecture
 
 The binding architecture is [ADR 0011](../architecture/0011-ams-fpga-approximation-validation.md). The complete capability, solver, numeric, validation, FPGA implementation, and HIL plan is in [`ams-fpga-validation-plan.md`](ams-fpga-validation-plan.md), with a machine-readable candidate in [`ams-fpga-validation-surface.json`](ams-fpga-validation-surface.json).
@@ -502,7 +534,7 @@ core ──X─────────────────► libraries or 
 libraries ──X────────────► plugin implementations
 ```
 
-- `core/` contains the language/API, plugin SPI and resolver, construction frontend, MLIR bridge/compiler, diagnostics, built-in backends, simulation API, adapters, and mandatory tests.
+- `core/` contains the language/API, plugin SPI and resolver, construction frontend, MLIR bridge/compiler, diagnostics, built-in backends, simulation API, future formal property/harness/task services, adapters, and mandatory tests.
 - `libraries/` is reserved for optional passive reusable models, interfaces, helpers, and verification packages.
 - `plugins/` is reserved for optional executable extension bundles or conformance fixtures; production plugins may live in independent repositories.
 - A core-only project must compile with no library or plugin checkout/artifact.
@@ -527,6 +559,7 @@ Nodal/
 │   │   ├── bridge/                # Scala-to-MLIR protocol and nodalc invocation
 │   │   ├── cli/                   # JVM CLI
 │   │   ├── sim/                   # Simulation/regression API
+│   │   ├── formal/                # Deferred property, harness, task, and trace services
 │   │   └── testkit/               # Core fixtures and test support
 │   ├── compiler/
 │   │   ├── include/nodal/         # Dialect, analyses, transforms, conversions
@@ -550,9 +583,10 @@ Empty future-library or plugin directories are not committed merely as placehold
 - **M0 — Foundation:** reproducible builds, CI, clock/reset plus unified core-semantics/automatic-pipeline API freezes, digital-backend selection contract, and enforced core/library boundaries.
 - **M1 — First vertical slice:** Scala RC model lowers through MLIR and emits validated Verilog-A.
 - **M2 — Analog preview:** useful Verilog-A subset with open-source compilation and simulation regression.
-- **M3 — Digital/AMS preview:** implicit-domain digital state, automatic fixed/valid/elastic pipelines, portable Verilog with open-source simulation/synthesis/formal verification, CDC/RDC-safe clock/reset architecture, mixed-signal crossings, and Verilog-AMS emission.
+- **M3 — Digital/AMS preview:** implicit-domain digital state, automatic fixed/valid/elastic pipelines, portable Verilog with open-source simulation/synthesis/equivalence and compiler-generated formal verification, CDC/RDC-safe clock/reset architecture, mixed-signal crossings, and Verilog-AMS emission.
 - **M4 — Scalable core release:** packaged compiler, complete reference, frozen plugin and target-HDL pass SPIs, deterministic extension/pass graphs, optimization proof evidence, conformance kits, library-author contract, and compatibility policy.
 - **M5 — FPGA-accelerated AMS validation:** explicit sampled/fixed-point approximation, four-level reference evidence, open FPGA implementation, HIL runtime, and a published capability/limitations matrix.
+- **M6 — User-authored formal verification extension:** frozen formal property API, target-neutral property IR, compositional harness/contracts, pluggable proof engines, vacuity/coverage, typed counterexample replay, property libraries, and conformance evidence.
 
 # Incremental roadmap
 
@@ -802,10 +836,11 @@ Empty future-library or plugin directories are not committed merely as placehold
   - Extend the Scala simulation API with typed digital/aggregate/protocol access, clock/reset-domain stimulus, multiple clocks, randomized reset release, `Valid`/`Stream` drivers/monitors/scoreboards, stalls/bubbles, latency-aware checking, timeouts, caching, and artifacts.
   - Add optional cocotb metadata/runner support for Icarus and Verilator without making Python or cocotb define Nodal semantics.
 
-- [ ] **Increment 67 — Yosys synthesis/equivalence and SBY formal verification**
+- [ ] **Increment 67 — Yosys synthesis/equivalence and core SBY formal-readiness infrastructure**
   - Pin and integrate Yosys, SBY, and selected solvers. Run hierarchy/process/memory checks, target-neutral synthesis, inferred-latch/loop/black-box diagnostics, normalized netlist emission, statistics, and parameter elaboration matrices.
   - Add RTL-to-optimized/netlist equivalence, including latency-aware fixed-pipeline and protocol-aware elastic checks.
-  - Add bounded/unbounded safety, cover, and selected liveness property suites for registers, resets, `Valid`/`Stream`, FIFOs, handshakes, synchronizers, CDC/RDC wrappers, and automatic pipelines. Retain traces and counterexamples as CI evidence.
+  - Add compiler-generated bounded/unbounded safety, cover, and selected liveness property suites for registers, resets, `Valid`/`Stream`, FIFOs, handshakes, synchronizers, CDC/RDC wrappers, and automatic pipelines. Retain traces and counterexamples as CI evidence.
+  - Preserve stable property IDs, source maps, domain/reset/parameter metadata, normalized tasks, and adapter evidence in forms compatible with [ADR 0014](../architecture/0014-target-neutral-formal-verification.md). Use portable hooks or sidecar harnesses without freezing a user-authored formal API or binding Nodal semantics to SVA/SBY syntax.
 
 - [ ] **Increment 68 — Discrete real and mixed-signal net types**
   - Implement `real`, `wreal` or profile equivalents, resolution, direction, sampling/update semantics, and portability.
@@ -968,9 +1003,43 @@ Empty future-library or plugin directories are not committed merely as placehold
   - Publish supported/unsupported constructs, validation envelopes, approximation/error limits, resource/timing results, board/bitstream evidence, claims language, and the M5 FPGA-accelerated AMS validation release package.
 
 
+## Phase 7 — Deferred, independently schedulable user-authored formal verification
+
+This phase is deliberately outside the initial core, plugin, and AMS-to-FPGA milestones. It may be pulled forward after Increments 15, 19-23, 54-67, 82, and 87 provide the public semantic, IR, backend, core-proof, compiler-plugin, and formal-adapter prerequisites. No formal implementation is performed by this roadmap update.
+
+- [ ] **Increment 109 — Formal verification architecture gate and public API v0.1 contracts**
+  - Use [ADR 0014](../architecture/0014-target-neutral-formal-verification.md), [`formal-verification-v0.1-plan.md`](formal-verification-v0.1-plan.md), and [`formal-verification-v0.1-surface.json`](formal-verification-v0.1-surface.json) as the mandatory architecture and candidate.
+  - Compile and compare concise formal context, assert/assume/cover, property IDs/groups, sampled-value operators, bounded temporal forms, symbolic values, harness, contract, and task configuration candidates.
+  - Freeze clock/reset, combinational, cross-domain, parameter, memory, black-box, assumption-scope, vacuity, result-state, source-map, and simulation/formal-inclusion semantics.
+  - Publish `NodalFormalVerification-DG-v0.1.md`, machine-readable frozen API/task surfaces, compatibility policy, stable diagnostics, and positive/negative external-consumer fixtures. Keep execution/lowering inert until approval.
+
+- [ ] **Increment 110 — Target-neutral formal property IR, verifier, and lowering framework**
+  - Implement formal test/harness, property, symbolic-value, sampled-history, bounded-temporal, contract, enable/reset, and formal-model operations with stable IDs and source maps.
+  - Selectively reuse CIRCT `verif` and `ltl` through verified conversions; retain Nodal-owned operations where semantics differ or capabilities are missing.
+  - Add property/domain/reset/type/capability verification, deterministic parse/print, normalized reports, and portable immediate/monitor/sidecar lowering.
+  - Prove formal-only constructs cannot affect ordinary synthesis/simulation artifacts without explicit inclusion.
+
+- [ ] **Increment 111 — Formal harnesses, symbolic environments, compositional contracts, and model abstractions**
+  - Implement DUT wrappers, symbolic sequence/constants, initial assumptions, legal clock/reset generation, stable verification exports, property groups, and reusable harness composition.
+  - Implement exact or explicitly abstracted memory, external-operation, and black-box formal models with soundness and waiver reporting.
+  - Implement require/ensure contract checking/application, assume-guarantee composition, parameter matrices/envelopes, conservative multi-clock handling, and hidden-assumption/over-constraint diagnostics.
+
+- [ ] **Increment 112 — Pluggable proof execution, proof modes, and normalized evidence**
+  - Implement SBY/Yosys as the required open-source formal adapter through the common process/evidence protocol, including BMC, prove/induction, cover, selected liveness, solver, timeout, and resource controls.
+  - Add an out-of-tree mock or second formal-adapter conformance fixture so public semantics are not coupled to SBY files.
+  - Normalize per-property/task results, commands, logs, traces, proof metadata, source maps, cache keys, and reproduction commands; reject unsupported capabilities before execution.
+  - Preserve inconclusive, timeout, cancellation, unsupported, and tool-error states without reporting them as proof success.
+
+- [ ] **Increment 113 — Property libraries, vacuity/coverage, counterexample replay, documentation, and conformance**
+  - Publish passive property libraries for protocols, FIFOs, pipelines, resets, CDC/RDC wrappers, memories, and common control structures using only public APIs.
+  - Implement assumption consistency, antecedent/scenario cover goals, supported vacuity checks, over-constraint reports, and defined property/scenario coverage metrics.
+  - Replay normalized counterexamples/covers through the Scala simulation API with typed transactions, domain timelines, source annotations, and VCD/FST waveforms.
+  - Publish tutorials, adapter/property-library author guides, capability matrices, known limitations, conformance suites, and the M6 reproducible formal-verification extension package.
+
+
 ## Deferred reusable library roadmap
 
-No official reusable model/component library or production plugin is implemented by Increments 0-108. After the core API, extension surface, packaging model, and preview release are proven, independently approved library/plugin roadmaps may populate `libraries/`, `plugins/`, or separate repositories while preserving the public-core dependency contract.
+No official reusable model/component library or production plugin is implemented by Increments 0-113. After the core API, extension surface, packaging model, and preview release are proven, independently approved library/plugin roadmaps may populate `libraries/`, `plugins/`, or separate repositories while preserving the public-core dependency contract.
 
 ## Roadmap maintenance
 
@@ -1000,6 +1069,9 @@ When an increment is completed:
 - SpinalHDL pipeline library: <https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Libraries/Pipeline/index.html>
 - CIRCT pipeline dialect: <https://circt.llvm.org/docs/Dialects/Pipeline/>
 - CIRCT ESI channel buffers: <https://circt.llvm.org/docs/Dialects/ESI/>
+- SpinalHDL formal verification: <https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Formal%20verification/index.html>
+- CIRCT Verif dialect: <https://circt.llvm.org/docs/Dialects/Verif/>
+- CIRCT LTL dialect: <https://circt.llvm.org/docs/Dialects/LTL/>
 - Chisel width inference: <https://www.chisel-lang.org/docs/explanations/width-inference>
 - Chisel connectable API: <https://www.chisel-lang.org/docs/explanations/connectable>
 - SpinalHDL streams: <https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Libraries/stream.html>

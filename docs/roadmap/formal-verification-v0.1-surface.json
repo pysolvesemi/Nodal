@@ -1,0 +1,180 @@
+{
+  "schema": 1,
+  "status": "deferred-roadmap-candidate",
+  "roadmap_revision": "1.8",
+  "formal_gate_increment": 109,
+  "implementation_increments": {
+    "110": "target-neutral formal property IR, verifier, and lowering framework",
+    "111": "formal harnesses, symbolic environments, compositional contracts, and model abstractions",
+    "112": "pluggable proof execution, proof modes, and normalized evidence",
+    "113": "property libraries, vacuity and coverage, counterexample replay, documentation, and conformance"
+  },
+  "documents": {
+    "architecture": "docs/architecture/0014-target-neutral-formal-verification.md",
+    "plan": "docs/roadmap/formal-verification-v0.1-plan.md",
+    "main_roadmap": "docs/roadmap/nodal-development-todo.md",
+    "digital_verification_architecture": "docs/architecture/0010-digital-verilog-open-source-verification.md",
+    "digital_verification_plan": "docs/roadmap/digital-verilog-open-source-verification-plan.md",
+    "plugin_architecture": "docs/architecture/0012-versioned-capability-plugin-architecture.md"
+  },
+  "binding_rule": "author properties in Nodal semantics, preserve them in typed IR, lower only to declared tool capabilities, and retain proof and counterexample evidence",
+  "initial_scope": {
+    "digital_only": true,
+    "general_continuous_time_formal": false,
+    "implementation_now": false,
+    "may_be_scheduled_out_of_roadmap_order": true,
+    "core_preview_dependency": false,
+    "ams_fpga_milestone_dependency": false
+  },
+  "architecture_layers": [
+    "property-authoring-api",
+    "target-neutral-formal-ir",
+    "target-and-harness-lowering",
+    "proof-engine-adapters"
+  ],
+  "property_kinds": [
+    "assert",
+    "assume",
+    "cover"
+  ],
+  "property_inclusion": [
+    "formal-only",
+    "simulation-and-formal",
+    "simulation-only",
+    "explicit-synthesized-checker"
+  ],
+  "sampled_value_candidates": [
+    "past",
+    "rose",
+    "fell",
+    "changed",
+    "stable",
+    "initState",
+    "pastValid",
+    "pastValidAfterReset"
+  ],
+  "temporal_candidates": [
+    "boolean implication",
+    "exact cycle delay",
+    "bounded cycle delay",
+    "bounded consecutive repetition",
+    "bounded eventuality",
+    "until with explicit weak or strong policy",
+    "sequence concatenation",
+    "explicit clocking",
+    "explicit enable or disable condition"
+  ],
+  "symbolic_value_candidates": [
+    "anySeq",
+    "anyConst",
+    "allSeq when supported",
+    "allConst when supported"
+  ],
+  "clock_reset_rules": {
+    "lexical_domain_default_when_unambiguous": true,
+    "explicit_domain_supported": true,
+    "sampled_edge_is_semantic": true,
+    "reset_disable_is_explicit": true,
+    "properties_enabled_during_reset_supported": true,
+    "history_validity_is_first_class": true,
+    "implicit_cross_domain_timeline": false,
+    "explicit_combinational_properties": true
+  },
+  "proof_task_kinds": [
+    "bounded-model-check",
+    "prove-or-induction-safety",
+    "cover-witness",
+    "selected-liveness-when-capability-supported"
+  ],
+  "result_states": [
+    "proven",
+    "failed",
+    "covered",
+    "unreachable",
+    "inconclusive",
+    "unsupported",
+    "timed-out",
+    "cancelled",
+    "tool-error"
+  ],
+  "target_neutral_ir": {
+    "nodal_owned_when_needed": true,
+    "selective_circt_reuse": [
+      "verif",
+      "ltl"
+    ],
+    "required_semantics": [
+      "formal test and harness regions",
+      "stable property IDs and groups",
+      "assert assume cover",
+      "clock edge reset and enable metadata",
+      "symbolic values and constants",
+      "sampled history",
+      "typed bounded temporal properties",
+      "require ensure contracts",
+      "fairness and liveness declarations",
+      "formal model references",
+      "source map and diagnostic provenance"
+    ]
+  },
+  "lowering_profiles": [
+    "portable-yosys-immediate-and-monitor",
+    "sidecar-harness",
+    "future-systemverilog-sva",
+    "versioned-engine-native-adapter"
+  ],
+  "initial_required_adapter": "SBY/Yosys through ToolAdapterPlugin process and evidence protocol",
+  "future_adapter_policy": {
+    "commercial_or_research_engines_allowed": true,
+    "engine_specific_semantics_in_public_api": false,
+    "installing_adapter_executes_proofs": false,
+    "installing_adapter_changes_backend_auto": false,
+    "capabilities_checked_before_execution": true
+  },
+  "harness_contract": [
+    "explicit DUT and parameter cases or envelope",
+    "symbolic or constrained inputs",
+    "clock and reset generation from domain metadata",
+    "stable verification exports",
+    "formal-only wrapper logic",
+    "property groups and proof scopes",
+    "memory and black-box models",
+    "compositional require ensure contracts",
+    "assume-guarantee composition"
+  ],
+  "soundness_rules": {
+    "raw_sva_strings_as_core_api": false,
+    "hidden_adapter_assumptions": false,
+    "unmodeled_black_box_silent_unconstrained_fallback": false,
+    "inconclusive_reported_as_success": false,
+    "single_parameter_case_reported_as_generic_proof": false,
+    "unsupported_temporal_operator_silently_weakened": false,
+    "implicit_reset_disable_for_every_property": false,
+    "formal_only_value_leaks_to_synthesis": false
+  },
+  "vacuity_and_constraint_evidence": [
+    "active assumption inventory",
+    "assumption consistency where supported",
+    "antecedent and scenario cover goals",
+    "supported vacuity classification",
+    "over-constraint diagnostics",
+    "defined property and scenario coverage metrics",
+    "explicit inconclusive state when no sound check exists"
+  ],
+  "counterexample_contract": [
+    "normalized typed trace",
+    "property and task identity",
+    "source locations",
+    "clock and reset domain timeline",
+    "aggregate and protocol reconstruction",
+    "Scala simulation replay",
+    "VCD or FST generation",
+    "original and optionally minimized trace hashes"
+  ],
+  "relationship_to_increment_67": {
+    "scope": "core synthesis equivalence and internal formal-readiness infrastructure",
+    "public_formal_api_frozen": false,
+    "must_preserve_future_property_ir_seam": true,
+    "must_not_bake_sby_or_sva_into_public_semantics": true
+  }
+}

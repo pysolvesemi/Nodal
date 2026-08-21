@@ -162,6 +162,13 @@ SBY provides required smoke flows for:
 
 Nodal may emit portable assertions/assumptions/covers or sidecar formal harnesses. The formal profile stays within the supported open-source frontend subset and reports unsupported property syntax explicitly.
 
+### Deferred user-authored formal property architecture
+
+[ADR 0014](0014-target-neutral-formal-verification.md) owns the future public property, clock/reset, sampled-history, symbolic-environment, harness/contract, task, vacuity, counterexample, and replay semantics. Formal properties remain target-neutral Nodal IR and may selectively lower to CIRCT `verif`/`ltl`, portable Yosys-compatible hooks, sidecar harnesses, or future capability-gated targets.
+
+Increment 67 provides compiler-generated formal hooks, equivalence, core property suites, SBY/Yosys integration, source mapping, and evidence readiness only. It must not freeze a public formal DSL or make SVA/SBY syntax part of Nodal semantics. The deferred public formal phase is independent of the initial core and AMS milestones.
+
+
 ### Differential and regression testing
 
 Core digital fixtures run through more than one tool when practical:

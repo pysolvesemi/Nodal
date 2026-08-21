@@ -1,14 +1,16 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.4",
-  "roadmap_last_increment": 90,
-  "formal_freeze_increment": 15,
+  "roadmap_revision": "1.8",
+  "roadmap_last_increment": 113,
   "architecture": "narrowest-compatible-backend-open-source-generated-hdl-verification",
   "documents": {
     "architecture_adr": "docs/architecture/0010-digital-verilog-open-source-verification.md",
     "verification_plan": "docs/roadmap/digital-verilog-open-source-verification-plan.md",
-    "main_roadmap": "docs/roadmap/nodal-development-todo.md"
+    "main_roadmap": "docs/roadmap/nodal-development-todo.md",
+    "formal_architecture": "docs/architecture/0014-target-neutral-formal-verification.md",
+    "formal_plan": "docs/roadmap/formal-verification-v0.1-plan.md",
+    "formal_surface": "docs/roadmap/formal-verification-v0.1-surface.json"
   },
   "design_kinds": [
     "DigitalOnly",
@@ -75,5 +77,22 @@
     "architecture": "docs/architecture/0011-ams-fpga-approximation-validation.md",
     "plan": "docs/roadmap/ams-fpga-validation-plan.md",
     "post_transform_backend": "Backend.Verilog"
+  },
+  "backend_profile_freeze_increment": 15,
+  "user_authored_formal_gate_increment": 109,
+  "formal_readiness": {
+    "increment_67_scope": "compiler-generated hooks, equivalence, core property suites, SBY/Yosys integration, traces, source maps, and evidence",
+    "public_property_api_in_increment_67": false,
+    "target_neutral_property_ir_required": true,
+    "raw_sva_strings_define_public_semantics": false,
+    "sby_files_define_public_semantics": false,
+    "proof_engines_use_tool_adapter_plugins": true,
+    "deferred_public_increments": [
+      109,
+      110,
+      111,
+      112,
+      113
+    ]
   }
 }

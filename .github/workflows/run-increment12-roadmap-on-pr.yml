@@ -1,0 +1,51 @@
+name: Apply Increment 12 roadmap on pull request
+
+on:
+  pull_request:
+    branches:
+      - dev
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: write
+
+jobs:
+  apply-roadmap:
+    if: github.head_ref == 'increment/12-clock-reset-domain-roadmap' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out roadmap branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/12-clock-reset-domain-roadmap
+          fetch-depth: 0
+
+      - name: Extract and run the staged roadmap transformation
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/apply-increment12-clock-reset-roadmap.yml')
+          lines = workflow.read_text(encoding='utf-8').splitlines()
+          start = next(i for i, line in enumerate(lines) if line.strip() == "python3 - <<'PY'")
+          end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'PY')
+          code = textwrap.dedent('\n'.join(lines[start + 1:end]))
+          exec(compile(code, str(workflow), 'exec'))
+          PY
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm \
+            .github/workflows/apply-increment12-clock-reset-roadmap.yml \
+            .github/workflows/run-increment12-roadmap-on-pr.yml \
+            .github/clock-reset-roadmap-trigger.txt
+          git add -- docs/roadmap/nodal-development-todo.md
+          git diff --cached --check
+          git commit -m 'docs: define scalable clock and reset domain roadmap'
+          git push origin HEAD:increment/12-clock-reset-domain-roadmap

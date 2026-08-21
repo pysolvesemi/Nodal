@@ -113,6 +113,63 @@ jobs:
             --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
             --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
 
+  prepare-target-hdl-pass-roadmap:
+    name: prepare target-HDL pass roadmap
+    if: >-
+      ((github.event_name == 'push' &&
+        github.ref_name == 'increment/13-verilog-optimization-pass-roadmap') ||
+       (github.event_name == 'pull_request' &&
+        github.head_ref == 'increment/13-verilog-optimization-pass-roadmap')) &&
+      github.actor != 'github-actions[bot]'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out roadmap branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/13-verilog-optimization-pass-roadmap
+          fetch-depth: 0
+
+      - name: Apply target-HDL pass roadmap transformation
+        run: python3 scripts/update_target_hdl_optimization_roadmap.py
+
+      - name: Validate durable documentation and JSON
+        shell: bash
+        run: |
+          python3 scripts/check_markdown.py
+          python3 scripts/check_formatting_baseline.py
+          python3 scripts/check_architecture.py
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          for path in sorted(Path("docs/roadmap").glob("*.json")):
+              json.loads(path.read_text(encoding="utf-8"))
+          print("roadmap JSON validation passed")
+          PY
+
+      - name: Commit durable roadmap and restore permanent CI
+        shell: bash
+        run: |
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
+          git checkout origin/dev -- .github/workflows/ci.yml
+          git rm \
+            .github/workflows/apply-target-hdl-optimization-roadmap.yml \
+            scripts/update_target_hdl_optimization_roadmap.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- \
+            .github/branch-policy.json \
+            .github/workflows/ci.yml \
+            docs/architecture \
+            docs/roadmap
+          git diff --cached --check
+          git commit -m 'docs: plan plug-and-play target-HDL optimization passes'
+          git push origin HEAD:increment/13-verilog-optimization-pass-roadmap
+
   required:
     name: required
     if: always()

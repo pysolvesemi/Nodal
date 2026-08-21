@@ -4,11 +4,14 @@
 **Architecture:** [ADR 0009](../architecture/0009-core-semantic-contracts.md)
 **Enum/FSM architecture:** [ADR 0015](../architecture/0015-native-scala-enum-and-hierarchical-fsm.md)
 **Signed/loop architecture:** [ADR 0016](../architecture/0016-signed-types-and-staged-loops.md)
+**Shaped-value architecture:** [ADR 0017](../architecture/0017-semantic-multidimensional-values-and-target-layouts.md)
+**Naming architecture:** [ADR 0018](../architecture/0018-expression-materialization-and-semantic-naming.md)
+**Quality-gate architecture:** [ADR 0019](../architecture/0019-mandatory-pre-emission-hardware-quality-gates.md)
 **Unified formal freeze:** Increment 15 design gate with automatic pipeline API
 
 ## Goal
 
-Freeze the language semantics that clock/reset domains, symbolic parameterization, native enums, reusable FSM/statecharts, reusable interfaces, analog equations, memories, external blocks, and automatic pipelines depend on.
+Freeze the language semantics that clock/reset domains, symbolic parameterization, native enums, reusable FSM/statecharts, parameterized multidimensional shaped values, reusable interfaces, expression materialization/naming, mandatory quality gates, analog equations, memories, external blocks, and automatic pipelines depend on.
 
 The architectural rule is:
 
@@ -149,6 +152,32 @@ The gate also distinguishes:
 Runtime trip counts, unbounded `while`, hidden multi-cycle loop synthesis, structural declarations inside procedural loops, and backend-defined signedness are outside the initial contract.
 
 
+## Multidimensional shapes, target layouts, naming, and quality profiles
+
+ADRs [0017](../architecture/0017-semantic-multidimensional-values-and-target-layouts.md), [0018](../architecture/0018-expression-materialization-and-semantic-naming.md), and [0019](../architecture/0019-mandatory-pre-emission-hardware-quality-gates.md), plus [`shaped-values-naming-quality-v0.3-plan.md`](shaped-values-naming-quality-v0.3-plan.md), define mandatory Increment 13 candidates.
+
+Preferred shaped-value direction:
+
+```scala
+val matrix = in(Vec(SInt(width), rows, cols))
+val element = matrix(row, col)
+```
+
+`Vec` has semantic rank/dimensions and structural storage. `Mem` remains explicit addressable storage. Portable Verilog uses a canonical flat carrier; future SystemVerilog defaults to unpacked multidimensional ports of packed elements. Flatten/index/reshape order is target independent.
+
+Preferred emission configuration direction:
+
+```scala
+EmitOptions(
+  temporaries = TemporaryPolicy.InlineSafe,
+  naming = NamingPolicy.Semantic,
+  checks = CheckProfile.Default
+)
+```
+
+Safe single-use expressions inline without anonymous-wire chains. Required temporaries/state receive reasoned semantic names and expression-level source maps. Fast/Default/Release profiles all retain mandatory internal safety checks; external lint/synthesis/equivalence evidence increases by profile. Accidental latches, combinational loops, multiple drivers, hierarchy/scope, width/sign/shape, CDC/RDC, storage, effect, protocol, and target-legality errors prevent accepted emission.
+
+
 ## Native enums and FSM/statechart semantics
 
 [ADR 0015](../architecture/0015-native-scala-enum-and-hierarchical-fsm.md), [`enum-fsm-api-v0.3-plan.md`](enum-fsm-api-v0.3-plan.md), and [`enum-fsm-api-v0.3-surface.json`](enum-fsm-api-v0.3-surface.json) define the mandatory Increment 13 candidates.
@@ -207,7 +236,7 @@ The v0.3 gate must freeze:
 
 - product/record declaration form;
 - field ordering and deterministic naming;
-- nested aggregate and vector rules;
+- nested aggregate and parameterized multidimensional `Vec` rank/dimension/index/flatten/reshape rules;
 - equality, assignment, and literal construction;
 - parameterized field widths/counts;
 - backend flattening and source-map behavior.
@@ -375,6 +404,8 @@ Automatic-pipeline API v0.3 depends on this contract:
 - physical quantities do not enter digital scheduling without explicit sampling;
 - effectful operations and memories move only under declared contracts;
 - parameterized schedules require finite envelopes.
+- shaped-value indexing/layout/storage and expression materialization/naming boundaries remain exact unless a separately verified transformation contract permits change.
+- every accepted emission passes the mandatory ADR 0019 internal and selected external quality gates.
 - enum codes and FSM state/action/transition/completion boundaries remain exact typed scheduling barriers unless a separately verified transformation contract permits movement or recoding.
 
 Therefore Increment 15 freezes this plan and the automatic-pipeline plan in one versioned gate rather than approving either independently.
@@ -394,6 +425,9 @@ Increment 13 must compile candidates covering:
 - manual and high-level flat FSMs plus reusable nested/parallel/timed/finite-recursive definitions and bounded-stack candidates;
 - every explicit narrowing/overflow policy;
 - directionless nested aggregates and vectors;
+- parameterized rank-one through rank-four `Vec`, exact shape/index/slice/flatten/reshape, signed elements, structural `Vec` versus `Mem`, and portable-Verilog/future-SystemVerilog layout candidates;
+- safe expression inlining, shared/observable/target-required materialization, semantic anonymous-register names, and expression-span source maps;
+- Fast/Default/Release check profiles and typed waiver metadata;
 - exact plain, `Valid`, and `Stream` ports/connections;
 - explicit adapters/views;
 - dimension-correct analog equations;
@@ -414,6 +448,9 @@ Required failures include:
 - implicit bits-to-enum/cross-enum conversion or ignored sparse-decode validity;
 - non-exhaustive switch, overlapping transitions, missing initial state, hidden boot assumption, invalid local encoding, or unbounded FSM recursion;
 - aggregate field mismatch or silent field loss;
+- runtime/zero/negative/overflowing shape dimension, rank/index/reshape mismatch, illegal target layout, implicit `Vec`/`Mem` conversion, or signed element loss during flattening;
+- forced unsafe inlining, traversal-counter-only normal names, duplicate semantic names, or unclassified required temporary;
+- disabled mandatory safety check, blanket waiver, accidental latch, combinational loop, multiple driver, undriven output, or unexpected memory inference;
 - protocol conversion without an adapter;
 - domain crossing through direct connection;
 - voltage/current or other dimension mismatch;
@@ -438,7 +475,10 @@ The unified v0.3 gate may be approved only when:
 10. flat and reusable hierarchical/parallel/timed/bounded-recursive FSM candidates have unambiguous reset, transition, encoding, report, and diagnostic contracts;
 11. signed declaration/literal/parameter/memory/expression/conversion and Verilog-family mapping contracts are exact;
 12. elaboration, generate, and bounded hardware-loop contracts plus procedural/unrolled equivalence and dynamic-loop rejection are proven;
-13. the machine-readable manifest, migration notes, diagnostics, and CI are green.
+13. multidimensional shape/layout/storage and signed-element mappings are exact across portable Verilog and future SystemVerilog contracts;
+14. safe inlining removes avoidable anonymous-wire chains while required objects receive deterministic semantic names and source maps;
+15. mandatory check profiles, transactional emission, check inventory, and typed waiver boundaries are unambiguous;
+16. the machine-readable manifest, migration notes, diagnostics, and CI are green.
 
 ## References
 
@@ -446,6 +486,9 @@ The unified v0.3 gate may be approved only when:
 - Chisel connection operators: <https://www.chisel-lang.org/docs/explanations/connectable>
 - SpinalHDL stream and flow concepts: <https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Libraries/stream.html>
 - CIRCT ESI channels: <https://circt.llvm.org/docs/Dialects/ESI/>
+- Accellera SystemVerilog arrays and ports: <https://www.accellera.org/images/eda/vlog-pp/0438.html>
+- Yosys arrays and memories: <https://yosyshq.readthedocs.io/projects/yosys/en/stable/CHAPTER_Basics.html>
+- SpinalHDL design errors: <https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Design%20errors/index.html>
 - Chisel enums: <https://www.chisel-lang.org/docs/explanations/chisel-enum>
 - Chisel FSM cookbook: <https://www.chisel-lang.org/docs/cookbooks/cookbook#how-do-i-create-a-finite-state-machine-fsm>
 - SpinalHDL enums: <https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Data%20types/enum.html>

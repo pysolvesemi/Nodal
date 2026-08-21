@@ -48,6 +48,7 @@ A design is digital-only when its entire reachable hierarchy contains only const
 Legal categories include:
 
 - digital scalar/vector/aggregate ports and signals;
+- parameterized multidimensional structural `Vec` values with exact shape/index/layout metadata and explicit `Mem` storage contracts;
 - signless `Bits`, unsigned `UInt`, signed `SInt`, signed parameters/memories/aggregate fields, and explicit signed conversions/literals/shifts;
 - elaboration-expanded structure, symbolic structural generate loops, and bounded hardware iteration with deterministic procedural/unrolled lowering;
 - native semantic enums, canonical enum encodings, safe decode, and manual/high-level FSM/statechart constructs;
@@ -85,6 +86,7 @@ The required output is a conservative synthesizable IEEE 1364-2005-style subset.
 - explicit inferred clock/reset ports and reset behavior;
 - CDC/RDC structures, FIFOs, synchronizers, gates/mux wrappers, and pipeline control;
 - flattened aggregate and protocol fields with stable names;
+- flat packed carriers for shaped ports, deterministic row-major offsets, signed element views, structural-storage manifests, safe expression inlining, semantic state/temporary names, and expression-span source maps;
 - black-box declarations and attributes supported by the profile;
 - portable formal hooks or sidecar harnesses;
 - source-map and metadata sidecars.
@@ -128,6 +130,22 @@ The portable profile follows [ADR 0015](../architecture/0015-native-scala-enum-a
 - nested/parallel/timed/bounded-procedure FSMs lower to explicit state, completion, counter, join, and stack logic;
 - state/case names, transitions, encodings, source maps, and coverage IDs remain in sidecar manifests;
 - future SystemVerilog native enum emission is a separate capability gate but must preserve the same numeric values.
+
+
+## Shaped-value, materialization, and quality lowering
+
+The portable profile follows ADRs [0017](../architecture/0017-semantic-multidimensional-values-and-target-layouts.md), [0018](../architecture/0018-expression-materialization-and-semantic-naming.md), and [0019](../architecture/0019-mandatory-pre-emission-hardware-quality-gates.md):
+
+- parameterized multidimensional module ports flatten to one canonical packed carrier;
+- signed elements use deterministic signed views rather than treating the whole carrier as one signed number;
+- structural `Vec` and addressable `Mem` remain distinct in IR and synthesis reports;
+- pure single-use expression trees inline when exact Verilog typing permits;
+- shared/observable/target-required values materialize with stable semantic names and reason codes;
+- anonymous registers derive names from source, sink, role, and stable origin;
+- mandatory internal checks run before render, then the target is reparsed and independently linted/synthesized by the selected profile;
+- failed partial output is diagnostic-only.
+
+Future SystemVerilog defaults to unpacked multidimensional ports of packed elements and supports an explicit packed-dimensional layout. It must preserve the same Nodal row-major ABI and signed element semantics.
 
 
 ## Capability profiles
@@ -191,6 +209,7 @@ Required digital support:
 
 - deterministic compilation cache keyed by HDL/tool/profile hash;
 - typed scalar/vector/aggregate signal access through emitted metadata;
+- typed multidimensional access reconstructed from flat portable carriers, including signed elements, bounds, slices, reshape, and layout manifests;
 - typed `Bits`/`UInt`/`SInt` access, signed boundary values, memory elements, literals, shifts, comparisons, and loop-index/source-map reconstruction;
 - clock/reset generation from `ClockDomain` contracts;
 - multiple clocks, phase/ratio relationships, and asynchronous scenarios;
@@ -227,8 +246,9 @@ Each representative digital fixture runs a reproducible Yosys script that:
 5. runs structural `check` passes;
 6. performs target-neutral synthesis;
 7. records inferred latches, memories, cells, widths, and black boxes;
-8. emits a normalized synthesized Verilog netlist;
-9. optionally maps to selected FPGA/ASIC targets in later increments.
+8. audits combinational loops, multiple drivers, structural-`Vec` unexpected memory inference, and shaped-port/layout legality;
+9. emits a normalized synthesized Verilog netlist;
+10. optionally maps to selected FPGA/ASIC targets in later increments.
 
 Failures include:
 
@@ -251,6 +271,8 @@ Yosys equivalence flows compare:
 - fixed-latency automatic pipelines against latency-aligned reference behavior.
 - signed expression lowering and procedural-versus-unrolled/generate-normalized loop implementations against the same typed reference semantics.
 - enum/FSM behavior before and after approved recoding, hierarchy flattening, minimization, or synthesis, aligned by semantic state/transition identity rather than raw encoded bits.
+- shaped flatten/unpack/index/reshape behavior and signed element views across portable/future layouts.
+- inline-safe versus readable/debug materialization profiles, aligned by typed expression origin rather than generated temporary names.
 
 Pipeline equivalence tracks transaction identity, valid/bubble state, sidebands, reset, and published latency. Elastic pipelines require protocol-level safety/equivalence properties rather than same-cycle output equality.
 
@@ -278,6 +300,7 @@ Initial reusable property suites prove:
 - no output before a valid input transaction.
 - signed extension/cast/shift correctness, loop index bounds, finite parameter envelopes, no out-of-range access, and no unintended loop-carried combinational recurrence.
 - legal enum/state encoding, one-hot invariants, allowed FSM transition relations, reset convergence, no unintended deadlock, nested/parallel completion, and bounded call-stack overflow/underflow safety.
+- multidimensional index bounds and flatten/reshape equivalence, structural-storage invariants, no accidental latch/combinational loop/multiple driver, and accepted-emission gate completeness.
 
 Formal syntax remains within the open-source frontend capability profile. Unsupported SVA is lowered to simpler assertions or a sidecar harness, or rejected with a stable diagnostic.
 

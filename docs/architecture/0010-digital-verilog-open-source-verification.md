@@ -76,6 +76,8 @@ The profile includes:
 - memories and initialization only within declared profile support;
 - hierarchy, CDC/RDC primitives, automatic pipeline state, and assertions lowered into supported forms;
 - deterministic flattening of structured payloads and protocols at module boundaries;
+- canonical flat carriers for parameterized multidimensional shaped ports, signed element views, and shape/layout/storage sidecar manifests;
+- safe expression inlining, semantic state/temporary names, expression-span source maps, and materialization reports;
 - stable source mapping and metadata comments or sidecar manifests.
 
 The backend must lower high-level aggregates and protocol types without requiring SystemVerilog interfaces, packages, packed structs, or broad SVA support.
@@ -93,6 +95,15 @@ The digital backend publishes separate capability flags for:
 - unsupported event-driven constructs.
 
 `Backend.Auto` defaults to the synthesizable portable profile for a digital-only design. Simulation-only features require an explicit profile or option so synthesis cannot accidentally ignore behavior.
+
+## Shaped values, readable HDL, and mandatory quality gates
+
+[ADR 0017](0017-semantic-multidimensional-values-and-target-layouts.md) defines parameterized multidimensional `Vec` and target layouts. Portable Verilog uses canonical flat packed carriers; future SystemVerilog may use unpacked multidimensional ports of packed elements. `Vec` remains structural and `Mem` remains explicit addressable storage. Yosys evidence audits unexpected memory inference.
+
+[ADR 0018](0018-expression-materialization-and-semantic-naming.md) keeps pure single-use expression DAG nodes inline where exact semantics permit. Required shared, signed-element, procedural, observable, or tool-limited values receive deterministic semantic names. Debug/materialized and inline profiles are equivalence-checked.
+
+[ADR 0019](0019-mandatory-pre-emission-hardware-quality-gates.md) requires internal driver/latch/cycle/hierarchy/type/shape/domain/protocol/storage/effect verification before rendering, target reparse after rendering, and the selected Verilator/Icarus/Yosys evidence before accepting the emission.
+
 
 ## Signed values and staged loops
 
@@ -146,6 +157,7 @@ Yosys validates the synthesizable profile with reproducible scripts that:
 - lower processes and memories;
 - run `check` and target-neutral synthesis;
 - report cells, memories, wires, and inferred latches;
+- audit combinational cycles, multiple drivers, structural-`Vec` unexpected memory inference, and materialization/layout profile contracts;
 - emit a normalized synthesized Verilog netlist;
 - optionally map to a generic or selected FPGA/ASIC target later.
 

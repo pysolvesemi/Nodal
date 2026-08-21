@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.10",
+  "roadmap_revision": "1.11",
   "formal_freeze_increment": 15,
   "architecture": "native-scala-enum-stable-abi-typed-reusable-statechart",
   "documents": {
@@ -217,5 +217,10 @@
     "graph-and-encoding-reports",
     "stable-diagnostics",
     "green-ci"
-  ]
+  ],
+  "shaped_value_integration": {
+    "enum_in_Vec": true,
+    "parameterized_dimensions": true,
+    "canonical_encoding_preserved_across_layout": true
+  }
 }

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.9",
+  "roadmap_revision": "1.10",
   "formal_gate_increment": 83,
   "architecture": "structured-target-ir-declared-effects-mandatory-reverification-proof-evidence",
   "documents": {
@@ -211,5 +211,11 @@
     "cache and provenance integration",
     "out of tree conformance plugin",
     "green CI"
-  ]
+  ],
+  "signed_loop_preservation": {
+    "signed_type_width_cast_shift_and_literal": true,
+    "loop_category_and_iteration_order": true,
+    "symbolic_generate": true,
+    "unroll_reroll_requires_declared_effect_and_proof": true
+  }
 }

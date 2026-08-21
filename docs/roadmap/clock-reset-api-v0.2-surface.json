@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.9",
+  "roadmap_revision": "1.10",
   "formal_freeze_increment": 12,
   "architecture": "implicit-local-domain-explicit-crossing-explicit-emitted-hdl",
   "documents": {

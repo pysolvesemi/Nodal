@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.9",
+  "roadmap_revision": "1.10",
   "roadmap_last_increment": 113,
   "architecture": "narrowest-compatible-backend-open-source-generated-hdl-verification",
   "documents": {
@@ -109,6 +109,25 @@
       "reset convergence",
       "deadlock and completion",
       "bounded stack safety"
+    ]
+  },
+  "signed_and_loops": {
+    "architecture": "docs/architecture/0016-signed-types-and-staged-loops.md",
+    "portable_verilog_signed": "signed vectors parameters localparams memories and fields",
+    "future_systemverilog_signed": "logic signed and equivalent exact-width constructs",
+    "generate": "genvar generate for",
+    "bounded_iteration": [
+      "procedural for",
+      "verified unroll"
+    ],
+    "dynamic_trip_count": false,
+    "unbounded_while": false,
+    "required_checks": [
+      "signed width extension comparison shift and cast parity",
+      "mixed-sign negative fixtures",
+      "parameterized generate",
+      "procedural versus unrolled equivalence",
+      "index bounds and no out-of-range access"
     ]
   }
 }

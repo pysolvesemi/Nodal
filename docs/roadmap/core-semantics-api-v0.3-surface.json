@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.9",
+  "roadmap_revision": "1.10",
   "formal_freeze_increment": 15,
   "architecture": "explicit-stage-lossless-value-exact-connection-dimension-safe-declared-effect",
   "documents": {
@@ -9,7 +9,8 @@
     "freeze_plan": "docs/roadmap/core-semantics-api-v0.3-plan.md",
     "pipeline_plan": "docs/roadmap/automatic-pipeline-api-v0.3-plan.md",
     "main_roadmap": "docs/roadmap/nodal-development-todo.md",
-    "enum_fsm_plan": "docs/roadmap/enum-fsm-api-v0.3-plan.md"
+    "enum_fsm_plan": "docs/roadmap/enum-fsm-api-v0.3-plan.md",
+    "signed_loop_plan": "docs/roadmap/signed-loop-api-v0.3-plan.md"
   },
   "value_stages": {
     "elaboration": [
@@ -135,6 +136,7 @@
   ],
   "required_evidence": [
     "core-semantic-candidate-compilation",
+    "signed-loop-candidate-compilation",
     "enum-fsm-candidate-compilation",
     "automatic-pipeline-candidate-compilation",
     "unified-public-api-v0.3-design-gate",
@@ -157,6 +159,25 @@
     "flat_and_reusable_statecharts": true,
     "nested_parallel_timed_and_bounded_recursive": true,
     "unbounded_recursion": false,
+    "formal_freeze_increment": 15
+  },
+  "signed_and_loops": {
+    "architecture": "docs/architecture/0016-signed-types-and-staged-loops.md",
+    "types": [
+      "Bits",
+      "UInt",
+      "SInt",
+      "Bool"
+    ],
+    "mixed_signedness_implicit": false,
+    "numeric_conversion_distinct_from_reinterpretation": true,
+    "portable_verilog_signed_vectors_parameters_memories": true,
+    "loop_categories": [
+      "scala-elaboration",
+      "symbolic-generate",
+      "bounded-hardware-iteration"
+    ],
+    "runtime_or_unbounded_loop_initial_support": false,
     "formal_freeze_increment": 15
   }
 }

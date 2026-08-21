@@ -3,6 +3,7 @@
 **Status:** Normative roadmap target
 **Architecture:** [ADR 0009](../architecture/0009-core-semantic-contracts.md)
 **Enum/FSM architecture:** [ADR 0015](../architecture/0015-native-scala-enum-and-hierarchical-fsm.md)
+**Signed/loop architecture:** [ADR 0016](../architecture/0016-signed-types-and-staged-loops.md)
 **Unified formal freeze:** Increment 15 design gate with automatic pipeline API
 
 ## Goal
@@ -72,6 +73,7 @@ The exact range/index types will be selected by compile prototypes. The frozen c
 - parameter used as Scala condition or collection length;
 - runtime signal used as a type width, array length, or generate bound;
 - target generate with a non-static/non-symbolic legal bound;
+- bounded hardware loop with a runtime trip count, structural body, unbounded termination, illegal recurrence, or uncovered parameter envelope;
 - symbolic structure unsupported by a selected backend.
 
 ## Numeric values and widths
@@ -128,6 +130,24 @@ A narrowing assignment without one of these policies is a compile error.
 - unsized Scala numeric values do not silently become backend-dependent HDL literals;
 - symbolic widths participate in type checking and generated declarations;
 - constant folding preserves width, signedness, overflow, and dimension semantics.
+- portable Verilog and future SystemVerilog signed declarations, parameters, literals, casts, shifts, arrays, and memories preserve the same target-neutral result;
+- `Bits` arithmetic and implicit mixed `UInt`/`SInt` arithmetic/comparison are errors;
+- numeric signedness conversion and bit reinterpretation remain separate operations.
+
+## Signed finite-width values and staged loops
+
+[ADR 0016](../architecture/0016-signed-types-and-staged-loops.md), [`signed-loop-api-v0.3-plan.md`](signed-loop-api-v0.3-plan.md), and [`signed-loop-api-v0.3-surface.json`](signed-loop-api-v0.3-surface.json) define mandatory Increment 13 candidates.
+
+`Bits` is signless, `UInt` is unsigned, and `SInt` is two's-complement signed. The v0.3 gate freezes exact signed declarations, literals, parameters/localparams, ports, memories, aggregate fields, arithmetic/comparison/shift result types, numeric conversion versus bit reinterpretation, mixed-sign diagnostics, and portable Verilog/future SystemVerilog mappings.
+
+The gate also distinguishes:
+
+- ordinary Scala loops, executed and fully elaborated during construction;
+- symbolic structural `generate(...)`, preserved as target-visible hierarchy;
+- a separate bounded hardware-loop operation, lowered deterministically to procedural HDL or verified unrolled operations.
+
+Runtime trip counts, unbounded `while`, hidden multi-cycle loop synthesis, structural declarations inside procedural loops, and backend-defined signedness are outside the initial contract.
+
 
 ## Native enums and FSM/statechart semantics
 
@@ -367,6 +387,8 @@ Increment 13 must compile candidates covering:
 - symbolic parameters in widths, lengths, and generate loops;
 - dynamic values separated from shape values;
 - full-width unsigned and signed arithmetic;
+- signed ports/registers/parameters/memories, exact negative literals, numeric conversions, bit reinterpretations, and arithmetic/logical shifts;
+- Scala elaboration loops, symbolic structural generate loops, bounded hardware loops, and collection map/reduce candidates;
 - native Scala enums with default and sparse/custom encodings;
 - enum ports/parameters/aggregates/vectors/memories/protocols, safe decode, and exhaustive selection;
 - manual and high-level flat FSMs plus reusable nested/parallel/timed/finite-recursive definitions and bounded-stack candidates;
@@ -386,6 +408,8 @@ Required failures include:
 - parameter used as Scala `if`/loop/list length;
 - runtime signal used as width/generate bound;
 - implicit narrowing or signedness change;
+- implicit `Bits` arithmetic, mixed `UInt`/`SInt` operation, ambiguous negative literal, or signed/logical shift mismatch;
+- symbolic parameter used as a Scala loop bound, runtime generate/hardware-loop bound, structural procedural-loop body, unbounded/data-dependent loop, or loop-carried combinational cycle;
 - Scala ordinal used as enum ABI or invalid/duplicate enum code;
 - implicit bits-to-enum/cross-enum conversion or ignored sparse-decode validity;
 - non-exhaustive switch, overlapping transitions, missing initial state, hidden boot assumption, invalid local encoding, or unbounded FSM recursion;
@@ -412,7 +436,9 @@ The unified v0.3 gate may be approved only when:
 8. external-library fixtures use only the frozen public subset;
 9. native enum ABI, safe decode, exhaustive selection, portable localparam mapping, and future SystemVerilog numeric parity are proven;
 10. flat and reusable hierarchical/parallel/timed/bounded-recursive FSM candidates have unambiguous reset, transition, encoding, report, and diagnostic contracts;
-11. the machine-readable manifest, migration notes, diagnostics, and CI are green.
+11. signed declaration/literal/parameter/memory/expression/conversion and Verilog-family mapping contracts are exact;
+12. elaboration, generate, and bounded hardware-loop contracts plus procedural/unrolled equivalence and dynamic-loop rejection are proven;
+13. the machine-readable manifest, migration notes, diagnostics, and CI are green.
 
 ## References
 

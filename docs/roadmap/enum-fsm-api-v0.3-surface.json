@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.9",
+  "roadmap_revision": "1.10",
   "formal_freeze_increment": 15,
   "architecture": "native-scala-enum-stable-abi-typed-reusable-statechart",
   "documents": {

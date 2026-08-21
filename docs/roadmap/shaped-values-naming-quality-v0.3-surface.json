@@ -1,0 +1,212 @@
+{
+  "schema": 1,
+  "status": "roadmap-freeze-candidate",
+  "roadmap_revision": "1.11",
+  "formal_freeze_increment": 15,
+  "architecture": "semantic-shape-reasoned-materialization-mandatory-quality-gates",
+  "documents": {
+    "shape_architecture": "docs/architecture/0017-semantic-multidimensional-values-and-target-layouts.md",
+    "naming_architecture": "docs/architecture/0018-expression-materialization-and-semantic-naming.md",
+    "quality_architecture": "docs/architecture/0019-mandatory-pre-emission-hardware-quality-gates.md",
+    "plan": "docs/roadmap/shaped-values-naming-quality-v0.3-plan.md",
+    "core_semantics_plan": "docs/roadmap/core-semantics-api-v0.3-plan.md",
+    "main_roadmap": "docs/roadmap/nodal-development-todo.md"
+  },
+  "shaped_values": {
+    "preferred_candidate": "Vec(element, dimensions*)",
+    "fallback_candidate": "Vec.of(element, dimensions*)",
+    "rank_is_static": true,
+    "dimensions": [
+      "positive Scala elaboration integer",
+      "positive symbolic Param/constant expression",
+      "legal generate-index-dependent constant expression"
+    ],
+    "runtime_dimensions": false,
+    "zero_dimensions_initially_supported": false,
+    "canonical_index_origin": 0,
+    "canonical_layout": "row-major-rightmost-dimension-contiguous",
+    "nested_aggregate_field_order": "stable-declaration-order",
+    "parameterized_multidimensional_ports": true,
+    "shape_operations": [
+      "index",
+      "row or plane view",
+      "slice",
+      "flatten",
+      "reshape",
+      "map",
+      "zip",
+      "reduce"
+    ],
+    "shape_connection": "exact-or-explicit-adapter"
+  },
+  "storage": {
+    "Vec": "structural value collection",
+    "Mem": "addressable storage with explicit latency collision ports domain and initialization",
+    "unpacked_syntax_implies_memory": false,
+    "dynamic_vec_index_implies_memory": false,
+    "unexpected_structural_memory_inference_audited": true,
+    "resource_mapping_requires_declared_effect_and_proof": true
+  },
+  "layouts": {
+    "candidates": [
+      "Auto",
+      "FlatPacked",
+      "Unpacked",
+      "PackedDimensions"
+    ],
+    "portable_verilog_default": "single flat packed vector carrier",
+    "portable_verilog_multidimensional_packed_syntax": false,
+    "portable_verilog_unpacked_array_ports": false,
+    "future_systemverilog_default": "unpacked multidimensional array of packed elements",
+    "future_systemverilog_optional": "multidimensional packed array",
+    "layout_changes_semantics": false,
+    "abi_manifest_required": true
+  },
+  "signed_elements": {
+    "scalar_SInt_declaration_is_signed": true,
+    "flat_vec_SInt_carrier": "signless serialization vector",
+    "flat_vec_SInt_access": "deterministically named signed element view or verified signed helper",
+    "repeated_signed_casts_as_primary_strategy": false,
+    "systemverilog_unpacked_element": "logic signed [W-1:0] element [dimensions]"
+  },
+  "temporary_policy_candidates": [
+    "InlineSafe",
+    "Readable",
+    "Debug",
+    "ToolFriendly"
+  ],
+  "inline_safe_rules": {
+    "pure_single_use_inline": true,
+    "preserve_exact_operation_tree": true,
+    "reassociate": false,
+    "change_width_or_signedness": false,
+    "duplicate_effects": false,
+    "shared_nontrivial_expression_materialized": true,
+    "correctness_overrides_inline_preference": true
+  },
+  "materialization_reasons": [
+    "shared-expression",
+    "user-observable",
+    "user-named",
+    "signed-element-view",
+    "target-type-preservation",
+    "procedural-boundary",
+    "target-expression-limit",
+    "external-operation-boundary",
+    "pipeline-or-timing-boundary",
+    "formal-or-debug-anchor",
+    "source-map-granularity",
+    "plugin-pass-anchor"
+  ],
+  "naming": {
+    "normal_traversal_counter_names_allowed": false,
+    "priority": [
+      "explicit user name",
+      "captured Scala declaration or member name",
+      "destination or sink plus semantic role",
+      "subsystem role",
+      "named ancestor plus role and source origin",
+      "stable source/content digest fallback"
+    ],
+    "all_emitted_state_has_identifier": true,
+    "source_map_survives_inlining": true,
+    "naming_algorithm_versioned": true,
+    "materialization_report_required": true
+  },
+  "check_profiles": {
+    "Fast": "all mandatory internal safety and target legality gates",
+    "Default": "Fast plus target reparse and normal pinned lint/compile tools",
+    "Release": "Default plus full portability synthesis parameter matrix equivalence formal reproducibility and evidence",
+    "mandatory_safety_can_be_disabled": false
+  },
+  "quality_gates": [
+    "Scala API and construction",
+    "closed elaborated semantic graph",
+    "authoritative MLIR verification",
+    "target profile legalization and verification",
+    "render and structured reparse",
+    "independent digital lint and synthesis",
+    "analog and AMS compile/differential checks",
+    "release equivalence formal reproducibility and evidence"
+  ],
+  "mandatory_check_categories": [
+    "scope and hierarchy",
+    "port direction and connectivity",
+    "drivers and undriven signals",
+    "assignment coverage and latches",
+    "combinational cycles",
+    "width signedness constants enums and conversions",
+    "rank shape index slice and layout",
+    "register reset and update priority",
+    "clock reset CDC RDC gates muxes and waivers",
+    "protocol ordering backpressure stability capacity and ready loops",
+    "parameters generate loops pipelines memories and effects",
+    "FSM reachability transitions encodings hierarchy joins and recursion",
+    "physical dimensions analog branches contributions events and connect rules",
+    "mixed signal sampling drive and scheduling",
+    "backend capability and portable syntax",
+    "plugin pass preservation and re-verification"
+  ],
+  "latch_policy": {
+    "accidental_inference": "error",
+    "partial_combinational_assignment_requests_latch": false,
+    "future_explicit_latch_requires_separate_semantic_primitive": true
+  },
+  "waiver": {
+    "typed": true,
+    "required_fields": [
+      "stable ID",
+      "check code",
+      "exact scope",
+      "source location",
+      "reason",
+      "risk and required evidence"
+    ],
+    "blanket_mandatory_check_suppression": false,
+    "provenance_retained": true
+  },
+  "transactional_emission": {
+    "accepted_output_only_after_mandatory_gates": true,
+    "failed_partial_output_is_diagnostic_only": true,
+    "last_accepted_state_preserved": true,
+    "plugins_cannot_disable_core_verifiers": true,
+    "tool_logs_and_reproduction_commands_retained": true
+  },
+  "increment_integration": {
+    "13": "compile shaped value layout naming temporary check profile and waiver candidates",
+    "15": "freeze unified public API and configuration contracts",
+    "16": "construction ownership shape capture and transactional lifecycle",
+    "17": "source spans semantic names sink affinity and origin graph",
+    "19": "shaped types layout storage and materialization metadata in MLIR",
+    "21": "staged internal and target verification pipeline",
+    "22": "diagnostics and path mapping",
+    "26": "determinism and reproducibility evidence",
+    "43": "analog arrays and generation",
+    "54-58": "digital shaped values expressions state hierarchy and generate",
+    "65-67": "portable Verilog lowering lint simulation synthesis memory audit equivalence formal readiness",
+    "71": "mixed-domain verifier",
+    "72": "Verilog-AMS mapping",
+    "83-88": "pass preservation and mandatory re-verification",
+    "92": "documentation",
+    "96": "performance and scalability benchmarks",
+    "97": "public API and quality coverage review",
+    "98": "preview release evidence",
+    "99": "future SystemVerilog packed and unpacked port layouts"
+  },
+  "required_evidence": [
+    "parameterized-multidimensional-Vec-candidates",
+    "portable-Verilog-flat-layout-goldens",
+    "future-SystemVerilog-unpacked-and-packed-layout-contracts",
+    "signed-element-view-fixtures",
+    "Vec-versus-Mem-synthesis-audit",
+    "inline-versus-debug-equivalence",
+    "no-avoidable-anonymous-wire-chain-goldens",
+    "semantic-anonymous-register-names",
+    "expression-span-source-maps",
+    "mandatory-check-inventory",
+    "SpinalHDL-category-conformance-fixtures",
+    "Nodal-specific-negative-fixtures",
+    "transactional-emission-failure-fixtures",
+    "green-CI"
+  ]
+}

@@ -59,3 +59,7 @@
 # Future libraries remain separately reviewable when they are introduced.
 /libraries/ @pysolvesemi
 /packaging/libraries/ @pysolvesemi
+/core/scala/api/public-api-v0.1.json @pysolvesemi
+/scripts/check_increment11.py @pysolvesemi
+/tests/api/ @pysolvesemi
+/docs/language-reference/public-api-v0.1.md @pysolvesemi

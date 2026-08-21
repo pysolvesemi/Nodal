@@ -1,6 +1,6 @@
 package nodal
 
-/** Marker hierarchy for the Increment 10 compile-only public API candidates. */
+/** Public marker hierarchy frozen by Nodal API v0.1. Implementations remain inert. */
 sealed trait Data
 sealed trait Real extends Data
 sealed trait Integer extends Data
@@ -20,11 +20,13 @@ case object Bool extends DataType[Bool]
 
 object Bits:
   def apply(width: Int): DataType[Bits] = new WidthDataType[Bits](width)
+  def apply(width: Expr[Integer]): DataType[Bits] = new WidthDataType[Bits](width)
 
 object UInt:
   def apply(width: Int): DataType[UInt] = new WidthDataType[UInt](width)
+  def apply(width: Expr[Integer]): DataType[UInt] = new WidthDataType[UInt](width)
 
-private final class WidthDataType[A <: Data](width: Int) extends DataType[A]:
+private final class WidthDataType[A <: Data](width: Any) extends DataType[A]:
   CandidateRuntime.statement(width)
 
 /** Candidate analog nature metadata. */
@@ -83,16 +85,16 @@ final class Instance[M <: Module] private[nodal] (private val module: M):
 abstract class Module:
   protected final def param[A <: Data](default: Expr[A]): Param[A] = new Param(default)
 
-  protected final def input[A <: Data](dataType: DataType[A]): Signal[A] =
+  protected final def in[A <: Data](dataType: DataType[A]): Signal[A] =
     new Signal(dataType)
 
-  protected final def output[A <: Data](dataType: DataType[A]): Signal[A] =
+  protected final def out[A <: Data](dataType: DataType[A]): Signal[A] =
     new Signal(dataType)
 
-  protected final def input[D <: Discipline](discipline: D): Node[D] =
+  protected final def in[D <: Discipline](discipline: D): Node[D] =
     new Node(discipline)
 
-  protected final def output[D <: Discipline](discipline: D): Node[D] =
+  protected final def out[D <: Discipline](discipline: D): Node[D] =
     new Node(discipline)
 
   protected final def inout[D <: Discipline](discipline: D): Node[D] =
@@ -167,6 +169,9 @@ def transition(
 ): Expr[Real] = CandidateRuntime.expr(value, delay, rise, fall)
 
 def toUInt(value: Expr[Real], width: Int): Expr[UInt] =
+  CandidateRuntime.expr(value, width)
+
+def toUInt(value: Expr[Real], width: Expr[Integer]): Expr[UInt] =
   CandidateRuntime.expr(value, width)
 
 def toReal(value: Expr[UInt]): Expr[Real] = CandidateRuntime.expr(value)

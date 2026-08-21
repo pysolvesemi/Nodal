@@ -1,9 +1,10 @@
 # NodalPublicApiCandidates-DG v0.1
 
-**Status:** Approved  
+**Status:** Superseded  
 **Scope:** public-api  
 **Decision:** Authorize compile-only candidate prototypes for Increment 10  
 **Approved by:** Repository owner instruction to implement Increment 10 on 2026-08-21
+**Superseded by:** [`NodalPublicApi-DG v0.1`](NodalPublicApi-DG-v0.1.md)
 
 ## Decision boundary
 

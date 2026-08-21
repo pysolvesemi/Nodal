@@ -207,7 +207,7 @@ def check_repository(root: Path) -> list[Problem]:
     _require(
         gate,
         (
-            "**Status:** Approved",
+            "**Status:** Superseded",
             "**Scope:** public-api",
             "not an API freeze",
             "Increment 11",

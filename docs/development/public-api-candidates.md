@@ -1,5 +1,7 @@
 # Public API candidate prototypes
 
+> **Superseded by Increment 11:** the accepted surface is frozen by [`NodalPublicApi-DG-v0.1.md`](../design-gates/NodalPublicApi-DG-v0.1.md). This page remains the comparison record.
+
 Increment 10 evaluates source ergonomics before Nodal commits to a public contract. The files compile, but they do not elaborate hardware, build MLIR, emit HDL, or simulate behavior.
 
 ## What is being tested

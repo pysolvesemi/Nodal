@@ -116,9 +116,12 @@ jobs:
   prepare-clock-reset-roadmap:
     name: prepare clock/reset roadmap
     if: >-
-      github.event_name == 'push' &&
-      github.ref_name == 'increment/12-clock-reset-architecture-roadmap' &&
-      github.actor != 'github-actions[bot]'
+      (github.event_name == 'push' &&
+       github.ref_name == 'increment/12-clock-reset-architecture-roadmap' &&
+       github.actor != 'github-actions[bot]') ||
+      (github.event_name == 'pull_request' &&
+       github.head_ref == 'increment/12-clock-reset-architecture-roadmap' &&
+       github.actor != 'github-actions[bot]')
     permissions:
       contents: write
     runs-on: ubuntu-24.04

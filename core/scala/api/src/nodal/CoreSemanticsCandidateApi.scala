@@ -15,19 +15,19 @@ object SInt:
     CandidateRuntime.statement(width)
     Bits(width).asInstanceOf[DataType[SInt]]
 
+  extension (left: Expr[SInt])
+    @targetName("sintAddition")
+    def +(right: Expr[SInt]): Expr[SInt] = CandidateRuntime.expr(left, right)
+
+    @targetName("sintSubtraction")
+    def -(right: Expr[SInt]): Expr[SInt] = CandidateRuntime.expr(left, right)
+
+    @targetName("sintArithmeticShiftRight")
+    def >>(amount: Int): Expr[SInt] = CandidateRuntime.expr(left, amount)
+
 extension (value: Int)
   def S(width: Int): Expr[SInt] = CandidateRuntime.expr(value, width)
   def S(width: Expr[Integer]): Expr[SInt] = CandidateRuntime.expr(value, width)
-
-extension (left: Expr[SInt])
-  @targetName("sintAddition")
-  def +(right: Expr[SInt]): Expr[SInt] = CandidateRuntime.expr(left, right)
-
-  @targetName("sintSubtraction")
-  def -(right: Expr[SInt]): Expr[SInt] = CandidateRuntime.expr(left, right)
-
-  @targetName("sintArithmeticShiftRight")
-  def >>(amount: Int): Expr[SInt] = CandidateRuntime.expr(left, amount)
 
 extension (left: Expr[UInt])
   @targetName("uintLogicalShiftRight")
@@ -179,17 +179,18 @@ sealed trait TimeDimension
 
 final class Quantity[D] private[nodal] (private val value: Double)
 
+object Quantity:
+  extension [D](left: Quantity[D])
+    @targetName("quantityAddition")
+    def +(right: Quantity[D]): Quantity[D] =
+      CandidateRuntime.statement(left, right)
+      left
+
 extension (value: Double)
   def volts: Quantity[VoltageDimension] = new Quantity(value)
   def amps: Quantity[CurrentDimension] = new Quantity(value)
   def ohms: Quantity[ResistanceDimension] = new Quantity(value)
   def seconds: Quantity[TimeDimension] = new Quantity(value)
-
-extension [D](left: Quantity[D])
-  @targetName("quantityAddition")
-  def +(right: Quantity[D]): Quantity[D] =
-    CandidateRuntime.statement(left, right)
-    left
 
 /** Materialization, naming, and mandatory-check candidates. */
 enum TemporaryPolicy:

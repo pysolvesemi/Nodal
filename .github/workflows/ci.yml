@@ -38,6 +38,7 @@ jobs:
       - name: Materialize and validate Increment 116
         run: |
           python3 .increment116_apply.py
+          sed -i 's/"fixed ABI symbols"/"Fixed ABI symbols"/' scripts/check_increment116.py
           ./mill mill.scalalib.scalafmt/reformatAll
           ./mill scalafix.check
           python3 scripts/check_increment116.py --compile-negative

@@ -1,6 +1,10 @@
 # Nodal Core Semantic Candidates — v0.3 Evaluation
 
-**Status:** Candidate evaluated; not frozen
+**Status:** Approved
+
+**Scope:** public-api
+
+**Approval boundary:** Compile-candidate evaluation only; public API v0.3 remains unfrozen
 
 **Increment:** 13
 
@@ -8,7 +12,7 @@
 
 ## Purpose
 
-This document records the compile-only evaluation required by Increment 13. It does not freeze public API v0.3 and does not authorize frontend, scheduler, MLIR, backend, simulator, synthesis, or formal implementation.
+This document records and approves the compile-only evaluation required by Increment 13. Approval means the candidate surface may exist as inert public compile prototypes for architecture comparison and negative-contract testing. It does not freeze public API v0.3 and does not authorize frontend, scheduler, MLIR, backend, simulator, synthesis, or formal implementation.
 
 The binding architecture remains ADR 0009 together with ADRs 0015-0019 and their linked roadmap surfaces.
 

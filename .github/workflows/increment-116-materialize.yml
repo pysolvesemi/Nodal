@@ -34,6 +34,7 @@ jobs:
       - name: Publish final Increment 116 source tree
         run: |
           rm -f .increment116_apply.py
+          rm -f .increment116-trigger
           rm -f .github/workflows/increment-116-materialize.yml
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           git config user.name 'github-actions[bot]'

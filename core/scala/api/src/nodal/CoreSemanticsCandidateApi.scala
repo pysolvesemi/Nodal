@@ -2,7 +2,8 @@ package nodal
 
 import scala.annotation.targetName
 
-/** Compile-only public candidates for Increment 13. No elaboration or lowering semantics live here. */
+/** Compile-only public candidates for Increment 13. No elaboration or lowering semantics live here.
+  */
 opaque type SInt <: Data = Bits
 
 object SInt:
@@ -260,7 +261,6 @@ final class StateBuilder[S] private[nodal] ():
     CandidateRuntime.statement(condition, mode, to)
   def after(cycles: Int)(to: S): Unit = CandidateRuntime.statement(cycles, to)
   def terminal(): Unit = CandidateRuntime.statement("terminal")
-
 
 def fsm[S](
     definition: FsmDefinition[S],

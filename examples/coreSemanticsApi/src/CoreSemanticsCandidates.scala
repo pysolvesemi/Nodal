@@ -10,7 +10,7 @@ object ControlState:
     Idle -> BigInt(0),
     Load -> BigInt(1),
     Run -> BigInt(3),
-    Error -> BigInt(7),
+    Error -> BigInt(7)
   )
 
 final class CoreSemanticsCandidates extends Module:
@@ -59,7 +59,7 @@ final class CoreSemanticsCandidates extends Module:
   val packetType = Aggregate(
     "Packet",
     AggregateField("data", UInt(width)),
-    AggregateField("flag", Bool),
+    AggregateField("flag", Bool)
   )
   val packet = wire(packetType)
   packet := packet
@@ -90,7 +90,7 @@ final class CoreSemanticsCandidates extends Module:
     readLatency = 1,
     readUnderWrite = ReadUnderWrite.OldData,
     ordering = MemoryOrdering.Ordered,
-    domain = domain,
+    domain = domain
   )
   val memoryData = memory.read(unsignedIn)
   memory.write(unsignedIn, memoryData, 15.U(4))
@@ -103,8 +103,8 @@ final class CoreSemanticsCandidates extends Module:
       initiationInterval = 1,
       effect = Effect.Pure,
       models = Set(ModelAvailability.Simulation, ModelAvailability.Synthesis),
-      domain = domain,
-    ),
+      domain = domain
+    )
   )
   val crcValue = crc(unsignedIn)
   CandidateSmoke.consume(crcValue)
@@ -122,9 +122,19 @@ final class CoreSemanticsCandidates extends Module:
     temporaries = TemporaryPolicy.InlineSafe,
     naming = NamingPolicy.Semantic,
     checks = CheckProfile.Release,
-    waivers = Seq(CheckWaiver("WAIVE-001", "external reviewed exception", "portability")),
+    waivers = Seq(CheckWaiver("WAIVE-001", "external reviewed exception", "portability"))
   )
-  CandidateSmoke.consume(namedResult, quality, shiftedSigned, shiftedUnsigned, wrappedUnsigned, saturatedUnsigned, convertedSigned, reinterpretedSigned, bitsIn)
+  CandidateSmoke.consume(
+    namedResult,
+    quality,
+    shiftedSigned,
+    shiftedUnsigned,
+    wrappedUnsigned,
+    saturatedUnsigned,
+    convertedSigned,
+    reinterpretedSigned,
+    bitsIn
+  )
 
   // Native Scala enum and typed statechart candidates.
   val decoded = decodeEnum(bitsIn, ControlState.Error)
@@ -135,7 +145,7 @@ final class CoreSemanticsCandidates extends Module:
     definition = control,
     initial = ControlState.Idle,
     encoding = FsmEncoding.Compact,
-    illegalState = IllegalStatePolicy.RecoverToInitial,
+    illegalState = IllegalStatePolicy.RecoverToInitial
   ): machine =>
     machine.state(ControlState.Idle): state =>
       state.entry(CandidateSmoke.consume("entry"))

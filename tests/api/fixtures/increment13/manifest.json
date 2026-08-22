@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "increment": 13,
+  "status": "candidate-evaluation",
+  "validation": {
+    "pull_request": 32,
+    "dedicated_workflow_run": 32587119017
+  },
+  "positive_modules": [
+    "examples.coreSemanticsExternal.compile",
+    "examples.coreSemanticsApi.compile"
+  ],
+  "scala_type_negative": [
+    {
+      "path": "tests/api/fixtures/increment13/negative/mixed-signed-arithmetic.scala",
+      "code": "NODAL-NUM-013"
+    },
+    {
+      "path": "tests/api/fixtures/increment13/negative/unit-mismatch.scala",
+      "code": "NODAL-UNIT-013"
+    },
+    {
+      "path": "tests/api/fixtures/increment13/negative/runtime-generate-bound.scala",
+      "code": "NODAL-STAGE-013"
+    }
+  ],
+  "semantic_contracts": [
+    "implicit-narrowing",
+    "invalid-symbolic-bound",
+    "shape-mismatch",
+    "vec-versus-mem-confusion",
+    "unknown-memory-latency",
+    "unknown-external-effect",
+    "latch",
+    "combinational-loop",
+    "multiple-driver",
+    "hierarchy-ownership",
+    "invalid-waiver",
+    "enum-encoding-collision",
+    "non-exhaustive-enum-selection",
+    "fsm-overlapping-exclusive-transition",
+    "fsm-unbounded-recursion"
+  ],
+  "frontend_behavior_inert": true,
+  "backend_behavior_inert": true,
+  "freeze_owner": 15
+}

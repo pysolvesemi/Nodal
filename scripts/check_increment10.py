@@ -22,6 +22,11 @@ EXPECTED_FILES = (
     "tests/api/test_increment10.py",
     ".github/workflows/increment-10-public-api-candidates.yml",
 )
+V02_COMPATIBILITY_FILES = (
+    "core/scala/api/public-api-v0.2.json",
+    "docs/design-gates/NodalClockResetApi-DG-v0.2.md",
+    "docs/migrations/public-api-v0.1-to-v0.2.md",
+)
 
 
 @dataclass(frozen=True)
@@ -51,6 +56,82 @@ def _require(
     for fragment in fragments:
         if fragment not in content:
             problems.append(Problem(code, f"{subject} lacks: {fragment}"))
+
+
+def _check_ordinary_always_compatibility(
+    root: Path,
+    api: str,
+    problems: list[Problem],
+) -> None:
+    """Accept Increment 10's candidate `always` or its approved v0.2 migration."""
+
+    if "def always(" in api:
+        return
+
+    for relative in V02_COMPATIBILITY_FILES:
+        if not (root / relative).is_file():
+            problems.append(
+                Problem(
+                    "NODAL-INC10-023",
+                    "ordinary always was removed without the complete v0.2 compatibility contract: "
+                    + relative,
+                )
+            )
+
+    manifest = _read(
+        root / "core/scala/api/public-api-v0.2.json",
+        problems,
+        "NODAL-INC10-024",
+    )
+    gate = _read(
+        root / "docs/design-gates/NodalClockResetApi-DG-v0.2.md",
+        problems,
+        "NODAL-INC10-024",
+    )
+    migration = _read(
+        root / "docs/migrations/public-api-v0.1-to-v0.2.md",
+        problems,
+        "NODAL-INC10-024",
+    )
+    _require(
+        manifest,
+        (
+            '"api_version": "0.2"',
+            '"removed_from_ordinary_subset"',
+            '"always"',
+            '"ordinary_always_allowed": false',
+            '"v0.1_ordinary_always"',
+        ),
+        problems,
+        "NODAL-INC10-024",
+        "v0.2 public API compatibility manifest",
+    )
+    _require(
+        gate,
+        (
+            "**Status:** Approved",
+            "**Scope:** public-api",
+            "ordinary synchronous `always(event)`",
+            "NODAL-MIGRATION-001",
+        ),
+        problems,
+        "NODAL-INC10-024",
+        "v0.2 clock/reset design gate",
+    )
+    _require(
+        migration,
+        (
+            "v0.1",
+            "v0.2",
+            "always(clock.rising)",
+            "ClockDomain",
+            "Reg",
+            "NODAL-MIGRATION-001",
+        ),
+        problems,
+        "NODAL-INC10-024",
+        "v0.1-to-v0.2 migration note",
+    )
 
 
 def check_repository(root: Path) -> list[Problem]:
@@ -120,7 +201,6 @@ def check_repository(root: Path) -> list[Problem]:
             "def discipline(",
             "def analog(",
             "def initial(",
-            "def always(",
             "def V[",
             "def I[",
             "def ddt(",
@@ -136,6 +216,8 @@ def check_repository(root: Path) -> list[Problem]:
         "NODAL-INC10-012",
         "candidate API",
     )
+    _check_ordinary_always_compatibility(root, api, problems)
+
     for forbidden in ("NodalComponent", "NodalModule", "NodalParam", "nodal.internal"):
         if forbidden in api:
             problems.append(

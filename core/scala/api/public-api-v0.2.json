@@ -1,0 +1,346 @@
+{
+  "schema": 1,
+  "api_version": "0.2",
+  "status": "frozen",
+  "supersedes": "0.1",
+  "baseline_manifest": "core/scala/api/public-api-v0.1.json",
+  "default_import": "import nodal.*",
+  "source_package": "nodal",
+  "types": [
+    "Backend",
+    "Bits",
+    "Bool",
+    "CdcWaiver",
+    "Clock",
+    "ClockDomain",
+    "ClockEdge",
+    "ClockRelation",
+    "Data",
+    "DataType",
+    "Discipline",
+    "Edge",
+    "Emission",
+    "EmittedFile",
+    "EmitOptions",
+    "Event",
+    "Expr",
+    "Frequency",
+    "Gray",
+    "Instance",
+    "Integer",
+    "Module",
+    "NamedDiscipline",
+    "Nature",
+    "Node",
+    "Param",
+    "Phase",
+    "Pulse",
+    "Real",
+    "Register",
+    "Reset",
+    "ResetPolicy",
+    "ResetPolarity",
+    "Signal",
+    "Stream",
+    "UInt",
+    "Variable"
+  ],
+  "objects": [
+    "Backend",
+    "Bits",
+    "Bool",
+    "Cdc",
+    "Clock",
+    "ClockDomain",
+    "ClockGate",
+    "ClockMux",
+    "ClockRelation",
+    "Current",
+    "Electrical",
+    "Gray",
+    "Integer",
+    "Nodal",
+    "Phase",
+    "Pulse",
+    "Real",
+    "Reg",
+    "RegNext",
+    "Rdc",
+    "Reset",
+    "ResetController",
+    "ResetPolicy",
+    "Stream",
+    "UInt",
+    "Voltage",
+    "lowlevel"
+  ],
+  "module_members": [
+    "connect",
+    "in",
+    "inout",
+    "instance",
+    "node",
+    "out",
+    "param",
+    "variable",
+    "wire"
+  ],
+  "instance_members": [
+    "apply",
+    "domain",
+    "param"
+  ],
+  "blocks": [
+    "analog",
+    "elsewhen",
+    "initial",
+    "on",
+    "otherwise",
+    "when"
+  ],
+  "removed_from_ordinary_subset": [
+    "always",
+    "always(event)"
+  ],
+  "analog_functions": [
+    "I",
+    "V",
+    "cross",
+    "ddt",
+    "discipline",
+    "idt",
+    "nature",
+    "timer",
+    "transition"
+  ],
+  "conversion_functions": [
+    "toReal",
+    "toUInt"
+  ],
+  "operators": [
+    "!",
+    "&&",
+    "*",
+    "+",
+    "-",
+    "/",
+    ":=",
+    "<",
+    "<+",
+    "<=",
+    ">",
+    ">=",
+    "||"
+  ],
+  "literal_extensions": {
+    "Boolean": [
+      "B"
+    ],
+    "Double": [
+      "A",
+      "F",
+      "MHz",
+      "Ohm",
+      "V",
+      "deg",
+      "kOhm",
+      "ns",
+      "pF",
+      "real",
+      "s"
+    ],
+    "Int": [
+      "A",
+      "F",
+      "MHz",
+      "Ohm",
+      "U",
+      "V",
+      "deg",
+      "integer",
+      "kOhm",
+      "ns",
+      "pF",
+      "real",
+      "s"
+    ]
+  },
+  "clock_reset": {
+    "architecture": "implicit-local-domain-explicit-crossing-explicit-emitted-hdl",
+    "clock_and_reset_distinct_from_bool": true,
+    "domain_constructors": [
+      "ClockDomain.external",
+      "ClockDomain.from",
+      "ClockDomain.required",
+      "ClockDomain.generated"
+    ],
+    "domain_application": "domain: body",
+    "single_domain_child_inheritance": true,
+    "typed_instance_binding": [
+      "Instance.domain(actualDomain)",
+      "Instance.domain(selector, actualDomain)"
+    ],
+    "string_keyed_domain_binding": false,
+    "state": [
+      "Reg(init)",
+      "Reg.uninitialized(kind)",
+      "RegNext(next, init)",
+      "RegNext.uninitialized(next)"
+    ],
+    "conditional_update": [
+      "when",
+      "elsewhen",
+      "otherwise"
+    ],
+    "ordinary_always_allowed": false,
+    "reset_priority": "reset-over-enable-over-normal-update",
+    "implicit_hold": true,
+    "unrelated_multiple_state_drivers": "error",
+    "root_unresolved_domain": "error"
+  },
+  "clock_edges": [
+    "ClockEdge.Rising",
+    "ClockEdge.Falling"
+  ],
+  "reset_polarities": [
+    "ResetPolarity.ActiveHigh",
+    "ResetPolarity.ActiveLow"
+  ],
+  "reset_policies": [
+    "ResetPolicy.None",
+    "ResetPolicy.Sync",
+    "ResetPolicy.Async",
+    "ResetPolicy.AsyncAssertSyncRelease"
+  ],
+  "clock_relations": [
+    "ClockRelation.Same",
+    "ClockRelation.Ratio",
+    "ClockRelation.Synchronous",
+    "ClockRelation.MutuallyExclusive",
+    "ClockRelation.Asynchronous",
+    "ClockRelation.Unknown"
+  ],
+  "crossings": {
+    "cdc": [
+      "Cdc.sync",
+      "Cdc.gray",
+      "Cdc.pulse",
+      "Cdc.handshake",
+      "Cdc.fifo",
+      "Cdc.waive"
+    ],
+    "rdc": [
+      "Rdc.sync",
+      "ResetController.combine"
+    ],
+    "single_bit_sync_only": true,
+    "source_domain_from_provenance": true,
+    "destination_explicit": true,
+    "silent_synchronizer_insertion": false,
+    "waiver_retains_provenance": true
+  },
+  "clock_structure": [
+    "ClockGate",
+    "ClockMux.glitchless"
+  ],
+  "event_semantics": {
+    "analog": [
+      "analog",
+      "on(cross)",
+      "on(timer)"
+    ],
+    "low_level_escape": "nodal.lowlevel.process(event)",
+    "low_level_library_subset": false,
+    "low_level_can_bypass_domain_checks": false
+  },
+  "diagnostics_manifest": "core/scala/api/clock-reset-diagnostics-v0.2.json",
+  "fixture_manifest": "tests/api/fixtures/increment12/manifest.json",
+  "backends": {
+    "entry_point": "Nodal.emit",
+    "options_type": "EmitOptions",
+    "result_type": "Emission",
+    "supported_profiles": [
+      "Backend.VerilogA",
+      "Backend.VerilogAMS"
+    ],
+    "default_profile": "Backend.VerilogAMS",
+    "filesystem_side_effects": false
+  },
+  "parameterization": {
+    "native_parameterized_hdl_required": true,
+    "declaration_api": "param(default: Expr[A]): Param[A]",
+    "reference_form": "Param[A] extends Expr[A]",
+    "minimum_value_kinds": [
+      "Bool",
+      "Integer",
+      "Real"
+    ],
+    "parameterized_widths": [
+      "Bits(Expr[Integer])",
+      "UInt(Expr[Integer])"
+    ],
+    "instance_override_api": "Instance.param(selector, value)",
+    "symbolic_hierarchy_propagation": true,
+    "module_specialization_by_value": false
+  },
+  "library_author_subset": {
+    "allowed_clock_reset": [
+      "Clock",
+      "Reset",
+      "ClockDomain.required",
+      "ClockDomain.generated",
+      "ClockEdge",
+      "ClockRelation",
+      "ResetPolicy",
+      "ResetPolarity",
+      "Reg",
+      "Reg.uninitialized",
+      "RegNext",
+      "RegNext.uninitialized",
+      "when",
+      "elsewhen",
+      "otherwise",
+      "Instance.domain",
+      "Cdc.sync",
+      "Cdc.gray",
+      "Cdc.pulse",
+      "Cdc.handshake",
+      "Cdc.fifo",
+      "Cdc.waive",
+      "Rdc.sync",
+      "ResetController.combine",
+      "ClockGate",
+      "ClockMux.glitchless"
+    ],
+    "application_only": [
+      "ClockDomain.external",
+      "ClockDomain.from"
+    ],
+    "excluded": [
+      "Backend",
+      "Emission",
+      "EmitOptions",
+      "EmittedFile",
+      "Nodal.emit",
+      "nodal.lowlevel.*",
+      "nodal.internal.*",
+      "nodal.bootstrap.*"
+    ]
+  },
+  "implementation_status": {
+    "surface_compiles": true,
+    "scala_type_negative_fixtures_execute": true,
+    "semantic_negative_fixtures_are_contract_only": true,
+    "frontend_domain_semantics_implemented": false,
+    "hdl_lowering_implemented": false
+  },
+  "compatibility": {
+    "source_compatibility": "required across 0.2.x",
+    "binary_compatibility": "not promised before 1.0",
+    "breaking_change": "requires a new versioned design gate and migration note",
+    "additive_change": "allowed only when overload resolution remains unambiguous",
+    "v0.1_ordinary_always": "migrate to ClockDomain plus Reg/RegNext and when/elsewhen/otherwise",
+    "v0.1_analog_events": "retained through analog and on(cross/timer)",
+    "v0.1_irreducible_events": "move to nodal.lowlevel.process with restricted semantics"
+  }
+}

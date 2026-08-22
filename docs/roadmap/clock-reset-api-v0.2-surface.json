@@ -1,12 +1,19 @@
 {
   "schema": 1,
-  "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.11",
+  "status": "frozen",
+  "api_version": "0.2",
+  "roadmap_revision": "1.12",
   "formal_freeze_increment": 12,
   "architecture": "implicit-local-domain-explicit-crossing-explicit-emitted-hdl",
   "documents": {
     "architecture_adr": "docs/architecture/0007-implicit-clock-reset-domains.md",
     "freeze_plan": "docs/roadmap/clock-reset-api-v0.2-plan.md",
+    "design_gate": "docs/design-gates/NodalClockResetApi-DG-v0.2.md",
+    "migration": "docs/migrations/public-api-v0.1-to-v0.2.md",
+    "language_reference": "docs/language-reference/clock-reset-api-v0.2.md",
+    "public_api_manifest": "core/scala/api/public-api-v0.2.json",
+    "diagnostics_manifest": "core/scala/api/clock-reset-diagnostics-v0.2.json",
+    "fixture_manifest": "tests/api/fixtures/increment12/manifest.json",
     "main_roadmap": "docs/roadmap/nodal-development-todo.md"
   },
   "ordinary_state": {
@@ -70,14 +77,13 @@
     ],
     "low_level_escape": "nodal.lowlevel.process"
   },
-  "required_evidence": [
-    "public-api-v0.2-design-gate",
-    "v0.1-to-v0.2-migration-note",
-    "machine-readable-public-api-manifest",
-    "compile-positive-fixtures",
-    "compile-negative-fixtures",
-    "external-library-fixture",
-    "stable-diagnostic-codes",
-    "green-ci"
-  ]
+  "evidence": {
+    "compile_positive": true,
+    "scala_type_negative": true,
+    "semantic_negative_contracts": true,
+    "external_library": true,
+    "stable_diagnostics": true,
+    "source_locations": true,
+    "frontend_behavior_inert": true
+  }
 }

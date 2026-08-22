@@ -1,6 +1,6 @@
 # Clock/reset public API v0.2 freeze plan
 
-**Status:** Normative roadmap target  
+**Status:** Frozen by Increment 12  
 **Architecture:** [ADR 0007](../architecture/0007-implicit-clock-reset-domains.md)  
 **Formal freeze:** Increment 12 design gate  
 
@@ -295,14 +295,16 @@ This escape is not part of the ordinary reusable-library subset, cannot create u
 
 ### Increment 12 — Public API v0.2 freeze and contract fixtures
 
-- [ ] Add compile-only candidates for the exact surface above.
-- [ ] Compare Scala ambiguities and minimize the API without weakening semantics.
-- [ ] Publish `NodalClockResetApi-DG-v0.2.md` and a v0.1-to-v0.2 migration note.
-- [ ] Update the machine-readable public API manifest.
-- [ ] Add positive fixtures for implicit single-domain state, explicit root binding, existing-signal binding, generated domains, multi-domain requirements, every reset policy, every CDC/RDC category, gates/muxes, and analog-event separation.
-- [ ] Add negative fixtures for missing domain, direct asynchronous sampling, multi-bit `Cdc.sync`, unsafe pulse transfer, unreported relationship assumptions, reset-release errors, Boolean clock creation, normal use of `always`, and low-level-process misuse.
-- [ ] Freeze stable diagnostic codes and source locations.
-- [ ] Keep frontend behavior inert; this increment freezes contracts rather than implementing hardware semantics.
+- [x] Add compile-only candidates for the exact surface above.
+- [x] Compare Scala ambiguities and minimize the API without weakening semantics.
+- [x] Publish `NodalClockResetApi-DG-v0.2.md` and a v0.1-to-v0.2 migration note.
+- [x] Update the machine-readable public API manifest.
+- [x] Add positive fixtures for implicit single-domain state, explicit root binding, existing-signal binding, generated domains, multi-domain requirements, every reset policy, every CDC/RDC category, gates/muxes, and analog-event separation.
+- [x] Add negative fixtures for missing domain, direct asynchronous sampling, multi-bit `Cdc.sync`, unsafe pulse transfer, unreported relationship assumptions, reset-release errors, Boolean clock creation, normal use of `always`, and low-level-process misuse.
+- [x] Freeze stable diagnostic codes and source locations.
+- [x] Keep frontend behavior inert; this increment freezes contracts rather than implementing hardware semantics.
+
+Freeze evidence: [`NodalClockResetApi-DG-v0.2.md`](../design-gates/NodalClockResetApi-DG-v0.2.md), [`public-api-v0.2.json`](../../core/scala/api/public-api-v0.2.json), [`clock-reset-diagnostics-v0.2.json`](../../core/scala/api/clock-reset-diagnostics-v0.2.json), and [`tests/api/fixtures/increment12/manifest.json`](../../tests/api/fixtures/increment12/manifest.json).
 
 ### Increment 16 — Elaboration and lexical domain context
 

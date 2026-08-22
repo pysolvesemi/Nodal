@@ -1,0 +1,73 @@
+{
+  "schema": 1,
+  "api_family": "register-factory",
+  "api_version": "0.1",
+  "positive": [
+    "examples/registerFactoryApi/src/contracts/registerfactory/positive/RegisterMapFixtures.scala",
+    "examples/registerFactoryApi/src/contracts/registerfactory/positive/RegisterBlockFixtures.scala",
+    "examples/registerFactoryApi/src/contracts/registerfactory/positive/TransportFixtures.scala",
+    "examples/externalLibrary/src/external/registers/GpioRegisterMap.scala"
+  ],
+  "negative": [
+    {
+      "path": "tests/api/fixtures/increment116/negative/CrossMapField.scala",
+      "code": "NODAL-REG-BIND-001",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment116/negative/MissingTransport.scala",
+      "code": "NODAL-REG-TRANSPORT-001",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment116/negative/SymbolicFixedOffset.scala",
+      "code": "NODAL-REG-PARAM-001",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment116/negative/WrongBindingType.scala",
+      "code": "NODAL-REG-BIND-002",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment116/negative/WrongCounterField.scala",
+      "code": "NODAL-REG-BIND-003",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment116/negative/DuplicateAddress.scala",
+      "code": "NODAL-REG-MAP-001",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment116/negative/OverlappingField.scala",
+      "code": "NODAL-REG-MAP-002",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment116/negative/MissingRegisterDomain.scala",
+      "code": "NODAL-REG-DOMAIN-001",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment116/negative/MultipleDirectTransports.scala",
+      "code": "NODAL-REG-TRANSPORT-002",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment116/negative/DynamicReset.scala",
+      "code": "NODAL-REG-SOURCE-001",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment116/negative/IllegalPolicy.scala",
+      "code": "NODAL-REG-POLICY-001",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment116/negative/UnsafeCrossDomainBinding.scala",
+      "code": "NODAL-REG-CDC-001",
+      "mode": "semantic-contract"
+    }
+  ]
+}

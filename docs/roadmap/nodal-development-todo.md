@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.14
+**Revision:** 1.15
 **Created:** 2026-08-20
 **Updated:** 2026-08-22
 **Status:** Active roadmap
@@ -99,7 +99,7 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Keep proof-engine options behind normalized task/adaptor contracts; installing a formal adapter or property library never executes a proof or changes `Backend.Auto`.
 - Use compile-positive and compile-negative fixtures to freeze public names, types, construction forms, imports, and diagnostics.
 - Keep ordinary model source backend-neutral and exclude frontend/compiler internals from the future library-author subset.
-- Reserve a separately versioned register-factory API gate for immutable `RegisterMap` definitions, physical `RegisterBlock` bindings, typed field handles, orthogonal software/hardware/collision policies, committed-access endpoints, and Scala 3 transport adapters. Exact spellings remain deferred to Increment 116.
+- Freeze register-factory API v0.1 around immutable `RegisterMap` definitions, physical `RegisterBlock` bindings, map-owned typed field handles, orthogonal software/hardware/collision policies, an opaque committed-access endpoint, and Scala 3 `RegisterTransport[B]` adapters. Exact spellings are owned by `NodalRegisterFactory-DG-v0.1`.
 - Keep register authoring independent of a concrete access bus. APB, AXI4-Lite, and custom buses attach through capability-checked adapters; multiple access paths to one physical bank require an explicit arbiter/router.
 - Require equivalent Scala/SystemRDL/YAML descriptions to produce equivalent canonical Register IR and ABI hashes. Generated headers, UVM models, documentation, SystemRDL, IP-XACT, and other views never become hidden competing sources.
 - Any incompatible public API change after a freeze requires a new versioned design gate and migration note.
@@ -1186,10 +1186,12 @@ This phase is deliberately outside the initial core, plugin, and AMS-to-FPGA mil
   - Freeze generated-Verilog policy: fixed register ABI symbols use width-safe non-overridable `localparam`s/constants; only explicit Nodal architectural variability becomes an HDL `parameter`; relative-offset decode is the default and any absolute-base wrapper is explicit.
   - Keep exact public API, canonical IR, parsers, bus adapters, RTL lowering, and artifact generators unimplemented and assigned to Increments 116-123.
 
-- [ ] **Increment 116 — Register factory public API candidates and design gate**
-  - Prototype concise Scala 3 `RegisterMap`, `RegisterBlock`, register/field definitions, typed handles, hardware bindings, arrays/submaps/windows/aliases, snapshots/commits, software/hardware/collision policies, and transport binding.
-  - Compare alternatives against mature bus-slave/register-interface facilities while preserving Nodal's stronger register-definition-first separation.
-  - Freeze exact imports, names, construction rules, diagnostics, extension points, external-library subset, and compile-positive/negative fixtures in `NodalRegisterFactory-DG-v0.1` before implementation.
+- [x] **Increment 116 — Register factory public API candidates and design gate**
+  - Freeze concise Scala 3 `RegisterMap`, `RegisterBlock`, register/field definitions, map-owned handles, hardware bindings, arrays/submaps/windows/aliases, snapshots/commits, orthogonal software/hardware/collision policies, and `RegisterTransport[B]` attachment.
+  - Preserve the register-definition-first separation while recording the comparison baseline against Scala 3.8.4 and SpinalHDL 1.14.2 bus/register facilities.
+  - Publish `NodalRegisterFactory-DG-v0.1.md`, machine-readable API and diagnostic manifests, a language reference, positive native/external fixtures, executable Scala type-negative fixtures, and semantic diagnostic contracts.
+  - Keep canonical Register IR, SystemRDL/YAML parsers, APB/AXI adapters, register semantics, RTL lowering, and artifact generation inert and assigned to Increments 117-123.
+  - Evidence: [`NodalRegisterFactory-DG-v0.1.md`](../design-gates/NodalRegisterFactory-DG-v0.1.md), [`register-factory-api-v0.1.json`](../../core/scala/api/register-factory-api-v0.1.json), [`register-factory-diagnostics-v0.1.json`](../../core/scala/api/register-factory-diagnostics-v0.1.json), [`tests/api/fixtures/increment116/manifest.json`](../../tests/api/fixtures/increment116/manifest.json), [`scripts/check_increment116.py`](../../scripts/check_increment116.py), and status `increment-116/register-factory-api-v0-1`.
 
 - [ ] **Increment 117 — Canonical Register IR, source maps, verifier, and ABI manifest**
   - Implement target-neutral Register IR for blocks, registers, fields, hierarchy, geometry, policies, side effects, hardware bindings, domains, accesses, and transport capabilities.
@@ -1222,7 +1224,7 @@ This phase is deliberately outside the initial core, plugin, and AMS-to-FPGA mil
 
 ## Deferred reusable library roadmap
 
-No official reusable model/component library or production plugin is implemented by Increment 115. Increments 116-123 define the future core register-factory and qualification track; they do not populate `libraries/` yet. After the core API, extension surface, packaging model, and preview release are proven, independently approved library/plugin roadmaps may populate `libraries/`, `plugins/`, or separate repositories while preserving the public-core dependency contract.
+No official reusable model/component library or production plugin is implemented by Increment 116. Increments 117-123 implement and qualify the future core register-factory track; they do not populate `libraries/` yet. After the core API, extension surface, packaging model, and preview release are proven, independently approved library/plugin roadmaps may populate `libraries/`, `plugins/`, or separate repositories while preserving the public-core dependency contract.
 
 ## Roadmap maintenance
 

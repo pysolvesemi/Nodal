@@ -1,22 +1,25 @@
 {
   "schema": 1,
   "surface_version": "0.1",
-  "status": "architecture-accepted-api-deferred",
+  "status": "api-frozen-implementation-deferred",
   "binding_adr": "docs/architecture/0020-canonical-register-factory-and-transport-adapters.md",
   "binding_rule": "define-register-abi-once-normalize-every-authoring-source-into-canonical-register-ir-bind-hardware-explicitly-and-adapt-transports-without-changing-register-semantics",
   "implementation_status": {
     "architecture_recorded": true,
     "roadmap_recorded": true,
-    "public_api_frozen": false,
+    "public_api_frozen": true,
     "canonical_register_ir_implemented": false,
-    "scala_dsl_implemented": false,
+    "scala_dsl_implemented": true,
     "systemrdl_frontend_implemented": false,
     "yaml_json_frontend_implemented": false,
     "ip_xact_frontend_implemented": false,
     "apb_adapter_implemented": false,
     "axi4_lite_adapter_implemented": false,
     "verilog_lowering_implemented": false,
-    "artifact_generators_implemented": false
+    "artifact_generators_implemented": false,
+    "surface_compiles": true,
+    "scala_type_negative_fixtures_execute": true,
+    "semantic_negative_fixtures_are_contract_only": true
   },
   "separation": {
     "register_map": "immutable-bus-neutral-programmer-visible-specification",
@@ -60,7 +63,7 @@
       "ErrorOnCollision"
     ],
     "axes_are_orthogonal": true,
-    "exact_api_deferred_to_increment": 116
+    "frozen_by_increment": 116
   },
   "authoring_frontends": {
     "scala_register_map_dsl": {
@@ -188,7 +191,7 @@
     {
       "increment": 116,
       "title": "Register factory public API candidates and design gate",
-      "status": "planned"
+      "status": "complete"
     },
     {
       "increment": 117,
@@ -225,5 +228,16 @@
       "title": "Register factory verification, scale, and reusable adapter/library qualification",
       "status": "planned"
     }
-  ]
+  ],
+  "public_api": {
+    "gate": "docs/design-gates/NodalRegisterFactory-DG-v0.1.md",
+    "manifest": "core/scala/api/register-factory-api-v0.1.json",
+    "diagnostics": "core/scala/api/register-factory-diagnostics-v0.1.json",
+    "default_import": "import nodal.*",
+    "map": "RegisterMap",
+    "physical_block": "RegisterBlock",
+    "transport_type_class": "RegisterTransport[B]",
+    "map_owned_field_handles": true,
+    "implementation_inert": true
+  }
 }

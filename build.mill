@@ -105,3 +105,6 @@ object examples extends Module:
 
   object clockResetApi extends NodalScalaModule:
     def moduleDeps = Seq(core.scala.api, externalLibrary)
+
+  object registerFactoryApi extends NodalScalaModule:
+    def moduleDeps = Seq(core.scala.api, externalLibrary)

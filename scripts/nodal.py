@@ -289,6 +289,7 @@ def _contract_commands(root: Path, *, online_toolchain: bool) -> list[list[str]]
         _python(root, "check_increment10.py"),
         _python(root, "check_increment11.py"),
         _python(root, "check_increment12.py", "--compile-negative"),
+        _python(root, "check_increment116.py", "--compile-negative"),
     ]
     if online_toolchain:
         commands.append(_python(root, "check_native_toolchain.py", "--online"))

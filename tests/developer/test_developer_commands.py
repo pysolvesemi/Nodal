@@ -207,6 +207,7 @@ class UnifiedDeveloperCommandTests(unittest.TestCase):
             "check_increment10.py",
             "check_increment11.py",
             "check_increment12.py",
+            "check_increment116.py",
         ):
             self.assertTrue(any(script in command for command in rendered), script)
         for suite in (
@@ -242,6 +243,7 @@ class UnifiedDeveloperCommandTests(unittest.TestCase):
         self.assertTrue(any("check_increment10.py" in command for command in rendered))
         self.assertTrue(any("check_increment11.py" in command for command in rendered))
         self.assertTrue(any("check_increment12.py" in command for command in rendered))
+        self.assertTrue(any("check_increment116.py" in command for command in rendered))
         self.assertTrue(any("tests/lint" in command for command in rendered))
         self.assertTrue(any("tests/api" in command for command in rendered))
         self.assertTrue(any("scalafix.check" in command for command in rendered))

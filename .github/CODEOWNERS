@@ -68,3 +68,10 @@
 /scripts/check_increment12.py @pysolvesemi
 /docs/language-reference/clock-reset-api-v0.2.md @pysolvesemi
 /docs/migrations/public-api-v0.1-to-v0.2.md @pysolvesemi
+
+/core/scala/api/src/nodal/RegisterFactoryApi.scala @pysolvesemi
+/core/scala/api/register-factory-api-v0.1.json @pysolvesemi
+/core/scala/api/register-factory-diagnostics-v0.1.json @pysolvesemi
+/scripts/check_increment116.py @pysolvesemi
+/docs/design-gates/NodalRegisterFactory-DG-v0.1.md @pysolvesemi
+/docs/language-reference/register-factory-api-v0.1.md @pysolvesemi

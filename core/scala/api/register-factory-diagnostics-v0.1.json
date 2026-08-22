@@ -1,0 +1,112 @@
+{
+  "schema": 1,
+  "api_family": "register-factory",
+  "api_version": "0.1",
+  "source_location": {
+    "required": true,
+    "fields": [
+      "path",
+      "line",
+      "column",
+      "span"
+    ]
+  },
+  "diagnostics": [
+    {
+      "code": "NODAL-REG-BIND-001",
+      "name": "field-from-unrelated-map",
+      "phase": "scala-type",
+      "severity": "error",
+      "message": "A register block may consume only field handles owned by its RegisterMap.",
+      "suggestion": "Use the corresponding field from the block's map or instantiate the matching RegisterBlock."
+    },
+    {
+      "code": "NODAL-REG-TRANSPORT-001",
+      "name": "missing-register-transport",
+      "phase": "scala-type",
+      "severity": "error",
+      "message": "No RegisterTransport instance is available for the attached bus type.",
+      "suggestion": "Import or define one capability-declaring RegisterTransport for the bus type."
+    },
+    {
+      "code": "NODAL-REG-PARAM-001",
+      "name": "symbolic-fixed-register-offset",
+      "phase": "scala-type",
+      "severity": "error",
+      "message": "A fixed register offset cannot be supplied by a symbolic parameter.",
+      "suggestion": "Keep published offsets constant and use explicit symbolic array or layout geometry where configurability is intentional."
+    },
+    {
+      "code": "NODAL-REG-BIND-002",
+      "name": "hardware-binding-type-mismatch",
+      "phase": "scala-type",
+      "severity": "error",
+      "message": "A hardware binding value does not match the field's declared data type.",
+      "suggestion": "Bind an expression with the exact field type or use an explicit typed conversion."
+    },
+    {
+      "code": "NODAL-REG-BIND-003",
+      "name": "hardware-operation-field-kind-mismatch",
+      "phase": "scala-type",
+      "severity": "error",
+      "message": "A field is used with an incompatible hardware-side operation.",
+      "suggestion": "Use set/clear for Boolean fields and increment/decrement only for compatible numeric fields."
+    },
+    {
+      "code": "NODAL-REG-MAP-001",
+      "name": "duplicate-register-address",
+      "phase": "register-map-verifier",
+      "severity": "error",
+      "message": "Two register declarations occupy the same address without an explicit alias contract.",
+      "suggestion": "Move one register or declare an intentional alias using the alias API."
+    },
+    {
+      "code": "NODAL-REG-MAP-002",
+      "name": "overlapping-field-range",
+      "phase": "register-map-verifier",
+      "severity": "error",
+      "message": "Field bit ranges overlap inside one register.",
+      "suggestion": "Assign disjoint ranges or declare the intended alias/overlay semantics explicitly."
+    },
+    {
+      "code": "NODAL-REG-DOMAIN-001",
+      "name": "register-block-without-domain",
+      "phase": "domain-verifier",
+      "severity": "error",
+      "message": "A physical RegisterBlock has no resolved clock/reset domain.",
+      "suggestion": "Construct the RegisterBlock inside one lexical ClockDomain or bind the required domain explicitly."
+    },
+    {
+      "code": "NODAL-REG-TRANSPORT-002",
+      "name": "multiple-direct-register-transports",
+      "phase": "register-transport-verifier",
+      "severity": "error",
+      "message": "More than one transport is attached directly to one physical register block.",
+      "suggestion": "Use an explicit register-access arbiter/router with declared ordering and priority."
+    },
+    {
+      "code": "NODAL-REG-SOURCE-001",
+      "name": "dynamic-value-captured-by-register-map",
+      "phase": "register-map-verifier",
+      "severity": "error",
+      "message": "An immutable RegisterMap captures a live hardware value as ABI metadata.",
+      "suggestion": "Keep reset and layout metadata constant or symbolic and bind live signals on RegisterBlock."
+    },
+    {
+      "code": "NODAL-REG-POLICY-001",
+      "name": "illegal-register-field-policy-combination",
+      "phase": "register-map-verifier",
+      "severity": "error",
+      "message": "The selected software, hardware, collision, or partial-write policies are incompatible.",
+      "suggestion": "Choose a supported orthogonal policy combination or an explicit custom extension approved by the API."
+    },
+    {
+      "code": "NODAL-REG-CDC-001",
+      "name": "unsafe-cross-domain-register-binding",
+      "phase": "domain-verifier",
+      "severity": "error",
+      "message": "A register field binding samples a value from an unrelated domain without an explicit CDC primitive.",
+      "suggestion": "Use a typed level, pulse, handshake, snapshot, or FIFO crossing appropriate to the value semantics."
+    }
+  ]
+}

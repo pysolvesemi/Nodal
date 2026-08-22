@@ -2,7 +2,7 @@
 
 **Revision:** 0.1
 **Created:** 2026-08-22
-**Status:** Architecture accepted; API and implementation deferred
+**Status:** Public API frozen by Increment 116; semantic implementation deferred
 **Binding architecture:** [ADR 0020](../architecture/0020-canonical-register-factory-and-transport-adapters.md)
 
 ## Goal
@@ -32,7 +32,13 @@ The register-factory roadmap covers:
 - C/C++, Rust, CMSIS-SVD, SystemRDL, IP-XACT, UVM RAL/RALF, and documentation views;
 - generated simulation/formal contracts and open-source RTL validation.
 
-This roadmap does not implement the public API or compiler in Increment 115. Exact spellings require a versioned design gate.
+Increment 116 freezes the public Scala source contract through `NodalRegisterFactory-DG-v0.1`. Canonical Register IR, parsers, register behavior, adapters, RTL, and artifacts remain deferred to Increments 117-123.
+
+## Frozen public API v0.1
+
+The exact public surface is frozen by [`NodalRegisterFactory-DG-v0.1.md`](../design-gates/NodalRegisterFactory-DG-v0.1.md), [`register-factory-api-v0.1.json`](../../core/scala/api/register-factory-api-v0.1.json), and [`register-factory-diagnostics-v0.1.json`](../../core/scala/api/register-factory-diagnostics-v0.1.json).
+
+The freeze selects immutable bus-neutral maps, map-owned path-dependent field/group handles, one-domain physical blocks, explicit typed hardware bindings, orthogonal policy enums, an opaque adapter endpoint, and Scala 3 `RegisterTransport[B]` contextual attachment. Positive fixtures compile while semantic implementation remains intentionally inert.
 
 ## Layered architecture
 
@@ -382,11 +388,12 @@ Generated concurrent/temporal properties are verification-only. They never becom
   - Freeze generated-Verilog policy: fixed register ABI symbols use width-safe `localparam`s/constants; only intentional Nodal architectural variability becomes an HDL `parameter`; relative-offset decode is the default.
   - Add a machine-readable architecture candidate and update the main roadmap to revision 1.14 without claiming API/compiler/backend implementation.
 
-- [ ] **Increment 116 — Register factory public API candidates and design gate**
-  - Prototype Scala 3 `RegisterMap`, `RegisterBlock`, register/field definitions, typed handles, hardware bindings, arrays/submaps/windows/aliases, snapshots/commits, software/hardware/collision policies, and transport binding.
-  - Compare concise alternatives against SpinalHDL-style bus factories and register interfaces while preserving the stronger separation.
-  - Freeze exact public imports, names, construction rules, diagnostics, extension points, and external-library subset in `NodalRegisterFactory-DG-v0.1` plus compile-positive/negative fixtures.
-  - Do not implement semantic lowering before the gate is approved.
+- [x] **Increment 116 — Register factory public API candidates and design gate**
+  - Freeze Scala 3 `RegisterMap`, `RegisterBlock`, register/field definitions, map-owned handles, hardware bindings, arrays/submaps/windows/aliases, snapshots/commits, orthogonal policies, and contextual transport attachment.
+  - Record the Scala 3.8.4 and SpinalHDL 1.14.2 comparison while preserving the stronger register-definition-first separation.
+  - Publish `NodalRegisterFactory-DG-v0.1`, API/diagnostic manifests, language reference, external-consumer fixtures, executable type-negative fixtures, and semantic-contract fixtures.
+  - Keep semantic lowering, canonical Register IR, parsers, bus adapters, RTL, and artifacts deferred.
+  - Evidence: [`NodalRegisterFactory-DG-v0.1.md`](../design-gates/NodalRegisterFactory-DG-v0.1.md), [`register-factory-api-v0.1.json`](../../core/scala/api/register-factory-api-v0.1.json), [`register-factory-diagnostics-v0.1.json`](../../core/scala/api/register-factory-diagnostics-v0.1.json), and [`tests/api/fixtures/increment116/manifest.json`](../../tests/api/fixtures/increment116/manifest.json).
 
 - [ ] **Increment 117 — Canonical Register IR, source maps, verifier, and ABI manifest**
   - Implement target-neutral Register IR for blocks, registers, fields, hierarchy, geometry, policies, side effects, hardware bindings, domains, accesses, and transport capabilities.

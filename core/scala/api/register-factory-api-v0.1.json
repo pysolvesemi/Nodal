@@ -1,0 +1,150 @@
+{
+  "schema": 1,
+  "api_family": "register-factory",
+  "api_version": "0.1",
+  "status": "frozen",
+  "approved_gate": "docs/design-gates/NodalRegisterFactory-DG-v0.1.md",
+  "binding_adr": "docs/architecture/0020-canonical-register-factory-and-transport-adapters.md",
+  "default_import": "import nodal.*",
+  "tooling_baseline": {
+    "scala": "3.8.4",
+    "spinalhdl_comparison": "1.14.2",
+    "comparison_date": "2026-08-22"
+  },
+  "binding_rule": "define-register-abi-once-normalize-every-authoring-source-into-canonical-register-ir-bind-hardware-explicitly-and-adapt-transports-without-changing-register-semantics",
+  "public_types": [
+    "RegisterMap",
+    "RegisterBlock",
+    "RegisterOffset",
+    "RegisterSize",
+    "RegisterCount",
+    "BitRange",
+    "FieldBits",
+    "FieldReset",
+    "AddressUnit",
+    "Endianness",
+    "SoftwareAccess",
+    "HardwareAccess",
+    "CollisionPolicy",
+    "IllegalAccessPolicy",
+    "PartialWritePolicy",
+    "MultiwordAccess",
+    "RegisterFieldInput",
+    "RegisterTransport",
+    "RegisterTransportCapabilities",
+    "RegisterAccessPort"
+  ],
+  "map_construction": {
+    "constructor": "RegisterMap(name, dataWidth, addressUnit, endianness, illegalAccess)",
+    "register": "register(offset, name, doc, multiword)",
+    "field": "register.field(name, dataType, bits, software, reset, hardware, collision, partialWrite, doc)",
+    "reserved_register_bits": "register.reserved(bits, doc)",
+    "reserved_address_region": "reserved(offset, size, doc)",
+    "symbolic_parameter": "param(default)",
+    "submap": "submap(offset, map, name)",
+    "array": "array(base, count, stride, element, name)",
+    "window": "window(offset, size, name)",
+    "alias": "alias(offset, target, name, software)",
+    "snapshot": "snapshot(name, fields*)",
+    "commit_group": "commitGroup(name, fields*)",
+    "published_offsets_explicit_by_default": true
+  },
+  "field_semantics": {
+    "software_access": [
+      "RO",
+      "RW",
+      "WO",
+      "W1C",
+      "W1S",
+      "W1T",
+      "W0C",
+      "W0S",
+      "RC",
+      "RS",
+      "WriteOnce",
+      "Reserved"
+    ],
+    "hardware_access": [
+      "None",
+      "Input",
+      "Write",
+      "Settable",
+      "Clearable",
+      "Increment",
+      "Decrement",
+      "Pulse"
+    ],
+    "collision_policy": [
+      "HardwareWins",
+      "SoftwareWins",
+      "SetDominatesClear",
+      "ClearDominatesSet",
+      "ErrorOnCollision"
+    ],
+    "partial_write_policy": [
+      "Allow",
+      "Reject",
+      "RequireWholeField",
+      "RequireWholeRegister"
+    ],
+    "multiword_policy": [
+      "NonAtomic",
+      "SnapshotOnFirstRead",
+      "ShadowThenCommit",
+      "ProtocolAtomic",
+      "Rejected"
+    ],
+    "axes_are_orthogonal": true
+  },
+  "physical_binding": {
+    "constructor": "RegisterBlock(map)",
+    "one_clock_reset_domain": true,
+    "value": "block.value(map.field)",
+    "input": "block.input(map.field) := value",
+    "set_when": "block.setWhen(map.field, condition)",
+    "clear_when": "block.clearWhen(map.field, condition)",
+    "increment_when": "block.incrementWhen(map.field, condition)",
+    "decrement_when": "block.decrementWhen(map.field, condition)",
+    "pulse": "block.pulse(map.field)",
+    "write_event": "block.writeEvent(map.field)",
+    "capture": "block.capture(map.snapshot, condition)",
+    "commit": "block.commit(map.commitGroup, condition)",
+    "map_owned_field_handles": true,
+    "cross_map_binding_is_type_error": true
+  },
+  "transport_binding": {
+    "type_class": "RegisterTransport[B]",
+    "attach": "block.attach(bus)",
+    "scala_mechanism": "given-using",
+    "capability_record": "RegisterTransportCapabilities",
+    "canonical_endpoint": "RegisterAccessPort",
+    "endpoint_is_opaque_in_v0_1": true,
+    "exact_endpoint_protocol_deferred_to_increment": 120,
+    "implicit_multiple_direct_attachment": false
+  },
+  "authoring_interchange": {
+    "scala_dsl": "frozen-native-surface",
+    "systemrdl_2_0": "primary-standards-interchange-deferred-to-increment-118",
+    "nodal_yaml_json": "versioned-convenience-frontend-deferred-to-increment-118",
+    "ip_xact_1685_2022": "integration-view-deferred-to-increment-122"
+  },
+  "generated_verilog": {
+    "fixed_offsets_and_field_symbols": "non-overridable-width-safe-localparam-or-inline-constant",
+    "fixed_abi_symbols_are_parameters": false,
+    "hdl_parameters_only_for_explicit_nodal_architectural_variability": true,
+    "relative_offset_decode_default": true,
+    "absolute_base_wrapper_explicit": true
+  },
+  "diagnostics_manifest": "core/scala/api/register-factory-diagnostics-v0.1.json",
+  "fixture_manifest": "tests/api/fixtures/increment116/manifest.json",
+  "implementation_status": {
+    "surface_compiles": true,
+    "scala_type_negative_fixtures_execute": true,
+    "semantic_negative_fixtures_are_contract_only": true,
+    "canonical_register_ir_implemented": false,
+    "register_semantics_implemented": false,
+    "bus_adapters_implemented": false,
+    "verilog_lowering_implemented": false,
+    "artifact_generators_implemented": false
+  }
+}

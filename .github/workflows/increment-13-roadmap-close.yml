@@ -1,0 +1,37 @@
+name: Increment 13 roadmap closure
+
+on:
+  push:
+    branches:
+      - increment/13-core-semantic-candidates
+
+permissions:
+  contents: write
+
+jobs:
+  close-roadmap:
+    if: github.event.head_commit.message == 'Increment 13 — close roadmap'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Close roadmap and clean temporary helper
+        run: |
+          python3 .increment13_close.py
+          rm -f .increment13_close.py
+          rm -f .increment13-trigger
+          rm -f .github/workflows/increment-13-roadmap-close.yml
+          git diff --check
+
+      - name: Publish roadmap closure
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 13 — close roadmap and evidence'
+          git push origin HEAD:increment/13-core-semantic-candidates

@@ -1,0 +1,39 @@
+name: Increment 12 format fix
+
+on:
+  push:
+    branches:
+      - increment/12-clock-reset-api-v0-2-freeze
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.event.head_commit.message == 'Run Increment 12 format fix'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Apply pinned Scala formatting and validate compile contracts
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          ./mill \
+            examples.externalLibrary.compile \
+            examples.publicApiCandidates.compile \
+            examples.clockResetApi.compile
+          python3 scripts/check_increment12.py --compile-negative
+
+      - name: Publish formatted sources
+        run: |
+          rm .increment12-format-trigger
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Format Increment 12 Scala contracts'
+          git push origin HEAD:increment/12-clock-reset-api-v0-2-freeze

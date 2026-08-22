@@ -20,7 +20,11 @@ class Increment10ContractTests(unittest.TestCase):
     def copy_fixture(self) -> tuple[tempfile.TemporaryDirectory[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         root = Path(temporary.name)
-        relatives = set(CHECKER.EXPECTED_FILES) | {"build.mill", "scripts/nodal.py"}
+        relatives = (
+            set(CHECKER.EXPECTED_FILES)
+            | set(CHECKER.V02_COMPATIBILITY_FILES)
+            | {"build.mill", "scripts/nodal.py"}
+        )
         for relative in relatives:
             source = REPOSITORY_ROOT / relative
             target = root / relative
@@ -67,6 +71,20 @@ class Increment10ContractTests(unittest.TestCase):
         )
         codes = {problem.code for problem in CHECKER.check_repository(root)}
         self.assertIn("NODAL-INC10-019", codes)
+
+    def test_removed_always_requires_complete_v02_migration_contract(self) -> None:
+        temporary, root = self.copy_fixture()
+        self.addCleanup(temporary.cleanup)
+        manifest = root / "core/scala/api/public-api-v0.2.json"
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                '"ordinary_always_allowed": false',
+                '"ordinary_always_allowed": true',
+            ),
+            encoding="utf-8",
+        )
+        codes = {problem.code for problem in CHECKER.check_repository(root)}
+        self.assertIn("NODAL-INC10-024", codes)
 
 
 if __name__ == "__main__":

@@ -21,40 +21,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  materialize_increment12:
-    name: materialize Increment 12
-    if: github.event_name == 'push' && github.event.head_commit.message == 'Run Increment 12 materializer'
-    permissions:
-      contents: write
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Apply payload and validate structural contracts
-        run: |
-          cat .increment12-payload/part* | base64 --decode > /tmp/nodal-inc12-payload.tar.xz
-          tar -xJf /tmp/nodal-inc12-payload.tar.xz -C /tmp
-          find /tmp/nodal_inc12 -type d -name __pycache__ -prune -exec rm -rf {} +
-          python3 /tmp/nodal_inc12/_apply.py "${GITHUB_WORKSPACE}"
-          rm -rf .increment12-payload
-          rm -f .github/workflows/increment-12-clock-reset-api-freeze.yml
-          git checkout HEAD -- .github/workflows/increment-12-materialize.yml
-          find scripts tests -type d -name __pycache__ -prune -exec rm -rf {} +
-          rm -f .increment12-trigger-v2
-
-      - name: Commit final Increment 12 source tree
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'Increment 12 — Freeze clock/reset public API v0.2'
-          git push origin HEAD:increment/12-clock-reset-api-v0-2-freeze
-
   contracts:
     name: contracts
     runs-on: ubuntu-24.04

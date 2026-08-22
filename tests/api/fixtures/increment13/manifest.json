@@ -2,6 +2,10 @@
   "schema": 1,
   "increment": 13,
   "status": "candidate-evaluation",
+  "validation": {
+    "pull_request": 32,
+    "dedicated_workflow_run": 32587119017
+  },
   "positive_modules": [
     "examples.coreSemanticsExternal.compile",
     "examples.coreSemanticsApi.compile"

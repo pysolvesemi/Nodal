@@ -26,7 +26,7 @@ final class GeneratedDomainFixture extends Module:
     edge = ClockEdge.Rising,
     reset = ResetPolicy.AsyncAssertSyncRelease(stages = 2),
     resetPolarity = ResetPolarity.ActiveLow,
-    frequency = 100.MHz,
+    frequency = 100.MHz
   )
 
   val pixel = ClockDomain.generated(
@@ -34,7 +34,7 @@ final class GeneratedDomainFixture extends Module:
     clock = pllClock,
     from = core,
     relation = ClockRelation.Ratio(multiply = 3, divide = 2, phase = 0.deg),
-    reset = Rdc.sync(core.reset, stages = 2),
+    reset = Rdc.sync(core.reset, stages = 2)
   )
 
   val same = ClockRelation.Same

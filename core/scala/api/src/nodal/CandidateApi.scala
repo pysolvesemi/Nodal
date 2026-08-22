@@ -45,7 +45,7 @@ sealed trait Discipline
 final class NamedDiscipline private[nodal] (
     val name: String,
     val potential: Nature,
-    val flow: Nature,
+    val flow: Nature
 ) extends Discipline
 
 case object Electrical extends Discipline
@@ -70,7 +70,7 @@ final class Signal[A <: Data] private[nodal] (dataType: DataType[A]) extends Exp
 /** Candidate elaboration-time variable visible to behavioral blocks. */
 final class Variable[A <: Data] private[nodal] (
     dataType: DataType[A],
-    initialValue: Expr[A],
+    initialValue: Expr[A]
 ) extends Expr[A]:
   CandidateRuntime.statement(dataType, initialValue)
 
@@ -115,7 +115,7 @@ object ClockRelation:
   final case class Ratio(
       multiply: Int,
       divide: Int,
-      phase: Phase = Phase.Zero,
+      phase: Phase = Phase.Zero
   ) extends ClockRelation
   final case class Synchronous(phaseKnown: Boolean = false) extends ClockRelation
   case object MutuallyExclusive extends ClockRelation
@@ -125,7 +125,7 @@ object ClockRelation:
 /** Lexically applied candidate clock/reset domain. */
 final class ClockDomain private[nodal] (
     val name: String,
-    val reset: Expr[Reset],
+    val reset: Expr[Reset]
 ):
   def apply(body: => Unit): Unit = CandidateRuntime.block(body)
 
@@ -135,7 +135,7 @@ object ClockDomain:
       edge: ClockEdge,
       reset: ResetPolicy,
       resetPolarity: ResetPolarity,
-      frequency: Frequency,
+      frequency: Frequency
   ): ClockDomain =
     CandidateRuntime.statement(edge, reset, resetPolarity, frequency)
     new ClockDomain(name, CandidateRuntime.expr(name, reset))
@@ -147,7 +147,7 @@ object ClockDomain:
       policy: ResetPolicy,
       polarity: ResetPolarity,
       frequency: Frequency,
-      name: String = "bound",
+      name: String = "bound"
   ): ClockDomain =
     CandidateRuntime.statement(clock, edge, policy, polarity, frequency)
     new ClockDomain(name, reset)
@@ -160,7 +160,7 @@ object ClockDomain:
       clock: Expr[Clock],
       from: ClockDomain,
       relation: ClockRelation,
-      reset: Expr[Reset],
+      reset: Expr[Reset]
   ): ClockDomain =
     CandidateRuntime.statement(clock, from, relation)
     new ClockDomain(name, reset)
@@ -208,7 +208,7 @@ abstract class Module:
 
   protected final def variable[A <: Data](
       dataType: DataType[A],
-      initialValue: Expr[A],
+      initialValue: Expr[A]
   ): Variable[A] = new Variable(dataType, initialValue)
 
   protected final def instance[M <: Module](module: M): Instance[M] =
@@ -223,7 +223,7 @@ abstract class Module:
 /** Domain-owned state candidate. */
 final class Register[A <: Data] private[nodal] (
     initialValue: Expr[A] | Null,
-    dataType: DataType[A] | Null,
+    dataType: DataType[A] | Null
 ) extends Expr[A]:
   CandidateRuntime.statement(initialValue, dataType)
 
@@ -275,7 +275,7 @@ object Stream:
 final case class CdcWaiver(
     id: String,
     reason: String,
-    relation: ClockRelation,
+    relation: ClockRelation
 )
 
 object Cdc:
@@ -285,7 +285,7 @@ object Cdc:
   def gray[A <: Data](
       grayValue: Gray[A],
       to: ClockDomain,
-      stages: Int = 2,
+      stages: Int = 2
   ): Expr[A] = CandidateRuntime.expr(grayValue, to, stages)
 
   def pulse(pulse: Pulse, to: ClockDomain): Expr[Bool] =
@@ -297,7 +297,7 @@ object Cdc:
   def fifo[A <: Data](
       stream: Stream[A],
       to: ClockDomain,
-      depth: Int = 4,
+      depth: Int = 4
   ): Stream[A] =
     CandidateRuntime.statement(to, depth)
     stream
@@ -305,7 +305,7 @@ object Cdc:
   def waive[A <: Data](
       value: Expr[A],
       to: ClockDomain,
-      waiver: CdcWaiver,
+      waiver: CdcWaiver
   ): Expr[A] = CandidateRuntime.expr(value, to, waiver)
 
 object Rdc:
@@ -317,7 +317,7 @@ object Rdc:
   def sync(
       reset: Expr[Reset],
       to: ClockDomain,
-      stages: Int = 2,
+      stages: Int = 2
   ): Expr[Reset] = CandidateRuntime.expr(reset, to, stages)
 
 object ResetController:
@@ -328,7 +328,7 @@ object ClockGate:
       domain: ClockDomain,
       enable: Expr[Bool],
       testEnable: Expr[Bool] = false.B,
-      name: String = "gated",
+      name: String = "gated"
   ): ClockDomain =
     CandidateRuntime.statement(enable, testEnable)
     new ClockDomain(name, domain.reset)
@@ -337,7 +337,7 @@ object ClockMux:
   def glitchless(
       select: Expr[Bool],
       domains: Seq[ClockDomain],
-      name: String = "selected",
+      name: String = "selected"
   ): ClockDomain =
     CandidateRuntime.statement(select, domains)
     new ClockDomain(name, CandidateRuntime.expr(domains))
@@ -383,7 +383,7 @@ def transition(
     value: Expr[Real],
     delay: Expr[Real],
     rise: Expr[Real],
-    fall: Expr[Real],
+    fall: Expr[Real]
 ): Expr[Real] = CandidateRuntime.expr(value, delay, rise, fall)
 
 def toUInt(value: Expr[Real], width: Int): Expr[UInt] =

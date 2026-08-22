@@ -28,7 +28,7 @@ final class ExplicitRootBinding extends Module:
     edge = ClockEdge.Rising,
     reset = ResetPolicy.AsyncAssertSyncRelease(stages = 2),
     resetPolarity = ResetPolarity.ActiveLow,
-    frequency = 100.MHz,
+    frequency = 100.MHz
   )
 
   core:
@@ -46,7 +46,7 @@ final class ExistingSignalBinding extends Module:
     policy = ResetPolicy.Sync,
     polarity = ResetPolarity.ActiveHigh,
     frequency = 50.MHz,
-    name = "boundCore",
+    name = "boundCore"
   )
 
   core:
@@ -60,26 +60,26 @@ final class ResetPolicyFixtures extends Module:
     edge = ClockEdge.Rising,
     reset = ResetPolicy.None,
     resetPolarity = ResetPolarity.ActiveHigh,
-    frequency = 25.MHz,
+    frequency = 25.MHz
   )
   val synchronous = ClockDomain.external(
     name = "synchronous",
     edge = ClockEdge.Rising,
     reset = ResetPolicy.Sync,
     resetPolarity = ResetPolarity.ActiveHigh,
-    frequency = 50.MHz,
+    frequency = 50.MHz
   )
   val asynchronous = ClockDomain.external(
     name = "asynchronous",
     edge = ClockEdge.Falling,
     reset = ResetPolicy.Async,
     resetPolarity = ResetPolarity.ActiveLow,
-    frequency = 75.MHz,
+    frequency = 75.MHz
   )
   val asyncAssertSyncRelease = ClockDomain.external(
     name = "asyncAssertSyncRelease",
     edge = ClockEdge.Rising,
     reset = ResetPolicy.AsyncAssertSyncRelease(stages = 3),
     resetPolarity = ResetPolarity.ActiveLow,
-    frequency = 100.MHz,
+    frequency = 100.MHz
   )

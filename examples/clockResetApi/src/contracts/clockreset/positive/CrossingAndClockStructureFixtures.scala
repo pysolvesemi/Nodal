@@ -20,8 +20,8 @@ final class CrossingFixtures extends Module:
     waiver = CdcWaiver(
       id = "CDC-001",
       reason = "fixture proves source-located waiver shape",
-      relation = ClockRelation.Synchronous(phaseKnown = true),
-    ),
+      relation = ClockRelation.Synchronous(phaseKnown = true)
+    )
   )
 
   val synchronizedReset = Rdc.sync(source.reset, to = destination, stages = 2)
@@ -37,24 +37,24 @@ final class ClockStructureFixtures extends Module:
     edge = ClockEdge.Rising,
     reset = ResetPolicy.Sync,
     resetPolarity = ResetPolarity.ActiveHigh,
-    frequency = 100.MHz,
+    frequency = 100.MHz
   )
   val alternate = ClockDomain.external(
     name = "alternate",
     edge = ClockEdge.Rising,
     reset = ResetPolicy.Sync,
     resetPolarity = ResetPolarity.ActiveHigh,
-    frequency = 100.MHz,
+    frequency = 100.MHz
   )
 
   val gated = ClockGate(
     source,
     enable,
     testEnable = testEnable,
-    name = "gated",
+    name = "gated"
   )
   val selected = ClockMux.glitchless(
     select,
     domains = Seq(gated, alternate),
-    name = "selected",
+    name = "selected"
   )

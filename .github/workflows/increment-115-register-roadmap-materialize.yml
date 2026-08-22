@@ -1,0 +1,39 @@
+name: Increment 115 register roadmap materializer
+
+on:
+  push:
+    branches:
+      - increment/115-register-factory-roadmap
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.event.head_commit.message == 'Run Increment 115 roadmap materializer'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Integrate and validate the register factory roadmap
+        run: |
+          python3 .increment115-roadmap.py
+          python3 -m json.tool docs/roadmap/register-factory-v0.1-surface.json >/dev/null
+          python3 scripts/check_increment12.py
+          git diff --check
+
+      - name: Publish final Increment 115 roadmap tree
+        run: |
+          rm -f .increment115-roadmap.py .increment115-roadmap-trigger
+          rm -f .github/workflows/increment-115-register-roadmap-materialize.yml
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 115 — Integrate register factory roadmap'
+          git push origin HEAD:increment/115-register-factory-roadmap

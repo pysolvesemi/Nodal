@@ -222,27 +222,27 @@ abstract class Module:
 
 /** Domain-owned state candidate. */
 final class Register[A <: Data] private[nodal] (
-    initialValue: Expr[A] | Null,
-    dataType: DataType[A] | Null
+    initialValue: Option[Expr[A]],
+    dataType: Option[DataType[A]]
 ) extends Expr[A]:
   CandidateRuntime.statement(initialValue, dataType)
 
   infix def :=(value: Expr[A]): Unit = CandidateRuntime.statement(this, value)
 
 object Reg:
-  def apply[A <: Data](init: Expr[A]): Register[A] = new Register(init, null)
+  def apply[A <: Data](init: Expr[A]): Register[A] = new Register(Some(init), None)
 
   def uninitialized[A <: Data](dataType: DataType[A]): Register[A] =
-    new Register(null, dataType)
+    new Register(None, Some(dataType))
 
 object RegNext:
   def apply[A <: Data](next: Expr[A], init: Expr[A]): Register[A] =
-    val register = new Register(init, null)
+    val register = new Register(Some(init), None)
     register := next
     register
 
   def uninitialized[A <: Data](next: Expr[A]): Register[A] =
-    val register = new Register[A](null, null)
+    val register = new Register[A](None, None)
     register := next
     register
 

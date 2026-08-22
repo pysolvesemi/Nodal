@@ -54,7 +54,7 @@ Legal categories include:
 - native semantic enums, canonical enum encodings, safe decode, and manual/high-level FSM/statechart constructs;
 - parameters, symbolic widths, target generate, and hierarchy;
 - implicit clock/reset domains;
-- registers, memories, state machines, and assertions;
+- registers, memories, state machines, and explicitly synthesized immediate assertions;
 - `Valid` and `Stream` protocols;
 - CDC/RDC primitives;
 - automatic fixed-rate, valid-only, and elastic pipelines;
@@ -88,7 +88,7 @@ The required output is a conservative synthesizable IEEE 1364-2005-style subset.
 - flattened aggregate and protocol fields with stable names;
 - flat packed carriers for shaped ports, deterministic row-major offsets, signed element views, structural-storage manifests, safe expression inlining, semantic state/temporary names, and expression-span source maps;
 - black-box declarations and attributes supported by the profile;
-- portable formal hooks or sidecar harnesses;
+- explicit synthesized immediate checker logic; verification-only formal hooks and sidecar harnesses are emitted only by simulation or formal profiles;
 - source-map and metadata sidecars.
 
 ### Portability restrictions
@@ -159,6 +159,12 @@ The backend publishes separate feature sets for:
 - unsupported features with stable diagnostics.
 
 `Backend.Auto` selects the synthesizable profile unless the user explicitly requests a simulation/formal profile.
+
+## Assertion synthesis boundary
+
+The `digital-verilog-synth` profile accepts checker logic only for an immediate Boolean assertion that is selected explicitly for synthesis. Merely writing an assertion does not add hardware. The synthesized checker is observational by default and produces a deterministic failure indication; functional control requires an ordinary explicit design connection.
+
+Concurrent or temporal properties, sampled-history operators, assumptions, covers, symbolic formal values, fairness or liveness declarations, and compiler-generated verification monitors are excluded from synthesizable DUT RTL. Formal and simulation profiles may create history registers or monitor automata, but those artifacts remain outside the synth profile. An unsupported synthesis request is rejected rather than approximated, bounded, or silently converted.
 
 ## Target-HDL optimization integration
 
@@ -302,7 +308,7 @@ Initial reusable property suites prove:
 - legal enum/state encoding, one-hot invariants, allowed FSM transition relations, reset convergence, no unintended deadlock, nested/parallel completion, and bounded call-stack overflow/underflow safety.
 - multidimensional index bounds and flatten/reshape equivalence, structural-storage invariants, no accidental latch/combinational loop/multiple driver, and accepted-emission gate completeness.
 
-Formal syntax remains within the open-source frontend capability profile. Unsupported SVA is lowered to simpler assertions or a sidecar harness, or rejected with a stable diagnostic.
+Formal syntax remains within the open-source frontend capability profile. Unsupported SVA is lowered to verification-only immediate checks, monitor logic, or a sidecar harness, or rejected with a stable diagnostic. Such monitor logic never enters `digital-verilog-synth`.
 
 ## Future user-authored formal verification boundary
 
@@ -312,7 +318,7 @@ The architecture keeps these layers separate:
 
 - target-neutral property authoring and domain/reset semantics;
 - Nodal/CIRCT formal IR and capability verification;
-- portable immediate/monitor/sidecar or future SVA lowering;
+- verification-only immediate/history/monitor/sidecar or future SVA lowering, plus a separate explicit immediate-assertion synthesis path;
 - SBY/Yosys and future commercial/research proof-engine adapters;
 - normalized proof, vacuity, coverage, counterexample, and replay evidence.
 

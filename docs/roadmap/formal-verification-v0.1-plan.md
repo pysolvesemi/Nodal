@@ -15,7 +15,7 @@ The binding rule is:
 
 > **Author properties in Nodal semantics, preserve them in typed IR, lower only to declared tool capabilities, and retain proof and counterexample evidence.**
 
-This plan adds no formal API or proof implementation now. It reserves the public, IR, harness, adapter, evidence, and conformance boundaries that later increments must implement.
+This plan adds no formal API or proof implementation now. It reserves the public, IR, harness, adapter, evidence, and conformance boundaries that later increments must implement. It also fixes the synthesis boundary: only an explicitly selected immediate Boolean assertion may become checker RTL; concurrent or temporal properties remain verification-only.
 
 ## Existing foundation retained
 
@@ -151,10 +151,26 @@ Each property declares inclusion policy:
 formal-only
 simulation-and-formal
 simulation-only
-synthesized-checker only when explicitly requested
+explicit synthesized immediate assertion
 ```
 
 Installing a property library or adapter does not execute proofs automatically. Projects select property groups and tasks explicitly.
+
+## Immediate assertion synthesis boundary
+
+The synthesis contract is deliberately smaller than the formal property contract.
+
+Only an immediate Boolean assertion may be selected explicitly for synthesis. Such a checker observes values at its declared combinational point or owning clock domain and emits a deterministic failure indication. The default checker is observational: it cannot reset, stall, gate, mutate, or otherwise control functional state. A design may use the failure indication functionally only through an ordinary, explicit Nodal connection that is visible to normal review, timing, CDC/RDC, and synthesis checks.
+
+The following are never synthesis-eligible:
+
+- concurrent or temporal properties and sequences;
+- `past`, `rose`, `fell`, `changed`, `stable`, or other sampled-history operators;
+- `assume`, `cover`, fairness, liveness, and environment constraints;
+- symbolic formal values or constants;
+- history registers, automata, counters, or monitors generated only to execute a verification property.
+
+Those constructs may lower to verification-only immediate checks, monitor logic, SVA, sidecar harnesses, or engine-native input. They never enter the `digital-verilog-synth` DUT artifact. A request to synthesize an ineligible property is a stable error; the compiler never approximates it as an immediate assertion.
 
 ## Clock/reset contract
 
@@ -173,7 +189,7 @@ The current lexical domain may provide defaults only when unambiguous. An unboun
 
 ### Combinational properties
 
-A combinational assertion/assumption is explicitly declared and evaluated without sampled history. It cannot use `past`, temporal delay, or edge operators.
+A combinational assertion or assumption is explicitly declared and evaluated without sampled history. It cannot use `past`, temporal delay, or edge operators. Only an immediate Boolean assertion, whether evaluated combinationally or in one owning clock domain, can be synthesis-eligible; every assumption remains verification-only.
 
 ### Reset
 
@@ -218,7 +234,7 @@ Rules to freeze:
 - legal cycle-delay expressions;
 - first-cycle and reset history semantics;
 - behavior for four-state/unknown values where a selected profile supports them;
-- deterministic lowering to registers, CIRCT operations, SVA, or engine-native forms;
+- deterministic verification-only lowering to history registers, CIRCT operations, SVA, or engine-native forms;
 - source-map behavior for compiler-generated history state;
 - diagnostics for unguarded or invalid history access.
 
@@ -244,7 +260,8 @@ Every operator declares:
 - bounded versus unbounded semantics;
 - strong/weak and vacuity behavior;
 - required target/engine capabilities;
-- permitted simulation-monitor lowering.
+- permitted simulation-monitor lowering;
+- synthesis eligibility, which is always false for temporal or concurrent properties.
 
 Unsupported temporal constructs are rejected; they are never shortened, bounded, or weakened silently.
 
@@ -307,6 +324,7 @@ Increment 110 implements Nodal formal operations or verified conversions for:
 - symbolic values/constants;
 - sampled-history operations;
 - typed sequences and temporal properties;
+- immediate-versus-temporal classification and explicit synthesis eligibility;
 - contract require/ensure;
 - fairness/liveness declarations;
 - formal model references;
@@ -330,8 +348,9 @@ A conversion is accepted only when Nodal's domain/reset/parameter/source-map sem
 
 Lower to:
 
-- portable immediate assertions/assumptions/covers;
-- generated history/monitor logic;
+- portable immediate assertions/assumptions/covers in verification artifacts;
+- generated verification-only history and monitor logic;
+- explicit checker RTL only for synthesis-selected immediate Boolean assertions;
 - Yosys-recognized formal attributes/cells where required;
 - sidecar harness modules and SBY task files;
 - deterministic property/task manifests.
@@ -490,6 +509,10 @@ Increment 109 freezes stable categories for at least:
 - assumption outside legal environment scope;
 - contradictory or unused assumption where detectable;
 - formal-only value leaking into synthesis/simulation;
+- implicit synthesis of an assertion without an explicit immediate-checker policy;
+- concurrent or temporal property requested for synthesis;
+- assumption, cover, sampled history, or symbolic formal value requested for synthesis;
+- synthesized immediate assertion attempting to alter functional behavior without an explicit design connection;
 - unsupported memory or black-box model;
 - missing formal model for an external operation;
 - property ID collision;
@@ -505,6 +528,8 @@ Increment 109 freezes stable categories for at least:
 
 - embedded assert/assume/cover;
 - shared simulation/formal invariant;
+- explicit synthesized immediate assertion with a deterministic observational failure indication;
+- the same immediate invariant excluded from synthesis by default;
 - explicit formal-only block;
 - lexical and explicit domains;
 - reset-disabled and reset-active properties;
@@ -540,7 +565,11 @@ Increment 109 freezes stable categories for at least:
 - unsupported symbolic parameter proof;
 - engine-specific option leaking into core property semantics;
 - malformed or source-unmapped counterexample;
-- plugin that inserts an undeclared assumption.
+- plugin that inserts an undeclared assumption;
+- implicit synthesis of an ordinary assertion;
+- temporal or concurrent property requested for synthesis;
+- assumption or cover requested for synthesis;
+- sampled-history or symbolic formal value used by a synthesized immediate assertion.
 
 ## Deferred incremental delivery
 
@@ -548,7 +577,7 @@ Increment 109 freezes stable categories for at least:
 
 - [ ] Use ADR 0014, this plan, and the machine-readable surface as mandatory candidates.
 - [ ] Compile and compare concise `formal` context, assert/assume/cover, property IDs/groups, sampled-value operators, symbolic values, harness, contract, and task configuration candidates.
-- [ ] Freeze clock/reset, combinational, cross-domain, parameter, memory, black-box, assumption-scope, vacuity, result, and source-map semantics.
+- [ ] Freeze clock/reset, combinational, cross-domain, parameter, memory, black-box, assumption-scope, vacuity, result, source-map, and immediate-assertion-only synthesis semantics.
 - [ ] Publish `NodalFormalVerification-DG-v0.1.md`, machine-readable frozen API/task surfaces, migration/compatibility policy, and positive/negative external-consumer fixtures.
 - [ ] Keep property execution, lowering, and adapters inert until the gate is approved.
 
@@ -556,8 +585,8 @@ Increment 109 freezes stable categories for at least:
 
 - [ ] Implement formal test/harness, property, symbolic-value, sampled-history, bounded-temporal, contract, enable/reset, and formal-model operations with stable IDs and source maps.
 - [ ] Selectively reuse CIRCT `verif` and `ltl` only through verified conversions; retain Nodal-owned operations where semantics differ or capabilities are missing.
-- [ ] Add property/domain/reset/type/capability verification, deterministic parse/print, normalized reports, and portable immediate/monitor/sidecar lowering framework.
-- [ ] Prove formal-only constructs cannot affect ordinary synthesis/simulation artifacts without explicit inclusion.
+- [ ] Add property/domain/reset/type/capability verification, immediate-versus-temporal classification, deterministic parse/print, normalized reports, verification-only immediate/monitor/sidecar lowering, and explicit immediate-checker RTL lowering.
+- [ ] Prove concurrent or temporal properties, sampled history, assumptions, covers, symbolic values, and generated verification monitors cannot enter ordinary synthesis artifacts; prove immediate assertions synthesize only through explicit inclusion.
 
 ### Increment 111 — Formal harnesses, symbolic environments, compositional contracts, and model abstractions
 
@@ -580,6 +609,13 @@ Increment 109 freezes stable categories for at least:
 - [ ] Replay normalized counterexamples/covers through the Scala simulation API with typed transactions, domain timelines, source annotations, and waveforms.
 - [ ] Publish tutorials, migration examples, adapter/property-library author guides, conformance suites, capability matrices, known limitations, and reproducible release evidence.
 
+### Increment 114 — Immediate assertion synthesis boundary correction
+
+- [x] Narrow synthesis eligibility to explicitly selected immediate Boolean assertions.
+- [x] Make concurrent/temporal properties and all formal environment constructs verification-only.
+- [x] Require observational checker behavior by default and explicit functional connections.
+- [x] Update architecture, roadmap, backend, and machine-readable policy surfaces without implementing the deferred API or lowering.
+
 ## Gate exit criteria
 
 Increment 109 may be checked only when:
@@ -587,15 +623,16 @@ Increment 109 may be checked only when:
 1. `NodalFormalVerification-DG-v0.1.md` is approved;
 2. property, sequence, clock/reset, symbolic-value, harness, contract, and task semantics are frozen without backend spelling;
 3. Scala runtime assertions and simulation/formal statements are unambiguous;
-4. cross-domain and reset behavior is explicit;
-5. assumptions and guarantees have enforceable scopes;
-6. parameter, memory, external-operation, and black-box proof policies are explicit;
-7. result states distinguish proven, failed, covered, inconclusive, unsupported, timeout, and tool errors;
-8. vacuity, over-constraint, and hidden-assumption expectations are documented;
-9. source maps, property IDs, traces, and reproducibility fields are frozen;
-10. external consumer fixtures use no compiler internals;
-11. no formal execution or hidden property inclusion occurs during the gate; and
-12. Core CI passes.
+4. only explicitly selected immediate Boolean assertions are synthesis-eligible, and all temporal or concurrent properties remain verification-only;
+5. cross-domain and reset behavior is explicit;
+6. assumptions and guarantees have enforceable scopes;
+7. parameter, memory, external-operation, and black-box proof policies are explicit;
+8. result states distinguish proven, failed, covered, inconclusive, unsupported, timeout, and tool errors;
+9. vacuity, over-constraint, and hidden-assumption expectations are documented;
+10. source maps, property IDs, traces, and reproducibility fields are frozen;
+11. external consumer fixtures use no compiler internals;
+12. no formal execution or hidden property inclusion occurs during the gate; and
+13. Core CI passes.
 
 ## References
 

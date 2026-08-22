@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-21
-- **Scope:** Future user-authored digital formal properties, formal harnesses, symbolic values, temporal semantics, proof tasks, tool adapters, evidence, and counterexample replay
+- **Scope:** Future user-authored digital formal properties, explicit synthesized immediate assertions, formal harnesses, symbolic values, temporal semantics, proof tasks, tool adapters, evidence, and counterexample replay
 
 ## Context
 
@@ -30,6 +30,8 @@ The binding rule is:
 > **Author properties in Nodal semantics, preserve them in typed IR, lower only to declared tool capabilities, and retain proof and counterexample evidence.**
 
 No user-authored formal API or proof engine is implemented by this ADR. Exact public names are frozen only by the future formal-verification design gate.
+
+Synthesis eligibility is intentionally narrower than verification-property support. Only an explicitly selected immediate Boolean assertion may generate checker RTL. Concurrent or temporal properties and all formal environment constructs remain verification-only.
 
 ## Architectural layers
 
@@ -60,7 +62,7 @@ formal:
     assert(past(request) ==> response)
 ```
 
-The formal API is separate from Scala runtime `assert` and from ordinary simulation-only reporting. A formal-only block cannot silently change synthesizable behavior.
+The formal API is separate from Scala runtime `assert` and from ordinary simulation-only reporting. A formal-only block cannot silently change synthesizable behavior. An immediate Nodal assertion may be selected explicitly for checker synthesis, but temporal or concurrent properties never acquire synthesis eligibility.
 
 ### 2. Target-neutral formal IR
 
@@ -84,8 +86,9 @@ Nodal may selectively lower this layer to CIRCT `verif` and `ltl` dialects. Any 
 
 The formal backend lowers verified property IR to the narrowest selected capability:
 
-- portable immediate assertions/assumptions/covers accepted by Yosys;
-- generated monitor logic where a temporal property is not natively supported;
+- portable immediate assertions/assumptions/covers in verification artifacts accepted by Yosys;
+- generated history and monitor logic confined to formal or simulation artifacts;
+- explicit synthesizable checker logic only for an immediate Boolean assertion selected for synthesis;
 - sidecar harness modules;
 - explicit bind-style artifacts where an approved backend supports them;
 - future SystemVerilog/SVA output only through a separate capability profile;
@@ -123,6 +126,18 @@ cover
 `assert` states a required design guarantee. `assume` constrains the formal environment and is prohibited from hiding an implementation bug through undeclared scope changes. `cover` requests a reachable witness and does not prove correctness.
 
 Property IDs are stable and source-located. Messages and tags survive IR, lowering, reports, and counterexample replay.
+
+## Immediate assertion synthesis boundary
+
+Synthesis eligibility is intentionally narrow:
+
+- only an immediate Boolean assertion may be selected for synthesis;
+- synthesis is opt-in and is never inferred from the use of `assert`;
+- `assume`, `cover`, sampled-history operators, temporal or sequence operators, fairness or liveness declarations, symbolic formal values, and compiler-generated temporal monitors are never synthesis-eligible;
+- generated history or monitor state for concurrent or temporal properties is confined to formal or simulation artifacts and never enters synthesizable DUT RTL;
+- a synthesized immediate assertion is observational by default and produces a deterministic checker or failure indication; it does not reset, stall, mutate, or otherwise control functional state unless ordinary design logic explicitly connects that indication.
+
+The future design gate freezes the exact public spelling and failure-export policy. The authoritative IR records immediate-versus-temporal classification and synthesis eligibility before target lowering.
 
 ## Clock and reset semantics
 
@@ -235,14 +250,14 @@ Counterexample minimization, trace shortening, and signal slicing are optional a
 
 ## Simulation assertions versus formal properties
 
-Nodal may reuse the same simple invariant in simulation and formal execution when semantics match. The compiler still records whether a statement is:
+Nodal may reuse the same simple immediate invariant in simulation, formal execution, and an explicitly selected synthesized checker when semantics match. The compiler still records whether a statement is:
 
 - simulation-only;
 - formal-only;
 - shared simulation/formal;
-- synthesis-time checker generation where explicitly requested.
+- an explicitly synthesized immediate assertion.
 
-Severity/reporting behavior in simulation does not redefine proof semantics. Assumptions are never treated as ordinary simulation assertions without an explicit harness policy.
+Concurrent or temporal properties, sampled history, assumptions, covers, symbolic formal values, and generated verification monitors remain verification-only. Severity or reporting behavior in simulation does not redefine proof semantics. Assumptions are never treated as ordinary simulation assertions without an explicit harness policy.
 
 ## Digital and AMS boundary
 
@@ -264,6 +279,7 @@ The deferred formal phase after the current roadmap freezes and implements the p
 - Explicit domains, resets, protocols, parameters, source maps, and effects become reusable formal semantics rather than reconstructed metadata.
 - CIRCT `verif`/`ltl`, Yosys/SBY, and future commercial tools can coexist behind capability-checked conversions and adapters.
 - Formal-only code remains isolated from synthesis and ordinary simulation artifacts.
+- Immediate assertion synthesis has a small, reviewable boundary, while temporal properties cannot add hidden monitor state to functional RTL.
 - Compositional contracts, reusable property libraries, and typed counterexample replay can scale beyond unit proofs.
 - Proof manifests, tool versions, options, assumptions, and traces remain reproducible and cacheable.
 
@@ -284,6 +300,8 @@ The deferred formal phase after the current roadmap freezes and implements the p
 - **Allow implicit cross-clock temporal sampling:** creates undefined or tool-specific timelines.
 - **Make commercial tools core dependencies:** prevents open, reproducible baseline use and complicates licensing.
 - **Implement full SVA syntax first:** creates a large backend-shaped API before the useful portable subset and IR contracts are proven.
+- **Synthesize concurrent or temporal properties into DUT monitors:** adds hidden state and timing impact to functional RTL and confuses verification semantics with implementation.
+- **Treat assumptions, covers, or symbolic formal values as synthesizable:** gives environment and witness constructs an invalid hardware meaning.
 
 ## References reviewed
 

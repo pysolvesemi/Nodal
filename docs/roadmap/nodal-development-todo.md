@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.12
+**Revision:** 1.13
 **Created:** 2026-08-20
 **Updated:** 2026-08-22
 **Status:** Active roadmap
@@ -48,6 +48,7 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Verify generated pure-digital HDL through a pinned open-source matrix using Verilator, Icarus Verilog, Yosys, SBY, and optional cocotb interoperability.
 - Keep future user-authored formal properties target-neutral and domain-aware in Nodal IR; do not make raw SVA strings, SBY files, or one solver define public semantics.
 - Separate formal property authoring, target lowering, harness generation, and proof-engine execution so formal-only constructs cannot silently alter synthesizable behavior or ordinary simulation.
+- Permit checker RTL only for an explicitly selected immediate Boolean assertion. Concurrent or temporal properties, sampled history, assumptions, covers, symbolic formal values, and generated verification monitors remain verification-only and never enter synthesizable DUT RTL.
 - Require explicit property IDs, clock/reset semantics, assumption scope, symbolic environment, proof task, result state, source mapping, vacuity/constraint evidence, and counterexample provenance before reporting a formal result.
 - Treat AMS-to-FPGA validation as an explicit discrete-time, finite-precision approximation transformation. `Backend.Auto` must never select it and no report may present it as direct synthesis of general Verilog-AMS.
 - Require sample period, solver, state/reset, fixed-point, range, rounding/overflow, multi-rate/event, validation-envelope, error-budget, and target-FPGA contracts before generating an approximation.
@@ -91,7 +92,7 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Semantic post-render transforms must reparse into the approved target representation, restore source/capability metadata, run mandatory verification, and satisfy the pass proof obligation; render-only plugins may change formatting but not parsed meaning.
 - Keep Scala/native in-process plugins trusted and explicitly enabled; prefer process isolation for external tools and long-lived transform/backend integrations.
 - Reserve a separately versioned future formal-verification API for assert/assume/cover, sampled history, symbolic values, harnesses, contracts, and proof tasks; exact names remain deferred to its design gate.
-- Keep Scala runtime assertions, simulation assertions, formal properties, and explicitly synthesized checkers distinct unless a frozen inclusion policy intentionally shares one invariant.
+- Keep Scala runtime assertions, simulation assertions, formal properties, and explicitly synthesized immediate assertions distinct unless a frozen inclusion policy intentionally shares one immediate invariant. Concurrent or temporal properties are never synthesis-eligible.
 - Keep proof-engine options behind normalized task/adaptor contracts; installing a formal adapter or property library never executes a proof or changes `Backend.Auto`.
 - Use compile-positive and compile-negative fixtures to freeze public names, types, construction forms, imports, and diagnostics.
 - Keep ordinary model source backend-neutral and exclude frontend/compiler internals from the future library-author subset.
@@ -706,7 +707,7 @@ Empty future-library or plugin directories are not committed merely as placehold
 - **M3 — Digital/AMS preview:** implicit-domain digital state, exact signed finite-width types, parameterized multidimensional shaped values, elaboration/generate/bounded hardware loops, native typed enums, reusable hierarchical/parallel FSMs, automatic fixed/valid/elastic pipelines, readable HDL without avoidable anonymous-wire chains, portable Verilog with mandatory internal checks plus open-source lint/simulation/synthesis/equivalence and compiler-generated formal verification, CDC/RDC-safe clock/reset architecture, mixed-signal crossings, and Verilog-AMS emission.
 - **M4 — Scalable core release:** packaged compiler, complete reference, frozen plugin and target-HDL pass SPIs, deterministic extension/pass graphs, optimization proof evidence, machine-readable check coverage and waiver inventory, conformance kits, library-author contract, and compatibility policy.
 - **M5 — FPGA-accelerated AMS validation:** explicit sampled/fixed-point approximation, four-level reference evidence, open FPGA implementation, HIL runtime, and a published capability/limitations matrix.
-- **M6 — User-authored formal verification extension:** frozen formal property API, target-neutral property IR, compositional harness/contracts, pluggable proof engines, vacuity/coverage, typed counterexample replay, property libraries, and conformance evidence.
+- **M6 — User-authored formal verification extension:** frozen formal property API with an immediate-assertion-only synthesis boundary, target-neutral property IR, compositional harness/contracts, pluggable proof engines, vacuity/coverage, typed counterexample replay, property libraries, and conformance evidence.
 
 # Incremental roadmap
 
@@ -767,6 +768,7 @@ Empty future-library or plugin directories are not committed merely as placehold
   - Add compile-negative fixtures for missing domains, direct CDC, multi-bit `Cdc.sync`, unsafe pulses, unsupported relationship assumptions, reset-release/reconvergence hazards, Boolean clocks, ordinary `always`, low-level misuse, and ambiguous/multiple state drivers. Freeze stable diagnostic codes and source locations.
   - Keep frontend/backend semantics inert. Mark this increment `[x]` only after every freeze exit criterion in the detailed plan passes CI.
   - Evidence: [`NodalClockResetApi-DG-v0.2.md`](../design-gates/NodalClockResetApi-DG-v0.2.md), [`public-api-v0.2.json`](../../core/scala/api/public-api-v0.2.json), [`clock-reset-diagnostics-v0.2.json`](../../core/scala/api/clock-reset-diagnostics-v0.2.json), [`tests/api/fixtures/increment12/manifest.json`](../../tests/api/fixtures/increment12/manifest.json), [`scripts/check_increment12.py`](../../scripts/check_increment12.py), and status `increment-12/clock-reset-api-v0-2`.
+  - Freeze baseline: roadmap **Revision:** 1.12; later roadmap revisions must preserve this completed increment and its evidence.
 
 
 - [ ] **Increment 13 — Core semantic candidate prototypes and architecture comparison**
@@ -954,7 +956,8 @@ Empty future-library or plugin directories are not committed merely as placehold
 
 - [ ] **Increment 65 — Digital-only classification, Backend.Auto, and portable Verilog backend**
   - Implement transitive digital-only/analog-only/mixed-signal classification, construct inventories, deterministic `Backend.Auto` selection, explicit capability rejection, and machine-readable selection evidence.
-  - Emit the portable synthesizable Verilog profile with exact signed vector ports/wires/registers/parameters/localparams/memories/aggregate fields, explicitly sized signed literals, typed shifts/casts, parameterized multidimensional `Vec` ports as canonical flat packed carriers, verified row-major offset/slice/reshape formulas, deterministic signed element views, structural `Vec` versus `Mem` evidence, structural `genvar` generate loops, bounded procedural `for` loops or verified unrolled equivalents, symbolic parameters/generate, hierarchy, flattened aggregates/protocols, canonical enum vectors and member `localparam`s, enum configuration parameters, flat/hierarchical/parallel FSM state and completion logic, clocks/resets, memories, CDC/RDC, automatic pipelines, black boxes, assertions/formal hooks, safe expression inlining and semantic temporary/state naming, materialization/shape/storage/signed/loop/enum/FSM manifests, expression-level source maps, deterministic formatting, target reparse, and exact golden fixtures.
+  - Emit the portable synthesizable Verilog profile with exact signed vector ports/wires/registers/parameters/localparams/memories/aggregate fields, explicitly sized signed literals, typed shifts/casts, parameterized multidimensional `Vec` ports as canonical flat packed carriers, verified row-major offset/slice/reshape formulas, deterministic signed element views, structural `Vec` versus `Mem` evidence, structural `genvar` generate loops, bounded procedural `for` loops or verified unrolled equivalents, symbolic parameters/generate, hierarchy, flattened aggregates/protocols, canonical enum vectors and member `localparam`s, enum configuration parameters, flat/hierarchical/parallel FSM state and completion logic, clocks/resets, memories, CDC/RDC, automatic pipelines, black boxes, explicitly synthesized immediate assertions, verification-only formal hooks, safe expression inlining and semantic temporary/state naming, materialization/shape/storage/signed/loop/enum/FSM manifests, expression-level source maps, deterministic formatting, target reparse, and exact golden fixtures.
+  - Concurrent or temporal properties and compiler-generated verification monitors are excluded from `digital-verilog-synth`; they remain formal, simulation, or sidecar artifacts.
   - Keep broad SystemVerilog optional and separately gated; portable Verilog remains required for open-source interoperability.
 
 - [ ] **Increment 66 — Open-source digital lint, simulation, waveforms, and cocotb interoperability**
@@ -1136,14 +1139,14 @@ This phase is deliberately outside the initial core, plugin, and AMS-to-FPGA mil
 - [ ] **Increment 109 — Formal verification architecture gate and public API v0.1 contracts**
   - Use [ADR 0014](../architecture/0014-target-neutral-formal-verification.md), [`formal-verification-v0.1-plan.md`](formal-verification-v0.1-plan.md), and [`formal-verification-v0.1-surface.json`](formal-verification-v0.1-surface.json) as the mandatory architecture and candidate.
   - Compile and compare concise formal context, assert/assume/cover, property IDs/groups, sampled-value operators, bounded temporal forms, symbolic values, harness, contract, and task configuration candidates.
-  - Freeze clock/reset, combinational, cross-domain, parameter, memory, black-box, assumption-scope, vacuity, result-state, source-map, and simulation/formal-inclusion semantics.
+  - Freeze clock/reset, combinational, cross-domain, parameter, memory, black-box, assumption-scope, vacuity, result-state, source-map, simulation/formal-inclusion, and immediate-assertion-only synthesis semantics.
   - Publish `NodalFormalVerification-DG-v0.1.md`, machine-readable frozen API/task surfaces, compatibility policy, stable diagnostics, and positive/negative external-consumer fixtures. Keep execution/lowering inert until approval.
 
 - [ ] **Increment 110 — Target-neutral formal property IR, verifier, and lowering framework**
   - Implement formal test/harness, property, symbolic-value, sampled-history, bounded-temporal, contract, enable/reset, and formal-model operations with stable IDs and source maps.
   - Selectively reuse CIRCT `verif` and `ltl` through verified conversions; retain Nodal-owned operations where semantics differ or capabilities are missing.
-  - Add property/domain/reset/type/capability verification, deterministic parse/print, normalized reports, and portable immediate/monitor/sidecar lowering.
-  - Prove formal-only constructs cannot affect ordinary synthesis/simulation artifacts without explicit inclusion.
+  - Add property/domain/reset/type/capability verification, immediate-versus-temporal classification, deterministic parse/print, normalized reports, verification-only immediate/monitor/sidecar lowering, and explicit immediate-checker RTL lowering.
+  - Prove concurrent or temporal properties, sampled history, assumptions, covers, symbolic values, and generated verification monitors cannot enter ordinary synthesis artifacts; prove immediate assertions synthesize only through explicit inclusion.
 
 - [ ] **Increment 111 — Formal harnesses, symbolic environments, compositional contracts, and model abstractions**
   - Implement DUT wrappers, symbolic sequence/constants, initial assumptions, legal clock/reset generation, stable verification exports, property groups, and reusable harness composition.
@@ -1162,10 +1165,17 @@ This phase is deliberately outside the initial core, plugin, and AMS-to-FPGA mil
   - Replay normalized counterexamples/covers through the Scala simulation API with typed transactions, domain timelines, source annotations, and VCD/FST waveforms.
   - Publish tutorials, adapter/property-library author guides, capability matrices, known limitations, conformance suites, and the M6 reproducible formal-verification extension package.
 
+- [x] **Increment 114 — Immediate assertion synthesis boundary correction**
+  - Restrict synthesizable assertion logic to an explicitly selected immediate Boolean assertion evaluated combinationally or in one owning clock domain.
+  - Keep concurrent or temporal properties, sampled history, assumptions, covers, symbolic formal values, fairness/liveness declarations, and compiler-generated verification monitors outside synthesizable DUT RTL.
+  - Require synthesized immediate assertions to be observational by default; functional control requires an ordinary explicit design connection.
+  - Synchronize ADR 0014, the formal-verification plan/surface, the digital Verilog verification plan, the digital-backend surface, and roadmap revision 1.13. Keep exact public spelling and implementation deferred to Increments 109-110.
+  - Evidence: [`0014-target-neutral-formal-verification.md`](../architecture/0014-target-neutral-formal-verification.md), [`formal-verification-v0.1-plan.md`](formal-verification-v0.1-plan.md), [`formal-verification-v0.1-surface.json`](formal-verification-v0.1-surface.json), [`digital-verilog-open-source-verification-plan.md`](digital-verilog-open-source-verification-plan.md), and [`digital-backend-v0.3-surface.json`](digital-backend-v0.3-surface.json).
+
 
 ## Deferred reusable library roadmap
 
-No official reusable model/component library or production plugin is implemented by Increments 0-113. After the core API, extension surface, packaging model, and preview release are proven, independently approved library/plugin roadmaps may populate `libraries/`, `plugins/`, or separate repositories while preserving the public-core dependency contract.
+No official reusable model/component library or production plugin is implemented by Increments 0-114. After the core API, extension surface, packaging model, and preview release are proven, independently approved library/plugin roadmaps may populate `libraries/`, `plugins/`, or separate repositories while preserving the public-core dependency contract.
 
 ## Roadmap maintenance
 

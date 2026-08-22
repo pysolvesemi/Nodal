@@ -10,6 +10,7 @@ on:
       - dev
       - main
       - 'increment/**'
+      - 'roadmap/**'
   workflow_dispatch:
 
 permissions:
@@ -21,6 +22,114 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  repair_increment12_revision:
+    name: repair Increment 12 roadmap revision check
+    if: github.event_name == 'push' && github.event.head_commit.message == 'Run Increment 12 revision repair'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Patch checker and mutation test
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          checker = Path("scripts/check_increment12.py")
+          lines = checker.read_text(encoding="utf-8").splitlines(keepends=True)
+          fixed_revision = '            "**Revision:** 1.12",\n'
+          validation_marker = "main roadmap revision must be a two-part numeric revision at least 1.12"
+          if validation_marker not in "".join(lines):
+              matches = [index for index, line in enumerate(lines) if line == fixed_revision]
+              if len(matches) != 1:
+                  raise SystemExit(f"expected one fixed roadmap revision line, found {len(matches)}")
+              del lines[matches[0]]
+              anchors = [
+                  index
+                  for index, line in enumerate(lines)
+                  if line == '        "main roadmap",\n'
+                  and index + 1 < len(lines)
+                  and lines[index + 1] == "    )\n"
+              ]
+              if len(anchors) != 1:
+                  raise SystemExit(f"expected one main-roadmap validation anchor, found {len(anchors)}")
+              revision_check = '''    revision_line = next(
+        (line for line in roadmap.splitlines() if line.startswith("**Revision:** ")),
+        None,
+    )
+    try:
+        revision = (
+            tuple(
+                int(part)
+                for part in revision_line.removeprefix("**Revision:** ").split(".")
+            )
+            if revision_line is not None
+            else ()
+        )
+    except ValueError:
+        revision = ()
+    if len(revision) != 2 or revision < (1, 12):
+        problems.append(
+            Problem(
+                "NODAL-INC12-054",
+                "main roadmap revision must be a two-part numeric revision at least 1.12",
+            )
+        )
+
+'''.splitlines(keepends=True)
+              lines[anchors[0] + 2:anchors[0] + 2] = revision_check
+              checker.write_text("".join(lines), encoding="utf-8")
+
+          tests = Path("tests/api/test_increment12.py")
+          test_lines = tests.read_text(encoding="utf-8").splitlines(keepends=True)
+          test_name = "    def test_roadmap_revision_cannot_predate_increment12(self) -> None:\n"
+          if test_name not in test_lines:
+              anchors = [
+                  index
+                  for index, line in enumerate(test_lines)
+                  if line == "    def test_roadmap_increment_must_remain_closed(self) -> None:\n"
+              ]
+              if len(anchors) != 1:
+                  raise SystemExit(f"expected one roadmap test anchor, found {len(anchors)}")
+              test_case = '''    def test_roadmap_revision_cannot_predate_increment12(self) -> None:
+        temporary, root = self.copy_fixture()
+        self.addCleanup(temporary.cleanup)
+        path = root / "docs/roadmap/nodal-development-todo.md"
+        content = path.read_text(encoding="utf-8")
+        revision_line = next(
+            line for line in content.splitlines() if line.startswith("**Revision:** ")
+        )
+        path.write_text(
+            content.replace(revision_line, "**Revision:** 1.11", 1),
+            encoding="utf-8",
+        )
+        codes = {problem.code for problem in CHECKER.check_repository(root)}
+        self.assertIn("NODAL-INC12-054", codes)
+
+'''.splitlines(keepends=True)
+              test_lines[anchors[0]:anchors[0]] = test_case
+              tests.write_text("".join(test_lines), encoding="utf-8")
+          PY
+          python3 -m py_compile scripts/check_increment12.py tests/api/test_increment12.py
+          python3 scripts/check_increment12.py
+          python3 -m unittest discover -s tests/api -p 'test_increment12.py'
+          git diff --check
+
+      - name: Publish checker repair
+        run: |
+          rm .ci-increment12-repair-trigger
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/check_increment12.py tests/api/test_increment12.py .ci-increment12-repair-trigger
+          git commit -m 'Make Increment 12 checker accept later roadmap revisions'
+          git push origin HEAD:roadmap/immediate-assertion-synthesis-boundary
+
   contracts:
     name: contracts
     runs-on: ubuntu-24.04

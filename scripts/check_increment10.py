@@ -111,7 +111,7 @@ def _check_ordinary_always_compatibility(
         (
             "**Status:** Approved",
             "**Scope:** public-api",
-            "ordinary synchronous state",
+            "ordinary synchronous `always(event)`",
             "NODAL-MIGRATION-001",
         ),
         problems,

@@ -768,6 +768,7 @@ Empty future-library or plugin directories are not committed merely as placehold
   - Add compile-negative fixtures for missing domains, direct CDC, multi-bit `Cdc.sync`, unsafe pulses, unsupported relationship assumptions, reset-release/reconvergence hazards, Boolean clocks, ordinary `always`, low-level misuse, and ambiguous/multiple state drivers. Freeze stable diagnostic codes and source locations.
   - Keep frontend/backend semantics inert. Mark this increment `[x]` only after every freeze exit criterion in the detailed plan passes CI.
   - Evidence: [`NodalClockResetApi-DG-v0.2.md`](../design-gates/NodalClockResetApi-DG-v0.2.md), [`public-api-v0.2.json`](../../core/scala/api/public-api-v0.2.json), [`clock-reset-diagnostics-v0.2.json`](../../core/scala/api/clock-reset-diagnostics-v0.2.json), [`tests/api/fixtures/increment12/manifest.json`](../../tests/api/fixtures/increment12/manifest.json), [`scripts/check_increment12.py`](../../scripts/check_increment12.py), and status `increment-12/clock-reset-api-v0-2`.
+  - Freeze baseline: roadmap **Revision:** 1.12; later roadmap revisions must preserve this completed increment and its evidence.
 
 
 - [ ] **Increment 13 — Core semantic candidate prototypes and architecture comparison**

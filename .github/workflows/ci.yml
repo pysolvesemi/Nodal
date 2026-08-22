@@ -21,6 +21,44 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  materialize_increment116:
+    name: materialize Increment 116
+    if: github.event_name == 'push' && github.event.head_commit.message == 'Run Increment 116 Core materializer'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Materialize and validate Increment 116
+        run: |
+          python3 .increment116_apply.py
+          ./mill mill.scalalib.scalafmt/reformatAll
+          ./mill scalafix.check
+          python3 scripts/check_increment116.py --compile-negative
+          python3 -m unittest tests/api/test_increment116.py
+          git diff --check
+
+      - name: Publish final Increment 116 source tree
+        run: |
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
+          git checkout origin/dev -- .github/workflows/ci.yml
+          rm -f .increment116_apply.py
+          rm -f .increment116-trigger
+          rm -f .increment116-core-trigger
+          rm -f .github/workflows/increment-116-materialize.yml
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 116 — Freeze register factory public API v0.1'
+          git push origin HEAD:increment/116-register-factory-api-gate
+
   contracts:
     name: contracts
     runs-on: ubuntu-24.04

@@ -1,0 +1,57 @@
+name: Clarify immediate assertion synthesis boundary
+
+on:
+  push:
+    branches:
+      - roadmap/immediate-assertion-synthesis-boundary
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message == 'Clarify immediate assertion synthesis boundary'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Clarify context and profile wording
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              content = target.read_text(encoding="utf-8")
+              count = content.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one occurrence in {path}, found {count}")
+              target.write_text(content.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "docs/roadmap/formal-verification-v0.1-plan.md",
+              "A combinational assertion or assumption is explicitly declared and evaluated without sampled history. It cannot use `past`, temporal delay, or edge operators. Only an immediate Boolean assertion in this class can be synthesis-eligible; a combinational assumption remains verification-only.",
+              "A combinational assertion or assumption is explicitly declared and evaluated without sampled history. It cannot use `past`, temporal delay, or edge operators. Only an immediate Boolean assertion, whether evaluated combinationally or in one owning clock domain, can be synthesis-eligible; every assumption remains verification-only.",
+          )
+          replace_once(
+              "docs/roadmap/digital-verilog-open-source-verification-plan.md",
+              "- explicit synthesized immediate checker logic plus verification-only formal hooks or sidecar harnesses;",
+              "- explicit synthesized immediate checker logic; verification-only formal hooks and sidecar harnesses are emitted only by simulation or formal profiles;",
+          )
+          PY
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Publish clarification
+        run: |
+          rm .roadmap-immediate-assertion-clarify-trigger
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Clarify immediate assertion contexts and profiles'
+          git push origin HEAD:roadmap/immediate-assertion-synthesis-boundary

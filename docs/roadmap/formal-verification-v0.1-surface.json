@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "deferred-roadmap-candidate",
-  "roadmap_revision": "1.11",
+  "roadmap_revision": "1.13",
   "formal_gate_increment": 109,
   "implementation_increments": {
     "110": "target-neutral formal property IR, verifier, and lowering framework",
@@ -41,7 +41,7 @@
     "formal-only",
     "simulation-and-formal",
     "simulation-only",
-    "explicit-synthesized-checker"
+    "explicit-synthesized-immediate-assertion"
   ],
   "sampled_value_candidates": [
     "past",
@@ -114,11 +114,14 @@
       "require ensure contracts",
       "fairness and liveness declarations",
       "formal model references",
-      "source map and diagnostic provenance"
+      "source map and diagnostic provenance",
+      "immediate versus temporal property classification",
+      "explicit synthesis eligibility for immediate assertions only"
     ]
   },
   "lowering_profiles": [
-    "portable-yosys-immediate-and-monitor",
+    "portable-yosys-verification-immediate-and-monitor",
+    "explicit-synthesized-immediate-assertion",
     "sidecar-harness",
     "future-systemverilog-sva",
     "versioned-engine-native-adapter"
@@ -150,7 +153,11 @@
     "single_parameter_case_reported_as_generic_proof": false,
     "unsupported_temporal_operator_silently_weakened": false,
     "implicit_reset_disable_for_every_property": false,
-    "formal_only_value_leaks_to_synthesis": false
+    "formal_only_value_leaks_to_synthesis": false,
+    "concurrent_or_temporal_property_leaks_to_synthesis": false,
+    "generated_verification_monitor_leaks_to_synthesis": false,
+    "implicit_immediate_assertion_synthesis": false,
+    "assume_or_cover_is_synthesis_eligible": false
   },
   "vacuity_and_constraint_evidence": [
     "active assumption inventory",
@@ -189,5 +196,18 @@
       "bounded stack overflow and underflow"
     ],
     "user_authored_properties_deferred_to_formal_gate": true
+  },
+  "synthesis_boundary": {
+    "eligible_kind": "explicit-immediate-boolean-assertion",
+    "explicit_opt_in_required": true,
+    "observational_by_default": true,
+    "functional_control_requires_explicit_design_connection": true,
+    "concurrent_or_temporal_property": false,
+    "sampled_history": false,
+    "assume": false,
+    "cover": false,
+    "symbolic_formal_value": false,
+    "generated_verification_monitor_in_synth_rtl": false,
+    "ineligible_request_policy": "stable-error"
   }
 }

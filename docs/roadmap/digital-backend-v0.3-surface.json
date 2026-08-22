@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.11",
+  "roadmap_revision": "1.13",
   "roadmap_last_increment": 113,
   "architecture": "narrowest-compatible-backend-open-source-generated-hdl-verification",
   "documents": {
@@ -144,5 +144,17 @@
       "Release"
     ],
     "mandatory_safety_checks_disableable": false
+  },
+  "assertion_synthesis": {
+    "eligible_kind": "explicit-immediate-boolean-assertion",
+    "explicit_opt_in_required": true,
+    "observational_by_default": true,
+    "functional_control_requires_explicit_design_connection": true,
+    "concurrent_or_temporal_property": false,
+    "sampled_history": false,
+    "assume": false,
+    "cover": false,
+    "symbolic_formal_value": false,
+    "generated_verification_monitor_in_synth_rtl": false
   }
 }

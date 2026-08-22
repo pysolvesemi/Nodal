@@ -189,7 +189,7 @@ The current lexical domain may provide defaults only when unambiguous. An unboun
 
 ### Combinational properties
 
-A combinational assertion or assumption is explicitly declared and evaluated without sampled history. It cannot use `past`, temporal delay, or edge operators. Only an immediate Boolean assertion in this class can be synthesis-eligible; a combinational assumption remains verification-only.
+A combinational assertion or assumption is explicitly declared and evaluated without sampled history. It cannot use `past`, temporal delay, or edge operators. Only an immediate Boolean assertion, whether evaluated combinationally or in one owning clock domain, can be synthesis-eligible; every assumption remains verification-only.
 
 ### Reset
 

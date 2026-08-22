@@ -88,7 +88,7 @@ The required output is a conservative synthesizable IEEE 1364-2005-style subset.
 - flattened aggregate and protocol fields with stable names;
 - flat packed carriers for shaped ports, deterministic row-major offsets, signed element views, structural-storage manifests, safe expression inlining, semantic state/temporary names, and expression-span source maps;
 - black-box declarations and attributes supported by the profile;
-- explicit synthesized immediate checker logic plus verification-only formal hooks or sidecar harnesses;
+- explicit synthesized immediate checker logic; verification-only formal hooks and sidecar harnesses are emitted only by simulation or formal profiles;
 - source-map and metadata sidecars.
 
 ### Portability restrictions

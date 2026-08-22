@@ -46,14 +46,17 @@ jobs:
           roadmap = Path("docs/roadmap/nodal-development-todo.md")
           content = roadmap.read_text(encoding="utf-8")
           marker = "\n\n## Deferred reusable library roadmap\n"
-          entry = '''
-- [x] **Increment 114 — Immediate assertion synthesis boundary correction**
-  - Restrict synthesizable assertion logic to an explicitly selected immediate Boolean assertion evaluated combinationally or in one owning clock domain.
-  - Keep concurrent or temporal properties, sampled history, assumptions, covers, symbolic formal values, fairness/liveness declarations, and compiler-generated verification monitors outside synthesizable DUT RTL.
-  - Require synthesized immediate assertions to be observational by default; functional control requires an ordinary explicit design connection.
-  - Synchronize ADR 0014, the formal-verification plan/surface, the digital Verilog verification plan, the digital-backend surface, and roadmap revision 1.13. Keep exact public spelling and implementation deferred to Increments 109-110.
-  - Evidence: [`0014-target-neutral-formal-verification.md`](../architecture/0014-target-neutral-formal-verification.md), [`formal-verification-v0.1-plan.md`](formal-verification-v0.1-plan.md), [`formal-verification-v0.1-surface.json`](formal-verification-v0.1-surface.json), [`digital-verilog-open-source-verification-plan.md`](digital-verilog-open-source-verification-plan.md), and [`digital-backend-v0.3-surface.json`](digital-backend-v0.3-surface.json).
-'''
+          entry = "\n".join(
+              (
+                  "- [x] **Increment 114 — Immediate assertion synthesis boundary correction**",
+                  "  - Restrict synthesizable assertion logic to an explicitly selected immediate Boolean assertion evaluated combinationally or in one owning clock domain.",
+                  "  - Keep concurrent or temporal properties, sampled history, assumptions, covers, symbolic formal values, fairness/liveness declarations, and compiler-generated verification monitors outside synthesizable DUT RTL.",
+                  "  - Require synthesized immediate assertions to be observational by default; functional control requires an ordinary explicit design connection.",
+                  "  - Synchronize ADR 0014, the formal-verification plan/surface, the digital Verilog verification plan, the digital-backend surface, and roadmap revision 1.13. Keep exact public spelling and implementation deferred to Increments 109-110.",
+                  "  - Evidence: [`0014-target-neutral-formal-verification.md`](../architecture/0014-target-neutral-formal-verification.md), [`formal-verification-v0.1-plan.md`](formal-verification-v0.1-plan.md), [`formal-verification-v0.1-surface.json`](formal-verification-v0.1-surface.json), [`digital-verilog-open-source-verification-plan.md`](digital-verilog-open-source-verification-plan.md), and [`digital-backend-v0.3-surface.json`](digital-backend-v0.3-surface.json).",
+                  "",
+              )
+          )
           if entry.strip() not in content:
               if content.count(marker) != 1:
                   raise SystemExit("deferred library roadmap marker is ambiguous")
@@ -73,14 +76,17 @@ jobs:
           plan = Path("docs/roadmap/formal-verification-v0.1-plan.md")
           plan_content = plan.read_text(encoding="utf-8")
           plan_marker = "\n## Gate exit criteria\n"
-          plan_entry = '''
-### Increment 114 — Immediate assertion synthesis boundary correction
-
-- [x] Narrow synthesis eligibility to explicitly selected immediate Boolean assertions.
-- [x] Make concurrent/temporal properties and all formal environment constructs verification-only.
-- [x] Require observational checker behavior by default and explicit functional connections.
-- [x] Update architecture, roadmap, backend, and machine-readable policy surfaces without implementing the deferred API or lowering.
-'''
+          plan_entry = "\n".join(
+              (
+                  "### Increment 114 — Immediate assertion synthesis boundary correction",
+                  "",
+                  "- [x] Narrow synthesis eligibility to explicitly selected immediate Boolean assertions.",
+                  "- [x] Make concurrent/temporal properties and all formal environment constructs verification-only.",
+                  "- [x] Require observational checker behavior by default and explicit functional connections.",
+                  "- [x] Update architecture, roadmap, backend, and machine-readable policy surfaces without implementing the deferred API or lowering.",
+                  "",
+              )
+          )
           if plan_entry.strip() not in plan_content:
               if plan_content.count(plan_marker) != 1:
                   raise SystemExit("formal gate-exit marker is ambiguous")

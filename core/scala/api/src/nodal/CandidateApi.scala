@@ -1,5 +1,7 @@
 package nodal
 
+import scala.annotation.targetName
+
 /** Public marker hierarchy frozen by Nodal API v0.2. Implementations remain inert. */
 sealed trait Data
 sealed trait Real extends Data
@@ -408,6 +410,7 @@ extension (left: Expr[Real])
   infix def <+(value: Expr[Real]): Unit = CandidateRuntime.statement(left, value)
 
 extension (left: Expr[UInt])
+  @targetName("uintAddition")
   def +(right: Expr[UInt]): Expr[UInt] = CandidateRuntime.expr(left, right)
 
 extension (left: Expr[Bool])

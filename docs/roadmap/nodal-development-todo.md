@@ -777,7 +777,7 @@ Empty future-library or plugin directories are not committed merely as placehold
   - Freeze baseline: roadmap **Revision:** 1.12; later roadmap revisions must preserve this completed increment and its evidence.
 
 
-- [ ] **Increment 13 — Core semantic candidate prototypes and architecture comparison**
+- [x] **Increment 13 — Core semantic candidate prototypes and architecture comparison**
   - Use [ADR 0009](../architecture/0009-core-semantic-contracts.md), [`core-semantics-api-v0.3-plan.md`](core-semantics-api-v0.3-plan.md), and [`core-semantics-api-v0.3-surface.json`](core-semantics-api-v0.3-surface.json) as the mandatory candidate.
   - Compile and compare elaboration-only Scala values, symbolic `Param`/constant/width/range/generate values, and dynamic hardware values. Compile ordinary Scala elaboration loops, symbolic structural `generate(...)`, a distinct bounded hardware-loop candidate, and vector `map`/`reduce` forms; freeze stage/bound/body legality and dynamic/unbounded-loop diagnostics.
   - Compile lossless unsigned/signed arithmetic, `Bits`/`UInt`/`SInt` declarations, signed/negative literals, signed parameters/localparams/memories/aggregates, symbolic width rules, numeric conversion versus reinterpretation, arithmetic/logical shifts, explicit extend/truncate/wrap/saturate/checked-resize/signedness conversions, and negative mixed-sign/implicit-narrowing fixtures.
@@ -789,6 +789,8 @@ Empty future-library or plugin directories are not committed merely as placehold
   - Include an external-library consumer using only public candidate APIs; keep frontend/backend behavior inert.
   - Compile native Scala 3 enum derivation, stable/custom canonical encodings, typed ports/parameters/aggregates/protocols, safe decode, exhaustive switch, portable-Verilog localparam mapping contracts, and future SystemVerilog native-enum contracts.
   - Compile manual enum-register FSMs plus concise flat, reusable, nested, parallel, timed, finite-recursive, and explicit bounded-call-stack statechart candidates from [ADR 0015](../architecture/0015-native-scala-enum-and-hierarchical-fsm.md).
+
+  - Evidence: [`NodalCoreSemanticCandidates-DG-v0.3.md`](../design-gates/NodalCoreSemanticCandidates-DG-v0.3.md), [`CoreSemanticsCandidateApi.scala`](../../core/scala/api/src/nodal/CoreSemanticsCandidateApi.scala), [`tests/api/fixtures/increment13/manifest.json`](../../tests/api/fixtures/increment13/manifest.json), [`scripts/check_increment13.py`](../../scripts/check_increment13.py), PR [#32](https://github.com/pysolvesemi/Nodal/pull/32), and dedicated validation run [32587119017](https://github.com/pysolvesemi/Nodal/actions/runs/32587119017).
 
 - [ ] **Increment 14 — Automatic pipeline candidate prototypes and architecture comparison**
   - Compile `pipe`, `delay`, plain/`Valid`/`Stream` protocols, exact/ranged/auto latency, throughput and ready-path policy, automatic sideband transport and reconvergence balancing, `stage`/`sameStage`, schedule inspection, parameter envelopes, and fixed/variable-latency operators against Increment 13 semantics.

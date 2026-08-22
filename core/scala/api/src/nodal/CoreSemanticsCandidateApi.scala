@@ -177,7 +177,8 @@ sealed trait CurrentDimension
 sealed trait ResistanceDimension
 sealed trait TimeDimension
 
-final class Quantity[D] private[nodal] (private val value: Double)
+final class Quantity[D] private[nodal] (value: Double):
+  CandidateRuntime.statement(value)
 
 object Quantity:
   extension [D](left: Quantity[D])
@@ -215,7 +216,7 @@ final case class EmitQuality(
 trait HwEnum[A]
 
 object HwEnum:
-  inline def derived[A]: HwEnum[A] = new HwEnum[A] {}
+  def derived[A]: HwEnum[A] = new HwEnum[A] {}
 
 final case class EnumEncoding[A](values: Map[A, BigInt])
 

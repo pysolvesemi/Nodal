@@ -26,87 +26,84 @@ jobs:
           from pathlib import Path
 
           checker = Path("scripts/check_increment12.py")
-          content = checker.read_text(encoding="utf-8")
+          lines = checker.read_text(encoding="utf-8").splitlines(keepends=True)
 
-          revision_fragment = '            "**Revision:** 1.12",\n'
-          if content.count(revision_fragment) != 1:
-              raise SystemExit("expected the fixed Increment 12 roadmap revision exactly once")
-          content = content.replace(revision_fragment, "", 1)
+          fixed_revision = '            "**Revision:** 1.12",\n'
+          validation_marker = "main roadmap revision must be a two-part numeric revision at least 1.12"
+          if validation_marker not in "".join(lines):
+              matches = [index for index, line in enumerate(lines) if line == fixed_revision]
+              if len(matches) != 1:
+                  raise SystemExit(f"expected one fixed roadmap revision line, found {len(matches)}")
+              del lines[matches[0]]
 
-          marker = '''        "main roadmap",
-              )
+              anchors = [
+                  index
+                  for index, line in enumerate(lines)
+                  if line == '        "main roadmap",\n'
+                  and index + 1 < len(lines)
+                  and lines[index + 1] == "    )\n"
+              ]
+              if len(anchors) != 1:
+                  raise SystemExit(f"expected one main-roadmap validation anchor, found {len(anchors)}")
+              insert_at = anchors[0] + 2
+              revision_check = '''    revision_line = next(
+        (line for line in roadmap.splitlines() if line.startswith("**Revision:** ")),
+        None,
+    )
+    try:
+        revision = (
+            tuple(
+                int(part)
+                for part in revision_line.removeprefix("**Revision:** ").split(".")
+            )
+            if revision_line is not None
+            else ()
+        )
+    except ValueError:
+        revision = ()
+    if len(revision) != 2 or revision < (1, 12):
+        problems.append(
+            Problem(
+                "NODAL-INC12-054",
+                "main roadmap revision must be a two-part numeric revision at least 1.12",
+            )
+        )
 
-              _require(
-                  build,
-          '''
-          if marker not in content:
-              marker = '''        "main roadmap",
-              )
-
-              _require(
-                  build,
-          '''.replace("              ", "    ")
-          if content.count(marker) != 1:
-              raise SystemExit("could not locate the main-roadmap validation boundary")
-
-          insertion = '''        "main roadmap",
-              )
-              revision_line = next(
-                  (line for line in roadmap.splitlines() if line.startswith("**Revision:** ")),
-                  None,
-              )
-              try:
-                  revision = (
-                      tuple(
-                          int(part)
-                          for part in revision_line.removeprefix("**Revision:** ").split(".")
-                      )
-                      if revision_line is not None
-                      else ()
-                  )
-              except ValueError:
-                  revision = ()
-              if len(revision) != 2 or revision < (1, 12):
-                  problems.append(
-                      Problem(
-                          "NODAL-INC12-054",
-                          "main roadmap revision must be a two-part numeric revision at least 1.12",
-                      )
-                  )
-
-              _require(
-                  build,
-          '''
-          insertion = insertion.replace("              ", "    ")
-          content = content.replace(marker, insertion, 1)
-          checker.write_text(content, encoding="utf-8")
+'''.splitlines(keepends=True)
+              lines[insert_at:insert_at] = revision_check
+              checker.write_text("".join(lines), encoding="utf-8")
 
           tests = Path("tests/api/test_increment12.py")
-          test_content = tests.read_text(encoding="utf-8")
-          test_marker = "    def test_roadmap_increment_must_remain_closed(self) -> None:\n"
-          test_case = '''    def test_roadmap_revision_cannot_predate_increment12(self) -> None:
-              temporary, root = self.copy_fixture()
-              self.addCleanup(temporary.cleanup)
-              path = root / "docs/roadmap/nodal-development-todo.md"
-              content = path.read_text(encoding="utf-8")
-              revision_line = next(
-                  line for line in content.splitlines() if line.startswith("**Revision:** ")
-              )
-              path.write_text(
-                  content.replace(revision_line, "**Revision:** 1.11", 1),
-                  encoding="utf-8",
-              )
-              codes = {problem.code for problem in CHECKER.check_repository(root)}
-              self.assertIn("NODAL-INC12-054", codes)
+          test_lines = tests.read_text(encoding="utf-8").splitlines(keepends=True)
+          test_name = "    def test_roadmap_revision_cannot_predate_increment12(self) -> None:\n"
+          if test_name not in test_lines:
+              anchors = [
+                  index
+                  for index, line in enumerate(test_lines)
+                  if line == "    def test_roadmap_increment_must_remain_closed(self) -> None:\n"
+              ]
+              if len(anchors) != 1:
+                  raise SystemExit(f"expected one roadmap test anchor, found {len(anchors)}")
+              test_case = '''    def test_roadmap_revision_cannot_predate_increment12(self) -> None:
+        temporary, root = self.copy_fixture()
+        self.addCleanup(temporary.cleanup)
+        path = root / "docs/roadmap/nodal-development-todo.md"
+        content = path.read_text(encoding="utf-8")
+        revision_line = next(
+            line for line in content.splitlines() if line.startswith("**Revision:** ")
+        )
+        path.write_text(
+            content.replace(revision_line, "**Revision:** 1.11", 1),
+            encoding="utf-8",
+        )
+        codes = {problem.code for problem in CHECKER.check_repository(root)}
+        self.assertIn("NODAL-INC12-054", codes)
 
-          '''.replace("              ", "        ")
-          if test_content.count(test_marker) != 1:
-              raise SystemExit("Increment 12 roadmap test insertion point is ambiguous")
-          tests.write_text(
-              test_content.replace(test_marker, test_case + test_marker, 1),
-              encoding="utf-8",
-          )
+'''.splitlines(keepends=True)
+              test_lines[anchors[0]:anchors[0]] = test_case
+              tests.write_text("".join(test_lines), encoding="utf-8")
           PY
+          python3 -m py_compile scripts/check_increment12.py tests/api/test_increment12.py
           python3 scripts/check_increment12.py
           python3 -m unittest discover -s tests/api -p 'test_increment12.py'
           git diff --check

@@ -1,0 +1,229 @@
+{
+  "schema": 1,
+  "surface_version": "0.1",
+  "status": "architecture-accepted-api-deferred",
+  "binding_adr": "docs/architecture/0020-canonical-register-factory-and-transport-adapters.md",
+  "binding_rule": "define-register-abi-once-normalize-every-authoring-source-into-canonical-register-ir-bind-hardware-explicitly-and-adapt-transports-without-changing-register-semantics",
+  "implementation_status": {
+    "architecture_recorded": true,
+    "roadmap_recorded": true,
+    "public_api_frozen": false,
+    "canonical_register_ir_implemented": false,
+    "scala_dsl_implemented": false,
+    "systemrdl_frontend_implemented": false,
+    "yaml_json_frontend_implemented": false,
+    "ip_xact_frontend_implemented": false,
+    "apb_adapter_implemented": false,
+    "axi4_lite_adapter_implemented": false,
+    "verilog_lowering_implemented": false,
+    "artifact_generators_implemented": false
+  },
+  "separation": {
+    "register_map": "immutable-bus-neutral-programmer-visible-specification",
+    "register_block": "independent-physical-instance-with-one-clock-reset-domain",
+    "canonical_access": "committed-request-response-endpoint",
+    "transport": "capability-checked-adapter",
+    "generated_artifacts_are_views": true,
+    "one_authoritative_source_per_map": true,
+    "implicit_multiple_transport_attachment": false
+  },
+  "field_semantics": {
+    "software_access_axis": [
+      "RO",
+      "RW",
+      "WO",
+      "W1C",
+      "W1S",
+      "W1T",
+      "W0C",
+      "W0S",
+      "RC",
+      "RS",
+      "WriteOnce",
+      "Reserved"
+    ],
+    "hardware_behavior_axis": [
+      "None",
+      "Input",
+      "Write",
+      "Settable",
+      "Clearable",
+      "Increment",
+      "Decrement",
+      "Pulse"
+    ],
+    "collision_axis": [
+      "HardwareWins",
+      "SoftwareWins",
+      "SetDominatesClear",
+      "ClearDominatesSet",
+      "ErrorOnCollision"
+    ],
+    "axes_are_orthogonal": true,
+    "exact_api_deferred_to_increment": 116
+  },
+  "authoring_frontends": {
+    "scala_register_map_dsl": {
+      "role": "native-nodal-authoring",
+      "published_maps_use_explicit_offsets_by_default": true,
+      "reflection_order_defines_abi": false
+    },
+    "systemrdl": {
+      "version": "2.0",
+      "role": "primary-standards-based-register-interchange",
+      "import_planned": true,
+      "deterministic_export_planned": true,
+      "lossy_mapping_is_error": true,
+      "semantic_round_trip_required": true
+    },
+    "nodal_yaml_json": {
+      "schema_id": "nodal-registers/v1",
+      "role": "versioned-convenience-frontend",
+      "yaml_and_json_equivalent": true,
+      "key_order_has_semantic_meaning": false,
+      "safe_data_only_parsing": true,
+      "arbitrary_tags_or_code_execution": false,
+      "implicit_include_tags": false,
+      "explicit_imports_with_controlled_roots": true,
+      "import_cycle_detection": true,
+      "source_spans_required": true,
+      "unknown_semantic_keys_are_errors": true,
+      "schema_migration_diagnostics_required": true,
+      "canonical_ir_equivalence_required": true
+    },
+    "ip_xact": {
+      "version": "IEEE 1685-2022",
+      "role": "later-ip-integration-and-packaging-interchange",
+      "ordinary_authoring_dependency": false,
+      "vendor_extensions_namespaced": true,
+      "lossy_mapping_is_error": true
+    },
+    "csv_and_spreadsheets": {
+      "compiler_contract": false,
+      "explicit_conversion_to_supported_frontend_only": true
+    }
+  },
+  "generated_verilog": {
+    "relative_offset_decode_default": true,
+    "fixed_register_offsets": "width-safe-localparam-or-equivalent-inline-constant",
+    "field_positions_masks_reset_values_access_encodings": "non-overridable-local-constants",
+    "fixed_abi_symbols_externally_overridable": false,
+    "unsized_address_literals_allowed": false,
+    "named_localparams_default_for_review_debug_profile": true,
+    "hdl_parameters_only_for_explicit_nodal_architectural_variability": true,
+    "permitted_parameter_examples": [
+      "channel-count",
+      "optional-feature-set",
+      "deliberately-configurable-data-width",
+      "symbolic-repeated-map-geometry",
+      "explicit-standalone-wrapper-base-address"
+    ],
+    "fixed_scala_offset_becomes_hdl_parameter": false,
+    "optional_absolute_decode_wrapper": true,
+    "internal_offsets_remain_localparams_with_base_wrapper": true
+  },
+  "parameterized_geometry": {
+    "must_originate_from_explicit_nodal_param": true,
+    "retain_formulas_and_constraints_in_ir": true,
+    "required_checks": [
+      "alignment",
+      "finite-bounds",
+      "non-overlap",
+      "address-width-sufficiency",
+      "reserved-region-legality",
+      "artifact-configuration-consistency"
+    ],
+    "resolved_software_artifacts_identify_configuration": true
+  },
+  "transports": {
+    "built_in_planned": [
+      "APB3",
+      "APB4",
+      "AXI4-Lite"
+    ],
+    "custom_adapter_conformance_required": true,
+    "multiple_access_paths_require_explicit_arbiter_router": true,
+    "commit_semantics": "exactly-once-per-completed-canonical-access",
+    "incomplete_protocol_progress_has_side_effect": false
+  },
+  "clock_reset": {
+    "one_domain_per_physical_register_block": true,
+    "implicit_multi_bit_cdc": false,
+    "explicit_cdc_rdc_required": true,
+    "coherent_snapshot_handshake_or_fifo_for_multi_bit_crossings": true
+  },
+  "artifacts": [
+    "canonical-json-manifest",
+    "semantic-abi-hash",
+    "c-cpp-headers",
+    "rust-metadata-or-pac-input",
+    "cmsis-svd",
+    "systemrdl-2.0",
+    "ieee-1685-2022-ip-xact-register-view",
+    "uvm-ral-ralf",
+    "markdown-html-documentation",
+    "verification-metadata-and-test-vectors"
+  ],
+  "verification": {
+    "exactly_once_side_effects": true,
+    "partial_write_and_byte_enable_checks": true,
+    "software_hardware_collision_checks": true,
+    "multiword_snapshot_commit_checks": true,
+    "adapter_conformance": true,
+    "frontend_semantic_equivalence": true,
+    "open_source_rtl_matrix": [
+      "Verilator",
+      "Icarus-Verilog",
+      "Yosys"
+    ],
+    "generated_concurrent_temporal_properties_synthesizable": false,
+    "assertion_synthesis_policy_owner": "Increment 114"
+  },
+  "roadmap": [
+    {
+      "increment": 115,
+      "title": "Register factory architecture and roadmap contract",
+      "status": "complete"
+    },
+    {
+      "increment": 116,
+      "title": "Register factory public API candidates and design gate",
+      "status": "planned"
+    },
+    {
+      "increment": 117,
+      "title": "Canonical Register IR, source maps, verifier, and ABI manifest",
+      "status": "planned"
+    },
+    {
+      "increment": 118,
+      "title": "SystemRDL 2.0 and Nodal YAML/JSON frontends",
+      "status": "planned"
+    },
+    {
+      "increment": 119,
+      "title": "Canonical access endpoint and APB3/APB4 adapter",
+      "status": "planned"
+    },
+    {
+      "increment": 120,
+      "title": "AXI4-Lite and custom transport conformance",
+      "status": "planned"
+    },
+    {
+      "increment": 121,
+      "title": "Portable Verilog register lowering and parameterized geometry",
+      "status": "planned"
+    },
+    {
+      "increment": 122,
+      "title": "Artifact generators, IP-XACT, and software ABI flows",
+      "status": "planned"
+    },
+    {
+      "increment": 123,
+      "title": "Register factory verification, scale, and reusable adapter/library qualification",
+      "status": "planned"
+    }
+  ]
+}

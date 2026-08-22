@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "api_version": "0.2",
+  "status": "frozen",
+  "source_location": {
+    "required": true,
+    "fields": [
+      "path",
+      "line",
+      "column",
+      "span"
+    ],
+    "fixture_anchor": "diagnostic-anchor"
+  },
+  "diagnostics": [
+    {
+      "code": "NODAL-DOMAIN-001",
+      "name": "missing-sequential-domain",
+      "phase": "domain-verification",
+      "severity": "error",
+      "message": "sequential state has no resolved ClockDomain",
+      "suggestion": "bind a root domain or instantiate the reusable module inside a domain"
+    },
+    {
+      "code": "NODAL-CDC-001",
+      "name": "direct-asynchronous-sampling",
+      "phase": "cdc-verification",
+      "severity": "error",
+      "message": "a value crosses into unrelated destination state without a semantic CDC primitive",
+      "suggestion": "use the matching Cdc.sync, gray, pulse, handshake, fifo, or reported waiver form"
+    },
+    {
+      "code": "NODAL-CDC-002",
+      "name": "multi-bit-level-synchronizer",
+      "phase": "api-type-check",
+      "severity": "error",
+      "message": "Cdc.sync accepts only a one-bit Bool level",
+      "suggestion": "use Cdc.gray, Cdc.handshake, or Cdc.fifo according to coherence requirements"
+    },
+    {
+      "code": "NODAL-CDC-003",
+      "name": "pulse-through-level-synchronizer",
+      "phase": "api-type-check",
+      "severity": "error",
+      "message": "a Pulse cannot use the one-bit level synchronizer",
+      "suggestion": "use Cdc.pulse so toggle, acknowledgement, and destination reconstruction remain explicit"
+    },
+    {
+      "code": "NODAL-RELATION-001",
+      "name": "unreported-clock-relationship-assumption",
+      "phase": "relation-verification",
+      "severity": "error",
+      "message": "clock relationship safety was assumed without a source-located declaration or transfer primitive",
+      "suggestion": "declare ClockRelation evidence or use a semantic crossing primitive"
+    },
+    {
+      "code": "NODAL-RDC-001",
+      "name": "unsynchronized-reset-release",
+      "phase": "rdc-verification",
+      "severity": "error",
+      "message": "asynchronous reset deassertion is not synchronized for the destination domain",
+      "suggestion": "use AsyncAssertSyncRelease or Rdc.sync with the destination and stage count"
+    },
+    {
+      "code": "NODAL-RDC-002",
+      "name": "reset-reconvergence-hazard",
+      "phase": "rdc-verification",
+      "severity": "error",
+      "message": "reset paths with different assertion or release provenance reconverge unsafely",
+      "suggestion": "use an explicit ResetController and preserve one analyzed release path per destination"
+    },
+    {
+      "code": "NODAL-CLOCK-001",
+      "name": "boolean-used-as-clock",
+      "phase": "api-type-check",
+      "severity": "error",
+      "message": "Bool is not Clock and cannot bind a ClockDomain clock input",
+      "suggestion": "declare a typed Clock input or use an explicit generated, gated, or muxed domain primitive"
+    },
+    {
+      "code": "NODAL-MIGRATION-001",
+      "name": "ordinary-always-removed",
+      "phase": "migration",
+      "severity": "error",
+      "message": "always(event) is not part of the v0.2 ordinary synchronous API",
+      "suggestion": "declare Reg or RegNext state under a ClockDomain and update it with when/elsewhen/otherwise"
+    },
+    {
+      "code": "NODAL-LOWLEVEL-001",
+      "name": "lowlevel-process-misuse",
+      "phase": "lowlevel-verification",
+      "severity": "error",
+      "message": "nodal.lowlevel.process cannot create untracked ordinary state or bypass CDC/RDC checks",
+      "suggestion": "use domain-owned Reg state or isolate only the irreducible event-driven operation"
+    },
+    {
+      "code": "NODAL-STATE-001",
+      "name": "multiple-state-drivers",
+      "phase": "state-verification",
+      "severity": "error",
+      "message": "state has unrelated update roots instead of one deterministic lexical priority chain",
+      "suggestion": "combine updates into one when/elsewhen/otherwise chain or define an explicit arbitration policy"
+    }
+  ]
+}

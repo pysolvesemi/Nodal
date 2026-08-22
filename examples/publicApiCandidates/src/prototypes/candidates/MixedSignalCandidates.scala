@@ -6,12 +6,14 @@ final class Adc extends Module:
   val width = param(12.integer)
   val analogInput = in(Electrical)
   val common = in(Electrical)
-  val sampleClock = in(Bool)
   val code = out(UInt(width))
   val fullScale = param(1.0.V)
+  val sampleDomain = ClockDomain.required("sample")
 
-  always(sampleClock.rising):
-    code := toUInt(V(analogInput, common) / fullScale, width)
+  sampleDomain:
+    val sampledCode = Reg(0.U(width))
+    sampledCode := toUInt(V(analogInput, common) / fullScale, width)
+    code := sampledCode
 
 final class Dac(val width: Int = 12) extends Module:
   val code = in(UInt(width))
@@ -24,23 +26,25 @@ final class Dac(val width: Int = 12) extends Module:
       toReal(code) * fullScale / ((1 << width) - 1).real,
       0.0.ns,
       1.0.ns,
-      1.0.ns
+      1.0.ns,
     )
 
 final class MixedSignalHold(val width: Int = 10) extends Module:
   val analogInput = in(Electrical)
   val common = in(Electrical)
-  val capture = in(Bool)
   val code = out(UInt(width))
   val threshold = param(0.25.V)
+  val captureDomain = ClockDomain.required("capture")
   private val held = variable(Real, 0.0.V)
 
   analog:
     on(cross(V(analogInput, common) - threshold, Edge.Either)):
       held := V(analogInput, common)
 
-  always(capture.rising):
-    code := toUInt(held, width)
+  captureDomain:
+    val capturedCode = Reg(0.U(width))
+    capturedCode := toUInt(held, width)
+    code := capturedCode
 
 final class HierarchyAndOverride extends Module:
   val input = inout(Electrical)

@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "api_version": "0.2",
+  "positive": [
+    "examples/clockResetApi/src/contracts/clockreset/positive/DomainStateFixtures.scala",
+    "examples/clockResetApi/src/contracts/clockreset/positive/HierarchyAndGeneratedFixtures.scala",
+    "examples/clockResetApi/src/contracts/clockreset/positive/CrossingAndClockStructureFixtures.scala",
+    "examples/clockResetApi/src/contracts/clockreset/positive/AnalogEventSeparationFixtures.scala",
+    "examples/externalLibrary/src/external/reuse/ClockedRegister.scala"
+  ],
+  "negative": [
+    {
+      "path": "tests/api/fixtures/increment12/negative/MissingDomain.scala",
+      "code": "NODAL-DOMAIN-001",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment12/negative/DirectAsyncSampling.scala",
+      "code": "NODAL-CDC-001",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment12/negative/MultiBitSync.scala",
+      "code": "NODAL-CDC-002",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment12/negative/UnsafePulseTransfer.scala",
+      "code": "NODAL-CDC-003",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment12/negative/UnreportedRelationship.scala",
+      "code": "NODAL-RELATION-001",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment12/negative/UnsynchronizedResetRelease.scala",
+      "code": "NODAL-RDC-001",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment12/negative/ResetReconvergence.scala",
+      "code": "NODAL-RDC-002",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment12/negative/BooleanClock.scala",
+      "code": "NODAL-CLOCK-001",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment12/negative/OrdinaryAlways.scala",
+      "code": "NODAL-MIGRATION-001",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment12/negative/LowLevelState.scala",
+      "code": "NODAL-LOWLEVEL-001",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment12/negative/MultipleStateDrivers.scala",
+      "code": "NODAL-STATE-001",
+      "mode": "semantic-contract"
+    }
+  ]
+}

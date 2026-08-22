@@ -162,6 +162,7 @@ def check_repository(root: Path) -> list[Problem]:
         'check_increment9.py"',
         'check_increment10.py"',
         'check_increment11.py"',
+        'check_increment12.py"',
         'check_markdown.py"',
         'check_package_visibility.py"',
         'check_contribution_policy.py"',

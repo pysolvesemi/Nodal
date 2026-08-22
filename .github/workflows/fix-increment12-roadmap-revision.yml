@@ -1,0 +1,118 @@
+name: Fix Increment 12 roadmap revision compatibility
+
+on:
+  push:
+    branches:
+      - roadmap/immediate-assertion-synthesis-boundary
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message == 'Fix Increment 12 roadmap revision compatibility'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Make the Increment 12 checker forward-compatible
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          checker = Path("scripts/check_increment12.py")
+          content = checker.read_text(encoding="utf-8")
+          old = '''    _require(
+              roadmap,
+              (
+                  "**Revision:** 1.12",
+                  "**Updated:** 2026-08-22",
+                  "- [x] **Increment 12 — Clock/reset public API v0.2 freeze and contract fixtures**",
+                  "NodalClockResetApi-DG-v0.2.md",
+                  "clock-reset-diagnostics-v0.2.json",
+                  "increment-12/clock-reset-api-v0-2",
+              ),
+              problems,
+              "NODAL-INC12-054",
+              "main roadmap",
+          )
+'''
+          new = '''    _require(
+              roadmap,
+              (
+                  "**Updated:** 2026-08-22",
+                  "- [x] **Increment 12 — Clock/reset public API v0.2 freeze and contract fixtures**",
+                  "NodalClockResetApi-DG-v0.2.md",
+                  "clock-reset-diagnostics-v0.2.json",
+                  "increment-12/clock-reset-api-v0-2",
+              ),
+              problems,
+              "NODAL-INC12-054",
+              "main roadmap",
+          )
+          revision_line = next(
+              (line for line in roadmap.splitlines() if line.startswith("**Revision:** ")),
+              None,
+          )
+          try:
+              revision = tuple(
+                  int(part)
+                  for part in revision_line.removeprefix("**Revision:** ").split(".")
+              ) if revision_line is not None else ()
+          except ValueError:
+              revision = ()
+          if len(revision) != 2 or revision < (1, 12):
+              problems.append(
+                  Problem(
+                      "NODAL-INC12-054",
+                      "main roadmap revision must be a two-part numeric revision at least 1.12",
+                  )
+              )
+'''
+          if content.count(old) != 1:
+              raise SystemExit("expected Increment 12 roadmap block was not found exactly once")
+          checker.write_text(content.replace(old, new, 1), encoding="utf-8")
+
+          tests = Path("tests/api/test_increment12.py")
+          test_content = tests.read_text(encoding="utf-8")
+          marker = '''    def test_roadmap_increment_must_remain_closed(self) -> None:
+'''
+          insertion = '''    def test_roadmap_revision_cannot_predate_increment12(self) -> None:
+              temporary, root = self.copy_fixture()
+              self.addCleanup(temporary.cleanup)
+              path = root / "docs/roadmap/nodal-development-todo.md"
+              content = path.read_text(encoding="utf-8")
+              revision_line = next(
+                  line for line in content.splitlines() if line.startswith("**Revision:** ")
+              )
+              path.write_text(
+                  content.replace(revision_line, "**Revision:** 1.11", 1),
+                  encoding="utf-8",
+              )
+              codes = {problem.code for problem in CHECKER.check_repository(root)}
+              self.assertIn("NODAL-INC12-054", codes)
+
+'''
+          if test_content.count(marker) != 1:
+              raise SystemExit("Increment 12 roadmap test insertion point is ambiguous")
+          tests.write_text(test_content.replace(marker, insertion + marker, 1), encoding="utf-8")
+          PY
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment12.py
+          python3 -m unittest tests.api.test_increment12
+          ./mill scalafix.check
+          git diff --check
+
+      - name: Publish checker repair
+        run: |
+          rm .fix-increment12-roadmap-revision-trigger
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Make Increment 12 checker accept later roadmap revisions'
+          git push origin HEAD:roadmap/immediate-assertion-synthesis-boundary

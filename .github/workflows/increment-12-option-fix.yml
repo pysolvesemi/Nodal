@@ -1,0 +1,58 @@
+name: Increment 12 Option fix
+
+on:
+  push:
+    branches:
+      - increment/12-clock-reset-api-v0-2-freeze
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message == 'Run Increment 12 Option fix'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Replace null sentinels and validate Scala policy
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("core/scala/api/src/nodal/CandidateApi.scala")
+          content = path.read_text(encoding="utf-8")
+          replacements = {
+              "    initialValue: Expr[A] | Null,\n    dataType: DataType[A] | Null\n":
+                  "    initialValue: Option[Expr[A]],\n    dataType: Option[DataType[A]]\n",
+              "new Register(init, null)": "new Register(Some(init), None)",
+              "new Register(null, dataType)": "new Register(None, Some(dataType))",
+              "new Register[A](null, null)": "new Register[A](None, None)",
+          }
+          for before, after in replacements.items():
+              if before not in content:
+                  raise SystemExit(f"expected Register fragment was not found: {before!r}")
+              content = content.replace(before, after)
+          path.write_text(content, encoding="utf-8")
+          PY
+          ./mill mill.scalalib.scalafmt/reformatAll
+          ./mill scalafix.check
+          ./mill \
+            examples.externalLibrary.compile \
+            examples.publicApiCandidates.compile \
+            examples.clockResetApi.compile
+          python3 scripts/check_increment12.py --compile-negative
+
+      - name: Publish Option-based Register placeholders
+        run: |
+          rm .increment12-option-trigger
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Replace Register null sentinels with Option'
+          git push origin HEAD:increment/12-clock-reset-api-v0-2-freeze

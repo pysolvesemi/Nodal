@@ -131,7 +131,9 @@ def check_repository(root: Path) -> list[Problem]:
     require(
         gate,
         (
-            "**Status:** Candidate evaluated; not frozen",
+            "**Status:** Approved",
+            "**Scope:** public-api",
+            "**Approval boundary:** Compile-candidate evaluation only; public API v0.3 remains unfrozen",
             "**Freeze owner:** Increment 15",
             "ordinary Scala values and `for` loops are elaboration-only",
             "symbolic target-visible replication uses `generate(...)`",
@@ -166,8 +168,10 @@ def check_repository(root: Path) -> list[Problem]:
             if source.count(f"diagnostic-anchor: {code}") != 1:
                 problems.append(Problem("NODAL-INC13-018", f"negative fixture lacks unique anchor: {path}"))
 
-    if "**Increment 13 — Core semantic candidate prototypes and architecture comparison**" not in roadmap:
-        problems.append(Problem("NODAL-INC13-019", "roadmap lost Increment 13"))
+    if "- [x] **Increment 13 — Core semantic candidate prototypes and architecture comparison**" not in roadmap:
+        problems.append(Problem("NODAL-INC13-019", "roadmap does not close Increment 13"))
+    if "- [ ] **Increment 14 — Automatic pipeline candidate prototypes and architecture comparison**" not in roadmap:
+        problems.append(Problem("NODAL-INC13-025", "roadmap does not leave Increment 14 as the next candidate increment"))
     return problems
 
 

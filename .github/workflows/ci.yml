@@ -42,10 +42,12 @@ jobs:
           find /tmp/nodal_inc12 -type d -name __pycache__ -prune -exec rm -rf {} +
           python3 /tmp/nodal_inc12/_apply.py "${GITHUB_WORKSPACE}"
           rm -rf .increment12-payload
-          git fetch --no-tags origin dev:refs/remotes/origin/dev
-          git checkout origin/dev -- .github/workflows/ci.yml
+          rm -f .github/workflows/increment-12-clock-reset-api-freeze.yml
+          git checkout HEAD -- .github/workflows/increment-12-materialize.yml
+          find scripts tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          rm -f .increment12-trigger-v2
 
-      - name: Commit final Increment 12 tree
+      - name: Commit final Increment 12 source tree
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'

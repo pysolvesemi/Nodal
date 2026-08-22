@@ -21,6 +21,103 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  materialize_increment114:
+    name: materialize Increment 114
+    if: github.event_name == 'push' && github.event.head_commit.message == 'Run Increment 114 roadmap materializer'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Add completed Increment 114 policy correction
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          from pathlib import Path
+
+          roadmap = Path("docs/roadmap/nodal-development-todo.md")
+          content = roadmap.read_text(encoding="utf-8")
+          marker = "\n\n## Deferred reusable library roadmap\n"
+          entry = '''
+- [x] **Increment 114 — Immediate assertion synthesis boundary correction**
+  - Restrict synthesizable assertion logic to an explicitly selected immediate Boolean assertion evaluated combinationally or in one owning clock domain.
+  - Keep concurrent or temporal properties, sampled history, assumptions, covers, symbolic formal values, fairness/liveness declarations, and compiler-generated verification monitors outside synthesizable DUT RTL.
+  - Require synthesized immediate assertions to be observational by default; functional control requires an ordinary explicit design connection.
+  - Synchronize ADR 0014, the formal-verification plan/surface, the digital Verilog verification plan, the digital-backend surface, and roadmap revision 1.13. Keep exact public spelling and implementation deferred to Increments 109-110.
+  - Evidence: [`0014-target-neutral-formal-verification.md`](../architecture/0014-target-neutral-formal-verification.md), [`formal-verification-v0.1-plan.md`](formal-verification-v0.1-plan.md), [`formal-verification-v0.1-surface.json`](formal-verification-v0.1-surface.json), [`digital-verilog-open-source-verification-plan.md`](digital-verilog-open-source-verification-plan.md), and [`digital-backend-v0.3-surface.json`](digital-backend-v0.3-surface.json).
+'''
+          if entry.strip() not in content:
+              if content.count(marker) != 1:
+                  raise SystemExit("deferred library roadmap marker is ambiguous")
+              content = content.replace(marker, "\n" + entry + marker, 1)
+          old_library_scope = (
+              "No official reusable model/component library or production plugin "
+              "is implemented by Increments 0-113."
+          )
+          new_library_scope = (
+              "No official reusable model/component library or production plugin "
+              "is implemented by Increments 0-114."
+          )
+          if old_library_scope in content:
+              content = content.replace(old_library_scope, new_library_scope, 1)
+          roadmap.write_text(content, encoding="utf-8")
+
+          plan = Path("docs/roadmap/formal-verification-v0.1-plan.md")
+          plan_content = plan.read_text(encoding="utf-8")
+          plan_marker = "\n## Gate exit criteria\n"
+          plan_entry = '''
+### Increment 114 — Immediate assertion synthesis boundary correction
+
+- [x] Narrow synthesis eligibility to explicitly selected immediate Boolean assertions.
+- [x] Make concurrent/temporal properties and all formal environment constructs verification-only.
+- [x] Require observational checker behavior by default and explicit functional connections.
+- [x] Update architecture, roadmap, backend, and machine-readable policy surfaces without implementing the deferred API or lowering.
+'''
+          if plan_entry.strip() not in plan_content:
+              if plan_content.count(plan_marker) != 1:
+                  raise SystemExit("formal gate-exit marker is ambiguous")
+              plan_content = plan_content.replace(plan_marker, "\n" + plan_entry + plan_marker, 1)
+          plan.write_text(plan_content, encoding="utf-8")
+
+          formal_surface_path = Path("docs/roadmap/formal-verification-v0.1-surface.json")
+          formal_surface = json.loads(formal_surface_path.read_text(encoding="utf-8"))
+          formal_surface["policy_correction_increment"] = 114
+          formal_surface_path.write_text(
+              json.dumps(formal_surface, indent=2) + "\n",
+              encoding="utf-8",
+          )
+
+          backend_surface_path = Path("docs/roadmap/digital-backend-v0.3-surface.json")
+          backend_surface = json.loads(backend_surface_path.read_text(encoding="utf-8"))
+          backend_surface["roadmap_last_increment"] = 114
+          backend_surface_path.write_text(
+              json.dumps(backend_surface, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          python3 -m json.tool docs/roadmap/formal-verification-v0.1-surface.json >/dev/null
+          python3 -m json.tool docs/roadmap/digital-backend-v0.3-surface.json >/dev/null
+          python3 scripts/check_increment12.py
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Publish Increment 114 source changes
+        run: |
+          rm .increment114-roadmap-trigger
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/roadmap .increment114-roadmap-trigger
+          git commit -m 'Increment 114 — Record immediate assertion synthesis boundary'
+          git push origin HEAD:increment/114-immediate-assertion-synthesis-boundary
+
   contracts:
     name: contracts
     runs-on: ubuntu-24.04

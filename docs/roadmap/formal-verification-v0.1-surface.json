@@ -209,5 +209,6 @@
     "symbolic_formal_value": false,
     "generated_verification_monitor_in_synth_rtl": false,
     "ineligible_request_policy": "stable-error"
-  }
+  },
+  "policy_correction_increment": 114
 }

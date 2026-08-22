@@ -609,6 +609,13 @@ Increment 109 freezes stable categories for at least:
 - [ ] Replay normalized counterexamples/covers through the Scala simulation API with typed transactions, domain timelines, source annotations, and waveforms.
 - [ ] Publish tutorials, migration examples, adapter/property-library author guides, conformance suites, capability matrices, known limitations, and reproducible release evidence.
 
+### Increment 114 — Immediate assertion synthesis boundary correction
+
+- [x] Narrow synthesis eligibility to explicitly selected immediate Boolean assertions.
+- [x] Make concurrent/temporal properties and all formal environment constructs verification-only.
+- [x] Require observational checker behavior by default and explicit functional connections.
+- [x] Update architecture, roadmap, backend, and machine-readable policy surfaces without implementing the deferred API or lowering.
+
 ## Gate exit criteria
 
 Increment 109 may be checked only when:

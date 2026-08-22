@@ -2,7 +2,7 @@
   "schema": 1,
   "status": "roadmap-freeze-candidate",
   "roadmap_revision": "1.13",
-  "roadmap_last_increment": 113,
+  "roadmap_last_increment": 114,
   "architecture": "narrowest-compatible-backend-open-source-generated-hdl-verification",
   "documents": {
     "architecture_adr": "docs/architecture/0010-digital-verilog-open-source-verification.md",

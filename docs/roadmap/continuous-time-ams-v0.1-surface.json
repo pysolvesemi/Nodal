@@ -1,0 +1,298 @@
+{
+  "schema": 1,
+  "surface_version": "0.1",
+  "status": "architecture-accepted-api-deferred",
+  "binding_adr": "docs/architecture/0022-layered-continuous-time-hybrid-dae-architecture.md",
+  "binding_rule": "preserve-source-analog-intent-partition-explicit-analog-islands-normalize-verified-topology-and-hybrid-equations-derive-analysis-specific-solver-forms-retain-capability-and-validity-evidence",
+  "roadmap_increment": 132,
+  "public_semantic_gate": 133,
+  "native_solver_required_for_initial_release": false,
+  "implementation_status": {
+    "architecture_recorded": true,
+    "roadmap_recorded": true,
+    "public_api_frozen": false,
+    "source_semantic_analog_ir_implemented": false,
+    "analog_island_implemented": false,
+    "residual_dae_ir_implemented": false,
+    "structural_dae_analysis_implemented": false,
+    "hybrid_scheduler_implemented": false,
+    "analysis_projection_implemented": false,
+    "solver_abi_implemented": false,
+    "model_validity_implemented": false
+  },
+  "layers": [
+    "source-semantic-analog-ir",
+    "topology-connectivity-graph",
+    "hybrid-equation-system-ir",
+    "analysis-projections",
+    "target-and-solver-representations"
+  ],
+  "analog_island": {
+    "owns": [
+      "topology",
+      "references",
+      "unknowns",
+      "equations",
+      "contributions",
+      "continuous-state",
+      "discrete-event-state",
+      "event-indicators",
+      "analysis-requirements",
+      "dimensions",
+      "nominal-scales",
+      "tolerances",
+      "solver-capabilities",
+      "bridge-boundaries",
+      "source-provenance"
+    ],
+    "merge_split_reduce_requires_verified_transform": true
+  },
+  "hybrid_equation_system": {
+    "conceptual_residual": "F(x,xdot,y,z,u,p,environment,time)=0",
+    "variable_classes": [
+      "continuous-state",
+      "derivative",
+      "algebraic",
+      "discrete-event",
+      "parameter",
+      "constant",
+      "environment",
+      "independent",
+      "input"
+    ],
+    "stable_identity": [
+      "unknown",
+      "equation",
+      "residual",
+      "state",
+      "event",
+      "noise-source",
+      "bridge",
+      "analysis-projection"
+    ],
+    "dimensions_and_source_spans_required": true
+  },
+  "structural_analysis": [
+    "connected-components",
+    "reference-and-conservation",
+    "equation-unknown-inventory",
+    "incidence-and-dependency",
+    "structural-matching",
+    "block-decomposition",
+    "under-over-constraint",
+    "structural-singularity",
+    "algebraic-and-event-loops",
+    "initialization-consistency",
+    "parameter-envelope-structure",
+    "variable-topology-classification"
+  ],
+  "unapproved_transforms": [
+    "index-reduction",
+    "tearing",
+    "homotopy",
+    "limiting",
+    "topology-rewrite",
+    "model-reduction",
+    "automatic-smoothing"
+  ],
+  "state_categories": [
+    "user-continuous",
+    "integral-or-transfer",
+    "delay-or-waveform",
+    "hysteresis-or-event",
+    "sample-hold-or-bridge",
+    "target-or-solver-required-with-provenance"
+  ],
+  "initialization_policies": [
+    "fixed-value",
+    "guess",
+    "initial-equation",
+    "steady-state",
+    "operating-point-derived",
+    "solver-selected",
+    "event-time-reinitialization"
+  ],
+  "hybrid_schedule": [
+    "initialization",
+    "continuous-solve",
+    "root-and-time-event-detection",
+    "analog-and-discrete-event-execution",
+    "zero-time-fixed-point-iteration",
+    "digital-and-bridge-interaction",
+    "continuous-restart",
+    "finalization"
+  ],
+  "analysis_projections": [
+    "initialization",
+    "dc-operating-point",
+    "transient",
+    "ac-small-signal",
+    "noise"
+  ],
+  "noise": {
+    "stable_identity": true,
+    "physical_psd_dimension": true,
+    "hierarchy_and_source_location": true,
+    "correlation_metadata": true,
+    "small_signal_noise_distinct_from_statistical_variation": true
+  },
+  "derivatives": {
+    "allowed_methods": [
+      "symbolic",
+      "automatic",
+      "verified-analytic",
+      "capability-gated-numerical"
+    ],
+    "jacobian_and_sparsity_manifest": true,
+    "incorrect_derivative_is_semantic_failure": true
+  },
+  "environment": [
+    "time",
+    "frequency",
+    "temperature",
+    "nominal-temperature",
+    "process-or-corner",
+    "declared-operating-conditions",
+    "analysis",
+    "sweep-coordinates",
+    "deterministic-random-seeds",
+    "global-variation",
+    "local-mismatch"
+  ],
+  "validity_envelope": {
+    "parameter_constraints": true,
+    "dynamic_operating_ranges": true,
+    "analysis_and_pvt_applicability": true,
+    "topology_loading_assumptions": true,
+    "accuracy_class": true,
+    "silent_clamp_or_model_mutation": false
+  },
+  "solver_hints_separate_from_math": true,
+  "solver_capability_negotiation_before_execution": true,
+  "required_evidence": [
+    "deterministic-semantic-ir",
+    "topology-island-manifest",
+    "equation-unknown-state-event-inventory",
+    "dae-structural-report",
+    "initialization-report",
+    "analysis-projection-report",
+    "derivative-jacobian-sparsity-report",
+    "environment-pvt-seed-manifest",
+    "model-validity-manifest",
+    "solver-capability-report",
+    "target-lowering-source-map",
+    "differential-validation"
+  ],
+  "existing_increment_integration": {
+    "source_language": [
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47
+    ],
+    "analog_validation": [
+      48,
+      49,
+      50,
+      51,
+      52,
+      53
+    ],
+    "mixed_signal": [
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78
+    ],
+    "interface_and_lowering": [
+      128,
+      129
+    ],
+    "ams_fpga_architecture": "ADR-0011",
+    "target_pass_architecture": "ADR-0013"
+  },
+  "roadmap": [
+    {
+      "increment": 132,
+      "title": "Continuous-time equation, hybrid DAE, and solver architecture roadmap contract",
+      "status": "complete"
+    },
+    {
+      "increment": 133,
+      "title": "Analog semantic API and analysis contract design gate",
+      "status": "planned"
+    },
+    {
+      "increment": 134,
+      "title": "Source-semantic analog IR, AnalogIsland, and stable identities",
+      "status": "planned"
+    },
+    {
+      "increment": 135,
+      "title": "Topology expansion, residual DAE construction, and structural verification",
+      "status": "planned"
+    },
+    {
+      "increment": 136,
+      "title": "Continuous state, initialization, operators, and hidden-state reporting",
+      "status": "planned"
+    },
+    {
+      "increment": 137,
+      "title": "Hybrid event scheduler, discontinuities, and mode-dependent topology",
+      "status": "planned"
+    },
+    {
+      "increment": 138,
+      "title": "Analysis projections, linearization, derivatives, and noise",
+      "status": "planned"
+    },
+    {
+      "increment": 139,
+      "title": "Environment, PVT, statistical variation, and model validity envelopes",
+      "status": "planned"
+    },
+    {
+      "increment": 140,
+      "title": "Solver capability profiles and simulator/model ABI seam",
+      "status": "planned"
+    },
+    {
+      "increment": 141,
+      "title": "Verilog-A/Verilog-AMS and solver-facing lowering parity",
+      "status": "planned"
+    },
+    {
+      "increment": 142,
+      "title": "Continuous-time validation, scale, and reusable-model qualification",
+      "status": "planned"
+    }
+  ]
+}

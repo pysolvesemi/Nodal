@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "increment": 14,
-  "status": "candidate-evaluation",
+  "status": "validated-candidate-evaluation",
   "architecture": [
     "docs/architecture/0008-automatic-pipeline-architecture.md",
     "docs/architecture/0021-unified-struct-interface-role-and-inout-architecture.md"
@@ -11,8 +11,8 @@
     "docs/roadmap/interface-role-inout-ams-v0.1-surface.json"
   ],
   "validation": {
-    "pull_request": null,
-    "dedicated_workflow_run": null
+    "pull_request": 36,
+    "dedicated_workflow_run": 32633324974
   },
   "positive_modules": [
     "examples.interfacePipelineExternal.compile",

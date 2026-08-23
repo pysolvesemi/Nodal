@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.17
+**Revision:** 1.18
 **Created:** 2026-08-20
 **Updated:** 2026-08-23
 **Status:** Active roadmap
@@ -804,7 +804,7 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
 
   - Evidence: [`NodalCoreSemanticCandidates-DG-v0.3.md`](../design-gates/NodalCoreSemanticCandidates-DG-v0.3.md), [`CoreSemanticsCandidateApi.scala`](../../core/scala/api/src/nodal/CoreSemanticsCandidateApi.scala), [`tests/api/fixtures/increment13/manifest.json`](../../tests/api/fixtures/increment13/manifest.json), [`scripts/check_increment13.py`](../../scripts/check_increment13.py), PR [#32](https://github.com/pysolvesemi/Nodal/pull/32), and dedicated validation run [32587119017](https://github.com/pysolvesemi/Nodal/actions/runs/32587119017).
 
-- [ ] **Increment 14 — Automatic pipeline, Interface/Role, and inout candidate prototypes and architecture comparison**
+- [x] **Increment 14 — Automatic pipeline, Interface/Role, and inout candidate prototypes and architecture comparison**
   - Use [ADR 0021](../architecture/0021-unified-struct-interface-role-and-inout-architecture.md), [`interface-role-inout-ams-v0.1-plan.md`](interface-role-inout-ams-v0.1-plan.md), and [`interface-role-inout-ams-v0.1-surface.json`](interface-role-inout-ams-v0.1-surface.json) as mandatory candidates alongside ADR 0008.
   - Compile and compare directionless storable `Struct` values versus non-storable `Interface` connectivity, named roles, legal digital role inversion, monitor views, nested request/response roles, `master`/`slave` `Valid` and `Stream`, exact role-compatible connection, symbolic interface arrays, and external reusable interfaces.
   - Compile first-class digital `inout` candidates with explicit read/drive/enable semantics, push-pull/open-drain modes, high impedance, split internal tri-state carriers, top-level/black-box pins, hierarchy pass-through, pad adapters, and profile-aware internal resolved-net restrictions.
@@ -813,6 +813,8 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Compare current Chisel aggregate/connectable/protocol forms, current SpinalHDL Bundle/Interface/IMasterSlave/Stream/Flow/Analog/inout forms, current SystemVerilog interface/modport/net semantics, and CIRCT `pipeline`/ESI. Retain useful semantics without exposing lower-level graph plumbing or backend syntax.
   - Add compile-positive and negative contracts for role completeness, monitor drive, incompatible roles, protocol mismatch, interface storage, invalid inversion, multiple ordinary drivers, illegal open-drain drive, unsupported internal tri-state, discipline mismatch, sense-only contribution, implicit bridge conversion, flattening collision, and parameter-envelope layout conflict.
   - Prove that arithmetic, aggregate, protocol, interface ABI, inout resolution, quantity, memory, effect, clock/reset, CDC/RDC, native parameterized-module, and AMS topology contracts remain unchanged by the candidate scheduler surface.
+
+  - Evidence: [`NodalPipelineInterfaceCandidates-DG-v0.3.md`](../design-gates/NodalPipelineInterfaceCandidates-DG-v0.3.md), [`PipelineInterfaceCandidateApi.scala`](../../core/scala/api/src/nodal/PipelineInterfaceCandidateApi.scala), [`tests/api/fixtures/increment14/manifest.json`](../../tests/api/fixtures/increment14/manifest.json), [`scripts/check_increment14.py`](../../scripts/check_increment14.py), PR [#36](https://github.com/pysolvesemi/Nodal/pull/36), and dedicated validation run [32633324974](https://github.com/pysolvesemi/Nodal/actions/runs/32633324974).
 
 - [ ] **Increment 15 — Unified core semantics, Interface/Role/inout, and automatic pipeline public API v0.3 freeze**
   - Publish `docs/design-gates/NodalCoreSemanticsPipelineApi-DG-v0.3.md`, migration notes, and an updated machine-readable public API manifest using ADRs 0009/0008/0021 and the core, pipeline, and interface candidate plans/surfaces.

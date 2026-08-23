@@ -10,7 +10,9 @@
       "docs/roadmap/asic-memory-dependent-tracks-v0.1-plan.md"
     ],
     "latest_foundation_increment": 150,
-    "foundation_increment_150_is_architecture_only": true
+    "foundation_increment_150_is_architecture_only": true,
+    "foundation_extension_plan_is_normative": true,
+    "dependent_track_implementation_is_not_a_foundation_exit_criterion": true
   },
   "dependent_tracks": [
     {

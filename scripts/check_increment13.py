@@ -170,8 +170,21 @@ def check_repository(root: Path) -> list[Problem]:
 
     if "- [x] **Increment 13 — Core semantic candidate prototypes and architecture comparison**" not in roadmap:
         problems.append(Problem("NODAL-INC13-019", "roadmap does not close Increment 13"))
-    if "- [ ] **Increment 14 — Automatic pipeline candidate prototypes and architecture comparison**" not in roadmap:
-        problems.append(Problem("NODAL-INC13-025", "roadmap does not leave Increment 14 as the next candidate increment"))
+    increment14_lines = [
+        line
+        for line in roadmap.splitlines()
+        if line.startswith("- [ ] **Increment 14 — ")
+    ]
+    if (
+        len(increment14_lines) != 1
+        or "candidate prototypes and architecture comparison**" not in increment14_lines[0]
+    ):
+        problems.append(
+            Problem(
+                "NODAL-INC13-025",
+                "roadmap does not leave one unchecked Increment 14 candidate-prototype increment",
+            )
+        )
     return problems
 
 

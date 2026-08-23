@@ -1,0 +1,335 @@
+{
+  "schema": 1,
+  "surface_version": "0.1",
+  "status": "architecture-accepted-api-deferred",
+  "binding_adr": "docs/architecture/0021-unified-struct-interface-role-and-inout-architecture.md",
+  "binding_rule": "values-are-directionless-structs-connectivity-is-an-interface-access-is-selected-by-a-named-role-physical-bidirectionality-is-explicit-and-every-backend-preserves-one-logical-interface-abi",
+  "public_freeze_increment": 15,
+  "implementation_status": {
+    "architecture_recorded": true,
+    "roadmap_recorded": true,
+    "public_api_frozen": false,
+    "interface_ir_implemented": false,
+    "role_expansion_implemented": false,
+    "valid_stream_implemented": false,
+    "digital_inout_implemented": false,
+    "ams_interface_implemented": false,
+    "portable_verilog_lowering_implemented": false,
+    "verilog_ams_lowering_implemented": false,
+    "native_systemverilog_interface_implemented": false,
+    "interface_abi_manifest_implemented": false
+  },
+  "semantic_kinds": {
+    "struct": {
+      "meaning": "directionless-storable-hardware-value",
+      "storable_in_register_or_memory": true,
+      "may_contain_interface": false,
+      "may_contain_boundary_direction": false,
+      "may_be_protocol_payload": true,
+      "deterministic_field_identity_required": true
+    },
+    "interface": {
+      "meaning": "non-storable-connectivity-contract",
+      "storable_in_register_or_memory": false,
+      "may_nest_interfaces": true,
+      "may_contain_struct_payloads": true,
+      "exported_role_required": true,
+      "role_expansion_in_ir": true
+    },
+    "role": {
+      "meaning": "named-per-member-access-contract",
+      "built_in_convenience": [
+        "master",
+        "slave",
+        "source",
+        "sink",
+        "initiator",
+        "target",
+        "controller",
+        "peripheral",
+        "device",
+        "environment",
+        "monitor"
+      ],
+      "user_defined_roles": true,
+      "automatic_inverse_only_for_fully_complementary_digital_access": true,
+      "monitor_is_read_only": true
+    }
+  },
+  "protocols": {
+    "canonical_valid_only_type": "Valid",
+    "flow_is_second_core_type": false,
+    "valid": {
+      "master_outputs": [
+        "valid",
+        "payload"
+      ],
+      "master_inputs": [],
+      "slave_is_inverse": true,
+      "backpressure": false
+    },
+    "stream": {
+      "master_outputs": [
+        "valid",
+        "payload"
+      ],
+      "master_inputs": [
+        "ready"
+      ],
+      "slave_is_inverse": true,
+      "ordered": true,
+      "backpressure": true
+    },
+    "implicit_plain_valid_stream_conversion": false,
+    "implicit_domain_crossing": false,
+    "implicit_latency_insertion": false
+  },
+  "digital_inout": {
+    "first_class_language_support_required": true,
+    "preferred_semantics": "separate-read-and-drive",
+    "direct_variable_assignment_default": false,
+    "minimum_resolved_values": [
+      "0",
+      "1",
+      "Z",
+      "X-or-contention"
+    ],
+    "drive_modes": [
+      "push-pull-tristate",
+      "open-drain-open-collector",
+      "open-source",
+      "read-only-observation",
+      "hierarchy-pass-through",
+      "explicit-pad-io-cell-adapter"
+    ],
+    "multiple_drivers_allowed_only_on_declared_resolved_nets": true,
+    "ordinary_signals_remain_single_driver": true,
+    "required_use_cases": [
+      "top-level-pins",
+      "black-box-inout",
+      "hierarchy-pass-through",
+      "gpio",
+      "i2c-open-drain",
+      "mdio",
+      "memory-dq-dqs",
+      "selected-phy-pad-groups",
+      "mixed-signal-wrappers"
+    ],
+    "portable_internal_recommendation": "split-read-write-enable-tristate-carrier",
+    "portable_synthesis_may_restrict_native_resolution_to_boundary": true,
+    "silent_internal_inout_to_mux_rewrite": false,
+    "technology_strength_or_switch_level_semantics_inferred": false
+  },
+  "ams": {
+    "conservative_terminal_distinct_from_digital_inout": true,
+    "concepts": {
+      "terminal": "module-or-interface-boundary-physical-connection",
+      "node": "internal-topological-connection",
+      "branch": "ordered-potential-flow-relation",
+      "signal_flow": "directional-analog-information-value"
+    },
+    "analog_role_access": [
+      "connect",
+      "sense",
+      "contribute",
+      "monitor"
+    ],
+    "analog_roles_auto_inverted": false,
+    "mixed_digital_analog_interface": true,
+    "implicit_conservative_signal_flow_conversion": false,
+    "implicit_analog_digital_conversion": false,
+    "explicit_bridge_metadata": [
+      "source-destination-domain",
+      "physical-dimension",
+      "sample-update-time",
+      "threshold-hysteresis",
+      "quantization-rounding-saturation-range",
+      "delay-transition-hold-interpolation-event",
+      "resolution-connect-rule",
+      "model-availability",
+      "source-provenance"
+    ],
+    "fpga_approximation_owner": "ADR-0011"
+  },
+  "canonical_interface_ir": {
+    "stable_type_member_role_ids": true,
+    "struct_interface_kind_preserved": true,
+    "selected_role_and_expanded_access_preserved": true,
+    "nested_role_application_preserved": true,
+    "type_shape_signedness_encoding_preserved": true,
+    "protocol_ordering_latency_capacity_preserved": true,
+    "clock_reset_domain_provenance_preserved": true,
+    "digital_net_resolution_drive_mode_preserved": true,
+    "analog_discipline_terminal_branch_access_preserved": true,
+    "source_spans_and_hierarchy_paths_preserved": true,
+    "parameter_formulas_and_envelopes_preserved": true,
+    "backend_layout_mapping_preserved": true
+  },
+  "interface_abi_manifest": {
+    "required": true,
+    "logical_to_backend_mapping": true,
+    "role_direction_access_metadata": true,
+    "type_shape_domain_protocol_metadata": true,
+    "digital_net_drive_metadata": true,
+    "analog_discipline_access_metadata": true,
+    "source_map_metadata": true,
+    "semantic_hash": true,
+    "compatibility_diff": true,
+    "consumers": [
+      "wrappers",
+      "scala-simulation",
+      "cocotb",
+      "uvm-uvm-ms",
+      "waveforms",
+      "ip-xact",
+      "documentation",
+      "cache-and-provenance"
+    ]
+  },
+  "backend_profiles": {
+    "portable_verilog": {
+      "interface_representation": "deterministically-flattened-ports",
+      "struct_representation": "canonical-flat-or-profile-value-layout",
+      "valid_stream_representation": "stable-leaf-ports",
+      "digital_inout_representation": "net-typed-inout-plus-explicit-tristate-assignment",
+      "analog_members_supported": false,
+      "unsupported_internal_resolved_net_is_error": true
+    },
+    "verilog_a": {
+      "interface_representation": "flattened-discipline-terminals-and-supported-analog-signal-flow",
+      "digital_protocol_support_profile_checked": true
+    },
+    "verilog_ams": {
+      "interface_representation": "flattened-mixed-signal-ports-terminals-and-bridges",
+      "digital_inout_supported": true,
+      "conservative_terminals_supported": true
+    },
+    "future_systemverilog": {
+      "implementation_requires_increment_99_approval": true,
+      "native_interface_modport_planned": true,
+      "flatten_fallback_required": true,
+      "per_instance_flatten_override_planned": true,
+      "native_flat_semantic_abi_parity_required": true
+    }
+  },
+  "required_diagnostics": [
+    "interface-stored-as-data",
+    "interface-or-direction-embedded-in-struct",
+    "exported-interface-without-role",
+    "incompatible-role-connection",
+    "missing-required-member",
+    "monitor-drive",
+    "invalid-role-inversion",
+    "implicit-protocol-domain-latency-adaptation",
+    "direct-inout-assignment-without-drive-state",
+    "multiple-ordinary-drivers",
+    "illegal-open-drain-drive",
+    "unsupported-internal-resolved-net",
+    "digital-inout-to-conservative-terminal",
+    "discipline-mismatch",
+    "sense-only-contribution",
+    "implicit-conservative-signal-flow-conversion",
+    "backend-capability-mismatch",
+    "flattening-name-collision",
+    "parameter-envelope-interface-layout-conflict"
+  ],
+  "verification": {
+    "scala_type_negative_fixtures": true,
+    "construction_ir_mutation_tests": true,
+    "role_and_driver_checks": true,
+    "valid_stream_transfer_stall_bubble_tests": true,
+    "high_z_readback_contention_open_drain_tests": true,
+    "black_box_and_hierarchy_inout_tests": true,
+    "flattened_abi_goldens": true,
+    "native_flat_systemverilog_equivalence_after_approval": true,
+    "ams_discipline_topology_bridge_tests": true,
+    "external_library_conformance": true,
+    "parameterized_scale_and_determinism": true,
+    "temporal_properties_synthesizable": false,
+    "assertion_synthesis_policy_owner": "Increment 114"
+  },
+  "existing_increment_integration": {
+    "compile_candidates": 14,
+    "public_freeze": 15,
+    "construction_and_ir": [
+      16,
+      19,
+      22
+    ],
+    "digital_semantics": [
+      54,
+      55,
+      56,
+      57,
+      58
+    ],
+    "pipeline_semantics": [
+      59,
+      60,
+      61,
+      62,
+      63,
+      64
+    ],
+    "portable_verilog_and_open_source_verification": [
+      65,
+      66,
+      67
+    ],
+    "mixed_signal_and_verilog_ams": [
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77
+    ],
+    "future_systemverilog_gate": 99
+  },
+  "roadmap": [
+    {
+      "increment": 124,
+      "title": "Interface, Role, AMS, and digital inout architecture roadmap contract",
+      "status": "complete"
+    },
+    {
+      "increment": 125,
+      "title": "Canonical Interface IR, role expansion, source maps, and ABI manifest",
+      "status": "planned"
+    },
+    {
+      "increment": 126,
+      "title": "Digital Struct/Interface/Role and full Valid/Stream implementation",
+      "status": "planned"
+    },
+    {
+      "increment": 127,
+      "title": "Digital inout, resolved nets, tri-state, open-drain, pads, and black-box hierarchy",
+      "status": "planned"
+    },
+    {
+      "increment": 128,
+      "title": "Conservative AMS terminals, signal-flow values, and mixed-signal roles",
+      "status": "planned"
+    },
+    {
+      "increment": 129,
+      "title": "Flattened Verilog, Verilog-A, and Verilog-AMS interface lowering",
+      "status": "planned"
+    },
+    {
+      "increment": 130,
+      "title": "Native SystemVerilog interface/modport backend and wrapper parity",
+      "status": "planned"
+    },
+    {
+      "increment": 131,
+      "title": "Interface metadata, verification agents, scale, and external qualification",
+      "status": "planned"
+    }
+  ]
+}

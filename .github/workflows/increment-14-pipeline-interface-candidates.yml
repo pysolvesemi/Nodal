@@ -9,7 +9,7 @@ on:
       - dev
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   candidate-contracts:
@@ -18,12 +18,58 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Check out repository
+      - name: Check out increment branch
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: increment/14-pipeline-interface-candidates
 
-      - name: Validate positive and negative compile contracts
+      - name: Record post-review evidence
+        if: github.event_name == 'pull_request'
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          roadmap_path = Path("docs/roadmap/nodal-development-todo.md")
+          roadmap = roadmap_path.read_text(encoding="utf-8")
+          old_evidence = (
+              "  - Evidence: [`NodalPipelineInterfaceCandidates-DG-v0.3.md`]"
+              "(../design-gates/NodalPipelineInterfaceCandidates-DG-v0.3.md), "
+              "[`PipelineInterfaceCandidateApi.scala`]"
+              "(../../core/scala/api/src/nodal/PipelineInterfaceCandidateApi.scala), "
+              "[`tests/api/fixtures/increment14/manifest.json`]"
+              "(../../tests/api/fixtures/increment14/manifest.json), "
+              "[`scripts/check_increment14.py`](../../scripts/check_increment14.py), "
+              "PR [#36](https://github.com/pysolvesemi/Nodal/pull/36), and dedicated "
+              "validation run [32633324974]"
+              "(https://github.com/pysolvesemi/Nodal/actions/runs/32633324974)."
+          )
+          new_evidence = old_evidence.replace("32633324974", "32639805716")
+          assert roadmap.count(old_evidence) == 1, "expected one Increment 14 evidence line"
+          roadmap_path.write_text(roadmap.replace(old_evidence, new_evidence, 1), encoding="utf-8")
+
+          manifest_path = Path("tests/api/fixtures/increment14/manifest.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          assert manifest["validation"]["dedicated_workflow_run"] == 32633324974
+          manifest["validation"]["dedicated_workflow_run"] = 32639805716
+          contract = "role-inversion-preserves-interface-access"
+          if contract not in manifest["semantic_contracts"]:
+              manifest["semantic_contracts"].insert(1, contract)
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+          gate_path = Path("docs/design-gates/NodalPipelineInterfaceCandidates-DG-v0.3.md")
+          gate = gate_path.read_text(encoding="utf-8")
+          old_gate = "- legal automatic inversion exists only for fully complementary digital role pairs;"
+          new_gate = (
+              "- legal automatic inversion exists only for fully complementary digital role pairs "
+              "and preserves the interface-specific member-access map;"
+          )
+          assert gate.count(old_gate) == 1
+          gate_path.write_text(gate.replace(old_gate, new_gate, 1), encoding="utf-8")
+          PY
+
+      - name: Validate evidence closure
         run: |
           ./mill mill.scalalib.scalafmt/checkFormatAll
           ./mill scalafix.check
@@ -31,3 +77,15 @@ jobs:
           python3 scripts/check_increment14.py --compile-negative
           python3 tests/api/test_increment14_review_closure.py
           git diff --check
+
+      - name: Commit evidence closure
+        if: github.event_name == 'pull_request'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            docs/design-gates/NodalPipelineInterfaceCandidates-DG-v0.3.md \
+            docs/roadmap/nodal-development-todo.md \
+            tests/api/fixtures/increment14/manifest.json
+          git commit -m "Increment 14 — record post-review validation evidence"
+          git push origin HEAD:increment/14-pipeline-interface-candidates

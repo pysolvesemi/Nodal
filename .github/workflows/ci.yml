@@ -42,6 +42,7 @@ jobs:
 
       - name: Apply roadmap changes and structural validation
         run: |
+          python3 .foundation_tracks_patch.py
           python3 .foundation_tracks_apply.py
           python3 scripts/check_markdown.py
           python3 scripts/check_formatting_baseline.py
@@ -51,6 +52,7 @@ jobs:
 
       - name: Publish clean roadmap source tree
         run: |
+          rm -f .foundation_tracks_patch.py
           rm -f .foundation_tracks_apply.py
           rm -f .foundation-tracks-trigger
           git fetch --no-tags origin dev:refs/remotes/origin/dev

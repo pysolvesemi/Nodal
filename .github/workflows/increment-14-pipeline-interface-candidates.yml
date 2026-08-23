@@ -9,7 +9,7 @@ on:
       - dev
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   candidate-contracts:
@@ -23,81 +23,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply focused review closure
-        if: github.event_name == 'push' && github.ref_name == 'increment/14-pipeline-interface-candidates'
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          def replace_once(path: Path, old: str, new: str) -> None:
-              text = path.read_text(encoding="utf-8")
-              assert text.count(old) == 1, f"expected one replacement anchor in {path}: {old!r}"
-              path.write_text(text.replace(old, new, 1), encoding="utf-8")
-
-          example = Path("examples/interfacePipelineApi/src/PipelineInterfaceCandidates.scala")
-          replace_once(
-              example,
-              """  val invertedPixelSource = pixelSource.inverted
-            val pixelMonitor = pixelSource.monitorView
-          """,
-              """  val invertedPixelSource = pixelSource.inverted
-            val invertedPixelAccess = invertedPixelSource.role.access
-            val pixelMonitor = pixelSource.monitorView
-          """,
-          )
-          replace_once(example, "stage(payload + b)", "stage(payload + payload)")
-          replace_once(example, "payload + c", "payload + payload")
-          replace_once(
-              example,
-              """    invertedPixelSource,
-            pixelMonitor,
-          """,
-              """    invertedPixelSource,
-            invertedPixelAccess,
-            pixelMonitor,
-          """,
-          )
-
-          Path(".github/workflows/increment-14-pipeline-interface-candidates.yml").write_text(
-              """name: Increment 14 Pipeline and Interface Candidates
-
-          on:
-            push:
-              branches:
-                - increment/14-pipeline-interface-candidates
-            pull_request:
-              branches:
-                - dev
-
-          permissions:
-            contents: read
-
-          jobs:
-            candidate-contracts:
-              name: increment-14/pipeline-interface-candidates
-              runs-on: ubuntu-24.04
-              timeout-minutes: 30
-
-              steps:
-                - name: Check out repository
-                  uses: actions/checkout@v6
-                  with:
-                    fetch-depth: 0
-
-                - name: Validate positive and negative compile contracts
-                  run: |
-                    ./mill mill.scalalib.scalafmt/checkFormatAll
-                    ./mill scalafix.check
-                    python3 scripts/check_increment13.py --compile-negative
-                    python3 scripts/check_increment14.py --compile-negative
-                    python3 tests/api/test_increment14_review_closure.py
-                    git diff --check
-          """,
-              encoding="utf-8",
-          )
-          PY
-
-      - name: Validate focused review closure
+      - name: Validate positive and negative compile contracts
         run: |
           ./mill mill.scalalib.scalafmt/checkFormatAll
           ./mill scalafix.check
@@ -105,14 +31,3 @@ jobs:
           python3 scripts/check_increment14.py --compile-negative
           python3 tests/api/test_increment14_review_closure.py
           git diff --check
-
-      - name: Commit focused review closure
-        if: github.event_name == 'push' && github.ref_name == 'increment/14-pipeline-interface-candidates'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            .github/workflows/increment-14-pipeline-interface-candidates.yml \
-            examples/interfacePipelineApi/src/PipelineInterfaceCandidates.scala
-          git commit -m "Increment 14 — close pipeline and role review findings"
-          git push

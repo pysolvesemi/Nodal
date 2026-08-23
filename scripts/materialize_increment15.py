@@ -622,10 +622,10 @@ object Nodal:
 GATE = r'''
 # NodalCoreSemanticsPipelineApi-DG v0.3
 
-**Status:** Approved  
-**Scope:** public-api  
-**API version:** 0.3  
-**Decision:** Freeze unified core semantics, Interface/Role/inout, automatic pipeline, and backend selection  
+**Status:** Approved
+**Scope:** public-api
+**API version:** 0.3
+**Decision:** Freeze unified core semantics, Interface/Role/inout, automatic pipeline, and backend selection
 **Approved by:** Repository owner instruction to implement Increment 15 on 2026-08-23
 
 ## Decision

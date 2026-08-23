@@ -53,26 +53,25 @@ jobs:
                   raise RuntimeError(f"materializer repair anchor is not unique: {old!r}")
               text = text.replace(old, new, 1)
 
-          explicit_writer_marker = '                "  object publicApiV03External extends NodalScalaModule:\\n"'
+          build_fragment = (
+              "\n"
+              "  object publicApiV03External extends NodalScalaModule:\n"
+              "    def moduleDeps = Seq(core.scala.api)\n"
+              "\n"
+              "  object publicApiV03 extends NodalScalaModule:\n"
+              "    def moduleDeps = Seq(core.scala.api, publicApiV03External)\n"
+              "\n"
+              "  object publicApiV03Migration extends NodalScalaModule:\n"
+              "    def moduleDeps = Seq(core.scala.api)\n"
+          )
+          explicit_writer_marker = f"stream.write({build_fragment!r})"
           if explicit_writer_marker not in text:
               build_section = text.index(
                   '    build_marker = "object publicApiV03External extends NodalScalaModule"'
               )
               writer_start = text.index("            stream.write(", build_section)
               writer_end = text.index("\n\n    core_api = ROOT", writer_start)
-              explicit_writer = (
-                  "            stream.write(\n"
-                  "                \"\\n\"\n"
-                  "                \"  object publicApiV03External extends NodalScalaModule:\\\\n\"\n"
-                  "                \"    def moduleDeps = Seq(core.scala.api)\\\\n\"\n"
-                  "                \"\\\\n\"\n"
-                  "                \"  object publicApiV03 extends NodalScalaModule:\\\\n\"\n"
-                  "                \"    def moduleDeps = Seq(core.scala.api, publicApiV03External)\\\\n\"\n"
-                  "                \"\\\\n\"\n"
-                  "                \"  object publicApiV03Migration extends NodalScalaModule:\\\\n\"\n"
-                  "                \"    def moduleDeps = Seq(core.scala.api)\\\\n\"\n"
-                  "            )"
-              )
+              explicit_writer = "            " + explicit_writer_marker
               text = text[:writer_start] + explicit_writer + text[writer_end:]
 
           path.write_text(text, encoding="utf-8")

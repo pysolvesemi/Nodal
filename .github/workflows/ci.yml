@@ -23,7 +23,7 @@ concurrency:
 jobs:
   materialize_foundation_tracks:
     name: materialize Foundation/dependent tracks
-    if: github.event_name == 'push' && github.event.head_commit.message == 'Run Foundation track roadmap materializer'
+    if: (github.event_name == 'push' && github.event.head_commit.message == 'Run Foundation track roadmap materializer') || (github.event_name == 'pull_request' && github.head_ref == 'increment/143-foundation-fpga-hvl-track-roadmaps')
     permissions:
       contents: write
     runs-on: ubuntu-24.04

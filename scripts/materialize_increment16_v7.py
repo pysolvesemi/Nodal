@@ -17,6 +17,16 @@ def replace(path: str, old: str, new: str) -> None:
     target.write_text(content.replace(old, new, 1), encoding="utf-8")
 
 
+def remove_once(path: str, fragment: str) -> None:
+    target = ROOT / path
+    content = target.read_text(encoding="utf-8")
+    if fragment not in content:
+        return
+    if content.count(fragment) != 1:
+        raise RuntimeError(f"v7 removal anchor is not unique in {path}: {fragment!r}")
+    target.write_text(content.replace(fragment, "", 1), encoding="utf-8")
+
+
 def retain_frozen_compiler_marker() -> None:
     target = ROOT / "core/scala/api/src/nodal/CompilerApi.scala"
     content = target.read_text(encoding="utf-8")
@@ -42,6 +52,7 @@ def main() -> int:
     )
 
     kernel = "core/scala/api/src/nodal/ElaborationConstructionKernel.scala"
+    remove_once(kernel, "import java.util.concurrent.Callable\n")
     replace(
         kernel,
         """  private def fail(code: String, message: String, path: Option[String] = None): Nothing =

@@ -1,0 +1,89 @@
+{
+  "schema": 1,
+  "increment": 16,
+  "status": "preflight-kernel",
+  "validation": {
+    "pull_request": null,
+    "dedicated_workflow_run": null,
+    "core_ci_run": null
+  },
+  "public_api_version": "0.3",
+  "public_api_changed": false,
+  "implementation_scope": [
+    "transaction-local module construction",
+    "deterministic hierarchy and declaration ordinals",
+    "module and declaration ownership",
+    "transactional construction close",
+    "lexical clock-domain capture",
+    "single-domain defaulting",
+    "required child-domain inheritance and explicit binding",
+    "top-level required-domain rejection",
+    "Struct and multidimensional Vec shape capture",
+    "Vec versus Mem intent preservation",
+    "Interface construction close and role completeness",
+    "recursive logical Interface ABI expansion",
+    "digital resolved-net endpoint registration",
+    "conservative-terminal topology ownership",
+    "deterministic DesignReport construction classification"
+  ],
+  "implementation_exclusions": [
+    "source-span capture",
+    "semantic source-name recovery",
+    "scheduler implementation",
+    "Interface MLIR",
+    "resolved-net electrical resolution",
+    "analog topology verification",
+    "HDL emission",
+    "simulation",
+    "synthesis",
+    "formal execution"
+  ],
+  "context_contract": {
+    "binding": "java.lang.ScopedValue",
+    "mutable_global_state": false,
+    "thread_local_state": false,
+    "public_scala_implicit": false,
+    "jvm_identity_in_output": false,
+    "parallel_emit_isolation": true
+  },
+  "deterministic_identity": {
+    "module": "parent hierarchy plus local instance ordinal",
+    "declaration": "module hierarchy plus local declaration ordinal or explicit endpoint name",
+    "domain": "module hierarchy plus declared domain name",
+    "expression": "module hierarchy plus local expression ordinal",
+    "future_semantic_names": "Increment 17"
+  },
+  "positive_targets": [
+    "core.scala.testkit.test",
+    "Nodal.emit(new KernelTop)",
+    "ConstructionKernel.inspect(new KernelTop)"
+  ],
+  "diagnostics": [
+    "NODAL-CONSTRUCT-016",
+    "NODAL-LIFECYCLE-016",
+    "NODAL-LIFECYCLE-017",
+    "NODAL-LIFECYCLE-018",
+    "NODAL-OWNERSHIP-016",
+    "NODAL-OWNERSHIP-017",
+    "NODAL-HIERARCHY-016",
+    "NODAL-HIERARCHY-017",
+    "NODAL-HIERARCHY-018",
+    "NODAL-HIERARCHY-019",
+    "NODAL-HIERARCHY-020",
+    "NODAL-HIERARCHY-021",
+    "NODAL-DOMAIN-016",
+    "NODAL-DOMAIN-017",
+    "NODAL-DOMAIN-018",
+    "NODAL-DOMAIN-019",
+    "NODAL-DOMAIN-020",
+    "NODAL-ROOT-DOMAIN-016",
+    "NODAL-CHILD-DOMAIN-016",
+    "NODAL-STATE-DOMAIN-016",
+    "NODAL-MULTI-DOMAIN-016",
+    "NODAL-ROLE-COMPLETE-016",
+    "NODAL-ROLE-ACCESS-016",
+    "NODAL-INTERFACE-MEMBER-016",
+    "NODAL-INTERFACE-DOMAIN-016"
+  ],
+  "next_increment": 17
+}

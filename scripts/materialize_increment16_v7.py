@@ -44,6 +44,22 @@ def retain_frozen_compiler_marker() -> None:
     target.write_text(content, encoding="utf-8")
 
 
+def retain_identity_contract_phrase() -> None:
+    target = ROOT / "docs/implementation/increment16-construction-kernel.md"
+    content = target.read_text(encoding="utf-8")
+    phrase = "Temporary identity maps locate live Scala objects"
+    if phrase in content:
+        return
+    anchor = "## Ownership and identity\n\n"
+    if content.count(anchor) != 1:
+        raise RuntimeError("v7 identity-contract anchor is not unique")
+    addition = (
+        "Temporary identity maps locate live Scala objects during one construction "
+        "transaction; their keys never become stable design identity.\n\n"
+    )
+    target.write_text(content.replace(anchor, anchor + addition, 1), encoding="utf-8")
+
+
 def main() -> int:
     subprocess.run(
         ["python3", str(ROOT / "scripts/materialize_increment16_v6.py")],
@@ -85,6 +101,7 @@ def main() -> int:
 """,
     )
     retain_frozen_compiler_marker()
+    retain_identity_contract_phrase()
     return 0
 
 

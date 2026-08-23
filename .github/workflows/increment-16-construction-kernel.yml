@@ -25,7 +25,7 @@ jobs:
 
       - name: Materialize latest construction kernel
         run: |
-          python3 scripts/materialize_increment16_v6.py
+          python3 scripts/materialize_increment16_v7.py
           ./mill mill.scalalib.scalafmt/reformatAll
 
       - name: Validate construction and predecessor contracts

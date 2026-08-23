@@ -1,0 +1,142 @@
+{
+  "schema": 1,
+  "increment": 15,
+  "api_version": "0.3",
+  "status": "validated-freeze",
+  "validation": {
+    "pull_request": 40,
+    "dedicated_workflow_run": 32645312790
+  },
+  "positive_modules": [
+    "examples.publicApiV03External.compile",
+    "examples.publicApiV03.compile",
+    "examples.publicApiV03Migration.compile"
+  ],
+  "scala_type_negative": [
+    {
+      "path": "tests/api/fixtures/increment15/negative/mixed-signedness.scala",
+      "code": "NODAL-NUM-015",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/negative/quantity-mismatch.scala",
+      "code": "NODAL-UNIT-015",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/negative/interface-storage.scala",
+      "code": "NODAL-IFACE-015",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/negative/interface-payload.scala",
+      "code": "NODAL-PAYLOAD-015",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/negative/monitor-drive.scala",
+      "code": "NODAL-MONITOR-015",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/negative/monitor-inversion.scala",
+      "code": "NODAL-INVERT-015",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/negative/open-drain-drive.scala",
+      "code": "NODAL-INOUT-015",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/negative/protocol-mismatch.scala",
+      "code": "NODAL-PROTOCOL-015",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/negative/systemverilog-backend.scala",
+      "code": "NODAL-BACKEND-015",
+      "mode": "scala-type-rejected"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/negative/ordinary-always.scala",
+      "code": "NODAL-MIGRATION-015",
+      "mode": "scala-type-rejected"
+    }
+  ],
+  "semantic_negative": [
+    {
+      "path": "tests/api/fixtures/increment15/semantic/pipeline-without-domain.scala",
+      "code": "NODAL-DOMAIN-015",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/semantic/cross-domain-pipeline.scala",
+      "code": "NODAL-CDC-015",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/semantic/unrelated-live-capture.scala",
+      "code": "NODAL-PIPE-015",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/semantic/unbounded-published-latency.scala",
+      "code": "NODAL-LATENCY-015",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/semantic/external-contract-missing.scala",
+      "code": "NODAL-EXTERNAL-015",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/semantic/multiple-drivers.scala",
+      "code": "NODAL-DRIVER-015",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/semantic/unsupported-resolution.scala",
+      "code": "NODAL-RESOLVE-015",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/semantic/implicit-bridge.scala",
+      "code": "NODAL-BRIDGE-015",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/semantic/layout-backend-mismatch.scala",
+      "code": "NODAL-LAYOUT-015",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/semantic/flattening-collision.scala",
+      "code": "NODAL-FLATTEN-015",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/semantic/unbounded-hardware-loop.scala",
+      "code": "NODAL-GENERATE-015",
+      "mode": "semantic-contract"
+    },
+    {
+      "path": "tests/api/fixtures/increment15/semantic/invalid-fsm-contract.scala",
+      "code": "NODAL-FSM-015",
+      "mode": "semantic-contract"
+    }
+  ],
+  "migration_modules": [
+    "v0.1 analog/parameter/hierarchy source retained",
+    "v0.2 clock/reset/domain/crossing source retained",
+    "v0.2 backend default preserved by explicit Backend.VerilogAMS",
+    "v0.3 default selects Backend.Auto"
+  ],
+  "frontend_behavior_inert": true,
+  "scheduler_behavior_inert": true,
+  "interface_ir_behavior_inert": true,
+  "resolution_topology_behavior_inert": true,
+  "backend_behavior_inert": true,
+  "simulator_behavior_inert": true,
+  "next_increment": 16
+}

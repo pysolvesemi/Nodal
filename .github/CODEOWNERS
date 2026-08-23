@@ -68,3 +68,10 @@
 /scripts/check_increment12.py @pysolvesemi
 /docs/language-reference/clock-reset-api-v0.2.md @pysolvesemi
 /docs/migrations/public-api-v0.1-to-v0.2.md @pysolvesemi
+/core/scala/api/public-api-v0.3.json @pysolvesemi
+/core/scala/api/public-api-diagnostics-v0.3.json @pysolvesemi
+/scripts/check_increment15.py @pysolvesemi
+/scripts/materialize_increment15.py @pysolvesemi
+/docs/language-reference/public-api-v0.3.md @pysolvesemi
+/docs/migrations/public-api-v0.1-to-v0.3.md @pysolvesemi
+/docs/migrations/public-api-v0.2-to-v0.3.md @pysolvesemi

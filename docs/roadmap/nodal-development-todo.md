@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.18
+**Revision:** 1.19
 **Created:** 2026-08-20
 **Updated:** 2026-08-23
 **Status:** Active roadmap
@@ -816,7 +816,7 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
 
   - Evidence: [`NodalPipelineInterfaceCandidates-DG-v0.3.md`](../design-gates/NodalPipelineInterfaceCandidates-DG-v0.3.md), [`PipelineInterfaceCandidateApi.scala`](../../core/scala/api/src/nodal/PipelineInterfaceCandidateApi.scala), [`tests/api/fixtures/increment14/manifest.json`](../../tests/api/fixtures/increment14/manifest.json), [`scripts/check_increment14.py`](../../scripts/check_increment14.py), PR [#36](https://github.com/pysolvesemi/Nodal/pull/36), and dedicated validation run [32639805716](https://github.com/pysolvesemi/Nodal/actions/runs/32639805716).
 
-- [ ] **Increment 15 — Unified core semantics, Interface/Role/inout, and automatic pipeline public API v0.3 freeze**
+- [x] **Increment 15 — Unified core semantics, Interface/Role/inout, and automatic pipeline public API v0.3 freeze**
   - Publish `docs/design-gates/NodalCoreSemanticsPipelineApi-DG-v0.3.md`, migration notes, and an updated machine-readable public API manifest using ADRs 0009/0008/0021 and the core, pipeline, and interface candidate plans/surfaces.
   - Freeze value stages; ordinary Scala elaboration loops; symbolic target `generate`; bounded hardware iteration and collection operations; `Bits`/`UInt`/`SInt`; exact signed declaration/literal/parameter/memory/expression/shift/conversion/reinterpretation and Verilog-family lowering rules; lossless numeric/width semantics; explicit lossy conversions; parameterized multidimensional `Vec` shape/index/flatten/reshape and target layout; explicit `Vec` versus `Mem`; physical quantities; memory/external effect contracts; native Scala enums; canonical enum ABI/safe decode/exhaustive selection; flat and reusable hierarchical/parallel/timed/bounded-recursive FSMs; local FSM encoding/illegal-state policies; safe expression inlining, materialization reasons, semantic naming, source-span maps, Fast/Default/Release check profiles and typed waivers; `pipe`/`delay`; latency/throughput/ready policy; stage constraints; parameter-envelope scheduling; and schedule evidence.
   - Freeze directionless storable `Struct` versus non-storable `Interface`, generic named `Role`, `master`/`slave`/`monitor`, nested roles, full `Valid`/`Stream` ownership, exact interface connection/adapters, interface arrays, logical Interface ABI/source mapping, deterministic flattening, and external-library extension rules.
@@ -825,6 +825,8 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Freeze `Backend.Auto`, `Backend.Verilog`, design-kind reporting, explicit synth/sim/formal digital profiles, portable flattened interface ABI, and future native SystemVerilog interface/modport parity requirements from ADR 0010, ADR 0021, and the digital-backend candidate.
   - Add positive and negative compile contracts for every candidate category, including external-library use, stable diagnostic codes/source locations, v0.1/v0.2 migration behavior, role/inout/AMS-interface misuse, and native-versus-flat layout candidates.
   - Keep elaboration, scheduler, interface IR, resolution/topology analysis, digital/AMS backends, and simulator behavior inert. Mark this increment `[x]` only when the unified gate, manifests, fixtures, diagnostics, and CI satisfy all linked exit criteria.
+
+  - Evidence: [`NodalCoreSemanticsPipelineApi-DG-v0.3.md`](../design-gates/NodalCoreSemanticsPipelineApi-DG-v0.3.md), [`public-api-v0.3.json`](../../core/scala/api/public-api-v0.3.json), [`public-api-diagnostics-v0.3.json`](../../core/scala/api/public-api-diagnostics-v0.3.json), [`public-api-v0.2-to-v0.3.md`](../migrations/public-api-v0.2-to-v0.3.md), [`tests/api/fixtures/increment15/manifest.json`](../../tests/api/fixtures/increment15/manifest.json), [`scripts/check_increment15.py`](../../scripts/check_increment15.py), PR [#40](https://github.com/pysolvesemi/Nodal/pull/40), and dedicated validation run [32645312790](https://github.com/pysolvesemi/Nodal/actions/runs/32645312790).
 
 ## Phase 1 — Compiler vertical slice
 

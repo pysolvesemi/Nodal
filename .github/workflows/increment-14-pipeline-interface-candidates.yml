@@ -9,7 +9,7 @@ on:
       - dev
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   candidate-contracts:
@@ -30,71 +30,3 @@ jobs:
           python3 scripts/check_increment13.py --compile-negative
           python3 scripts/check_increment14.py --compile-negative
           git diff --check
-
-      - name: Record accepted Increment 14 evidence
-        if: github.event_name == 'push' && github.ref_name == 'increment/14-pipeline-interface-candidates'
-        env:
-          PR_NUMBER: "36"
-          DEDICATED_RUN_ID: "32633324974"
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          roadmap_path = Path("docs/roadmap/nodal-development-todo.md")
-          roadmap = roadmap_path.read_text(encoding="utf-8")
-          revision = "**Revision:** 1.17"
-          increment14 = (
-              "- [ ] **Increment 14 — Automatic pipeline, Interface/Role, and inout "
-              "candidate prototypes and architecture comparison**"
-          )
-          increment15 = (
-              "- [ ] **Increment 15 — Unified core semantics, Interface/Role/inout, and "
-              "automatic pipeline public API v0.3 freeze**"
-          )
-          evidence_marker = "NodalPipelineInterfaceCandidates-DG-v0.3.md"
-          assert roadmap.count(revision) == 1
-          assert roadmap.count(increment14) == 1
-          assert roadmap.count(increment15) == 1
-          assert evidence_marker not in roadmap
-
-          roadmap = roadmap.replace(revision, "**Revision:** 1.18", 1)
-          roadmap = roadmap.replace(increment14, increment14.replace("[ ]", "[x]", 1), 1)
-          evidence = (
-              "  - Evidence: [`NodalPipelineInterfaceCandidates-DG-v0.3.md`]"
-              "(../design-gates/NodalPipelineInterfaceCandidates-DG-v0.3.md), "
-              "[`PipelineInterfaceCandidateApi.scala`]"
-              "(../../core/scala/api/src/nodal/PipelineInterfaceCandidateApi.scala), "
-              "[`tests/api/fixtures/increment14/manifest.json`]"
-              "(../../tests/api/fixtures/increment14/manifest.json), "
-              "[`scripts/check_increment14.py`](../../scripts/check_increment14.py), "
-              f"PR [#{os.environ['PR_NUMBER']}]"
-              f"(https://github.com/pysolvesemi/Nodal/pull/{os.environ['PR_NUMBER']}), "
-              f"and dedicated validation run [{os.environ['DEDICATED_RUN_ID']}]"
-              f"(https://github.com/pysolvesemi/Nodal/actions/runs/"
-              f"{os.environ['DEDICATED_RUN_ID']}).\n\n"
-          )
-          insert_at = roadmap.index(increment15)
-          roadmap = roadmap[:insert_at] + evidence + roadmap[insert_at:]
-          roadmap_path.write_text(roadmap, encoding="utf-8")
-
-          manifest_path = Path("tests/api/fixtures/increment14/manifest.json")
-          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-          manifest["status"] = "validated-candidate-evaluation"
-          manifest["validation"] = {
-              "pull_request": int(os.environ["PR_NUMBER"]),
-              "dedicated_workflow_run": int(os.environ["DEDICATED_RUN_ID"]),
-          }
-          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-          PY
-          python3 scripts/check_increment14.py
-          git diff --check
-          if git diff --quiet; then
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/roadmap/nodal-development-todo.md tests/api/fixtures/increment14/manifest.json
-          git commit -m "Increment 14 — record validation evidence"
-          git push

@@ -47,6 +47,26 @@ jobs:
 
       - name: Apply and validate roadmap updates
         run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.increment124_apply.py')
+          content = path.read_text(encoding='utf-8')
+          start_marker = 'if "- storing an `Interface`" not in core_plan:'
+          end_marker = 'write(core_plan_path, core_plan)'
+          start = content.index(start_marker)
+          end = content.index(end_marker, start)
+          replacement = '''if "- storing an `Interface`" not in core_plan:
+              core_plan = insert_after_heading(
+                  core_plan,
+                  "## Compile-negative matrix",
+                  """\nRequired Interface/Role/inout/AMS failures also include:\n\n- storing an `Interface`, embedding direction/connectivity in a `Struct`, or exporting an interface without a role;\n- incompatible roles, missing members, monitor drive, invalid inversion, or implicit protocol/domain/latency adaptation;\n- direct inout assignment without explicit drive state, multiple ordinary drivers, illegal open-drain drive, or unsupported internal resolution;\n- implicit digital-inout/conservative-terminal, conservative/signal-flow, or analog/digital conversion;\n- discipline/access mismatch, sense-only contribution, flattening collision, or parameter-envelope interface-layout conflict;\n""",
+                  marker="storing an `Interface`",
+              )
+          '''
+          content = content[:start] + replacement + content[end:]
+          path.write_text(content, encoding='utf-8')
+          PY
           python3 .increment124_apply.py
           python3 -m json.tool docs/roadmap/interface-role-inout-ams-v0.1-surface.json >/dev/null
           python3 -m json.tool docs/roadmap/core-semantics-api-v0.3-surface.json >/dev/null

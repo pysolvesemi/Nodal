@@ -1,11 +1,16 @@
 {
   "schema": 1,
   "status": "active",
-  "roadmap_revision": "1.17",
+  "roadmap_revision": "1.18",
   "foundation_track": {
     "roadmap": "docs/roadmap/nodal-development-todo.md",
     "completion_rule": "all-foundation-checkboxes-complete",
-    "architecture_discoveries_return_to_foundation": true
+    "architecture_discoveries_return_to_foundation": true,
+    "extensions": [
+      "docs/roadmap/asic-memory-dependent-tracks-v0.1-plan.md"
+    ],
+    "latest_foundation_increment": 150,
+    "foundation_increment_150_is_architecture_only": true
   },
   "dependent_tracks": [
     {
@@ -25,6 +30,18 @@
       "display_name": "Analog/Mixed-Signal Verification",
       "numbering_starts_at": 1,
       "implementation_status": "blocked-by-foundation"
+    },
+    {
+      "id": "asic-productivity-signoff",
+      "display_name": "ASIC Productivity and Sign-off",
+      "numbering_starts_at": 1,
+      "implementation_status": "blocked-by-foundation"
+    },
+    {
+      "id": "memory-interface-ip-phy",
+      "display_name": "Memory Interface IP and PHY",
+      "numbering_starts_at": 1,
+      "implementation_status": "blocked-by-foundation"
     }
   ],
   "verification_architecture": {
@@ -37,5 +54,14 @@
     ],
     "vendor_variation_policy": "thin-adapter-profile"
   },
-  "detailed_plan": "docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md"
+  "asic_advanced_io_architecture": {
+    "adr": "docs/architecture/0024-minimal-asic-advanced-io-readiness-boundary.md",
+    "plan": "docs/roadmap/asic-memory-dependent-tracks-v0.1-plan.md",
+    "foundation_policy": "semantic-identities-and-adapter-seams-only",
+    "implementation_deferred_to_dependent_tracks": true
+  },
+  "detailed_plans": [
+    "docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md",
+    "docs/roadmap/asic-memory-dependent-tracks-v0.1-plan.md"
+  ]
 }

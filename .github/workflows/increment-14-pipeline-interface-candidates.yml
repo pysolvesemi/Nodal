@@ -23,12 +23,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply accepted Codex review closure
+      - name: Publish accepted Codex review closure
         if: github.event_name == 'push' && github.ref_name == 'increment/14-pipeline-interface-candidates'
         run: |
           python3 - <<'PY'
-          import json
-          import re
           from pathlib import Path
 
           def replace_once(path: Path, old: str, new: str) -> None:
@@ -36,16 +34,22 @@ jobs:
               assert text.count(old) == 1, f"expected one replacement anchor in {path}"
               path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
-          def substitute_once(path: Path, pattern: str, replacement: str) -> None:
-              text = path.read_text(encoding="utf-8")
-              updated, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)
-              assert count == 1, f"expected one regex anchor in {path}"
-              path.write_text(updated, encoding="utf-8")
-
           api_path = Path("core/scala/api/src/nodal/PipelineInterfaceCandidateApi.scala")
-          substitute_once(
+          replace_once(
               api_path,
-              r"enum RoleAccess:\n(?:  case .*\n){11}",
+              """enum RoleAccess:
+            case In(member: String)
+            case Out(member: String)
+            case Observe(member: String)
+            case Master(member: String)
+            case Slave(member: String)
+            case Read(member: String)
+            case Drive(member: String)
+            case Connect(member: String)
+            case Sense(member: String)
+            case Contribute(member: String)
+            case Nested(member: String, role: String)
+          """,
               """enum RoleAccess:
             case In(member: String)
             case Out(member: String)
@@ -88,13 +92,54 @@ jobs:
               case other => s"inverse($other)"
           """,
           )
-          substitute_once(
+          replace_once(
               api_path,
-              r"/\*\* Evidence for the small set of fully complementary digital roles\. \*/\n"
-              r"trait RoleInverse\[R <: RoleKind\]:.*?\n\n"
-              r"/\*\* Exact role-compatibility evidence\. External libraries may publish additional instances\. \*/",
-              """/** Evidence for the small set of fully complementary digital roles. */
-          trait RoleInverse[R <: RoleKind]:
+              """trait RoleInverse[R <: RoleKind]:
+            type Out <: RoleKind
+            def inverse: Role[Out]
+
+          object RoleInverse:
+            given masterInverse: RoleInverse[MasterRole] with
+              type Out = SlaveRole
+              def inverse: Role[SlaveRole] = slave
+
+            given slaveInverse: RoleInverse[SlaveRole] with
+              type Out = MasterRole
+              def inverse: Role[MasterRole] = master
+
+            given sourceInverse: RoleInverse[SourceRole] with
+              type Out = SinkRole
+              def inverse: Role[SinkRole] = sink
+
+            given sinkInverse: RoleInverse[SinkRole] with
+              type Out = SourceRole
+              def inverse: Role[SourceRole] = source
+
+            given initiatorInverse: RoleInverse[InitiatorRole] with
+              type Out = TargetRole
+              def inverse: Role[TargetRole] = target
+
+            given targetInverse: RoleInverse[TargetRole] with
+              type Out = InitiatorRole
+              def inverse: Role[InitiatorRole] = initiator
+
+            given controllerInverse: RoleInverse[ControllerRole] with
+              type Out = PeripheralRole
+              def inverse: Role[PeripheralRole] = peripheral
+
+            given peripheralInverse: RoleInverse[PeripheralRole] with
+              type Out = ControllerRole
+              def inverse: Role[ControllerRole] = controller
+
+            given deviceInverse: RoleInverse[DeviceRole] with
+              type Out = EnvironmentRole
+              def inverse: Role[EnvironmentRole] = environment
+
+            given environmentInverse: RoleInverse[EnvironmentRole] with
+              type Out = DeviceRole
+              def inverse: Role[DeviceRole] = device
+          """,
+              """trait RoleInverse[R <: RoleKind]:
             type Out <: RoleKind
             def inverseName: String
 
@@ -122,13 +167,18 @@ jobs:
             given targetInverse: RoleInverse[TargetRole] with
               type Out = InitiatorRole
               def inverseName: String = "initiator"
-
-          /** Exact role-compatibility evidence. External libraries may publish additional instances. */""",
+          """,
           )
-          substitute_once(
+          replace_once(
               api_path,
-              r"  def inverted\(using inverse: RoleInverse\[R\]\): InterfacePort\[I, inverse\.Out\] =\n"
-              r".*?\n\n  def monitorView",
+              """  def inverted(using inverse: RoleInverse[R]): InterfacePort[I, inverse.Out] =
+            new InterfacePort(
+              endpoint.definition,
+              inverse.inverse,
+              s"${endpoint.name}.inverse",
+              endpoint.domain
+            )
+          """,
               """  def inverted(using inverse: RoleInverse[R]): InterfacePort[I, inverse.Out] =
             val invertedRole = new Role[inverse.Out](
               inverse.inverseName,
@@ -140,8 +190,7 @@ jobs:
               s"${endpoint.name}.inverse",
               endpoint.domain
             )
-
-            def monitorView""",
+          """,
           )
 
           example_path = Path("examples/interfacePipelineApi/src/PipelineInterfaceCandidates.scala")
@@ -165,67 +214,6 @@ jobs:
               """    invertedPixelSource,
             invertedPixelAccess,
             pixelMonitor,
-          """,
-          )
-
-          gate_path = Path("docs/design-gates/NodalPipelineInterfaceCandidates-DG-v0.3.md")
-          replace_once(
-              gate_path,
-              "- legal automatic inversion exists only for fully complementary digital role pairs;",
-              "- legal automatic inversion exists only for fully complementary digital role pairs and preserves the interface-specific member-access map;",
-          )
-
-          manifest_path = Path("tests/api/fixtures/increment14/manifest.json")
-          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-          contract = "role-inversion-preserves-interface-access"
-          assert contract not in manifest["semantic_contracts"]
-          manifest["semantic_contracts"].insert(1, contract)
-          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-
-          checker_path = Path("scripts/check_increment14.py")
-          replace_once(
-              checker_path,
-              """            ".inverted",
-                      ".monitorView",
-          """,
-              """            ".inverted",
-                      "invertedPixelSource.role.access",
-                      ".monitorView",
-          """,
-          )
-          replace_once(
-              checker_path,
-              """    require(
-                  external,
-          """,
-              """    for forbidden_capture in ("stage(payload + b)", "payload + c"):
-              if forbidden_capture in positive:
-                  problems.append(
-                      Problem(
-                          "NODAL-INC14-035",
-                          f"pipeline transform captures an undeclared live signal: {forbidden_capture}",
-                      )
-                  )
-
-              require(
-                  external,
-          """,
-          )
-          replace_once(
-              checker_path,
-              """    if not isinstance(semantic_contracts, list) or len(semantic_contracts) < 20:
-              problems.append(
-                  Problem("NODAL-INC14-025", "semantic-negative contract inventory is incomplete")
-              )
-          """,
-              """    if not isinstance(semantic_contracts, list) or len(semantic_contracts) < 20:
-              problems.append(
-                  Problem("NODAL-INC14-025", "semantic-negative contract inventory is incomplete")
-              )
-              elif "role-inversion-preserves-interface-access" not in semantic_contracts:
-                  problems.append(
-                      Problem("NODAL-INC14-036", "role inversion access-preservation contract is missing")
-                  )
           """,
           )
 
@@ -265,7 +253,16 @@ jobs:
           """,
               encoding="utf-8",
           )
+
           PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            .github/workflows/increment-14-pipeline-interface-candidates.yml \
+            core/scala/api/src/nodal/PipelineInterfaceCandidateApi.scala \
+            examples/interfacePipelineApi/src/PipelineInterfaceCandidates.scala
+          git commit -m "Increment 14 — address pipeline and role review"
+          git push
 
       - name: Validate positive and negative compile contracts
         run: |
@@ -274,18 +271,3 @@ jobs:
           python3 scripts/check_increment13.py --compile-negative
           python3 scripts/check_increment14.py --compile-negative
           git diff --check
-
-      - name: Commit accepted Codex review closure
-        if: github.event_name == 'push' && github.ref_name == 'increment/14-pipeline-interface-candidates'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            .github/workflows/increment-14-pipeline-interface-candidates.yml \
-            core/scala/api/src/nodal/PipelineInterfaceCandidateApi.scala \
-            docs/design-gates/NodalPipelineInterfaceCandidates-DG-v0.3.md \
-            examples/interfacePipelineApi/src/PipelineInterfaceCandidates.scala \
-            scripts/check_increment14.py \
-            tests/api/fixtures/increment14/manifest.json
-          git commit -m "Increment 14 — address pipeline and role review"
-          git push

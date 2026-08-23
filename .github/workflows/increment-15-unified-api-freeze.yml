@@ -9,7 +9,7 @@ on:
       - dev
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   unified-public-api-freeze:
@@ -18,12 +18,21 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - name: Check out repository
+      - name: Check out Increment 15 branch
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: increment/15-unified-public-api-v0-3-freeze
 
-      - name: Validate unified API and predecessor contracts
+      - name: Record final freeze evidence
+        if: github.event_name == 'pull_request'
+        run: |
+          python3 scripts/materialize_increment15.py \
+            --mode close \
+            --pull-request 40 \
+            --workflow-run 32645312790
+
+      - name: Validate finalized API and predecessor contracts
         run: |
           ./mill mill.scalalib.scalafmt/checkFormatAll
           ./mill scalafix.check
@@ -34,3 +43,14 @@ jobs:
           python3 scripts/check_increment15.py --compile-negative
           python3 tests/api/test_increment15.py
           git diff --check
+
+      - name: Commit final freeze evidence
+        if: github.event_name == 'pull_request'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            docs/roadmap/nodal-development-todo.md \
+            tests/api/fixtures/increment15/manifest.json
+          git commit -m "Increment 15 — record validated freeze evidence"
+          git push origin HEAD:increment/15-unified-public-api-v0-3-freeze

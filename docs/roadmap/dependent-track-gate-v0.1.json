@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "status": "active",
+  "foundation_track": {
+    "roadmap": "docs/roadmap/nodal-development-todo.md",
+    "completion_rule": "all-foundation-checkboxes-complete",
+    "architecture_discoveries_return_to_foundation": true
+  },
+  "dependent_tracks": [
+    {
+      "id": "fpga-productivity",
+      "display_name": "FPGA Productivity",
+      "numbering_starts_at": 1,
+      "implementation_status": "blocked-by-foundation"
+    },
+    {
+      "id": "digital-verification",
+      "display_name": "Digital Verification",
+      "numbering_starts_at": 1,
+      "implementation_status": "blocked-by-foundation"
+    },
+    {
+      "id": "ams-verification",
+      "display_name": "Analog/Mixed-Signal Verification",
+      "numbering_starts_at": 1,
+      "implementation_status": "blocked-by-foundation"
+    }
+  ],
+  "verification_architecture": {
+    "adr": "docs/architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md",
+    "canonical_semantics": "nodal-verification-semantic-ir",
+    "native_simulation_depends_on_generated_uvm": false,
+    "generated_backends": [
+      "uvm",
+      "uvm-ms"
+    ],
+    "vendor_variation_policy": "thin-adapter-profile"
+  },
+  "detailed_plan": "docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md"
+}

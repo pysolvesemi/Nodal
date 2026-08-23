@@ -9,30 +9,30 @@ on:
       - dev
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   construction-kernel:
     name: increment-16/construction-kernel
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
-      - name: Check out Increment 16 branch
+      - name: Check out repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: increment/16-elaboration-construction-kernel
 
-      - name: Materialize deterministic construction kernel
+      - name: Materialize latest construction kernel
         run: |
-          python3 scripts/materialize_increment16.py
+          python3 scripts/materialize_increment16_v6.py
           ./mill mill.scalalib.scalafmt/reformatAll
 
       - name: Validate construction and predecessor contracts
         run: |
           ./mill mill.scalalib.scalafmt/checkFormatAll
           ./mill scalafix.check
+          python3 scripts/check_increment11.py
           python3 scripts/check_increment12.py --compile-negative
           python3 scripts/check_increment13.py --compile-negative
           python3 scripts/check_increment14.py --compile-negative
@@ -41,14 +41,3 @@ jobs:
           python3 tests/api/test_increment16.py
           python3 scripts/check_formatting_baseline.py
           git diff --check
-
-      - name: Commit materialized implementation
-        run: |
-          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Increment 16 — materialize elaboration construction kernel"
-          git push origin HEAD:increment/16-elaboration-construction-kernel

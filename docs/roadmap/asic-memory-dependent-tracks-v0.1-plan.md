@@ -2,6 +2,7 @@
 
 **Status:** Normative Foundation-only roadmap extension  
 **Date:** 2026-08-23  
+**Roadmap revision:** 1.19  
 **Architecture:** [ADR 0024](../architecture/0024-minimal-asic-advanced-io-readiness-boundary.md)  
 **Foundation:** the main Nodal Foundation roadmap plus Foundation Increments 150-151 below  
 **Implementation status:** deliberately unplanned

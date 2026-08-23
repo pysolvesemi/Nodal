@@ -68,6 +68,76 @@ def retain_identity_contract_phrase() -> None:
     )
 
 
+def normalize_conservative_access_evidence() -> None:
+    path = "core/scala/api/src/nodal/PipelineInterfaceCandidateApi.scala"
+    replace(
+        path,
+        """sealed trait ConservativeAccess
+
+object ConservativeAccess:
+  sealed trait Connect extends ConservativeAccess
+  sealed trait Sense extends ConservativeAccess
+  sealed trait Contribute extends ConservativeAccess
+  sealed trait Monitor extends ConservativeAccess
+
+final class TerminalView[D <: Discipline, A <: ConservativeAccess] private[nodal] (
+    val terminal: Terminal[D]
+)
+
+trait CanConnect[A <: ConservativeAccess]
+
+object CanConnect:
+  given connectAccess: CanConnect[ConservativeAccess.Connect] with {}
+
+trait CanSense[A <: ConservativeAccess]
+
+object CanSense:
+  given connectSense: CanSense[ConservativeAccess.Connect] with {}
+  given senseAccess: CanSense[ConservativeAccess.Sense] with {}
+  given contributeSense: CanSense[ConservativeAccess.Contribute] with {}
+  given monitorSense: CanSense[ConservativeAccess.Monitor] with {}
+
+trait CanContribute[A <: ConservativeAccess]
+
+object CanContribute:
+  given contributeAccess: CanContribute[ConservativeAccess.Contribute] with {}
+""",
+        """sealed trait ConservativeAccess
+
+trait CanConnect[A <: ConservativeAccess]
+trait CanSense[A <: ConservativeAccess]
+trait CanContribute[A <: ConservativeAccess]
+
+object ConservativeAccess:
+  sealed trait Connect extends ConservativeAccess
+  object Connect:
+    given connectAccess: CanConnect[Connect] with {}
+    given connectSense: CanSense[Connect] with {}
+
+  sealed trait Sense extends ConservativeAccess
+  object Sense:
+    given senseAccess: CanSense[Sense] with {}
+
+  sealed trait Contribute extends ConservativeAccess
+  object Contribute:
+    given contributeSense: CanSense[Contribute] with {}
+    given contributeAccess: CanContribute[Contribute] with {}
+
+  sealed trait Monitor extends ConservativeAccess
+  object Monitor:
+    given monitorSense: CanSense[Monitor] with {}
+
+final class TerminalView[D <: Discipline, A <: ConservativeAccess] private[nodal] (
+    val terminal: Terminal[D]
+)
+
+object CanConnect {}
+object CanSense {}
+object CanContribute {}
+""",
+    )
+
+
 def main() -> int:
     subprocess.run(
         ["python3", str(ROOT / "scripts/materialize_increment16_v6.py")],
@@ -110,6 +180,7 @@ def main() -> int:
     )
     retain_frozen_compiler_marker()
     retain_identity_contract_phrase()
+    normalize_conservative_access_evidence()
     return 0
 
 

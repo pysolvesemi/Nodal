@@ -23,7 +23,9 @@ concurrency:
 jobs:
   materialize_increment124:
     name: materialize Increment 124
-    if: github.event_name == 'push' && github.event.head_commit.message == 'Run Increment 124 via Core CI'
+    if: >-
+      (github.event_name == 'push' && github.event.head_commit.message == 'Run Increment 124 via Core CI') ||
+      (github.event_name == 'pull_request' && github.head_ref == 'increment/124-interface-role-inout-ams-roadmap')
     permissions:
       contents: write
     runs-on: ubuntu-24.04
@@ -34,6 +36,14 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Select the writable feature head
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin \
+            increment/124-interface-role-inout-ams-roadmap:refs/remotes/origin/increment/124-interface-role-inout-ams-roadmap
+          git checkout -B increment/124-interface-role-inout-ams-roadmap \
+            origin/increment/124-interface-role-inout-ams-roadmap
 
       - name: Apply and validate roadmap updates
         run: |

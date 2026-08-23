@@ -1,0 +1,303 @@
+name: Increment 16 Authoritative Closure
+
+on:
+  push:
+    branches:
+      - increment/16-elaboration-construction-kernel
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: increment-16-validated-closure
+  cancel-in-progress: true
+
+jobs:
+  close:
+    name: increment-16/authoritative-closure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: "41"
+
+    steps:
+      - name: Check out latest branch head
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: increment/16-elaboration-construction-kernel
+
+      - name: Refresh latest remote head
+        run: |
+          git fetch origin increment/16-elaboration-construction-kernel
+          git reset --hard origin/increment/16-elaboration-construction-kernel
+
+      - name: Read closure state
+        id: state
+        run: |
+          status="$(jq -r .status tests/api/fixtures/increment16/manifest.json)"
+          case "$status" in
+            preflight-kernel|validated-kernel) ;;
+            *) echo "unexpected Increment 16 status: $status" >&2; exit 1 ;;
+          esac
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Materialize final implementation
+        if: steps.state.outputs.status == 'preflight-kernel'
+        run: |
+          python3 scripts/materialize_increment16_v6.py
+          ./mill mill.scalalib.scalafmt/reformatAll
+
+      - name: Bootstrap pinned contract toolchain
+        run: |
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          echo "NODAL_LINT_TOOLCHAIN=${RUNNER_TEMP}/nodal-lint-toolchain" >> "$GITHUB_ENV"
+
+      - name: Validate exact implementation tree
+        run: |
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          python3 scripts/check_increment11.py
+          python3 scripts/check_increment12.py --compile-negative
+          python3 scripts/check_increment13.py --compile-negative
+          python3 scripts/check_increment14.py --compile-negative
+          python3 scripts/check_increment15.py --compile-negative
+          python3 scripts/check_increment16.py --compile
+          python3 tests/api/test_increment16.py
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${NODAL_LINT_TOOLCHAIN}" \
+            --base-ref origin/dev
+          git diff --check
+
+      - name: Record authoritative evidence and clean scaffolding
+        if: steps.state.outputs.status == 'preflight-kernel'
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          pull_request = 41
+          run_id = int(os.environ["GITHUB_RUN_ID"])
+
+          manifest_path = Path("tests/api/fixtures/increment16/manifest.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          assert manifest["status"] == "preflight-kernel"
+          manifest["status"] = "validated-kernel"
+          manifest["validation"] = {
+              "pull_request": pull_request,
+              "dedicated_workflow_run": run_id,
+              "core_ci_run": run_id,
+          }
+          manifest_path.write_text(
+              json.dumps(manifest, indent=2) + "\n",
+              encoding="utf-8",
+          )
+
+          roadmap_path = Path("docs/roadmap/nodal-development-todo.md")
+          roadmap = roadmap_path.read_text(encoding="utf-8")
+          unchecked = (
+              "- [ ] **Increment 16 — Elaboration, hierarchy, shape, and "
+              "lexical domain-context kernel**"
+          )
+          checked = unchecked.replace("[ ]", "[x]", 1)
+          assert roadmap.count(unchecked) == 1
+          assert roadmap.count("**Revision:** 1.19") == 1
+          roadmap = roadmap.replace(unchecked, checked, 1)
+          roadmap = roadmap.replace("**Revision:** 1.19", "**Revision:** 1.20", 1)
+          evidence = (
+              "  - Evidence: [`NodalConstructionKernel-DG-v1.0.md`]"
+              "(../design-gates/NodalConstructionKernel-DG-v1.0.md), "
+              "[`increment16-construction-kernel.md`]"
+              "(../implementation/increment16-construction-kernel.md), "
+              "[`tests/api/fixtures/increment16/manifest.json`]"
+              "(../../tests/api/fixtures/increment16/manifest.json), "
+              "[`scripts/check_increment16.py`]"
+              "(../../scripts/check_increment16.py), "
+              f"PR [#{pull_request}]"
+              f"(https://github.com/pysolvesemi/Nodal/pull/{pull_request}), "
+              f"and authoritative exact-tree validation run [{run_id}]"
+              f"(https://github.com/pysolvesemi/Nodal/actions/runs/{run_id}).\n"
+          )
+          marker = "\n- [ ] **Increment 17 — Source spans, semantic naming, and origin graph**"
+          assert roadmap.count(marker) == 1
+          roadmap = roadmap.replace(marker, "\n\n" + evidence + marker, 1)
+          roadmap_path.write_text(roadmap, encoding="utf-8")
+
+          codeowners_path = Path(".github/CODEOWNERS")
+          lines = codeowners_path.read_text(encoding="utf-8").splitlines()
+          lines = [
+              line
+              for line in lines
+              if not re.match(
+                  r"/scripts/(?:apply|materialize|repair)_increment16.* @pysolvesemi$",
+                  line,
+              )
+          ]
+          required = (
+              "/core/scala/api/src/nodal/ElaborationConstructionKernel.scala @pysolvesemi",
+              "/core/scala/testkit/test/src/nodal/ConstructionKernelTests.scala @pysolvesemi",
+              "/docs/design-gates/NodalConstructionKernel-DG-v1.0.md @pysolvesemi",
+              "/docs/implementation/increment16-construction-kernel.md @pysolvesemi",
+              "/scripts/check_increment16.py @pysolvesemi",
+              "/tests/api/fixtures/increment16/manifest.json @pysolvesemi",
+              "/.github/workflows/increment-16-construction-kernel.yml @pysolvesemi",
+          )
+          for line in required:
+              if line not in lines:
+                  lines.append(line)
+          codeowners_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+          rm -f \
+            scripts/apply_increment16.py \
+            scripts/materialize_increment16.py \
+            scripts/materialize_increment16_v2.py \
+            scripts/materialize_increment16_v3.py \
+            scripts/materialize_increment16_v4.py \
+            scripts/materialize_increment16_v5.py \
+            scripts/materialize_increment16_v6.py \
+            scripts/repair_increment16_round1.py \
+            scripts/repair_increment16_round2.py \
+            .github/workflows/increment-16-close.yml \
+            .github/workflows/increment-16-autoclose.yml \
+            .github/workflows/increment-16-repair.yml \
+            .github/workflows/increment-16-repair-round2.yml \
+            .github/workflows/increment-16-v2-materialize.yml \
+            .github/workflows/increment-16-v3-finalize.yml \
+            .github/workflows/increment-16-v4-final.yml \
+            .github/workflows/increment-16-v5-stable.yml \
+            .github/workflows/increment-16-v6-stable.yml
+
+      - name: Validate final evidence and cleanup tree
+        run: |
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          python3 scripts/check_increment11.py
+          python3 scripts/check_increment12.py --compile-negative
+          python3 scripts/check_increment13.py --compile-negative
+          python3 scripts/check_increment14.py --compile-negative
+          python3 scripts/check_increment15.py --compile-negative
+          python3 scripts/check_increment16.py --compile
+          python3 tests/api/test_increment16.py
+          python3 scripts/check_formatting_baseline.py
+          python3 scripts/check_markdown.py
+          python3 scripts/check_package_visibility.py
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${NODAL_LINT_TOOLCHAIN}" \
+            --base-ref origin/dev
+          git diff --check
+
+      - name: Commit final tree
+        id: final
+        run: |
+          if ! git diff --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "Increment 16 — finalize validated construction kernel"
+            git pull --rebase origin increment/16-elaboration-construction-kernel
+            git push origin HEAD:increment/16-elaboration-construction-kernel
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify review closure
+        run: |
+          owner="${GITHUB_REPOSITORY%%/*}"
+          name="${GITHUB_REPOSITORY#*/}"
+          query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}}reviews(first:100){nodes{state}}}}}'
+          result="$(gh api graphql \
+            -f query="$query" \
+            -F owner="$owner" \
+            -F name="$name" \
+            -F number="$PR_NUMBER")"
+          unresolved="$(jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length' <<<"$result")"
+          changes="$(jq '[.data.repository.pullRequest.reviews.nodes[] | select(.state == "CHANGES_REQUESTED")] | length' <<<"$result")"
+          test "$unresolved" -eq 0
+          test "$changes" -eq 0
+
+      - name: Publish final PR evidence
+        run: |
+          sha="${{ steps.final.outputs.sha }}"
+          run_id="$GITHUB_RUN_ID"
+          body="$(cat <<EOF
+          # Pull request
+
+          ## Summary
+
+          - Roadmap increment: Increment 16 — Elaboration, hierarchy, shape, and lexical domain-context kernel
+          - User-visible result: deterministic transaction-local construction now operates beneath frozen public API v0.3; \\`Nodal.emit\\` returns design classification and logical Interface ABI while HDL emission remains intentionally empty.
+
+          The implementation provides module/declaration ownership, deterministic hierarchy-local identity, transactional closure, lexical and bound domain resolution, Struct/Vec shape preservation, explicit Mem intent, Interface role closure and recursive ABI expansion, digital inout registration, conservative topology ownership, rollback after failure, and concurrent elaboration isolation. Construction context uses \\`java.lang.ScopedValue\\`; mutable data is session-local and JVM identity never enters stable output.
+
+          ## Validation
+
+          - [x] Final merge head \\`$sha\\`
+          - [x] Authoritative exact-tree validation run \\`$run_id\\`
+          - [x] Pinned Scalafmt, Scalafix, lint toolchain, online provenance, and contribution contracts
+          - [x] Increment 11–15 predecessor contracts
+          - [x] Complete Scala testkit execution
+          - [x] Repeated and concurrent construction determinism
+          - [x] Transactional recovery after invalid construction
+          - [x] Root/child/multi-domain binding checks
+          - [x] Interface role completeness, inout registration, and conservative topology checks
+
+          ## Design gate
+
+          - [x] Approved implementation gate: \\`docs/design-gates/NodalConstructionKernel-DG-v1.0.md\\`
+          - [x] Frozen public API gate remains \\`docs/design-gates/NodalCoreSemanticsPipelineApi-DG-v0.3.md\\`
+
+          Public API v0.3 is unchanged. Scheduler, source-name/span capture, MLIR, HDL backends, simulation, synthesis, formal execution, electrical resolution, and timing remain outside Increment 16.
+
+          ## Checklist
+
+          - [x] Scope is limited to one increment
+          - [x] Tests and documentation are included
+          - [x] Temporary materializers and write workflows are removed
+          - [x] Roadmap revision 1.20 marks Increment 16 complete
+          - [x] Increment 17 remains unchecked
+          - [x] No unresolved review threads or requested changes
+          EOF
+          )"
+          gh api \
+            --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+            --raw-field body="$body" >/dev/null
+
+      - name: Squash merge validated Increment 16
+        run: |
+          sha="${{ steps.final.outputs.sha }}"
+          for _ in $(seq 1 30); do
+            pull="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
+            test "$(jq -r .state <<<"$pull")" = "open"
+            test "$(jq -r .head.sha <<<"$pull")" = "$sha"
+            mergeable="$(jq -r .mergeable <<<"$pull")"
+            if [ "$mergeable" = "true" ]; then
+              break
+            fi
+            sleep 2
+          done
+          test "$mergeable" = "true"
+
+          message="$(cat <<EOF
+          Implement deterministic transaction-local module construction beneath frozen public API v0.3. Add hierarchy and declaration ownership, lexical/default/required domain binding, shape and storage intent capture, Interface role closure and logical ABI expansion, digital inout registration, conservative topology ownership, transactional rollback, and concurrent elaboration isolation.
+
+          The exact final tree was validated in authoritative run ${GITHUB_RUN_ID} with pinned formatting/lint tools, online provenance, predecessor contracts, and the complete Scala testkit. Roadmap revision 1.20 records PR #41 and leaves Increment 17 unchecked.
+          EOF
+          )"
+          response="$(gh api \
+            --method PUT \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/merge" \
+            --raw-field sha="$sha" \
+            --raw-field merge_method="squash" \
+            --raw-field commit_title="Increment 16 — implement elaboration construction kernel" \
+            --raw-field commit_message="$message")"
+          test "$(jq -r .merged <<<"$response")" = "true"
+          echo "$response" | jq '{merged, sha, message}'

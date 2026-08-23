@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.15
+**Revision:** 1.16
 **Created:** 2026-08-20
 **Updated:** 2026-08-23
 **Status:** Active roadmap
@@ -37,6 +37,10 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Apply named `Role`s at interface boundaries. Provide concise `master`/`slave` and `monitor` behavior for `Valid`/`Stream` while retaining a generic role model for request/response, controller/peripheral, device/environment, and AMS access.
 - Support first-class digital `inout` through explicit typed read/drive/high-impedance semantics, resolved-net identity, open-drain/push-pull modes, black-box and hierarchical pass-through, and capability-checked internal tri-state use; never silently rewrite unsupported resolution into a mux.
 - Keep digital resolved `inout`, conservative AMS terminals, directional analog signal-flow values, and discrete real nets as distinct semantic categories. Require explicit bridges for every analog/digital or conservative/signal-flow conversion.
+- Preserve source-semantic analog constructs separately from normalized topology, hybrid equation systems, analysis projections, target AMS IR, and solver-facing representations; no simulator callback ABI or emitted HDL text defines Nodal semantics.
+- Partition continuous behavior into explicit `AnalogIsland`s with stable topology, unknown, equation, contribution, state, event, noise, analysis, capability, and source identities.
+- Make analog state, initialization, discontinuities, event iteration, analysis context, environment/PVT, derivatives, solver hints, and model-validity envelopes explicit and machine-readable rather than backend side effects.
+- Negotiate simulator and solver capabilities before execution, reject unsupported behavior without approximation, and keep a native analog solver optional for the initial release.
 - Preserve one logical Interface ABI through IR and emit deterministic flattened Verilog/Verilog-A/Verilog-AMS ports plus an optional future native SystemVerilog interface/modport representation with proven flat/native parity.
 - Distinguish elaboration-only Scala values, symbolic HDL parameters/constants, and dynamic hardware values. Target-visible generation is explicit and never inferred from ordinary Scala control.
 - Use lossless finite-width arithmetic by default. Narrowing, wrap, truncation, saturation, checked resize, and signedness conversion require explicit intent.
@@ -714,9 +718,9 @@ Empty future-library or plugin directories are not committed merely as placehold
 
 - **M0 — Foundation:** reproducible builds, CI, clock/reset plus unified core-semantics/automatic-pipeline API freezes, shaped-value/layout and naming/materialization contracts, mandatory quality-gate policy, digital-backend selection contract, and enforced core/library boundaries.
 - **M1 — First vertical slice:** Scala RC model lowers through MLIR and emits validated Verilog-A.
-- **M2 — Analog preview:** useful Verilog-A subset with open-source compilation and simulation regression.
+- **M2 — Analog preview:** useful Verilog-A subset with source-semantic analog IR, explicit island/equation/state/event/analysis contracts, open-source compilation, and simulation regression.
 - **M3 — Digital/AMS preview:** implicit-domain digital state, exact signed finite-width types, parameterized multidimensional shaped values, elaboration/generate/bounded hardware loops, native typed enums, reusable hierarchical/parallel FSMs, automatic fixed/valid/elastic pipelines, readable HDL without avoidable anonymous-wire chains, portable Verilog with mandatory internal checks plus open-source lint/simulation/synthesis/equivalence and compiler-generated formal verification, CDC/RDC-safe clock/reset architecture, mixed-signal crossings, and Verilog-AMS emission.
-- **M4 — Scalable core release:** packaged compiler, complete reference, frozen plugin and target-HDL pass SPIs, deterministic extension/pass graphs, optimization proof evidence, machine-readable check coverage and waiver inventory, conformance kits, library-author contract, and compatibility policy.
+- **M4 — Scalable core release:** packaged compiler, complete reference, frozen plugin and target-HDL pass SPIs, deterministic extension/pass graphs, continuous-time solver-capability and model-validity manifests, optimization proof evidence, machine-readable check coverage and waiver inventory, conformance kits, library-author contract, and compatibility policy.
 - **M5 — FPGA-accelerated AMS validation:** explicit sampled/fixed-point approximation, four-level reference evidence, open FPGA implementation, HIL runtime, and a published capability/limitations matrix.
 - **M6 — User-authored formal verification extension:** frozen formal property API with an immediate-assertion-only synthesis boundary, target-neutral property IR, compositional harness/contracts, pluggable proof engines, vacuity/coverage, typed counterexample replay, property libraries, and conformance evidence.
 
@@ -1290,6 +1294,75 @@ This independently schedulable phase closes the cross-layer architecture accepte
 - [ ] **Increment 131 — Interface metadata, verification agents, scale, and external qualification**
   - Generate Scala simulation, cocotb, UVM/UVM-MS, waveform, IP-XACT, and documentation metadata from the logical Interface ABI.
   - Add role/inout/AMS checkers, large nested-interface performance, parameter matrices, deterministic output, compatibility diff, and external reusable interface/library qualification.
+
+## Phase 9 — Continuous-time equation, hybrid DAE, solver, and analog-model qualification closure
+
+This independently schedulable phase closes the cross-layer continuous-time architecture accepted by ADR 0022. It does not replace the source-language, validation, mixed-signal, interface, or backend work in Increments 24-53, 68-78, and 128-129. It gives those increments one solver-independent semantic, mathematical, analysis, and evidence architecture.
+
+- [x] **Increment 132 — Continuous-time equation, hybrid DAE, and solver architecture roadmap contract**
+  - Accept [ADR 0022](../architecture/0022-layered-continuous-time-hybrid-dae-architecture.md), the staged [`continuous-time-ams-v0.1-plan.md`](continuous-time-ams-v0.1-plan.md), and the machine-readable [`continuous-time-ams-v0.1-surface.json`](continuous-time-ams-v0.1-surface.json).
+  - Record distinct source-semantic analog IR, topology graph, hybrid equation-system IR, analysis projections, and target/solver representations.
+  - Record explicit `AnalogIsland`, stable equation/unknown/state/event/noise identities, DAE structural verification, state and initialization ownership, hybrid event ordering, analysis/noise/environment contracts, solver capability negotiation, model validity envelopes, and retained evidence.
+  - Keep exact public syntax, compiler implementation, solver behavior, and target lowering assigned to Increments 133-142 and the existing analog/AMS increments.
+  - Evidence: [`0022-layered-continuous-time-hybrid-dae-architecture.md`](../architecture/0022-layered-continuous-time-hybrid-dae-architecture.md), [`continuous-time-ams-v0.1-plan.md`](continuous-time-ams-v0.1-plan.md), and [`continuous-time-ams-v0.1-surface.json`](continuous-time-ams-v0.1-surface.json).
+
+- [ ] **Increment 133 — Analog semantic API and analysis contract design gate**
+  - Compile and compare public candidates for equations/contributions, explicit analog state and initialization, event tolerance and discontinuity declarations, analysis context, environment/PVT access, noise identity/correlation, validity envelopes, and solver-hint metadata.
+  - Publish `NodalContinuousTimeApi-DG-v0.1.md`, a machine-readable public surface, migration notes, stable diagnostics, positive/negative fixtures, and an external reusable-model fixture.
+  - Keep frontend, equation normalization, solver, and backend behavior inert.
+
+- [ ] **Increment 134 — Source-semantic analog IR, `AnalogIsland`, and stable identities**
+  - Implement source-semantic operations for contributions, equations, operators, events, analyses, noise, environment, connect constructs, and solver hints.
+  - Build deterministic islands and stable IDs for topology objects, unknowns, equations, state, events, noise, bridges, and analyses.
+  - Add normalized parse/print, source maps, parameter formulas/envelopes, mutation tests, and semantic manifests.
+
+- [ ] **Increment 135 — Topology expansion, residual DAE construction, and structural verification**
+  - Expand conservative connections and contribution sets into solver-neutral residual systems while preserving provenance.
+  - Classify continuous, derivative, algebraic, discrete, parameter, environment, independent, and input variables.
+  - Implement incidence/dependency graphs, structural matching, block decomposition, equation/unknown balance, reference/conservation checks, singularity, algebraic loops, initialization structure, variable-topology classification, and parameter-envelope checks.
+  - Reject unsupported higher-index or variable-structure systems explicitly; do not perform unapproved index reduction.
+
+- [ ] **Increment 136 — Continuous state, initialization, operators, and hidden-state reporting**
+  - Implement state ownership for `ddt`, `idt`, Laplace/Z-domain operators, delay, transition, slew, hysteresis, sample/hold, and bridge state.
+  - Implement fixed values, guesses, initial equations, steady-state conditions, operating-point-derived initialization, reinitialization/jumps, and conflict diagnostics.
+  - Generate state/initialization reports and reject accidental duplication, movement, or hidden backend state.
+  - Add semantics-preserving operator lowering and differential fixtures.
+
+- [ ] **Increment 137 — Hybrid event scheduler, discontinuities, and mode-dependent topology**
+  - Freeze and implement observable ordering for initialization, integration, root detection, timers, analog events, digital events, bridge updates, zero-time event iteration, restart, and finalization.
+  - Implement dynamic event tolerances, named events, interrupted transitions, event fixed-point convergence, zero-time oscillation diagnostics, and event dependency graphs.
+  - Classify hard discontinuities, smoothness, hysteresis, guarded equations, and explicitly supported topology modes.
+  - Keep solver hints separate from mathematical behavior.
+
+- [ ] **Increment 138 — Analysis projections, linearization, derivatives, and noise**
+  - Derive initialization, DC/operating-point, transient, AC/small-signal, and noise projections from one semantic model.
+  - Implement derivative/Jacobian interfaces, sparse structure, differentiability diagnostics, symbolic/automatic/analytic derivative evidence, and capability-gated numerical differentiation.
+  - Preserve stable noise identity, PSD dimensions, hierarchy, correlation, transfer paths, and analysis applicability.
+  - Add cross-analysis consistency and derivative differential tests.
+
+- [ ] **Increment 139 — Environment, PVT, statistical variation, and model validity envelopes**
+  - Implement immutable typed environment contexts for temperature, nominal temperature, corner/process, supplies or declared conditions, analysis/sweep coordinates, and deterministic random seeds.
+  - Separate parameters, environment, small-signal noise, transient stochastic behavior, global variation, and local mismatch.
+  - Implement static and dynamic validity-envelope checks, applicability/accuracy metadata, violation policy, source-located diagnostics, and manifests.
+  - Add PVT/seed matrix determinism and envelope-boundary fixtures.
+
+- [ ] **Increment 140 — Solver capability profiles and simulator/model ABI seam**
+  - Define solver-neutral residual, state, event, derivative, noise, environment, and result interfaces.
+  - Publish capability descriptors and negotiation for analyses, DAEs, events, variable topology, noise, derivatives, tolerances, connect rules, mixed-signal bridges, statistics, hierarchy, and result fidelity.
+  - Define an OSDI-like external model adapter seam and a future native solver plugin seam without requiring either to define Nodal semantics.
+  - Retain adapter versions, options, commands, hashes, capability decisions, diagnostics, and failure classification.
+
+- [ ] **Increment 141 — Verilog-A/Verilog-AMS and solver-facing lowering parity**
+  - Prove source-semantic, residual/analysis, and target-lowering correspondence for supported constructs.
+  - Emit deterministic state, event, noise, analysis, environment, contribution, and source-map metadata alongside Verilog-A/Verilog-AMS.
+  - Add target reparse, OpenVAF/OSDI where supported, ngspice and mixed-signal adapter differential fixtures, and explicit capability rejection.
+  - Do not claim waveform equivalence as proof for unsupported structural transformations.
+
+- [ ] **Increment 142 — Continuous-time validation, scale, and reusable-model qualification**
+  - Add DC/operating-point/transient/AC/noise differential suites, event-order and initialization tests, parameter/PVT/seed matrices, cross-simulator comparisons, and failure classification.
+  - Exercise large sparse islands, hierarchy, repeated models, deterministic ordering, derivative/Jacobian performance, cache keys, and memory/runtime budgets.
+  - Qualify one external reusable analog model package using only public contracts, including model/environment/validity/solver manifests and portability reports.
+  - Publish a capability and limitations matrix for higher-index DAE, dynamic topology, advanced analyses, stochastic features, and simulator extensions.
 
 ## Deferred reusable library roadmap
 

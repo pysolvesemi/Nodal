@@ -9,7 +9,7 @@ on:
       - dev
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   unified-public-api-freeze:
@@ -18,51 +18,12 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - name: Check out Increment 15 branch
+      - name: Check out repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: increment/15-unified-public-api-v0.3-freeze
-
-      - name: Remove materializer trailing whitespace
-        if: github.event_name == 'pull_request'
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("scripts/materialize_increment15.py")
-          text = path.read_text(encoding="utf-8")
-          replacements = (
-              ("**Status:** Approved  \n", "**Status:** Approved\n"),
-              ("**Scope:** public-api  \n", "**Scope:** public-api\n"),
-              ("**API version:** 0.3  \n", "**API version:** 0.3\n"),
-              (
-                  "**Decision:** Freeze unified core semantics, Interface/Role/inout, automatic pipeline, and backend selection  \n",
-                  "**Decision:** Freeze unified core semantics, Interface/Role/inout, automatic pipeline, and backend selection\n",
-              ),
-          )
-          for old, new in replacements:
-              if new in text and old not in text:
-                  continue
-              if text.count(old) != 1:
-                  raise RuntimeError(f"whitespace repair anchor is not unique: {old!r}")
-              text = text.replace(old, new, 1)
-          path.write_text(text, encoding="utf-8")
-          PY
-          python3 scripts/check_formatting_baseline.py
-          git diff --check
-
-      - name: Commit whitespace repair
-        if: github.event_name == 'pull_request'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add scripts/materialize_increment15.py
-          git commit -m "Increment 15 — normalize materializer whitespace"
-          git push origin HEAD:increment/15-unified-public-api-v0.3-freeze
 
       - name: Validate unified API and predecessor contracts
-        if: github.event_name == 'push'
         run: |
           ./mill mill.scalalib.scalafmt/checkFormatAll
           ./mill scalafix.check

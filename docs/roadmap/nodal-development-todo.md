@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.16
+**Revision:** 1.17
 **Created:** 2026-08-20
 **Updated:** 2026-08-23
 **Status:** Active roadmap
@@ -724,7 +724,10 @@ Empty future-library or plugin directories are not committed merely as placehold
 - **M5 — FPGA-accelerated AMS validation:** explicit sampled/fixed-point approximation, four-level reference evidence, open FPGA implementation, HIL runtime, and a published capability/limitations matrix.
 - **M6 — User-authored formal verification extension:** frozen formal property API with an immediate-assertion-only synthesis boundary, target-neutral property IR, compositional harness/contracts, pluggable proof engines, vacuity/coverage, typed counterexample replay, property libraries, and conformance evidence.
 
-# Incremental roadmap
+# Foundation track — Incremental roadmap
+
+The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digital Verification, and Analog/Mixed-Signal Verification are dependent tracks with independent numbering that starts again at 1. Those dependent tracks remain implementation-blocked until every Foundation checkbox is complete. Architecture or public seams discovered while researching a dependent track must be added here rather than hidden in a vendor/tool implementation.
+
 
 ## Phase 0 — Repository, toolchains, architecture, and API contract
 
@@ -1364,6 +1367,89 @@ This independently schedulable phase closes the cross-layer continuous-time arch
   - Qualify one external reusable analog model package using only public contracts, including model/environment/validity/solver manifests and portability reports.
   - Publish a capability and limitations matrix for higher-index DAE, dynamic topology, advanced analyses, stochastic features, and simulator extensions.
 
+## Phase 10 — Foundation comments, FPGA-readiness, and HVL verification-readiness
+
+Detailed rationale and dependent-track plans are in [`dependent-productivity-and-verification-tracks-v0.1-plan.md`](dependent-productivity-and-verification-tracks-v0.1-plan.md). Verification backend ownership is defined by [ADR 0023](../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md). Foundation adds only the architecture/public seams needed to prevent later FPGA/UVM/UVM-MS work from being blocked by core design limitations; dependent-track implementations remain outside Foundation.
+
+- [ ] **Foundation Increment 143 — Comment/documentation IR architecture and public API gate**
+  - Freeze automatic ScalaDoc/unambiguous leading-comment capture plus an explicit target-neutral comment/documentation API for guaranteed placement.
+  - Define stable Comment IR anchors, propagation/orphan policy, directive separation, and semantic-versus-presentation hashing.
+
+- [ ] **Foundation Increment 144 — Scala source-comment capture and Comment IR propagation**
+  - Implement Scala 3 source/comment extraction, explicit comment APIs, stable anchors, deterministic propagation, source correlation, and ambiguity/directive diagnostics.
+
+- [ ] **Foundation Increment 145 — Verilog-family comment and documentation lowering**
+  - Emit the same Comment IR deterministically to Verilog, SystemVerilog, Verilog-A, and Verilog-AMS plus documentation/source-map manifests without changing semantic HDL identity.
+
+- [ ] **Foundation Increment 146 — FPGA productivity architecture readiness**
+  - Freeze reusable-IP requirements, board/platform resources, project implementation intent, portable Constraint IR, stable semantic targets, vendor capability/tool-adapter seams, constraint coverage, normalized reports, debug identities, and build/program provenance.
+  - Do not implement vendor constraints, board libraries, FPGA builds/programming, timing-closure exploration, or debug insertion in Foundation.
+
+- [ ] **Foundation Increment 147 — Nodal HVL Verification Semantic IR and public API architecture gate**
+  - Freeze target-neutral tests/scenarios, transactions, processes/events/time, drivers/monitors/agents, scoreboards/reference models, constrained stimulus, deterministic replay, functional coverage, properties/checks, register bindings, reusable VIP packaging, and AMS verification extensions.
+  - Bind verification endpoints to logical Interface/Register identities rather than generated HDL hierarchy strings.
+
+- [ ] **Foundation Increment 148 — Native verification runtime and generated-SystemVerilog IR readiness**
+  - Freeze the native Nodal verification scheduler/runtime contract independently of UVM and the simulator-adapter boundary needed for direct Verilator/Icarus and future open mixed-signal execution.
+  - Define a verification-SystemVerilog IR sufficient for generated UVM/VIP classes, interfaces/virtual interfaces, clocking blocks, dynamic containers, processes/events/mailboxes/semaphores, constraints/randomization, covergroups, properties, and DPI/VPI shims.
+  - Do not implement complete HVL runtime or UVM generation in Foundation.
+
+- [ ] **Foundation Increment 149 — UVM/UVM-MS projection and vendor-profile architecture readiness**
+  - Accept ADR 0023 and freeze Verification Semantic IR -> UVM/UVM-MS projections while keeping `nodal sim` independent of generated UVM.
+  - Freeze UVM component/TLM/factory/config/phase/objection/RAL mappings, UVM-MS structural/class bridge identities, vendor-neutral common source, and thin VCS/Questa/Xcelium profile seams.
+  - Confine unavoidable vendor `ifdef`s to generated adapter/include units; do not scatter them through common VIP logic.
+
+## Foundation completion barrier
+
+> **Blocked:** no FPGA Productivity, Digital Verification, or Analog/Mixed-Signal Verification implementation increment may start until every Foundation increment is complete, including any Foundation item appended after Increment 149 before the barrier is released.
+
+Research and feasibility work may continue while blocked. Any newly discovered core architecture requirement belongs in Foundation.
+
+## FPGA Productivity Track — blocked by Foundation; numbering restarts
+
+See [`dependent-productivity-and-verification-tracks-v0.1-plan.md`](dependent-productivity-and-verification-tracks-v0.1-plan.md) for detailed scope.
+
+- [ ] **FPGA Increment 1 — FPGA public platform/resource/constraint API gate**
+- [ ] **FPGA Increment 2 — Board/device/resource database and binding**
+- [ ] **FPGA Increment 3 — Portable timing and I/O constraint engine**
+- [ ] **FPGA Increment 4 — AMD Vivado constraint/build backend**
+- [ ] **FPGA Increment 5 — Intel Quartus and open-source FPGA backends**
+- [ ] **FPGA Increment 6 — Additional vendor profiles and constraint coverage**
+- [ ] **FPGA Increment 7 — Reproducible build, program, artifact, and normalized reporting**
+- [ ] **FPGA Increment 8 — Timing-closure feedback and bounded design-space exploration**
+- [ ] **FPGA Increment 9 — Vendor primitive/IP abstraction and debug instrumentation**
+- [ ] **FPGA Increment 10 — Board bring-up, IP packaging, HIL, and ecosystem qualification**
+
+## Digital Verification Track — blocked by Foundation; numbering restarts
+
+Nodal HVL is canonical. Native/open-source execution and generated UVM are sibling projections of one Verification Semantic IR; generated UVM is not the simulation foundation.
+
+- [ ] **Digital Verification Increment 1 — Nodal HVL native digital simulation vertical slice**
+- [ ] **Digital Verification Increment 2 — Scenarios, sequences, constrained stimulus, and replay**
+- [ ] **Digital Verification Increment 3 — Agents, drivers, monitors, scoreboards, and reference models**
+- [ ] **Digital Verification Increment 4 — Functional coverage and verification reporting**
+- [ ] **Digital Verification Increment 5 — Properties, protocol checks, and register-model verification**
+- [ ] **Digital Verification Increment 6 — Verification SystemVerilog and digital UVM generation**
+- [ ] **Digital Verification Increment 7 — Commercial simulator profiles**
+- [ ] **Digital Verification Increment 8 — Cross-backend semantic parity**
+- [ ] **Digital Verification Increment 9 — Reusable digital VIP qualification**
+- [ ] **Digital Verification Increment 10 — Scale, performance, compatibility, and verification release gate**
+
+## Analog/Mixed-Signal Verification Track — blocked by Foundation; numbering restarts
+
+This track is separate from Digital Verification but reuses its target-neutral transaction/component concepts and the Foundation AMS semantics. UVM-MS generation is a backend, not native mixed-signal simulation.
+
+- [ ] **AMS Verification Increment 1 — Nodal HVL native mixed-signal simulation vertical slice**
+- [ ] **AMS Verification Increment 2 — Analog/mixed-signal agents, drivers, monitors, and scoreboards**
+- [ ] **AMS Verification Increment 3 — PVT, sweeps, stochastic stimulus, and deterministic replay**
+- [ ] **AMS Verification Increment 4 — Analog measurements and functional coverage**
+- [ ] **AMS Verification Increment 5 — Mixed-signal properties and register/control interaction**
+- [ ] **AMS Verification Increment 6 — UVM-MS generation from Verification IR**
+- [ ] **AMS Verification Increment 7 — Commercial mixed-signal simulator profiles**
+- [ ] **AMS Verification Increment 8 — Native versus UVM-MS semantic parity**
+- [ ] **AMS Verification Increment 9 — Reusable UVM-MS VIP qualification**
+- [ ] **AMS Verification Increment 10 — Scale, portability, and mixed-signal verification release gate**
+
 ## Deferred reusable library roadmap
 
 No official reusable model/component library or production plugin is implemented by Increment 115. Increments 116-123 define the future core register-factory and qualification track; they do not populate `libraries/` yet. After the core API, extension surface, packaging model, and preview release are proven, independently approved library/plugin roadmaps may populate `libraries/`, `plugins/`, or separate repositories while preserving the public-core dependency contract.
@@ -1427,4 +1513,7 @@ When an increment is completed:
 - MLIR pass plugin API: <https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Tools/Plugins/PassPlugin.h>
 - MLIR dialect plugin API: <https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Tools/Plugins/DialectPlugin.h>
 - Verilog-AMS standards: <https://accellera.org/downloads/standards/v-ams>
+- IEEE SystemVerilog 1800-2023 via Accellera/IEEE: <https://www.accellera.org/downloads/ieee>
+- Accellera UVM / IEEE 1800.2 reference implementation: <https://www.accellera.org/downloads/standards/uvm>
+- Accellera UVM-MS 1.0: <https://www.accellera.org/downloads/standards/uvm-ms>
 - SystemVerilog-AMS working group: <https://accellera.org/activities/working-groups/systemverilog-ams>

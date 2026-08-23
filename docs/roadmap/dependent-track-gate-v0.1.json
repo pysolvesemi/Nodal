@@ -1,6 +1,7 @@
 {
   "schema": 1,
   "status": "active",
+  "roadmap_revision": "1.17",
   "foundation_track": {
     "roadmap": "docs/roadmap/nodal-development-todo.md",
     "completion_rule": "all-foundation-checkboxes-complete",

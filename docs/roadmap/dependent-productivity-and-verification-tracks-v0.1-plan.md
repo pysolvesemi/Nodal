@@ -1,0 +1,221 @@
+# Foundation-gated FPGA and verification tracks v0.1 plan
+
+**Status:** Normative roadmap target
+**Foundation:** the main Nodal incremental roadmap
+**Dependent tracks:** FPGA Productivity, Digital Verification, Analog/Mixed-Signal Verification
+**Verification architecture:** [ADR 0023](../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md)
+
+## Global dependency rule
+
+The existing Nodal incremental roadmap is the **Foundation track**.
+
+> **No FPGA Productivity, Digital Verification, or Analog/Mixed-Signal Verification implementation increment may start until every Foundation increment is complete.**
+
+A dependent track may be researched while Foundation is incomplete, but it may not merge implementation that depends on an unfinished Foundation contract. Any architectural seam discovered during research that would otherwise block a dependent track must be added to Foundation rather than worked around inside the dependent track.
+
+Foundation owns architecture and public contracts for:
+
+- hardware and AMS language semantics;
+- source maps, semantic identity, comments, and diagnostics;
+- clocks/resets/domains/CDC/RDC;
+- interfaces, roles, protocols, digital inout, and mixed-signal bridges;
+- continuous-time topology/equations/state/events/analysis/environment;
+- register IR and address-map metadata;
+- simulation/tool-adapter SPI;
+- target-neutral properties and coverage identities;
+- plugin and backend capability negotiation;
+- verification semantic IR and generated-language/backend seams;
+- FPGA platform/resource/constraint/report/debug semantic seams.
+
+Dependent tracks own implementations, vendor/tool adapters, generated collateral, reusable VIP, board libraries, and qualification after the barrier opens.
+
+## Foundation additions
+
+- [ ] **Foundation Increment 143 — Comment/documentation IR architecture and public API gate**
+  - Freeze automatic capture policy for ScalaDoc and unambiguous leading Scala comments plus an explicit target-neutral comment/documentation API for guaranteed placement.
+  - Define `Comment`/documentation IR with stable ID, kind, text, source span, semantic anchor, intended audience, placement/propagation policy, and original-versus-explicit provenance.
+  - Separate ordinary comments from typed synthesis directives, lint waivers, attributes, pragmas, simulation exclusions, and tool commands so preserved user text cannot accidentally change hardware behavior.
+  - Define semantic-design hash, presentation/comment hash, and final-artifact hash behavior; comment-only changes must not invalidate logic-equivalence evidence.
+  - Define propagation through inlining, elimination, hierarchy/generate expansion, source maps, orphan-comment reporting, generated-instance duplication limits, and output profiles.
+
+- [ ] **Foundation Increment 144 — Scala source-comment capture and Comment IR propagation**
+  - Implement Scala 3 source-position/comment extraction for module/interface/port/parameter/state/memory/instance/generate/analog/constraint/verification declarations where association is unambiguous.
+  - Implement the explicit comment/documentation API, stable semantic anchors, deterministic ordering, transformation propagation, source correlation, and orphan diagnostics.
+  - Add negative tests for accidental directive interpretation, ambiguous ownership, eliminated anchors, and nondeterministic macro/source expansion.
+
+- [ ] **Foundation Increment 145 — Verilog-family comment and documentation lowering**
+  - Emit deterministic comments for portable Verilog, SystemVerilog, Verilog-A, and Verilog-AMS from the same Comment IR.
+  - Support module/interface/port/parameter/signal/state/instance/generate/process/analog-island/node/branch/equation/contribution/event/constraint anchors where the target has a legal stable placement.
+  - Generate documentation/source-correlation artifacts and comment mapping manifests; verify that comment-only changes do not alter semantic HDL hashes.
+  - Keep vendor directives and constraints typed and separate from ordinary emitted comments.
+
+- [ ] **Foundation Increment 146 — FPGA productivity architecture readiness**
+  - Freeze a portable FPGA intent model with separate reusable-IP requirements, board/platform resources, and project implementation intent.
+  - Define target-neutral Constraint IR categories for clocks/generated clocks/domain relationships/I-O delays/timing exceptions/I-O electrical intent/physical regions/tool intent with stable semantic targets instead of hierarchy strings.
+  - Define board/device/package/bank/pin/resource schemas, vendor-capability profiles, raw-vendor escape metadata, constraint coverage/match-count evidence, normalized timing/resource/power reports, debug-probe identities, build/program provenance, and source-correlation seams.
+  - Preserve deliberate safety boundaries: no heuristic false paths, no heuristic multicycle paths, no silent floorplanning, no silent unsupported constraint translation.
+  - Do not implement XDC/SDC/QSF/PDC/LPF/PCF generation, vendor builds, board libraries, programming, timing-closure exploration, or debug insertion in Foundation.
+
+- [ ] **Foundation Increment 147 — Nodal HVL Verification Semantic IR and public API architecture gate**
+  - Freeze target-neutral verification semantics for tests/scenarios, transactions, typed endpoints, processes/events/time, deterministic cancellation and fork/join, drivers/monitors/agents, scoreboards/reference models, analysis streams, configuration/resources, random variables/constraints/seeds/replay, functional coverage, properties/checks, register-model bindings, and reusable VIP packaging.
+  - Bind drivers/monitors to the logical Nodal `Interface` ABI rather than generated signal names; bind register verification to canonical Register IR identities.
+  - Define source maps, stable verification/component/transaction/coverage IDs, capability requirements, backend exclusions, normalized results, replay manifests, and cross-backend parity rules.
+  - Define analog/mixed-signal verification extensions for quantities, tolerances, measurements, crossings/events, PVT/sweep context, and bridge provenance without implementing UVM-MS.
+
+- [ ] **Foundation Increment 148 — Native verification runtime and generated-SystemVerilog IR readiness**
+  - Freeze the Nodal verification scheduler/runtime contract independently of UVM: simulation time, delta/event ordering, clocks, waits, processes, cancellation, timeout, deterministic seed/replay, transaction recording, coverage sampling, failure identity, and simulator callback semantics.
+  - Define the simulator-adapter boundary needed for direct open-source execution through Verilator/Icarus and for future mixed-signal open-source adapters without requiring UVM support in those tools.
+  - Define a verification-SystemVerilog IR sufficient for generated UVM/VIP: packages, classes/inheritance/polymorphism/parameterized classes, interfaces/virtual interfaces/clocking blocks, tasks/functions, dynamic containers, processes/events/mailboxes/semaphores, constrained randomization, covergroups, properties, DPI/VPI shims, and deterministic naming/source maps.
+  - Do not implement the complete native HVL runtime, UVM generator, or commercial simulator adapters in Foundation.
+
+- [ ] **Foundation Increment 149 — UVM/UVM-MS projection and vendor-profile architecture readiness**
+  - Accept ADR 0023 and freeze the projection from Verification Semantic IR to digital UVM and UVM-MS rather than making UVM the canonical Nodal execution model.
+  - Define mappings for tests/envs/agents/drivers/monitors/sequencers/sequences/items/scoreboards/TLM/analysis/factory/config/phases/objections/coverage/reporting and generated UVM RAL integration.
+  - Define UVM-MS structural/class bridge identities, mixed-signal endpoints, analog stimulus/monitor/measurement contracts, and capability mapping to Foundation AMS semantics.
+  - Define vendor-neutral common source plus thin simulator profiles. Any required `ifdef` is confined to generated vendor adapter/include units, not common VIP/test logic.
+  - Record standard version, UVM reference implementation, vendor profile, feature decisions, defines, adapter hashes, source hashes, commands, and unsupported capabilities.
+  - Do not generate production UVM/UVM-MS code or vendor scripts in Foundation.
+
+## Foundation completion barrier
+
+The barrier opens only when every checkbox in the Foundation track, including Increments 143-149 and any later Foundation item added before release, is complete with required CI/evidence.
+
+The three dependent tracks are then independently schedulable unless they declare additional track-local prerequisites.
+
+---
+
+# FPGA Productivity Track — blocked by Foundation
+
+Numbering restarts for this track.
+
+- [ ] **FPGA Increment 1 — FPGA public platform/resource/constraint API gate**
+  - Freeze board/device/resource/project APIs against Foundation Constraint IR and Interface identities.
+  - Compile positive/negative candidates for clocks, pins/banks, connectors, protocol resources, implementation intent, vendor extensions, and stable semantic constraint targets.
+
+- [ ] **FPGA Increment 2 — Board/device/resource database and binding**
+  - Implement versioned device/package/board schemas, oscillators, pins/banks/voltages, connectors, common peripherals, capability matching, project resource binding, and reproducible board provenance.
+
+- [ ] **FPGA Increment 3 — Portable timing and I/O constraint engine**
+  - Implement primary/generated clocks, declared relationships, asynchronous groups, I/O delays, explicit max/min/multicycle/false-path constraints, interface timing contracts, I/O electrical intent, stable target resolution, and constraint manifests.
+  - Never infer unsafe timing exceptions heuristically.
+
+- [ ] **FPGA Increment 4 — AMD Vivado constraint/build backend**
+  - Generate ordered XDC/Tcl for timing, I/O, clocking, supported physical intent, build, report, and programming flows.
+  - Validate semantic targets before/after synthesis and retain Vivado version/options/checkpoints/reports.
+
+- [ ] **FPGA Increment 5 — Intel Quartus and open-source FPGA backends**
+  - Generate SDC/QSF and Quartus build/report flows.
+  - Add Yosys/nextpnr architecture-appropriate PCF/LPF/PDC/CST/clock configuration as supported by selected families.
+  - Keep unsupported physical constraints explicit rather than approximated.
+
+- [ ] **FPGA Increment 6 — Additional vendor profiles and constraint coverage**
+  - Add Microchip and selected Lattice/vendor flows according to demand.
+  - Implement unmatched/multi-match/stale-target, unconstrained-clock/path, exception-audit, bank-voltage, pin-conflict, generated-clock, and CDC-constraint coverage reports across all backends.
+
+- [ ] **FPGA Increment 7 — Reproducible build, program, artifact, and normalized reporting**
+  - Implement `nodal fpga build/program/report`-style flows, tool lock/provenance, cache keys, checkpoints/bitstreams, normalized timing/resource/power/clock/I-O reports, and source-correlated diagnostics.
+
+- [ ] **FPGA Increment 8 — Timing-closure feedback and bounded design-space exploration**
+  - Map critical paths and failures back to Nodal expressions, pipelines, interfaces, memories, FSMs, domains, and generated instances.
+  - Produce explicit pipeline/ready-path/memory/DSP/fanout/placement recommendations with latency/protocol/evidence impact.
+  - Support bounded strategy/seed exploration under user budgets and produce Pareto timing/resource/power reports; never silently mutate the accepted design.
+
+- [ ] **FPGA Increment 9 — Vendor primitive/IP abstraction and debug instrumentation**
+  - Qualify target-neutral memory/DSP/PLL/clock-buffer/I-O-delay/SERDES/FIFO/ECC/transceiver abstractions where portable contracts are possible.
+  - Add typed probes/triggers and adapters for ILA, Signal Tap, and open-source analyzers with source/waveform correlation.
+
+- [ ] **FPGA Increment 10 — Board bring-up, IP packaging, HIL, and ecosystem qualification**
+  - Generate reusable IP packaging metadata, software collateral, memory/interrupt/register integration artifacts, board self-tests, programming/HIL flows, and a supported board/vendor/tool capability matrix.
+  - Qualify representative complex FPGA subsystem builds across at least one commercial and one open-source flow.
+
+---
+
+# Digital Verification Track — blocked by Foundation
+
+Numbering restarts for this track.
+
+- [ ] **Digital Verification Increment 1 — Nodal HVL native digital simulation vertical slice**
+  - Implement the Verification IR/native runtime vertical slice for tests, deterministic processes/time, clocks/resets, typed transactions, direct signal/interface access, failures, waveforms, seeds, and replay.
+  - Run generated Verilog directly through Verilator as the primary fast adapter and Icarus as an independent event-driven adapter; generated UVM is not involved.
+
+- [ ] **Digital Verification Increment 2 — Scenarios, sequences, constrained stimulus, and replay**
+  - Implement reusable scenarios/sequence graphs, random variables/constraints/distributions, deterministic seed hierarchy, value-stream capture, exact replay, parallel stimulus, cancellation, timeout, and capability diagnostics.
+
+- [ ] **Digital Verification Increment 3 — Agents, drivers, monitors, scoreboards, and reference models**
+  - Implement active/passive agents, typed drivers/monitors bound to logical Interfaces, analysis streams, transaction correlation, protocol timing policies, scoreboards, reference-model calls, and reusable BFM/VIP base classes.
+
+- [ ] **Digital Verification Increment 4 — Functional coverage and verification reporting**
+  - Implement canonical coverpoints/bins/crosses/transition coverage where meaningful, coverage groups/sampling, stable IDs, merge/report, source mapping, exclusions/waivers, and optional UCIS interchange.
+
+- [ ] **Digital Verification Increment 5 — Properties, protocol checks, and register-model verification**
+  - Integrate the Foundation property layer with simulation checks and formal hooks.
+  - Generate register frontdoor/backdoor operations, predictors, access-policy checks, reset/side-effect/collision coverage, and register scoreboards from canonical Register IR.
+
+- [ ] **Digital Verification Increment 6 — Verification SystemVerilog and digital UVM generation**
+  - Render standards-oriented SystemVerilog/UVM from the same Verification IR: test/env/agent/driver/monitor/sequencer/sequence/item/scoreboard/TLM/factory/config/phases/objections/coverage/reporting and UVM RAL.
+  - Generate reusable packages/VIP with deterministic hierarchy/names and source maps.
+
+- [ ] **Digital Verification Increment 7 — Commercial simulator profiles**
+  - Qualify thin VCS-family, Questa-family, and Xcelium-family profiles for compile/elaboration/run, DPI/VPI, UVM library selection, waves, coverage, reporting, and known compatibility workarounds.
+  - Keep common UVM source identical wherever standards support it; confine unavoidable vendor `ifdef`s to adapter packages/includes.
+
+- [ ] **Digital Verification Increment 8 — Cross-backend semantic parity**
+  - Run the same Nodal HVL tests in native/open-source mode and generated-UVM mode and compare transaction ordering, checks, scoreboards, register behavior, deterministic replay streams, coverage intent/results, termination, and source-level failures.
+  - Classify scheduler/random-solver differences rather than hiding them.
+
+- [ ] **Digital Verification Increment 9 — Reusable digital VIP qualification**
+  - Author representative protocol VIP only in Nodal HVL—at minimum `Valid`/`Stream`, APB, and AXI4-Lite or another approved protocol—and generate both native BFM/agents and UVM VIP.
+  - Qualify active/passive modes, protocol assertions, constrained traffic, coverage, scoreboards, configuration, errors, reset, backpressure, and reuse in an external consumer project.
+
+- [ ] **Digital Verification Increment 10 — Scale, performance, compatibility, and verification release gate**
+  - Exercise large testbench hierarchies, many agents, long regressions, parallel tests, deterministic caching, coverage merge, UVM compile/runtime scale, and source-map performance.
+  - Publish supported HVL/UVM/SystemVerilog/vendor capability and limitations matrices plus a reusable VIP author conformance kit.
+
+---
+
+# Analog/Mixed-Signal Verification Track — blocked by Foundation
+
+Numbering restarts for this track and remains separate from Digital Verification.
+
+- [ ] **AMS Verification Increment 1 — Nodal HVL native mixed-signal simulation vertical slice**
+  - Extend the native Verification IR/runtime to typed physical quantities, analog terminals/signal-flow values, measurements, tolerances, crossings/events, waveform stimulus, PVT/environment context, and mixed digital/analog synchronization.
+  - Execute through available open Verilog-A/solver and digital adapters without requiring generated UVM-MS.
+
+- [ ] **AMS Verification Increment 2 — Analog/mixed-signal agents, drivers, monitors, and scoreboards**
+  - Implement mixed-signal transaction schemas, analog stimulus sources, samplers/monitors, tolerance-aware scoreboards/reference models, event correlation, mixed interface bindings, and reusable active/passive agent patterns.
+
+- [ ] **AMS Verification Increment 3 — PVT, sweeps, stochastic stimulus, and deterministic replay**
+  - Integrate Foundation environment/PVT/noise/variation semantics with constrained verification scenarios, corner matrices, Monte Carlo/mismatch seeds, deterministic run manifests, failure reduction, and replay.
+
+- [ ] **AMS Verification Increment 4 — Analog measurements and functional coverage**
+  - Implement reusable measurements for amplitude/range, threshold/crossing, settling, overshoot, frequency/period/duty, jitter, gain, phase, integrated noise, SNR/ENOB-like metrics where mathematically defined, plus tolerance-aware bins and cross coverage.
+  - Keep measurement definitions target neutral and retain waveform/source evidence.
+
+- [ ] **AMS Verification Increment 5 — Mixed-signal properties and register/control interaction**
+  - Add bridge/event/control-loop checks, analog envelope assertions, initialization/settling checks, mode transition verification, mixed register/control sequences, and source-level failure correlation using Foundation property and Register IR identities.
+
+- [ ] **AMS Verification Increment 6 — UVM-MS generation from Verification IR**
+  - Generate UVM-MS 1.0-oriented class and structural verification collateral from the same Nodal HVL environment, including mixed-signal agents, analog stimulus/monitor bridges, scoreboards, transactions, coverage, configuration, and reuse of generated digital UVM components where appropriate.
+  - Keep native simulation independent of UVM-MS.
+
+- [ ] **AMS Verification Increment 7 — Commercial mixed-signal simulator profiles**
+  - Qualify thin VCS-family, Questa-family, and Xcelium-family AMS/UVM-MS profiles according to available licensed environments and supported standards.
+  - Isolate compile/elaboration/binding/connect-rule/real-net/waveform/vendor workarounds in adapter units and manifests.
+
+- [ ] **AMS Verification Increment 8 — Native versus UVM-MS semantic parity**
+  - Compare the same Nodal HVL environment across native/open and generated-UVM-MS runs for transactions, analog stimulus, event timing within declared tolerances, measurements, scoreboards, register/control behavior, coverage intent, termination, and failure IDs.
+  - Classify solver/scheduling/tolerance differences explicitly.
+
+- [ ] **AMS Verification Increment 9 — Reusable UVM-MS VIP qualification**
+  - Author representative mixed-signal VIP only in Nodal HVL, then generate native and UVM-MS forms.
+  - Qualify at least one converter/control-loop-oriented VIP with digital control plus analog terminals/measurements, reusable configuration, active/passive modes, scoreboards, coverage, PVT scenarios, and external consumer reuse.
+
+- [ ] **AMS Verification Increment 10 — Scale, portability, and mixed-signal verification release gate**
+  - Exercise multiple analog islands, many digital agents, long regressions, PVT/Monte Carlo matrices, waveform/result volume, coverage merge, UVM-MS compile/runtime scale, source maps, and failure reduction.
+  - Publish supported HVL/UVM-MS/simulator/analysis/real-net/connect-rule capability and limitations matrices plus a reusable mixed-signal VIP conformance kit.
+
+## Feasibility conclusion
+
+The requested architecture is feasible and valuable with one critical rule: the common representation must be a **Nodal Verification Semantic IR**, not a UVM IR. Digital UVM and UVM-MS are generated projections. This keeps `nodal sim` fast and open-source-friendly while allowing the same testbench and VIP source to enter commercial UVM flows unchanged at the Nodal level.
+
+The latest standards baseline for the dependent verification tracks is IEEE 1800-2023 SystemVerilog, IEEE 1800.2-2020 UVM with the current Accellera reference implementation selected by profile, and Accellera UVM-MS 1.0. Version selection remains explicit and lockable so later standards/reference releases do not silently change generated verification behavior.

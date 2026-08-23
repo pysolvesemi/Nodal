@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-API = ROOT / "core/scala/api/src/nodal/RoleAccessInversionCandidate.scala"
+API = ROOT / "core/scala/api/src/nodal/PipelineInterfaceCandidateApi.scala"
 EXAMPLE = ROOT / "examples/interfacePipelineApi/src/PipelineInterfaceCandidates.scala"
 
 
@@ -23,8 +23,8 @@ class Increment14ReviewClosureTests(unittest.TestCase):
         api = API.read_text(encoding="utf-8")
         source = EXAMPLE.read_text(encoding="utf-8")
         for fragment in (
-            "type InverseRole",
-            "endpoint.role.access.map(RoleAccessInversion.apply)",
+            "object RoleAccess",
+            "endpoint.role.access.map(RoleAccess.inverted)",
             "case RoleAccess.Master(member) => RoleAccess.Slave(member)",
             "case RoleAccess.Slave(member) => RoleAccess.Master(member)",
             "case RoleAccess.Nested(member, role)",

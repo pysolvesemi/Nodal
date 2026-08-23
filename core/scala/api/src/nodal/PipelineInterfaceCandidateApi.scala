@@ -99,6 +99,34 @@ enum RoleAccess:
   case Contribute(member: String)
   case Nested(member: String, role: String)
 
+object RoleAccess:
+  private[nodal] def inverted(access: RoleAccess): RoleAccess = access match
+    case RoleAccess.In(member) => RoleAccess.Out(member)
+    case RoleAccess.Out(member) => RoleAccess.In(member)
+    case RoleAccess.Observe(member) => RoleAccess.Observe(member)
+    case RoleAccess.Master(member) => RoleAccess.Slave(member)
+    case RoleAccess.Slave(member) => RoleAccess.Master(member)
+    case RoleAccess.Read(member) => RoleAccess.Drive(member)
+    case RoleAccess.Drive(member) => RoleAccess.Read(member)
+    case RoleAccess.Connect(member) => RoleAccess.Connect(member)
+    case RoleAccess.Sense(member) => RoleAccess.Contribute(member)
+    case RoleAccess.Contribute(member) => RoleAccess.Sense(member)
+    case RoleAccess.Nested(member, role) =>
+      RoleAccess.Nested(member, invertedRoleName(role))
+
+  private def invertedRoleName(role: String): String = role match
+    case "master" => "slave"
+    case "slave" => "master"
+    case "source" => "sink"
+    case "sink" => "source"
+    case "initiator" => "target"
+    case "target" => "initiator"
+    case "controller" => "peripheral"
+    case "peripheral" => "controller"
+    case "device" => "environment"
+    case "environment" => "device"
+    case other => s"inverse($other)"
+
 final class Role[R <: RoleKind] private[nodal] (
     val name: String,
     val access: Seq[RoleAccess]
@@ -227,9 +255,13 @@ def interfaceArray[I <: Interface, R <: RoleKind](
 
 extension [I <: Interface, R <: RoleKind](endpoint: InterfacePort[I, R])
   def inverted(using inverse: RoleInverse[R]): InterfacePort[I, inverse.Out] =
+    val invertedRole = new Role[inverse.Out](
+      inverse.inverse.name,
+      endpoint.role.access.map(RoleAccess.inverted)
+    )
     new InterfacePort(
       endpoint.definition,
-      inverse.inverse,
+      invertedRole,
       s"${endpoint.name}.inverse",
       endpoint.domain
     )

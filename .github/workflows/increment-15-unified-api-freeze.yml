@@ -52,6 +52,31 @@ jobs:
               if text.count(old) != 1:
                   raise RuntimeError(f"materializer repair anchor is not unique: {old!r}")
               text = text.replace(old, new, 1)
+
+          build_modules_old = """                    object publicApiV03External extends NodalScalaModule:
+                      def moduleDeps = Seq(core.scala.api)
+
+                    object publicApiV03 extends NodalScalaModule:
+                      def moduleDeps = Seq(core.scala.api, publicApiV03External)
+
+                    object publicApiV03Migration extends NodalScalaModule:
+                      def moduleDeps = Seq(core.scala.api)
+"""
+          build_modules_old = build_modules_old.replace("                      ", "                      ")
+          build_modules_new = """                      object publicApiV03External extends NodalScalaModule:
+                        def moduleDeps = Seq(core.scala.api)
+
+                      object publicApiV03 extends NodalScalaModule:
+                        def moduleDeps = Seq(core.scala.api, publicApiV03External)
+
+                      object publicApiV03Migration extends NodalScalaModule:
+                        def moduleDeps = Seq(core.scala.api)
+"""
+          if build_modules_new not in text:
+              if text.count(build_modules_old) != 1:
+                  raise RuntimeError("Mill example-module source anchor is not unique")
+              text = text.replace(build_modules_old, build_modules_new, 1)
+
           path.write_text(text, encoding="utf-8")
           PY
           python3 scripts/materialize_increment15.py --mode prepare

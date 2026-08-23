@@ -617,7 +617,6 @@ def check_repository(root: Path) -> list[Problem]:
         roadmap,
         (
             "**Revision:** 1.12",
-            "**Updated:** 2026-08-22",
             "- [x] **Increment 12 — Clock/reset public API v0.2 freeze and contract fixtures**",
             "NodalClockResetApi-DG-v0.2.md",
             "clock-reset-diagnostics-v0.2.json",
@@ -627,6 +626,18 @@ def check_repository(root: Path) -> list[Problem]:
         "NODAL-INC12-054",
         "main roadmap",
     )
+    updated_lines = [
+        line.removeprefix("**Updated:** ")
+        for line in roadmap.splitlines()
+        if line.startswith("**Updated:** ")
+    ]
+    if len(updated_lines) != 1 or updated_lines[0] < "2026-08-22":
+        problems.append(
+            Problem(
+                "NODAL-INC12-054",
+                "main roadmap Updated date must be present and no earlier than 2026-08-22",
+            )
+        )
 
     _require(
         build,

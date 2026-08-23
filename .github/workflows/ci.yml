@@ -21,59 +21,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  update_increment12_roadmap_check:
-    name: update Increment 12 roadmap check
-    if: github.event_name == 'pull_request' && github.head_ref == 'increment/124-interface-role-inout-ams-roadmap'
-    permissions:
-      contents: write
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Select the writable feature head
-        run: |
-          git fetch --no-tags origin \
-            increment/124-interface-role-inout-ams-roadmap:refs/remotes/origin/increment/124-interface-role-inout-ams-roadmap
-          git checkout -B increment/124-interface-role-inout-ams-roadmap \
-            origin/increment/124-interface-role-inout-ams-roadmap
-
-      - name: Validate a forward-moving roadmap date
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('scripts/check_increment12.py')
-          content = path.read_text(encoding='utf-8')
-          old = '''            "**Revision:** 1.12",\n            "**Updated:** 2026-08-22",\n            "- [x] **Increment 12 — Clock/reset public API v0.2 freeze and contract fixtures**",\n'''
-          new = '''            "**Revision:** 1.12",\n            "- [x] **Increment 12 — Clock/reset public API v0.2 freeze and contract fixtures**",\n'''
-          if content.count(old) != 1:
-              raise SystemExit('Increment 12 roadmap fragment was not found exactly once')
-          content = content.replace(old, new, 1)
-          anchor = '''        "main roadmap",\n    )\n\n    _require(\n        build,\n'''
-          replacement = '''        "main roadmap",\n    )\n    updated_lines = [\n        line.removeprefix("**Updated:** ")\n        for line in roadmap.splitlines()\n        if line.startswith("**Updated:** ")\n    ]\n    if len(updated_lines) != 1 or updated_lines[0] < "2026-08-22":\n        problems.append(\n            Problem(\n                "NODAL-INC12-054",\n                "main roadmap Updated date must be present and no earlier than 2026-08-22",\n            )\n        )\n\n    _require(\n        build,\n'''
-          if content.count(anchor) != 1:
-              raise SystemExit('Increment 12 roadmap validation insertion point was not found exactly once')
-          content = content.replace(anchor, replacement, 1)
-          path.write_text(content, encoding='utf-8')
-          PY
-          python3 scripts/check_increment12.py
-          git diff --check
-
-      - name: Publish updated checker
-        run: |
-          git fetch --no-tags origin dev:refs/remotes/origin/dev
-          git checkout origin/dev -- .github/workflows/ci.yml
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'Make Increment 12 roadmap date check forward-compatible'
-          git push origin HEAD:increment/124-interface-role-inout-ams-roadmap
-
   contracts:
     name: contracts
     runs-on: ubuntu-24.04

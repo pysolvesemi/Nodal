@@ -3,7 +3,7 @@ name: Increment 15 Unified Public API Freeze
 on:
   push:
     branches:
-      - increment/15-unified-public-api-v0.3-freeze
+      - increment/15-unified-public-api-v0-3-freeze
   pull_request:
     branches:
       - dev

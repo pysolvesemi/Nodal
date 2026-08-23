@@ -36,12 +36,15 @@ Accepted ADRs must not be edited to reverse their decision. A material change re
 | [0018](0018-expression-materialization-and-semantic-naming.md) | Inline safe pure expressions, materialize only for declared reasons, and derive deterministic semantic names and expression-level source maps for required objects. |
 | [0019](0019-mandatory-pre-emission-hardware-quality-gates.md) | Require transactional staged internal verification and independent target lint/synthesis evidence before generated HDL is accepted. |
 | [0020](0020-canonical-register-factory-and-transport-adapters.md) | Define register ABI once in canonical Register IR, separate physical register blocks from transports, support Scala/SystemRDL/YAML/IP-XACT frontends, and emit fixed register ABI symbols as non-overridable Verilog constants. |
+| [0021](0021-unified-struct-interface-role-and-inout-architecture.md) | Separate directionless `Struct` values from connectivity `Interface`s, use generic named roles with master/slave convenience, support explicit digital resolved inout, preserve conservative AMS terminals, and retain one logical Interface ABI across flattened and native backends. |
 
 ADR 0012 owns general plugin discovery, resolution, loading, trust, lifecycle, and provenance. ADR 0013 layers the target-HDL-specific structured representations, pass profiles, preservation rules, and proof obligations on that common plugin foundation. Installing either a plugin or pass is inert until the project resolves and explicitly selects it in a locked plan.
 
 ADR 0014 specializes ADR 0010 and ADR 0012 for deferred user-authored formal verification: Nodal owns property/domain/reset/task semantics, while CIRCT lowering, SBY/Yosys, and future engines remain capability-checked implementation and adapter layers.
 
 ADR 0020 specializes the core semantic, clock/reset, quality-gate, and plugin boundaries for control/status registers. Register authoring frontends and transport adapters normalize around one canonical model; neither a bus protocol nor a generated software/interchange view may redefine the register ABI.
+
+ADR 0021 specializes the core semantic, clock/reset, AMS, backend-profile, and quality-gate boundaries for reusable connectivity. It keeps storable values, protocol interfaces, digital resolved inout, conservative terminals, directional analog signal flow, mixed-signal bridges, and backend physical layouts distinct while preserving one logical Interface ABI.
 
 ## Proposed records
 

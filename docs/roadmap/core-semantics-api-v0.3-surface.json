@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "roadmap-freeze-candidate",
-  "roadmap_revision": "1.11",
+  "roadmap_revision": "1.15",
   "formal_freeze_increment": 15,
   "architecture": "explicit-stage-lossless-value-exact-connection-dimension-safe-declared-effect",
   "documents": {
@@ -11,7 +11,10 @@
     "main_roadmap": "docs/roadmap/nodal-development-todo.md",
     "enum_fsm_plan": "docs/roadmap/enum-fsm-api-v0.3-plan.md",
     "signed_loop_plan": "docs/roadmap/signed-loop-api-v0.3-plan.md",
-    "shaped_values_naming_quality_plan": "docs/roadmap/shaped-values-naming-quality-v0.3-plan.md"
+    "shaped_values_naming_quality_plan": "docs/roadmap/shaped-values-naming-quality-v0.3-plan.md",
+    "interface_role_inout_adr": "docs/architecture/0021-unified-struct-interface-role-and-inout-architecture.md",
+    "interface_role_inout_plan": "docs/roadmap/interface-role-inout-ams-v0.1-plan.md",
+    "interface_role_inout_surface": "docs/roadmap/interface-role-inout-ams-v0.1-surface.json"
   },
   "value_stages": {
     "elaboration": [
@@ -61,8 +64,27 @@
     ]
   },
   "aggregates": {
-    "directionless_payload": true,
-    "candidate_base": "Bundle",
+    "value_kind": "Struct",
+    "value_is_directionless": true,
+    "value_is_storable": true,
+    "connectivity_kind": "Interface",
+    "interface_is_storable": false,
+    "role_kind": "Role",
+    "generic_named_roles": true,
+    "built_in_convenience_roles": [
+      "master",
+      "slave",
+      "source",
+      "sink",
+      "initiator",
+      "target",
+      "controller",
+      "peripheral",
+      "device",
+      "environment",
+      "monitor"
+    ],
+    "automatic_inverse_only_for_complementary_digital_access": true,
     "boundary_direction": [
       "in",
       "out",
@@ -73,11 +95,14 @@
       "Valid",
       "Stream"
     ],
+    "canonical_valid_only_type": "Valid",
     "direct_connection": "exact",
     "adapter_candidates": [
       "via",
       "viewAs"
-    ]
+    ],
+    "logical_interface_abi_required": true,
+    "formal_freeze_increment": 15
   },
   "quantities": {
     "dimension_checked": true,
@@ -149,7 +174,11 @@
     "compile-negative-fixtures",
     "external-library-fixture",
     "stable-diagnostic-codes",
-    "green-ci"
+    "green-ci",
+    "interface-role-inout-ams-candidate-compilation",
+    "digital-inout-negative-fixtures",
+    "mixed-signal-interface-negative-fixtures",
+    "logical-interface-abi-layout-candidates"
   ],
   "enum_fsm": {
     "architecture": "docs/architecture/0015-native-scala-enum-and-hierarchical-fsm.md",
@@ -196,6 +225,43 @@
     "semantic_state_and_temporary_names": true,
     "mandatory_internal_checks": true,
     "transactional_accepted_emission": true,
+    "formal_freeze_increment": 15
+  },
+  "digital_inout": {
+    "first_class": true,
+    "separate_read_and_drive": true,
+    "minimum_resolution": [
+      "0",
+      "1",
+      "Z",
+      "X-or-contention"
+    ],
+    "drive_modes": [
+      "push-pull-tristate",
+      "open-drain",
+      "open-source",
+      "pass-through"
+    ],
+    "multiple_drivers_only_on_resolved_nets": true,
+    "split_internal_tristate_preferred_for_portable_synthesis": true,
+    "top_level_black_box_pad_hierarchy_use": true,
+    "silent_internal_inout_to_mux": false,
+    "profile_aware_internal_resolution": true,
+    "formal_freeze_increment": 15
+  },
+  "ams_interface": {
+    "conservative_terminal_distinct_from_digital_inout": true,
+    "terminal_node_branch_distinction": true,
+    "directional_signal_flow_distinct": true,
+    "access": [
+      "connect",
+      "sense",
+      "contribute",
+      "monitor"
+    ],
+    "mixed_signal_interface": true,
+    "explicit_bridge_required": true,
+    "future_native_systemverilog_interface_requires_separate_gate": true,
     "formal_freeze_increment": 15
   }
 }

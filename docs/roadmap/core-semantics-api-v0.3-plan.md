@@ -7,6 +7,7 @@
 **Shaped-value architecture:** [ADR 0017](../architecture/0017-semantic-multidimensional-values-and-target-layouts.md)
 **Naming architecture:** [ADR 0018](../architecture/0018-expression-materialization-and-semantic-naming.md)
 **Quality-gate architecture:** [ADR 0019](../architecture/0019-mandatory-pre-emission-hardware-quality-gates.md)
+**Interface/role/inout architecture:** [ADR 0021](../architecture/0021-unified-struct-interface-role-and-inout-architecture.md)
 **Unified formal freeze:** Increment 15 design gate with automatic pipeline API
 
 ## Goal
@@ -211,39 +212,41 @@ val controller = fsm(initial = ControlState.Idle):
 The gate freezes flat/manual and high-level FSM semantics, entry/active/exit/transition actions, reset/no-hidden-boot behavior, exclusive versus priority transitions, illegal-state policy, local storage encoding independent of enum ABI, typed status, reusable immutable definitions, nested/parallel/timed machines, finite structural recursion, explicit bounded runtime call stacks, graph diagnostics, reports, source maps, and formal readiness.
 
 
-## Directionless aggregates
+## Struct, Interface, Role, protocol, and inout semantics
 
-The candidate base type is `Bundle` or a refined equivalent:
+[ADR 0021](../architecture/0021-unified-struct-interface-role-and-inout-architecture.md), [`interface-role-inout-ams-v0.1-plan.md`](interface-role-inout-ams-v0.1-plan.md), and [`interface-role-inout-ams-v0.1-surface.json`](interface-role-inout-ams-v0.1-surface.json) define mandatory Increment 14 candidates and Increment 15 freeze obligations.
 
-```scala
-final case class Pixel(
-  red: UInt,
-  green: UInt,
-  blue: UInt,
-) extends Bundle
-```
-
-Aggregate fields do not contain nested port direction. Direction is applied only at a boundary:
+A directionless `Struct` is a storable/copyable hardware value:
 
 ```scala
-val input = in(Pixel(...))
-val output = out(Pixel(...))
+final case class Pixel(width: Int) extends Struct:
+  val red   = UInt(width)
+  val green = UInt(width)
+  val blue  = UInt(width)
 ```
 
-The same aggregate type is reusable in internal expressions, memories, protocols, pipelines, and external libraries.
+A connectivity `Interface` is not storable and applies a named role at a module boundary:
 
-The v0.3 gate must freeze:
+```scala
+final case class VideoInterface(width: Int) extends Interface:
+  val pixels = Stream(Pixel(width))
+  val start  = Bool()
 
-- product/record declaration form;
-- field ordering and deterministic naming;
-- nested aggregate and parameterized multidimensional `Vec` rank/dimension/index/flatten/reshape rules;
-- equality, assignment, and literal construction;
-- parameterized field widths/counts;
-- backend flattening and source-map behavior.
+  role source:
+    master(pixels)
+    out(start)
 
-## Protocol-typed transport
+  role sink:
+    slave(pixels)
+    in(start)
 
-The common transport types are:
+  role monitor:
+    observe(pixels, start)
+```
+
+The same role system supports `master`/`slave`, `source`/`sink`, `initiator`/`target`, `controller`/`peripheral`, `device`/`environment`, monitor, and stable user-defined roles. Automatic inversion is legal only for fully complementary digital access.
+
+The common transport types remain:
 
 ```scala
 T
@@ -251,15 +254,33 @@ Valid[T]
 Stream[T]
 ```
 
-Semantics:
+`Valid[T]` carries payload plus validity without backpressure. `Stream[T]` carries ordered ready/valid transport with backpressure. Master drives `valid`/`payload` and receives `ready`; slave is the exact inverse. `Valid` is the canonical valid-only type.
 
-- plain `T`: fixed-rate value each active cycle;
-- `Valid[T]`: payload plus bubble validity, no backpressure;
-- `Stream[T]`: ordered ready/valid transport with backpressure.
+Digital inout is first class and separates sensing from driving:
 
-The types are general interfaces, not pipeline-only wrappers. They carry protocol, domain, ordering, latency, and source metadata in the compiler.
+```scala
+val gpio = inout(Bits(8))
+val sampled = gpio.read
+gpio.drive(writeData, enable = outputEnable)
+```
 
-No implicit conversion is permitted among them.
+The v0.3 gate freezes typed read/drive/high-impedance/resolution semantics, push-pull/open-drain modes, top-level/black-box/hierarchy/pad use, split internal tri-state carriers, multiple-driver restrictions, and capability-checked internal resolved nets. Unsupported resolution is rejected rather than silently rewritten to a mux.
+
+Conservative AMS terminals remain distinct from digital inout and directional analog signal-flow values. Mixed-signal interfaces explicitly declare connect/sense/contribute/monitor access and use typed bridges for every analog/digital or conservative/signal-flow conversion.
+
+Every backend preserves one logical Interface ABI. Portable Verilog and Verilog-AMS flatten deterministically; a future approved SystemVerilog backend may emit native interface/modport syntax only with proven semantic and ABI parity.
+
+The v0.3 gate must freeze:
+
+- exact `Struct`, `Interface`, and `Role` public spellings and type relationships;
+- deterministic member identity, nested roles, role selection, inversion, and monitor access;
+- exact `Valid`/`Stream` ownership and connection behavior;
+- interface storage prohibition and exact adapters/views;
+- digital inout endpoint, resolution, drive mode, hierarchy, and profile rules;
+- conservative terminal versus node/branch and directional signal-flow distinctions;
+- mixed-signal role access and explicit bridge requirements;
+- logical Interface ABI/source maps and flat/native target layout contracts;
+- stable diagnostics and external-library extension boundaries.
 
 ## Exact connections and adapters
 
@@ -425,6 +446,12 @@ Increment 13 must compile candidates covering:
 - manual and high-level flat FSMs plus reusable nested/parallel/timed/finite-recursive definitions and bounded-stack candidates;
 - every explicit narrowing/overflow policy;
 - directionless nested aggregates and vectors;
+- storable nested `Struct` payloads and non-storable nested `Interface`s;
+- named master/slave/source/sink/controller/peripheral/device/environment/monitor roles;
+- full `Valid`/`Stream` role ownership, nested request/response interfaces, and exact role-compatible connections;
+- digital inout read/drive/high-impedance, push-pull/open-drain, split-tristate boundary, black-box, pad, and hierarchy candidates;
+- conservative-terminal-only and mixed-signal interfaces with explicit analog access and bridges;
+- portable flattened and future native SystemVerilog interface/modport layout candidates;
 - parameterized rank-one through rank-four `Vec`, exact shape/index/slice/flatten/reshape, signed elements, structural `Vec` versus `Mem`, and portable-Verilog/future-SystemVerilog layout candidates;
 - safe expression inlining, shared/observable/target-required materialization, semantic anonymous-register names, and expression-span source maps;
 - Fast/Default/Release check profiles and typed waiver metadata;
@@ -436,6 +463,14 @@ Increment 13 must compile candidates covering:
 - external reusable-library use through public APIs only.
 
 ## Compile-negative matrix
+
+Required Interface/Role/inout/AMS failures also include:
+
+- storing an `Interface`, embedding direction/connectivity in a `Struct`, or exporting an interface without a role;
+- incompatible roles, missing members, monitor drive, invalid inversion, or implicit protocol/domain/latency adaptation;
+- direct inout assignment without explicit drive state, multiple ordinary drivers, illegal open-drain drive, or unsupported internal resolution;
+- implicit digital-inout/conservative-terminal, conservative/signal-flow, or analog/digital conversion;
+- discipline/access mismatch, sense-only contribution, flattening collision, or parameter-envelope interface-layout conflict;
 
 Required failures include:
 

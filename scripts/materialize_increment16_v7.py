@@ -38,14 +38,9 @@ def main() -> int:
     )
     replace(
         kernel,
-        """  private def renderStable(value: Any, owner: Long): String = value match
-    case null => \"null\"
+        """    case null => \"null\"
 """,
-        """  private object MissingStableValue:
-    def unapply(value: Any): Boolean = Option(value).isEmpty
-
-  private def renderStable(value: Any, owner: Long): String = value match
-    case MissingStableValue() => \"null\"
+        """    case candidate if Option(candidate).isEmpty => \"null\"
 """,
     )
     replace(

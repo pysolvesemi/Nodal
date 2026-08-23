@@ -1,0 +1,33 @@
+name: Increment 14 Pipeline and Interface Candidates
+
+on:
+  push:
+    branches:
+      - increment/14-pipeline-interface-candidates
+  pull_request:
+    branches:
+      - dev
+
+permissions:
+  contents: read
+
+jobs:
+  candidate-contracts:
+    name: increment-14/pipeline-interface-candidates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate positive and negative compile contracts
+        run: |
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          python3 scripts/check_increment13.py --compile-negative
+          python3 scripts/check_increment14.py --compile-negative
+          python3 tests/api/test_increment14_review_closure.py
+          git diff --check

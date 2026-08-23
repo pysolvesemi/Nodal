@@ -31,7 +31,10 @@ A gate must state the exact contract, accepted alternatives, rejected
 alternatives, compatibility impact, tests, and approval evidence. Draft or
 proposed documents do not authorize protected changes.
 
-## API freeze
+## API freezes and candidate evaluations
 
-Increment 11 will create the first Nodal public-API gate. Increment 9 establishes
-only the enforcement mechanism; it does not freeze any public API itself.
+Increment 11 froze public API v0.1, and Increment 12 froze the clock/reset v0.2
+surface. Candidate-evaluation gates may authorize compile-only prototypes while
+explicitly leaving their public surface unfrozen. Increment 14 uses that model
+for automatic-pipeline, Interface/Role, digital-inout, and AMS candidates;
+Increment 15 owns the unified public API v0.3 freeze.

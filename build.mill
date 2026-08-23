@@ -111,3 +111,9 @@ object examples extends Module:
 
   object coreSemanticsApi extends NodalScalaModule:
     def moduleDeps = Seq(core.scala.api, coreSemanticsExternal)
+
+  object interfacePipelineExternal extends NodalScalaModule:
+    def moduleDeps = Seq(core.scala.api)
+
+  object interfacePipelineApi extends NodalScalaModule:
+    def moduleDeps = Seq(core.scala.api, interfacePipelineExternal)

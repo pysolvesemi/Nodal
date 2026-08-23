@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "increment": 14,
+  "status": "validated-candidate-evaluation",
+  "architecture": [
+    "docs/architecture/0008-automatic-pipeline-architecture.md",
+    "docs/architecture/0021-unified-struct-interface-role-and-inout-architecture.md"
+  ],
+  "candidate_surfaces": [
+    "docs/roadmap/automatic-pipeline-api-v0.3-surface.json",
+    "docs/roadmap/interface-role-inout-ams-v0.1-surface.json"
+  ],
+  "validation": {
+    "pull_request": 36,
+    "dedicated_workflow_run": 32639805716
+  },
+  "positive_modules": [
+    "examples.interfacePipelineExternal.compile",
+    "examples.interfacePipelineApi.compile"
+  ],
+  "scala_type_negative": [
+    {
+      "path": "tests/api/fixtures/increment14/negative/interface-storage.scala",
+      "code": "NODAL-IFACE-014"
+    },
+    {
+      "path": "tests/api/fixtures/increment14/negative/incompatible-role-connection.scala",
+      "code": "NODAL-ROLE-014"
+    },
+    {
+      "path": "tests/api/fixtures/increment14/negative/monitor-inversion.scala",
+      "code": "NODAL-INVERT-014"
+    },
+    {
+      "path": "tests/api/fixtures/increment14/negative/monitor-drive.scala",
+      "code": "NODAL-MONITOR-014"
+    },
+    {
+      "path": "tests/api/fixtures/increment14/negative/open-drain-drive.scala",
+      "code": "NODAL-INOUT-014"
+    },
+    {
+      "path": "tests/api/fixtures/increment14/negative/sense-only-contribution.scala",
+      "code": "NODAL-AMS-014"
+    },
+    {
+      "path": "tests/api/fixtures/increment14/negative/protocol-mismatch.scala",
+      "code": "NODAL-PROTOCOL-014"
+    }
+  ],
+  "semantic_contracts": [
+    "role-completeness",
+    "role-inversion-preserves-interface-access",
+    "missing-required-member",
+    "interface-or-direction-embedded-in-struct",
+    "multiple-ordinary-drivers",
+    "unsupported-internal-resolved-net",
+    "unbound-inout-hierarchy-path",
+    "digital-inout-to-conservative-terminal",
+    "discipline-mismatch",
+    "implicit-conservative-signal-flow-conversion",
+    "implicit-analog-digital-conversion",
+    "flattening-name-collision",
+    "parameter-envelope-interface-layout-conflict",
+    "pipeline-without-domain",
+    "cross-domain-value-in-pipeline",
+    "unrelated-live-input-capture",
+    "side-effect-without-contract",
+    "variable-latency-in-fixed-rate-pipeline",
+    "impossible-exact-or-ranged-latency",
+    "published-auto-latency-without-bound",
+    "hard-stage-same-stage-conflict",
+    "clone-per-parameter-scheduling-request"
+  ],
+  "frontend_behavior_inert": true,
+  "scheduler_behavior_inert": true,
+  "interface_ir_behavior_inert": true,
+  "resolution_topology_behavior_inert": true,
+  "backend_behavior_inert": true,
+  "simulator_behavior_inert": true,
+  "freeze_owner": 15
+}

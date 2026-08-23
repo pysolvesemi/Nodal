@@ -173,7 +173,7 @@ def check_repository(root: Path) -> list[Problem]:
     increment14_lines = [
         line
         for line in roadmap.splitlines()
-        if line.startswith("- [ ] **Increment 14 — ")
+        if line.startswith(("- [ ] **Increment 14 — ", "- [x] **Increment 14 — "))
     ]
     if (
         len(increment14_lines) != 1
@@ -182,7 +182,7 @@ def check_repository(root: Path) -> list[Problem]:
         problems.append(
             Problem(
                 "NODAL-INC13-025",
-                "roadmap does not leave one unchecked Increment 14 candidate-prototype increment",
+                "roadmap does not retain one Increment 14 candidate-prototype increment",
             )
         )
     return problems

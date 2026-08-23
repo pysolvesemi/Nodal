@@ -27,10 +27,73 @@ jobs:
       - name: Record final freeze evidence
         if: github.event_name == 'pull_request'
         run: |
-          python3 scripts/materialize_increment15.py \
-            --mode close \
-            --pull-request 40 \
-            --workflow-run 32645312790
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          pull_request = 40
+          workflow_run = 32645312790
+
+          manifest_path = Path("tests/api/fixtures/increment15/manifest.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          expected_preflight = {
+              "pull_request": None,
+              "dedicated_workflow_run": None,
+          }
+          expected_final = {
+              "pull_request": pull_request,
+              "dedicated_workflow_run": workflow_run,
+          }
+          if manifest.get("status") == "preflight-freeze":
+              assert manifest.get("validation") == expected_preflight
+              manifest["status"] = "validated-freeze"
+              manifest["validation"] = expected_final
+              manifest_path.write_text(
+                  json.dumps(manifest, indent=2) + "\n",
+                  encoding="utf-8",
+              )
+          else:
+              assert manifest.get("status") == "validated-freeze"
+              assert manifest.get("validation") == expected_final
+
+          roadmap_path = Path("docs/roadmap/nodal-development-todo.md")
+          roadmap = roadmap_path.read_text(encoding="utf-8")
+          unchecked = (
+              "- [ ] **Increment 15 — Unified core semantics, Interface/Role/inout, and "
+              "automatic pipeline public API v0.3 freeze**"
+          )
+          checked = unchecked.replace("[ ]", "[x]", 1)
+          evidence = (
+              "  - Evidence: [`NodalCoreSemanticsPipelineApi-DG-v0.3.md`]"
+              "(../design-gates/NodalCoreSemanticsPipelineApi-DG-v0.3.md), "
+              "[`public-api-v0.3.json`](../../core/scala/api/public-api-v0.3.json), "
+              "[`public-api-diagnostics-v0.3.json`]"
+              "(../../core/scala/api/public-api-diagnostics-v0.3.json), "
+              "[`public-api-v0.2-to-v0.3.md`]"
+              "(../migrations/public-api-v0.2-to-v0.3.md), "
+              "[`tests/api/fixtures/increment15/manifest.json`]"
+              "(../../tests/api/fixtures/increment15/manifest.json), "
+              "[`scripts/check_increment15.py`](../../scripts/check_increment15.py), "
+              f"PR [#{pull_request}]"
+              f"(https://github.com/pysolvesemi/Nodal/pull/{pull_request}), "
+              f"and dedicated validation run [{workflow_run}]"
+              f"(https://github.com/pysolvesemi/Nodal/actions/runs/{workflow_run}).\n"
+          )
+          if unchecked in roadmap:
+              assert roadmap.count(unchecked) == 1
+              assert roadmap.count("**Revision:** 1.18") == 1
+              assert evidence not in roadmap
+              roadmap = roadmap.replace(unchecked, checked, 1)
+              roadmap = roadmap.replace("**Revision:** 1.18", "**Revision:** 1.19", 1)
+              marker = "\n## Phase 1 — Compiler vertical slice"
+              assert roadmap.count(marker) == 1
+              roadmap = roadmap.replace(marker, "\n" + evidence + marker, 1)
+              roadmap_path.write_text(roadmap, encoding="utf-8")
+          else:
+              assert checked in roadmap
+              assert "**Revision:** 1.19" in roadmap
+              assert evidence in roadmap
+          PY
 
       - name: Validate finalized API and predecessor contracts
         run: |
@@ -47,6 +110,9 @@ jobs:
       - name: Commit final freeze evidence
         if: github.event_name == 'pull_request'
         run: |
+          if git diff --quiet; then
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add \

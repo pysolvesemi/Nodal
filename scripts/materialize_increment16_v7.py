@@ -40,43 +40,12 @@ def main() -> int:
         kernel,
         """  private def renderStable(value: Any, owner: Long): String = value match
     case null => \"null\"
-    case text: String => text
-    case boolean: Boolean => boolean.toString
-    case integer: Int => integer.toString
-    case long: Long => long.toString
-    case double: Double => java.lang.Double.toString(double)
-    case big: BigInt => big.toString
-    case dataType: DataType[?] => renderType(dataType, owner)
-    case field: StructField[?] => s\"${field.name}:${renderType(field.dataType, owner)}\"
-    case values: Seq[?] => values.map(renderStable(_, owner)).mkString(\"[\", \",\", \"]\")
-    case values: Set[?] => values.toVector.map(renderStable(_, owner)).sorted.mkString(\"[\", \",\", \"]\")
-    case option: Option[?] => option.map(renderStable(_, owner)).getOrElse(\"none\")
-    case enumValue: scala.reflect.Enum => enumValue.toString
-    case reference: AnyRef =>
-      pathOf(reference).getOrElse(reference.getClass.getSimpleName.stripSuffix(\"$\"))
-    case other => other.getClass.getSimpleName
 """,
-        """  private def renderStable(value: Any, owner: Long): String =
-    Option(value).fold(\"null\"): nonNull =>
-      nonNull match
-        case text: String => text
-        case boolean: Boolean => boolean.toString
-        case integer: Int => integer.toString
-        case long: Long => long.toString
-        case double: Double => java.lang.Double.toString(double)
-        case big: BigInt => big.toString
-        case dataType: DataType[?] => renderType(dataType, owner)
-        case field: StructField[?] =>
-          s\"${field.name}:${renderType(field.dataType, owner)}\"
-        case values: Seq[?] =>
-          values.map(renderStable(_, owner)).mkString(\"[\", \",\", \"]\")
-        case values: Set[?] =>
-          values.toVector.map(renderStable(_, owner)).sorted.mkString(\"[\", \",\", \"]\")
-        case option: Option[?] => option.map(renderStable(_, owner)).getOrElse(\"none\")
-        case enumValue: scala.reflect.Enum => enumValue.toString
-        case reference: AnyRef =>
-          pathOf(reference).getOrElse(reference.getClass.getSimpleName.stripSuffix(\"$\"))
-        case other => other.getClass.getSimpleName
+        """  private object MissingStableValue:
+    def unapply(value: Any): Boolean = Option(value).isEmpty
+
+  private def renderStable(value: Any, owner: Long): String = value match
+    case MissingStableValue() => \"null\"
 """,
     )
     replace(

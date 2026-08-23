@@ -21,48 +21,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  materialize_foundation_tracks:
-    name: materialize Foundation/dependent tracks
-    if: (github.event_name == 'push' && github.event.head_commit.message == 'Run Foundation track roadmap materializer') || (github.event_name == 'pull_request' && github.head_ref == 'increment/143-foundation-fpga-hvl-track-roadmaps')
-    permissions:
-      contents: write
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Select writable feature head
-        run: |
-          git fetch --no-tags origin increment/143-foundation-fpga-hvl-track-roadmaps:refs/remotes/origin/increment/143-foundation-fpga-hvl-track-roadmaps
-          git checkout -B increment/143-foundation-fpga-hvl-track-roadmaps origin/increment/143-foundation-fpga-hvl-track-roadmaps
-
-      - name: Apply roadmap changes and structural validation
-        run: |
-          python3 .foundation_tracks_patch.py
-          python3 .foundation_tracks_apply.py
-          python3 scripts/check_markdown.py
-          python3 scripts/check_formatting_baseline.py
-          python3 scripts/check_increment12.py
-          python3 scripts/check_increment13.py
-          git diff --check
-
-      - name: Publish clean roadmap source tree
-        run: |
-          rm -f .foundation_tracks_patch.py
-          rm -f .foundation_tracks_apply.py
-          rm -f .foundation-tracks-trigger
-          git fetch --no-tags origin dev:refs/remotes/origin/dev
-          git checkout origin/dev -- .github/workflows/ci.yml
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'Roadmap — Add Foundation-gated FPGA and verification tracks'
-          git push origin HEAD:increment/143-foundation-fpga-hvl-track-roadmaps
-
   contracts:
     name: contracts
     runs-on: ubuntu-24.04

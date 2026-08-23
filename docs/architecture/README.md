@@ -38,6 +38,7 @@ Accepted ADRs must not be edited to reverse their decision. A material change re
 | [0020](0020-canonical-register-factory-and-transport-adapters.md) | Define register ABI once in canonical Register IR, separate physical register blocks from transports, support Scala/SystemRDL/YAML/IP-XACT frontends, and emit fixed register ABI symbols as non-overridable Verilog constants. |
 | [0021](0021-unified-struct-interface-role-and-inout-architecture.md) | Separate directionless `Struct` values from connectivity `Interface`s, use generic named roles with master/slave convenience, support explicit digital resolved inout, preserve conservative AMS terminals, and retain one logical Interface ABI across flattened and native backends. |
 | [0022](0022-layered-continuous-time-hybrid-dae-architecture.md) | Preserve source analog intent through layered semantic, topology, hybrid equation, analysis, and solver representations with explicit analog islands, state, events, capabilities, and model-validity evidence. |
+| [0023](0023-unified-hvl-native-sim-uvm-uvmms-architecture.md) | Author verification once in target-neutral Nodal HVL/Verification IR, execute it through the native simulation runtime or project it to UVM/UVM-MS, and isolate simulator/vendor differences in thin capability profiles. |
 
 ADR 0012 owns general plugin discovery, resolution, loading, trust, lifecycle, and provenance. ADR 0013 layers the target-HDL-specific structured representations, pass profiles, preservation rules, and proof obligations on that common plugin foundation. Installing either a plugin or pass is inert until the project resolves and explicitly selects it in a locked plan.
 
@@ -48,6 +49,8 @@ ADR 0020 specializes the core semantic, clock/reset, quality-gate, and plugin bo
 ADR 0021 specializes the core semantic, clock/reset, AMS, backend-profile, and quality-gate boundaries for reusable connectivity. It keeps storable values, protocol interfaces, digital resolved inout, conservative terminals, directional analog signal flow, mixed-signal bridges, and backend physical layouts distinct while preserving one logical Interface ABI.
 
 ADR 0022 specializes the analog semantic, AMS backend, optimization, simulator-adapter, and quality-gate boundaries for continuous-time compilation. It keeps source constructs, topology, hybrid equations, analysis projections, solver callbacks, and target HDL distinct while preserving stable state, event, noise, environment, capability, validity, and source evidence.
+
+ADR 0023 specializes the simulation, Interface/Register, property, AMS, plugin/tool-adapter, and generated-language boundaries for verification. Nodal HVL and Verification Semantic IR remain authoritative; native/open-source simulation and generated UVM/UVM-MS are capability-checked sibling projections with vendor differences isolated in thin profiles.
 
 ## Proposed records
 

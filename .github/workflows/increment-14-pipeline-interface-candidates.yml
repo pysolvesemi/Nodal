@@ -9,7 +9,7 @@ on:
       - dev
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   candidate-contracts:
@@ -18,111 +18,10 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Check out increment branch
+      - name: Check out repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: increment/14-pipeline-interface-candidates
-
-      - name: Fold review closure into original API
-        if: github.event_name == 'pull_request'
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          def replace_once(path: Path, old: str, new: str) -> None:
-              text = path.read_text(encoding="utf-8")
-              assert text.count(old) == 1, f"expected one replacement anchor in {path}: {old!r}"
-              path.write_text(text.replace(old, new, 1), encoding="utf-8")
-
-          api = Path("core/scala/api/src/nodal/PipelineInterfaceCandidateApi.scala")
-          role_access = (
-              "enum RoleAccess:\n"
-              "  case In(member: String)\n"
-              "  case Out(member: String)\n"
-              "  case Observe(member: String)\n"
-              "  case Master(member: String)\n"
-              "  case Slave(member: String)\n"
-              "  case Read(member: String)\n"
-              "  case Drive(member: String)\n"
-              "  case Connect(member: String)\n"
-              "  case Sense(member: String)\n"
-              "  case Contribute(member: String)\n"
-              "  case Nested(member: String, role: String)\n"
-          )
-          role_access_with_inverse = role_access + (
-              "\n"
-              "object RoleAccess:\n"
-              "  private[nodal] def inverted(access: RoleAccess): RoleAccess = access match\n"
-              "    case RoleAccess.In(member) => RoleAccess.Out(member)\n"
-              "    case RoleAccess.Out(member) => RoleAccess.In(member)\n"
-              "    case RoleAccess.Observe(member) => RoleAccess.Observe(member)\n"
-              "    case RoleAccess.Master(member) => RoleAccess.Slave(member)\n"
-              "    case RoleAccess.Slave(member) => RoleAccess.Master(member)\n"
-              "    case RoleAccess.Read(member) => RoleAccess.Drive(member)\n"
-              "    case RoleAccess.Drive(member) => RoleAccess.Read(member)\n"
-              "    case RoleAccess.Connect(member) => RoleAccess.Connect(member)\n"
-              "    case RoleAccess.Sense(member) => RoleAccess.Contribute(member)\n"
-              "    case RoleAccess.Contribute(member) => RoleAccess.Sense(member)\n"
-              "    case RoleAccess.Nested(member, role) =>\n"
-              "      RoleAccess.Nested(member, invertedRoleName(role))\n"
-              "\n"
-              "  private def invertedRoleName(role: String): String = role match\n"
-              "    case \"master\" => \"slave\"\n"
-              "    case \"slave\" => \"master\"\n"
-              "    case \"source\" => \"sink\"\n"
-              "    case \"sink\" => \"source\"\n"
-              "    case \"initiator\" => \"target\"\n"
-              "    case \"target\" => \"initiator\"\n"
-              "    case \"controller\" => \"peripheral\"\n"
-              "    case \"peripheral\" => \"controller\"\n"
-              "    case \"device\" => \"environment\"\n"
-              "    case \"environment\" => \"device\"\n"
-              "    case other => s\"inverse($other)\"\n"
-          )
-          replace_once(api, role_access, role_access_with_inverse)
-
-          old_inverted = (
-              "  def inverted(using inverse: RoleInverse[R]): InterfacePort[I, inverse.Out] =\n"
-              "    new InterfacePort(\n"
-              "      endpoint.definition,\n"
-              "      inverse.inverse,\n"
-              "      s\"${endpoint.name}.inverse\",\n"
-              "      endpoint.domain\n"
-              "    )\n"
-          )
-          new_inverted = (
-              "  def inverted(using inverse: RoleInverse[R]): InterfacePort[I, inverse.Out] =\n"
-              "    val invertedRole = new Role[inverse.Out](\n"
-              "      inverse.inverse.name,\n"
-              "      endpoint.role.access.map(RoleAccess.inverted)\n"
-              "    )\n"
-              "    new InterfacePort(\n"
-              "      endpoint.definition,\n"
-              "      invertedRole,\n"
-              "      s\"${endpoint.name}.inverse\",\n"
-              "      endpoint.domain\n"
-              "    )\n"
-          )
-          replace_once(api, old_inverted, new_inverted)
-
-          test = Path("tests/api/test_increment14_review_closure.py")
-          replace_once(
-              test,
-              'API = ROOT / "core/scala/api/src/nodal/RoleAccessInversionCandidate.scala"',
-              'API = ROOT / "core/scala/api/src/nodal/PipelineInterfaceCandidateApi.scala"',
-          )
-          replace_once(test, '            "type InverseRole",\n', '            "object RoleAccess",\n')
-          replace_once(
-              test,
-              '            "endpoint.role.access.map(RoleAccessInversion.apply)",',
-              '            "endpoint.role.access.map(RoleAccess.inverted)",',
-          )
-
-          workaround = Path("core/scala/api/src/nodal/RoleAccessInversionCandidate.scala")
-          assert workaround.exists(), "expected temporary role-inversion workaround"
-          workaround.unlink()
-          PY
 
       - name: Validate positive and negative compile contracts
         run: |
@@ -132,15 +31,3 @@ jobs:
           python3 scripts/check_increment14.py --compile-negative
           python3 tests/api/test_increment14_review_closure.py
           git diff --check
-
-      - name: Commit validated code repair
-        if: github.event_name == 'pull_request'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            core/scala/api/src/nodal/PipelineInterfaceCandidateApi.scala \
-            core/scala/api/src/nodal/RoleAccessInversionCandidate.scala \
-            tests/api/test_increment14_review_closure.py
-          git commit -m "Increment 14 — preserve role access during inversion"
-          git push origin HEAD:increment/14-pipeline-interface-candidates

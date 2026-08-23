@@ -61,6 +61,7 @@ jobs:
 
       - name: Validate unified API and predecessor contracts
         run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
           ./mill mill.scalalib.scalafmt/checkFormatAll
           ./mill scalafix.check
           python3 scripts/check_increment11.py

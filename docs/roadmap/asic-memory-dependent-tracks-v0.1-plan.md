@@ -1,24 +1,26 @@
-# Minimal ASIC/memory-interface Foundation extension and dependent tracks v0.1
+# Minimal ASIC, open physical-design, and memory-interface Foundation readiness v0.2
 
-**Status:** Normative roadmap extension  
+**Status:** Normative Foundation-only roadmap extension  
 **Date:** 2026-08-23  
+**Roadmap revision:** 1.19  
 **Architecture:** [ADR 0024](../architecture/0024-minimal-asic-advanced-io-readiness-boundary.md)  
-**Foundation:** the main Nodal Foundation roadmap plus Foundation Increment 150 below
+**Foundation:** the main Nodal Foundation roadmap plus Foundation Increments 150-151 below  
+**Implementation status:** deliberately unplanned
 
 ## Intent
 
-This plan closes the minimum architecture gap required for future controller/PHY-class ASIC work without turning Foundation into an implementation program.
+This document contains only the minimum Foundation architecture needed to avoid blocking future controller/PHY-class ASIC and open-source physical-design work.
 
-The main roadmap already states that any Foundation item appended after Foundation Increment 149 before barrier release belongs to Foundation. This document appends exactly one such item: Foundation Increment 150.
+It does **not** define, schedule, authorize, or imply implementation increments for:
 
-The implementation work is split into two dependent tracks, each restarting at Increment 1:
+- ASIC synthesis, place-and-route, extraction, sign-off, or RTL-to-GDS execution;
+- SDC, STA, MCMM, UPF, DFT insertion, PDK, DRC, LVS, or custom-layout flows;
+- DFI or LPDDR libraries, controllers, training engines, behavioral devices, or hard PHYs;
+- Yosys, OpenROAD, OpenROAD-flow-scripts, OpenLane, KLayout, commercial tools, or any specific foundry platform.
 
-- **ASIC Productivity and Sign-off Track**;
-- **Memory Interface IP and PHY Track**.
+Future implementation may receive a separately approved track whose numbering starts at 1. No such implementation TODO is created by this Foundation extension.
 
-Both tracks remain implementation-blocked until the Foundation completion barrier opens. Research and feasibility work may proceed while blocked.
-
-## Minimal Foundation addition
+## Foundation TODO
 
 - [x] **Foundation Increment 150 — Minimal ASIC, source-synchronous I/O, power, DFT, and hard-macro architecture readiness**
   - Accept [ADR 0024](../architecture/0024-minimal-asic-advanced-io-readiness-boundary.md).
@@ -28,95 +30,60 @@ Both tracks remain implementation-blocked until the Foundation completion barrie
   - Record that future protocol/device standards are versioned dependent libraries/profiles rather than core Nodal semantics.
   - This increment is architecture-only; no compiler/backend/vendor implementation is required for its completion.
 
+- [x] **Foundation Increment 151 — Foundation-only scope correction and open RTL-to-GDS readiness seam**
+  - Remove ASIC and memory-interface implementation checklists from this Foundation extension. Retain only architecture ownership, capability seams, and reserved future track names.
+  - Clarify that Foundation supports a future open-source RTL-to-GDS flow through stable target identities and adapter contracts, not by implementing or selecting a physical-design toolchain.
+  - Preserve stable identities and capability metadata for logical designs, generated RTL, clocks and constraints, technology/platform and PDK profiles, corners, standard-cell and hard-macro views, physical implementation stages, generated artifacts, normalized reports, source correlation, and provenance.
+  - Recognize synthesis, floorplanning, power-grid construction, placement, clock-tree synthesis, routing, extraction, GDS/OASIS assembly, DRC, and LVS as future adapter stage identities without defining their algorithms, scripts, command lines, or tool-specific public APIs.
+  - Keep Yosys, OpenROAD, OpenROAD-flow-scripts, OpenLane, KLayout, commercial tools, PDK packages, SDC emission, physical execution, and sign-off outside Foundation.
+  - Reserve future **ASIC Productivity and Sign-off** and **Memory Interface IP and PHY** track names. Each may start at Increment 1 only after a separate roadmap is explicitly approved.
+  - This increment is architecture-only; no implementation TODO, compiler behavior, backend, plugin, library, tool adapter, or physical artifact is added.
+
+## Architecture readiness boundary
+
+### Source-synchronous and advanced-I/O identity
+
+Foundation may identify forwarded clocks and strobes, launch/capture edge sets, source-synchronous data groups, lanes and bits, phase/delay/sampling-window references, training/calibration state references, and serialization relationships. It does not define DDR primitives, training algorithms, or an LPDDR-specific source API.
+
+### ASIC timing, implementation, and sign-off identity
+
+Foundation may identify clocks, constraints, timing targets, mode/corner/PVT contexts, implementation stages, physical views, reports, and evidence. It does not emit SDC, execute synthesis or STA, perform physical design, or claim timing closure.
+
+### Open-source RTL-to-GDS integration seam
+
+A future adapter may bind the same stable Nodal identities to an open-source flow consuming generated RTL, constraints, technology libraries, LEF/GDS views, and a selected platform/PDK profile. Foundation preserves:
+
+- logical module, instance, port, net, clock, domain, constraint, register, memory, interface, and hard-macro identities;
+- technology/platform, PDK, library, cell, macro, view, corner, and operating-mode identities;
+- synthesis, floorplan, power-grid, placement, CTS, routing, extraction, stream-out, DRC, and LVS stage identities;
+- netlist, DEF, LEF, Liberty, SDF, SPEF, GDS/OASIS, report, log, checkpoint, and verification-result artifact identities;
+- capability negotiation, deterministic configuration/provenance hashes, normalized result categories, and source correlation.
+
+These are architecture seams only. Foundation neither requires nor executes a particular open-source or commercial flow.
+
+### Power-intent identity
+
+Foundation may identify power domains, supplies, legal states and transitions, isolation, level shifting, retention, always-on intent, and operating-point associations. It does not implement UPF, insertion, power-aware simulation, or power analysis.
+
+### DFT/DFx identity
+
+Foundation may identify scan/test modes, overrides, MBIST/repair endpoints, JTAG/boundary-scan access, loopback/calibration-test observability, and test-specific timing/power targets. It does not implement scan insertion, ATPG, MBIST, boundary-scan generation, or ATE flows.
+
+### Hard-macro and multi-view identity
+
+One logical external or hard-IP identity may reference applicable RTL, AMS, formal, Liberty, LEF, GDS/OASIS, SDF, SPEF, I/O-model, constraint, power, DFT, corner, and version metadata. Foundation does not parse every format, create layouts, define PDKs, or execute DRC/LVS/extraction.
+
+## Reserved future tracks — not TODOs
+
+The following names and numbering policy are reserved only to prevent future roadmap ambiguity:
+
+- **ASIC Productivity and Sign-off Track** — future numbering starts at Increment 1.
+- **Memory Interface IP and PHY Track** — future numbering starts at Increment 1.
+
+This reservation contains no increment list, checkbox, prerequisite chain, implementation commitment, or authorization to start work. Exact scope must be proposed and approved later in a separate roadmap change.
+
 ## Foundation barrier clarification
 
-Foundation completion does **not** require implementation of ASIC sign-off flows, low-power insertion, DFT insertion, custom PHY circuits, process design kits, DDR training, DFI, LPDDR controllers, or LPDDR PHYs.
+For this extension, Foundation completion requires only the architecture evidence recorded by Foundation Increments 150-151. It does not require an RTL-to-GDS run, generated GDS, a supported PDK, SDC/UPF/DFT implementation, an LPDDR controller, a PHY, or any external-tool integration.
 
-After Foundation is complete, the two tracks below may proceed independently except for their explicit local prerequisites.
-
----
-
-# ASIC Productivity and Sign-off Track — blocked by Foundation
-
-Numbering restarts at 1. This track implements generic ASIC productivity/sign-off capabilities and remains independent of any one memory standard.
-
-- [ ] **ASIC Increment 1 — ASIC implementation-intent public API and capability gate**
-  - Freeze project/mode/corner/constraint/power/test/hard-macro configuration APIs against Foundation semantic identities.
-  - Define portable versus vendor-specific capability boundaries and explicit raw-tool escape policy.
-
-- [ ] **ASIC Increment 2 — Portable ASIC Constraint IR and SDC projection**
-  - Implement primary/generated/forwarded clocks, source-synchronous I/O timing, clock groups, uncertainty/jitter, min/max delays, explicit false/multicycle paths, case analysis, and stable semantic target resolution.
-  - Generate deterministic SDC where supported; never infer unsafe exceptions heuristically.
-
-- [ ] **ASIC Increment 3 — STA, MCMM, Liberty/SDF/SPEF adapters and normalized timing evidence**
-  - Implement mode/corner/PVT matrices, Liberty/SDF/SPEF association, STA execution adapters, unconstrained/stale-target checks, critical-path source correlation, and normalized sign-off reports.
-
-- [ ] **ASIC Increment 4 — Power-intent IR and UPF interoperability**
-  - Implement power domains, supplies, legal states/transitions, isolation, level shifting, retention, always-on, DVFS associations, UPF projection/import where supported, and power-intent coverage diagnostics.
-
-- [ ] **ASIC Increment 5 — DFT/DFx intent and production-test integration**
-  - Implement typed scan/test modes, test overrides, MBIST/repair endpoints, JTAG/boundary-scan seams, loopback/calibration-test observability, test-mode timing/power constraints, and adapter contracts for external DFT tools.
-
-- [ ] **ASIC Increment 6 — Hard-macro and process multi-view integration**
-  - Bind one logical IP identity to applicable RTL/AMS/formal, Liberty, LEF, GDS/OASIS, SDF, SPEF, I/O-model, power, DFT, constraint, corner, and version views.
-  - Add capability/profile selection, consistency checks, source correlation, provenance, and explicit unsupported-view diagnostics.
-
-- [ ] **ASIC Increment 7 — Synthesis and physical-design handoff**
-  - Add reproducible synthesis/implementation adapter contracts, hierarchy preservation/flattening policy, clock/power/test handoff, hard-macro placement interfaces, normalized area/power/timing results, and retained tool provenance.
-
-- [ ] **ASIC Increment 8 — Timing/power/physical feedback and bounded optimization loop**
-  - Map implementation feedback to Nodal modules, paths, pipelines, domains, interfaces, memories, and hard macros.
-  - Support explicit bounded design-space exploration without silently mutating the accepted design or changing protocol/latency contracts.
-
-- [ ] **ASIC Increment 9 — Sign-off artifact manifests, reproducibility, and ecosystem adapters**
-  - Define complete implementation/sign-off manifests, tool/version/options hashes, constraint/power/DFT coverage, result normalization, cache/provenance rules, and optional commercial/open adapter profiles.
-
-- [ ] **ASIC Increment 10 — Representative complex ASIC qualification gate**
-  - Qualify a multi-clock, multi-power-domain subsystem containing hard macros, CDC/RDC, source-synchronous I/O, registers, memories, formal properties, SDC, UPF, DFT intent, and normalized synthesis/STA evidence.
-  - Publish supported capability/limitations matrices without requiring one particular commercial toolchain.
-
----
-
-# Memory Interface IP and PHY Track — blocked by Foundation
-
-Numbering restarts at 1. This track develops reusable controller/PHY abstractions and versioned memory-standard libraries without moving protocol-specific semantics into Nodal core.
-
-- [ ] **Memory Interface Increment 1 — Memory-interface architecture and public library/API gate**
-  - Freeze the controller/PHY/hard-PHY/behavioral-model partition, source-synchronous lane abstractions, training/calibration contracts, firmware-visible state, versioned protocol-profile model, and library packaging rules.
-  - Keep DFI/LPDDR versions explicit and independently versioned.
-
-- [ ] **Memory Interface Increment 2 — Generic source-synchronous lane, edge, delay, and gearbox primitives**
-  - Implement reusable forwarded-clock/strobe, rise/fall launch/capture, lane/bit grouping, serializer/deserializer, gearbox, phase/delay control, capture-window, and calibration-state primitives.
-  - Keep them generic enough for memory and other source-synchronous interfaces.
-
-- [ ] **Memory Interface Increment 3 — Versioned DFI interface and adapter libraries**
-  - Implement selected DFI revisions as versioned Nodal libraries with typed roles, timing relationships, training/control/status channels, capability negotiation, adapters, monitors, and conformance fixtures.
-
-- [ ] **Memory Interface Increment 4 — LPDDR protocol, timing, mode-register, refresh, and low-power libraries**
-  - Implement selected LPDDR generations as versioned profiles covering legal commands, timings, initialization, mode registers, refresh/self-refresh/power-down, frequency-set behavior, and explicit unsupported-feature diagnostics.
-
-- [ ] **Memory Interface Increment 5 — Controller building blocks and memory-side integration**
-  - Implement reusable arbitration, bank/rank/channel scheduling, command queues, read/write ordering, refresh, QoS, low-power coordination, ECC/parity/CRC/RAS hooks, AXI/CHI or approved host adapters, and performance counters.
-
-- [ ] **Memory Interface Increment 6 — Digital PHY utility and training architecture**
-  - Implement training/calibration sequencers, per-lane/per-bit delay state, read/write leveling, eye/VREF search abstractions, impedance/ZQ coordination, frequency-state training, retraining, drift handling, firmware control/status, and deterministic diagnostics.
-
-- [ ] **Memory Interface Increment 7 — Behavioral AMS PHY and memory-device models**
-  - Build portable behavioral Verilog-AMS/Nodal models for PHY analog behavior and representative memory-device interactions with declared validity envelopes, PVT/noise/event behavior, and capability-limited simulation profiles.
-  - Do not present behavioral models as custom-layout hard-PHY implementation.
-
-- [ ] **Memory Interface Increment 8 — Process-specific hard-PHY wrapper and multi-view integration**
-  - Integrate external/hardened PHY views through the ASIC hard-macro identity model, including digital utility/training handoff, pads, clocks/strobes, power/test modes, constraints, corners, simulation models, and sign-off collateral.
-
-- [ ] **Memory Interface Increment 9 — Reusable VIP, protocol/training checks, coverage, and error injection**
-  - Add native Nodal HVL plus generated UVM/UVM-MS projections for controller/DFI/PHY traffic, timing/protocol checks, training coverage, scoreboard/reference models, DRAM behavior, fault/error injection, and deterministic replay.
-
-- [ ] **Memory Interface Increment 10 — LPDDR-class end-to-end qualification vertical slice**
-  - Qualify a parameterized controller plus digital PHY utility/training subsystem and behavioral or external hard-PHY boundary across multiple clocks/resets/power modes, DFI, register control, training state, source-synchronous lanes, simulation, formal, synthesis, ASIC constraints, power intent, DFT intent, and scalability evidence.
-  - Publish compile/runtime/memory/generated-RTL/source-map/regression metrics and a capability/limitations matrix.
-
-## Scope boundary
-
-These tracks are intentionally future implementation roadmaps. They do not change the current next Foundation implementation increment, and they do not require Nodal core to become an LPDDR-specific language.
-
-A later memory standard, PHY technology, foundry flow, or vendor tool should normally extend these tracks/libraries/adapters rather than add another Foundation item. Foundation is reopened only for a genuinely missing target-neutral semantic identity that cannot be represented through ADR 0024 and the existing core architecture.
+A new memory standard, DFI revision, foundry, PDK, physical-design flow, or EDA tool should normally be handled by a future library, profile, plugin, or dependent-track roadmap. Foundation is reopened only for a genuinely missing target-neutral semantic identity that cannot be represented through ADR 0024 and this readiness boundary.

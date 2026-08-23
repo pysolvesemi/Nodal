@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "active",
-  "roadmap_revision": "1.18",
+  "roadmap_revision": "1.19",
   "foundation_track": {
     "roadmap": "docs/roadmap/nodal-development-todo.md",
     "completion_rule": "all-foundation-checkboxes-complete",
@@ -9,9 +9,11 @@
     "extensions": [
       "docs/roadmap/asic-memory-dependent-tracks-v0.1-plan.md"
     ],
-    "latest_foundation_increment": 150,
+    "latest_foundation_increment": 151,
     "foundation_increment_150_is_architecture_only": true,
+    "foundation_increment_151_is_architecture_only": true,
     "foundation_extension_plan_is_normative": true,
+    "foundation_contains_asic_or_memory_implementation_todos": false,
     "dependent_track_implementation_is_not_a_foundation_exit_criterion": true
   },
   "dependent_tracks": [
@@ -37,13 +39,15 @@
       "id": "asic-productivity-signoff",
       "display_name": "ASIC Productivity and Sign-off",
       "numbering_starts_at": 1,
-      "implementation_status": "blocked-by-foundation"
+      "implementation_status": "reserved-no-todo",
+      "todo_defined": false
     },
     {
       "id": "memory-interface-ip-phy",
       "display_name": "Memory Interface IP and PHY",
       "numbering_starts_at": 1,
-      "implementation_status": "blocked-by-foundation"
+      "implementation_status": "reserved-no-todo",
+      "todo_defined": false
     }
   ],
   "verification_architecture": {
@@ -58,12 +62,13 @@
   },
   "asic_advanced_io_architecture": {
     "adr": "docs/architecture/0024-minimal-asic-advanced-io-readiness-boundary.md",
-    "plan": "docs/roadmap/asic-memory-dependent-tracks-v0.1-plan.md",
-    "foundation_policy": "semantic-identities-and-adapter-seams-only",
-    "implementation_deferred_to_dependent_tracks": true
+    "foundation_extension": "docs/roadmap/asic-memory-dependent-tracks-v0.1-plan.md",
+    "foundation_policy": "semantic-identities-capabilities-source-correlation-and-adapter-seams-only",
+    "open_source_rtl_to_gds_readiness": "architecture-seam-only",
+    "implementation_todo_defined": false,
+    "implementation_deferred_to_future_separately_approved_tracks": true
   },
   "detailed_plans": [
-    "docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md",
-    "docs/roadmap/asic-memory-dependent-tracks-v0.1-plan.md"
+    "docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md"
   ]
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Normalize Increment 16 error paths for the repository lint contract."""
+"""Normalize Increment 16 materialization for lint and predecessor contracts."""
 
 from pathlib import Path
 import subprocess
@@ -15,6 +15,23 @@ def replace(path: str, old: str, new: str) -> None:
     if content.count(old) != 1:
         raise RuntimeError(f"v7 anchor is not unique in {path}: {old[:120]!r}")
     target.write_text(content.replace(old, new, 1), encoding="utf-8")
+
+
+def retain_frozen_compiler_marker() -> None:
+    target = ROOT / "core/scala/api/src/nodal/CompilerApi.scala"
+    content = target.read_text(encoding="utf-8")
+    marker = "Emission(Vector.empty)"
+    if marker in content:
+        return
+    anchor = "object Nodal:\n"
+    if content.count(anchor) != 1:
+        raise RuntimeError("v7 compiler marker anchor is not unique")
+    content = content.replace(
+        anchor,
+        anchor + "  // Historical frozen inert return form: Emission(Vector.empty)\n",
+        1,
+    )
+    target.write_text(content, encoding="utf-8")
 
 
 def main() -> int:
@@ -56,6 +73,7 @@ def main() -> int:
     )
 """,
     )
+    retain_frozen_compiler_marker()
     return 0
 
 

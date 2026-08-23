@@ -308,13 +308,15 @@ def check_repository(root: Path) -> list[Problem]:
             )
         )
     increment15_lines = [
-        line for line in roadmap.splitlines() if line.startswith("- [ ] **Increment 15 — ")
+        line
+        for line in roadmap.splitlines()
+        if line.startswith(("- [ ] **Increment 15 — ", "- [x] **Increment 15 — "))
     ]
     if len(increment15_lines) != 1 or "public API v0.3 freeze**" not in increment15_lines[0]:
         problems.append(
             Problem(
                 "NODAL-INC14-027",
-                "roadmap does not leave one unchecked Increment 15 public API freeze",
+                "roadmap does not retain one Increment 15 public API freeze",
             )
         )
     return problems

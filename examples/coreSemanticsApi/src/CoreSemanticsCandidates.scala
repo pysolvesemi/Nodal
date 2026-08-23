@@ -56,10 +56,10 @@ final class CoreSemanticsCandidates extends Module:
   unsignedOut := convertedUnsigned
 
   // Directionless aggregates and ranked structural values.
-  val packetType = Aggregate(
+  val packetType = Struct(
     "Packet",
-    AggregateField("data", UInt(width)),
-    AggregateField("flag", Bool)
+    StructField("data", UInt(width)),
+    StructField("flag", Bool)
   )
   val packet = wire(packetType)
   packet := packet

@@ -38,3 +38,8 @@ surface. Candidate-evaluation gates may authorize compile-only prototypes while
 explicitly leaving their public surface unfrozen. Increment 14 uses that model
 for automatic-pipeline, Interface/Role, digital-inout, and AMS candidates;
 Increment 15 owns the unified public API v0.3 freeze.
+## Unified public API v0.3
+
+`NodalCoreSemanticsPipelineApi-DG-v0.3.md` is the authoritative unified
+freeze for core semantics, Interface/Role/inout, automatic pipeline, and
+backend selection. The Increment 13 and 14 gates remain candidate evidence.

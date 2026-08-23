@@ -2,8 +2,7 @@ package nodal
 
 import scala.annotation.targetName
 
-/** Compile-only public candidates for Increment 13. No elaboration or lowering semantics live here.
-  */
+/** Public core semantic surface frozen by Increment 15. Implementation remains inert. */
 opaque type SInt <: Data = Bits
 
 object SInt:
@@ -71,16 +70,6 @@ extension [A <: Data](value: Expr[Vec[A]])
     CandidateRuntime.expr(value, other, "zip")
   def reduce(function: (Expr[A], Expr[A]) => Expr[A]): Expr[A] =
     CandidateRuntime.expr(value, function, "reduce")
-
-/** Directionless aggregate candidate. */
-opaque type Aggregate <: Data = Bits
-
-final case class AggregateField[A <: Data](name: String, dataType: DataType[A])
-
-object Aggregate:
-  def apply(name: String, fields: AggregateField[? <: Data]*): DataType[Aggregate] =
-    CandidateRuntime.statement(name, fields)
-    Bits(1).asInstanceOf[DataType[Aggregate]]
 
 /** General valid-only transport candidate. */
 final class Valid[A <: Data] private[nodal] (val payload: Expr[A])

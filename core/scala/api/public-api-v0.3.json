@@ -1,0 +1,337 @@
+{
+  "schema": 1,
+  "api_version": "0.3",
+  "status": "frozen",
+  "supersedes": "0.2",
+  "historical_baselines": [
+    "core/scala/api/public-api-v0.1.json",
+    "core/scala/api/public-api-v0.2.json"
+  ],
+  "default_import": "import nodal.*",
+  "source_package": "nodal",
+  "design_gate": "docs/design-gates/NodalCoreSemanticsPipelineApi-DG-v0.3.md",
+  "diagnostics_manifest": "core/scala/api/public-api-diagnostics-v0.3.json",
+  "fixture_manifest": "tests/api/fixtures/increment15/manifest.json",
+  "migration_notes": [
+    "docs/migrations/public-api-v0.1-to-v0.3.md",
+    "docs/migrations/public-api-v0.2-to-v0.3.md"
+  ],
+  "language_reference": "docs/language-reference/public-api-v0.3.md",
+  "binding_architecture": [
+    "docs/architecture/0007-implicit-clock-reset-domains.md",
+    "docs/architecture/0008-automatic-pipeline-architecture.md",
+    "docs/architecture/0009-core-semantic-contracts.md",
+    "docs/architecture/0010-digital-verilog-open-source-verification.md",
+    "docs/architecture/0015-native-scala-enum-and-hierarchical-fsm.md",
+    "docs/architecture/0016-signed-types-and-staged-loops.md",
+    "docs/architecture/0017-semantic-multidimensional-values-and-target-layouts.md",
+    "docs/architecture/0018-expression-materialization-and-semantic-naming.md",
+    "docs/architecture/0019-mandatory-pre-emission-hardware-quality-gates.md",
+    "docs/architecture/0021-unified-struct-interface-role-and-inout-architecture.md"
+  ],
+  "candidate_inputs": [
+    "docs/roadmap/core-semantics-api-v0.3-surface.json",
+    "docs/roadmap/automatic-pipeline-api-v0.3-surface.json",
+    "docs/roadmap/interface-role-inout-ams-v0.1-surface.json",
+    "docs/roadmap/signed-loop-api-v0.3-surface.json",
+    "docs/roadmap/shaped-values-naming-quality-v0.3-surface.json",
+    "docs/roadmap/enum-fsm-api-v0.3-surface.json",
+    "docs/roadmap/digital-backend-v0.3-surface.json"
+  ],
+  "source_files": [
+    "core/scala/api/src/nodal/CandidateApi.scala",
+    "core/scala/api/src/nodal/CoreSemanticsCandidateApi.scala",
+    "core/scala/api/src/nodal/PipelineInterfaceCandidateApi.scala",
+    "core/scala/api/src/nodal/CompilerApi.scala"
+  ],
+  "value_stages": {
+    "elaboration": "ordinary Scala values and Scala control flow",
+    "symbolic": "Param, Dimension, GenerateIndex, and symbolic expressions",
+    "dynamic": "ports, wires, registers, memory data, protocol payloads, and sampled values",
+    "target_replication": "generate(count)",
+    "bounded_same_cycle_iteration": "loop(LoopBound)"
+  },
+  "numeric": {
+    "types": [
+      "Bool",
+      "Bits",
+      "UInt",
+      "SInt",
+      "Integer",
+      "Real"
+    ],
+    "lossless_by_default": true,
+    "implicit_narrowing": false,
+    "implicit_signedness_change": false,
+    "explicit_resize": [
+      "extend",
+      "truncate",
+      "wrap",
+      "saturate",
+      "resizeChecked"
+    ],
+    "explicit_signedness": [
+      "toSigned",
+      "toUnsigned",
+      "reinterpretSigned",
+      "reinterpretUnsigned"
+    ]
+  },
+  "shaped_values": {
+    "structural_type": "Vec",
+    "dimensions": "Int | Expr[Integer]",
+    "operations": [
+      "at",
+      "flatten",
+      "reshape",
+      "map",
+      "zip",
+      "reduce"
+    ],
+    "storage_type": "Mem",
+    "portable_layout": "TargetLayout.PortableVerilogFlat",
+    "future_layout_candidates": [
+      "TargetLayout.SystemVerilogUnpacked",
+      "TargetLayout.SystemVerilogPacked"
+    ]
+  },
+  "values_and_connectivity": {
+    "value_aggregate": "Struct",
+    "value_is_directionless_and_storable": true,
+    "connectivity_aggregate": "Interface",
+    "interface_is_storable": false,
+    "role_type": "Role",
+    "roles": [
+      "master",
+      "slave",
+      "source",
+      "sink",
+      "initiator",
+      "target",
+      "controller",
+      "peripheral",
+      "device",
+      "environment",
+      "monitor"
+    ],
+    "direct_connection": "connectExact",
+    "adaptation": "explicit user-authored Module boundary",
+    "implicit_adaptation": false,
+    "interface_arrays": "interfaceArray",
+    "supported_layout": "InterfaceLayout.PortableFlattened",
+    "future_native_layout_candidate": "InterfaceLayout.FutureSystemVerilogNative",
+    "removed_candidate_symbols": [
+      "Aggregate",
+      "AggregateField",
+      "Flow",
+      "via",
+      "viewAs"
+    ]
+  },
+  "protocols": {
+    "plain_fixed_rate": "Txn",
+    "valid_only": "Valid",
+    "elastic": "Stream",
+    "implicit_conversion": false
+  },
+  "pipeline": {
+    "entry_points": [
+      "pipe",
+      "delay"
+    ],
+    "latency": [
+      "Latency.Auto",
+      "Latency.Exact",
+      "Latency.Range"
+    ],
+    "throughput": "Throughput.EveryCycle",
+    "ready_path": [
+      "ReadyPath.Auto",
+      "ReadyPath.Combinational",
+      "ReadyPath.Registered"
+    ],
+    "constraints": [
+      "stage",
+      "sameStage"
+    ],
+    "parameter_envelope": "ParameterEnvelope",
+    "inspection": "inspectSchedule",
+    "dynamic_values_must_enter_transaction": true,
+    "single_domain": true,
+    "general_hls": false
+  },
+  "memory_and_external": {
+    "memory": "Mem",
+    "memory_policy": [
+      "ReadUnderWrite",
+      "MemoryOrdering"
+    ],
+    "external_operation": "ExternalOp",
+    "fixed_contract": "ExternalContract",
+    "variable_contract": "VariableLatencyContract",
+    "effect": "Effect",
+    "model_availability": "ModelAvailability"
+  },
+  "quantities": {
+    "type": "Quantity",
+    "initial_dimensions": [
+      "VoltageDimension",
+      "CurrentDimension",
+      "ResistanceDimension",
+      "TimeDimension"
+    ],
+    "dimension_mismatch_is_type_error": true
+  },
+  "enum_and_fsm": {
+    "enum_derivation": "derives HwEnum",
+    "canonical_encoding": "enumEncoding",
+    "safe_decode": "decodeEnum",
+    "fsm": [
+      "FsmDefinition",
+      "fsm"
+    ],
+    "encoding": "FsmEncoding",
+    "transition": "TransitionMode",
+    "illegal_state": "IllegalStatePolicy",
+    "bounded_call_stack": true
+  },
+  "clock_reset": {
+    "retains_api_version": "0.2",
+    "architecture": "implicit-local-domain-explicit-crossing-explicit-emitted-hdl",
+    "ordinary_always_allowed": false,
+    "state": [
+      "Reg",
+      "Reg.uninitialized",
+      "RegNext",
+      "RegNext.uninitialized"
+    ],
+    "updates": [
+      "when",
+      "elsewhen",
+      "otherwise"
+    ],
+    "crossings": [
+      "Cdc",
+      "Rdc",
+      "ResetController",
+      "ClockGate",
+      "ClockMux"
+    ]
+  },
+  "digital_inout": {
+    "type": "DigitalInout",
+    "separate_read_and_drive": true,
+    "drive_modes": [
+      "pushPull",
+      "openDrain",
+      "openSource",
+      "readOnly",
+      "passThrough"
+    ],
+    "release": "highZ",
+    "portable_carrier": "split",
+    "hierarchy": "passThrough",
+    "pad": "padAdapter",
+    "silent_internal_mux_rewrite": false
+  },
+  "ams_connectivity": {
+    "terminal": "Terminal",
+    "views": [
+      "connectView",
+      "senseView",
+      "contributeView",
+      "terminalMonitorView"
+    ],
+    "signal_flow": "AnalogSignal",
+    "bridges": [
+      "MixedSignalBridge",
+      "ConservativeSignalBridge"
+    ],
+    "implicit_conversion": false
+  },
+  "quality": {
+    "temporary_policy": "TemporaryPolicy",
+    "naming_policy": "NamingPolicy",
+    "check_profile": "CheckProfile",
+    "waiver": "CheckWaiver",
+    "aggregate": "EmitQuality"
+  },
+  "compiler": {
+    "entry_point": "Nodal.emit",
+    "options": "EmitOptions",
+    "result": "Emission",
+    "report": "DesignReport",
+    "design_kinds": [
+      "DigitalOnly",
+      "AnalogOnly",
+      "MixedSignal",
+      "Unsupported"
+    ],
+    "backends": [
+      "Backend.Auto",
+      "Backend.Verilog",
+      "Backend.VerilogA",
+      "Backend.VerilogAMS"
+    ],
+    "default_backend": "Backend.Auto",
+    "auto_selection": {
+      "DigitalOnly": "Backend.Verilog",
+      "AnalogOnly": "Backend.VerilogA",
+      "MixedSignal": "Backend.VerilogAMS"
+    },
+    "digital_profiles": [
+      "DigitalProfile.Synthesis",
+      "DigitalProfile.Simulation",
+      "DigitalProfile.Formal"
+    ],
+    "portable_interface_abi": "InterfaceAbiEntry",
+    "source_map": "SourceMapEntry",
+    "schedule_evidence": "ScheduleInspection",
+    "systemverilog_backend_public": false
+  },
+  "library_author_subset": {
+    "allowed": [
+      "value and quantity types",
+      "Struct",
+      "Interface and Role",
+      "Valid and Stream",
+      "clock/reset domains and explicit crossings",
+      "digital inout and conservative AMS connectivity",
+      "pipeline, memory, external-operation, enum, and FSM contracts"
+    ],
+    "excluded": [
+      "Backend",
+      "EmitOptions",
+      "Emission",
+      "DesignReport",
+      "Nodal.emit",
+      "nodal.lowlevel.*",
+      "nodal.internal.*",
+      "nodal.bootstrap.*"
+    ]
+  },
+  "compatibility": {
+    "source_compatibility": "required across 0.3.x for listed frozen symbols",
+    "binary_compatibility": "not promised before 1.0",
+    "v0.1_analog_and_parameter_forms": "retained",
+    "v0.2_clock_reset_forms": "retained",
+    "v0.2_default_backend": "pin Backend.VerilogAMS to preserve the prior default",
+    "v0.3_default_backend": "Backend.Auto",
+    "breaking_change": "requires a new approved design gate and migration note",
+    "additive_change": "allowed only when overload resolution and semantics remain unambiguous"
+  },
+  "implementation_status": {
+    "surface_compiles": true,
+    "scala_type_negative_fixtures_execute": true,
+    "semantic_negative_fixtures_are_contract_only": true,
+    "elaboration_implemented": false,
+    "scheduler_implemented": false,
+    "interface_ir_implemented": false,
+    "resolution_topology_implemented": false,
+    "digital_backend_implemented": false,
+    "ams_backend_implemented": false,
+    "simulator_implemented": false
+  },
+  "roadmap_revision": "1.19",
+  "next_implementation_increment": 16
+}

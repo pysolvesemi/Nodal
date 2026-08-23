@@ -1,0 +1,192 @@
+{
+  "schema": 1,
+  "api_version": "0.3",
+  "status": "frozen",
+  "source_location": {
+    "required": true,
+    "fields": [
+      "path",
+      "line",
+      "column",
+      "span"
+    ]
+  },
+  "diagnostics": [
+    {
+      "code": "NODAL-NUM-015",
+      "name": "mixed-signedness-arithmetic",
+      "phase": "typing",
+      "severity": "error",
+      "message": "UInt and SInt arithmetic requires an explicit signedness decision.",
+      "suggestion": "Use toSigned, toUnsigned, or a reinterpretation operation deliberately."
+    },
+    {
+      "code": "NODAL-UNIT-015",
+      "name": "physical-dimension-mismatch",
+      "phase": "typing",
+      "severity": "error",
+      "message": "Physical quantities with incompatible dimensions cannot be combined.",
+      "suggestion": "Convert through an explicit dimensioned model or correct the expression."
+    },
+    {
+      "code": "NODAL-IFACE-015",
+      "name": "interface-stored-as-data",
+      "phase": "typing",
+      "severity": "error",
+      "message": "Interface connectivity cannot be stored in a register or memory.",
+      "suggestion": "Store a directionless Struct payload instead."
+    },
+    {
+      "code": "NODAL-PAYLOAD-015",
+      "name": "interface-used-as-payload",
+      "phase": "typing",
+      "severity": "error",
+      "message": "An Interface endpoint cannot be used as a Valid or Stream payload.",
+      "suggestion": "Define a storable Struct payload and keep connectivity separate."
+    },
+    {
+      "code": "NODAL-MONITOR-015",
+      "name": "monitor-drive",
+      "phase": "typing",
+      "severity": "error",
+      "message": "A monitor role cannot drive an interface member.",
+      "suggestion": "Use a driving role or keep the access observational."
+    },
+    {
+      "code": "NODAL-INVERT-015",
+      "name": "invalid-role-inversion",
+      "phase": "typing",
+      "severity": "error",
+      "message": "The selected role has no legal automatic inverse.",
+      "suggestion": "Declare an explicit complementary role or adapter module."
+    },
+    {
+      "code": "NODAL-INOUT-015",
+      "name": "illegal-open-drain-drive",
+      "phase": "typing",
+      "severity": "error",
+      "message": "Open-drain endpoints cannot drive arbitrary values.",
+      "suggestion": "Use driveLow(enable) and highZ()."
+    },
+    {
+      "code": "NODAL-PROTOCOL-015",
+      "name": "protocol-or-interface-mismatch",
+      "phase": "typing",
+      "severity": "error",
+      "message": "Exact connection requires one interface identity and complementary roles.",
+      "suggestion": "Insert an explicit adapter module for protocol conversion."
+    },
+    {
+      "code": "NODAL-BACKEND-015",
+      "name": "unapproved-systemverilog-backend",
+      "phase": "typing",
+      "severity": "error",
+      "message": "Backend.SystemVerilog is not part of public API v0.3.",
+      "suggestion": "Use Backend.Auto or Backend.Verilog; await the separately gated backend."
+    },
+    {
+      "code": "NODAL-MIGRATION-015",
+      "name": "ordinary-always-removed",
+      "phase": "typing",
+      "severity": "error",
+      "message": "Ordinary synchronous always(event) is not in the v0.3 public subset.",
+      "suggestion": "Use ClockDomain, Reg or RegNext, and when/elsewhen/otherwise."
+    },
+    {
+      "code": "NODAL-DOMAIN-015",
+      "name": "pipeline-without-domain",
+      "phase": "construction",
+      "severity": "error",
+      "message": "A pipeline region containing dynamic hardware has no lexical clock domain.",
+      "suggestion": "Declare or inherit one ClockDomain before creating the region."
+    },
+    {
+      "code": "NODAL-CDC-015",
+      "name": "cross-domain-pipeline-capture",
+      "phase": "construction",
+      "severity": "error",
+      "message": "A pipeline transform captures a value from another domain without a crossing.",
+      "suggestion": "Use an explicit CDC or RDC primitive before entering the transaction."
+    },
+    {
+      "code": "NODAL-PIPE-015",
+      "name": "unrelated-live-pipeline-capture",
+      "phase": "construction",
+      "severity": "error",
+      "message": "A dynamic value used by a transform did not enter through its transaction.",
+      "suggestion": "Add the value to the transaction payload or make it static."
+    },
+    {
+      "code": "NODAL-LATENCY-015",
+      "name": "unbounded-published-auto-latency",
+      "phase": "scheduling",
+      "severity": "error",
+      "message": "A published fixed-rate boundary cannot expose unconstrained automatic latency.",
+      "suggestion": "Use Latency.Exact, Latency.Range, or keep the region internal."
+    },
+    {
+      "code": "NODAL-EXTERNAL-015",
+      "name": "external-model-or-effect-missing",
+      "phase": "construction",
+      "severity": "error",
+      "message": "An external operation lacks required latency, effect, domain, or model evidence.",
+      "suggestion": "Provide a complete ExternalContract or VariableLatencyContract."
+    },
+    {
+      "code": "NODAL-DRIVER-015",
+      "name": "multiple-ordinary-drivers",
+      "phase": "construction",
+      "severity": "error",
+      "message": "An ordinary signal or state value has multiple unrelated drivers.",
+      "suggestion": "Use one priority update root or a declared resolved digital net."
+    },
+    {
+      "code": "NODAL-RESOLVE-015",
+      "name": "unsupported-internal-resolution",
+      "phase": "construction",
+      "severity": "error",
+      "message": "The selected backend profile cannot implement this internal resolved net.",
+      "suggestion": "Use a boundary inout, split carrier, or technology-mapped adapter."
+    },
+    {
+      "code": "NODAL-BRIDGE-015",
+      "name": "implicit-mixed-signal-conversion",
+      "phase": "construction",
+      "severity": "error",
+      "message": "Digital, conservative, and signal-flow values cannot convert implicitly.",
+      "suggestion": "Use an explicit bridge with timing, threshold, quantization, and model metadata."
+    },
+    {
+      "code": "NODAL-LAYOUT-015",
+      "name": "backend-interface-layout-mismatch",
+      "phase": "backend-selection",
+      "severity": "error",
+      "message": "The requested interface layout is unsupported by the selected backend.",
+      "suggestion": "Use PortableFlattened or select a future separately approved capability."
+    },
+    {
+      "code": "NODAL-FLATTEN-015",
+      "name": "flattened-interface-name-collision",
+      "phase": "backend-selection",
+      "severity": "error",
+      "message": "Two logical interface members map to the same emitted port name.",
+      "suggestion": "Choose a unique flatten prefix or revise the logical member names."
+    },
+    {
+      "code": "NODAL-GENERATE-015",
+      "name": "unbounded-or-runtime-hardware-loop",
+      "phase": "construction",
+      "severity": "error",
+      "message": "A target-visible loop has no static or bounded symbolic limit.",
+      "suggestion": "Use Scala elaboration, generate, or LoopBound.Symbolic with a maximum."
+    },
+    {
+      "code": "NODAL-FSM-015",
+      "name": "invalid-fsm-contract",
+      "phase": "construction",
+      "severity": "error",
+      "message": "An FSM has invalid encoding, transition, recursion, or illegal-state metadata.",
+      "suggestion": "Provide canonical enum encoding and a finite verified statechart contract."
+    }
+  ]
+}

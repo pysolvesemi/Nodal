@@ -1,7 +1,7 @@
 package nodal
 
-/** Compile-only public candidates for Increment 14. No construction, scheduling, lowering,
-  * resolution, topology, or simulation semantics live here.
+/** Public Interface, inout, AMS, and pipeline surface frozen by Increment 15. Construction,
+  * scheduling, lowering, resolution, topology, and simulation remain inert.
   */
 
 /** Directionless, storable record candidate. */

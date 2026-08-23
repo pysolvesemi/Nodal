@@ -2114,7 +2114,7 @@ def check_repository(root: Path) -> list[Problem]:
             "pipe(",
             "DigitalProfile.Synthesis",
             "InterfaceLayout.PortableFlattened",
-            "Native SystemVerilog is not a v0.3 backend",
+            "Native SystemVerilog is not a",
         ),
         problems,
         "NODAL-INC15-050",
@@ -2128,10 +2128,10 @@ def check_repository(root: Path) -> list[Problem]:
             "**API version:** 0.3",
             "Values are explicit and lossless",
             "`Struct` is the sole frozen directionless value aggregate",
-            "adaptation is an explicit",
+            "v0.3 deliberately does not freeze",
             "Every dynamic value used by a transform must enter through its transaction",
             "Backend.Auto",
-            "Backend.SystemVerilog is not public v0.3 API",
+            "`Backend.SystemVerilog` is not public v0.3 API",
             "All implementation behavior remains inert",
             "Increment 16",
         ),
@@ -2189,7 +2189,7 @@ def check_repository(root: Path) -> list[Problem]:
         }:
             problems.append(Problem("NODAL-INC15-063", "preflight validation evidence is malformed"))
     increment16 = [line for line in roadmap.splitlines() if line.startswith("- [ ] **Increment 16 — ")]
-    if len(increment16) != 1 or "construction" not in increment16[0].lower():
+    if len(increment16) != 1 or "kernel" not in increment16[0].lower():
         problems.append(Problem("NODAL-INC15-064", "roadmap does not leave one unchecked Increment 16"))
     return problems
 
@@ -2357,21 +2357,7 @@ def prepare() -> None:
     build_marker = "object publicApiV03External extends NodalScalaModule"
     if build_marker not in build.read_text(encoding="utf-8"):
         with build.open("a", encoding="utf-8") as stream:
-            stream.write(
-                normalized(
-                    """
-
-                    object publicApiV03External extends NodalScalaModule:
-                      def moduleDeps = Seq(core.scala.api)
-
-                    object publicApiV03 extends NodalScalaModule:
-                      def moduleDeps = Seq(core.scala.api, publicApiV03External)
-
-                    object publicApiV03Migration extends NodalScalaModule:
-                      def moduleDeps = Seq(core.scala.api)
-                    """
-                )
-            )
+            stream.write('\n  object publicApiV03External extends NodalScalaModule:\n    def moduleDeps = Seq(core.scala.api)\n\n  object publicApiV03 extends NodalScalaModule:\n    def moduleDeps = Seq(core.scala.api, publicApiV03External)\n\n  object publicApiV03Migration extends NodalScalaModule:\n    def moduleDeps = Seq(core.scala.api)\n')
 
     core_api = ROOT / "core/scala/api/src/nodal/CoreSemanticsCandidateApi.scala"
     replace_once_or_present(

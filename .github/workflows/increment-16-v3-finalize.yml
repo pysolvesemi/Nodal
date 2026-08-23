@@ -1,0 +1,65 @@
+name: Increment 16 Finalized Materialization
+
+on:
+  push:
+    branches:
+      - increment/16-elaboration-construction-kernel
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-16-finalized-materialization
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    name: increment-16/finalized-materialization
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Wait for superseded branch writers
+        run: sleep 210
+
+      - name: Check out latest branch head
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: increment/16-elaboration-construction-kernel
+
+      - name: Refresh latest remote head
+        run: |
+          git fetch origin increment/16-elaboration-construction-kernel
+          git reset --hard origin/increment/16-elaboration-construction-kernel
+
+      - name: Materialize final normalized implementation
+        run: |
+          python3 scripts/materialize_increment16_v3.py
+          rm -f .github/workflows/increment-16-v2-materialize.yml
+
+      - name: Format and validate final implementation
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          python3 scripts/check_increment11.py
+          python3 scripts/check_increment12.py --compile-negative
+          python3 scripts/check_increment13.py --compile-negative
+          python3 scripts/check_increment14.py --compile-negative
+          python3 scripts/check_increment15.py --compile-negative
+          python3 scripts/check_increment16.py --compile
+          python3 tests/api/test_increment16.py
+          git diff --check
+
+      - name: Commit final normalized implementation
+        run: |
+          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Increment 16 — finalize construction kernel"
+          git pull --rebase origin increment/16-elaboration-construction-kernel
+          git push origin HEAD:increment/16-elaboration-construction-kernel

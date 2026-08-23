@@ -21,6 +21,56 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  fix_increment124_newlines:
+    name: fix Increment 124 file endings
+    if: github.event_name == 'pull_request' && github.head_ref == 'increment/124-interface-role-inout-ams-roadmap'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Select the writable feature head
+        run: |
+          git fetch --no-tags origin \
+            increment/124-interface-role-inout-ams-roadmap:refs/remotes/origin/increment/124-interface-role-inout-ams-roadmap
+          git checkout -B increment/124-interface-role-inout-ams-roadmap \
+            origin/increment/124-interface-role-inout-ams-roadmap
+
+      - name: Add required final newlines
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          for name in (
+              'docs/architecture/0021-unified-struct-interface-role-and-inout-architecture.md',
+              'docs/roadmap/interface-role-inout-ams-v0.1-plan.md',
+              'docs/roadmap/interface-role-inout-ams-v0.1-surface.json',
+          ):
+              path = Path(name)
+              content = path.read_bytes()
+              if not content.endswith(b'\n'):
+                  path.write_bytes(content + b'\n')
+          PY
+          python3 -m json.tool docs/roadmap/interface-role-inout-ams-v0.1-surface.json >/dev/null
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Publish corrected source tree
+        run: |
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
+          git checkout origin/dev -- .github/workflows/ci.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Fix Increment 124 file endings'
+          git push origin HEAD:increment/124-interface-role-inout-ams-roadmap
+
   contracts:
     name: contracts
     runs-on: ubuntu-24.04

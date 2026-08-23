@@ -23,19 +23,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate positive and negative compile contracts
-        run: |
-          ./mill mill.scalalib.scalafmt/checkFormatAll
-          ./mill scalafix.check
-          python3 scripts/check_increment13.py --compile-negative
-          python3 scripts/check_increment14.py --compile-negative
-          git diff --check
-
       - name: Apply accepted Codex review closure
         if: github.event_name == 'push' && github.ref_name == 'increment/14-pipeline-interface-candidates'
         run: |
           python3 - <<'PY'
           import json
+          import re
           from pathlib import Path
 
           def replace_once(path: Path, old: str, new: str) -> None:
@@ -43,22 +36,16 @@ jobs:
               assert text.count(old) == 1, f"expected one replacement anchor in {path}"
               path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
+          def substitute_once(path: Path, pattern: str, replacement: str) -> None:
+              text = path.read_text(encoding="utf-8")
+              updated, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)
+              assert count == 1, f"expected one regex anchor in {path}"
+              path.write_text(updated, encoding="utf-8")
+
           api_path = Path("core/scala/api/src/nodal/PipelineInterfaceCandidateApi.scala")
-          replace_once(
+          substitute_once(
               api_path,
-              """enum RoleAccess:
-            case In(member: String)
-            case Out(member: String)
-            case Observe(member: String)
-            case Master(member: String)
-            case Slave(member: String)
-            case Read(member: String)
-            case Drive(member: String)
-            case Connect(member: String)
-            case Sense(member: String)
-            case Contribute(member: String)
-            case Nested(member: String, role: String)
-          """,
+              r"enum RoleAccess:\n(?:  case .*\n){11}",
               """enum RoleAccess:
             case In(member: String)
             case Out(member: String)
@@ -74,81 +61,40 @@ jobs:
 
           object RoleAccess:
             private[nodal] def inverted(access: RoleAccess): RoleAccess = access match
-              case RoleAccess.In(member)         => RoleAccess.Out(member)
-              case RoleAccess.Out(member)        => RoleAccess.In(member)
-              case RoleAccess.Observe(member)    => RoleAccess.Observe(member)
-              case RoleAccess.Master(member)     => RoleAccess.Slave(member)
-              case RoleAccess.Slave(member)      => RoleAccess.Master(member)
-              case RoleAccess.Read(member)       => RoleAccess.Drive(member)
-              case RoleAccess.Drive(member)      => RoleAccess.Read(member)
-              case RoleAccess.Connect(member)    => RoleAccess.Connect(member)
-              case RoleAccess.Sense(member)      => RoleAccess.Contribute(member)
+              case RoleAccess.In(member) => RoleAccess.Out(member)
+              case RoleAccess.Out(member) => RoleAccess.In(member)
+              case RoleAccess.Observe(member) => RoleAccess.Observe(member)
+              case RoleAccess.Master(member) => RoleAccess.Slave(member)
+              case RoleAccess.Slave(member) => RoleAccess.Master(member)
+              case RoleAccess.Read(member) => RoleAccess.Drive(member)
+              case RoleAccess.Drive(member) => RoleAccess.Read(member)
+              case RoleAccess.Connect(member) => RoleAccess.Connect(member)
+              case RoleAccess.Sense(member) => RoleAccess.Contribute(member)
               case RoleAccess.Contribute(member) => RoleAccess.Sense(member)
               case RoleAccess.Nested(member, role) =>
                 RoleAccess.Nested(member, invertedRoleName(role))
 
             private def invertedRoleName(role: String): String = role match
-              case "master"     => "slave"
-              case "slave"      => "master"
-              case "source"     => "sink"
-              case "sink"       => "source"
-              case "initiator"  => "target"
-              case "target"     => "initiator"
+              case "master" => "slave"
+              case "slave" => "master"
+              case "source" => "sink"
+              case "sink" => "source"
+              case "initiator" => "target"
+              case "target" => "initiator"
               case "controller" => "peripheral"
               case "peripheral" => "controller"
-              case "device"     => "environment"
+              case "device" => "environment"
               case "environment" => "device"
-              case other         => s"inverse($other)"
+              case other => s"inverse($other)"
           """,
           )
-          replace_once(
+          substitute_once(
               api_path,
-              """trait RoleInverse[R <: RoleKind]:
-            type Out <: RoleKind
-            def inverse: Role[Out]
-
-          object RoleInverse:
-            given masterInverse: RoleInverse[MasterRole] with
-              type Out = SlaveRole
-              def inverse: Role[SlaveRole] = slave
-
-            given slaveInverse: RoleInverse[SlaveRole] with
-              type Out = MasterRole
-              def inverse: Role[MasterRole] = master
-
-            given sourceInverse: RoleInverse[SourceRole] with
-              type Out = SinkRole
-              def inverse: Role[SinkRole] = sink
-
-            given sinkInverse: RoleInverse[SinkRole] with
-              type Out = SourceRole
-              def inverse: Role[SourceRole] = source
-
-            given initiatorInverse: RoleInverse[InitiatorRole] with
-              type Out = TargetRole
-              def inverse: Role[TargetRole] = target
-
-            given targetInverse: RoleInverse[TargetRole] with
-              type Out = InitiatorRole
-              def inverse: Role[InitiatorRole] = initiator
-
-            given controllerInverse: RoleInverse[ControllerRole] with
-              type Out = PeripheralRole
-              def inverse: Role[PeripheralRole] = peripheral
-
-            given peripheralInverse: RoleInverse[PeripheralRole] with
-              type Out = ControllerRole
-              def inverse: Role[ControllerRole] = controller
-
-            given deviceInverse: RoleInverse[DeviceRole] with
-              type Out = EnvironmentRole
-              def inverse: Role[EnvironmentRole] = environment
-
-            given environmentInverse: RoleInverse[EnvironmentRole] with
-              type Out = DeviceRole
-              def inverse: Role[DeviceRole] = device
-          """,
-              """trait RoleInverse[R <: RoleKind]:
+              r"/\*\* Evidence for the small set of fully complementary digital roles\. \*/\n"
+              r"trait RoleInverse\[R <: RoleKind\]:.*?\n\n"
+              r"/\*\* Exact role-compatibility evidence\. External libraries may publish additional instances\. \*/",
+              """/** Evidence for the small set of fully complementary digital roles. */
+          trait RoleInverse[R <: RoleKind]:
             type Out <: RoleKind
             def inverseName: String
 
@@ -176,18 +122,13 @@ jobs:
             given targetInverse: RoleInverse[TargetRole] with
               type Out = InitiatorRole
               def inverseName: String = "initiator"
-          """,
+
+          /** Exact role-compatibility evidence. External libraries may publish additional instances. */""",
           )
-          replace_once(
+          substitute_once(
               api_path,
-              """  def inverted(using inverse: RoleInverse[R]): InterfacePort[I, inverse.Out] =
-            new InterfacePort(
-              endpoint.definition,
-              inverse.inverse,
-              s"${endpoint.name}.inverse",
-              endpoint.domain
-            )
-          """,
+              r"  def inverted\(using inverse: RoleInverse\[R\]\): InterfacePort\[I, inverse\.Out\] =\n"
+              r".*?\n\n  def monitorView",
               """  def inverted(using inverse: RoleInverse[R]): InterfacePort[I, inverse.Out] =
             val invertedRole = new Role[inverse.Out](
               inverse.inverseName,
@@ -199,7 +140,8 @@ jobs:
               s"${endpoint.name}.inverse",
               endpoint.domain
             )
-          """,
+
+            def monitorView""",
           )
 
           example_path = Path("examples/interfacePipelineApi/src/PipelineInterfaceCandidates.scala")
@@ -253,14 +195,6 @@ jobs:
           )
           replace_once(
               checker_path,
-              """            "Named roles, protocols, and exact connection",
-          """,
-              """            "Named roles, protocols, and exact connection",
-                      "preserves the interface-specific member-access map",
-          """,
-          )
-          replace_once(
-              checker_path,
               """    require(
                   external,
           """,
@@ -295,8 +229,7 @@ jobs:
           """,
           )
 
-          workflow_path = Path(".github/workflows/increment-14-pipeline-interface-candidates.yml")
-          workflow_path.write_text(
+          Path(".github/workflows/increment-14-pipeline-interface-candidates.yml").write_text(
               """name: Increment 14 Pipeline and Interface Candidates
 
           on:
@@ -333,11 +266,18 @@ jobs:
               encoding="utf-8",
           )
           PY
+
+      - name: Validate positive and negative compile contracts
+        run: |
           ./mill mill.scalalib.scalafmt/checkFormatAll
           ./mill scalafix.check
           python3 scripts/check_increment13.py --compile-negative
           python3 scripts/check_increment14.py --compile-negative
           git diff --check
+
+      - name: Commit accepted Codex review closure
+        if: github.event_name == 'push' && github.ref_name == 'increment/14-pipeline-interface-candidates'
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add \

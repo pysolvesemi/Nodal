@@ -157,6 +157,7 @@ final class PipelineInterfaceCandidates extends Module:
   val pixelSink = interfacePort(PixelLink.definition, PixelLink.sinkRole, "pixelIn", domain)
   pixelSource.connectExact(pixelSink)
   val invertedPixelSource = pixelSource.inverted
+  val invertedPixelAccess = invertedPixelSource.role.access
   val pixelMonitor = pixelSource.monitorView
   pixelSource.driveMember("frameStart", enable)
   pixelMonitor.observeMember("pixels")
@@ -316,12 +317,12 @@ final class PipelineInterfaceCandidates extends Module:
 
   val validInput = Valid(a)
   val validOutput = pipe(validInput, exactPolicy): payload =>
-    stage(payload + b)
+    stage(payload + payload)
 
   val streamInput = Stream(a)
   val streamOutput = pipe(streamInput, rangedPolicy): payload =>
     sameStage:
-      payload + c
+      payload + payload
 
   val delayedPlain = a.delay(3)
   val delayedTransaction = automatic.delay(1)
@@ -375,6 +376,7 @@ final class PipelineInterfaceCandidates extends Module:
     fixedStream,
     variableStream,
     invertedPixelSource,
+    invertedPixelAccess,
     pixelMonitor,
     pixelLanes,
     portableLayout,

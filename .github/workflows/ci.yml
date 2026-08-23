@@ -21,6 +21,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  materialize_increment124:
+    name: materialize Increment 124
+    if: github.event_name == 'push' && github.event.head_commit.message == 'Run Increment 124 via Core CI'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Apply and validate roadmap updates
+        run: |
+          python3 .increment124_apply.py
+          python3 -m json.tool docs/roadmap/interface-role-inout-ams-v0.1-surface.json >/dev/null
+          python3 -m json.tool docs/roadmap/core-semantics-api-v0.3-surface.json >/dev/null
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Publish final Increment 124 source tree
+        run: |
+          rm -f .increment124_apply.py
+          rm -f .github/workflows/increment-124-interface-roadmap-materialize.yml
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
+          git checkout origin/dev -- .github/workflows/ci.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 124 — Record Interface, Role, AMS, and digital inout architecture'
+          git push origin HEAD:increment/124-interface-role-inout-ams-roadmap
+
   contracts:
     name: contracts
     runs-on: ubuntu-24.04

@@ -38,7 +38,7 @@ The candidate provides generic `RoleKind` identities plus built-in `master`, `sl
 - nested request/response ownership remains explicit;
 - `Valid` is the canonical valid-only protocol and `Stream` is the canonical elastic protocol;
 - exact connection requires the same interface identity and compile-visible complementary-role evidence;
-- legal automatic inversion exists only for fully complementary digital role pairs;
+- legal automatic inversion exists only for fully complementary digital role pairs and preserves the interface-specific member-access map;
 - monitor roles have no inverse and no drive evidence;
 - protocol conversion, field adaptation, resizing, CDC/RDC, buffering, latency insertion, and domain conversion remain explicit operations rather than connection side effects;
 - external libraries may define interface identities, role declarations, and additional compatibility evidence using public APIs only.

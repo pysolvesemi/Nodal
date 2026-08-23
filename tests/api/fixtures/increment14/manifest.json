@@ -12,7 +12,7 @@
   ],
   "validation": {
     "pull_request": 36,
-    "dedicated_workflow_run": 32633324974
+    "dedicated_workflow_run": 32639805716
   },
   "positive_modules": [
     "examples.interfacePipelineExternal.compile",
@@ -50,6 +50,7 @@
   ],
   "semantic_contracts": [
     "role-completeness",
+    "role-inversion-preserves-interface-access",
     "missing-required-member",
     "interface-or-direction-embedded-in-struct",
     "multiple-ordinary-drivers",

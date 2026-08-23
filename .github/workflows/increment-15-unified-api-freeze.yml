@@ -1,0 +1,83 @@
+name: Increment 15 Unified Public API Freeze
+
+on:
+  push:
+    branches:
+      - increment/15-unified-public-api-v0.3-freeze
+  pull_request:
+    branches:
+      - dev
+
+permissions:
+  contents: write
+
+jobs:
+  unified-public-api-freeze:
+    name: increment-15/unified-public-api-freeze
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out Increment 15 branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: increment/15-unified-public-api-v0.3-freeze
+
+      - name: Materialize unified v0.3 freeze
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/materialize_increment15.py")
+          text = path.read_text(encoding="utf-8")
+          replacements = {
+              '            "adaptation is an explicit",':
+                  '            "v0.3 deliberately does not freeze",',
+              'if len(increment16) != 1 or "construction" not in increment16[0].lower():':
+                  'if len(increment16) != 1 or "kernel" not in increment16[0].lower():',
+          }
+          for old, new in replacements.items():
+              if new in text:
+                  continue
+              if text.count(old) != 1:
+                  raise RuntimeError(f"materializer repair anchor is not unique: {old!r}")
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+          python3 scripts/materialize_increment15.py --mode prepare
+          if [ "$EVENT_NAME" = "pull_request" ] && \
+             [ "$HEAD_REF" = "increment/15-unified-public-api-v0.3-freeze" ]; then
+            python3 scripts/materialize_increment15.py \
+              --mode close \
+              --pull-request "$PR_NUMBER" \
+              --workflow-run "$WORKFLOW_RUN_ID"
+          fi
+
+      - name: Validate unified API and predecessor contracts
+        run: |
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          python3 scripts/check_increment11.py
+          python3 scripts/check_increment12.py --compile-negative
+          python3 scripts/check_increment13.py --compile-negative
+          python3 scripts/check_increment14.py --compile-negative
+          python3 scripts/check_increment15.py --compile-negative
+          python3 tests/api/test_increment15.py
+          git diff --check
+
+      - name: Commit materialized freeze
+        run: |
+          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Increment 15 — materialize unified public API v0.3 freeze"
+          git push origin HEAD:increment/15-unified-public-api-v0.3-freeze

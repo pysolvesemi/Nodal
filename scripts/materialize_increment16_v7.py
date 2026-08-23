@@ -45,19 +45,27 @@ def retain_frozen_compiler_marker() -> None:
 
 
 def retain_identity_contract_phrase() -> None:
-    target = ROOT / "docs/implementation/increment16-construction-kernel.md"
-    content = target.read_text(encoding="utf-8")
+    implementation = ROOT / "docs/implementation/increment16-construction-kernel.md"
+    content = implementation.read_text(encoding="utf-8")
     phrase = "Temporary identity maps locate live Scala objects"
-    if phrase in content:
-        return
-    anchor = "## Ownership and identity\n\n"
-    if content.count(anchor) != 1:
-        raise RuntimeError("v7 identity-contract anchor is not unique")
-    addition = (
-        "Temporary identity maps locate live Scala objects during one construction "
-        "transaction; their keys never become stable design identity.\n\n"
+    if phrase not in content:
+        anchor = "## Ownership and identity\n\n"
+        if content.count(anchor) != 1:
+            raise RuntimeError("v7 identity-contract anchor is not unique")
+        addition = (
+            "Temporary identity maps locate live Scala objects during one construction "
+            "transaction; their keys never become stable design identity.\n\n"
+        )
+        implementation.write_text(
+            content.replace(anchor, anchor + addition, 1),
+            encoding="utf-8",
+        )
+
+    replace(
+        "docs/design-gates/NodalConstructionKernel-DG-v1.0.md",
+        "Temporary identity maps locate live Scala\nobjects during one transaction",
+        "Temporary identity maps locate live Scala objects during one transaction",
     )
-    target.write_text(content.replace(anchor, anchor + addition, 1), encoding="utf-8")
 
 
 def main() -> int:

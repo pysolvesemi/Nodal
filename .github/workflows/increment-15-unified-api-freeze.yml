@@ -41,6 +41,10 @@ jobs:
                   '            "v0.3 deliberately does not freeze",',
               'if len(increment16) != 1 or "construction" not in increment16[0].lower():':
                   'if len(increment16) != 1 or "kernel" not in increment16[0].lower():',
+              '            "Native SystemVerilog is not a v0.3 backend",':
+                  '            "Native SystemVerilog is not a",',
+              '            "Backend.SystemVerilog is not public v0.3 API",':
+                  '            "`Backend.SystemVerilog` is not public v0.3 API",',
           }
           for old, new in replacements.items():
               if new in text:

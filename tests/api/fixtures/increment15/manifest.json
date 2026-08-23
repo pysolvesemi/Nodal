@@ -2,10 +2,10 @@
   "schema": 1,
   "increment": 15,
   "api_version": "0.3",
-  "status": "preflight-freeze",
+  "status": "validated-freeze",
   "validation": {
-    "pull_request": null,
-    "dedicated_workflow_run": null
+    "pull_request": 40,
+    "dedicated_workflow_run": 32645312790
   },
   "positive_modules": [
     "examples.publicApiV03External.compile",

@@ -28,6 +28,23 @@ jobs:
       - name: Materialize and format Increment 17
         run: |
           git fetch --no-tags origin dev:refs/remotes/origin/dev
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/materialize_increment17.py")
+          text = path.read_text(encoding="utf-8")
+          old = 'text.rstrip() + "\\n\\n" + content.strip() + "\\n"'
+          new = 'text.rstrip() + "\\n\\n" + content.rstrip() + "\\n"'
+          if old not in text:
+              raise RuntimeError("append indentation anchor is missing")
+          text = text.replace(old, new, 1)
+
+          old = 'raw"(?m)^\\\\s*package\\\\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\\\\s*:\\s*)?$".r'
+          new = '(raw"(?m)^\\\\s*package\\\\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\\\\s*:\\s*)?" + "$").r'
+          if old not in text:
+              raise RuntimeError("source package regex anchor is missing")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
           python3 scripts/materialize_increment17.py
           ./mill mill.scalalib.scalafmt/reformatAll
           ./mill scalafix.fix

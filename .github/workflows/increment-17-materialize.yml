@@ -69,6 +69,7 @@ jobs:
               text = text.replace(old, new, 1)
           source.write_text(text, encoding="utf-8")
           PY
+          rm -f .increment17-materialize-trigger
           ./mill mill.scalalib.scalafmt/reformatAll
           ./mill scalafix.fix
 

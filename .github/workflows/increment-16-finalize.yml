@@ -49,8 +49,9 @@ jobs:
           python3 scripts/check_increment15.py --compile-negative
           python3 scripts/check_increment16.py --compile
           python3 tests/api/test_increment16.py
+          git add -A
           python3 scripts/check_formatting_baseline.py
-          git diff --check
+          git diff --cached --check
 
       - name: Replace temporary machinery with permanent read-only CI
         run: |
@@ -155,6 +156,7 @@ jobs:
           python3 scripts/check_increment15.py --compile-negative
           python3 scripts/check_increment16.py --compile
           python3 tests/api/test_increment16.py
+          git add -A
           python3 scripts/check_formatting_baseline.py
           python3 scripts/check_markdown.py
           python3 scripts/check_package_visibility.py
@@ -164,7 +166,7 @@ jobs:
             --online-toolchain \
             --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
             --base-ref origin/dev
-          git diff --check
+          git diff --cached --check
 
       - name: Commit clean implementation tree
         run: |

@@ -32,15 +32,42 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("docs/implementation/increment17-source-origin-naming.md")
-          text = path.read_text(encoding="utf-8")
+          doc = Path("docs/implementation/increment17-source-origin-naming.md")
+          text = doc.read_text(encoding="utf-8")
           marker = "Traversal ordinals are never emitted as a normal name."
           if marker not in text:
               text = text.rstrip() + "\n\n" + marker + "\n"
           marker = "All expression-level source-map entries remain present when nodes are inlined."
           if marker not in text:
               text = text.rstrip() + "\n" + marker + "\n"
-          path.write_text(text, encoding="utf-8")
+          doc.write_text(text, encoding="utf-8")
+
+          source = Path("core/scala/api/src/nodal/SemanticOriginKernel.scala")
+          text = source.read_text(encoding="utf-8")
+          old = '''  private def isUserFrame(frame: StackWalker.StackFrame): Boolean =
+    Option(frame.getFileName).exists: fileName =>
+      fileName.endsWith(".scala") &&
+      !internalSourceFiles.contains(fileName) &&
+      !apiSourceFiles.contains(fileName)
+'''
+          new = '''  private def isUserFrame(frame: StackWalker.StackFrame): Boolean =
+    val owner = frame.getClassName
+    Option(frame.getFileName).exists: fileName =>
+      fileName.endsWith(".scala") &&
+      !internalSourceFiles.contains(fileName) &&
+      !apiSourceFiles.contains(fileName) &&
+      !owner.startsWith("scala.") &&
+      !owner.startsWith("java.") &&
+      !owner.startsWith("jdk.") &&
+      !owner.startsWith("sun.") &&
+      !owner.startsWith("utest.") &&
+      !owner.startsWith("mill.")
+'''
+          if new not in text:
+              if text.count(old) != 1:
+                  raise RuntimeError("user-frame selection anchor is not unique")
+              text = text.replace(old, new, 1)
+          source.write_text(text, encoding="utf-8")
           PY
           ./mill mill.scalalib.scalafmt/reformatAll
           ./mill scalafix.fix

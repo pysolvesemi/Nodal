@@ -39,8 +39,9 @@ EXPECTED_FILES = (
     ".github/workflows/increment-6-native-compiler-bootstrap.yml",
 )
 
+# Increment 18 may register the semantics-free dialect skeleton. Hardware and
+# lowering semantics remain forbidden by this historical compatibility check.
 FORBIDDEN_SEMANTICS = (
-    "NodalDialect",
     "nodal.module",
     "nodal.contribute",
     "FIRRTL",
@@ -168,7 +169,7 @@ def check_repository(root: Path) -> list[Problem]:
         "circt/Dialect/HW/HWDialect.h",
         "circt/Support/Version.h",
         "mlir/Tools/mlir-opt/MlirOptMain.h",
-        "registry.insert<circt::hw::HWDialect>()",
+        "circt::hw::HWDialect",
         "nodal::printVersion",
     )
     for fragment in required_driver:

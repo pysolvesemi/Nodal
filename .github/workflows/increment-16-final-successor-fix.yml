@@ -1,10 +1,10 @@
-# Trigger after workflow registration; removed by the repair job.
+# Temporary self-removing repair for the Increment 16 pull request.
 name: Increment 16 Final Successor Fix
 
 on:
-  push:
+  pull_request:
     branches:
-      - increment/16-elaboration-construction-kernel
+      - dev
 
 permissions:
   contents: write

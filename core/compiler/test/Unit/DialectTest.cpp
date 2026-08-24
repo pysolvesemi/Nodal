@@ -1,9 +1,8 @@
-#include "nodal/Dialect/Nodal/NodalDialect.h"
-#include "nodal/Dialect/Nodal/NodalOps.h"
-
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Parser/Parser.h"
+#include "nodal/Dialect/Nodal/NodalDialect.h"
+#include "nodal/Dialect/Nodal/NodalOps.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
@@ -25,8 +24,8 @@ int main() {
   registry.insert<nodal::NodalDialect>();
   mlir::MLIRContext context(registry);
 
-  auto module = mlir::parseSourceString<mlir::ModuleOp>(
-      "module { nodal.placeholder \"unit\" }", &context);
+  auto module =
+      mlir::parseSourceString<mlir::ModuleOp>("module { nodal.placeholder \"unit\" }", &context);
   if (!module)
     return fail("valid placeholder did not parse");
 

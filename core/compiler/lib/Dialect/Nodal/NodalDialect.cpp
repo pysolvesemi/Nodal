@@ -1,4 +1,5 @@
 #include "nodal/Dialect/Nodal/NodalDialect.h"
+
 #include "nodal/Dialect/Nodal/NodalOps.h"
 
 using namespace mlir;

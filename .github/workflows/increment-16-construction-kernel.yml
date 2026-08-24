@@ -58,6 +58,15 @@ jobs:
           ./mill scalafix.fix
           git checkout origin/dev -- .github/workflows/increment-16-construction-kernel.yml
 
+      - name: Publish formatted implementation for validation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Increment 17 — materialize semantic source identity"
+          git pull --rebase origin increment/17-source-origin-naming
+          git push origin HEAD:increment/17-source-origin-naming
+
       - name: Validate materialized Increment 17
         run: |
           python3 scripts/check_increment15.py --compile-negative
@@ -68,15 +77,6 @@ jobs:
           python3 scripts/check_markdown.py
           python3 scripts/check_package_visibility.py
           git diff --check
-
-      - name: Commit materialized implementation
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Increment 17 — implement semantic source identity"
-          git pull --rebase origin increment/17-source-origin-naming
-          git push origin HEAD:increment/17-source-origin-naming
 
   construction-kernel:
     name: increment-16/construction-kernel

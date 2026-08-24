@@ -36,22 +36,22 @@ def main() -> int:
     )
 
     gate = ROOT / "docs/design-gates/NodalConstructionKernel-DG-v1.0.md"
-    replace_once(
-        gate,
-        """**Status:** Approved by the frozen public API v0.3 architecture  
-**Scope:** construction-kernel implementation  
-**Public API:** unchanged at 0.3  
-**Governing gate:** `NodalCoreSemanticsPipelineApi-DG-v0.3.md`
-""",
-        """**Status:** Approved  
-**Scope:** public-api  
-**API version:** 0.3  
-**Decision:** Activate the private construction kernel beneath frozen public API v0.3  
-**Approved by:** Repository owner instruction to continue Increment 16 on 2026-08-24  
-**Public API:** unchanged at 0.3  
-**Governing gate:** `NodalCoreSemanticsPipelineApi-DG-v0.3.md`
-""",
+    old_gate_header = (
+        "**Status:** Approved by the frozen public API v0.3 architecture  \n"
+        "**Scope:** construction-kernel implementation  \n"
+        "**Public API:** unchanged at 0.3  \n"
+        "**Governing gate:** `NodalCoreSemanticsPipelineApi-DG-v0.3.md`\n"
     )
+    new_gate_header = (
+        "**Status:** Approved  \n"
+        "**Scope:** public-api  \n"
+        "**API version:** 0.3  \n"
+        "**Decision:** Activate the private construction kernel beneath frozen public API v0.3  \n"
+        "**Approved by:** Repository owner instruction to continue Increment 16 on 2026-08-24  \n"
+        "**Public API:** unchanged at 0.3  \n"
+        "**Governing gate:** `NodalCoreSemanticsPipelineApi-DG-v0.3.md`\n"
+    )
+    replace_once(gate, old_gate_header, new_gate_header)
 
     implementation = ROOT / "docs/implementation/increment16-construction-kernel.md"
     replace_once(

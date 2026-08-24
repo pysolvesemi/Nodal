@@ -12,11 +12,18 @@ sealed trait UInt extends Bits
 sealed trait Clock extends Data
 sealed trait Reset extends Data
 
-/** Backend-neutral expression placeholder used only to prove candidate source syntax. */
+/** Backend-neutral expression node. Construction metadata remains private to Nodal. */
 sealed trait Expr[+A <: Data]
+
+private[nodal] final class KernelExpr[A <: Data](val operands: Vector[Any]) extends Expr[A]
 
 /** Candidate declaration-time type descriptor. */
 sealed trait DataType[+A <: Data]
+
+private[nodal] final class KernelDataType[A <: Data](
+    val kernelDescriptor: KernelTypeDescriptor
+) extends DataType[A],
+      KernelDescribedType
 
 case object Real extends DataType[Real]
 case object Integer extends DataType[Integer]
@@ -25,15 +32,17 @@ case object Clock extends DataType[Clock]
 case object Reset extends DataType[Reset]
 
 object Bits:
-  def apply(width: Int): DataType[Bits] = new WidthDataType[Bits](width)
-  def apply(width: Expr[Integer]): DataType[Bits] = new WidthDataType[Bits](width)
+  def apply(width: Int): DataType[Bits] = new WidthDataType[Bits]("Bits", width)
+  def apply(width: Expr[Integer]): DataType[Bits] = new WidthDataType[Bits]("Bits", width)
 
 object UInt:
-  def apply(width: Int): DataType[UInt] = new WidthDataType[UInt](width)
-  def apply(width: Expr[Integer]): DataType[UInt] = new WidthDataType[UInt](width)
+  def apply(width: Int): DataType[UInt] = new WidthDataType[UInt]("UInt", width)
+  def apply(width: Expr[Integer]): DataType[UInt] = new WidthDataType[UInt]("UInt", width)
 
-private final class WidthDataType[A <: Data](width: Any) extends DataType[A]:
-  CandidateRuntime.statement(width)
+private final class WidthDataType[A <: Data](kind: String, width: Any)
+    extends DataType[A],
+      KernelDescribedType:
+  val kernelDescriptor = KernelTypeDescriptor(kind, Vector(width))
 
 /** Candidate analog nature metadata. */
 final class Nature private[nodal] (val name: String)
@@ -59,25 +68,46 @@ def discipline(name: String, potential: Nature, flow: Nature): NamedDiscipline =
   new NamedDiscipline(name, potential, flow)
 
 /** Candidate module parameter. */
-final class Param[A <: Data] private[nodal] (val default: Expr[A]) extends Expr[A]
+final class Param[A <: Data] private[nodal] (val default: Expr[A]) extends Expr[A]:
+  CandidateRuntime.declare(
+    this,
+    KernelSignalKind.Parameter,
+    attributes = Vector("default" -> default)
+  )
 
 /** Candidate digital signal or port. */
-final class Signal[A <: Data] private[nodal] (dataType: DataType[A]) extends Expr[A]:
-  CandidateRuntime.statement(dataType)
+final class Signal[A <: Data] private[nodal] (
+    val dataType: DataType[A],
+    kind: KernelSignalKind
+) extends Expr[A]:
+  CandidateRuntime.declare(this, kind, dataType = Some(dataType))
 
-  infix def :=(value: Expr[A]): Unit = CandidateRuntime.statement(this, value)
+  infix def :=(value: Expr[A]): Unit = CandidateRuntime.assign(this, value)
 
 /** Candidate elaboration-time variable visible to behavioral blocks. */
 final class Variable[A <: Data] private[nodal] (
-    dataType: DataType[A],
-    initialValue: Expr[A]
+    val dataType: DataType[A],
+    val initialValue: Expr[A]
 ) extends Expr[A]:
-  CandidateRuntime.statement(dataType, initialValue)
+  CandidateRuntime.declare(
+    this,
+    KernelSignalKind.Variable,
+    dataType = Some(dataType),
+    attributes = Vector("initial" -> initialValue)
+  )
 
-  infix def :=(value: Expr[A]): Unit = CandidateRuntime.statement(this, value)
+  infix def :=(value: Expr[A]): Unit = CandidateRuntime.assign(this, value)
 
 /** Candidate analog node or port. */
-final class Node[D <: Discipline] private[nodal] (val discipline: D)
+final class Node[D <: Discipline] private[nodal] (
+    val discipline: D,
+    kind: KernelSignalKind
+):
+  CandidateRuntime.declare(
+    this,
+    kind,
+    attributes = Vector("discipline" -> discipline)
+  )
 
 /** Frequency metadata carried by a clock-domain declaration. */
 sealed trait Frequency
@@ -122,12 +152,15 @@ object ClockRelation:
   case object Asynchronous extends ClockRelation
   case object Unknown extends ClockRelation
 
-/** Lexically applied candidate clock/reset domain. */
+/** Lexically applied clock/reset domain owned by the active construction transaction. */
 final class ClockDomain private[nodal] (
     val name: String,
-    val reset: Expr[Reset]
+    val reset: Expr[Reset],
+    kind: KernelDomainKind
 ):
-  def apply(body: => Unit): Unit = CandidateRuntime.block(body)
+  CandidateRuntime.registerDomain(this, kind)
+
+  def apply(body: => Unit): Unit = CandidateRuntime.domainBlock(this, body)
 
 object ClockDomain:
   def external(
@@ -138,7 +171,11 @@ object ClockDomain:
       frequency: Frequency
   ): ClockDomain =
     CandidateRuntime.statement(edge, reset, resetPolarity, frequency)
-    new ClockDomain(name, CandidateRuntime.expr(name, reset))
+    new ClockDomain(
+      name,
+      CandidateRuntime.expr(name, reset),
+      KernelDomainKind.External
+    )
 
   def from(
       clock: Expr[Clock],
@@ -150,10 +187,14 @@ object ClockDomain:
       name: String = "bound"
   ): ClockDomain =
     CandidateRuntime.statement(clock, edge, policy, polarity, frequency)
-    new ClockDomain(name, reset)
+    new ClockDomain(name, reset, KernelDomainKind.Bound)
 
   def required(name: String = "default"): ClockDomain =
-    new ClockDomain(name, CandidateRuntime.expr(name))
+    new ClockDomain(
+      name,
+      CandidateRuntime.expr(name),
+      KernelDomainKind.Required
+    )
 
   def generated(
       name: String,
@@ -163,48 +204,53 @@ object ClockDomain:
       reset: Expr[Reset]
   ): ClockDomain =
     CandidateRuntime.statement(clock, from, relation)
-    new ClockDomain(name, reset)
+    new ClockDomain(name, reset, KernelDomainKind.Generated)
 
-/** Candidate child-instance handle with typed selector-based access and overrides. */
-final class Instance[M <: Module] private[nodal] (private val module: M):
+/** Child-instance handle with typed selector-based overrides and domain bindings. */
+final class Instance[M <: Module] private[nodal] (private[nodal] val module: M):
+  CandidateRuntime.attachInstance(this, module)
+
   def apply[A](select: M => A): A = select(module)
 
   def param[A <: Data](select: M => Param[A], value: Expr[A]): this.type =
-    CandidateRuntime.statement(select(module), value)
+    val parameter = select(module)
+    CandidateRuntime.overrideParameter(this, parameter, value)
     this
 
   def domain(domain: ClockDomain): this.type =
-    CandidateRuntime.statement(domain)
+    CandidateRuntime.bindDefaultDomain(this, domain)
     this
 
   def domain(select: M => ClockDomain, domain: ClockDomain): this.type =
-    CandidateRuntime.statement(select(module), domain)
+    CandidateRuntime.bindNamedDomain(this, select(module), domain)
     this
 
-/** Short Verilog-AMS-like module construction candidate. */
+/** Short Verilog-AMS-like module construction surface backed by Increment 16. */
 abstract class Module:
+  CandidateRuntime.beginModule(this)
+
   protected final def param[A <: Data](default: Expr[A]): Param[A] = new Param(default)
 
   protected final def in[A <: Data](dataType: DataType[A]): Signal[A] =
-    new Signal(dataType)
+    new Signal(dataType, KernelSignalKind.Input)
 
   protected final def out[A <: Data](dataType: DataType[A]): Signal[A] =
-    new Signal(dataType)
+    new Signal(dataType, KernelSignalKind.Output)
 
   protected final def in[D <: Discipline](discipline: D): Node[D] =
-    new Node(discipline)
+    new Node(discipline, KernelSignalKind.AnalogInput)
 
   protected final def out[D <: Discipline](discipline: D): Node[D] =
-    new Node(discipline)
+    new Node(discipline, KernelSignalKind.AnalogOutput)
 
   protected final def inout[D <: Discipline](discipline: D): Node[D] =
-    new Node(discipline)
+    new Node(discipline, KernelSignalKind.AnalogInout)
 
   protected final def node[D <: Discipline](discipline: D): Node[D] =
-    new Node(discipline)
+    new Node(discipline, KernelSignalKind.AnalogNode)
 
   protected final def wire[A <: Data](dataType: DataType[A]): Signal[A] =
-    new Signal(dataType)
+    new Signal(dataType, KernelSignalKind.Wire)
 
   protected final def variable[A <: Data](
       dataType: DataType[A],
@@ -215,19 +261,25 @@ abstract class Module:
     new Instance(module)
 
   protected final def connect[A <: Data](left: Signal[A], right: Signal[A]): Unit =
-    CandidateRuntime.statement(left, right)
+    CandidateRuntime.connectValues(left, right)
 
   protected final def connect[D <: Discipline](left: Node[D], right: Node[D]): Unit =
-    CandidateRuntime.statement(left, right)
+    CandidateRuntime.connectNodes(left, right)
 
-/** Domain-owned state candidate. */
+/** Domain-owned state captured at its lexical construction point. */
 final class Register[A <: Data] private[nodal] (
-    initialValue: Option[Expr[A]],
-    dataType: Option[DataType[A]]
+    val initialValue: Option[Expr[A]],
+    val dataType: Option[DataType[A]]
 ) extends Expr[A]:
-  CandidateRuntime.statement(initialValue, dataType)
+  CandidateRuntime.declare(
+    this,
+    KernelSignalKind.Register,
+    dataType = dataType,
+    domain = CandidateRuntime.currentDomain,
+    attributes = Vector("initial" -> initialValue)
+  )
 
-  infix def :=(value: Expr[A]): Unit = CandidateRuntime.statement(this, value)
+  infix def :=(value: Expr[A]): Unit = CandidateRuntime.assign(this, value)
 
 object Reg:
   def apply[A <: Data](init: Expr[A]): Register[A] = new Register(Some(init), None)
@@ -331,7 +383,7 @@ object ClockGate:
       name: String = "gated"
   ): ClockDomain =
     CandidateRuntime.statement(enable, testEnable)
-    new ClockDomain(name, domain.reset)
+    new ClockDomain(name, domain.reset, KernelDomainKind.Generated)
 
 object ClockMux:
   def glitchless(
@@ -340,7 +392,11 @@ object ClockMux:
       name: String = "selected"
   ): ClockDomain =
     CandidateRuntime.statement(select, domains)
-    new ClockDomain(name, CandidateRuntime.expr(domains))
+    new ClockDomain(
+      name,
+      CandidateRuntime.expr(domains),
+      KernelDomainKind.Generated
+    )
 
 /** Candidate event handle. */
 final class Event private[nodal] ()
@@ -456,18 +512,76 @@ private[nodal] def realLiteral(value: Double, unit: String): Expr[Real] =
   CandidateRuntime.expr(value, unit)
 
 private[nodal] object CandidateRuntime:
-  private object PlaceholderExpr extends Expr[Nothing]
+  def dataType[A <: Data](kind: String, arguments: Any*): DataType[A] =
+    new KernelDataType[A](KernelTypeDescriptor(kind, arguments.toVector))
+
+  def typeDescriptor(dataType: DataType[?]): KernelTypeDescriptor = dataType match
+    case described: KernelDescribedType => described.kernelDescriptor
+    case Real => KernelTypeDescriptor("Real")
+    case Integer => KernelTypeDescriptor("Integer")
+    case Bool => KernelTypeDescriptor("Bool")
+    case Clock => KernelTypeDescriptor("Clock")
+    case Reset => KernelTypeDescriptor("Reset")
+
+  def beginModule(module: Module): Unit = ConstructionKernel.beginModule(module)
+
+  def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
+    ConstructionKernel.registerDomain(domain, kind)
+
+  def declare(
+      value: AnyRef,
+      kind: KernelSignalKind,
+      dataType: Option[DataType[? <: Data]] = None,
+      explicitName: Option[String] = None,
+      domain: Option[ClockDomain] = None,
+      attributes: Vector[(String, Any)] = Vector.empty
+  ): Unit =
+    ConstructionKernel.declare(value, kind, dataType, explicitName, domain, attributes)
 
   def expr[A <: Data](values: Any*): Expr[A] =
-    values.foreach(_ => ())
-    PlaceholderExpr
+    val expression = new KernelExpr[A](values.toVector)
+    ConstructionKernel.expression(expression)
+    expression
 
-  def statement(values: Any*): Unit = values.foreach(_ => ())
+  def statement(values: Any*): Unit = ConstructionKernel.operation("statement", values*)
 
-  def block(body: => Unit): Unit = statement(() => body)
+  def assign(left: AnyRef, right: Any): Unit =
+    ConstructionKernel.operation("assignment", left, right)
 
-  def block(event: Event, body: => Unit): Unit = statement(event, () => body)
+  def connectValues(left: AnyRef, right: AnyRef): Unit =
+    ConstructionKernel.operation("value-connect", left, right)
+
+  def connectNodes(left: AnyRef, right: AnyRef): Unit =
+    ConstructionKernel.operation("node-connect", left, right)
+
+  def attachInstance(instance: Instance[? <: Module], module: Module): Unit =
+    ConstructionKernel.attachInstance(instance, module)
+
+  def bindDefaultDomain(instance: Instance[?], domain: ClockDomain): Unit =
+    ConstructionKernel.bindDefault(instance, domain)
+
+  def bindNamedDomain(
+      instance: Instance[?],
+      requirement: ClockDomain,
+      domain: ClockDomain
+  ): Unit = ConstructionKernel.bindNamed(instance, requirement, domain)
+
+  def overrideParameter(instance: Instance[?], parameter: Any, value: Any): Unit =
+    ConstructionKernel.overrideParameter(instance, parameter, value)
+
+  def currentDomain: Option[ClockDomain] = ConstructionKernel.currentDomain
+
+  def domainBlock(domain: ClockDomain, body: => Unit): Unit =
+    ConstructionKernel.domainBlock(domain)(body)
+
+  def block(body: => Unit): Unit =
+    ConstructionKernel.operation("block")
+    ConstructionKernel.block(body)
+
+  def block(event: Event, body: => Unit): Unit =
+    ConstructionKernel.operation("event-block", event)
+    ConstructionKernel.block(body)
 
   def event(values: Any*): Event =
-    values.foreach(_ => ())
+    ConstructionKernel.operation("event", values*)
     new Event()

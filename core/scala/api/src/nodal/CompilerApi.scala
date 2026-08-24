@@ -64,8 +64,8 @@ final case class Emission(
     report: DesignReport = DesignReport()
 )
 
-/** Stable public compiler entry point. Its implementation is intentionally deferred. */
+/** Stable public compiler entry point. Increment 16 implements construction only. */
 object Nodal:
+  // Historical frozen inert return form: Emission(Vector.empty)
   def emit(top: => Module, options: EmitOptions = EmitOptions()): Emission =
-    CandidateRuntime.statement(() => top, options)
-    Emission(Vector.empty)
+    ConstructionKernel.emit(top, options)

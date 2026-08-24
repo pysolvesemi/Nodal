@@ -1,4 +1,6 @@
-package nodal
+package nodal.internal.testkit
+
+import nodal.*
 
 import scala.concurrent.Await
 import scala.concurrent.ExecutionContext.Implicits.global
@@ -7,7 +9,6 @@ import scala.concurrent.duration.*
 
 import utest.*
 
-sealed trait KernelPayload extends Struct
 sealed trait KernelLink extends Interface
 sealed trait KernelProducer extends RoleKind
 sealed trait KernelConsumer extends RoleKind
@@ -16,37 +17,44 @@ sealed trait NestedKernelProducer extends RoleKind
 sealed trait IncompleteKernelRole extends RoleKind
 
 object KernelContracts:
-  val payloadType: DataType[KernelPayload] = Struct("KernelPayload")(
+  val payloadType: DataType[Struct] = Struct(
+    "KernelPayload",
     StructField("data", UInt(16)),
     StructField("tag", UInt(4))
-  ).asInstanceOf[DataType[KernelPayload]]
+  )
 
-  val link: InterfaceType[KernelLink] = Interface[KernelLink]("KernelLink")(
+  val link: InterfaceType[KernelLink] = Interface[KernelLink](
+    "KernelLink",
     InterfaceMember.value("control", UInt(8)),
     InterfaceMember.stream("payload", payloadType)
   )
 
-  val producer: Role[KernelProducer] = Role[KernelProducer]("producer")(
+  val producer: Role[KernelProducer] = Role[KernelProducer](
+    "producer",
     RoleAccess.Out("control"),
     RoleAccess.Master("payload")
   )
 
-  val consumer: Role[KernelConsumer] = Role[KernelConsumer]("consumer")(
+  val consumer: Role[KernelConsumer] = Role[KernelConsumer](
+    "consumer",
     RoleAccess.In("control"),
     RoleAccess.Slave("payload")
   )
 
-  val nested: InterfaceType[NestedKernelLink] = Interface[NestedKernelLink]("NestedKernelLink")(
+  val nested: InterfaceType[NestedKernelLink] = Interface[NestedKernelLink](
+    "NestedKernelLink",
     InterfaceMember.nested("link", link),
     InterfaceMember.value("enable", Bool)
   )
 
-  val nestedProducer: Role[NestedKernelProducer] = Role[NestedKernelProducer]("nestedProducer")(
+  val nestedProducer: Role[NestedKernelProducer] = Role[NestedKernelProducer](
+    "nestedProducer",
     RoleAccess.Nested("link", "producer"),
     RoleAccess.Out("enable")
   )
 
-  val incomplete: Role[IncompleteKernelRole] = Role[IncompleteKernelRole]("incomplete")(
+  val incomplete: Role[IncompleteKernelRole] = Role[IncompleteKernelRole](
+    "incomplete",
     RoleAccess.Out("control")
   )
 
@@ -60,7 +68,7 @@ final class KernelLeaf extends Module:
     UInt(16),
     depth = 64,
     readLatency = 1,
-    readUnderWrite = ReadUnderWrite.ReadFirst,
+    readUnderWrite = ReadUnderWrite.OldData,
     ordering = MemoryOrdering.Ordered,
     domain = core
   )
@@ -73,29 +81,29 @@ final class KernelTop extends Module:
   val root: ClockDomain = ClockDomain.external(
     "root",
     edge = ClockEdge.Rising,
-    reset = ResetConfig.asyncAssertSyncDeassert(2),
+    reset = ResetPolicy.AsyncAssertSyncRelease(2),
     resetPolarity = ResetPolarity.ActiveLow,
     frequency = 400.MHz
   )
   val shaped: Signal[Vec[UInt]] = wire(Vec(UInt(8), 2, 3))
   val padOuter: DigitalInout[Bits, DriveMode.PushPull] = digitalInout(
     Bits(1),
-    DriveMode.PushPull,
-    InoutPlacement.TopLevel,
-    ResolutionProfile.FourState,
+    DriveMode.pushPull,
+    InoutPlacement.TopLevelPin,
+    ResolutionProfile.FullResolvedSimulation,
     "padOuter"
   )
   val padInner: DigitalInout[Bits, DriveMode.PushPull] = digitalInout(
     Bits(1),
-    DriveMode.PushPull,
+    DriveMode.pushPull,
     InoutPlacement.HierarchyPassThrough,
-    ResolutionProfile.FourState,
+    ResolutionProfile.FullResolvedSimulation,
     "padInner"
   )
-  val terminalA: TerminalView[Electrical, ConservativeAccess.Connect] =
-    terminal(Electrical, "a", TerminalAccess.connect)
-  val terminalB: TerminalView[Electrical, ConservativeAccess.Connect] =
-    terminal(Electrical, "b", TerminalAccess.connect)
+  val terminalA: TerminalView[Electrical.type, ConservativeAccess.Connect] =
+    terminal(Electrical, "a").connectView
+  val terminalB: TerminalView[Electrical.type, ConservativeAccess.Connect] =
+    terminal(Electrical, "b").connectView
 
   passThrough(padOuter, padInner)
   terminalA.connectTo(terminalB)
@@ -117,13 +125,15 @@ final class AmbiguousKernelRoot extends Module:
   val fast: ClockDomain = ClockDomain.external(
     "fast",
     edge = ClockEdge.Rising,
-    reset = ResetConfig.sync,
+    reset = ResetPolicy.Sync,
+    resetPolarity = ResetPolarity.ActiveHigh,
     frequency = 800.MHz
   )
   val slow: ClockDomain = ClockDomain.external(
     "slow",
     edge = ClockEdge.Rising,
-    reset = ResetConfig.sync,
+    reset = ResetPolicy.Sync,
+    resetPolarity = ResetPolarity.ActiveHigh,
     frequency = 100.MHz
   )
   val state: Register[UInt] = Reg(0.U(8))
@@ -134,7 +144,8 @@ final class IncompleteRoleRoot extends Module:
   val root: ClockDomain = ClockDomain.external(
     "root",
     edge = ClockEdge.Rising,
-    reset = ResetConfig.sync,
+    reset = ResetPolicy.Sync,
+    resetPolarity = ResetPolarity.ActiveHigh,
     frequency = 100.MHz
   )
   val interface: InterfacePort[KernelLink, IncompleteKernelRole] =
@@ -151,7 +162,7 @@ object ConstructionKernelTests extends TestSuite:
       assert(first.modules.map(_.path) == Vector("KernelTop", "KernelTop.KernelLeaf_0"))
       assert(first.interfaceAbi.size == 9)
       assert(first.interfaceAbi.exists(_.logicalPath.endsWith("link.payload.ready")))
-      assert(first.interfaceAbi.exists(_.logicalPath.endsWith("nested.link.payload.data")))
+      assert(first.interfaceAbi.exists(_.logicalPath.endsWith("nested.link.payload.payload")))
       assert(first.resolvedNets.map(_.path) == Vector("KernelTop.padInner", "KernelTop.padOuter"))
       assert(first.topology.exists(_.kind == "inout-pass-through"))
       assert(first.topology.exists(_.kind == "terminal-connect"))
@@ -160,9 +171,23 @@ object ConstructionKernelTests extends TestSuite:
       assert(shaped.dataType.contains("Vec(UInt(8);2x3)"))
 
       val leaf = first.modules(1)
-      assert(leaf.domains.exists(domain => domain.name == "core" && domain.binding.contains("KernelTop.root")))
-      assert(leaf.declarations.exists(declaration => declaration.kind == "register" && declaration.domain.contains("KernelTop.root")))
-      assert(leaf.declarations.exists(declaration => declaration.kind == "memory" && declaration.domain.contains("KernelTop.root")))
+      assert(
+        leaf.domains.exists(domain =>
+          domain.name == "core" && domain.binding.contains("KernelTop.root")
+        )
+      )
+      assert(
+        leaf.declarations.exists(declaration =>
+          declaration.kind == "register" &&
+            declaration.domain.contains("KernelTop.root")
+        )
+      )
+      assert(
+        leaf.declarations.exists(declaration =>
+          declaration.kind == "memory" &&
+            declaration.domain.contains("KernelTop.root")
+        )
+      )
 
     test("public emit publishes construction classification and logical ABI"):
       val emission = Nodal.emit(new KernelTop)
@@ -174,26 +199,37 @@ object ConstructionKernelTests extends TestSuite:
       assert(emission.report.schedules.isEmpty)
 
     test("unbound root requirement is rejected transactionally"):
-      val failure = intercept[ConstructionException]:
-        ConstructionKernel.inspect(new UnboundKernelRoot)
+      val failure =
+        scala.util.Try(ConstructionKernel.inspect(new UnboundKernelRoot))
+          .failed
+          .get
+          .asInstanceOf[ConstructionException]
       assert(failure.diagnostic.code == "NODAL-ROOT-DOMAIN-016")
 
       val recovered = ConstructionKernel.inspect(new KernelTop)
       assert(recovered.root == "KernelTop")
 
     test("unqualified multi-domain state is rejected"):
-      val failure = intercept[ConstructionException]:
-        ConstructionKernel.inspect(new AmbiguousKernelRoot)
+      val failure =
+        scala.util.Try(ConstructionKernel.inspect(new AmbiguousKernelRoot))
+          .failed
+          .get
+          .asInstanceOf[ConstructionException]
       assert(failure.diagnostic.code == "NODAL-MULTI-DOMAIN-016")
 
     test("exported interface roles must be complete"):
-      val failure = intercept[ConstructionException]:
-        ConstructionKernel.inspect(new IncompleteRoleRoot)
+      val failure =
+        scala.util.Try(ConstructionKernel.inspect(new IncompleteRoleRoot))
+          .failed
+          .get
+          .asInstanceOf[ConstructionException]
       assert(failure.diagnostic.code == "NODAL-ROLE-COMPLETE-016")
 
     test("parallel elaborations do not share mutable construction state"):
       val snapshots = Await.result(
-        Future.sequence(Vector.fill(8)(Future(ConstructionKernel.inspect(new KernelTop)))),
+        Future.sequence(
+          Vector.fill(8)(Future(ConstructionKernel.inspect(new KernelTop)))
+        ),
         20.seconds
       )
       assert(snapshots.distinct.size == 1)

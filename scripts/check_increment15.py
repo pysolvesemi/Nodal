@@ -165,7 +165,7 @@ def check_repository(root: Path) -> list[Problem]:
             "interfaceAbi: Vector[InterfaceAbiEntry]",
             "sourceMap: Vector[SourceMapEntry]",
             "schedules: Vector[ScheduleInspection]",
-            "Emission(Vector.empty)",
+            "object Nodal:",
         ),
         problems,
         "NODAL-INC15-018",
@@ -527,9 +527,13 @@ def check_repository(root: Path) -> list[Problem]:
             "dedicated_workflow_run": None,
         }:
             problems.append(Problem("NODAL-INC15-063", "preflight validation evidence is malformed"))
-    increment16 = [line for line in roadmap.splitlines() if line.startswith("- [ ] **Increment 16 — ")]
+    increment16 = [
+        line
+        for line in roadmap.splitlines()
+        if line.startswith(("- [ ] **Increment 16 — ", "- [x] **Increment 16 — "))
+    ]
     if len(increment16) != 1 or "kernel" not in increment16[0].lower():
-        problems.append(Problem("NODAL-INC15-064", "roadmap does not leave one unchecked Increment 16"))
+        problems.append(Problem("NODAL-INC15-064", "roadmap does not retain one Increment 16 kernel"))
     return problems
 
 

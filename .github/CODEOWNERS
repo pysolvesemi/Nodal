@@ -75,3 +75,11 @@
 /docs/language-reference/public-api-v0.3.md @pysolvesemi
 /docs/migrations/public-api-v0.1-to-v0.3.md @pysolvesemi
 /docs/migrations/public-api-v0.2-to-v0.3.md @pysolvesemi
+/core/scala/api/src/nodal/ElaborationConstructionKernel.scala @pysolvesemi
+/scripts/check_increment16.py @pysolvesemi
+/scripts/apply_increment16.py @pysolvesemi
+/tests/api/fixtures/increment16/manifest.json @pysolvesemi
+/.github/workflows/increment-16-construction-kernel.yml @pysolvesemi
+/core/scala/testkit/test/src/nodal/ConstructionKernelTests.scala @pysolvesemi
+/docs/design-gates/NodalConstructionKernel-DG-v1.0.md @pysolvesemi
+/docs/implementation/increment16-construction-kernel.md @pysolvesemi

@@ -17,6 +17,8 @@ transaction, so a failed elaboration cannot contaminate a later call.
 
 ## Ownership and identity
 
+Temporary identity maps locate live Scala objects during one construction transaction; their keys never become stable design identity.
+
 A `Module` enters construction from its base constructor. Declarations are owned by the active module
 and receive deterministic local ordinals. A child module enters a nested construction frame and must be
 attached immediately by `instance(new Child)`. The instance closes the child frame and records the
@@ -71,8 +73,10 @@ Every exported `InterfacePort` or `InterfaceArray` is closed transactionally. Th
 - a resolved endpoint domain.
 
 The kernel recursively expands nested logical members and expands `Valid`/`Stream` channels into stable
-logical ABI leaves. This report remains backend-neutral and does not choose a Verilog flattening policy
-beyond the deterministic placeholder emitted names required by the frozen report shape.
+logical ABI leaves. A protocol payload remains one typed ABI leaf: `Struct` fields stay preserved in its
+type descriptor and are not flattened during construction. This report remains backend-neutral and does
+not choose a Verilog flattening policy beyond the deterministic placeholder emitted names required by
+the frozen report shape.
 
 ## Digital inout and conservative topology
 

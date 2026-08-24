@@ -2,11 +2,9 @@ package nodal
 
 import java.lang.ScopedValue
 import java.util.IdentityHashMap
-import java.util.concurrent.Callable
 
 import scala.collection.mutable
 
-/** Private implementation kinds. They are deliberately absent from the frozen public API. */
 private[nodal] enum KernelSignalKind(val label: String):
   case Parameter extends KernelSignalKind("parameter")
   case Input extends KernelSignalKind("input")
@@ -44,14 +42,12 @@ private[nodal] final case class KernelDiagnostic(
     message: String,
     semanticPath: Option[String] = None
 ):
-  override def toString: String =
-    semanticPath match
-      case Some(path) => s"$code: $message [$path]"
-      case None => s"$code: $message"
+  override def toString: String = semanticPath match
+    case Some(path) => s"$code: $message [$path]"
+    case None => s"$code: $message"
 
-private[nodal] final class ConstructionException(
-    val diagnostic: KernelDiagnostic
-) extends IllegalArgumentException(diagnostic.toString)
+private[nodal] final class ConstructionException(val diagnostic: KernelDiagnostic)
+    extends IllegalArgumentException(diagnostic.toString)
 
 private[nodal] final case class KernelDomainSnapshot(
     path: String,
@@ -93,11 +89,7 @@ private[nodal] final case class KernelResolvedNetSnapshot(
     operations: Vector[String]
 )
 
-private[nodal] final case class KernelTopologyEdge(
-    kind: String,
-    left: String,
-    right: String
-)
+private[nodal] final case class KernelTopologyEdge(kind: String, left: String, right: String)
 
 private[nodal] final case class ConstructionSnapshot(
     root: String,
@@ -107,270 +99,229 @@ private[nodal] final case class ConstructionSnapshot(
     topology: Vector[KernelTopologyEdge]
 )
 
-private[nodal] final case class KernelElaboration(
-    emission: Emission,
-    snapshot: ConstructionSnapshot
+private final case class DomainRef(module: Long, index: Int)
+private final case class DeclarationRef(module: Long, index: Int)
+private final case class ExpressionRef(module: Long, index: Int)
+
+private final case class DomainRecord(
+    reference: DomainRef,
+    domain: ClockDomain,
+    name: String,
+    kind: KernelDomainKind
 )
 
-private final case class KernelDomainRef(module: Long, index: Int)
-private final case class KernelDeclarationRef(module: Long, index: Int)
-private final case class KernelExpressionRef(module: Long, index: Int)
-
-private final class MutableDomainRecord(
-    val reference: KernelDomainRef,
-    val domain: ClockDomain,
-    val name: String,
-    val kind: KernelDomainKind
+private final case class DeclarationRecord(
+    reference: DeclarationRef,
+    value: AnyRef,
+    kind: KernelSignalKind,
+    dataType: Option[DataType[? <: Data]],
+    explicitName: Option[String],
+    domainCandidate: Option[ClockDomain],
+    attributes: Vector[(String, Any)]
 )
 
-private final class MutableDeclarationRecord(
-    val reference: KernelDeclarationRef,
-    val value: AnyRef,
-    val kind: KernelSignalKind,
-    val dataType: Option[DataType[? <: Data]],
-    val explicitName: Option[String],
-    val domainCandidate: Option[ClockDomain],
-    val attributes: Vector[(String, Any)]
-)
-
-private final class MutableInstanceRecord(
+private final class InstanceRecord(
     val ordinal: Int,
-    val instance: Instance[? <: Module],
     val child: Long,
     val lexicalDomain: Option[ClockDomain]
 ):
   var defaultBinding: Option[ClockDomain] = None
-  val namedBindings: mutable.LinkedHashMap[ClockDomain, ClockDomain] =
-    mutable.LinkedHashMap.empty
+  val namedBindings: mutable.ArrayBuffer[(ClockDomain, ClockDomain)] = mutable.ArrayBuffer.empty
   val parameterOverrides: mutable.ArrayBuffer[(Any, Any)] = mutable.ArrayBuffer.empty
 
-private final class MutableModuleRecord(
+private final class ModuleRecord(
     val handle: Long,
-    val module: Module,
     val className: String,
     val parentAtConstruction: Option[Long]
 ):
-  val domains: mutable.ArrayBuffer[MutableDomainRecord] = mutable.ArrayBuffer.empty
-  val declarations: mutable.ArrayBuffer[MutableDeclarationRecord] = mutable.ArrayBuffer.empty
-  val instances: mutable.ArrayBuffer[MutableInstanceRecord] = mutable.ArrayBuffer.empty
-  var attached: Boolean = parentAtConstruction.isEmpty
+  val domains: mutable.ArrayBuffer[DomainRecord] = mutable.ArrayBuffer.empty
+  val declarations: mutable.ArrayBuffer[DeclarationRecord] = mutable.ArrayBuffer.empty
+  val instances: mutable.ArrayBuffer[InstanceRecord] = mutable.ArrayBuffer.empty
   var expressionCount: Int = 0
+  var attached: Boolean = parentAtConstruction.isEmpty
 
-private final case class MutableOperation(
-    kind: String,
-    values: Vector[Any]
-)
+private final case class Operation(kind: String, values: Vector[Any])
 
-/**
-  * One mutable construction transaction. The object is allocated by one emit/inspect call and is
-  * reachable only through a scoped immutable binding. Stable output identities are derived from
-  * hierarchy and local ordinals; JVM identity is used only for transient lookup and is never emitted.
+/** One mutable transaction. JVM identity is used only for transient lookup; stable paths use
+  * hierarchy, explicit names, and deterministic local ordinals.
   */
 private final class ConstructionSession(val options: EmitOptions):
-  private var nextModuleHandle: Long = 0L
-  private val modulesByHandle: mutable.LinkedHashMap[Long, MutableModuleRecord] =
-    mutable.LinkedHashMap.empty
-  private val moduleLookup = new IdentityHashMap[Module, java.lang.Long]()
-  private val domainLookup = new IdentityHashMap[ClockDomain, KernelDomainRef]()
-  private val declarationLookup = new IdentityHashMap[AnyRef, KernelDeclarationRef]()
-  private val expressionLookup = new IdentityHashMap[AnyRef, KernelExpressionRef]()
-  private val instanceLookup = new IdentityHashMap[Instance[?], MutableInstanceRecord]()
-  private val moduleStack: mutable.ArrayBuffer[MutableModuleRecord] = mutable.ArrayBuffer.empty
+  private var nextModule: Long = 0L
+  private val moduleIds = new IdentityHashMap[AnyRef, java.lang.Long]()
+  private val domainIds = new IdentityHashMap[AnyRef, DomainRef]()
+  private val declarationIds = new IdentityHashMap[AnyRef, DeclarationRef]()
+  private val expressionIds = new IdentityHashMap[AnyRef, ExpressionRef]()
+  private val instanceIds = new IdentityHashMap[AnyRef, InstanceRecord]()
+  private val records: mutable.LinkedHashMap[Long, ModuleRecord] = mutable.LinkedHashMap.empty
+  private val moduleStack: mutable.ArrayBuffer[ModuleRecord] = mutable.ArrayBuffer.empty
   private val domainStack: mutable.ArrayBuffer[ClockDomain] = mutable.ArrayBuffer.empty
-  private val operations: mutable.ArrayBuffer[MutableOperation] = mutable.ArrayBuffer.empty
+  private val operations: mutable.ArrayBuffer[Operation] = mutable.ArrayBuffer.empty
 
   private def fail(code: String, message: String, path: Option[String] = None): Nothing =
-    throw new ConstructionException(KernelDiagnostic(code, message, path))
+    scala.util.Failure[Nothing](
+      new ConstructionException(KernelDiagnostic(code, message, path))
+    ).get
 
-  private def className(module: Module): String =
-    val simple = module.getClass.getSimpleName.stripSuffix("$")
-    if simple.nonEmpty then simple else "AnonymousModule"
+  private def moduleName(module: Module): String =
+    val name = module.getClass.getSimpleName.stripSuffix("$")
+    if name.isEmpty then "AnonymousModule" else name
 
-  private def currentModule: MutableModuleRecord =
-    moduleStack.lastOption.getOrElse(
-      fail(
-        "NODAL-CONSTRUCT-016",
-        "hardware construction occurred without an active Module"
-      )
+  private def currentModule: ModuleRecord = moduleStack.lastOption.getOrElse(
+    fail("NODAL-CONSTRUCT-016", "hardware construction has no active Module")
+  )
+
+  private def moduleHandle(module: Module): Long =
+    Option(moduleIds.get(module)).map(_.longValue).getOrElse(
+      fail("NODAL-OWNERSHIP-017", "Module is outside this construction transaction")
+    )
+
+  private def domainRef(domain: ClockDomain): DomainRef =
+    Option(domainIds.get(domain)).getOrElse(
+      fail("NODAL-DOMAIN-020", "ClockDomain is outside this construction transaction")
     )
 
   def beginModule(module: Module): Unit =
-    if moduleLookup.containsKey(module) then
-      fail("NODAL-LIFECYCLE-016", "one Module object entered construction more than once")
-    val handle = nextModuleHandle
-    nextModuleHandle += 1
-    val parent = moduleStack.lastOption.map(_.handle)
-    val record = new MutableModuleRecord(handle, module, className(module), parent)
-    modulesByHandle += handle -> record
-    moduleLookup.put(module, java.lang.Long.valueOf(handle))
+    if moduleIds.containsKey(module) then
+      fail("NODAL-LIFECYCLE-016", "one Module entered construction twice")
+    val handle = nextModule
+    nextModule += 1
+    val record = new ModuleRecord(
+      handle,
+      moduleName(module),
+      moduleStack.lastOption.map(_.handle)
+    )
+    records += handle -> record
+    moduleIds.put(module, java.lang.Long.valueOf(handle))
     moduleStack += record
 
   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
     val module = currentModule
-    if domainLookup.containsKey(domain) then
-      fail("NODAL-DOMAIN-016", "one ClockDomain object was registered more than once")
+    if domainIds.containsKey(domain) then
+      fail("NODAL-DOMAIN-016", "one ClockDomain was registered twice")
     if module.domains.exists(_.name == domain.name) then
-      fail(
-        "NODAL-DOMAIN-017",
-        s"duplicate domain name '${domain.name}' in ${module.className}"
-      )
-    val reference = KernelDomainRef(module.handle, module.domains.size)
-    module.domains += new MutableDomainRecord(reference, domain, domain.name, kind)
-    domainLookup.put(domain, reference)
+      fail("NODAL-DOMAIN-017", s"duplicate domain name '${domain.name}'")
+    val reference = DomainRef(module.handle, module.domains.size)
+    module.domains += DomainRecord(reference, domain, domain.name, kind)
+    domainIds.put(domain, reference)
 
   def registerDeclaration(
       value: AnyRef,
       kind: KernelSignalKind,
       dataType: Option[DataType[? <: Data]],
       explicitName: Option[String],
-      domainCandidate: Option[ClockDomain],
+      domain: Option[ClockDomain],
       attributes: Vector[(String, Any)]
   ): Unit =
     val module = currentModule
-    if declarationLookup.containsKey(value) then
-      fail(
-        "NODAL-OWNERSHIP-016",
-        s"${kind.label} object was registered more than once"
-      )
-    val reference = KernelDeclarationRef(module.handle, module.declarations.size)
-    module.declarations += new MutableDeclarationRecord(
+    if declarationIds.containsKey(value) then
+      fail("NODAL-OWNERSHIP-016", s"${kind.label} was registered twice")
+    val reference = DeclarationRef(module.handle, module.declarations.size)
+    module.declarations += DeclarationRecord(
       reference,
       value,
       kind,
       dataType,
       explicitName,
-      domainCandidate,
+      domain,
       attributes
     )
-    declarationLookup.put(value, reference)
+    declarationIds.put(value, reference)
 
-  def registerExpression(expression: AnyRef): Unit =
-    moduleStack.lastOption.foreach: module =>
-      val reference = KernelExpressionRef(module.handle, module.expressionCount)
-      module.expressionCount += 1
-      expressionLookup.put(expression, reference)
+  def registerExpression(value: AnyRef): Unit = moduleStack.lastOption.foreach: module =>
+    val reference = ExpressionRef(module.handle, module.expressionCount)
+    module.expressionCount += 1
+    expressionIds.put(value, reference)
 
-  def attachInstance(instance: Instance[? <: Module], childModule: Module): Unit =
-    val childHandleValue = moduleLookup.get(childModule)
-    if childHandleValue == null then
+  def attachInstance(instance: AnyRef, childModule: Module): Unit =
+    if !moduleIds.containsKey(childModule) then
       fail(
         "NODAL-HIERARCHY-016",
-        "child Module was constructed outside the active elaboration transaction"
+        "child Module was constructed outside this construction transaction"
       )
-    val childHandle = childHandleValue.longValue
-    val child = modulesByHandle(childHandle)
+    val childHandle = moduleHandle(childModule)
     if moduleStack.lastOption.forall(_.handle != childHandle) then
       fail(
         "NODAL-HIERARCHY-017",
-        "instance(new Child) must attach the child immediately after its construction"
+        "instance(new Child) must immediately follow child construction"
       )
+    val child = records(childHandle)
     moduleStack.remove(moduleStack.size - 1)
     val parent = currentModule
     if child.parentAtConstruction != Some(parent.handle) then
-      fail("NODAL-HIERARCHY-018", "child construction parent does not match instance owner")
-    if child.attached then
-      fail("NODAL-HIERARCHY-019", "child Module was attached more than once")
-    val record = new MutableInstanceRecord(
+      fail("NODAL-HIERARCHY-018", "child construction owner does not match Instance owner")
+    if child.attached then fail("NODAL-HIERARCHY-019", "child Module was attached twice")
+    val record = new InstanceRecord(
       parent.instances.size,
-      instance,
       childHandle,
       domainStack.lastOption
     )
     parent.instances += record
-    instanceLookup.put(instance, record)
     child.attached = true
+    instanceIds.put(instance, record)
 
-  def bindDefault(instance: Instance[?], domain: ClockDomain): Unit =
-    val record = Option(instanceLookup.get(instance)).getOrElse(
-      fail("NODAL-BINDING-016", "domain binding targets an unknown Instance")
+  private def instanceRecord(instance: AnyRef): InstanceRecord =
+    Option(instanceIds.get(instance)).getOrElse(
+      fail("NODAL-BINDING-016", "binding targets an unknown Instance")
     )
-    record.defaultBinding = Some(domain)
 
-  def bindNamed(
-      instance: Instance[?],
-      requirement: ClockDomain,
-      domain: ClockDomain
-  ): Unit =
-    val record = Option(instanceLookup.get(instance)).getOrElse(
-      fail("NODAL-BINDING-017", "named domain binding targets an unknown Instance")
-    )
-    val requirementRef = Option(domainLookup.get(requirement)).getOrElse(
-      fail("NODAL-BINDING-018", "selector did not identify a child domain requirement")
-    )
-    if requirementRef.module != record.child then
-      fail("NODAL-BINDING-019", "selector domain does not belong to the selected child")
-    record.namedBindings.update(requirement, domain)
+  def bindDefault(instance: AnyRef, domain: ClockDomain): Unit =
+    instanceRecord(instance).defaultBinding = Some(domain)
 
-  def overrideParameter(instance: Instance[?], parameter: Any, value: Any): Unit =
-    val record = Option(instanceLookup.get(instance)).getOrElse(
-      fail("NODAL-PARAM-016", "parameter override targets an unknown Instance")
-    )
-    record.parameterOverrides += parameter -> value
+  def bindNamed(instance: AnyRef, requirement: ClockDomain, domain: ClockDomain): Unit =
+    val record = instanceRecord(instance)
+    val requirementReference = domainRef(requirement)
+    if requirementReference.module != record.child then
+      fail("NODAL-BINDING-019", "selector domain does not belong to the child Instance")
+    record.namedBindings += requirement -> domain
+
+  def overrideParameter(instance: AnyRef, parameter: Any, value: Any): Unit =
+    instanceRecord(instance).parameterOverrides += parameter -> value
 
   def withDomain[A](domain: ClockDomain)(body: => A): A =
-    val reference = domainLookup.get(domain)
-    if reference == null then
-      fail("NODAL-DOMAIN-018", "lexical ClockDomain is not owned by this transaction")
+    if !domainIds.containsKey(domain) then
+      fail("NODAL-DOMAIN-018", "lexical ClockDomain is outside this transaction")
+    domainRef(domain)
     domainStack += domain
     try body
     finally
       val removed = domainStack.remove(domainStack.size - 1)
-      if removed ne domain then
-        fail("NODAL-DOMAIN-019", "lexical domain stack was corrupted")
+      if removed ne domain then fail("NODAL-DOMAIN-019", "lexical domain stack is corrupt")
 
   def currentDomain: Option[ClockDomain] = domainStack.lastOption
 
-  def recordOperation(kind: String, values: Any*): Unit =
-    operations += MutableOperation(kind, values.toVector)
-
-  private def moduleHandle(module: Module): Long =
-    val value = moduleLookup.get(module)
-    if value == null then fail("NODAL-OWNERSHIP-017", "Module is not owned by this transaction")
-    value.longValue
+  def operation(kind: String, values: Any*): Unit = operations += Operation(kind, values.toVector)
 
   private def modulePath(handle: Long): String =
-    val record = modulesByHandle(handle)
+    val record = records(handle)
     record.parentAtConstruction match
       case None => record.className
       case Some(parentHandle) =>
-        val parent = modulesByHandle(parentHandle)
+        val parent = records(parentHandle)
         val instance = parent.instances.find(_.child == handle).getOrElse(
-          fail("NODAL-HIERARCHY-020", "constructed child is missing its Instance record")
+          fail("NODAL-HIERARCHY-020", "child Module has no Instance record")
         )
         s"${modulePath(parentHandle)}.${record.className}_${instance.ordinal}"
 
-  private def declarationPath(reference: KernelDeclarationRef): String =
-    val declaration = modulesByHandle(reference.module).declarations(reference.index)
-    val localName = declaration.explicitName.getOrElse(
+  private def declarationPath(reference: DeclarationRef): String =
+    val declaration = records(reference.module).declarations(reference.index)
+    val name = declaration.explicitName.getOrElse(
       s"${declaration.kind.label}_${reference.index}"
     )
-    s"${modulePath(reference.module)}.$localName"
+    s"${modulePath(reference.module)}.$name"
 
   private def pathOf(value: Any): Option[String] = value match
     case reference: AnyRef =>
-      Option(declarationLookup.get(reference)).map(declarationPath)
-        .orElse(
-          Option(moduleLookup.get(reference.asInstanceOf[Module])).map(value => modulePath(value.longValue))
-            if reference.isInstanceOf[Module]
-            else None
-        )
+      Option(declarationIds.get(reference)).map(declarationPath).orElse(
+        Option(moduleIds.get(reference)).map(handle => modulePath(handle.longValue))
+      )
     case _ => None
 
-  private def renderDimension(value: Any, owner: Long): String = value match
-    case integer: Int => integer.toString
-    case big: BigInt => big.toString
-    case parameter: Param[?] =>
-      Option(declarationLookup.get(parameter)).map(declarationPath).getOrElse("detached-param")
-    case expression: Expr[?] =>
-      expression match
-        case reference: AnyRef =>
-          Option(expressionLookup.get(reference)) match
-            case Some(found) => s"${modulePath(found.module)}.expr_${found.index}"
-            case None => "detached-expr"
-    case other => renderStable(other, owner)
+  private def stableClassName(value: AnyRef): String =
+    val name = value.getClass.getSimpleName.stripSuffix("$")
+    if name.isEmpty then value.getClass.getName.split("\\.").last.stripSuffix("$") else name
 
-  private def renderStable(value: Any, owner: Long): String = value match
-    case null => "null"
+  private def renderAny(value: Any, owner: Long): String = value match
+    case candidate if Option(candidate).isEmpty => "null"
     case text: String => text
     case boolean: Boolean => boolean.toString
     case integer: Int => integer.toString
@@ -379,50 +330,55 @@ private final class ConstructionSession(val options: EmitOptions):
     case big: BigInt => big.toString
     case dataType: DataType[?] => renderType(dataType, owner)
     case field: StructField[?] => s"${field.name}:${renderType(field.dataType, owner)}"
-    case values: Seq[?] => values.map(renderStable(_, owner)).mkString("[", ",", "]")
-    case values: Set[?] => values.toVector.map(renderStable(_, owner)).sorted.mkString("[", ",", "]")
-    case option: Option[?] => option.map(renderStable(_, owner)).getOrElse("none")
-    case enumValue: scala.reflect.Enum => enumValue.toString
+    case option: Option[?] => option.map(renderAny(_, owner)).getOrElse("none")
+    case sequence: Seq[?] => sequence.map(renderAny(_, owner)).mkString("[", ",", "]")
+    case set: Set[?] => set.toVector.map(renderAny(_, owner)).sorted.mkString("[", ",", "]")
     case reference: AnyRef =>
-      pathOf(reference).getOrElse(reference.getClass.getSimpleName.stripSuffix("$"))
-    case other => other.getClass.getSimpleName
+      Option(declarationIds.get(reference)).map(declarationPath)
+        .orElse(
+          Option(expressionIds.get(reference)).map: expression =>
+            s"${modulePath(expression.module)}.expr_${expression.index}"
+        )
+        .getOrElse(stableClassName(reference))
+    case other => other.toString
 
   private def renderType(dataType: DataType[?], owner: Long): String =
-    CandidateRuntime.typeDescriptor(dataType) match
-      case KernelTypeDescriptor("Struct", Vector(name: String, fields: Seq[?])) =>
-        val rendered = fields.collect:
-          case field: StructField[?] => s"${field.name}:${renderType(field.dataType, owner)}"
-        s"Struct($name{${rendered.mkString(",")}})"
-      case KernelTypeDescriptor("Vec", Vector(element: DataType[?], dimensions: Seq[?])) =>
-        val renderedDimensions = dimensions.map(renderDimension(_, owner)).mkString("x")
-        s"Vec(${renderType(element, owner)};$renderedDimensions)"
-      case KernelTypeDescriptor(kind, arguments) if arguments.nonEmpty =>
-        s"$kind(${arguments.map(renderDimension(_, owner)).mkString(",")})"
-      case KernelTypeDescriptor(kind, _) => kind
+    val descriptor = CandidateRuntime.typeDescriptor(dataType)
+    descriptor.kind match
+      case "Struct" =>
+        val name = descriptor.arguments.headOption.collect { case value: String =>
+          value
+        }.getOrElse("Struct")
+        val fields = descriptor.arguments.lift(1).toVector.flatMap:
+          case values: Seq[?] => values.collect:
+              case field: StructField[?] =>
+                s"${field.name}:${renderType(field.dataType, owner)}"
+          case _ => Vector.empty
+        s"Struct($name{${fields.mkString(",")}})"
+      case "Vec" =>
+        val element = descriptor.arguments.headOption.collect:
+          case value: DataType[?] => renderType(value, owner)
+        val dimensions = descriptor.arguments.lift(1).toVector.flatMap:
+          case values: Seq[?] => values.map(renderAny(_, owner))
+          case _ => Vector.empty
+        s"Vec(${element.getOrElse("unknown")};${dimensions.mkString("x")})"
+      case kind if descriptor.arguments.nonEmpty =>
+        s"$kind(${descriptor.arguments.map(renderAny(_, owner)).mkString(",")})"
+      case kind => kind
 
-  private def domainReference(domain: ClockDomain): KernelDomainRef =
-    Option(domainLookup.get(domain)).getOrElse(
-      fail("NODAL-DOMAIN-020", "domain reference is outside the construction transaction")
-    )
+  private def resolveDomains(): Map[DomainRef, String] =
+    val resolved = mutable.LinkedHashMap.empty[DomainRef, String]
 
-  private def resolveDomains(): Map[KernelDomainRef, String] =
-    val resolved = mutable.LinkedHashMap.empty[KernelDomainRef, String]
-
-    def resolveBinding(domain: ClockDomain): String =
-      val reference = domainReference(domain)
+    def visible(domain: ClockDomain): String =
       resolved.getOrElse(
-        reference,
-        fail(
-          "NODAL-BINDING-020",
-          "a child domain was bound to a domain that is not visible from its parent"
-        )
+        domainRef(domain),
+        fail("NODAL-BINDING-020", "bound domain is not visible from the parent Module")
       )
 
     def visit(handle: Long): Unit =
-      val module = modulesByHandle(handle)
+      val module = records(handle)
       val path = modulePath(handle)
-      val concrete = module.domains.filter(_.kind != KernelDomainKind.Required)
-      concrete.foreach: domain =>
+      module.domains.filter(_.kind != KernelDomainKind.Required).foreach: domain =>
         resolved.update(domain.reference, s"$path.${domain.name}")
 
       if module.parentAtConstruction.isEmpty then
@@ -434,28 +390,21 @@ private final class ConstructionSession(val options: EmitOptions):
           )
 
       module.instances.foreach: instance =>
-        val child = modulesByHandle(instance.child)
+        val child = records(instance.child)
         val requirements = child.domains.filter(_.kind == KernelDomainKind.Required).toVector
-        val named = instance.namedBindings.toVector.map: (required, actual) =>
-          domainReference(required) -> resolveBinding(actual)
-        val namedMap = named.toMap
-        val parentDomains = module.domains.flatMap(domain => resolved.get(domain.reference)).toVector
+        val parentVisible =
+          module.domains.flatMap(domain => resolved.get(domain.reference)).distinct.toVector
         requirements.foreach: requirement =>
-          val inferred = namedMap.get(requirement.reference)
-            .orElse(
-              if requirements.size == 1 then instance.defaultBinding.map(resolveBinding)
-              else None
-            )
-            .orElse(
-              if requirements.size == 1 then instance.lexicalDomain.map(resolveBinding)
-              else None
-            )
-            .orElse(
-              if requirements.size == 1 && parentDomains.distinct.size == 1 then parentDomains.headOption
-              else None
-            )
-          inferred match
-            case Some(binding) => resolved.update(requirement.reference, binding)
+          val named = instance.namedBindings.collectFirst:
+            case (selected, actual) if selected eq requirement.domain => visible(actual)
+          val binding = named
+            .orElse(if requirements.size == 1 then instance.defaultBinding.map(visible) else None)
+            .orElse(if requirements.size == 1 then instance.lexicalDomain.map(visible) else None)
+            .orElse(if requirements.size == 1 && parentVisible.size == 1 then
+              parentVisible.headOption
+            else None)
+          binding match
+            case Some(actual) => resolved.update(requirement.reference, actual)
             case None =>
               fail(
                 "NODAL-CHILD-DOMAIN-016",
@@ -464,44 +413,53 @@ private final class ConstructionSession(val options: EmitOptions):
               )
         visit(instance.child)
 
-    val roots = modulesByHandle.values.filter(_.parentAtConstruction.isEmpty).toVector
-    if roots.size != 1 then
-      fail("NODAL-ROOT-016", s"expected one root Module, found ${roots.size}")
+    val roots = records.values.filter(_.parentAtConstruction.isEmpty).toVector
+    if roots.size != 1 then fail("NODAL-ROOT-016", s"expected one root Module, found ${roots.size}")
     visit(roots.head.handle)
     resolved.toMap
 
   private def declarationDomain(
-      declaration: MutableDeclarationRecord,
-      resolvedDomains: Map[KernelDomainRef, String]
-  ): Option[String] =
-    declaration.domainCandidate match
-      case Some(domain) => resolvedDomains.get(domainReference(domain)).orElse(
+      declaration: DeclarationRecord,
+      resolved: Map[DomainRef, String]
+  ): Option[String] = declaration.domainCandidate match
+    case Some(domain) =>
+      resolved.get(domainRef(domain)).orElse(
+        fail(
+          "NODAL-DECL-DOMAIN-016",
+          s"${declaration.kind.label} has an unresolved domain",
+          Some(declarationPath(declaration.reference))
+        )
+      )
+    case None if declaration.kind == KernelSignalKind.Register =>
+      val module = records(declaration.reference.module)
+      val choices =
+        module.domains.flatMap(domain => resolved.get(domain.reference)).distinct.toVector
+      choices match
+        case Vector(single) => Some(single)
+        case Vector() =>
           fail(
-            "NODAL-DECL-DOMAIN-016",
-            s"${declaration.kind.label} references an unresolved domain",
+            "NODAL-STATE-DOMAIN-016",
+            "state has no lexical or default domain",
             Some(declarationPath(declaration.reference))
           )
-        )
-      case None if declaration.kind == KernelSignalKind.Register =>
-        val module = modulesByHandle(declaration.reference.module)
-        val choices = module.domains.flatMap(domain => resolvedDomains.get(domain.reference)).distinct
-        choices.toVector match
-          case Vector(single) => Some(single)
-          case Vector() =>
-            fail(
-              "NODAL-STATE-DOMAIN-016",
-              "state has no lexical or default clock domain",
-              Some(declarationPath(declaration.reference))
-            )
-          case _ =>
-            fail(
-              "NODAL-MULTI-DOMAIN-016",
-              "state in a multi-domain Module requires a lexical ClockDomain",
-              Some(declarationPath(declaration.reference))
-            )
-      case None => None
+        case _ =>
+          fail(
+            "NODAL-MULTI-DOMAIN-016",
+            "state in a multi-domain Module requires a lexical ClockDomain",
+            Some(declarationPath(declaration.reference))
+          )
+    case None => None
 
-  private def roleMember(access: RoleAccess): String = access match
+  private def memberName(member: InterfaceMember): String = member match
+    case value: InterfaceMember.Value[?] => value.name
+    case valid: InterfaceMember.ValidChannel[?] => valid.name
+    case stream: InterfaceMember.StreamChannel[?] => stream.name
+    case nested: InterfaceMember.Nested[?] => nested.name
+    case digital: InterfaceMember.DigitalResolved[?, ?] => digital.name
+    case conservative: InterfaceMember.Conservative[?] => conservative.name
+    case signal: InterfaceMember.SignalFlow[?] => signal.name
+
+  private def accessMember(access: RoleAccess): String = access match
     case RoleAccess.In(member) => member
     case RoleAccess.Out(member) => member
     case RoleAccess.Observe(member) => member
@@ -527,65 +485,72 @@ private final class ConstructionSession(val options: EmitOptions):
     case RoleAccess.Contribute(_) => "contribute"
     case RoleAccess.Nested(_, role) => s"nested:$role"
 
-  private def validateAccess(member: InterfaceMember, access: RoleAccess, path: String): Unit =
-    val valid = (member, access) match
-      case (_: InterfaceMember.Value[?], RoleAccess.In(_) | RoleAccess.Out(_) | RoleAccess.Observe(_)) => true
-      case (_: InterfaceMember.ValidChannel[?], RoleAccess.Master(_) | RoleAccess.Slave(_) | RoleAccess.Observe(_)) => true
-      case (_: InterfaceMember.StreamChannel[?], RoleAccess.Master(_) | RoleAccess.Slave(_) | RoleAccess.Observe(_)) => true
-      case (_: InterfaceMember.Nested[?], RoleAccess.Nested(_, _) | RoleAccess.Observe(_)) => true
-      case (_: InterfaceMember.DigitalResolved[?, ?], RoleAccess.Read(_) | RoleAccess.Drive(_) | RoleAccess.Connect(_) | RoleAccess.Observe(_)) => true
-      case (_: InterfaceMember.Conservative[?], RoleAccess.Connect(_) | RoleAccess.Sense(_) | RoleAccess.Contribute(_)) => true
-      case (_: InterfaceMember.SignalFlow[?], RoleAccess.In(_) | RoleAccess.Out(_) | RoleAccess.Observe(_)) => true
-      case _ => false
-    if !valid then
-      fail(
-        "NODAL-ROLE-ACCESS-016",
-        s"access '${accessName(access)}' is not legal for member '${roleMember(access)}'",
-        Some(path)
-      )
+  private def validAccess(member: InterfaceMember, access: RoleAccess): Boolean = member match
+    case _: InterfaceMember.Value[?] => access match
+        case RoleAccess.In(_) | RoleAccess.Out(_) | RoleAccess.Observe(_) => true
+        case _ => false
+    case _: InterfaceMember.ValidChannel[?] => access match
+        case RoleAccess.Master(_) | RoleAccess.Slave(_) | RoleAccess.Observe(_) => true
+        case _ => false
+    case _: InterfaceMember.StreamChannel[?] => access match
+        case RoleAccess.Master(_) | RoleAccess.Slave(_) | RoleAccess.Observe(_) => true
+        case _ => false
+    case _: InterfaceMember.Nested[?] => access match
+        case RoleAccess.Nested(_, _) | RoleAccess.Observe(_) => true
+        case _ => false
+    case _: InterfaceMember.DigitalResolved[?, ?] => access match
+        case RoleAccess.Read(_) | RoleAccess.Drive(_) | RoleAccess.Connect(_) | RoleAccess.Observe(
+              _
+            ) => true
+        case _ => false
+    case _: InterfaceMember.Conservative[?] => access match
+        case RoleAccess.Connect(_) | RoleAccess.Sense(_) | RoleAccess.Contribute(_) => true
+        case _ => false
+    case _: InterfaceMember.SignalFlow[?] => access match
+        case RoleAccess.In(_) | RoleAccess.Out(_) | RoleAccess.Observe(_) => true
+        case _ => false
 
-  private def protocolEntries(
-      base: String,
-      emittedBase: String,
+  private def protocolAbi(
+      logical: String,
+      emitted: String,
       role: String,
       access: RoleAccess,
-      payloadType: DataType[?],
+      payload: DataType[?],
       domain: String,
       stream: Boolean,
       owner: Long
   ): Vector[InterfaceAbiEntry] =
-    val accessLabel = accessName(access)
-    val payloadAccess = access match
+    val forward = access match
       case RoleAccess.Master(_) => "out"
       case RoleAccess.Slave(_) => "in"
       case RoleAccess.Observe(_) => "observe"
-      case _ => accessLabel
-    val readyAccess = access match
+      case _ => accessName(access)
+    val backward = access match
       case RoleAccess.Master(_) => "in"
       case RoleAccess.Slave(_) => "out"
       case RoleAccess.Observe(_) => "observe"
-      case _ => accessLabel
-    val common = Vector(
-      InterfaceAbiEntry(s"$base.valid", s"${emittedBase}_valid", role, payloadAccess, "Bool", domain),
+      case _ => accessName(access)
+    val entries = Vector(
+      InterfaceAbiEntry(s"$logical.valid", s"${emitted}_valid", role, forward, "Bool", domain),
       InterfaceAbiEntry(
-        s"$base.payload",
-        s"${emittedBase}_payload",
+        s"$logical.payload",
+        s"${emitted}_payload",
         role,
-        payloadAccess,
-        renderType(payloadType, owner),
+        forward,
+        renderType(payload, owner),
         domain
       )
     )
     if stream then
-      common :+ InterfaceAbiEntry(
-        s"$base.ready",
-        s"${emittedBase}_ready",
+      entries :+ InterfaceAbiEntry(
+        s"$logical.ready",
+        s"${emitted}_ready",
         role,
-        readyAccess,
+        backward,
         "Bool",
         domain
       )
-    else common
+    else entries
 
   private def expandMember(
       member: InterfaceMember,
@@ -608,17 +573,17 @@ private final class ConstructionSession(val options: EmitOptions):
         )
       )
     case valid: InterfaceMember.ValidChannel[?] =>
-      protocolEntries(logical, emitted, role, access, valid.payloadType, domain, stream = false, owner)
+      protocolAbi(logical, emitted, role, access, valid.payloadType, domain, false, owner)
     case stream: InterfaceMember.StreamChannel[?] =>
-      protocolEntries(logical, emitted, role, access, stream.payloadType, domain, stream = true, owner)
+      protocolAbi(logical, emitted, role, access, stream.payloadType, domain, true, owner)
     case nested: InterfaceMember.Nested[?] =>
       nested.definition.members.toVector.flatMap: child =>
-        val childName = interfaceMemberName(child)
+        val name = memberName(child)
         expandMember(
           child,
           access,
-          s"$logical.$childName",
-          s"${emitted}_$childName",
+          s"$logical.$name",
+          s"${emitted}_$name",
           role,
           domain,
           owner
@@ -657,112 +622,134 @@ private final class ConstructionSession(val options: EmitOptions):
         )
       )
 
-  private def interfaceMemberName(member: InterfaceMember): String = member match
-    case value: InterfaceMember.Value[?] => value.name
-    case valid: InterfaceMember.ValidChannel[?] => valid.name
-    case stream: InterfaceMember.StreamChannel[?] => stream.name
-    case nested: InterfaceMember.Nested[?] => nested.name
-    case digital: InterfaceMember.DigitalResolved[?, ?] => digital.name
-    case conservative: InterfaceMember.Conservative[?] => conservative.name
-    case signal: InterfaceMember.SignalFlow[?] => signal.name
-
-  private def interfaceAbi(
-      resolvedDomains: Map[KernelDomainRef, String]
+  private def endpointAbi(
+      definition: InterfaceType[?],
+      role: Role[?],
+      name: String,
+      domain: ClockDomain,
+      count: Option[Any],
+      declaration: DeclarationRecord,
+      resolved: Map[DomainRef, String]
   ): Vector[InterfaceAbiEntry] =
-    modulesByHandle.values.toVector.flatMap: module =>
-      module.declarations.toVector.flatMap: declaration =>
-        val endpoint = declaration.value match
-          case port: InterfacePort[?, ?] =>
-            Some((port.definition, port.role, port.name, port.domain, Option.empty[Any]))
-          case array: InterfaceArray[?, ?] =>
-            Some((array.definition, array.role, array.name, array.domain, Some(array.count)))
-          case _ => None
-        endpoint.toVector.flatMap: (definition, role, name, domain, count) =>
-          val memberNames = definition.members.map(interfaceMemberName)
-          if memberNames.distinct.size != memberNames.size then
-            fail(
-              "NODAL-INTERFACE-MEMBER-016",
-              s"Interface '${definition.name}' has duplicate member names",
-              Some(declarationPath(declaration.reference))
-            )
-          val grouped = role.access.groupBy(roleMember)
-          val missing = memberNames.filterNot(grouped.contains)
-          val unknown = grouped.keySet.diff(memberNames.toSet)
-          val duplicate = grouped.collect { case (member, accesses) if accesses.size != 1 => member }
-          if missing.nonEmpty || unknown.nonEmpty || duplicate.nonEmpty then
-            fail(
-              "NODAL-ROLE-COMPLETE-016",
-              s"role '${role.name}' is incomplete: missing=${missing.mkString(",")}, unknown=${unknown.mkString(",")}, duplicate=${duplicate.mkString(",")}",
-              Some(declarationPath(declaration.reference))
-            )
-          val resolvedDomain = resolvedDomains.getOrElse(
-            domainReference(domain),
-            fail(
-              "NODAL-INTERFACE-DOMAIN-016",
-              s"Interface endpoint '$name' has an unresolved domain"
-            )
-          )
-          val suffix = count.map(value => s"[${renderDimension(value, module.handle)}]").getOrElse("")
-          definition.members.toVector.flatMap: member =>
-            val memberName = interfaceMemberName(member)
-            val access = grouped(memberName).head
-            validateAccess(member, access, s"${modulePath(module.handle)}.$name.$memberName")
-            expandMember(
-              member,
-              access,
-              s"${modulePath(module.handle)}.$name$suffix.$memberName",
-              s"${name}_${memberName}",
-              role.name,
-              resolvedDomain,
-              module.handle
-            )
-    .sortBy(_.logicalPath)
+    val names = definition.members.map(memberName)
+    if names.distinct.size != names.size then
+      fail(
+        "NODAL-INTERFACE-MEMBER-016",
+        s"Interface '${definition.name}' has duplicate member names",
+        Some(declarationPath(declaration.reference))
+      )
+    val grouped = role.access.groupBy(accessMember)
+    val missing = names.filterNot(grouped.contains)
+    val unknown = grouped.keySet.diff(names.toSet)
+    val duplicate =
+      grouped.collect { case (member, accesses) if accesses.size != 1 => member }.toVector
+    if missing.nonEmpty || unknown.nonEmpty || duplicate.nonEmpty then
+      fail(
+        "NODAL-ROLE-COMPLETE-016",
+        s"role '${role.name}' is incomplete",
+        Some(declarationPath(declaration.reference))
+      )
+    val endpointDomain = resolved.getOrElse(
+      domainRef(domain),
+      fail("NODAL-INTERFACE-DOMAIN-016", s"Interface endpoint '$name' has no domain")
+    )
+    val owner = declaration.reference.module
+    val suffix = count.map(value => s"[${renderAny(value, owner)}]").getOrElse("")
+    definition.members.toVector.flatMap: member =>
+      val memberNameValue = memberName(member)
+      val access = grouped(memberNameValue).head
+      if !validAccess(member, access) then
+        fail(
+          "NODAL-ROLE-ACCESS-016",
+          s"role '${role.name}' has an invalid access for '$memberNameValue'",
+          Some(declarationPath(declaration.reference))
+        )
+      expandMember(
+        member,
+        access,
+        s"${modulePath(owner)}.$name$suffix.$memberNameValue",
+        s"${name}_$memberNameValue",
+        role.name,
+        endpointDomain,
+        owner
+      )
 
-  private def resolvedNetSnapshots(): Vector[KernelResolvedNetSnapshot] =
-    modulesByHandle.values.toVector.flatMap: module =>
+  private def interfaceAbi(resolved: Map[DomainRef, String]): Vector[InterfaceAbiEntry] =
+    val entries = records.values.toVector.flatMap: module =>
+      module.declarations.toVector.flatMap: declaration =>
+        declaration.value match
+          case port: InterfacePort[?, ?] =>
+            endpointAbi(
+              port.definition,
+              port.role,
+              port.name,
+              port.domain,
+              None,
+              declaration,
+              resolved
+            )
+          case array: InterfaceArray[?, ?] =>
+            endpointAbi(
+              array.definition,
+              array.role,
+              array.name,
+              array.domain,
+              Some(array.count),
+              declaration,
+              resolved
+            )
+          case _ => Vector.empty
+    entries.sortBy(_.logicalPath)
+
+  private def attribute(
+      declaration: DeclarationRecord,
+      name: String,
+      owner: Long,
+      default: String
+  ): String = declaration.attributes.find(_._1 == name)
+    .map(value => renderAny(value._2, owner))
+    .getOrElse(default)
+
+  private def resolvedNets(): Vector[KernelResolvedNetSnapshot] =
+    val nets = records.values.toVector.flatMap: module =>
       module.declarations.collect:
-        case declaration if declaration.value.isInstanceOf[DigitalInout[?, ?]] =>
-          val endpoint = declaration.value.asInstanceOf[DigitalInout[Bits, DriveMode]]
-          val path = declarationPath(declaration.reference)
-          val related = operations.collect:
-            case operation if operation.values.exists:
+        case declaration if declaration.kind == KernelSignalKind.DigitalInout =>
+          val related = operations.iterator
+            .filter: operation =>
+              operation.values.exists:
                 case reference: AnyRef => reference eq declaration.value
                 case _ => false
-              => operation.kind
+            .map(_.kind)
+            .toVector
           KernelResolvedNetSnapshot(
-            path,
-            renderType(endpoint.dataType, module.handle),
-            endpoint.mode.name,
-            endpoint.placement.toString,
-            endpoint.profile.toString,
-            related.toVector
+            declarationPath(declaration.reference),
+            declaration.dataType.map(renderType(_, module.handle)).getOrElse("Bits"),
+            attribute(declaration, "mode", module.handle, "unknown"),
+            attribute(declaration, "placement", module.handle, "unknown"),
+            attribute(declaration, "profile", module.handle, "unknown"),
+            related
           )
-    .sortBy(_.path)
+    nets.sortBy(_.path)
 
-  private def topologyEdges(): Vector[KernelTopologyEdge] =
-    operations.toVector.flatMap: operation =>
+  private def topology(): Vector[KernelTopologyEdge] =
+    val edges = operations.toVector.flatMap: operation =>
       if Set("node-connect", "terminal-connect", "inout-pass-through").contains(operation.kind) &&
-          operation.values.size >= 2
+        operation.values.size >= 2
       then
-        for
-          left <- pathOf(operation.values(0))
-          right <- pathOf(operation.values(1))
-        yield KernelTopologyEdge(operation.kind, left, right)
+        (pathOf(operation.values(0)), pathOf(operation.values(1))) match
+          case (Some(left), Some(right)) => Some(KernelTopologyEdge(operation.kind, left, right))
+          case _ => None
       else None
-    .sortBy(edge => (edge.kind, edge.left, edge.right))
+    edges.sortBy(edge => (edge.kind, edge.left, edge.right))
 
-  private def moduleSnapshots(
-      resolvedDomains: Map[KernelDomainRef, String]
-  ): Vector[KernelModuleSnapshot] =
-    modulesByHandle.values.toVector.sortBy(record => modulePath(record.handle)).map: module =>
+  private def snapshots(resolved: Map[DomainRef, String]): Vector[KernelModuleSnapshot] =
+    records.values.toVector.sortBy(record => modulePath(record.handle)).map: module =>
       val domains = module.domains.toVector.map: domain =>
-        val resolved = resolvedDomains.get(domain.reference)
-        val ownPath = s"${modulePath(module.handle)}.${domain.name}"
         KernelDomainSnapshot(
-          ownPath,
+          s"${modulePath(module.handle)}.${domain.name}",
           domain.name,
           domain.kind.label,
-          if domain.kind == KernelDomainKind.Required then resolved else None
+          if domain.kind == KernelDomainKind.Required then resolved.get(domain.reference) else None
         )
       val declarations = module.declarations.toVector.map: declaration =>
         KernelDeclarationSnapshot(
@@ -772,17 +759,17 @@ private final class ConstructionSession(val options: EmitOptions):
             s"${declaration.kind.label}_${declaration.reference.index}"
           ),
           declaration.dataType.map(renderType(_, module.handle)),
-          declarationDomain(declaration, resolvedDomains),
-          declaration.attributes.map: (key, value) => key -> renderStable(value, module.handle)
+          declarationDomain(declaration, resolved),
+          declaration.attributes.map(value => value._1 -> renderAny(value._2, module.handle))
         )
       val instances = module.instances.toVector.map: instance =>
-        val child = modulesByHandle(instance.child)
+        val child = records(instance.child)
         val bindings = child.domains.filter(_.kind == KernelDomainKind.Required).flatMap: domain =>
-          resolvedDomains.get(domain.reference).map(domain.name -> _)
+          resolved.get(domain.reference).map(domain.name -> _)
         KernelInstanceSnapshot(
           s"${modulePath(module.handle)}.instance_${instance.ordinal}",
           modulePath(instance.child),
-          instance.lexicalDomain.flatMap(domain => resolvedDomains.get(domainReference(domain))),
+          instance.lexicalDomain.flatMap(domain => resolved.get(domainRef(domain))),
           bindings.toVector
         )
       KernelModuleSnapshot(
@@ -793,55 +780,57 @@ private final class ConstructionSession(val options: EmitOptions):
         instances
       )
 
-  private def designKind(snapshot: ConstructionSnapshot): DesignKind =
+  private def classify(snapshot: ConstructionSnapshot): DesignKind =
     val kinds = snapshot.modules.flatMap(_.declarations.map(_.kind)).toSet
-    val analogKinds = Set("analog-input", "analog-output", "analog-inout", "analog-node", "conservative-terminal", "analog-signal")
-    val digitalKinds = kinds -- analogKinds
+    val analogKinds = Set(
+      "analog-input",
+      "analog-output",
+      "analog-inout",
+      "analog-node",
+      "conservative-terminal",
+      "analog-signal"
+    )
     val analog = kinds.exists(analogKinds.contains)
-    val digital = digitalKinds.nonEmpty || snapshot.interfaceAbi.nonEmpty || snapshot.resolvedNets.nonEmpty
+    val digital = (kinds -- analogKinds).nonEmpty || snapshot.interfaceAbi.nonEmpty ||
+      snapshot.resolvedNets.nonEmpty
     (digital, analog) match
       case (true, true) => DesignKind.MixedSignal
       case (true, false) => DesignKind.DigitalOnly
       case (false, true) => DesignKind.AnalogOnly
       case _ => DesignKind.Unsupported
 
-  def finish(root: Module): KernelElaboration =
+  def finish(root: Module): (Emission, ConstructionSnapshot) =
     val rootHandle = moduleHandle(root)
     if moduleStack.size != 1 || moduleStack.last.handle != rootHandle then
-      val open = moduleStack.map(_.className).mkString(" -> ")
-      fail(
-        "NODAL-LIFECYCLE-017",
-        s"construction closed with unattached or unclosed Modules: $open"
-      )
+      fail("NODAL-LIFECYCLE-017", "construction closed with an unattached child Module")
     moduleStack.remove(moduleStack.size - 1)
     if domainStack.nonEmpty then
-      fail("NODAL-LIFECYCLE-018", "construction closed with an active lexical domain")
-    modulesByHandle.values.filterNot(_.attached).foreach: module =>
-      fail(
-        "NODAL-HIERARCHY-021",
-        s"Module '${module.className}' was constructed but not attached"
-      )
+      fail("NODAL-LIFECYCLE-018", "construction closed with a lexical domain still active")
+    records.values.filterNot(_.attached).foreach: module =>
+      fail("NODAL-HIERARCHY-021", s"Module '${module.className}' was not attached")
 
-    val resolvedDomains = resolveDomains()
-    val modules = moduleSnapshots(resolvedDomains)
-    val abi = interfaceAbi(resolvedDomains)
+    val resolved = resolveDomains()
+    val modules = snapshots(resolved)
+    val abi = interfaceAbi(resolved)
     val snapshot = ConstructionSnapshot(
       modulePath(rootHandle),
       modules,
       abi,
-      resolvedNetSnapshots(),
-      topologyEdges()
+      resolvedNets(),
+      topology()
     )
-    val kind = designKind(snapshot)
+    val kind = classify(snapshot)
     val report = DesignReport(
       designKind = kind,
       selectedBackend = options.backend,
-      digitalProfile = if kind == DesignKind.AnalogOnly || kind == DesignKind.Unsupported then None else Some(options.digitalProfile),
+      digitalProfile =
+        if kind == DesignKind.AnalogOnly || kind == DesignKind.Unsupported then None
+        else Some(options.digitalProfile),
       interfaceAbi = abi,
       sourceMap = Vector.empty,
       schedules = Vector.empty
     )
-    KernelElaboration(Emission(Vector.empty, report), snapshot)
+    Emission(Vector.empty, report) -> snapshot
 
 private[nodal] object ConstructionKernel:
   private val Current: ScopedValue[ConstructionSession] =
@@ -850,26 +839,25 @@ private[nodal] object ConstructionKernel:
   private def active: Option[ConstructionSession] =
     if Current.isBound then Some(Current.get) else None
 
-  private def inSession[A](session: ConstructionSession)(body: => A): A =
-    ScopedValue.where(Current, session).call(
-      new Callable[A]:
-        override def call(): A = body
+  private def elaborate(top: => Module, options: EmitOptions): (Emission, ConstructionSnapshot) =
+    val session = new ConstructionSession(options)
+    var result: Option[(Emission, ConstructionSnapshot)] = None
+    ScopedValue.where(Current, session).run(
+      new Runnable:
+        override def run(): Unit =
+          val root = top
+          result = Some(session.finish(root))
+    )
+    result.getOrElse(
+      scala.util.Failure[(Emission, ConstructionSnapshot)](
+        new IllegalStateException("construction transaction did not publish a result")
+      ).get
     )
 
-  private def elaborate(
-      top: => Module,
-      options: EmitOptions
-  ): KernelElaboration =
-    val session = new ConstructionSession(options)
-    inSession(session):
-      val root = top
-      session.finish(root)
-
-  def emit(top: => Module, options: EmitOptions): Emission =
-    elaborate(top, options).emission
+  def emit(top: => Module, options: EmitOptions): Emission = elaborate(top, options)._1
 
   def inspect(top: => Module, options: EmitOptions = EmitOptions()): ConstructionSnapshot =
-    elaborate(top, options).snapshot
+    elaborate(top, options)._2
 
   def beginModule(module: Module): Unit = active.foreach(_.beginModule(module))
 
@@ -887,7 +875,7 @@ private[nodal] object ConstructionKernel:
     _.registerDeclaration(value, kind, dataType, explicitName, domain, attributes)
   )
 
-  def expression(expression: AnyRef): Unit = active.foreach(_.registerExpression(expression))
+  def expression(value: AnyRef): Unit = active.foreach(_.registerExpression(value))
 
   def attachInstance(instance: Instance[? <: Module], child: Module): Unit =
     active.foreach(_.attachInstance(instance, child))
@@ -895,23 +883,18 @@ private[nodal] object ConstructionKernel:
   def bindDefault(instance: Instance[?], domain: ClockDomain): Unit =
     active.foreach(_.bindDefault(instance, domain))
 
-  def bindNamed(
-      instance: Instance[?],
-      requirement: ClockDomain,
-      domain: ClockDomain
-  ): Unit = active.foreach(_.bindNamed(instance, requirement, domain))
+  def bindNamed(instance: Instance[?], requirement: ClockDomain, domain: ClockDomain): Unit =
+    active.foreach(_.bindNamed(instance, requirement, domain))
 
   def overrideParameter(instance: Instance[?], parameter: Any, value: Any): Unit =
     active.foreach(_.overrideParameter(instance, parameter, value))
 
-  def domainBlock[A](domain: ClockDomain)(body: => A): A =
-    active match
-      case Some(session) => session.withDomain(domain)(body)
-      case None => body
+  def domainBlock[A](domain: ClockDomain)(body: => A): A = active match
+    case Some(session) => session.withDomain(domain)(body)
+    case None => body
 
   def block[A](body: => A): A = body
 
   def currentDomain: Option[ClockDomain] = active.flatMap(_.currentDomain)
 
-  def operation(kind: String, values: Any*): Unit =
-    active.foreach(_.recordOperation(kind, values*))
+  def operation(kind: String, values: Any*): Unit = active.foreach(_.operation(kind, values*))

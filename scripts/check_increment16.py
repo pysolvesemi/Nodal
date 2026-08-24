@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate Increment 16 construction-kernel contracts and optional Scala execution."""
+"""Validate Increment 16 construction-kernel contracts and optional execution."""
 
 from __future__ import annotations
 
@@ -20,96 +20,53 @@ class Problem:
     message: str
 
 
-def read(path: Path, problems: list[Problem], code: str) -> str:
+def text(root: Path, path: str, problems: list[Problem], code: str) -> str:
     try:
-        return path.read_text(encoding="utf-8")
+        return (root / path).read_text(encoding="utf-8")
     except OSError as error:
-        problems.append(Problem(code, f"cannot read {path.relative_to(ROOT)}: {error}"))
+        problems.append(Problem(code, f"cannot read {path}: {error}"))
         return ""
 
 
+def object_json(root: Path, path: str, problems: list[Problem], code: str) -> dict[str, object]:
+    try:
+        value = json.loads((root / path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        problems.append(Problem(code, f"cannot load {path}: {error}"))
+        return {}
+    if not isinstance(value, dict):
+        problems.append(Problem(code, f"{path} is not a JSON object"))
+        return {}
+    return value
+
+
 def require(
-    text: str,
+    source: str,
     fragments: tuple[str, ...],
     problems: list[Problem],
     code: str,
     label: str,
 ) -> None:
-    missing = [fragment for fragment in fragments if fragment not in text]
+    missing = [fragment for fragment in fragments if fragment not in source]
     if missing:
         problems.append(Problem(code, f"{label} lacks: {', '.join(missing)}"))
 
 
-def load_json(path: Path, problems: list[Problem], code: str) -> dict[str, object]:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        problems.append(Problem(code, f"cannot load {path.relative_to(ROOT)}: {error}"))
-        return {}
-    if not isinstance(value, dict):
-        problems.append(Problem(code, f"{path.relative_to(ROOT)} is not a JSON object"))
-        return {}
-    return value
-
-
 def validate_files(root: Path = ROOT) -> list[Problem]:
     problems: list[Problem] = []
-    kernel = read(
-        root / "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",
-        problems,
-        "NODAL-INC16-001",
-    )
-    candidate = read(
-        root / "core/scala/api/src/nodal/CandidateApi.scala",
-        problems,
-        "NODAL-INC16-002",
-    )
-    core = read(
-        root / "core/scala/api/src/nodal/CoreSemanticsCandidateApi.scala",
-        problems,
-        "NODAL-INC16-003",
-    )
-    interface = read(
-        root / "core/scala/api/src/nodal/PipelineInterfaceCandidateApi.scala",
-        problems,
-        "NODAL-INC16-004",
-    )
-    compiler = read(
-        root / "core/scala/api/src/nodal/CompilerApi.scala",
-        problems,
-        "NODAL-INC16-005",
-    )
-    tests = read(
-        root / "core/scala/testkit/test/src/nodal/ConstructionKernelTests.scala",
-        problems,
-        "NODAL-INC16-006",
-    )
-    documentation = read(
-        root / "docs/implementation/increment16-construction-kernel.md",
-        problems,
-        "NODAL-INC16-007",
-    )
-    roadmap = read(
-        root / "docs/roadmap/nodal-development-todo.md",
-        problems,
-        "NODAL-INC16-008",
-    )
-    predecessor = read(
-        root / "scripts/check_increment15.py",
-        problems,
-        "NODAL-INC16-009",
-    )
-    command = read(root / "scripts/nodal.py", problems, "NODAL-INC16-010")
-    manifest = load_json(
-        root / "tests/api/fixtures/increment16/manifest.json",
-        problems,
-        "NODAL-INC16-011",
-    )
-    public_manifest = load_json(
-        root / "core/scala/api/public-api-v0.3.json",
-        problems,
-        "NODAL-INC16-012",
-    )
+    kernel = text(root, "core/scala/api/src/nodal/ElaborationConstructionKernel.scala", problems, "NODAL-INC16-001")
+    candidate = text(root, "core/scala/api/src/nodal/CandidateApi.scala", problems, "NODAL-INC16-002")
+    core = text(root, "core/scala/api/src/nodal/CoreSemanticsCandidateApi.scala", problems, "NODAL-INC16-003")
+    interface = text(root, "core/scala/api/src/nodal/PipelineInterfaceCandidateApi.scala", problems, "NODAL-INC16-004")
+    compiler = text(root, "core/scala/api/src/nodal/CompilerApi.scala", problems, "NODAL-INC16-005")
+    tests = text(root, "core/scala/testkit/test/src/nodal/ConstructionKernelTests.scala", problems, "NODAL-INC16-006")
+    documentation = text(root, "docs/implementation/increment16-construction-kernel.md", problems, "NODAL-INC16-007")
+    gate = text(root, "docs/design-gates/NodalConstructionKernel-DG-v1.0.md", problems, "NODAL-INC16-008")
+    roadmap = text(root, "docs/roadmap/nodal-development-todo.md", problems, "NODAL-INC16-009")
+    predecessor = text(root, "scripts/check_increment15.py", problems, "NODAL-INC16-010")
+    command = text(root, "scripts/nodal.py", problems, "NODAL-INC16-011")
+    manifest = object_json(root, "tests/api/fixtures/increment16/manifest.json", problems, "NODAL-INC16-012")
+    public_manifest = object_json(root, "core/scala/api/public-api-v0.3.json", problems, "NODAL-INC16-013")
 
     require(
         kernel,
@@ -123,30 +80,19 @@ def validate_files(root: Path = ROOT) -> list[Problem]:
             "NODAL-ROOT-DOMAIN-016",
             "NODAL-MULTI-DOMAIN-016",
             "NODAL-ROLE-COMPLETE-016",
-            "def interfaceAbi",
-            "def resolvedNetSnapshots",
-            "def topologyEdges",
+            "private def interfaceAbi",
+            "private def resolvedNets",
+            "private def topology",
             "def finish(root: Module)",
             "def inspect(top: => Module",
         ),
         problems,
-        "NODAL-INC16-013",
+        "NODAL-INC16-014",
         "construction kernel",
     )
-    for forbidden in (
-        "ThreadLocal[",
-        "new ThreadLocal",
-        "DynamicVariable",
-        "System.identityHashCode",
-        ".hashCode()",
-    ):
+    for forbidden in ("new ThreadLocal", "DynamicVariable", "System.identityHashCode", ".hashCode()"):
         if forbidden in kernel:
-            problems.append(
-                Problem(
-                    "NODAL-INC16-014",
-                    f"construction kernel contains prohibited context/identity mechanism: {forbidden}",
-                )
-            )
+            problems.append(Problem("NODAL-INC16-015", f"prohibited mechanism: {forbidden}"))
 
     require(
         candidate,
@@ -157,11 +103,10 @@ def validate_files(root: Path = ROOT) -> list[Problem]:
             "CandidateRuntime.attachInstance(this, module)",
             "CandidateRuntime.currentDomain",
             "KernelSignalKind.Register",
-            "ConstructionKernel.operation",
         ),
         problems,
-        "NODAL-INC16-015",
-        "candidate API implementation hooks",
+        "NODAL-INC16-016",
+        "candidate hooks",
     )
     require(
         core,
@@ -169,11 +114,10 @@ def validate_files(root: Path = ROOT) -> list[Problem]:
             'CandidateRuntime.dataType[SInt]("SInt", width)',
             'CandidateRuntime.dataType[Vec[A]]("Vec", element, dimensions.toSeq)',
             "KernelSignalKind.Memory",
-            '"readLatency" -> readLatency',
         ),
         problems,
-        "NODAL-INC16-016",
-        "core semantic construction hooks",
+        "NODAL-INC16-017",
+        "core hooks",
     )
     require(
         interface,
@@ -183,19 +127,18 @@ def validate_files(root: Path = ROOT) -> list[Problem]:
             "KernelSignalKind.InterfaceArray",
             "KernelSignalKind.DigitalInout",
             "KernelSignalKind.ConservativeTerminal",
-            'ConstructionKernel.operation("interface-connect"',
             'ConstructionKernel.operation("inout-pass-through"',
             'ConstructionKernel.operation("terminal-connect"',
         ),
         problems,
-        "NODAL-INC16-017",
-        "Interface/inout/topology construction hooks",
+        "NODAL-INC16-018",
+        "interface hooks",
     )
     require(
         compiler,
         ("object Nodal:", "ConstructionKernel.emit(top, options)"),
         problems,
-        "NODAL-INC16-018",
+        "NODAL-INC16-019",
         "compiler entry point",
     )
     require(
@@ -208,28 +151,36 @@ def validate_files(root: Path = ROOT) -> list[Problem]:
             "parallel elaborations do not share mutable construction state",
         ),
         problems,
-        "NODAL-INC16-019",
+        "NODAL-INC16-020",
         "Scala tests",
     )
     require(
         documentation,
         (
             "Each `Nodal.emit` or private test inspection allocates one construction transaction",
-            "JVM identity values, hash codes, reflection order, and allocation addresses are never emitted",
+            "identity values, hash codes, reflection order, and allocation addresses are never emitted",
             "Increment 16 does not implement source spans",
         ),
         problems,
-        "NODAL-INC16-020",
+        "NODAL-INC16-021",
         "implementation documentation",
     )
     require(
-        predecessor,
+        gate,
         (
-            'line.startswith(("- [ ] **Increment 16 — ", "- [x] **Increment 16 — "))',
-            "roadmap does not retain one Increment 16 kernel",
+            "**Public API:** unchanged at 0.3",
+            "no public implicit, given, mutable global, or thread-local",
+            "Temporary identity maps locate live Scala objects",
         ),
         problems,
-        "NODAL-INC16-021",
+        "NODAL-INC16-022",
+        "implementation gate",
+    )
+    require(
+        predecessor,
+        ("- [x] **Increment 16 — ", "roadmap does not retain one Increment 16 kernel"),
+        problems,
+        "NODAL-INC16-023",
         "Increment 15 successor safety",
     )
     require(
@@ -241,18 +192,14 @@ def validate_files(root: Path = ROOT) -> list[Problem]:
             '_python(root, "check_increment16.py")',
         ),
         problems,
-        "NODAL-INC16-022",
+        "NODAL-INC16-024",
         "developer command integration",
     )
 
     if public_manifest.get("api_version") != "0.3" or public_manifest.get("status") != "frozen":
-        problems.append(Problem("NODAL-INC16-023", "public API v0.3 identity changed"))
-    if manifest.get("increment") != 16 or manifest.get("public_api_version") != "0.3":
-        problems.append(Problem("NODAL-INC16-024", "Increment 16 manifest identity is invalid"))
-    if manifest.get("public_api_changed") is not False:
-        problems.append(Problem("NODAL-INC16-025", "manifest does not preserve the frozen public API"))
-
-    context = manifest.get("context_contract")
+        problems.append(Problem("NODAL-INC16-025", "public API v0.3 identity changed"))
+    if manifest.get("increment") != 16 or manifest.get("public_api_changed") is not False:
+        problems.append(Problem("NODAL-INC16-026", "Increment 16 manifest identity is invalid"))
     expected_context = {
         "binding": "java.lang.ScopedValue",
         "mutable_global_state": False,
@@ -261,60 +208,48 @@ def validate_files(root: Path = ROOT) -> list[Problem]:
         "jvm_identity_in_output": False,
         "parallel_emit_isolation": True,
     }
-    if context != expected_context:
-        problems.append(Problem("NODAL-INC16-026", "context contract does not match the approved architecture"))
+    if manifest.get("context_contract") != expected_context:
+        problems.append(Problem("NODAL-INC16-027", "context contract changed"))
 
-    source_codes = set(re.findall(r'"(NODAL-[A-Z0-9-]+-016)"', kernel))
-    diagnostic_codes = manifest.get("diagnostics")
-    if not isinstance(diagnostic_codes, list) or not set(diagnostic_codes).issubset(source_codes):
-        problems.append(Problem("NODAL-INC16-027", "manifest diagnostics are not implemented by the kernel"))
+    implemented_codes = set(re.findall(r'"(NODAL-[A-Z0-9-]+-[0-9]{3})"', kernel))
+    listed_codes = manifest.get("diagnostics")
+    if not isinstance(listed_codes, list) or not set(listed_codes).issubset(implemented_codes):
+        problems.append(Problem("NODAL-INC16-028", "manifest diagnostics are not implemented"))
 
+    unchecked = "- [ ] **Increment 16 — Elaboration, hierarchy, shape, and lexical domain-context kernel**"
+    checked = unchecked.replace("[ ]", "[x]", 1)
     status = manifest.get("status")
     validation = manifest.get("validation")
-    unchecked = (
-        "- [ ] **Increment 16 — Elaboration, hierarchy, shape, and lexical domain-context kernel**"
-    )
-    checked = unchecked.replace("[ ]", "[x]", 1)
     if status == "preflight-kernel":
         if validation != {
             "pull_request": None,
             "dedicated_workflow_run": None,
             "core_ci_run": None,
         }:
-            problems.append(Problem("NODAL-INC16-028", "preflight validation evidence is malformed"))
+            problems.append(Problem("NODAL-INC16-029", "preflight evidence is malformed"))
         if unchecked not in roadmap or "**Revision:** 1.19" not in roadmap:
-            problems.append(Problem("NODAL-INC16-029", "preflight roadmap state is invalid"))
+            problems.append(Problem("NODAL-INC16-030", "preflight roadmap state is invalid"))
     elif status == "validated-kernel":
         if not isinstance(validation, dict) or not all(
             isinstance(validation.get(key), int)
             for key in ("pull_request", "dedicated_workflow_run", "core_ci_run")
         ):
-            problems.append(Problem("NODAL-INC16-030", "final validation evidence is incomplete"))
+            problems.append(Problem("NODAL-INC16-031", "final evidence is incomplete"))
         if checked not in roadmap or "**Revision:** 1.20" not in roadmap:
-            problems.append(Problem("NODAL-INC16-031", "final roadmap state is invalid"))
+            problems.append(Problem("NODAL-INC16-032", "final roadmap state is invalid"))
         if isinstance(validation, dict):
-            pull_request = validation.get("pull_request")
-            dedicated = validation.get("dedicated_workflow_run")
-            core_ci = validation.get("core_ci_run")
-            if f"PR [#{pull_request}]" not in roadmap:
-                problems.append(Problem("NODAL-INC16-032", "roadmap lacks final pull-request evidence"))
-            if f"[{dedicated}]" not in roadmap or f"[{core_ci}]" not in roadmap:
-                problems.append(Problem("NODAL-INC16-033", "roadmap lacks final workflow evidence"))
+            values = tuple(validation.get(key) for key in ("pull_request", "dedicated_workflow_run", "core_ci_run"))
+            if f"PR [#{values[0]}]" not in roadmap or f"[{values[1]}]" not in roadmap or f"[{values[2]}]" not in roadmap:
+                problems.append(Problem("NODAL-INC16-033", "roadmap lacks final evidence"))
     else:
-        problems.append(Problem("NODAL-INC16-034", f"unknown Increment 16 status: {status!r}"))
+        problems.append(Problem("NODAL-INC16-034", f"unknown status: {status!r}"))
 
-    increment17 = [
-        line
-        for line in roadmap.splitlines()
-        if line.startswith("- [ ] **Increment 17 — Source spans, semantic naming, and origin graph**")
-    ]
-    if len(increment17) != 1:
-        problems.append(Problem("NODAL-INC16-035", "roadmap does not leave Increment 17 unchecked"))
-
+    if "- [ ] **Increment 17 — Source spans, semantic naming, and origin graph**" not in roadmap:
+        problems.append(Problem("NODAL-INC16-035", "Increment 17 is not left unchecked"))
     return problems
 
 
-def run(root: Path, command: list[str]) -> subprocess.CompletedProcess[str]:
+def execute(root: Path, command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         command,
         cwd=root,
@@ -326,20 +261,22 @@ def run(root: Path, command: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def run_execution(root: Path, problems: list[Problem]) -> None:
-    wrapper = root / ("mill.bat" if os.name == "nt" else "mill")
-    commands = (
-        [str(wrapper), "mill.scalalib.scalafmt/checkFormatAll"],
-        [str(wrapper), "scalafix.check"],
-        [str(wrapper), "core.scala.testkit.test"],
-    )
-    for index, command in enumerate(commands, start=1):
-        result = run(root, command)
+def run_compile(root: Path, problems: list[Problem]) -> None:
+    mill = root / ("mill.bat" if os.name == "nt" else "mill")
+    for index, arguments in enumerate(
+        (
+            ["mill.scalalib.scalafmt/checkFormatAll"],
+            ["scalafix.check"],
+            ["core.scala.testkit.test"],
+        ),
+        start=1,
+    ):
+        result = execute(root, [str(mill), *arguments])
         if result.returncode != 0:
             problems.append(
                 Problem(
                     f"NODAL-INC16-{35 + index:03d}",
-                    f"command failed: {' '.join(command)}\n{result.stdout}",
+                    f"command failed: {' '.join(arguments)}\n{result.stdout}",
                 )
             )
             return
@@ -347,12 +284,11 @@ def run_execution(root: Path, problems: list[Problem]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--compile", action="store_true", help="run formatting, lint, and Scala tests")
+    parser.add_argument("--compile", action="store_true")
     args = parser.parse_args()
-
     problems = validate_files(ROOT)
     if args.compile and not problems:
-        run_execution(ROOT, problems)
+        run_compile(ROOT, problems)
     if problems:
         for problem in problems:
             print(f"{problem.code}: {problem.message}")

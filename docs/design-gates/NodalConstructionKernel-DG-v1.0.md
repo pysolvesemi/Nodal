@@ -1,8 +1,11 @@
 # NodalConstructionKernel-DG v1.0
 
-**Status:** Approved by the frozen public API v0.3 architecture  
-**Scope:** construction-kernel implementation  
-**Public API:** unchanged at 0.3  
+**Status:** Approved
+**Scope:** public-api
+**API version:** 0.3
+**Decision:** Activate the private construction kernel beneath frozen public API v0.3
+**Approved by:** Repository owner instruction to continue Increment 16 on 2026-08-24
+**Public API:** unchanged at 0.3
 **Governing gate:** `NodalCoreSemanticsPipelineApi-DG-v0.3.md`
 
 ## Decision
@@ -26,8 +29,7 @@ following remain true:
 ## Accepted implementation
 
 The accepted implementation uses `java.lang.ScopedValue` only as an immutable session binding. Mutable
-state is allocated inside the bound `ConstructionSession`. Temporary identity maps locate live Scala
-objects during one transaction, but identity values never participate in stable paths, reports, or
+state is allocated inside the bound `ConstructionSession`. Temporary identity maps locate live Scala objects during one transaction, but identity values never participate in stable paths, reports, or
 serialized artifacts.
 
 `Nodal.emit` remains the public entry point and still emits no HDL files. It now returns deterministic

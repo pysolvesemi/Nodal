@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - increment/16-elaboration-construction-kernel
+  pull_request:
+    branches:
+      - dev
 
 permissions:
   contents: write

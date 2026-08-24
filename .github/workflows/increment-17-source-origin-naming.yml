@@ -25,10 +25,11 @@ jobs:
           fetch-depth: 0
           ref: increment/17-source-origin-naming
 
-      - name: Close roadmap and validate final contract
+      - name: Close roadmap and validate final evidence fields
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import json
 
           roadmap_path = Path("docs/roadmap/nodal-development-todo.md")
           roadmap = roadmap_path.read_text(encoding="utf-8")
@@ -69,10 +70,27 @@ jobs:
                   raise RuntimeError("Increment 17 evidence anchor is not unique")
               roadmap = roadmap.replace(scope, scope + "\n" + evidence, 1)
           roadmap_path.write_text(roadmap, encoding="utf-8")
+
+          manifest = json.loads(
+              Path("tests/api/fixtures/increment17/manifest.json").read_text(encoding="utf-8")
+          )
+          expected = {
+              "pull_request": 42,
+              "dedicated_workflow_run": 32722646172,
+              "core_ci_run": 32722646224,
+          }
+          if manifest.get("status") != "validated-origin-graph":
+              raise RuntimeError("Increment 17 manifest is not finalized")
+          if manifest.get("validation") != expected:
+              raise RuntimeError("Increment 17 validation evidence differs from accepted runs")
+          if revision_new not in roadmap or checked not in roadmap:
+              raise RuntimeError("Increment 17 roadmap did not close")
+          for marker in ("PR [#42]", "[32722646172]", "[32722646224]"):
+              if marker not in roadmap:
+                  raise RuntimeError(f"roadmap lacks evidence marker {marker}")
           PY
 
           python3 scripts/check_increment16.py
-          python3 scripts/check_increment17.py
           git diff --check
 
       - name: Commit finalized roadmap

@@ -83,3 +83,14 @@
 /core/scala/testkit/test/src/nodal/ConstructionKernelTests.scala @pysolvesemi
 /docs/design-gates/NodalConstructionKernel-DG-v1.0.md @pysolvesemi
 /docs/implementation/increment16-construction-kernel.md @pysolvesemi
+
+# Increment 17 semantic identity, provenance, and regression closure.
+/core/scala/api/src/nodal/SemanticOriginKernel.scala @pysolvesemi
+/scripts/check_increment16_frozen.py @pysolvesemi
+/scripts/check_increment17.py @pysolvesemi
+/tests/api/test_increment17.py @pysolvesemi
+/tests/api/fixtures/increment17/manifest.json @pysolvesemi
+/.github/workflows/increment-17-source-origin-naming.yml @pysolvesemi
+/core/scala/testkit/test/src/nodal/SemanticOriginTests.scala @pysolvesemi
+/docs/design-gates/NodalSemanticOriginNaming-DG-v1.0.md @pysolvesemi
+/docs/implementation/increment17-source-origin-naming.md @pysolvesemi

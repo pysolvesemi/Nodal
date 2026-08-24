@@ -96,7 +96,11 @@ private[nodal] final case class ConstructionSnapshot(
     modules: Vector[KernelModuleSnapshot],
     interfaceAbi: Vector[InterfaceAbiEntry],
     resolvedNets: Vector[KernelResolvedNetSnapshot],
-    topology: Vector[KernelTopologyEdge]
+    topology: Vector[KernelTopologyEdge],
+    names: Vector[KernelNameSnapshot] = Vector.empty,
+    origins: Vector[KernelOriginSnapshot] = Vector.empty,
+    generatedNames: Vector[KernelGeneratedNameSnapshot] = Vector.empty,
+    sourceMap: Vector[SourceMapEntry] = Vector.empty
 )
 
 private final case class DomainRef(module: Long, index: Int)
@@ -156,6 +160,8 @@ private final class ConstructionSession(val options: EmitOptions):
   private val moduleStack: mutable.ArrayBuffer[ModuleRecord] = mutable.ArrayBuffer.empty
   private val domainStack: mutable.ArrayBuffer[ClockDomain] = mutable.ArrayBuffer.empty
   private val operations: mutable.ArrayBuffer[Operation] = mutable.ArrayBuffer.empty
+  private val semanticOrigin = new SemanticOriginBuilder
+  private var semanticResult: Option[SemanticOriginResult] = None
 
   private def fail(code: String, message: String, path: Option[String] = None): Nothing =
     scala.util.Failure[Nothing](
@@ -192,6 +198,7 @@ private final class ConstructionSession(val options: EmitOptions):
     )
     records += handle -> record
     moduleIds.put(module, java.lang.Long.valueOf(handle))
+    semanticOrigin.captureModule(handle, module, record.className, record.parentAtConstruction)
     moduleStack += record
 
   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
@@ -203,6 +210,7 @@ private final class ConstructionSession(val options: EmitOptions):
     val reference = DomainRef(module.handle, module.domains.size)
     module.domains += DomainRecord(reference, domain, domain.name, kind)
     domainIds.put(domain, reference)
+    semanticOrigin.captureDomain(module.handle, reference.index, domain, domain.name, kind.label)
 
   def registerDeclaration(
       value: AnyRef,
@@ -226,11 +234,22 @@ private final class ConstructionSession(val options: EmitOptions):
       attributes
     )
     declarationIds.put(value, reference)
+    semanticOrigin.captureDeclaration(
+      module.handle,
+      reference.index,
+      value,
+      kind.label,
+      explicitName
+    )
 
   def registerExpression(value: AnyRef): Unit = moduleStack.lastOption.foreach: module =>
     val reference = ExpressionRef(module.handle, module.expressionCount)
     module.expressionCount += 1
     expressionIds.put(value, reference)
+    val operands = value match
+      case expression: KernelExpr[?] => expression.operands
+      case _ => Vector.empty
+    semanticOrigin.captureExpression(module.handle, reference.index, value, operands)
 
   def attachInstance(instance: AnyRef, childModule: Module): Unit =
     if !moduleIds.containsKey(childModule) then
@@ -258,6 +277,13 @@ private final class ConstructionSession(val options: EmitOptions):
     parent.instances += record
     child.attached = true
     instanceIds.put(instance, record)
+    semanticOrigin.captureInstance(
+      parent.handle,
+      record.ordinal,
+      childHandle,
+      instance,
+      childModule
+    )
 
   private def instanceRecord(instance: AnyRef): InstanceRecord =
     Option(instanceIds.get(instance)).getOrElse(
@@ -289,9 +315,14 @@ private final class ConstructionSession(val options: EmitOptions):
 
   def currentDomain: Option[ClockDomain] = domainStack.lastOption
 
-  def operation(kind: String, values: Any*): Unit = operations += Operation(kind, values.toVector)
+  def operation(kind: String, values: Any*): Unit =
+    val captured = Operation(kind, values.toVector)
+    operations += captured
+    moduleStack.lastOption.foreach(module =>
+      semanticOrigin.captureOperation(module.handle, kind, captured.values)
+    )
 
-  private def modulePath(handle: Long): String =
+  private def provisionalModulePath(handle: Long): String =
     val record = records(handle)
     record.parentAtConstruction match
       case None => record.className
@@ -300,20 +331,51 @@ private final class ConstructionSession(val options: EmitOptions):
         val instance = parent.instances.find(_.child == handle).getOrElse(
           fail("NODAL-HIERARCHY-020", "child Module has no Instance record")
         )
-        s"${modulePath(parentHandle)}.${record.className}_${instance.ordinal}"
+        s"${provisionalModulePath(parentHandle)}.${record.className}_${instance.ordinal}"
+
+  private def modulePath(handle: Long): String =
+    semanticResult.flatMap(_.modulePaths.get(handle)).getOrElse(provisionalModulePath(handle))
+
+  private def domainName(reference: DomainRef): String =
+    semanticResult
+      .flatMap(_.domainNames.get(reference.module -> reference.index))
+      .getOrElse(records(reference.module).domains(reference.index).name)
+
+  private def domainPath(reference: DomainRef): String =
+    semanticResult
+      .flatMap(_.domainPaths.get(reference.module -> reference.index))
+      .getOrElse(s"${modulePath(reference.module)}.${domainName(reference)}")
+
+  private def declarationName(reference: DeclarationRef): String =
+    semanticResult
+      .flatMap(_.declarationNames.get(reference.module -> reference.index))
+      .getOrElse:
+        val declaration = records(reference.module).declarations(reference.index)
+        declaration.explicitName.getOrElse(
+          s"${declaration.kind.label}_${reference.index}"
+        )
 
   private def declarationPath(reference: DeclarationRef): String =
-    val declaration = records(reference.module).declarations(reference.index)
-    val name = declaration.explicitName.getOrElse(
-      s"${declaration.kind.label}_${reference.index}"
-    )
-    s"${modulePath(reference.module)}.$name"
+    semanticResult
+      .flatMap(_.declarationPaths.get(reference.module -> reference.index))
+      .getOrElse(s"${modulePath(reference.module)}.${declarationName(reference)}")
+
+  private def expressionPath(reference: ExpressionRef): String =
+    semanticResult
+      .flatMap(_.expressionPaths.get(reference.module -> reference.index))
+      .getOrElse(s"${modulePath(reference.module)}.expr_${reference.index}")
+
+  private def instancePath(parent: Long, ordinal: Int): String =
+    semanticResult
+      .flatMap(_.instancePaths.get(parent -> ordinal))
+      .getOrElse(s"${modulePath(parent)}.instance_$ordinal")
 
   private def pathOf(value: Any): Option[String] = value match
     case reference: AnyRef =>
-      Option(declarationIds.get(reference)).map(declarationPath).orElse(
-        Option(moduleIds.get(reference)).map(handle => modulePath(handle.longValue))
-      )
+      Option(declarationIds.get(reference))
+        .map(declarationPath)
+        .orElse(Option(expressionIds.get(reference)).map(expressionPath))
+        .orElse(Option(moduleIds.get(reference)).map(handle => modulePath(handle.longValue)))
     case _ => None
 
   private def stableClassName(value: AnyRef): String =
@@ -379,7 +441,7 @@ private final class ConstructionSession(val options: EmitOptions):
       val module = records(handle)
       val path = modulePath(handle)
       module.domains.filter(_.kind != KernelDomainKind.Required).foreach: domain =>
-        resolved.update(domain.reference, s"$path.${domain.name}")
+        resolved.update(domain.reference, domainPath(domain.reference))
 
       if module.parentAtConstruction.isEmpty then
         module.domains.filter(_.kind == KernelDomainKind.Required).foreach: requirement =>
@@ -746,8 +808,8 @@ private final class ConstructionSession(val options: EmitOptions):
     records.values.toVector.sortBy(record => modulePath(record.handle)).map: module =>
       val domains = module.domains.toVector.map: domain =>
         KernelDomainSnapshot(
-          s"${modulePath(module.handle)}.${domain.name}",
-          domain.name,
+          domainPath(domain.reference),
+          domainName(domain.reference),
           domain.kind.label,
           if domain.kind == KernelDomainKind.Required then resolved.get(domain.reference) else None
         )
@@ -755,9 +817,7 @@ private final class ConstructionSession(val options: EmitOptions):
         KernelDeclarationSnapshot(
           declarationPath(declaration.reference),
           declaration.kind.label,
-          declaration.explicitName.getOrElse(
-            s"${declaration.kind.label}_${declaration.reference.index}"
-          ),
+          declarationName(declaration.reference),
           declaration.dataType.map(renderType(_, module.handle)),
           declarationDomain(declaration, resolved),
           declaration.attributes.map(value => value._1 -> renderAny(value._2, module.handle))
@@ -767,7 +827,7 @@ private final class ConstructionSession(val options: EmitOptions):
         val bindings = child.domains.filter(_.kind == KernelDomainKind.Required).flatMap: domain =>
           resolved.get(domain.reference).map(domain.name -> _)
         KernelInstanceSnapshot(
-          s"${modulePath(module.handle)}.instance_${instance.ordinal}",
+          instancePath(module.handle, instance.ordinal),
           modulePath(instance.child),
           instance.lexicalDomain.flatMap(domain => resolved.get(domainRef(domain))),
           bindings.toVector
@@ -809,6 +869,8 @@ private final class ConstructionSession(val options: EmitOptions):
     records.values.filterNot(_.attached).foreach: module =>
       fail("NODAL-HIERARCHY-021", s"Module '${module.className}' was not attached")
 
+    val semantic = semanticOrigin.resolve()
+    semanticResult = Some(semantic)
     val resolved = resolveDomains()
     val modules = snapshots(resolved)
     val abi = interfaceAbi(resolved)
@@ -817,7 +879,11 @@ private final class ConstructionSession(val options: EmitOptions):
       modules,
       abi,
       resolvedNets(),
-      topology()
+      topology(),
+      semantic.names,
+      semantic.origins,
+      semantic.generatedNames,
+      semantic.sourceMap
     )
     val kind = classify(snapshot)
     val report = DesignReport(
@@ -827,7 +893,7 @@ private final class ConstructionSession(val options: EmitOptions):
         if kind == DesignKind.AnalogOnly || kind == DesignKind.Unsupported then None
         else Some(options.digitalProfile),
       interfaceAbi = abi,
-      sourceMap = Vector.empty,
+      sourceMap = semantic.sourceMap,
       schedules = Vector.empty
     )
     Emission(Vector.empty, report) -> snapshot

@@ -9,78 +9,9 @@ on:
       - dev
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  materialize-increment-17:
-    name: increment-17/materialize-via-registered-workflow
-    if: github.head_ref == 'increment/17-source-origin-naming' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-
-    steps:
-      - name: Check out authoritative Increment 17 branch
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          ref: increment/17-source-origin-naming
-
-      - name: Materialize and format Increment 17
-        run: |
-          git fetch --no-tags origin dev:refs/remotes/origin/dev
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("scripts/materialize_increment17.py")
-          text = path.read_text(encoding="utf-8")
-          old = 'text.rstrip() + "\\n\\n" + content.strip() + "\\n"'
-          new = 'text.rstrip() + "\\n\\n" + content.rstrip() + "\\n"'
-          if old not in text:
-              raise RuntimeError("append indentation anchor is missing")
-          text = text.replace(old, new, 1)
-
-          lines = text.splitlines()
-          matches = [
-              index
-              for index, line in enumerate(lines)
-              if 'raw"(?m)^' in line and 'package' in line and line.endswith('$".r')
-          ]
-          if len(matches) != 1:
-              raise RuntimeError("source package regex line is not unique")
-          index = matches[0]
-          lines[index] = lines[index].replace('raw"', '(raw"', 1).replace(
-              '?$".r', '?" + "$").r', 1
-          )
-          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-          PY
-          python3 scripts/materialize_increment17.py
-          ./mill mill.scalalib.scalafmt/reformatAll
-          ./mill scalafix.fix
-          git checkout origin/dev -- .github/workflows/increment-16-construction-kernel.yml
-          rm -f .github/workflows/increment-17-source-origin-naming.yml
-          rm -rf scripts/__pycache__
-          find . -name '*.pyc' -delete
-
-      - name: Publish formatted implementation for validation
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Increment 17 — materialize semantic source identity"
-          git pull --rebase origin increment/17-source-origin-naming
-          git push origin HEAD:increment/17-source-origin-naming
-
-      - name: Validate materialized Increment 17
-        run: |
-          python3 scripts/check_increment15.py --compile-negative
-          python3 scripts/check_increment16.py
-          python3 scripts/check_increment17.py --compile
-          python3 tests/api/test_increment16.py
-          python3 tests/api/test_increment17.py
-          python3 scripts/check_markdown.py
-          python3 scripts/check_package_visibility.py
-          git diff --check
-
   construction-kernel:
     name: increment-16/construction-kernel
     runs-on: ubuntu-24.04

@@ -67,18 +67,12 @@ def main() -> None:
       lines: Vector[String],
       currentIndex: Int
   ): Option[(Int, String)] =
-    val lower = math.max(0, currentIndex - 8)
-    val upper = math.min(lines.size - 1, currentIndex + 8)
-    val indexes = (lower to upper).sortBy: index =>
-      (math.abs(index - currentIndex), if index <= currentIndex then 0 else 1)
-    indexes.iterator
-      .flatMap: index =>
-        declarationPattern.findFirstMatchIn(lines(index)).map: matched =>
-          index -> matched.group(1)
-      .nextOption()
+    declarationPattern
+      .findFirstMatchIn(lines(currentIndex))
+      .map(matched => currentIndex -> matched.group(1))
       .filter(_._2 != "_")
 ''',
-        "nearby binding lookup",
+        "exact source-span binding lookup",
     )
 
     text = replace_once(
@@ -220,6 +214,150 @@ def main() -> None:
     val root = repositoryRoot
 ''',
         "repository-relative path root",
+    )
+
+    text = replace_once(
+        text,
+        '''  private def preferredBinding(
+      members: IdentityHashMap[AnyRef, String],
+      value: AnyRef,
+      site: KernelSourceSite
+  ): Option[String] =
+    site.bindingName
+      .map(cleanIdentifier(_, "value"))
+      .orElse(Option(members.get(value)).map(cleanIdentifier(_, "value")))
+''',
+        '''  private def sourceLines(
+      site: KernelSourceSite
+  ): Option[(Vector[String], Int)] =
+    site.span.flatMap: source =>
+      val capturedPath = Path.of(source.path)
+      val path =
+        if capturedPath.isAbsolute then capturedPath.normalize()
+        else repositoryRoot.resolve(capturedPath).normalize()
+      if !Files.isRegularFile(path) then None
+      else
+        try
+          val lines = Files.readAllLines(path).asScala.toVector
+          if lines.isEmpty then None
+          else
+            val observedIndex = math.max(0, math.min(lines.size - 1, source.endLine - 1))
+            Some(lines -> observedIndex)
+        catch case _: Exception => None
+
+  private def declarationContext(lines: Vector[String], index: Int): String =
+    val tail = lines.slice(index, math.min(lines.size, index + 5))
+    val continuation = tail.headOption.toVector ++
+      tail.drop(1).takeWhile(line => declarationPattern.findFirstMatchIn(line).isEmpty)
+    continuation.mkString(" ")
+
+  private def bindingForTokens(
+      site: KernelSourceSite,
+      tokens: Vector[String],
+      radius: Int
+  ): Option[String] =
+    sourceLines(site).flatMap: (lines, observedIndex) =>
+      val lower = math.max(0, observedIndex - radius)
+      val upper = math.min(lines.size - 1, observedIndex + radius)
+      val indexes = (lower to upper).sortBy: index =>
+        (math.abs(index - observedIndex), if index <= observedIndex then 0 else 1)
+      indexes.iterator
+        .flatMap: index =>
+          declarationPattern.findFirstMatchIn(lines(index)).flatMap: matched =>
+            val context = declarationContext(lines, index)
+            if tokens.isEmpty || tokens.exists(context.contains) then
+              Some(matched.group(1))
+            else None
+        .nextOption()
+        .flatMap: name =>
+          if name == "_" then None else Some(cleanIdentifier(name, "value"))
+
+  private def declarationTokens(kind: String, site: KernelSourceSite): Vector[String] =
+    kind match
+      case "register" =>
+        val owner = generatedStem(site.apiOwner)
+        if owner.contains("reg_next") || owner.contains("regnext") then Vector("RegNext(")
+        else Vector("Reg(")
+      case "parameter" => Vector("param(")
+      case "input" | "analog-input" => Vector("in(")
+      case "output" | "analog-output" => Vector("out(")
+      case "analog-inout" => Vector("inout(")
+      case "analog-node" => Vector("node(")
+      case "wire" => Vector("wire(")
+      case "variable" => Vector("variable(")
+      case "memory" => Vector("Mem(")
+      case "interface-port" => Vector("interfacePort(")
+      case "interface-array" => Vector("interfaceArray(")
+      case "digital-inout" => Vector("digitalInout(")
+      case "conservative-terminal" => Vector("terminal(")
+      case "analog-signal" => Vector("AnalogSignal.")
+      case _ => Vector.empty
+
+  private def declarationBinding(site: KernelSourceSite, kind: String): Option[String] =
+    val tokens = declarationTokens(kind, site)
+    bindingForTokens(site, tokens, if tokens.nonEmpty then 12 else 0)
+
+  private def instanceBinding(site: KernelSourceSite): Option[String] =
+    bindingForTokens(site, Vector("instance("), 12)
+
+  private def expressionBinding(site: KernelSourceSite): Option[String] =
+    bindingForTokens(site, Vector.empty, 0)
+
+  private def memberBinding(
+      members: IdentityHashMap[AnyRef, String],
+      value: AnyRef
+  ): Option[String] =
+    Option(members.get(value)).map(cleanIdentifier(_, "value"))
+''',
+        "context-aware binding helpers",
+    )
+
+    text = replace_once(
+        text,
+        '''      val direct = preferredBinding(members, capture.instance, capture.site)
+        .orElse(Option(members.get(capture.childModule)))
+''',
+        '''      val direct = instanceBinding(capture.site)
+        .orElse(memberBinding(members, capture.instance))
+        .orElse(memberBinding(members, capture.childModule))
+''',
+        "instance source binding",
+    )
+
+    text = replace_once(
+        text,
+        '''      capture.explicitName
+        .map(cleanIdentifier(_, capture.kind))
+        .orElse(preferredBinding(members, capture.value, capture.site))
+        .foreach(name => directDeclarationNames.put(capture.value, name))
+''',
+        '''      capture.explicitName
+        .map(cleanIdentifier(_, capture.kind))
+        .orElse(declarationBinding(capture.site, capture.kind))
+        .orElse(memberBinding(members, capture.value))
+        .foreach(name => directDeclarationNames.put(capture.value, name))
+''',
+        "direct declaration source binding",
+    )
+
+    text = replace_once(
+        text,
+        '''          val binding = preferredBinding(members, capture.value, capture.site)
+''',
+        '''          val binding = declarationBinding(capture.site, capture.kind)
+            .orElse(memberBinding(members, capture.value))
+''',
+        "declaration allocation binding",
+    )
+
+    text = replace_once(
+        text,
+        '''        val binding = preferredBinding(members, capture.value, capture.site)
+''',
+        '''        val binding = expressionBinding(capture.site)
+          .orElse(memberBinding(members, capture.value))
+''',
+        "expression allocation binding",
     )
 
     SOURCE.write_text(text, encoding="utf-8")

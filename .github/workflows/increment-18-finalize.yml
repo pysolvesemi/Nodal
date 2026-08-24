@@ -1,0 +1,152 @@
+name: Increment 18 Evidence Finalizer
+
+on:
+  push:
+    branches:
+      - increment/18-nodal-mlir-dialect-skeleton
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-18-evidence-finalizer
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    name: increment-18/finalize-evidence
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out Increment 18 branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: increment/18-nodal-mlir-dialect-skeleton
+
+      - name: Record accepted evidence and strengthen closure contracts
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          from pathlib import Path
+
+          root = Path.cwd()
+
+          roadmap_path = root / "docs/roadmap/nodal-development-todo.md"
+          roadmap = roadmap_path.read_text(encoding="utf-8")
+          replacements = (
+              ("**Revision:** 1.21", "**Revision:** 1.22"),
+              ("**Updated:** 2026-08-24", "**Updated:** 2026-08-25"),
+              (
+                  """- [ ] **Increment 18 — Nodal MLIR dialect skeleton**
+  - Register the out-of-tree dialect, TableGen organization/docs, generic parser/printer, and a verified placeholder operation.
+""",
+                  """- [x] **Increment 18 — Nodal MLIR dialect skeleton**
+  - Register the out-of-tree dialect, TableGen organization/docs, generic parser/printer, and a verified placeholder operation.
+  - Evidence: [`NodalMlirDialectSkeleton-DG-v1.0.md`](../design-gates/NodalMlirDialectSkeleton-DG-v1.0.md), [`increment18-mlir-dialect-skeleton.md`](../implementation/increment18-mlir-dialect-skeleton.md), PR [#45](https://github.com/pysolvesemi/Nodal/pull/45), dedicated validation run [32767361722](https://github.com/pysolvesemi/Nodal/actions/runs/32767361722), and Core CI run [32767361651](https://github.com/pysolvesemi/Nodal/actions/runs/32767361651).
+""",
+              ),
+          )
+          for old, new in replacements:
+              if roadmap.count(old) != 1:
+                  raise RuntimeError(f"roadmap anchor count for {old!r} is {roadmap.count(old)}")
+              roadmap = roadmap.replace(old, new, 1)
+          roadmap_path.write_text(roadmap, encoding="utf-8")
+
+          manifest_path = root / "tests/compiler/fixtures/increment18/manifest.json"
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          manifest["status"] = "validated-dialect-skeleton"
+          manifest["evidence"] = {
+              "pull_request": 45,
+              "dedicated_run": 32767361722,
+              "core_ci_run": 32767361651,
+          }
+          manifest_path.write_text(
+              json.dumps(manifest, indent=2) + "\n",
+              encoding="utf-8",
+          )
+
+          checker_path = root / "scripts/check_increment18.py"
+          checker = checker_path.read_text(encoding="utf-8")
+          old_fragment = '            "useDefaultAttributePrinterParser = 1",\n'
+          new_fragment = '            "remains deferred until a later",\n'
+          if checker.count(old_fragment) != 1:
+              raise RuntimeError("attribute-parser checker fragment is not unique")
+          checker = checker.replace(old_fragment, new_fragment, 1)
+
+          old_anchor = '''        "dialect definition",
+    )
+    _require(
+        ops_td,
+'''
+          new_anchor = '''        "dialect definition",
+    )
+    if "let useDefaultAttributePrinterParser = 1;" in dialect_td:
+        problems.append(
+            Problem(
+                "NODAL-MLIR-003",
+                "dialect attribute parser generation is premature before attribute definitions",
+            )
+        )
+    _require(
+        ops_td,
+'''
+          if checker.count(old_anchor) != 1:
+              raise RuntimeError("dialect checker insertion anchor is not unique")
+          checker = checker.replace(old_anchor, new_anchor, 1)
+          checker_path.write_text(checker, encoding="utf-8")
+
+          test_path = root / "tests/compiler/test_increment18.py"
+          tests = test_path.read_text(encoding="utf-8")
+          test_anchor = '''    def test_rejects_missing_placeholder_verifier(self) -> None:
+'''
+          test_method = '''    def test_rejects_premature_attribute_parser_generation(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/include/nodal/Dialect/Nodal/NodalDialect.td"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "}\n\n#endif",
+                "  let useDefaultAttributePrinterParser = 1;\n}\n\n#endif",
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-MLIR-003", self.problem_codes(root))
+
+'''
+          if tests.count(test_anchor) != 1:
+              raise RuntimeError("mutation-test insertion anchor is not unique")
+          tests = tests.replace(test_anchor, test_method + test_anchor, 1)
+          test_path.write_text(tests, encoding="utf-8")
+          PY
+
+      - name: Remove finalizer and validate closed state
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          rm .github/workflows/increment-18-finalize.yml
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          python3 scripts/check_increment18.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          python3 scripts/check_formatting_baseline.py
+          python3 scripts/check_markdown.py
+          python3 scripts/check_package_visibility.py
+          git diff --check
+
+      - name: Publish roadmap and evidence closure
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email \
+            '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 18 — record accepted CI evidence'
+          git push origin HEAD:increment/18-nodal-mlir-dialect-skeleton

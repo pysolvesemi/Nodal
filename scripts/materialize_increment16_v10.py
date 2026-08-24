@@ -43,12 +43,12 @@ def main() -> int:
         "**Governing gate:** `NodalCoreSemanticsPipelineApi-DG-v0.3.md`\n"
     )
     new_gate_header = (
-        "**Status:** Approved  \n"
-        "**Scope:** public-api  \n"
-        "**API version:** 0.3  \n"
-        "**Decision:** Activate the private construction kernel beneath frozen public API v0.3  \n"
-        "**Approved by:** Repository owner instruction to continue Increment 16 on 2026-08-24  \n"
-        "**Public API:** unchanged at 0.3  \n"
+        "**Status:** Approved\n"
+        "**Scope:** public-api\n"
+        "**API version:** 0.3\n"
+        "**Decision:** Activate the private construction kernel beneath frozen public API v0.3\n"
+        "**Approved by:** Repository owner instruction to continue Increment 16 on 2026-08-24\n"
+        "**Public API:** unchanged at 0.3\n"
         "**Governing gate:** `NodalCoreSemanticsPipelineApi-DG-v0.3.md`\n"
     )
     replace_once(gate, old_gate_header, new_gate_header)

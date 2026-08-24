@@ -25,12 +25,62 @@ jobs:
           fetch-depth: 0
           ref: increment/17-source-origin-naming
 
-      - name: Apply and format bounded source-origin repair
+      - name: Apply, format, and restore permanent workflow
         run: |
           git fetch --no-tags origin dev:refs/remotes/origin/dev
           python3 scripts/repair_increment17_source_origin.py
           ./mill mill.scalalib.scalafmt/reformatAll
           ./mill scalafix.fix
+          cat > .github/workflows/increment-17-source-origin-naming.yml <<'YAML'
+          name: Increment 17 Source Origin Naming
+
+          on:
+            push:
+              branches:
+                - increment/17-source-origin-naming
+            pull_request:
+              branches:
+                - dev
+
+          permissions:
+            contents: read
+
+          jobs:
+            source-origin:
+              name: increment-17/source-origin
+              runs-on: ubuntu-24.04
+              timeout-minutes: 75
+
+              steps:
+                - name: Check out repository
+                  uses: actions/checkout@v6
+                  with:
+                    fetch-depth: 0
+
+                - name: Bootstrap pinned contract toolchain
+                  run: |
+                    ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+                    echo "NODAL_LINT_TOOLCHAIN=${RUNNER_TEMP}/nodal-lint-toolchain" >> "$GITHUB_ENV"
+
+                - name: Validate semantic source identity and predecessor contracts
+                  run: |
+                    ./mill mill.scalalib.scalafmt/checkFormatAll
+                    ./mill scalafix.check
+                    python3 scripts/check_increment15.py --compile-negative
+                    python3 scripts/check_increment16.py
+                    python3 scripts/check_increment17.py --compile
+                    python3 tests/api/test_increment16.py
+                    python3 tests/api/test_increment17.py
+                    python3 scripts/check_formatting_baseline.py
+                    python3 scripts/check_markdown.py
+                    python3 scripts/check_package_visibility.py
+                    ./nodal check \
+                      --contracts-only \
+                      --online-toolchain \
+                      --lint-toolchain "${NODAL_LINT_TOOLCHAIN}" \
+                      --base-ref origin/dev
+                    git diff --check
+          YAML
 
       - name: Validate repaired Increment 17 behavior
         run: |

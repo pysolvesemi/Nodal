@@ -57,6 +57,9 @@ jobs:
           ./mill mill.scalalib.scalafmt/reformatAll
           ./mill scalafix.fix
           git checkout origin/dev -- .github/workflows/increment-16-construction-kernel.yml
+          rm -f .github/workflows/increment-17-source-origin-naming.yml
+          rm -rf scripts/__pycache__
+          find . -name '*.pyc' -delete
 
       - name: Publish formatted implementation for validation
         run: |

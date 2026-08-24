@@ -94,13 +94,23 @@ jobs:
           python3 scripts/check_package_visibility.py
           git diff --check
 
-      - name: Restore workflow and commit repair
+      - name: Commit validated source without workflow payloads
         run: |
-          git checkout origin/dev -- .github/workflows/increment-16-construction-kernel.yml
-          rm scripts/repair_increment17_source_origin.py
+          git checkout HEAD -- \
+            .github/workflows/increment-16-construction-kernel.yml \
+            .github/workflows/increment-17-source-origin-naming.yml
+          rm -f \
+            scripts/repair_increment17_source_origin.py \
+            scripts/repair_increment17_anonymous_register.py
+          rm -rf scripts/__pycache__
+          find . -name '*.pyc' -delete
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add core/scala/api/src/nodal/SemanticOriginKernel.scala
+          git add -u -- \
+            scripts/repair_increment17_source_origin.py \
+            scripts/repair_increment17_anonymous_register.py
+          git diff --cached --check
           git commit -m "Increment 17 — fix semantic binding and source identity"
           git pull --rebase origin increment/17-source-origin-naming
           git push origin HEAD:increment/17-source-origin-naming

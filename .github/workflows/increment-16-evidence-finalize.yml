@@ -1,0 +1,103 @@
+name: Increment 16 Final Evidence
+
+on:
+  push:
+    branches:
+      - increment/16-elaboration-construction-kernel
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-16-final-evidence
+  cancel-in-progress: true
+
+jobs:
+  evidence:
+    name: increment-16/evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out authoritative branch head
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: increment/16-elaboration-construction-kernel
+
+      - name: Refresh latest remote head
+        run: |
+          git fetch origin increment/16-elaboration-construction-kernel dev
+          git reset --hard origin/increment/16-elaboration-construction-kernel
+
+      - name: Record validated evidence and publish
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest_path = Path('tests/api/fixtures/increment16/manifest.json')
+          roadmap_path = Path('docs/roadmap/nodal-development-todo.md')
+
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+          if manifest.get('status') == 'validated-kernel':
+              print('Increment 16 evidence is already recorded')
+          else:
+              if manifest.get('status') != 'preflight-kernel':
+                  raise RuntimeError(f"unexpected Increment 16 status: {manifest.get('status')!r}")
+              manifest['status'] = 'validated-kernel'
+              manifest['validation'] = {
+                  'pull_request': 41,
+                  'dedicated_workflow_run': 32693824293,
+                  'core_ci_run': 32693824396,
+              }
+              manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+
+              roadmap = roadmap_path.read_text(encoding='utf-8')
+              replacements = (
+                  ('**Revision:** 1.19', '**Revision:** 1.20'),
+                  ('**Updated:** 2026-08-23', '**Updated:** 2026-08-24'),
+                  (
+                      '- [ ] **Increment 16 — Elaboration, hierarchy, shape, and lexical domain-context kernel**',
+                      '- [x] **Increment 16 — Elaboration, hierarchy, shape, and lexical domain-context kernel**',
+                  ),
+              )
+              for old, new in replacements:
+                  if new not in roadmap:
+                      if roadmap.count(old) != 1:
+                          raise RuntimeError(f'roadmap evidence anchor is not unique: {old!r}')
+                      roadmap = roadmap.replace(old, new, 1)
+
+              checked = '- [x] **Increment 16 — Elaboration, hierarchy, shape, and lexical domain-context kernel**'
+              anchor = (
+                  checked
+                  + '\n  - Add deterministic `Struct`/`Interface` kind ownership, interface construction close, exported-role requirements, recursive role expansion, interface storage rejection, resolved-net endpoint registration, conservative-terminal topology ownership, and logical Interface ABI paths without globals or JVM identity.'
+                  + '\n  - Implement deterministic module construction, ownership, lifecycle, shaped-value rank/dimension capture, structural `Vec` versus `Mem` intent, transactional construction close, default-domain requirements, lexical domain stack, single-domain inheritance, named multi-domain requirements, typed bindings, and root-domain validation without public Scala implicits, globals, thread-locals, or JVM identity.'
+              )
+              evidence = (
+                  '  - Evidence: PR [#41](https://github.com/pysolvesemi/Nodal/pull/41), '
+                  'dedicated validation run [32693824293](https://github.com/pysolvesemi/Nodal/actions/runs/32693824293), '
+                  'and Core CI run [32693824396](https://github.com/pysolvesemi/Nodal/actions/runs/32693824396).'
+              )
+              if evidence not in roadmap:
+                  if roadmap.count(anchor) != 1:
+                      raise RuntimeError('Increment 16 roadmap body anchor is not unique')
+                  roadmap = roadmap.replace(anchor, anchor + '\n' + evidence, 1)
+              roadmap_path.write_text(roadmap, encoding='utf-8')
+          PY
+
+          if git diff --quiet; then
+            echo "Increment 16 evidence already current"
+            exit 0
+          fi
+
+          python3 scripts/check_increment16.py
+          python3 tests/api/test_increment16.py
+          python3 scripts/check_markdown.py
+          git diff --check
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/roadmap/nodal-development-todo.md tests/api/fixtures/increment16/manifest.json
+          git commit -m "Increment 16 — record validated closure evidence"
+          git push origin HEAD:increment/16-elaboration-construction-kernel

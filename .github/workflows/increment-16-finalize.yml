@@ -53,61 +53,8 @@ jobs:
           python3 scripts/check_formatting_baseline.py
           git diff --cached --check
 
-      - name: Replace temporary machinery with permanent read-only CI
+      - name: Remove temporary construction machinery
         run: |
-          cat > .github/workflows/increment-16-construction-kernel.yml <<'YAML'
-          name: Increment 16 Elaboration Construction Kernel
-
-          on:
-            push:
-              branches:
-                - increment/16-elaboration-construction-kernel
-            pull_request:
-              branches:
-                - dev
-
-          permissions:
-            contents: read
-
-          jobs:
-            construction-kernel:
-              name: increment-16/construction-kernel
-              runs-on: ubuntu-24.04
-              timeout-minutes: 75
-
-              steps:
-                - name: Check out repository
-                  uses: actions/checkout@v6
-                  with:
-                    fetch-depth: 0
-
-                - name: Bootstrap pinned contract toolchain
-                  run: |
-                    ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
-                    echo "NODAL_LINT_TOOLCHAIN=${RUNNER_TEMP}/nodal-lint-toolchain" >> "$GITHUB_ENV"
-
-                - name: Validate construction and predecessor contracts
-                  run: |
-                    ./mill mill.scalalib.scalafmt/checkFormatAll
-                    ./mill scalafix.check
-                    python3 scripts/check_increment11.py
-                    python3 scripts/check_increment12.py --compile-negative
-                    python3 scripts/check_increment13.py --compile-negative
-                    python3 scripts/check_increment14.py --compile-negative
-                    python3 scripts/check_increment15.py --compile-negative
-                    python3 scripts/check_increment16.py --compile
-                    python3 tests/api/test_increment16.py
-                    python3 scripts/check_formatting_baseline.py
-                    python3 scripts/check_markdown.py
-                    python3 scripts/check_package_visibility.py
-                    ./nodal check \
-                      --contracts-only \
-                      --online-toolchain \
-                      --lint-toolchain "${NODAL_LINT_TOOLCHAIN}" \
-                      --base-ref origin/dev
-                    git diff --check
-          YAML
-
           rm -rf scripts/increment16_payload
           rm -f \
             scripts/apply_increment16.py \
@@ -122,8 +69,10 @@ jobs:
             scripts/materialize_increment16_v9.py \
             scripts/materialize_increment16_v10.py \
             scripts/repair_increment16_round1.py \
-            scripts/repair_increment16_round2.py \
-            .github/workflows/increment-16-finalize.yml
+            scripts/repair_increment16_round2.py
+
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f -name '*.pyc' -delete
 
           python3 - <<'PY'
           from pathlib import Path
@@ -166,6 +115,9 @@ jobs:
             --online-toolchain \
             --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
             --base-ref origin/dev
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f -name '*.pyc' -delete
+          git add -A
           git diff --cached --check
 
       - name: Commit clean implementation tree

@@ -29,6 +29,7 @@ jobs:
         run: |
           git fetch --no-tags origin dev:refs/remotes/origin/dev
           python3 scripts/repair_increment17_source_origin.py
+          python3 scripts/repair_increment17_anonymous_register.py
           ./mill mill.scalalib.scalafmt/reformatAll
           ./mill scalafix.fix
           cat > .github/workflows/increment-17-source-origin-naming.yml <<'YAML'

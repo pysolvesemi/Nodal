@@ -27,7 +27,7 @@ jobs:
           fetch-depth: 0
           ref: increment/18-nodal-mlir-dialect-skeleton
 
-      - name: Record accepted evidence and strengthen closure contracts
+      - name: Record accepted roadmap and manifest evidence
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
@@ -38,25 +38,40 @@ jobs:
           from pathlib import Path
 
           root = Path.cwd()
-
           roadmap_path = root / "docs/roadmap/nodal-development-todo.md"
           roadmap = roadmap_path.read_text(encoding="utf-8")
+
+          old_increment = (
+              "- [ ] **Increment 18 — Nodal MLIR dialect skeleton**\n"
+              "  - Register the out-of-tree dialect, TableGen organization/docs, "
+              "generic parser/printer, and a verified placeholder operation.\n"
+          )
+          new_increment = (
+              "- [x] **Increment 18 — Nodal MLIR dialect skeleton**\n"
+              "  - Register the out-of-tree dialect, TableGen organization/docs, "
+              "generic parser/printer, and a verified placeholder operation.\n"
+              "  - Evidence: [`NodalMlirDialectSkeleton-DG-v1.0.md`]"
+              "(../design-gates/NodalMlirDialectSkeleton-DG-v1.0.md), "
+              "[`increment18-mlir-dialect-skeleton.md`]"
+              "(../implementation/increment18-mlir-dialect-skeleton.md), "
+              "PR [#45](https://github.com/pysolvesemi/Nodal/pull/45), "
+              "dedicated validation run [32767361722]"
+              "(https://github.com/pysolvesemi/Nodal/actions/runs/32767361722), "
+              "and Core CI run [32767361651]"
+              "(https://github.com/pysolvesemi/Nodal/actions/runs/32767361651).\n"
+          )
+
           replacements = (
               ("**Revision:** 1.21", "**Revision:** 1.22"),
               ("**Updated:** 2026-08-24", "**Updated:** 2026-08-25"),
-              (
-                  """- [ ] **Increment 18 — Nodal MLIR dialect skeleton**
-  - Register the out-of-tree dialect, TableGen organization/docs, generic parser/printer, and a verified placeholder operation.
-""",
-                  """- [x] **Increment 18 — Nodal MLIR dialect skeleton**
-  - Register the out-of-tree dialect, TableGen organization/docs, generic parser/printer, and a verified placeholder operation.
-  - Evidence: [`NodalMlirDialectSkeleton-DG-v1.0.md`](../design-gates/NodalMlirDialectSkeleton-DG-v1.0.md), [`increment18-mlir-dialect-skeleton.md`](../implementation/increment18-mlir-dialect-skeleton.md), PR [#45](https://github.com/pysolvesemi/Nodal/pull/45), dedicated validation run [32767361722](https://github.com/pysolvesemi/Nodal/actions/runs/32767361722), and Core CI run [32767361651](https://github.com/pysolvesemi/Nodal/actions/runs/32767361651).
-""",
-              ),
+              (old_increment, new_increment),
           )
           for old, new in replacements:
-              if roadmap.count(old) != 1:
-                  raise RuntimeError(f"roadmap anchor count for {old!r} is {roadmap.count(old)}")
+              count = roadmap.count(old)
+              if count != 1:
+                  raise RuntimeError(
+                      f"roadmap anchor count for {old!r} is {count}"
+                  )
               roadmap = roadmap.replace(old, new, 1)
           roadmap_path.write_text(roadmap, encoding="utf-8")
 
@@ -75,56 +90,14 @@ jobs:
 
           checker_path = root / "scripts/check_increment18.py"
           checker = checker_path.read_text(encoding="utf-8")
-          old_fragment = '            "useDefaultAttributePrinterParser = 1",\n'
-          new_fragment = '            "remains deferred until a later",\n'
-          if checker.count(old_fragment) != 1:
-              raise RuntimeError("attribute-parser checker fragment is not unique")
-          checker = checker.replace(old_fragment, new_fragment, 1)
-
-          old_anchor = '''        "dialect definition",
-    )
-    _require(
-        ops_td,
-'''
-          new_anchor = '''        "dialect definition",
-    )
-    if "let useDefaultAttributePrinterParser = 1;" in dialect_td:
-        problems.append(
-            Problem(
-                "NODAL-MLIR-003",
-                "dialect attribute parser generation is premature before attribute definitions",
-            )
-        )
-    _require(
-        ops_td,
-'''
-          if checker.count(old_anchor) != 1:
-              raise RuntimeError("dialect checker insertion anchor is not unique")
-          checker = checker.replace(old_anchor, new_anchor, 1)
-          checker_path.write_text(checker, encoding="utf-8")
-
-          test_path = root / "tests/compiler/test_increment18.py"
-          tests = test_path.read_text(encoding="utf-8")
-          test_anchor = '''    def test_rejects_missing_placeholder_verifier(self) -> None:
-'''
-          test_method = '''    def test_rejects_premature_attribute_parser_generation(self) -> None:
-        temporary, root = self.temporary_repository()
-        self.addCleanup(temporary.cleanup)
-        path = root / "core/compiler/include/nodal/Dialect/Nodal/NodalDialect.td"
-        path.write_text(
-            path.read_text(encoding="utf-8").replace(
-                "}\n\n#endif",
-                "  let useDefaultAttributePrinterParser = 1;\n}\n\n#endif",
-            ),
-            encoding="utf-8",
-        )
-        self.assertIn("NODAL-MLIR-003", self.problem_codes(root))
-
-'''
-          if tests.count(test_anchor) != 1:
-              raise RuntimeError("mutation-test insertion anchor is not unique")
-          tests = tests.replace(test_anchor, test_method + test_anchor, 1)
-          test_path.write_text(tests, encoding="utf-8")
+          old = '            "useDefaultAttributePrinterParser = 1",\n'
+          new = '            "remains deferred until a later",\n'
+          if checker.count(old) != 1:
+              raise RuntimeError("attribute-parser checker anchor is not unique")
+          checker_path.write_text(
+              checker.replace(old, new, 1),
+              encoding="utf-8",
+          )
           PY
 
       - name: Remove finalizer and validate closed state

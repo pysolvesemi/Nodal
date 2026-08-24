@@ -19,7 +19,8 @@ def Nodal_Dialect : Dialect {
     verified semantics-free placeholder operation. Hardware-semantic
     operations are introduced by later increments.
   }];
-  let useDefaultAttributePrinterParser = 1;
+  // `useDefaultAttributePrinterParser = 1` remains deferred until a later
+  // increment introduces Nodal-owned attribute definitions and dispatch.
 }
 
 #endif // NODAL_DIALECT_NODAL_NODALDIALECT_TD

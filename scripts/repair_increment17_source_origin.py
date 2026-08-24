@@ -191,8 +191,11 @@ def main() -> None:
       Option(System.getenv(name)).flatMap: value =>
         scala.util.Try(Path.of(value).toAbsolutePath.normalize()).toOption
     val ancestorRoots = Iterator
-      .iterate(workingDirectory)(path => path.getParent)
-      .takeWhile(_ != null)
+      .iterate(Option(workingDirectory))(
+        _.flatMap(path => Option(path.getParent))
+      )
+      .takeWhile(_.nonEmpty)
+      .flatten
       .toVector
     (environmentRoots ++ ancestorRoots)
       .distinct

@@ -175,6 +175,50 @@ def main() -> None:
         "source identity scoring",
     )
 
+    text = replace_once(
+        text,
+        '''  private def locateSource(fileName: String, ownerClass: String): Option[Path] =
+    val root = Path.of(System.getProperty("user.dir", ".")).toAbsolutePath.normalize()
+''',
+        '''  private val repositoryRoot: Path =
+    val workingDirectory =
+      Path.of(System.getProperty("user.dir", ".")).toAbsolutePath.normalize()
+    val environmentRoots = Vector(
+      "NODAL_WORKSPACE",
+      "GITHUB_WORKSPACE",
+      "BUILD_WORKSPACE_DIRECTORY"
+    ).flatMap: name =>
+      Option(System.getenv(name)).flatMap: value =>
+        scala.util.Try(Path.of(value).toAbsolutePath.normalize()).toOption
+    val ancestorRoots = Iterator
+      .iterate(workingDirectory)(path => path.getParent)
+      .takeWhile(_ != null)
+      .toVector
+    (environmentRoots ++ ancestorRoots)
+      .distinct
+      .find: candidate =>
+        Files.isRegularFile(candidate.resolve("build.mill")) &&
+        Files.isDirectory(candidate.resolve("core/scala")) &&
+        Files.isDirectory(candidate.resolve("docs"))
+      .getOrElse(workingDirectory)
+
+  private def locateSource(fileName: String, ownerClass: String): Option[Path] =
+    val root = repositoryRoot
+''',
+        "repository root discovery",
+    )
+
+    text = replace_once(
+        text,
+        '''  private def repositoryPath(path: Path): String =
+    val root = Path.of(System.getProperty("user.dir", ".")).toAbsolutePath.normalize()
+''',
+        '''  private def repositoryPath(path: Path): String =
+    val root = repositoryRoot
+''',
+        "repository-relative path root",
+    )
+
     SOURCE.write_text(text, encoding="utf-8")
 
 

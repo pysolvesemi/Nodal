@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "increment": 16,
-  "status": "preflight-kernel",
+  "status": "validated-kernel",
   "validation": {
-    "pull_request": null,
-    "dedicated_workflow_run": null,
-    "core_ci_run": null
+    "pull_request": 41,
+    "dedicated_workflow_run": 32693824293,
+    "core_ci_run": 32693824396
   },
   "public_api_version": "0.3",
   "public_api_changed": false,

@@ -39,11 +39,19 @@ jobs:
               raise RuntimeError("append indentation anchor is missing")
           text = text.replace(old, new, 1)
 
-          old = 'raw"(?m)^\\\\s*package\\\\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\\\\s*:\\s*)?$".r'
-          new = '(raw"(?m)^\\\\s*package\\\\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\\\\s*:\\s*)?" + "$").r'
-          if old not in text:
-              raise RuntimeError("source package regex anchor is missing")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          lines = text.splitlines()
+          matches = [
+              index
+              for index, line in enumerate(lines)
+              if 'raw"(?m)^' in line and 'package' in line and line.endswith('$".r')
+          ]
+          if len(matches) != 1:
+              raise RuntimeError("source package regex line is not unique")
+          index = matches[0]
+          lines[index] = lines[index].replace('raw"', '(raw"', 1).replace(
+              '?$".r', '?" + "$").r', 1
+          )
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
           python3 scripts/materialize_increment17.py
           ./mill mill.scalalib.scalafmt/reformatAll

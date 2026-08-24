@@ -1,0 +1,50 @@
+name: Increment 18 Canonical Formatting Fix
+
+on:
+  push:
+    branches:
+      - increment/18-nodal-mlir-dialect-skeleton
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-18-format-fix
+  cancel-in-progress: false
+
+jobs:
+  format:
+    name: increment-18/canonical-format
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out Increment 18 branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: increment/18-nodal-mlir-dialect-skeleton
+
+      - name: Install pinned lint toolchain
+        run: |
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Apply canonical repository formatting
+        run: |
+          ./nodal style fix \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          python3 scripts/check_formatting_baseline.py
+          git diff --check
+
+      - name: Publish formatted permanent sources
+        run: |
+          rm .github/workflows/increment-18-format-fix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email \
+            '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 18 — apply canonical formatting'
+          git push origin HEAD:increment/18-nodal-mlir-dialect-skeleton

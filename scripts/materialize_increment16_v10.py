@@ -35,6 +35,24 @@ def main() -> int:
         '      assert(first.interfaceAbi.exists(_.logicalPath.endsWith("nested.link.payload.payload")))\n',
     )
 
+    gate = ROOT / "docs/design-gates/NodalConstructionKernel-DG-v1.0.md"
+    replace_once(
+        gate,
+        """**Status:** Approved by the frozen public API v0.3 architecture  
+**Scope:** construction-kernel implementation  
+**Public API:** unchanged at 0.3  
+**Governing gate:** `NodalCoreSemanticsPipelineApi-DG-v0.3.md`
+""",
+        """**Status:** Approved  
+**Scope:** public-api  
+**API version:** 0.3  
+**Decision:** Activate the private construction kernel beneath frozen public API v0.3  
+**Approved by:** Repository owner instruction to continue Increment 16 on 2026-08-24  
+**Public API:** unchanged at 0.3  
+**Governing gate:** `NodalCoreSemanticsPipelineApi-DG-v0.3.md`
+""",
+    )
+
     implementation = ROOT / "docs/implementation/increment16-construction-kernel.md"
     replace_once(
         implementation,

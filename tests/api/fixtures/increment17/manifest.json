@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "increment": 17,
-  "status": "preflight-origin-graph",
+  "status": "validated-origin-graph",
   "public_api_changed": false,
   "public_api_version": "0.3",
   "semantic_identity_contract": {
@@ -28,8 +28,8 @@
     "temporary"
   ],
   "validation": {
-    "pull_request": null,
-    "dedicated_workflow_run": null,
-    "core_ci_run": null
+    "pull_request": 42,
+    "dedicated_workflow_run": 32722646172,
+    "core_ci_run": 32722646224
   }
 }

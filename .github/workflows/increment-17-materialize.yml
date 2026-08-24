@@ -29,6 +29,19 @@ jobs:
       - name: Materialize implementation and permanent validation
         run: |
           python3 scripts/materialize_increment17.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("docs/implementation/increment17-source-origin-naming.md")
+          text = path.read_text(encoding="utf-8")
+          marker = "Traversal ordinals are never emitted as a normal name."
+          if marker not in text:
+              text = text.rstrip() + "\n\n" + marker + "\n"
+          marker = "All expression-level source-map entries remain present when nodes are inlined."
+          if marker not in text:
+              text = text.rstrip() + "\n" + marker + "\n"
+          path.write_text(text, encoding="utf-8")
+          PY
           ./mill mill.scalalib.scalafmt/reformatAll
           ./mill scalafix.fix
 

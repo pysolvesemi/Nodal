@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "increment": 17,
+  "status": "validated-origin-graph",
+  "public_api_changed": false,
+  "public_api_version": "0.3",
+  "semantic_identity_contract": {
+    "scala_declaration_names": true,
+    "expression_spans": true,
+    "stable_origin_graph": true,
+    "sink_affinity": true,
+    "counter_only_normal_names": false,
+    "inlined_expression_source_maps": true,
+    "mutable_global_state": false,
+    "thread_local_state": false,
+    "jvm_identity_in_output": false
+  },
+  "generated_name_categories": [
+    "clock-port",
+    "reset-port",
+    "synchronizer",
+    "fifo",
+    "reset-controller",
+    "crossing",
+    "pipeline-state",
+    "fsm-state",
+    "anonymous-register",
+    "temporary"
+  ],
+  "validation": {
+    "pull_request": 42,
+    "dedicated_workflow_run": 32722646172,
+    "core_ci_run": 32722646224
+  }
+}

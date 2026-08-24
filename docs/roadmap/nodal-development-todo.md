@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.20
+**Revision:** 1.21
 **Created:** 2026-08-20
 **Updated:** 2026-08-24
 **Status:** Active roadmap
@@ -835,8 +835,9 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Implement deterministic module construction, ownership, lifecycle, shaped-value rank/dimension capture, structural `Vec` versus `Mem` intent, transactional construction close, default-domain requirements, lexical domain stack, single-domain inheritance, named multi-domain requirements, typed bindings, and root-domain validation without public Scala implicits, globals, thread-locals, or JVM identity.
   - Evidence: PR [#41](https://github.com/pysolvesemi/Nodal/pull/41), dedicated validation run [32693824293](https://github.com/pysolvesemi/Nodal/actions/runs/32693824293), and Core CI run [32693824396](https://github.com/pysolvesemi/Nodal/actions/runs/32693824396).
 
-- [ ] **Increment 17 — Source spans, semantic naming, and origin graph**
+- [x] **Increment 17 — Source spans, semantic naming, and origin graph**
   - Capture Scala declaration/member names and expression spans; build stable origin/sink-affinity metadata; define deterministic names for modules, declarations, shaped elements/views, domains, generated clock/reset ports, synchronizers, FIFOs, reset controllers, crossings, pipeline/FSM state, anonymous registers, and required temporaries. Prohibit traversal-counter-only normal names and retain expression-level source maps when nodes are inlined.
+  - Evidence: [`SemanticOriginKernel.scala`](../../core/scala/api/src/nodal/SemanticOriginKernel.scala), [`SemanticOriginTests.scala`](../../core/scala/testkit/test/src/nodal/SemanticOriginTests.scala), [`NodalSemanticOriginNaming-DG-v1.0.md`](../design-gates/NodalSemanticOriginNaming-DG-v1.0.md), PR [#42](https://github.com/pysolvesemi/Nodal/pull/42), dedicated validation run [32722646172](https://github.com/pysolvesemi/Nodal/actions/runs/32722646172), and Core CI run [32722646224](https://github.com/pysolvesemi/Nodal/actions/runs/32722646224).
 
 - [ ] **Increment 18 — Nodal MLIR dialect skeleton**
   - Register the out-of-tree dialect, TableGen organization/docs, generic parser/printer, and a verified placeholder operation.

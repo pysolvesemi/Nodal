@@ -159,7 +159,7 @@ object ConstructionKernelTests extends TestSuite:
 
       assert(first == second)
       assert(first.root == "KernelTop")
-      assert(first.modules.map(_.path) == Vector("KernelTop", "KernelTop.KernelLeaf_0"))
+      assert(first.modules.map(_.path) == Vector("KernelTop", "KernelTop.leaf"))
       assert(first.interfaceAbi.size == 9)
       assert(first.interfaceAbi.exists(_.logicalPath.endsWith("link.payload.ready")))
       assert(first.interfaceAbi.exists(_.logicalPath.endsWith("nested.link.payload.payload")))
@@ -167,7 +167,7 @@ object ConstructionKernelTests extends TestSuite:
       assert(first.topology.exists(_.kind == "inout-pass-through"))
       assert(first.topology.exists(_.kind == "terminal-connect"))
 
-      val shaped = first.modules.head.declarations.find(_.name == "wire_0").get
+      val shaped = first.modules.head.declarations.find(_.name == "shaped").get
       assert(shaped.dataType.contains("Vec(UInt(8);2x3)"))
 
       val leaf = first.modules(1)
@@ -195,7 +195,7 @@ object ConstructionKernelTests extends TestSuite:
       assert(emission.report.designKind == DesignKind.MixedSignal)
       assert(emission.report.selectedBackend == Backend.Auto)
       assert(emission.report.interfaceAbi.nonEmpty)
-      assert(emission.report.sourceMap.isEmpty)
+      assert(emission.report.sourceMap.nonEmpty)
       assert(emission.report.schedules.isEmpty)
 
     test("unbound root requirement is rejected transactionally"):

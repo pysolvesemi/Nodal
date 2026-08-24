@@ -9,79 +9,9 @@ on:
       - dev
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  repair-predecessor:
-    name: increment-16/repair-predecessor
-    if: github.event_name == 'pull_request' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-
-    steps:
-      - name: Check out authoritative branch head
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          ref: increment/16-elaboration-construction-kernel
-
-      - name: Repair successor-safe validation and remove temporary helpers
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("scripts/check_increment15.py")
-          text = path.read_text(encoding="utf-8")
-          old = '''        if "**Revision:** 1.19" not in roadmap:
-            problems.append(Problem("NODAL-INC15-059", "roadmap revision is not 1.19"))
-'''
-          new = '''        revision_lines = [
-            line.removeprefix("**Revision:** ")
-            for line in roadmap.splitlines()
-            if line.startswith("**Revision:** ")
-        ]
-        revision = ()
-        if len(revision_lines) == 1:
-            try:
-                revision = tuple(int(part) for part in revision_lines[0].split("."))
-            except ValueError:
-                revision = ()
-        if not revision or revision < (1, 19):
-            problems.append(Problem("NODAL-INC15-059", "roadmap revision predates 1.19"))
-'''
-          if new not in text:
-              if text.count(old) != 1:
-                  raise RuntimeError("Increment 15 revision anchor is not unique")
-              text = text.replace(old, new, 1)
-          path.write_text(text, encoding="utf-8")
-          PY
-
-          rm -f \
-            .github/workflows/increment-16-final-successor-fix.yml \
-            .github/workflows/increment-16-predecessor-checker-fix.yml \
-            .github/workflows/increment-16-successor-safety-fix.yml
-
-      - name: Validate repaired contracts
-        run: |
-          python3 scripts/check_increment15.py --compile-negative
-          python3 scripts/check_increment16.py --compile
-          python3 tests/api/test_increment15.py
-          python3 tests/api/test_increment16.py
-          git diff --check
-
-      - name: Commit repair
-        run: |
-          if git diff --quiet; then
-            echo "No repair required"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Increment 16 — close successor validation repair"
-          git pull --rebase origin increment/16-elaboration-construction-kernel
-          git push origin HEAD:increment/16-elaboration-construction-kernel
-
   construction-kernel:
     name: increment-16/construction-kernel
     runs-on: ubuntu-24.04

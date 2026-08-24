@@ -26,6 +26,11 @@ def main() -> int:
     fixture = ROOT / "core/scala/testkit/test/src/nodal/ConstructionKernelTests.scala"
     replace_once(
         fixture,
+        "package nodal\n\n",
+        "package nodal.testkit\n\nimport nodal.*\n\n",
+    )
+    replace_once(
+        fixture,
         '      assert(first.interfaceAbi.exists(_.logicalPath.endsWith("nested.link.payload.data")))\n',
         '      assert(first.interfaceAbi.exists(_.logicalPath.endsWith("nested.link.payload.payload")))\n',
     )

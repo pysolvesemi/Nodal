@@ -5,6 +5,10 @@
 This document describes the first implementation increment beneath the frozen Nodal public API v0.3.
 It does not change the source API frozen by Increment 15.
 
+The completed Increment 15 checker remains preserved as `check_increment15_frozen.py`. Its public entry
+point is a successor-safe adapter: all frozen checks still run, while roadmap revision 1.19 is treated as
+the minimum completed baseline rather than an exact permanent repository revision.
+
 ## Transaction model
 
 Each `Nodal.emit` or private test inspection allocates one construction transaction. The transaction is

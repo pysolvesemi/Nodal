@@ -27,7 +27,7 @@ def main() -> int:
     replace_once(
         fixture,
         "package nodal\n\n",
-        "package nodal.testkit\n\nimport nodal.*\n\n",
+        "package nodal.internal.testkit\n\nimport nodal.*\n\n",
     )
     replace_once(
         fixture,

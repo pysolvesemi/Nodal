@@ -11,8 +11,7 @@ final case class StructField[A <: Data](name: String, dataType: DataType[A])
 
 object Struct:
   def apply(name: String, fields: StructField[? <: Data]*): DataType[Struct] =
-    CandidateRuntime.statement(name, fields)
-    Bits(1).asInstanceOf[DataType[Struct]]
+    CandidateRuntime.dataType[Struct]("Struct", name, fields.toSeq)
 
 /** Non-storable connectivity kind. External libraries may define phantom interface identities. */
 trait Interface
@@ -227,8 +226,17 @@ final class InterfacePort[I <: Interface, R <: RoleKind] private[nodal] (
     val definition: InterfaceType[I],
     val role: Role[R],
     val name: String,
-    val domain: ClockDomain
-)
+    val domain: ClockDomain,
+    private[nodal] val exported: Boolean
+):
+  if exported then
+    CandidateRuntime.declare(
+      this,
+      KernelSignalKind.InterfacePort,
+      explicitName = Some(name),
+      domain = Some(domain),
+      attributes = Vector("interface" -> definition.name, "role" -> role.name)
+    )
 
 final class InterfaceArray[I <: Interface, R <: RoleKind] private[nodal] (
     val definition: InterfaceType[I],
@@ -236,14 +244,25 @@ final class InterfaceArray[I <: Interface, R <: RoleKind] private[nodal] (
     val count: Dimension,
     val name: String,
     val domain: ClockDomain
-)
+):
+  CandidateRuntime.declare(
+    this,
+    KernelSignalKind.InterfaceArray,
+    explicitName = Some(name),
+    domain = Some(domain),
+    attributes = Vector(
+      "interface" -> definition.name,
+      "role" -> role.name,
+      "count" -> count
+    )
+  )
 
 def interfacePort[I <: Interface, R <: RoleKind](
     definition: InterfaceType[I],
     role: Role[R],
     name: String,
     domain: ClockDomain
-): InterfacePort[I, R] = new InterfacePort(definition, role, name, domain)
+): InterfacePort[I, R] = new InterfacePort(definition, role, name, domain, exported = true)
 
 def interfaceArray[I <: Interface, R <: RoleKind](
     definition: InterfaceType[I],
@@ -263,15 +282,23 @@ extension [I <: Interface, R <: RoleKind](endpoint: InterfacePort[I, R])
       endpoint.definition,
       invertedRole,
       s"${endpoint.name}.inverse",
-      endpoint.domain
+      endpoint.domain,
+      exported = false
     )
 
   def monitorView: InterfacePort[I, MonitorRole] =
-    new InterfacePort(endpoint.definition, monitor, s"${endpoint.name}.monitor", endpoint.domain)
+    new InterfacePort(
+      endpoint.definition,
+      monitor,
+      s"${endpoint.name}.monitor",
+      endpoint.domain,
+      exported = false
+    )
 
   def connectExact[OtherRole <: RoleKind](
       other: InterfacePort[I, OtherRole]
-  )(using RoleConnection[R, OtherRole]): Unit = CandidateRuntime.statement(endpoint, other)
+  )(using RoleConnection[R, OtherRole]): Unit =
+    ConstructionKernel.operation("interface-connect", endpoint, other)
 
   def driveMember[A <: Data](member: String, value: Expr[A])(using RoleCanDrive[R]): Unit =
     CandidateRuntime.statement(endpoint, member, value)
@@ -325,6 +352,18 @@ final class DigitalInout[A <: Bits, M <: DriveMode] private[nodal] (
     val profile: ResolutionProfile,
     val name: String
 ):
+  CandidateRuntime.declare(
+    this,
+    KernelSignalKind.DigitalInout,
+    dataType = Some(dataType),
+    explicitName = Some(name),
+    attributes = Vector(
+      "mode" -> mode.name,
+      "placement" -> placement,
+      "profile" -> profile
+    )
+  )
+
   def read: Expr[A] = CandidateRuntime.expr(this, "read")
 
 trait ArbitraryDrive[M <: DriveMode]
@@ -363,9 +402,10 @@ def digitalInout[A <: Bits, M <: DriveMode](
 
 extension [A <: Bits, M <: DriveMode](endpoint: DigitalInout[A, M])
   def drive(value: Expr[A], enable: Expr[Bool])(using ArbitraryDrive[M]): Unit =
-    CandidateRuntime.statement(endpoint, value, enable)
+    ConstructionKernel.operation("inout-drive", endpoint, value, enable)
 
-  def highZ()(using ReleasableDrive[M]): Unit = CandidateRuntime.statement(endpoint, "high-z")
+  def highZ()(using ReleasableDrive[M]): Unit =
+    ConstructionKernel.operation("inout-high-z", endpoint)
 
   def split: TriStateCarrier[A, M] =
     new TriStateCarrier(
@@ -376,15 +416,17 @@ extension [A <: Bits, M <: DriveMode](endpoint: DigitalInout[A, M])
     )
 
 extension [A <: Bits](endpoint: DigitalInout[A, DriveMode.OpenDrain])
-  def driveLow(enable: Expr[Bool]): Unit = CandidateRuntime.statement(endpoint, enable, "low")
+  def driveLow(enable: Expr[Bool]): Unit =
+    ConstructionKernel.operation("inout-drive-low", endpoint, enable)
 
 extension [A <: Bits](endpoint: DigitalInout[A, DriveMode.OpenSource])
-  def driveHigh(enable: Expr[Bool]): Unit = CandidateRuntime.statement(endpoint, enable, "high")
+  def driveHigh(enable: Expr[Bool]): Unit =
+    ConstructionKernel.operation("inout-drive-high", endpoint, enable)
 
 def passThrough[A <: Bits, M <: DriveMode](
     outer: DigitalInout[A, M],
     inner: DigitalInout[A, M]
-): Unit = CandidateRuntime.statement(outer, inner)
+): Unit = ConstructionKernel.operation("inout-pass-through", outer, inner)
 
 def padAdapter[A <: Bits, M <: DriveMode](
     endpoint: DigitalInout[A, M],
@@ -395,37 +437,46 @@ def padAdapter[A <: Bits, M <: DriveMode](
 final class Terminal[D <: Discipline] private[nodal] (
     val discipline: D,
     val name: String
-)
+):
+  CandidateRuntime.declare(
+    this,
+    KernelSignalKind.ConservativeTerminal,
+    explicitName = Some(name),
+    attributes = Vector("discipline" -> discipline)
+  )
 
 sealed trait ConservativeAccess
 
+trait CanConnect[A <: ConservativeAccess]
+trait CanSense[A <: ConservativeAccess]
+trait CanContribute[A <: ConservativeAccess]
+
 object ConservativeAccess:
   sealed trait Connect extends ConservativeAccess
+  object Connect:
+    given connectAccess: CanConnect[Connect] with {}
+    given connectSense: CanSense[Connect] with {}
+
   sealed trait Sense extends ConservativeAccess
+  object Sense:
+    given senseAccess: CanSense[Sense] with {}
+
   sealed trait Contribute extends ConservativeAccess
+  object Contribute:
+    given contributeSense: CanSense[Contribute] with {}
+    given contributeAccess: CanContribute[Contribute] with {}
+
   sealed trait Monitor extends ConservativeAccess
+  object Monitor:
+    given monitorSense: CanSense[Monitor] with {}
 
 final class TerminalView[D <: Discipline, A <: ConservativeAccess] private[nodal] (
     val terminal: Terminal[D]
 )
 
-trait CanConnect[A <: ConservativeAccess]
-
-object CanConnect:
-  given connectAccess: CanConnect[ConservativeAccess.Connect] with {}
-
-trait CanSense[A <: ConservativeAccess]
-
-object CanSense:
-  given connectSense: CanSense[ConservativeAccess.Connect] with {}
-  given senseAccess: CanSense[ConservativeAccess.Sense] with {}
-  given contributeSense: CanSense[ConservativeAccess.Contribute] with {}
-  given monitorSense: CanSense[ConservativeAccess.Monitor] with {}
-
-trait CanContribute[A <: ConservativeAccess]
-
-object CanContribute:
-  given contributeAccess: CanContribute[ConservativeAccess.Contribute] with {}
+object CanConnect {}
+object CanSense {}
+object CanContribute {}
 
 def terminal[D <: Discipline](discipline: D, name: String): Terminal[D] =
   new Terminal(discipline, name)
@@ -439,7 +490,8 @@ extension [D <: Discipline](endpoint: Terminal[D])
 extension [D <: Discipline, A <: ConservativeAccess](view: TerminalView[D, A])
   def connectTo[B <: ConservativeAccess](
       other: TerminalView[D, B]
-  )(using CanConnect[A], CanConnect[B]): Unit = CandidateRuntime.statement(view, other)
+  )(using CanConnect[A], CanConnect[B]): Unit =
+    ConstructionKernel.operation("terminal-connect", view.terminal, other.terminal)
 
   def potential(using CanSense[A]): Expr[Real] = CandidateRuntime.expr(view, "potential")
 
@@ -459,7 +511,13 @@ object AnalogDirection:
 final class AnalogSignal[D, R <: AnalogDirection] private[nodal] (
     val name: String,
     val dimension: String
-)
+):
+  CandidateRuntime.declare(
+    this,
+    KernelSignalKind.AnalogSignal,
+    explicitName = Some(name),
+    attributes = Vector("dimension" -> dimension)
+  )
 
 trait CanDriveAnalog[R <: AnalogDirection]
 

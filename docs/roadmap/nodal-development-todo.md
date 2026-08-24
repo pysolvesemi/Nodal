@@ -1,8 +1,8 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.19
+**Revision:** 1.20
 **Created:** 2026-08-20
-**Updated:** 2026-08-23
+**Updated:** 2026-08-24
 **Status:** Active roadmap
 **Primary language target:** Verilog-AMS 2023
 **Analog-only compatibility target:** Verilog-A
@@ -830,9 +830,10 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
 
 ## Phase 1 — Compiler vertical slice
 
-- [ ] **Increment 16 — Elaboration, hierarchy, shape, and lexical domain-context kernel**
+- [x] **Increment 16 — Elaboration, hierarchy, shape, and lexical domain-context kernel**
   - Add deterministic `Struct`/`Interface` kind ownership, interface construction close, exported-role requirements, recursive role expansion, interface storage rejection, resolved-net endpoint registration, conservative-terminal topology ownership, and logical Interface ABI paths without globals or JVM identity.
   - Implement deterministic module construction, ownership, lifecycle, shaped-value rank/dimension capture, structural `Vec` versus `Mem` intent, transactional construction close, default-domain requirements, lexical domain stack, single-domain inheritance, named multi-domain requirements, typed bindings, and root-domain validation without public Scala implicits, globals, thread-locals, or JVM identity.
+  - Evidence: PR [#41](https://github.com/pysolvesemi/Nodal/pull/41), dedicated validation run [32693824293](https://github.com/pysolvesemi/Nodal/actions/runs/32693824293), and Core CI run [32693824396](https://github.com/pysolvesemi/Nodal/actions/runs/32693824396).
 
 - [ ] **Increment 17 — Source spans, semantic naming, and origin graph**
   - Capture Scala declaration/member names and expression spans; build stable origin/sink-affinity metadata; define deterministic names for modules, declarations, shaped elements/views, domains, generated clock/reset ports, synchronizers, FIFOs, reset controllers, crossings, pipeline/FSM state, anonymous registers, and required temporaries. Prohibit traversal-counter-only normal names and retain expression-level source maps when nodes are inlined.

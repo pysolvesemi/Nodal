@@ -7,12 +7,10 @@ opaque type SInt <: Data = Bits
 
 object SInt:
   def apply(width: Int): DataType[SInt] =
-    CandidateRuntime.statement(width)
-    Bits(width).asInstanceOf[DataType[SInt]]
+    CandidateRuntime.dataType[SInt]("SInt", width)
 
   def apply(width: Expr[Integer]): DataType[SInt] =
-    CandidateRuntime.statement(width)
-    Bits(width).asInstanceOf[DataType[SInt]]
+    CandidateRuntime.dataType[SInt]("SInt", width)
 
   extension (left: Expr[SInt])
     @targetName("sintAddition")
@@ -56,8 +54,7 @@ opaque type Vec[A <: Data] <: Data = Bits
 
 object Vec:
   def apply[A <: Data](element: DataType[A], dimensions: Dimension*): DataType[Vec[A]] =
-    CandidateRuntime.statement(element, dimensions)
-    Bits(1).asInstanceOf[DataType[Vec[A]]]
+    CandidateRuntime.dataType[Vec[A]]("Vec", element, dimensions.toSeq)
 
 extension [A <: Data](value: Expr[Vec[A]])
   def at(indices: Dimension*): Expr[A] = CandidateRuntime.expr(value, indices)
@@ -117,6 +114,19 @@ final class Mem[A <: Data] private[nodal] (
     val ordering: MemoryOrdering,
     val domain: ClockDomain
 ):
+  CandidateRuntime.declare(
+    this,
+    KernelSignalKind.Memory,
+    dataType = Some(element),
+    domain = Some(domain),
+    attributes = Vector(
+      "depth" -> depth,
+      "readLatency" -> readLatency,
+      "readUnderWrite" -> readUnderWrite,
+      "ordering" -> ordering
+    )
+  )
+
   def read(address: Expr[UInt]): Expr[A] = CandidateRuntime.expr(this, address)
   def write(address: Expr[UInt], data: Expr[A], mask: Expr[Bits]): Unit =
     CandidateRuntime.statement(this, address, data, mask)

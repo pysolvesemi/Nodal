@@ -9,9 +9,51 @@ on:
       - dev
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  repair-increment-17-source-origin:
+    name: increment-17/repair-via-registered-workflow
+    if: github.event_name == 'pull_request' && github.head_ref == 'increment/17-source-origin-naming' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out authoritative Increment 17 branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: increment/17-source-origin-naming
+
+      - name: Apply and format bounded source-origin repair
+        run: |
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
+          python3 scripts/repair_increment17_source_origin.py
+          ./mill mill.scalalib.scalafmt/reformatAll
+          ./mill scalafix.fix
+
+      - name: Validate repaired Increment 17 behavior
+        run: |
+          python3 scripts/check_increment15.py --compile-negative
+          python3 scripts/check_increment16.py
+          python3 scripts/check_increment17.py --compile
+          python3 tests/api/test_increment16.py
+          python3 tests/api/test_increment17.py
+          python3 scripts/check_markdown.py
+          python3 scripts/check_package_visibility.py
+          git diff --check
+
+      - name: Restore workflow and commit repair
+        run: |
+          git checkout origin/dev -- .github/workflows/increment-16-construction-kernel.yml
+          rm scripts/repair_increment17_source_origin.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Increment 17 — fix semantic binding and source identity"
+          git pull --rebase origin increment/17-source-origin-naming
+          git push origin HEAD:increment/17-source-origin-naming
+
   construction-kernel:
     name: increment-16/construction-kernel
     runs-on: ubuntu-24.04

@@ -213,7 +213,7 @@ def check_repository(root: Path) -> list[Problem]:
         (
             'let name = "nodal";',
             'let cppNamespace = "::nodal";',
-            "useDefaultAttributePrinterParser = 1",
+            "remains deferred until a later",
             "semantics-free placeholder operation",
         ),
         problems,

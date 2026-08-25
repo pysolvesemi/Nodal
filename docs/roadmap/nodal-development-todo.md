@@ -1,8 +1,8 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.21
+**Revision:** 1.22
 **Created:** 2026-08-20
-**Updated:** 2026-08-24
+**Updated:** 2026-08-25
 **Status:** Active roadmap
 **Primary language target:** Verilog-AMS 2023
 **Analog-only compatibility target:** Verilog-A
@@ -839,8 +839,9 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Capture Scala declaration/member names and expression spans; build stable origin/sink-affinity metadata; define deterministic names for modules, declarations, shaped elements/views, domains, generated clock/reset ports, synchronizers, FIFOs, reset controllers, crossings, pipeline/FSM state, anonymous registers, and required temporaries. Prohibit traversal-counter-only normal names and retain expression-level source maps when nodes are inlined.
   - Evidence: [`SemanticOriginKernel.scala`](../../core/scala/api/src/nodal/SemanticOriginKernel.scala), [`SemanticOriginTests.scala`](../../core/scala/testkit/test/src/nodal/SemanticOriginTests.scala), [`NodalSemanticOriginNaming-DG-v1.0.md`](../design-gates/NodalSemanticOriginNaming-DG-v1.0.md), PR [#42](https://github.com/pysolvesemi/Nodal/pull/42), dedicated validation run [32722646172](https://github.com/pysolvesemi/Nodal/actions/runs/32722646172), and Core CI run [32722646224](https://github.com/pysolvesemi/Nodal/actions/runs/32722646224).
 
-- [ ] **Increment 18 — Nodal MLIR dialect skeleton**
+- [x] **Increment 18 — Nodal MLIR dialect skeleton**
   - Register the out-of-tree dialect, TableGen organization/docs, generic parser/printer, and a verified placeholder operation.
+  - Evidence: [`NodalMlirDialectSkeleton-DG-v1.0.md`](../design-gates/NodalMlirDialectSkeleton-DG-v1.0.md), [`increment18-mlir-dialect-skeleton.md`](../implementation/increment18-mlir-dialect-skeleton.md), PR [#45](https://github.com/pysolvesemi/Nodal/pull/45), dedicated validation run [32767361722](https://github.com/pysolvesemi/Nodal/actions/runs/32767361722), and Core CI run [32767361651](https://github.com/pysolvesemi/Nodal/actions/runs/32767361651).
 
 - [ ] **Increment 19 — Core MLIR module, port, parameter, and domain model**
   - Add canonical Interface IR definitions/instances/roles/member access, full `Valid`/`Stream` channel identity, logical interface ABI metadata, digital resolved-net/read/driver/drive-mode operations, conservative terminal/node/branch/access operations, and explicit mixed-signal bridge operations while keeping target layouts separate.

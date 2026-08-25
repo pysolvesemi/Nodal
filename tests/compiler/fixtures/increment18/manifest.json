@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "increment": 18,
-  "status": "implemented-awaiting-evidence",
+  "status": "validated-dialect-skeleton",
   "public_api": "0.3",
   "dialect": "nodal",
   "placeholder": "nodal.placeholder",
@@ -19,8 +19,8 @@
     "scheduling and HDL emission"
   ],
   "evidence": {
-    "pull_request": null,
-    "dedicated_run": null,
-    "core_ci_run": null
+    "pull_request": 45,
+    "dedicated_run": 32767361722,
+    "core_ci_run": 32767361651
   }
 }

@@ -131,7 +131,10 @@ LogicalResult verifyRelation(Operation *operation, llvm::StringRef label,
 } // namespace
 
 LogicalResult nodal::PlaceholderOp::verify() {
-  return requireText(getOperation(), "label", "label");
+  auto label = (*this)->getAttrOfType<StringAttr>("label");
+  if (!label || label.getValue().empty())
+    return emitOpError("requires a non-empty 'label' attribute");
+  return success();
 }
 
 LogicalResult nodal::ModuleOp::verify() {

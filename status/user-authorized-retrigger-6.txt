@@ -1,0 +1,1 @@
+User-authorized controller retrigger after structural-materializer validation commits.

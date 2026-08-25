@@ -1,0 +1,204 @@
+name: Automation Increment 21 Native Validate v4
+
+on:
+  push:
+    branches:
+      - automation/increment21-native-validate-v4
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+
+    steps:
+      - name: Check out latest Increment 21 head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/21-native-semantic-pipeline
+          fetch-depth: 0
+
+      - name: Apply idempotent integration fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          passes = Path('core/compiler/lib/Transforms/Passes.cpp')
+          text = passes.read_text(encoding='utf-8')
+          if '#include <cassert>' not in text:
+              text = text.replace('#include <functional>\n', '#include <cassert>\n#include <functional>\n', 1)
+          if '#include "llvm/Support/ErrorHandling.h"' not in text:
+              text = text.replace(
+                  '#include "llvm/ADT/Twine.h"\n',
+                  '#include "llvm/ADT/Twine.h"\n#include "llvm/Support/ErrorHandling.h"\n',
+                  1,
+              )
+          text = text.replace('accepted->clone()', 'accepted.get()->clone()')
+          passes.write_text(text, encoding='utf-8')
+
+          fixture = Path('core/compiler/test/IR/semantic-pipeline-invalid.mlir')
+          text = fixture.read_text(encoding='utf-8')
+          text = re.sub(
+              r'(}> \(\{\n)([ \t]*)(?!\^bb0:)(\}\) : \(\) -> \(\))',
+              lambda match: (
+                  match.group(1)
+                  + match.group(2)
+                  + '^bb0:\n'
+                  + match.group(2)
+                  + match.group(3)
+              ),
+              text,
+          )
+          fixture.write_text(text, encoding='utf-8')
+
+          gate = Path('docs/design-gates/NodalNativeSemanticPipeline-DG-v1.0.md')
+          text = gate.read_text(encoding='utf-8')
+          if 'clone-before-commit' not in text:
+              anchor = '## Transaction contract\n'
+              if text.count(anchor) != 1:
+                  raise SystemExit('transaction heading is not unique')
+              text = text.replace(
+                  anchor,
+                  anchor
+                  + '\nThis is a **clone-before-commit** contract across all thirteen '
+                  + 'mandatory stages.\n',
+                  1,
+              )
+          gate.write_text(text, encoding='utf-8')
+
+          codeowners = Path('.github/CODEOWNERS')
+          text = codeowners.read_text(encoding='utf-8')
+          entries = '''
+# Increment 21 native semantic pipeline.
+/core/compiler/include/nodal/Transforms/ @pysolvesemi
+/core/compiler/lib/Transforms/ @pysolvesemi
+/scripts/check_increment21.py @pysolvesemi
+/tests/compiler/test_increment21.py @pysolvesemi
+/tests/compiler/fixtures/increment21/ @pysolvesemi
+/.github/workflows/increment-21-native-semantic-pipeline.yml @pysolvesemi
+/docs/design-gates/NodalNativeSemanticPipeline-DG-v1.0.md @pysolvesemi
+/docs/implementation/increment21-native-semantic-pipeline.md @pysolvesemi
+'''
+          if '# Increment 21 native semantic pipeline.' not in text:
+              text = text.rstrip() + '\n\n' + entries.lstrip()
+          codeowners.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Install pinned toolchains
+        run: |
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+
+      - name: Format and validate repository contracts
+        run: |
+          "${RUNNER_TEMP}/nodal-lint-toolchain/bin/clang-format" -i \
+            core/compiler/include/nodal/Transforms/Passes.h \
+            core/compiler/lib/Transforms/Passes.cpp \
+            core/compiler/test/Unit/SemanticPipelineTest.cpp \
+            core/compiler/tools/nodalc/nodalc.cpp
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 scripts/check_increment21.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          python3 scripts/check_formatting_baseline.py
+          python3 scripts/check_markdown.py
+          python3 scripts/check_package_visibility.py
+          git diff --check
+
+      - name: Build, lint, and test pinned native compiler
+        shell: bash
+        run: |
+          set -o pipefail
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            2>&1 | tee /tmp/increment21-native.log
+
+      - name: Run named pipelines and failure matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler=out/native/release/bin/nodalc
+          filecheck="${RUNNER_TEMP}/nodal-native-toolchain/bin/FileCheck"
+          fixture=core/compiler/test/IR/semantic-pipeline-valid.mlir
+
+          for profile in fast default release; do
+            "${compiler}" \
+              "--pass-pipeline=builtin.module(nodal-gate-${profile})" \
+              "${fixture}" >"/tmp/nodal-gate-${profile}.mlir"
+          done
+          "${filecheck}" "${fixture}" --check-prefix=FAST < /tmp/nodal-gate-fast.mlir
+          "${filecheck}" "${fixture}" --check-prefix=DEFAULT < /tmp/nodal-gate-default.mlir
+          "${filecheck}" "${fixture}" --check-prefix=RELEASE < /tmp/nodal-gate-release.mlir
+
+          if "${compiler}" --split-input-file \
+              '--pass-pipeline=builtin.module(nodal-gate-default)' \
+              core/compiler/test/IR/semantic-pipeline-invalid.mlir \
+              >/tmp/nodal-invalid.log 2>&1; then
+            echo 'invalid semantic-stage matrix was accepted' >&2
+            exit 1
+          fi
+          for code in \
+            NODAL-VERIFY-CONSTRUCTION-001 \
+            NODAL-VERIFY-DRIVER-001 \
+            NODAL-VERIFY-LATCH-001 \
+            NODAL-VERIFY-CYCLE-001 \
+            NODAL-VERIFY-HIERARCHY-004 \
+            NODAL-VERIFY-TYPE-003 \
+            NODAL-VERIFY-PARAMETER-003 \
+            NODAL-VERIFY-FSM-001 \
+            NODAL-VERIFY-DOMAIN-003 \
+            NODAL-VERIFY-PROTOCOL-003 \
+            NODAL-VERIFY-EFFECT-001 \
+            NODAL-VERIFY-ANALOG-001 \
+            NODAL-VERIFY-CAPABILITY-003; do
+            grep -F "${code}" /tmp/nodal-invalid.log
+          done
+
+      - name: Publish validated corrections
+        run: |
+          git config user.name 'pysolvesemi'
+          git config user.email 'pysolvesemi@gmail.com'
+          git add \
+            .github/CODEOWNERS \
+            core/compiler/include/nodal/Transforms/Passes.h \
+            core/compiler/lib/Transforms/Passes.cpp \
+            core/compiler/test/IR/semantic-pipeline-invalid.mlir \
+            core/compiler/test/Unit/SemanticPipelineTest.cpp \
+            core/compiler/tools/nodalc/nodalc.cpp \
+            docs/design-gates/NodalNativeSemanticPipeline-DG-v1.0.md
+          if ! git diff --cached --quiet; then
+            git commit -m 'Increment 21 — apply validated native integration corrections'
+            git push origin HEAD:increment/21-native-semantic-pipeline
+          fi
+
+      - name: Report validation failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr=$(gh pr list --head increment/21-native-semantic-pipeline \
+            --state open --json number --jq '.[0].number // empty')
+          if [ -n "${pr}" ]; then
+            {
+              echo 'Pinned Increment 21 validation failed.'
+              echo
+              echo '```text'
+              if [ -f /tmp/increment21-native.log ]; then
+                grep -E '(error:|fatal error:|CMake Error|FAILED:|undefined reference|NODAL-[A-Z0-9-]+)' \
+                  /tmp/increment21-native.log | tail -100
+              else
+                echo 'Failure occurred before the native build log was created.'
+              fi
+              echo '```'
+            } >/tmp/comment.md
+            gh pr comment "${pr}" --body-file /tmp/comment.md
+          fi

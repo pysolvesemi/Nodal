@@ -10,7 +10,8 @@
   ],
   "mandatory_default_stage_count": 13,
   "transaction": "clone-before-commit",
-  "closure_state": "validated-final-head",
+  "closure_state": "accepted-evidence-recorded-awaiting-closed-state-ci",
+  "implementation_pull_request": 50,
   "closure_pull_request": 51,
   "evidence": {
     "pull_request": 51,

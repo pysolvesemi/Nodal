@@ -4,6 +4,10 @@
   "schema": "nodal.scala-to-mlir",
   "schema_version": 1,
   "process_protocol": 1,
-  "status": "implemented-awaiting-evidence",
-  "evidence": {}
+  "status": "validated-scala-mlir-bridge",
+  "evidence": {
+    "pull_request": 49,
+    "dedicated_run": 32850253855,
+    "core_ci_run": 32850253829
+  }
 }

@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "increment": 19,
+  "status": "implemented-awaiting-evidence",
+  "public_api": "0.3",
+  "dialect": "nodal",
+  "type_count": 13,
+  "operation_families": [
+    "module-port-parameter-instance",
+    "interface-role-protocol-abi",
+    "domain-relationship-crossing",
+    "shape-storage-layout-iteration",
+    "resolved-digital-connectivity",
+    "conservative-and-mixed-signal-connectivity",
+    "semantic-enum-and-fsm"
+  ],
+  "deferred": [
+    "Scala-to-MLIR lowering",
+    "whole-design semantic pass pipeline",
+    "CIRCT conversion",
+    "backend layout and HDL emission",
+    "scheduling and optimization"
+  ],
+  "evidence": {
+    "pull_request": null,
+    "dedicated_run": null,
+    "core_ci_run": null
+  }
+}

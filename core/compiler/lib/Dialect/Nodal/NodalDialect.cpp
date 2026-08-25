@@ -1,6 +1,7 @@
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/NodalTypes.h"
 
 using namespace mlir;
 
@@ -11,4 +12,5 @@ void nodal::NodalDialect::initialize() {
 #define GET_OP_LIST
 #include "nodal/Dialect/Nodal/NodalOps.cpp.inc"
       >();
+  registerTypes();
 }

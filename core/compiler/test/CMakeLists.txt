@@ -35,12 +35,43 @@ set_tests_properties(
     WILL_FAIL TRUE
 )
 
+add_test(
+  NAME nodal.native.core-model-roundtrip
+  COMMAND nodalc "${CMAKE_CURRENT_SOURCE_DIR}/IR/core-model.mlir"
+)
+set_tests_properties(nodal.native.core-model-roundtrip PROPERTIES
+  PASS_REGULAR_EXPRESSION "nodal[.]module"
+)
+
+add_test(
+  NAME nodal.native.core-model-generic
+  COMMAND nodalc --mlir-print-op-generic
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/core-model.mlir"
+)
+set_tests_properties(nodal.native.core-model-generic PROPERTIES
+  PASS_REGULAR_EXPRESSION "nodal[.]fsm"
+)
+
+foreach(_fixture IN ITEMS width net enum fsm)
+  add_test(
+    NAME nodal.native.core-model-rejects-${_fixture}
+    COMMAND nodalc
+      "${CMAKE_CURRENT_SOURCE_DIR}/IR/core-model-invalid-${_fixture}.mlir"
+  )
+  set_tests_properties(
+    nodal.native.core-model-rejects-${_fixture}
+    PROPERTIES
+      WILL_FAIL TRUE
+  )
+endforeach()
+
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
   DEPENDS
     nodalc
     nodal-native-unit-tests
     nodal-dialect-unit-tests
+    nodal-core-model-unit-tests
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
   USES_TERMINAL
 )

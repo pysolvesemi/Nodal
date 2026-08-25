@@ -1,0 +1,90 @@
+name: Repair Increment 22 Native Integration
+
+on:
+  push:
+    branches:
+      - automation/reconcile-increment-21-22-v11
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-increment-22-native
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+
+    steps:
+      - name: Wait for Increment 22 branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in $(seq 1 60); do
+            if git ls-remote --exit-code --heads \
+                "https://github.com/${GITHUB_REPOSITORY}.git" \
+                refs/heads/increment/22-circt-conversion-legalizer-skeleton \
+                >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - uses: actions/checkout@v6
+        with:
+          ref: increment/22-circt-conversion-legalizer-skeleton
+          fetch-depth: 0
+
+      - name: Normalize CMake and MLIR pass option compatibility
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          cmake = Path('core/compiler/lib/CMakeLists.txt')
+          text = cmake.read_text(encoding='utf-8')
+          lines = [line for line in text.splitlines() if line.strip()]
+          if 'add_subdirectory(Conversion)' in lines and 'add_subdirectory(Dialect)' in lines:
+              lines.remove('add_subdirectory(Conversion)')
+              dialect = lines.index('add_subdirectory(Dialect)')
+              lines.insert(dialect + 1, 'add_subdirectory(Conversion)')
+              cmake.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+          source = Path('core/compiler/lib/Conversion/CIRCT/CIRCTLegalizer.cpp')
+          text = source.read_text(encoding='utf-8')
+          text = text.replace(
+              '  mlir::Pass::Option<std::string> profile{',
+              '  Option<std::string> profile{',
+          )
+          text = text.replace(
+              '  mlir::Pass::Option<bool> failOnDeferred{',
+              '  Option<bool> failOnDeferred{',
+          )
+          source.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Install locked toolchains and validate
+        run: |
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/native"
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/lint"
+          "${RUNNER_TEMP}/lint/bin/clang-format" -i \
+            core/compiler/include/nodal/Conversion/CIRCT/CIRCTLegalizer.h \
+            core/compiler/lib/Conversion/CIRCT/CIRCTLegalizer.cpp
+          python3 scripts/check_increment21.py
+          python3 scripts/check_increment22.py
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/native" \
+            --lint-toolchain "${RUNNER_TEMP}/lint"
+          git diff --check
+
+      - name: Publish repair when required
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 22 — harden native legalizer integration'
+          git push origin HEAD:increment/22-circt-conversion-legalizer-skeleton

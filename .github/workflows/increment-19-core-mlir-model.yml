@@ -76,6 +76,9 @@ jobs:
           grep -F '"nodal.interface"' /tmp/nodal-core-model-generic.mlir
           grep -F '!nodal.shaped' /tmp/nodal-core-model-generic.mlir
 
+          # Exact inventory: core-model-invalid-width.mlir,
+          # core-model-invalid-net.mlir, core-model-invalid-enum.mlir, and
+          # core-model-invalid-fsm.mlir.
           declare -A expected=(
             [width]='width must be greater than zero'
             [net]='drive mode must match the resolved net'

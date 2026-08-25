@@ -1,0 +1,64 @@
+{
+  "dev_sha": "982451d0f7f22d3f5867db0c996e6416c1c79a98",
+  "increment_20": {
+    "checked": true,
+    "found": true,
+    "title": "Scala-to-MLIR bridge"
+  },
+  "increment_21": {
+    "checked": true,
+    "found": true,
+    "title": "Native parse, staged semantic verification, and pass pipeline"
+  },
+  "increment_22": {
+    "checked": false,
+    "found": true,
+    "title": "Cross-layer diagnostic mapping"
+  },
+  "relevant_branches": [
+    "increment/21-native-semantic-pipeline",
+    "increment/21-native-verifier-pipeline",
+    "increment/21-roadmap-evidence-closure",
+    "increment/22-cross-layer-diagnostic-mapping"
+  ],
+  "relevant_pull_requests": [
+    {
+      "baseRefName": "dev",
+      "headRefName": "increment/22-cross-layer-diagnostic-mapping",
+      "isDraft": false,
+      "mergeCommit": null,
+      "mergedAt": null,
+      "number": 53,
+      "state": "OPEN",
+      "title": "Increment 22 \u2014 implement cross-layer diagnostic mapping",
+      "url": "https://github.com/pysolvesemi/Nodal/pull/53"
+    },
+    {
+      "baseRefName": "dev",
+      "headRefName": "increment/21-roadmap-evidence-closure",
+      "isDraft": false,
+      "mergeCommit": {
+        "oid": "982451d0f7f22d3f5867db0c996e6416c1c79a98"
+      },
+      "mergedAt": "2026-08-25T18:45:57Z",
+      "number": 51,
+      "state": "MERGED",
+      "title": "Increment 21 \u2014 close roadmap and CI evidence",
+      "url": "https://github.com/pysolvesemi/Nodal/pull/51"
+    },
+    {
+      "baseRefName": "dev",
+      "headRefName": "increment/21-native-semantic-pipeline",
+      "isDraft": false,
+      "mergeCommit": {
+        "oid": "e41bdf514a4b472186a17996e81a0959e4486a63"
+      },
+      "mergedAt": "2026-08-25T16:14:43Z",
+      "number": 50,
+      "state": "MERGED",
+      "title": "Increment 21 \u2014 implement native staged semantic verification pipeline",
+      "url": "https://github.com/pysolvesemi/Nodal/pull/50"
+    }
+  ],
+  "roadmap_revision": "1.25"
+}

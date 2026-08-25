@@ -1,0 +1,123 @@
+name: Automation Increment 21 Warning Fix
+
+on:
+  push:
+    branches:
+      - automation/increment21-warning-fix
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+
+    steps:
+      - name: Check out latest Increment 21
+        uses: actions/checkout@v6
+        with:
+          ref: increment/21-native-semantic-pipeline
+          fetch-depth: 0
+
+      - name: Remove warning-sensitive move and ensure required includes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('core/compiler/lib/Transforms/Passes.cpp')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'std::string state = std::move(worklist.pop_back_val());',
+              'std::string state = worklist.pop_back_val();',
+          )
+          if '#include <cassert>' not in text:
+              text = text.replace(
+                  '#include <functional>\n',
+                  '#include <cassert>\n#include <functional>\n',
+                  1,
+              )
+          if '#include "llvm/Support/ErrorHandling.h"' not in text:
+              text = text.replace(
+                  '#include "llvm/ADT/Twine.h"\n',
+                  '#include "llvm/ADT/Twine.h"\n#include "llvm/Support/ErrorHandling.h"\n',
+                  1,
+              )
+          text = text.replace('accepted->clone()', 'accepted.get()->clone()')
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Install pinned toolchains
+        run: |
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+
+      - name: Format, validate, and build
+        shell: bash
+        run: |
+          set -o pipefail
+          "${RUNNER_TEMP}/nodal-lint-toolchain/bin/clang-format" -i \
+            core/compiler/lib/Transforms/Passes.cpp
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 scripts/check_increment21.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            2>&1 | tee /tmp/increment21-native.log
+
+      - name: Prove release gate and failure matrix
+        run: |
+          set -euo pipefail
+          compiler=out/native/release/bin/nodalc
+          "${compiler}" \
+            '--pass-pipeline=builtin.module(nodal-gate-release)' \
+            core/compiler/test/IR/semantic-pipeline-valid.mlir \
+            >/tmp/nodal-release.mlir
+          grep -F 'nodal.pipeline.profile = "release"' /tmp/nodal-release.mlir
+          if "${compiler}" --split-input-file \
+              '--pass-pipeline=builtin.module(nodal-gate-default)' \
+              core/compiler/test/IR/semantic-pipeline-invalid.mlir \
+              >/tmp/nodal-invalid.log 2>&1; then
+            exit 1
+          fi
+          grep -F 'NODAL-VERIFY-CAPABILITY-003' /tmp/nodal-invalid.log
+
+      - name: Publish only after complete validation
+        run: |
+          git config user.name 'pysolvesemi'
+          git config user.email 'pysolvesemi@gmail.com'
+          git add core/compiler/lib/Transforms/Passes.cpp
+          if ! git diff --cached --quiet; then
+            git commit -m 'Increment 21 — remove warning-sensitive reachability move'
+            git push origin HEAD:increment/21-native-semantic-pipeline
+          fi
+
+      - name: Comment failure details
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr=$(gh pr list --head increment/21-native-semantic-pipeline \
+            --state open --json number --jq '.[0].number // empty')
+          if [ -n "${pr}" ]; then
+            {
+              echo 'Increment 21 warning-fix validation failed.'
+              echo
+              echo '```text'
+              if [ -f /tmp/increment21-native.log ]; then
+                grep -E '(error:|fatal error:|CMake Error|FAILED:|undefined reference|NODAL-[A-Z0-9-]+)' \
+                  /tmp/increment21-native.log | tail -120
+              else
+                echo 'Failure occurred before native build logging.'
+              fi
+              echo '```'
+            } >/tmp/comment.md
+            gh pr comment "${pr}" --body-file /tmp/comment.md
+          fi

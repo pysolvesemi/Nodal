@@ -1,0 +1,130 @@
+name: Recover Increment 20 If Needed
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: recover-increment-20-if-needed
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+          path: automation
+
+      - name: Check out Increment 20 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/20-scala-mlir-bridge
+          fetch-depth: 0
+          path: target
+
+      - name: Inspect authoritative dev
+        id: state
+        working-directory: target
+        run: |
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
+          python3 - <<'PY'
+          import json,re,subprocess
+          from pathlib import Path
+          roadmap=subprocess.check_output(['git','show','origin/dev:docs/roadmap/nodal-development-todo.md'],text=True)
+          checked=bool(re.search(r'^- \[[xX]\] \*\*Increment 20 — Scala-to-MLIR bridge\*\*',roadmap,re.M))
+          try:
+              manifest=json.loads(subprocess.check_output(['git','show','origin/dev:tests/compiler/fixtures/increment20/manifest.json'],text=True))
+          except Exception: manifest={}
+          evidence=manifest.get('evidence',{})
+          complete=checked and manifest.get('status')=='validated-scala-mlir-bridge' and all(isinstance(evidence.get(key),int) for key in ('pull_request','dedicated_run','core_ci_run'))
+          Path('/tmp/inc20-state.json').write_text(json.dumps({'checked':checked,'status':manifest.get('status'),'evidence':evidence,'complete':complete},indent=2)+'\n')
+          Path('/tmp/inc20-env').write_text(f"complete={'true' if complete else 'false'}\n")
+          PY
+          cat /tmp/inc20-env >> "$GITHUB_OUTPUT"
+
+      - name: Rebase branch onto current dev and apply bridge metadata patch
+        if: steps.state.outputs.complete != 'true'
+        working-directory: target
+        run: |
+          git rebase origin/dev
+          python3 ../automation/scripts/patch_increment20_kernel.py .
+          python3 scripts/check_increment20.py
+          python3 -m unittest tests.compiler.test_increment20
+          git diff --check
+
+      - name: Install locked toolchains
+        if: steps.state.outputs.complete != 'true'
+        working-directory: target
+        run: |
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+
+      - name: Format and validate recovered Increment 20
+        id: validation
+        if: steps.state.outputs.complete != 'true'
+        working-directory: target
+        run: |
+          set -o pipefail
+          ./mill mill.scalalib.scalafmt/reformatAll
+          ./nodal style fix --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          python3 scripts/check_increment20.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          ./nodal core scala 2>&1 | tee /tmp/inc20-scala.log
+          ./nodal core native --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" 2>&1 | tee /tmp/inc20-native.log
+          NODAL_NODALC="$PWD/out/native/release/bin/nodalc" ./nodal core scala 2>&1 | tee /tmp/inc20-native-roundtrip.log
+          git diff --check
+
+      - name: Publish recovered branch and PR
+        id: publish
+        if: steps.validation.outcome == 'success'
+        working-directory: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 20 — complete Scala-to-MLIR bridge implementation' || true
+          git push --force-with-lease origin HEAD:increment/20-scala-mlir-bridge
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head increment/20-scala-mlir-bridge --state open --json number --jq '.[0].number // empty')
+          if [ -z "$pr" ]; then
+            pr=$(gh pr create --repo "$GITHUB_REPOSITORY" --base dev --head increment/20-scala-mlir-bridge --title 'Increment 20 — Scala-to-MLIR bridge' --body 'Completes deterministic source-correlated Scala construction-state serialization, versioned argv-safe nodalc invocation, process failure/timeout cleanup, native round-trip, mutation tests, and read-only CI. Roadmap closure remains pending accepted evidence.' --json number --jq '.number')
+          fi
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"; echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish recovery status
+        if: always()
+        working-directory: automation
+        env:
+          JOB_STATUS: ${{ job.status }}
+          VALIDATION_OUTCOME: ${{ steps.validation.outcome }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+          PR_NUMBER: ${{ steps.publish.outputs.pr }}
+          FEATURE_SHA: ${{ steps.publish.outputs.sha }}
+        run: |
+          mkdir -p status
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          state=json.loads(Path('/tmp/inc20-state.json').read_text()) if Path('/tmp/inc20-state.json').is_file() else {}
+          payload={'job_status':os.environ.get('JOB_STATUS'),'state':state,'validation_outcome':os.environ.get('VALIDATION_OUTCOME'),'publish_outcome':os.environ.get('PUBLISH_OUTCOME'),'pull_request':int(os.environ['PR_NUMBER']) if os.environ.get('PR_NUMBER','').isdigit() else None,'feature_sha':os.environ.get('FEATURE_SHA') or None}
+          for name in ('inc20-scala.log','inc20-native.log','inc20-native-roundtrip.log'):
+              path=Path('/tmp')/name
+              if path.is_file(): payload[name]=path.read_text(errors='replace').splitlines()[-160:]
+          Path('status/increment20-recovery.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')
+          PY
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add status/increment20-recovery.json
+          git commit -m 'Automation — publish Increment 20 recovery status' || true
+          git push origin HEAD:automation/inc21-inc22-probe-stage

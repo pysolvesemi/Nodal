@@ -148,6 +148,7 @@ module {
       step = 1 : i64,
       upper = 2 : i64
     }> ({
+    ^bb0:
     }) : () -> ()
     "nodal.hardware_loop"() <{
       effect_policy = "ordered",
@@ -157,6 +158,7 @@ module {
       step = 1 : i64,
       upper = 4 : i64
     }> ({
+    ^bb0:
     }) : () -> ()
 
     %net = "nodal.resolved_net"() <{

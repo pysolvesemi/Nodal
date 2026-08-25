@@ -1,0 +1,204 @@
+name: Automation Increment 21 Preclose
+
+on:
+  push:
+    branches:
+      - automation/increment21-preclose
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+jobs:
+  preclose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 130
+
+    steps:
+      - name: Check out Increment 21
+        uses: actions/checkout@v6
+        with:
+          ref: increment/21-native-semantic-pipeline
+          fetch-depth: 0
+
+      - name: Require dedicated and Core CI success on one head
+        id: evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import subprocess
+          import time
+          from pathlib import Path
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          feature = 'increment/21-native-semantic-pipeline'
+
+          def gh(*args: str) -> object:
+              result = subprocess.run(
+                  ['gh', *args],
+                  check=True,
+                  text=True,
+                  capture_output=True,
+              )
+              return json.loads(result.stdout)
+
+          prs = gh(
+              'pr', 'list',
+              '--repo', repo,
+              '--head', feature,
+              '--state', 'open',
+              '--json', 'number,headRefOid,url',
+          )
+          if len(prs) != 1:
+              raise SystemExit(f'expected one open Increment 21 PR, found {len(prs)}')
+          pr = prs[0]
+          head = pr['headRefOid']
+
+          deadline = time.monotonic() + 6900
+          accepted = None
+          while time.monotonic() < deadline:
+              runs = gh(
+                  'run', 'list',
+                  '--repo', repo,
+                  '--commit', head,
+                  '--limit', '100',
+                  '--json',
+                  'databaseId,workflowName,status,conclusion,headSha,createdAt,url',
+              )
+              selected = {}
+              for run in sorted(runs, key=lambda item: item['createdAt'], reverse=True):
+                  name = run['workflowName']
+                  if name in {
+                      'Increment 21 Native Semantic Pipeline',
+                      'Core CI',
+                  } and name not in selected:
+                      selected[name] = run
+              if len(selected) == 2:
+                  values = list(selected.values())
+                  if all(item['status'] == 'completed' for item in values):
+                      failures = [
+                          item for item in values
+                          if item['conclusion'] != 'success'
+                      ]
+                      if failures:
+                          details = ', '.join(
+                              f"{item['workflowName']}={item['conclusion']}"
+                              for item in failures
+                          )
+                          raise SystemExit(
+                              f'Increment 21 accepted-head CI failed: {details}'
+                          )
+                      accepted = selected
+                      break
+              time.sleep(20)
+
+          if accepted is None:
+              raise SystemExit('timed out before Increment 21 CI reached an accepted state')
+
+          dedicated = accepted['Increment 21 Native Semantic Pipeline']
+          core = accepted['Core CI']
+          output = Path(os.environ['GITHUB_OUTPUT'])
+          with output.open('a', encoding='utf-8') as stream:
+              stream.write(f"pull_request={pr['number']}\n")
+              stream.write(f"head={head}\n")
+              stream.write(f"dedicated_run={dedicated['databaseId']}\n")
+              stream.write(f"core_run={core['databaseId']}\n")
+          PY
+
+      - name: Record roadmap and manifest evidence
+        env:
+          PR_NUMBER: ${{ steps.evidence.outputs.pull_request }}
+          DEDICATED_RUN: ${{ steps.evidence.outputs.dedicated_run }}
+          CORE_RUN: ${{ steps.evidence.outputs.core_run }}
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+
+          roadmap_path = Path('docs/roadmap/nodal-development-todo.md')
+          roadmap = roadmap_path.read_text(encoding='utf-8')
+          replacements = (
+              ('**Revision:** 1.24', '**Revision:** 1.25'),
+              (
+                  '- [ ] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**\n'
+                  '  - Parse Nodal MLIR; implement mandatory construction-closure, driver/assignment coverage, latch, combinational-cycle, hierarchy, width/sign/shape/layout/storage, parameter/generate/loop, enum/FSM, clock/reset/CDC/RDC, protocol/pipeline, memory/effect, analog/mixed-signal, and target-capability verifiers; run registered passes with analysis invalidation/reverification; print normalized IR; and expose explicit lit/FileCheck-friendly gate pipelines. Preserve the last accepted state transactionally on failure.\n',
+                  '- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**\n'
+                  '  - Parse Nodal MLIR; implement mandatory construction-closure, driver/assignment coverage, latch, combinational-cycle, hierarchy, width/sign/shape/layout/storage, parameter/generate/loop, enum/FSM, clock/reset/CDC/RDC, protocol/pipeline, memory/effect, analog/mixed-signal, and target-capability verifiers; run registered passes with analysis invalidation/reverification; print normalized IR; and expose explicit lit/FileCheck-friendly gate pipelines. Preserve the last accepted state transactionally on failure.\n'
+                  f"  - Evidence: [`NodalNativeSemanticPipeline-DG-v1.0.md`](../design-gates/NodalNativeSemanticPipeline-DG-v1.0.md), [`increment21-native-semantic-pipeline.md`](../implementation/increment21-native-semantic-pipeline.md), PR [#{os.environ['PR_NUMBER']}](https://github.com/pysolvesemi/Nodal/pull/{os.environ['PR_NUMBER']}), dedicated validation run [{os.environ['DEDICATED_RUN']}](https://github.com/pysolvesemi/Nodal/actions/runs/{os.environ['DEDICATED_RUN']}), and Core CI run [{os.environ['CORE_RUN']}](https://github.com/pysolvesemi/Nodal/actions/runs/{os.environ['CORE_RUN']}).\n"
+              ),
+          )
+          for old, new in replacements:
+              count = roadmap.count(old)
+              if count != 1:
+                  raise SystemExit(f'roadmap anchor count for {old!r} is {count}')
+              roadmap = roadmap.replace(old, new, 1)
+          roadmap_path.write_text(roadmap, encoding='utf-8')
+
+          manifest_path = Path('tests/compiler/fixtures/increment21/manifest.json')
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+          manifest['status'] = 'validated-native-semantic-pipeline'
+          manifest['evidence'] = {
+              'pull_request': int(os.environ['PR_NUMBER']),
+              'dedicated_run': int(os.environ['DEDICATED_RUN']),
+              'core_ci_run': int(os.environ['CORE_RUN']),
+          }
+          manifest_path.write_text(
+              json.dumps(manifest, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+      - name: Validate closed roadmap state
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 scripts/check_increment21.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Publish evidence closure
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.evidence.outputs.pull_request }}
+          HEAD_SHA: ${{ steps.evidence.outputs.head }}
+        run: |
+          git config user.name 'pysolvesemi'
+          git config user.email 'pysolvesemi@gmail.com'
+          git add \
+            docs/roadmap/nodal-development-todo.md \
+            tests/compiler/fixtures/increment21/manifest.json
+          git commit -m 'Increment 21 — record accepted CI evidence'
+          git push origin HEAD:increment/21-native-semantic-pipeline
+
+          gh pr edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body-file - <<BODY
+          ## Summary
+
+          - Add thirteen mandatory native semantic verifier stages covering construction closure, drivers/assignments, latches, combinational cycles, hierarchy, types/shapes/layout/storage, parameters/generate/loops, enums/FSMs, domains/CDC/RDC, protocols/pipelines, memory/effects, analog/mixed-signal topology, and target capabilities.
+          - Register explicit \`nodal-gate-fast\`, \`nodal-gate-default\`, and \`nodal-gate-release\` MLIR pipelines in \`nodalc\`.
+          - Run every gate clone-before-commit, reverify after each pass, and retain the last accepted state transactionally.
+          - Print deterministic normalized IR with pipeline version/profile/stage evidence.
+          - Keep public Scala API v0.3 unchanged; diagnostic remapping and CIRCT/backend lowering remain deferred.
+
+          ## Validation
+
+          - [x] Native pass library, transactional session, normalized pipelines, unit/CTest coverage, structural checker, mutation tests, design gate, implementation note, manifest, and permanent read-only workflow are included.
+          - [x] Dedicated Increment 21 workflow passed on implementation head \`${HEAD_SHA}\`: run ${{ steps.evidence.outputs.dedicated_run }}.
+          - [x] Required Core CI passed on the same implementation head: run ${{ steps.evidence.outputs.core_run }}.
+          - [x] Roadmap revision is 1.25 and Increment 21 is checked with accepted evidence.
+          - [x] Manifest status is \`validated-native-semantic-pipeline\`.
+          - [ ] Final evidence-head CI is green.
+          - [ ] Squash-merge into \`dev\`.
+          BODY

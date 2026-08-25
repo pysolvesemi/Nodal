@@ -1,0 +1,106 @@
+name: Automation Increment 21 Final Evidence v2
+
+on:
+  push:
+    branches:
+      - automation/increment21-final-evidence-v2
+
+permissions:
+  contents: write
+
+concurrency:
+  group: automation-increment21-final-evidence-v2
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out Increment 21 closure branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/21-roadmap-evidence-closure
+          fetch-depth: 0
+
+      - name: Require accepted workflow evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for run in 32884043819 32884043761; do
+            conclusion=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run}" --jq .conclusion)
+            test "${conclusion}" = success
+          done
+
+      - name: Record roadmap and manifest closure
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          from pathlib import Path
+
+          roadmap_path = Path("docs/roadmap/nodal-development-todo.md")
+          roadmap = roadmap_path.read_text(encoding="utf-8")
+
+          revision = "**Revision:** 1.24"
+          if roadmap.count(revision) != 1:
+              raise SystemExit(
+                  f"expected exactly one roadmap revision anchor, found {roadmap.count(revision)}"
+              )
+          roadmap = roadmap.replace(revision, "**Revision:** 1.25", 1)
+
+          unchecked = (
+              "- [ ] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**\n"
+              "  - Parse Nodal MLIR; implement mandatory construction-closure, driver/assignment coverage, latch, combinational-cycle, hierarchy, width/sign/shape/layout/storage, parameter/generate/loop, enum/FSM, clock/reset/CDC/RDC, protocol/pipeline, memory/effect, analog/mixed-signal, and target-capability verifiers; run registered passes with analysis invalidation/reverification; print normalized IR; and expose explicit lit/FileCheck-friendly gate pipelines. Preserve the last accepted state transactionally on failure.\n"
+          )
+          checked = (
+              "- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**\n"
+              "  - Parse Nodal MLIR; implement mandatory construction-closure, driver/assignment coverage, latch, combinational-cycle, hierarchy, width/sign/shape/layout/storage, parameter/generate/loop, enum/FSM, clock/reset/CDC/RDC, protocol/pipeline, memory/effect, analog/mixed-signal, and target-capability verifiers; run registered passes with analysis invalidation/reverification; print normalized IR; and expose explicit lit/FileCheck-friendly gate pipelines. Preserve the last accepted state transactionally on failure.\n"
+              "  - Evidence: [`NodalNativeSemanticPipeline-DG-v1.0.md`](../design-gates/NodalNativeSemanticPipeline-DG-v1.0.md), [`increment21-native-semantic-pipeline.md`](../implementation/increment21-native-semantic-pipeline.md), implementation PR [#50](https://github.com/pysolvesemi/Nodal/pull/50), closure PR [#51](https://github.com/pysolvesemi/Nodal/pull/51), dedicated validation run [32884043819](https://github.com/pysolvesemi/Nodal/actions/runs/32884043819), and Core CI run [32884043761](https://github.com/pysolvesemi/Nodal/actions/runs/32884043761).\n"
+          )
+          if roadmap.count(unchecked) != 1:
+              raise SystemExit(
+                  f"expected exactly one Increment 21 roadmap anchor, found {roadmap.count(unchecked)}"
+              )
+          roadmap = roadmap.replace(unchecked, checked, 1)
+          roadmap_path.write_text(roadmap, encoding="utf-8")
+
+          manifest_path = Path("tests/compiler/fixtures/increment21/manifest.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          manifest["status"] = "validated-native-semantic-pipeline"
+          manifest["closure_state"] = "validated"
+          manifest["closure_pull_request"] = 51
+          manifest["evidence"] = {
+              "pull_request": 51,
+              "dedicated_run": 32884043819,
+              "core_ci_run": 32884043761,
+          }
+          manifest_path.write_text(
+              json.dumps(manifest, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Validate closed Increment 21 state
+        run: |
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 scripts/check_increment21.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Publish accepted evidence closure
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            docs/roadmap/nodal-development-todo.md \
+            tests/compiler/fixtures/increment21/manifest.json
+          git commit -m 'Increment 21 — record accepted CI evidence'
+          git push origin HEAD:increment/21-roadmap-evidence-closure

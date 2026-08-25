@@ -218,6 +218,20 @@ def main() -> None:
 
     path.write_text(text, encoding="utf-8")
 
+    serializer_path = (
+        root / "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala"
+    )
+    serializer = serializer_path.read_text(encoding="utf-8")
+    serializer = replace_once(
+        serializer,
+        re.escape(
+            "attributes: Vector[(String, String)] = Vector.empty,"
+        ),
+        "attributes: Vector[(String, String)],",
+        "strict-warning operation attributes",
+    )
+    serializer_path.write_text(serializer, encoding="utf-8")
+
 
 if __name__ == "__main__":
     main()

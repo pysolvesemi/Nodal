@@ -1,5 +1,6 @@
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/Support/LogicalResult.h"
@@ -7,6 +8,7 @@
 
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 #include <cctype>
 

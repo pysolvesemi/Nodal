@@ -56,8 +56,7 @@ int main() {
   if (!stream || stream.getPayloadType() != shapedType)
     return fail("stream type did not retain its shaped payload");
 
-  mlir::Type resolvedType =
-      parseType("!nodal.resolved<\"open_drain\", !nodal.bits<1>>", &context);
+  mlir::Type resolvedType = parseType("!nodal.resolved<\"open_drain\", !nodal.bits<1>>", &context);
   auto resolved = llvm::dyn_cast<nodal::ResolvedType>(resolvedType);
   if (!resolved || resolved.getDriveMode() != "open_drain")
     return fail("resolved-net type did not retain its drive mode");

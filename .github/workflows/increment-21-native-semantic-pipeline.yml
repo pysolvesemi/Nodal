@@ -136,7 +136,11 @@ jobs:
               echo "semantic failure fixture ${index} was accepted" >&2
               exit 1
             fi
-            grep -F "${codes[${index}]}" "${log}"
+            if ! grep -F "${codes[${index}]}" "${log}"; then
+              echo "semantic failure fixture ${index} did not emit ${codes[${index}]}" >&2
+              cat "${log}" >&2
+              exit 1
+            fi
           done
 
           git diff --check

@@ -1,0 +1,90 @@
+name: Increment 21 Native Verification Pipeline
+
+on:
+  push:
+    branches:
+      - increment/21-native-verifier-pipeline
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - 'core/compiler/**'
+      - 'docs/design-gates/NodalNativeVerificationPipeline-DG-v1.0.md'
+      - 'docs/implementation/increment21-native-verification-pipeline.md'
+      - 'docs/roadmap/nodal-development-todo.md'
+      - 'scripts/check_increment21.py'
+      - 'tests/compiler/**'
+      - '.github/workflows/increment-21-native-verification-pipeline.yml'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'cmake/**'
+      - 'toolchains/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-21-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-verification-pipeline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore locked native download cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
+
+      - name: Install locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate structural and predecessor contracts
+        run: |
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 scripts/check_increment21.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          git diff --check
+
+      - name: Build, lint, and test native compiler
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Prove registered, explicit, negative, and recovery gates
+        run: |
+          python3 core/compiler/test/run_increment21_tests.py \
+            out/native/release/bin/nodalc \
+            core/compiler/test/IR
+          out/native/release/bin/nodalc \
+            --nodal-gate-normalize \
+            core/compiler/test/IR/increment21-valid.mlir \
+            > "${RUNNER_TEMP}/increment21-normalized.mlir"
+          grep -F 'nodal.pipeline.normalized = true' \
+            "${RUNNER_TEMP}/increment21-normalized.mlir"
+          grep -F 'nodal.pipeline.stages' \
+            "${RUNNER_TEMP}/increment21-normalized.mlir"

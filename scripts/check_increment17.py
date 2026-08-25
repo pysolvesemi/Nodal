@@ -71,6 +71,44 @@ def roadmap_revision(roadmap: str) -> tuple[int, ...]:
         return ()
 
 
+def validate_increment18_successor_state(
+    roadmap: str,
+    revision: tuple[int, ...],
+    problems: list[Problem],
+) -> None:
+    unchecked = "- [ ] **Increment 18 — Nodal MLIR dialect skeleton**"
+    checked = unchecked.replace("[ ]", "[x]", 1)
+    entries = re.findall(
+        r"^- \[[ x]\] \*\*Increment 18 — Nodal MLIR dialect skeleton\*\*$",
+        roadmap,
+        re.MULTILINE,
+    )
+    if len(entries) != 1:
+        problems.append(
+            Problem(
+                "NODAL-INC17-036",
+                "roadmap does not retain one Increment 18 successor entry",
+            )
+        )
+        return
+
+    if revision >= (1, 22):
+        if checked not in roadmap:
+            problems.append(
+                Problem(
+                    "NODAL-INC17-036",
+                    "completed successor roadmap does not retain Increment 18 as checked",
+                )
+            )
+    elif unchecked not in roadmap:
+        problems.append(
+            Problem(
+                "NODAL-INC17-036",
+                "pre-Increment-18 roadmap does not leave Increment 18 unchecked",
+            )
+        )
+
+
 def validate_files(root: Path = ROOT) -> list[Problem]:
     problems: list[Problem] = []
     kernel = text(
@@ -368,7 +406,7 @@ def validate_files(root: Path = ROOT) -> list[Problem]:
             for key in ("pull_request", "dedicated_workflow_run", "core_ci_run")
         ):
             problems.append(Problem("NODAL-INC17-032", "final evidence is incomplete"))
-        if checked not in roadmap or revision != (1, 21):
+        if checked not in roadmap or revision < (1, 21):
             problems.append(Problem("NODAL-INC17-033", "final roadmap state is invalid"))
         if isinstance(validation, dict):
             values = tuple(
@@ -384,8 +422,7 @@ def validate_files(root: Path = ROOT) -> list[Problem]:
     else:
         problems.append(Problem("NODAL-INC17-035", f"unknown status: {status!r}"))
 
-    if "- [ ] **Increment 18 — Nodal MLIR dialect skeleton**" not in roadmap:
-        problems.append(Problem("NODAL-INC17-036", "Increment 18 is not left unchecked"))
+    validate_increment18_successor_state(roadmap, revision, problems)
     if len(re.findall(r"^- \[[ x]\] \*\*Increment 17 — ", roadmap, re.MULTILINE)) != 1:
         problems.append(
             Problem("NODAL-INC17-037", "roadmap does not retain one Increment 17 origin graph")

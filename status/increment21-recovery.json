@@ -1,0 +1,13 @@
+{
+  "feature_sha": null,
+  "job_status": "failure",
+  "publish_outcome": "skipped",
+  "pull_request": null,
+  "state": {
+    "increment20_ready": true,
+    "increment20_status": "validated-scala-mlir-bridge",
+    "increment21_complete": false,
+    "increment21_status": "validated-native-semantic-pipeline"
+  },
+  "validation_outcome": "skipped"
+}

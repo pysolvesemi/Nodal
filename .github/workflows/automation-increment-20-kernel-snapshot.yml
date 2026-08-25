@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      NODAL_WORKSPACE: ${{ github.workspace }}/target
+      NODAL_WORKSPACE: ${{ github.workspace }}/source
 
     steps:
       - name: Check out automation source
@@ -27,16 +27,16 @@ jobs:
         with:
           ref: increment/20-scala-mlir-bridge
           fetch-depth: 0
-          path: target
+          path: source
 
       - name: Apply bridge-required snapshot metadata
         run: |
-          python3 automation/scripts/patch_increment20_kernel.py target
+          python3 automation/scripts/patch_increment20_kernel.py source
           python3 - <<'PY'
           from pathlib import Path
 
           path = Path(
-              "target/core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
+              "source/core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
           )
           text = path.read_text(encoding="utf-8")
           old = "throw new AssertionError(failure.toString)"
@@ -47,7 +47,7 @@ jobs:
           PY
 
       - name: Format and compile Scala core
-        working-directory: target
+        working-directory: source
         run: |
           ./mill mill.scalalib.scalafmt/reformatAll
           python3 scripts/check_increment20.py
@@ -55,7 +55,7 @@ jobs:
           git diff --check
 
       - name: Commit validated kernel patch
-        working-directory: target
+        working-directory: source
         run: |
           git config user.name "pysolvesemi"
           git config user.email "pysolvesemi@gmail.com"

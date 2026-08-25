@@ -1,0 +1,255 @@
+name: Automation Increment 20 Candidate Metadata
+
+on:
+  push:
+    branches:
+      - automation/increment-20-kernel-metadata
+
+permissions:
+  contents: write
+
+jobs:
+  patch-candidate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out Increment 20 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/20-scala-mlir-bridge
+          fetch-depth: 0
+
+      - name: Preserve typed literals and domain configuration
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def one(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
+
+          path = Path("core/scala/api/src/nodal/CandidateApi.scala")
+          text = path.read_text(encoding="utf-8")
+
+          text = one(
+              text,
+              "private[nodal] final class KernelExpr[A <: Data](val operands: Vector[Any]) extends Expr[A]",
+              """private[nodal] final case class KernelLiteral(
+              kind: String,
+              value: String,
+              dataType: KernelTypeDescriptor
+          )
+          
+          private[nodal] final class KernelExpr[A <: Data](
+              val operands: Vector[Any],
+              val resultType: Option[KernelTypeDescriptor] = None,
+              val literal: Option[KernelLiteral] = None
+          ) extends Expr[A]""".replace("          ", ""),
+              "KernelExpr metadata",
+          )
+
+          text = one(
+              text,
+              """  CandidateRuntime.declare(
+              this,
+              KernelSignalKind.Parameter,
+              attributes = Vector("default" -> default)
+          )""".replace("          ", ""),
+              """  CandidateRuntime.declare(
+              this,
+              KernelSignalKind.Parameter,
+              dataType = CandidateRuntime.expressionDataType(default),
+              attributes = Vector("default" -> default)
+          )""".replace("          ", ""),
+              "parameter type capture",
+          )
+
+          text = one(
+              text,
+              """final class ClockDomain private[nodal] (
+              val name: String,
+              val reset: Expr[Reset],
+              kind: KernelDomainKind
+          ):""".replace("          ", ""),
+              """final class ClockDomain private[nodal] (
+              val name: String,
+              val reset: Expr[Reset],
+              kind: KernelDomainKind,
+              private[nodal] val edge: Option[ClockEdge] = None,
+              private[nodal] val resetPolicy: Option[ResetPolicy] = None,
+              private[nodal] val resetPolarity: Option[ResetPolarity] = None,
+              private[nodal] val relation: Option[ClockRelation] = None
+          ):""".replace("          ", ""),
+              "clock domain metadata",
+          )
+
+          text = one(
+              text,
+              """    new ClockDomain(
+              name,
+              CandidateRuntime.expr(name, reset),
+              KernelDomainKind.External
+            )""".replace("          ", ""),
+              """    new ClockDomain(
+              name,
+              CandidateRuntime.expr(name, reset),
+              KernelDomainKind.External,
+              edge = Some(edge),
+              resetPolicy = Some(reset),
+              resetPolarity = Some(resetPolarity)
+            )""".replace("          ", ""),
+              "external domain metadata",
+          )
+
+          text = one(
+              text,
+              "    new ClockDomain(name, reset, KernelDomainKind.Bound)",
+              """    new ClockDomain(
+              name,
+              reset,
+              KernelDomainKind.Bound,
+              edge = Some(edge),
+              resetPolicy = Some(policy),
+              resetPolarity = Some(polarity)
+            )""".replace("          ", ""),
+              "bound domain metadata",
+          )
+
+          text = one(
+              text,
+              """  def generated(
+              name: String,
+              clock: Expr[Clock],
+              from: ClockDomain,
+              relation: ClockRelation,
+              reset: Expr[Reset]
+            ): ClockDomain =
+              CandidateRuntime.statement(clock, from, relation)
+              new ClockDomain(name, reset, KernelDomainKind.Generated)""".replace("          ", ""),
+              """  def generated(
+              name: String,
+              clock: Expr[Clock],
+              from: ClockDomain,
+              relation: ClockRelation,
+              reset: Expr[Reset]
+            ): ClockDomain =
+              CandidateRuntime.statement(clock, from, relation)
+              new ClockDomain(
+                name,
+                reset,
+                KernelDomainKind.Generated,
+                relation = Some(relation)
+              )""".replace("          ", ""),
+              "generated domain metadata",
+          )
+
+          text = one(
+              text,
+              """  def integer: Expr[Integer] = CandidateRuntime.expr(value)
+            def U(width: Int): Expr[UInt] = CandidateRuntime.expr(value, width)
+            def U(width: Expr[Integer]): Expr[UInt] = CandidateRuntime.expr(value, width)""".replace("          ", ""),
+              """  def integer: Expr[Integer] = CandidateRuntime.literalInteger(value)
+            def U(width: Int): Expr[UInt] = CandidateRuntime.literalUInt(value, width)
+            def U(width: Expr[Integer]): Expr[UInt] = CandidateRuntime.expr(value, width)""".replace("          ", ""),
+              "integer literals",
+          )
+
+          text = one(
+              text,
+              """extension (value: Boolean)
+            def B: Expr[Bool] = CandidateRuntime.expr(value)
+          
+          private[nodal] def realLiteral(value: Double, unit: String): Expr[Real] =
+            CandidateRuntime.expr(value, unit)""".replace("          ", ""),
+              """extension (value: Boolean)
+            def B: Expr[Bool] = CandidateRuntime.literalBool(value)
+          
+          private[nodal] def realLiteral(value: Double, unit: String): Expr[Real] =
+            CandidateRuntime.literalReal(value, unit)""".replace("          ", ""),
+              "boolean and real literals",
+          )
+
+          text = one(
+              text,
+              """  def expr[A <: Data](values: Any*): Expr[A] =
+              val expression = new KernelExpr[A](values.toVector)
+              ConstructionKernel.expression(expression)
+              expression""".replace("          ", ""),
+              """  private def dataTypeFromDescriptor(
+              descriptor: KernelTypeDescriptor
+            ): DataType[? <: Data] = descriptor.kind match
+              case "Real" => Real
+              case "Integer" => Integer
+              case "Bool" => Bool
+              case _ => new KernelDataType[Data](descriptor)
+          
+            def expressionDataType(value: Expr[?]): Option[DataType[? <: Data]] = value match
+              case expression: KernelExpr[?] =>
+                expression.resultType.map(dataTypeFromDescriptor)
+              case _ => None
+          
+            private def literal[A <: Data](
+              descriptor: KernelTypeDescriptor,
+              kind: String,
+              value: String,
+              operands: Vector[Any]
+            ): Expr[A] =
+              val expression = new KernelExpr[A](
+                operands,
+                resultType = Some(descriptor),
+                literal = Some(KernelLiteral(kind, value, descriptor))
+              )
+              ConstructionKernel.expression(expression)
+              expression
+          
+            def literalInteger(value: Int): Expr[Integer] =
+              literal(
+                KernelTypeDescriptor("Integer"),
+                "integer",
+                value.toString,
+                Vector(value)
+              )
+          
+            def literalUInt(value: Int, width: Int): Expr[UInt] =
+              literal(
+                KernelTypeDescriptor("UInt", Vector(width)),
+                "integer",
+                value.toString,
+                Vector(value, width)
+              )
+          
+            def literalBool(value: Boolean): Expr[Bool] =
+              literal(
+                KernelTypeDescriptor("Bool"),
+                "boolean",
+                value.toString,
+                Vector(value)
+              )
+          
+            def literalReal(value: Double, unit: String): Expr[Real] =
+              literal(
+                KernelTypeDescriptor("Real"),
+                "real",
+                java.lang.Double.toString(value),
+                Vector(value, unit)
+              )
+          
+            def expr[A <: Data](values: Any*): Expr[A] =
+              val expression = new KernelExpr[A](values.toVector)
+              ConstructionKernel.expression(expression)
+              expression""".replace("          ", ""),
+              "literal runtime",
+          )
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          ./mill mill.scalalib.scalafmt/reformatAll
+          ./nodal core scala
+
+          git config user.name "pysolvesemi"
+          git config user.email "pysolvesemi@gmail.com"
+          git add core/scala/api/src/nodal/CandidateApi.scala
+          git commit -m "Increment 20 — preserve typed literal and domain metadata"
+          git push origin HEAD:increment/20-scala-mlir-bridge

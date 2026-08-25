@@ -12,6 +12,8 @@ jobs:
   patch-kernel:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      NODAL_WORKSPACE: ${{ github.workspace }}/target
 
     steps:
       - name: Check out automation source

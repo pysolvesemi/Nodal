@@ -1,4 +1,4 @@
-name: Automation Increment 20 Kernel Snapshot
+name: Automation Increment 20 Package Ownership
 
 on:
   push:
@@ -9,19 +9,13 @@ permissions:
   contents: write
 
 jobs:
-  patch-kernel:
+  patch-package:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       NODAL_WORKSPACE: ${{ github.workspace }}/source
 
     steps:
-      - name: Check out automation source
-        uses: actions/checkout@v6
-        with:
-          ref: automation/increment-20-complete
-          path: automation
-
       - name: Check out Increment 20 branch
         uses: actions/checkout@v6
         with:
@@ -29,41 +23,51 @@ jobs:
           fetch-depth: 0
           path: source
 
-      - name: Apply bridge-required snapshot metadata
+      - name: Align bridge-owned package namespace
         run: |
-          python3 automation/scripts/patch_increment20_kernel.py source
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path(
-              "source/core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
-          )
-          text = path.read_text(encoding="utf-8")
-          old = "throw new AssertionError(failure.toString)"
-          new = "throw new java.lang.AssertionError(failure.toString)"
-          if text.count(old) != 1:
-              raise SystemExit("expected one ambiguous AssertionError construction")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          edits = {
+              Path("source/core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala"): (
+                  "package nodal.bridge",
+                  "package nodal.internal.bridge",
+              ),
+              Path("source/core/scala/bridge/src/nodal/bridge/NativeCompilerClient.scala"): (
+                  "package nodal.bridge",
+                  "package nodal.internal.bridge",
+              ),
+              Path(
+                  "source/core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
+              ): (
+                  "import nodal.bridge.*",
+                  "import nodal.internal.bridge.*",
+              ),
+          }
+          for path, (old, new) in edits.items():
+              text = path.read_text(encoding="utf-8")
+              if text.count(old) != 1:
+                  raise SystemExit(f"{path}: expected one {old!r}")
+              path.write_text(text.replace(old, new, 1), encoding="utf-8")
           PY
 
-      - name: Format and compile Scala core
+      - name: Validate package policy and Scala core
         working-directory: source
         run: |
           ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_package_visibility.py
           python3 scripts/check_increment20.py
           ./nodal core scala
           git diff --check
 
-      - name: Commit validated kernel patch
+      - name: Commit validated package ownership
         working-directory: source
         run: |
           git config user.name "pysolvesemi"
           git config user.email "pysolvesemi@gmail.com"
           git add \
-            core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
-            core/scala/api/src/nodal/CandidateApi.scala \
             core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala \
             core/scala/bridge/src/nodal/bridge/NativeCompilerClient.scala \
             core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala
-          git commit -m "Increment 20 — preserve bridge construction metadata"
+          git commit -m "Increment 20 — align bridge package ownership"
           git push origin HEAD:increment/20-scala-mlir-bridge

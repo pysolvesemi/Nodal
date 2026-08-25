@@ -10,7 +10,7 @@
   ],
   "mandatory_default_stage_count": 13,
   "transaction": "clone-before-commit",
-  "closure_state": "contracts-green-awaiting-accepted-ci",
+  "closure_state": "native-repair-validated-awaiting-accepted-ci",
   "evidence": {
     "pull_request": null,
     "dedicated_run": null,

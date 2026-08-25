@@ -105,7 +105,7 @@ class NativeCompilerBootstrapCheckTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         path = root / "core/compiler/tools/nodalc/nodalc.cpp"
         path.write_text(
-            path.read_text(encoding="utf-8") + "\n// NodalDialect is deferred\n",
+            path.read_text(encoding="utf-8") + "\n// nodal.module remains deferred\n",
             encoding="utf-8",
         )
         self.assertIn("NODAL-COMPILER-014", self.problem_codes(root))

@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "increment": 18,
+  "status": "validated-dialect-skeleton",
+  "public_api": "0.3",
+  "dialect": "nodal",
+  "placeholder": "nodal.placeholder",
+  "scope": [
+    "out-of-tree dialect registration",
+    "TableGen declarations and generated documentation",
+    "generic and custom parser/printer round-trip",
+    "verified semantics-free placeholder operation",
+    "native compiler and unit-test integration"
+  ],
+  "deferred": [
+    "hardware module, port, parameter, instance, type, and domain operations",
+    "Scala construction-model lowering",
+    "CIRCT semantic conversion",
+    "scheduling and HDL emission"
+  ],
+  "evidence": {
+    "pull_request": 45,
+    "dedicated_run": 32767361722,
+    "core_ci_run": 32767361651
+  }
+}

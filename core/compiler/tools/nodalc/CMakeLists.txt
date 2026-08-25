@@ -10,6 +10,7 @@ llvm_update_compile_flags(nodalc)
 
 target_link_libraries(nodalc
   PRIVATE
+    NodalDialect
     NodalSupport
     CIRCTHW
     CIRCTSupport

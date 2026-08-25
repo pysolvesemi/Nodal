@@ -2,6 +2,7 @@
 #include "circt/Support/Version.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
+#include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Support/Version.h"
 
 #include "llvm/Support/CommandLine.h"
@@ -12,7 +13,7 @@ int main(int argc, char **argv) {
   llvm::setBugReportMsg("PLEASE submit a Nodal issue and include the crash backtrace.\n");
 
   mlir::DialectRegistry registry;
-  registry.insert<circt::hw::HWDialect>();
+  registry.insert<circt::hw::HWDialect, nodal::NodalDialect>();
 
   llvm::cl::AddExtraVersionPrinter([](llvm::raw_ostream &os) {
     nodal::printVersion(os);

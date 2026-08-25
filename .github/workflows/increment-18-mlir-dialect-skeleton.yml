@@ -1,0 +1,88 @@
+name: Increment 18 MLIR Dialect Skeleton
+
+on:
+  push:
+    branches:
+      - increment/18-nodal-mlir-dialect-skeleton
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-18-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dialect-skeleton:
+    name: increment-18/mlir-dialect-skeleton
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore locked native download cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
+
+      - name: Install locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate contracts and Increment 18 structure
+        run: |
+          python3 scripts/check_native_compiler_bootstrap.py
+          python3 scripts/check_increment18.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          git diff --check
+
+      - name: Build, lint, and test the native compiler
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Prove parser, printer, and verifier behavior
+        run: |
+          compiler=out/native/release/bin/nodalc
+          "${compiler}" \
+            core/compiler/test/IR/placeholder.mlir \
+            | tee /tmp/nodal-placeholder.mlir
+          grep -F 'nodal.placeholder "bootstrap"' \
+            /tmp/nodal-placeholder.mlir
+
+          "${compiler}" \
+            --mlir-print-op-generic \
+            core/compiler/test/IR/placeholder.mlir \
+            | tee /tmp/nodal-placeholder-generic.mlir
+          grep -F '"nodal.placeholder"' \
+            /tmp/nodal-placeholder-generic.mlir
+
+          if "${compiler}" \
+              core/compiler/test/IR/placeholder-invalid.mlir \
+              >/tmp/nodal-placeholder-invalid.log 2>&1; then
+            echo 'empty placeholder label was accepted' >&2
+            exit 1
+          fi
+          grep -F "requires a non-empty 'label' attribute" \
+            /tmp/nodal-placeholder-invalid.log

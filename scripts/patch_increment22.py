@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 
@@ -12,6 +13,14 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     if count != 1:
         raise SystemExit(f"{label}: expected one match, found {count}")
     return text.replace(old, new, 1)
+
+
+def qualify_builtin_modules(text: str) -> str:
+    # Inside namespace nodal, an unqualified ModuleOp names the Nodal dialect
+    # operation. Every transaction and pass in these files owns the builtin
+    # MLIR module, so make that type explicit and use its Region-valued body API.
+    text = re.sub(r"(?<![:A-Za-z0-9_])ModuleOp(?![A-Za-z0-9_])", "mlir::ModuleOp", text)
+    return text.replace(".getBody()->getOperations()", ".getBody().getOperations()")
 
 
 def main() -> None:
@@ -28,6 +37,17 @@ def main() -> None:
         '#include "mlir/IR/Location.h"',
         "pinned MLIR location header",
     )
+    diagnostic = replace_once(
+        diagnostic,
+        '''FileLineColLoc findFileLocation(Location location) {
+  if (!location)
+    return {};
+''',
+        '''FileLineColLoc findFileLocation(Location location) {
+''',
+        "non-null MLIR location contract",
+    )
+    diagnostic = qualify_builtin_modules(diagnostic)
     diagnostic_path.write_text(diagnostic, encoding="utf-8")
 
     passes_path = root / "core/compiler/lib/Transforms/Passes.cpp"
@@ -64,6 +84,7 @@ def main() -> None:
 ''',
         "cross-layer pass insertion",
     )
+    passes = qualify_builtin_modules(passes)
     passes_path.write_text(passes, encoding="utf-8")
 
     bridge_path = root / "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala"

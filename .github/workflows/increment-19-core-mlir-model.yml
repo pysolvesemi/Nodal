@@ -83,7 +83,7 @@ jobs:
             [width]='width must be greater than zero'
             [net]='driver and value types must match the resolved net'
             [enum]='duplicates an existing enum value'
-            [fsm]='references an unknown destination state'
+            [fsm]='requires exactly one initial FSM state'
           )
           for fixture in width net enum fsm; do
             log="/tmp/core-model-invalid-${fixture}.log"

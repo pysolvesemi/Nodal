@@ -1,0 +1,1 @@
+User-authorized controller retrigger after latest-head validation commits.

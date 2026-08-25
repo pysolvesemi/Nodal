@@ -65,6 +65,33 @@ foreach(_fixture IN ITEMS width net enum fsm)
   )
 endforeach()
 
+foreach(_profile IN ITEMS fast default release)
+  add_test(
+    NAME nodal.native.semantic-pipeline-${_profile}
+    COMMAND nodalc
+      "--pass-pipeline=builtin.module(nodal-gate-${_profile})"
+      "${CMAKE_CURRENT_SOURCE_DIR}/IR/semantic-pipeline-valid.mlir"
+  )
+  set_tests_properties(
+    nodal.native.semantic-pipeline-${_profile}
+    PROPERTIES
+      PASS_REGULAR_EXPRESSION "nodal[.]pipeline[.]normalized"
+  )
+endforeach()
+
+add_test(
+  NAME nodal.native.semantic-pipeline-rejects-invalid-stages
+  COMMAND nodalc
+    --split-input-file
+    "--pass-pipeline=builtin.module(nodal-gate-default)"
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/semantic-pipeline-invalid.mlir"
+)
+set_tests_properties(
+  nodal.native.semantic-pipeline-rejects-invalid-stages
+  PROPERTIES
+    WILL_FAIL TRUE
+)
+
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
   DEPENDS
@@ -72,6 +99,7 @@ add_custom_target(check-nodal-native
     nodal-native-unit-tests
     nodal-dialect-unit-tests
     nodal-core-model-unit-tests
+    nodal-semantic-pipeline-unit-tests
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
   USES_TERMINAL
 )

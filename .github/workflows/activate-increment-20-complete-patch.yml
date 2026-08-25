@@ -1,0 +1,47 @@
+name: Activate Increment 20 Complete Patch
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  activate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+          fetch-depth: 0
+      - name: Select complete Increment 20 patch in active chains
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for relative in (
+              '.github/workflows/chain-and-close-increment-20.yml',
+              '.github/workflows/recover-increment-20-if-needed.yml',
+              '.github/workflows/repair-increment-20-complete-tree.yml',
+          ):
+              path=Path(relative)
+              if not path.is_file(): continue
+              text=path.read_text(encoding='utf-8')
+              text=text.replace('patch_increment20_kernel.py','patch_increment20_complete.py')
+              path.write_text(text,encoding='utf-8')
+          PY
+          git diff --check
+      - name: Publish complete patch activation
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/chain-and-close-increment-20.yml \
+            .github/workflows/recover-increment-20-if-needed.yml \
+            .github/workflows/repair-increment-20-complete-tree.yml
+          git commit -m 'Automation — select complete Increment 20 patch'
+          git push origin HEAD:automation/inc21-inc22-probe-stage

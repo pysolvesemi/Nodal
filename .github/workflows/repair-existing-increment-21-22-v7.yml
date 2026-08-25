@@ -1,0 +1,135 @@
+name: Repair Existing Increment 21 and 22 V7
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-existing-increment-21-22-v7-${{ matrix.increment }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        increment: [21, 22]
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+          path: automation
+
+      - name: Wait for feature branch
+        id: branch
+        run: |
+          if [ '${{ matrix.increment }}' = 21 ]; then
+            name=increment/21-native-verification-pipeline
+          else
+            name=increment/22-circt-conversion-legalizer
+          fi
+          exists=false
+          for attempt in $(seq 1 90); do
+            if git ls-remote --exit-code https://github.com/${GITHUB_REPOSITORY}.git "refs/heads/${name}" >/dev/null 2>&1; then
+              exists=true
+              break
+            fi
+            sleep 20
+          done
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "exists=$exists" >> "$GITHUB_OUTPUT"
+
+      - name: Check out feature branch
+        if: steps.branch.outputs.exists == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.branch.outputs.name }}
+          fetch-depth: 0
+          path: target
+
+      - name: Skip closed evidence heads and apply v7 materializer
+        if: steps.branch.outputs.exists == 'true'
+        id: materialize
+        working-directory: target
+        run: |
+          status=$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          number=${{ matrix.increment }}
+          path=Path(f'tests/compiler/fixtures/increment{number}/manifest.json')
+          if not path.is_file(): print('missing')
+          else: print(json.loads(path.read_text()).get('status','missing'))
+          PY
+          )
+          case "$status" in
+            validated-*)
+              echo 'changed=false' >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          if [ '${{ matrix.increment }}' = 21 ]; then
+            python3 ../automation/scripts/materialize_increment21_v7.py .
+            python3 scripts/check_increment21.py
+          else
+            python3 ../automation/scripts/materialize_increment22_v7.py .
+            python3 scripts/check_increment22.py
+          fi
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+          git diff --check
+
+      - name: Install locked toolchains
+        if: steps.materialize.outputs.changed == 'true'
+        working-directory: target
+        run: |
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+
+      - name: Format and validate repaired branch
+        if: steps.materialize.outputs.changed == 'true'
+        working-directory: target
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          ./nodal style fix --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          if [ '${{ matrix.increment }}' = 21 ]; then
+            compiler=out/native/release/bin/nodalc
+            "${compiler}" --nodal-transactional-gate \
+              core/compiler/test/IR/native-gate-valid.mlir \
+              | grep -F 'nodal.verification.accepted'
+          else
+            compiler=out/native/release/bin/nodalc
+            "${compiler}" --nodal-circt-legalize \
+              core/compiler/test/IR/circt-legalizer.mlir \
+              | grep -F 'hw.constant'
+          fi
+          git diff --check
+
+      - name: Publish repaired branch
+        if: steps.materialize.outputs.changed == 'true'
+        working-directory: target
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Repair Increment ${{ matrix.increment }} to structural v7 materializer'
+          for attempt in 1 2 3; do
+            if git push origin HEAD:${{ steps.branch.outputs.name }}; then exit 0; fi
+            git fetch origin ${{ steps.branch.outputs.name }}
+            git rebase origin/${{ steps.branch.outputs.name }}
+          done
+          exit 1

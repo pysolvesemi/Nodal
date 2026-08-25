@@ -1,4 +1,4 @@
-name: Automation Increment 20 Package Ownership
+name: Automation Increment 20 Evidence Closure
 
 on:
   push:
@@ -9,11 +9,9 @@ permissions:
   contents: write
 
 jobs:
-  patch-package:
+  close-evidence:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      NODAL_WORKSPACE: ${{ github.workspace }}/source
+    timeout-minutes: 30
 
     steps:
       - name: Check out Increment 20 branch
@@ -21,53 +19,66 @@ jobs:
         with:
           ref: increment/20-scala-mlir-bridge
           fetch-depth: 0
-          path: source
 
-      - name: Align bridge-owned package namespace
+      - name: Record accepted evidence and close roadmap item
         run: |
           python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
           from pathlib import Path
 
-          edits = {
-              Path("source/core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala"): (
-                  "package nodal.bridge",
-                  "package nodal.internal.bridge",
-              ),
-              Path("source/core/scala/bridge/src/nodal/bridge/NativeCompilerClient.scala"): (
-                  "package nodal.bridge",
-                  "package nodal.internal.bridge",
-              ),
-              Path(
-                  "source/core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
-              ): (
-                  "import nodal.bridge.*",
-                  "import nodal.internal.bridge.*",
-              ),
+          manifest_path = Path("tests/compiler/fixtures/increment20/manifest.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          if manifest.get("status") != "implemented-awaiting-evidence":
+              raise SystemExit(f"unexpected Increment 20 status: {manifest.get('status')!r}")
+          manifest["status"] = "validated-scala-mlir-bridge"
+          manifest["evidence"] = {
+              "pull_request": 49,
+              "dedicated_run": 32850253855,
+              "core_ci_run": 32850253829,
           }
-          for path, (old, new) in edits.items():
-              text = path.read_text(encoding="utf-8")
-              if text.count(old) != 1:
-                  raise SystemExit(f"{path}: expected one {old!r}")
-              path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          manifest_path.write_text(
+              json.dumps(manifest, indent=2) + "\n",
+              encoding="utf-8",
+          )
+
+          roadmap_path = Path("docs/roadmap/nodal-development-todo.md")
+          roadmap = roadmap_path.read_text(encoding="utf-8")
+          replacements = (
+              ("**Revision:** 1.23", "**Revision:** 1.24"),
+              (
+                  "- [ ] **Increment 20 — Scala-to-MLIR bridge**",
+                  "- [x] **Increment 20 — Scala-to-MLIR bridge**",
+              ),
+          )
+          for old, new in replacements:
+              if roadmap.count(old) != 1:
+                  raise SystemExit(f"expected one roadmap fragment: {old!r}")
+              roadmap = roadmap.replace(old, new, 1)
+          if (
+              "- [ ] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**"
+              not in roadmap
+          ):
+              raise SystemExit("Increment 21 must remain the next unchecked roadmap item")
+          roadmap_path.write_text(roadmap, encoding="utf-8")
           PY
 
-      - name: Validate package policy and Scala core
-        working-directory: source
+      - name: Validate closed state
         run: |
-          ./mill mill.scalalib.scalafmt/reformatAll
-          python3 scripts/check_package_visibility.py
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
           python3 scripts/check_increment20.py
-          ./nodal core scala
+          python3 tests/compiler/test_increment20.py
+          python3 scripts/check_markdown.py
           git diff --check
 
-      - name: Commit validated package ownership
-        working-directory: source
+      - name: Commit validated evidence closure
         run: |
           git config user.name "pysolvesemi"
           git config user.email "pysolvesemi@gmail.com"
           git add \
-            core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala \
-            core/scala/bridge/src/nodal/bridge/NativeCompilerClient.scala \
-            core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala
-          git commit -m "Increment 20 — align bridge package ownership"
+            tests/compiler/fixtures/increment20/manifest.json \
+            docs/roadmap/nodal-development-todo.md
+          git commit -m "Increment 20 — close roadmap with accepted evidence"
           git push origin HEAD:increment/20-scala-mlir-bridge

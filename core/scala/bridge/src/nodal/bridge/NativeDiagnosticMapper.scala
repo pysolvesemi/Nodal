@@ -4,7 +4,8 @@ private[nodal] object NativeDiagnosticMapper:
   private val StableCode = raw"(NODAL-[A-Z0-9-]+):\s*([^\n]*)".r
   private val SemanticPath = raw"\[semantic-path=([^\]]+)\]".r
   private val HierarchyPath = raw"\[hierarchy-path=([^\]]+)\]".r
-  private val IndexPath = raw"\[index-path=([^\]]+)\]".r
+  private val BracketedIndexPath = raw"\[index-path=(\[[^\]]*\])\]".r
+  private val PlainIndexPath = raw"\[index-path=([^\]]+)\]".r
   private val SourceRange = raw"\[source-range=([^\]]+)\]".r
 
   def classify(standardError: String, exitCode: Int): BridgeDiagnostic =
@@ -20,7 +21,8 @@ private[nodal] object NativeDiagnosticMapper:
       message = message,
       semanticPath = capture(SemanticPath, normalized),
       hierarchyPath = capture(HierarchyPath, normalized),
-      indexPath = capture(IndexPath, normalized),
+      indexPath = capture(BracketedIndexPath, normalized)
+        .orElse(capture(PlainIndexPath, normalized)),
       sourceRange = capture(SourceRange, normalized)
     )
 

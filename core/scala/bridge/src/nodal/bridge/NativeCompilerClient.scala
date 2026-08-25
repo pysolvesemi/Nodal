@@ -1,4 +1,4 @@
-package nodal.bridge
+package nodal.internal.bridge
 
 import java.io.ByteArrayOutputStream
 import java.io.InputStream

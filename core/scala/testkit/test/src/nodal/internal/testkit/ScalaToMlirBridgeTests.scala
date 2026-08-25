@@ -1,7 +1,7 @@
 package nodal.internal.testkit
 
 import nodal.*
-import nodal.bridge.*
+import nodal.internal.bridge.*
 
 import java.nio.file.Files
 import java.nio.file.Path

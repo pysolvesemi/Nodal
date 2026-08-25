@@ -1,4 +1,4 @@
-package nodal.bridge
+package nodal.internal.bridge
 
 import nodal.*
 

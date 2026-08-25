@@ -1,0 +1,80 @@
+name: Automation Increment 22 Patch
+
+on:
+  push:
+    branches:
+      - automation/increment-22-patch
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/increment-22-patch
+          path: automation
+
+      - name: Check out Increment 22 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/22-cross-layer-diagnostic-mapping
+          fetch-depth: 0
+          path: target
+
+      - name: Apply focused source integrations
+        run: python3 automation/scripts/patch_increment22.py target
+
+      - name: Restore native download cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('target/toolchains/lock.json', 'target/toolchains/checksums/*.sha256') }}
+
+      - name: Install locked native and lint toolchains
+        working-directory: target
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Apply canonical formatting
+        working-directory: target
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          find \
+            core/compiler/include/nodal/Diagnostics \
+            core/compiler/lib/Diagnostics \
+            core/compiler/lib/Transforms \
+            core/compiler/tools/nodalc \
+            -type f \( -name '*.h' -o -name '*.cpp' \) \
+            -print0 | xargs -0 \
+            "${RUNNER_TEMP}/nodal-lint-toolchain/bin/clang-format" -i
+          git diff --check
+
+      - name: Compile and test Scala and native core
+        working-directory: target
+        run: |
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Publish validated integrations
+        working-directory: target
+        run: |
+          git config user.name "pysolvesemi"
+          git config user.email "pysolvesemi@gmail.com"
+          git add \
+            core/compiler/lib/Transforms/Passes.cpp \
+            core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala \
+            core/scala/bridge/src/nodal/bridge/NativeCompilerClient.scala
+          git commit -m "Increment 22 — integrate mapped diagnostics across native and Scala layers"
+          git push origin HEAD:increment/22-cross-layer-diagnostic-mapping

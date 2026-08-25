@@ -1,0 +1,165 @@
+name: Materialize Increment 22 After Precondition
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: materialize-increment-22-after-precondition
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+          path: automation
+
+      - name: Check out authoritative dev
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+          path: target
+
+      - name: Verify Increment 21 closure and exact Increment 22 roadmap title
+        working-directory: target
+        run: |
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          roadmap = Path('docs/roadmap/nodal-development-todo.md').read_text(encoding='utf-8')
+          required21 = '- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**'
+          required22 = '- [ ] **Increment 22 — CIRCT conversion strategy and legalizer skeleton**'
+          manifest = Path('tests/compiler/fixtures/increment21/manifest.json')
+          if required21 not in roadmap:
+              raise SystemExit('Increment 21 roadmap closure is not present on authoritative dev')
+          if required22 not in roadmap:
+              match = re.search(r'^- \[[ xX]\] \*\*Increment 22 — ([^*]+)\*\*', roadmap, re.M)
+              title = match.group(1).strip() if match else '<missing>'
+              raise SystemExit(f'Increment 22 roadmap title mismatch: {title}')
+          if not manifest.is_file():
+              raise SystemExit('Increment 21 evidence manifest is missing')
+          payload = json.loads(manifest.read_text(encoding='utf-8'))
+          if payload.get('status') not in {
+              'validated-native-verification-pipeline',
+              'validated-staged-semantic-pipeline',
+          }:
+              raise SystemExit(f"Increment 21 manifest is not validated: {payload.get('status')!r}")
+          evidence = payload.get('evidence', {})
+          for key in ('pull_request', 'dedicated_run', 'core_ci_run'):
+              if not isinstance(evidence.get(key), int):
+                  raise SystemExit(f'Increment 21 evidence field is missing: {key}')
+          PY
+
+      - name: Create clean Increment 22 branch and materialize implementation
+        working-directory: target
+        run: |
+          git checkout -B increment/22-circt-conversion-legalizer origin/dev
+          python3 ../automation/scripts/materialize_increment22.py .
+          python3 scripts/check_increment22.py
+          python3 -m unittest tests.compiler.test_increment22
+          git diff --check
+
+      - name: Install locked lint and native toolchains
+        working-directory: target
+        run: |
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal bootstrap --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+
+      - name: Format, compile, and test the legalizer skeleton
+        working-directory: target
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          ./nodal style fix \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          python3 scripts/check_increment22.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Prove legalizer behavior before publication
+        working-directory: target
+        run: |
+          compiler=out/native/release/bin/nodalc
+          "${compiler}" --nodal-circt-legalize \
+            core/compiler/test/IR/circt-legalizer.mlir \
+            | tee /tmp/inc22-legalized.mlir
+          grep -F 'hw.constant' /tmp/inc22-legalized.mlir
+          grep -F 'nodal.circt.strategy' /tmp/inc22-legalized.mlir
+          "${compiler}" \
+            "--pass-pipeline=builtin.module(nodal-circt-preflight,nodal-circt-legalize)" \
+            core/compiler/test/IR/circt-legalizer.mlir \
+            | grep -F 'hw.constant'
+          if "${compiler}" --nodal-circt-legalize \
+              core/compiler/test/IR/circt-legalizer-invalid.mlir \
+              >/tmp/inc22-invalid.log 2>&1; then
+            echo 'invalid legalizer fixture was accepted' >&2
+            exit 1
+          fi
+          grep -F 'NODAL-CIRCT-022-002' /tmp/inc22-invalid.log
+
+      - name: Publish Increment 22 branch
+        working-directory: target
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 22 — add CIRCT conversion strategy and legalizer skeleton'
+          git push --force-with-lease origin HEAD:increment/22-circt-conversion-legalizer
+
+      - name: Open Increment 22 pull request
+        working-directory: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh pr list --repo "$GITHUB_REPOSITORY" \
+            --head increment/22-circt-conversion-legalizer --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -z "$existing" ]; then
+            gh pr create --repo "$GITHUB_REPOSITORY" \
+              --base dev \
+              --head increment/22-circt-conversion-legalizer \
+              --title 'Increment 22 — CIRCT conversion strategy and legalizer skeleton' \
+              --body-file - <<'BODY'
+          ## Summary
+
+          - Add the first registered Nodal-to-CIRCT conversion library and textual pass pipeline.
+          - Preflight the supported conversion subset and retain all deferred Nodal operations explicitly.
+          - Transactionally convert finite-width `nodal.constant` operations to CIRCT `hw.constant` while preserving width and signedness intent.
+          - Publish deterministic conversion strategy/profile metadata only after successful conversion.
+          - Keep public Scala API v0.3 and verified Nodal MLIR semantics unchanged.
+
+          ## Validation
+
+          - [x] Increment 21 roadmap and manifest closure verified on authoritative `dev` before branch creation.
+          - [x] Direct pass and textual pass-pipeline paths validated.
+          - [x] Supported finite-width constant conversion validated.
+          - [x] Unsupported type and strict deferred-operation rejection validated.
+          - [x] Native unit, CTest, Scala, formatting, lint, checker, and mutation tests passed before publication.
+          - [ ] Dedicated Increment 22 and required Core CI evidence will be recorded after PR validation.
+
+          ## Deferred
+
+          Module/port/hierarchy/domain/interface/FSM/memory/analog/backend lowering remains assigned to later roadmap increments. No approximation or silent erasure is introduced.
+          BODY
+          fi

@@ -1,0 +1,199 @@
+name: Orchestrate Increment 22 With Status
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: orchestrate-increment-22-with-status
+  cancel-in-progress: false
+
+jobs:
+  orchestrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+          path: automation
+
+      - name: Check out authoritative dev
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+          path: target
+
+      - name: Evaluate precondition
+        id: precondition
+        working-directory: target
+        run: |
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          roadmap = Path('docs/roadmap/nodal-development-todo.md').read_text(encoding='utf-8')
+          inc21 = re.search(r'^- \[([ xX])\] \*\*Increment 21 — ([^*]+)\*\*', roadmap, re.M)
+          inc22 = re.search(r'^- \[([ xX])\] \*\*Increment 22 — ([^*]+)\*\*', roadmap, re.M)
+          revision = re.search(r'^\*\*Revision:\*\* ([^\n]+)$', roadmap, re.M)
+          manifest_path = Path('tests/compiler/fixtures/increment21/manifest.json')
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.is_file() else {}
+          evidence = manifest.get('evidence', {})
+          accepted_statuses = {
+              'validated-native-verification-pipeline',
+              'validated-staged-semantic-pipeline',
+          }
+          complete = bool(
+              inc21 and inc21.group(1).lower() == 'x'
+              and manifest.get('status') in accepted_statuses
+              and all(isinstance(evidence.get(key), int)
+                      for key in ('pull_request', 'dedicated_run', 'core_ci_run'))
+          )
+          exact22 = bool(
+              inc22
+              and inc22.group(1) == ' '
+              and inc22.group(2).strip() == 'CIRCT conversion strategy and legalizer skeleton'
+          )
+          payload = {
+              'roadmap_revision': revision.group(1).strip() if revision else None,
+              'increment21_checked': bool(inc21 and inc21.group(1).lower() == 'x'),
+              'increment21_title': inc21.group(2).strip() if inc21 else None,
+              'increment21_manifest_status': manifest.get('status'),
+              'increment21_evidence': evidence,
+              'increment21_complete': complete,
+              'increment22_title': inc22.group(2).strip() if inc22 else None,
+              'increment22_unchecked_exact': exact22,
+          }
+          Path('/tmp/inc22-precondition.json').write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+          with Path('/tmp/inc22-env').open('w', encoding='utf-8') as handle:
+              handle.write(f"increment21_complete={'true' if complete else 'false'}\n")
+              handle.write(f"increment22_exact={'true' if exact22 else 'false'}\n")
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+          cat /tmp/inc22-env >> "$GITHUB_OUTPUT"
+
+      - name: Materialize Increment 22
+        if: steps.precondition.outputs.increment21_complete == 'true' && steps.precondition.outputs.increment22_exact == 'true'
+        working-directory: target
+        run: |
+          git checkout -B increment/22-circt-conversion-legalizer origin/dev
+          python3 ../automation/scripts/materialize_increment22.py .
+          python3 scripts/check_increment22.py
+          python3 -m unittest tests.compiler.test_increment22
+          git diff --check
+
+      - name: Install toolchains
+        if: steps.precondition.outputs.increment21_complete == 'true' && steps.precondition.outputs.increment22_exact == 'true'
+        working-directory: target
+        run: |
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+
+      - name: Validate implementation
+        id: validation
+        if: steps.precondition.outputs.increment21_complete == 'true' && steps.precondition.outputs.increment22_exact == 'true'
+        working-directory: target
+        run: |
+          set -o pipefail
+          ./mill mill.scalalib.scalafmt/reformatAll
+          ./nodal style fix --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          python3 scripts/check_increment22.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            2>&1 | tee /tmp/inc22-native.log
+          compiler=out/native/release/bin/nodalc
+          "${compiler}" --nodal-circt-legalize \
+            core/compiler/test/IR/circt-legalizer.mlir \
+            | tee /tmp/inc22-legalized.mlir
+          grep -F 'hw.constant' /tmp/inc22-legalized.mlir
+          grep -F 'nodal.circt.strategy' /tmp/inc22-legalized.mlir
+          if "${compiler}" --nodal-circt-legalize \
+              core/compiler/test/IR/circt-legalizer-invalid.mlir \
+              >/tmp/inc22-invalid.log 2>&1; then
+            echo 'invalid legalizer fixture was accepted' >&2
+            exit 1
+          fi
+          grep -F 'NODAL-CIRCT-022-002' /tmp/inc22-invalid.log
+          git diff --check
+
+      - name: Publish branch and PR
+        id: publish
+        if: steps.validation.outcome == 'success'
+        working-directory: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 22 — add CIRCT conversion strategy and legalizer skeleton'
+          git push --force-with-lease origin HEAD:increment/22-circt-conversion-legalizer
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head increment/22-circt-conversion-legalizer \
+            --state open --json number --jq '.[0].number // empty')
+          if [ -z "$pr" ]; then
+            pr=$(gh pr create --repo "$GITHUB_REPOSITORY" --base dev \
+              --head increment/22-circt-conversion-legalizer \
+              --title 'Increment 22 — CIRCT conversion strategy and legalizer skeleton' \
+              --body 'Implements the approved transactional Nodal-to-CIRCT legalizer skeleton, exact finite-width constant conversion, strict preflight, native tests, structural checks, and read-only CI. Roadmap closure remains pending accepted PR evidence.' \
+              --json number --jq '.number')
+          fi
+          echo "pr_number=$pr" >> "$GITHUB_OUTPUT"
+          echo "feature_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish authoritative orchestration status
+        if: always()
+        working-directory: automation
+        env:
+          JOB_STATUS: ${{ job.status }}
+          INC21_COMPLETE: ${{ steps.precondition.outputs.increment21_complete }}
+          INC22_EXACT: ${{ steps.precondition.outputs.increment22_exact }}
+          VALIDATION_OUTCOME: ${{ steps.validation.outcome }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+          PR_NUMBER: ${{ steps.publish.outputs.pr_number }}
+          FEATURE_SHA: ${{ steps.publish.outputs.feature_sha }}
+        run: |
+          mkdir -p status
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          precondition_path = Path('/tmp/inc22-precondition.json')
+          precondition = json.loads(precondition_path.read_text(encoding='utf-8')) if precondition_path.is_file() else {}
+          payload = {
+              'job_status': os.environ.get('JOB_STATUS'),
+              'precondition': precondition,
+              'validation_outcome': os.environ.get('VALIDATION_OUTCOME'),
+              'publish_outcome': os.environ.get('PUBLISH_OUTCOME'),
+              'pull_request': int(os.environ['PR_NUMBER']) if os.environ.get('PR_NUMBER', '').isdigit() else None,
+              'feature_sha': os.environ.get('FEATURE_SHA') or None,
+          }
+          for log_name in ('inc22-native.log', 'inc22-invalid.log'):
+              path = Path('/tmp') / log_name
+              if path.is_file():
+                  lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
+                  payload[log_name] = lines[-120:]
+          Path('status/increment22-orchestration.json').write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add status/increment22-orchestration.json
+          git commit -m 'Automation — publish Increment 22 orchestration status' || true
+          git push origin HEAD:automation/inc21-inc22-probe-stage

@@ -4,6 +4,7 @@
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Support/Version.h"
+#include "nodal/Transforms/Passes.h"
 
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/PrettyStackTrace.h"
@@ -14,11 +15,13 @@ int main(int argc, char **argv) {
 
   mlir::DialectRegistry registry;
   registry.insert<circt::hw::HWDialect, nodal::NodalDialect>();
+  nodal::registerNodalPasses();
 
   llvm::cl::AddExtraVersionPrinter([](llvm::raw_ostream &os) {
     nodal::printVersion(os);
     os << circt::getCirctVersion() << '\n';
   });
 
-  return mlir::failed(mlir::MlirOptMain(argc, argv, "Nodal native compiler bootstrap", registry));
+  return mlir::failed(
+      mlir::MlirOptMain(argc, argv, "Nodal native compiler bootstrap", registry));
 }

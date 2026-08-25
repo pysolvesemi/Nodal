@@ -3,6 +3,7 @@
 **Revision:** v1.0
 **Status:** Approved
 **Scope:** compiler-bridge
+**Scope:** public-api
 **Public API:** unchanged at 0.3
 **Approved authority:** standing Nodal increment implementation and merge authorization
 
@@ -12,6 +13,12 @@ Increment 20 connects the deterministic Scala construction snapshot to the
 canonical private `nodal` MLIR model introduced by Increment 19. The bridge is
 versioned, deterministic, source-correlated, and internal to Nodal. It does not
 add public hardware syntax, select a backend, or implement whole-design passes.
+
+The bounded `public-api` scope authorizes only private `[nodal]` construction
+metadata required to preserve exact literal, clock/reset, relationship, and
+instance-parameter facts across the bridge. It adds no public class, method,
+constructor, enum case, import, or source spelling and does not revise public
+API v0.3.
 
 ## Textual bridge contract
 

@@ -21,6 +21,12 @@ hardware semantics or changing public API v0.3.
 attribute must be non-empty. No later compiler pass may interpret the
 placeholder as hardware, scheduling, analog, or backend behavior.
 
+The operation's concise syntax is generated from its TableGen
+`assemblyFormat`. Dialect-level default attribute or type parser generation
+remains deferred until a later increment introduces Nodal-owned attributes or
+types; enabling that dispatch before definitions exist would create unresolved
+parser/printer symbols in the native dialect library.
+
 ## Validation
 
 The permanent workflow runs the unified repository contracts, Increment 6

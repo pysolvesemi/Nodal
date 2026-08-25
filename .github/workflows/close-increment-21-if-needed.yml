@@ -1,0 +1,182 @@
+name: Close Increment 21 If Needed
+
+on:
+  push:
+    branches:
+      - automation/reconcile-increment-21-22-v11
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: close-increment-21-if-needed
+  cancel-in-progress: false
+
+jobs:
+  close:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Stop when Increment 21 is already closed
+        id: prerequisite
+        run: |
+          if grep -Fq -- '- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**' \
+              docs/roadmap/nodal-development-todo.md && \
+             test -f tests/compiler/fixtures/increment21/manifest.json && \
+             python3 - <<'PY'
+          import json
+          from pathlib import Path
+          value = json.loads(Path('tests/compiler/fixtures/increment21/manifest.json').read_text())
+          raise SystemExit(0 if str(value.get('status', '')).startswith('validated') else 1)
+          PY
+          then
+            echo 'closed=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'closed=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Select the latest implementation branch
+        if: steps.prerequisite.outputs.closed != 'true'
+        run: |
+          git fetch origin '+refs/heads/increment/21*:refs/remotes/origin/increment/21*'
+          branch=''
+          while read -r candidate; do
+            candidate=${candidate#origin/}
+            if git cat-file -e "origin/${candidate}:scripts/check_increment21.py" 2>/dev/null && \
+               git cat-file -e "origin/${candidate}:tests/compiler/fixtures/increment21/manifest.json" 2>/dev/null; then
+              branch=${candidate}
+              break
+            fi
+          done < <(git for-each-ref --sort=-committerdate \
+            --format='%(refname:short)' 'refs/remotes/origin/increment/21*')
+          test -n "$branch"
+          echo "INC21_BRANCH=$branch" >> "$GITHUB_ENV"
+          git checkout -B "$branch" "origin/$branch"
+
+      - name: Install locked toolchains
+        if: steps.prerequisite.outputs.closed != 'true'
+        run: |
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/native"
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/lint"
+
+      - name: Validate Increment 21 implementation
+        if: steps.prerequisite.outputs.closed != 'true'
+        run: |
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          if test -f scripts/check_increment20.py; then python3 scripts/check_increment20.py; fi
+          python3 scripts/check_increment21.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          ./nodal check --contracts-only --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/lint" --base-ref origin/dev
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/native" \
+            --lint-toolchain "${RUNNER_TEMP}/lint"
+          git diff --check
+
+      - name: Open or locate Increment 21 pull request
+        if: steps.prerequisite.outputs.closed != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$INC21_BRANCH" \
+            --base dev --state open --json number --jq '.[0].number // empty')
+          if [ -z "$pr" ]; then
+            url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base dev \
+              --head "$INC21_BRANCH" \
+              --title 'Increment 21 — native parse and staged semantic verification pipeline' \
+              --body 'Close the roadmap-defined native parse, mandatory staged verifier, transactional pass pipeline, normalized IR, and explicit gate-pipeline scope. Validation is performed by the dedicated workflow and Core CI.')
+            pr=${url##*/}
+          fi
+          echo "INC21_PR=$pr" >> "$GITHUB_ENV"
+          gh pr checks "$pr" --repo "$GITHUB_REPOSITORY" \
+            --watch --fail-fast --interval 10
+
+      - name: Record accepted evidence when still pre-evidence
+        if: steps.prerequisite.outputs.closed != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          manifest_path = Path('tests/compiler/fixtures/increment21/manifest.json')
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+          if str(manifest.get('status', '')).startswith('validated'):
+              raise SystemExit(0)
+
+          raw = subprocess.check_output([
+              'gh', 'pr', 'checks', os.environ['INC21_PR'],
+              '--repo', os.environ['GITHUB_REPOSITORY'],
+              '--json', 'name,link,state,bucket'
+          ], text=True)
+          checks = json.loads(raw)
+          def find(predicate):
+              for item in checks:
+                  if predicate(item):
+                      match = re.search(r'/actions/runs/(\d+)', item.get('link', ''))
+                      if match:
+                          return int(match.group(1))
+              raise SystemExit(f'missing check evidence: {checks}')
+          dedicated = find(lambda item: 'increment-21' in item.get('name', '').lower())
+          core = find(lambda item: item.get('name') == 'required' or 'core-ci/required' in item.get('name', ''))
+
+          allowed = Path('scripts/check_increment21.py').read_text(encoding='utf-8')
+          status_candidates = re.findall(r'validated[-a-z0-9_]+', allowed)
+          status = status_candidates[0] if status_candidates else 'validated-native-verification-pipeline'
+          manifest['status'] = status
+          manifest['evidence'] = {
+              'pull_request': int(os.environ['INC21_PR']),
+              'dedicated_run': dedicated,
+              'core_ci_run': core,
+          }
+          manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+
+          roadmap_path = Path('docs/roadmap/nodal-development-todo.md')
+          roadmap = roadmap_path.read_text(encoding='utf-8')
+          unchecked = '- [ ] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**'
+          checked = '- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**'
+          if unchecked in roadmap:
+              roadmap = roadmap.replace(unchecked, checked, 1)
+              match = re.search(r'^\*\*Revision:\*\* (\d+)\.(\d+)$', roadmap, re.MULTILINE)
+              if match:
+                  replacement = f'**Revision:** {match.group(1)}.{int(match.group(2)) + 1}'
+                  roadmap = roadmap[:match.start()] + replacement + roadmap[match.end():]
+          roadmap_path.write_text(roadmap, encoding='utf-8')
+          PY
+
+          python3 scripts/check_increment21.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ! git diff --quiet; then
+            git add docs/roadmap/nodal-development-todo.md \
+              tests/compiler/fixtures/increment21/manifest.json
+            git commit -m 'Increment 21 — record accepted validation evidence'
+            git push origin HEAD:"$INC21_BRANCH"
+            gh pr checks "$INC21_PR" --repo "$GITHUB_REPOSITORY" \
+              --watch --fail-fast --interval 10
+          fi
+
+      - name: Squash-merge Increment 21
+        if: steps.prerequisite.outputs.closed != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr merge "$INC21_PR" --repo "$GITHUB_REPOSITORY" \
+            --squash --delete-branch \
+            --subject 'Increment 21 — native parse and staged semantic verification pipeline'

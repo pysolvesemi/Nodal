@@ -62,14 +62,12 @@ def main() -> None:
     )
     passes = ensure_replace(
         passes,
-        """LogicalResult emitFailure(Operation *operation, llvm::StringRef code,
-                          const llvm::Twine &message) {
+        """LogicalResult emitFailure(Operation *operation, llvm::StringRef code, const llvm::Twine &message) {
   operation->emitError() << code << ": " << message;
   return failure();
 }
 """,
-        """LogicalResult emitFailure(Operation *operation, llvm::StringRef code,
-                          const llvm::Twine &message) {
+        """LogicalResult emitFailure(Operation *operation, llvm::StringRef code, const llvm::Twine &message) {
   return emitMappedFailure(operation, code, message);
 }
 """,

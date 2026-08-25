@@ -1,0 +1,109 @@
+name: Increment 21 Evidence Finalizer
+
+on:
+  push:
+    branches:
+      - increment/21-roadmap-evidence-closure
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-21-evidence-finalizer
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    name: increment-21/finalize-evidence
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out closure branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/21-roadmap-evidence-closure
+          fetch-depth: 0
+
+      - name: Record accepted evidence
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          from pathlib import Path
+
+          root = Path.cwd()
+          roadmap_path = root / "docs/roadmap/nodal-development-todo.md"
+          roadmap = roadmap_path.read_text(encoding="utf-8")
+
+          old_entry = (
+              "- [ ] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**\n"
+              "  - Parse Nodal MLIR; implement mandatory construction-closure, driver/assignment coverage, latch, combinational-cycle, hierarchy, width/sign/shape/layout/storage, parameter/generate/loop, enum/FSM, clock/reset/CDC/RDC, protocol/pipeline, memory/effect, analog/mixed-signal, and target-capability verifiers; run registered passes with analysis invalidation/reverification; print normalized IR; and expose explicit lit/FileCheck-friendly gate pipelines. Preserve the last accepted state transactionally on failure.\n"
+          )
+          new_entry = (
+              "- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**\n"
+              "  - Parse Nodal MLIR; implement mandatory construction-closure, driver/assignment coverage, latch, combinational-cycle, hierarchy, width/sign/shape/layout/storage, parameter/generate/loop, enum/FSM, clock/reset/CDC/RDC, protocol/pipeline, memory/effect, analog/mixed-signal, and target-capability verifiers; run registered passes with analysis invalidation/reverification; print normalized IR; and expose explicit lit/FileCheck-friendly gate pipelines. Preserve the last accepted state transactionally on failure.\n"
+              "  - Evidence: [`NodalNativeSemanticPipeline-DG-v1.0.md`](../design-gates/NodalNativeSemanticPipeline-DG-v1.0.md), [`increment21-native-semantic-pipeline.md`](../implementation/increment21-native-semantic-pipeline.md), implementation PR [#50](https://github.com/pysolvesemi/Nodal/pull/50), closure PR [#51](https://github.com/pysolvesemi/Nodal/pull/51), dedicated validation run [32884043819](https://github.com/pysolvesemi/Nodal/actions/runs/32884043819), and Core CI run [32884043761](https://github.com/pysolvesemi/Nodal/actions/runs/32884043761).\n"
+          )
+
+          replacements = (
+              ("**Revision:** 1.24", "**Revision:** 1.25"),
+              (old_entry, new_entry),
+          )
+          for old, new in replacements:
+              count = roadmap.count(old)
+              if count != 1:
+                  raise RuntimeError(
+                      f"roadmap anchor count for {old[:80]!r} is {count}"
+                  )
+              roadmap = roadmap.replace(old, new, 1)
+          roadmap_path.write_text(roadmap, encoding="utf-8")
+
+          manifest_path = root / "tests/compiler/fixtures/increment21/manifest.json"
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          manifest["status"] = "validated-native-semantic-pipeline"
+          manifest["closure_state"] = "accepted-evidence-recorded"
+          manifest["implementation_pull_request"] = 50
+          manifest["closure_pull_request"] = 51
+          manifest["evidence"] = {
+              "pull_request": 51,
+              "dedicated_run": 32884043819,
+              "core_ci_run": 32884043761,
+          }
+          manifest_path.write_text(
+              json.dumps(manifest, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Remove finalizer and validate closed state
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          rm .github/workflows/increment-21-evidence-finalizer.yml
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 scripts/check_increment21.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          python3 scripts/check_formatting_baseline.py
+          python3 scripts/check_markdown.py
+          python3 scripts/check_package_visibility.py
+          git diff --check
+
+      - name: Publish roadmap and manifest closure
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email \
+            '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 21 — record accepted CI evidence'
+          git push origin HEAD:increment/21-roadmap-evidence-closure

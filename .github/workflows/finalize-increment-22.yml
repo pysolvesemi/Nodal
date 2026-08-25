@@ -1,0 +1,157 @@
+name: Finalize Increment 22
+
+on:
+  push:
+    branches:
+      - automation/reconcile-increment-21-22-v11
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: finalize-increment-22
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Wait for implementation PR and accepted validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in $(seq 1 60); do
+            pr=$(gh pr list --repo "$GITHUB_REPOSITORY" \
+              --head increment/22-circt-conversion-legalizer-skeleton \
+              --base dev --state open --json number --jq '.[0].number // empty')
+            if [ -n "$pr" ]; then break; fi
+            sleep 10
+          done
+          test -n "$pr"
+          echo "PR_NUMBER=$pr" >> "$GITHUB_ENV"
+          gh pr checks "$pr" --repo "$GITHUB_REPOSITORY" \
+            --watch --fail-fast --interval 10
+
+      - name: Capture accepted run evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr checks "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json name,link,state,bucket > /tmp/checks.json
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          checks = json.loads(Path('/tmp/checks.json').read_text())
+          def run_id_for(predicate):
+              for check in checks:
+                  if predicate(check):
+                      match = re.search(r'/actions/runs/(\d+)', check.get('link', ''))
+                      if match:
+                          return int(match.group(1))
+              raise SystemExit(f'missing accepted check: {checks}')
+
+          dedicated = run_id_for(
+              lambda item: 'increment-22/circt-legalizer' in item.get('name', '')
+          )
+          core = run_id_for(
+              lambda item: item.get('name') == 'required'
+              or 'core-ci/required' in item.get('name', '')
+          )
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+              output.write(f'DEDICATED_RUN={dedicated}\n')
+              output.write(f'CORE_RUN={core}\n')
+          PY
+
+      - name: Check out Increment 22 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/22-circt-conversion-legalizer-skeleton
+          fetch-depth: 0
+
+      - name: Record roadmap and manifest evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          roadmap_path = Path('docs/roadmap/nodal-development-todo.md')
+          roadmap = roadmap_path.read_text(encoding='utf-8')
+          old = '- [ ] **Increment 22 — CIRCT conversion strategy and legalizer skeleton**'
+          new = '- [x] **Increment 22 — CIRCT conversion strategy and legalizer skeleton**'
+          if roadmap.count(old) != 1:
+              raise SystemExit(f'Increment 22 roadmap anchor count: {roadmap.count(old)}')
+          roadmap = roadmap.replace(old, new, 1)
+
+          match = re.search(r'^\*\*Revision:\*\* (\d+)\.(\d+)$', roadmap, re.MULTILINE)
+          if not match:
+              raise SystemExit('roadmap revision is not canonical')
+          next_revision = f'{match.group(1)}.{int(match.group(2)) + 1}'
+          roadmap = roadmap[:match.start(0)] + f'**Revision:** {next_revision}' + roadmap[match.end(0):]
+
+          evidence_line = (
+              '  - Evidence: '
+              '[`NodalCirctConversionLegalizer-DG-v1.0.md`]'
+              '(../design-gates/NodalCirctConversionLegalizer-DG-v1.0.md), '
+              '[`increment22-circt-conversion-legalizer.md`]'
+              '(../implementation/increment22-circt-conversion-legalizer.md), '
+              f'PR [#{os.environ["PR_NUMBER"]}]'
+              f'(https://github.com/{os.environ["GITHUB_REPOSITORY"]}/pull/{os.environ["PR_NUMBER"]}), '
+              f'dedicated validation run [{os.environ["DEDICATED_RUN"]}]'
+              f'(https://github.com/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{os.environ["DEDICATED_RUN"]}), '
+              f'and Core CI run [{os.environ["CORE_RUN"]}]'
+              f'(https://github.com/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{os.environ["CORE_RUN"]}).\n'
+          )
+          summary = (
+              new
+              + '\n  - Define the staged Nodal-to-CIRCT legality boundary, '
+                'versioned audit/structural/digital profiles, and a zero-rewrite '
+                'MLIR `ConversionTarget` skeleton with stable deferred-operation diagnostics.\n'
+          )
+          if summary not in roadmap:
+              roadmap = roadmap.replace(new + '\n', summary + evidence_line, 1)
+          roadmap_path.write_text(roadmap, encoding='utf-8')
+
+          manifest_path = Path('tests/compiler/fixtures/increment22/manifest.json')
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+          manifest['status'] = 'validated-circt-legalizer-skeleton'
+          manifest['evidence'] = {
+              'pull_request': int(os.environ['PR_NUMBER']),
+              'dedicated_run': int(os.environ['DEDICATED_RUN']),
+              'core_ci_run': int(os.environ['CORE_RUN']),
+          }
+          manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+          PY
+
+          python3 scripts/check_increment21.py
+          python3 scripts/check_increment22.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          git diff --check
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/roadmap/nodal-development-todo.md \
+            tests/compiler/fixtures/increment22/manifest.json
+          git commit -m 'Increment 22 — record accepted validation evidence'
+          git push origin HEAD:increment/22-circt-conversion-legalizer-skeleton
+
+      - name: Require final-head checks and squash-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr checks "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --watch --fail-fast --interval 10
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --squash --delete-branch \
+            --subject 'Increment 22 — CIRCT conversion strategy and legalizer skeleton'

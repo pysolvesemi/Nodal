@@ -1,0 +1,9 @@
+{
+  "already_closed": "true",
+  "core_run": null,
+  "dedicated_run": null,
+  "job_status": "success",
+  "merge_sha": null,
+  "postmerge_run": null,
+  "pr_number": null
+}

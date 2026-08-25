@@ -1,0 +1,58 @@
+name: Activate Increment 22 V8 Materializer
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  activate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+          fetch-depth: 0
+      - name: Select stable-marker v8 materializer
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for relative in (
+              '.github/workflows/chain-and-close-increment-22.yml',
+              '.github/workflows/orchestrate-increment-22-with-status.yml',
+              '.github/workflows/materialize-increment-22-after-precondition.yml',
+              '.github/workflows/repair-existing-increment-21-22-v7.yml',
+          ):
+              path=Path(relative)
+              if not path.is_file(): continue
+              text=path.read_text(encoding='utf-8')
+              for previous in (
+                  'materialize_increment22.py',
+                  'materialize_increment22_v2.py',
+                  'materialize_increment22_v3.py',
+                  'materialize_increment22_v4.py',
+                  'materialize_increment22_v5.py',
+                  'materialize_increment22_v6.py',
+                  'materialize_increment22_v7.py',
+              ):
+                  text=text.replace(previous,'materialize_increment22_v8.py')
+              path.write_text(text,encoding='utf-8')
+          PY
+          git diff --check
+      - name: Publish v8 activation
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/chain-and-close-increment-22.yml \
+            .github/workflows/orchestrate-increment-22-with-status.yml \
+            .github/workflows/materialize-increment-22-after-precondition.yml \
+            .github/workflows/repair-existing-increment-21-22-v7.yml
+          git commit -m 'Automation — select Increment 22 v8 materializer'
+          git push origin HEAD:automation/inc21-inc22-probe-stage

@@ -1,3 +1,4 @@
+# Retry after preserving bracketed multidimensional index paths.
 name: Automation Increment 22 Patch
 
 on:

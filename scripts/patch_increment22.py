@@ -88,13 +88,8 @@ def main() -> None:
     passes = qualify_builtin_modules(passes)
     passes = replace_once(
         passes,
-        '''  return OwningOpRef<mlir::ModuleOp>(
-      llvm::cast<mlir::ModuleOp>(accepted->clone()));
-''',
-        '''  auto acceptedModule = accepted.get();
-  return OwningOpRef<mlir::ModuleOp>(
-      llvm::cast<mlir::ModuleOp>(acceptedModule->clone()));
-''',
+        "accepted->clone()",
+        "accepted.get()->clone()",
         "const-safe accepted module clone",
     )
     passes_path.write_text(passes, encoding="utf-8")

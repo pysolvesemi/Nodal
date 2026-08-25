@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.24
+**Revision:** 1.25
 **Created:** 2026-08-20
 **Updated:** 2026-08-25
 **Status:** Active roadmap
@@ -851,8 +851,9 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
 - [x] **Increment 20 — Scala-to-MLIR bridge**
   - Lower deterministic construction state to versioned textual MLIR with source locations and invoke `nodalc` through a clear process protocol.
 
-- [ ] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**
+- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**
   - Parse Nodal MLIR; implement mandatory construction-closure, driver/assignment coverage, latch, combinational-cycle, hierarchy, width/sign/shape/layout/storage, parameter/generate/loop, enum/FSM, clock/reset/CDC/RDC, protocol/pipeline, memory/effect, analog/mixed-signal, and target-capability verifiers; run registered passes with analysis invalidation/reverification; print normalized IR; and expose explicit lit/FileCheck-friendly gate pipelines. Preserve the last accepted state transactionally on failure.
+  - Evidence: [`NodalNativeSemanticPipeline-DG-v1.0.md`](../design-gates/NodalNativeSemanticPipeline-DG-v1.0.md), [`increment21-native-semantic-pipeline.md`](../implementation/increment21-native-semantic-pipeline.md), implementation PR [#50](https://github.com/pysolvesemi/Nodal/pull/50), closure PR [#51](https://github.com/pysolvesemi/Nodal/pull/51), dedicated validation run [32884043819](https://github.com/pysolvesemi/Nodal/actions/runs/32884043819), and Core CI run [32884043761](https://github.com/pysolvesemi/Nodal/actions/runs/32884043761).
 
 - [ ] **Increment 22 — Cross-layer diagnostic mapping**
   - Include stable interface/role/inout/AMS codes for unstorable interfaces, missing roles/members, incompatible roles, monitor drive, invalid inversion, multiple ordinary drivers, illegal open-drain drive, unsupported resolution, hierarchy-pass-through failure, discipline/access mismatch, implicit bridge conversion, and interface-layout collisions.

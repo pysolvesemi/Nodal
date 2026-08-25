@@ -43,3 +43,14 @@ with the expanded snapshot.
 
 The dedicated workflow builds the native compiler and runs the round-trip with
 `NODAL_NODALC` configured.
+
+## Accepted closure evidence
+
+- Pull request: 49
+- Dedicated Scala-to-MLIR bridge run: 32850253855
+- Required Core CI run: 32850253829
+- Roadmap revision: 1.24
+
+Increment 19's predecessor checker is successor-aware, so later roadmap
+revisions do not invalidate already accepted Increment 19 evidence. Increment
+21 remains the next unchecked roadmap item.

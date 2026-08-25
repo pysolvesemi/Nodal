@@ -1,0 +1,255 @@
+name: Chain and Close Increment 22
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+  checks: read
+
+concurrency:
+  group: chain-and-close-increment-22
+  cancel-in-progress: false
+
+jobs:
+  chain:
+    if: github.event_name == 'workflow_dispatch' || github.actor == 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+          fetch-depth: 0
+          path: automation
+
+      - name: Check out authoritative dev
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+          path: target
+
+      - name: Verify chain preconditions
+        id: state
+        working-directory: target
+        run: |
+          python3 - <<'PY'
+          import json, re
+          from pathlib import Path
+          roadmap=Path('docs/roadmap/nodal-development-todo.md').read_text()
+          def entry(number):
+              match=re.search(rf'^- \[([ xX])\] \*\*Increment {number} — ([^*]+)\*\*',roadmap,re.M)
+              return (bool(match and match.group(1).lower()=='x'), match.group(2).strip() if match else None)
+          checked21,title21=entry(21); checked22,title22=entry(22)
+          manifest21_path=Path('tests/compiler/fixtures/increment21/manifest.json')
+          manifest21=json.loads(manifest21_path.read_text()) if manifest21_path.is_file() else {}
+          evidence21=manifest21.get('evidence',{})
+          ready21=checked21 and manifest21.get('status') in {'validated-native-verification-pipeline','validated-staged-semantic-pipeline'} and all(isinstance(evidence21.get(key),int) for key in ('pull_request','dedicated_run','core_ci_run'))
+          exact22=title22=='CIRCT conversion strategy and legalizer skeleton'
+          Path('/tmp/inc22-chain-state.json').write_text(json.dumps({'increment21_ready':ready21,'increment21_title':title21,'increment21_status':manifest21.get('status'),'increment22_checked':checked22,'increment22_title':title22,'increment22_exact':exact22},indent=2)+'\n')
+          with Path('/tmp/inc22-chain-env').open('w') as handle:
+              handle.write(f"increment21_ready={'true' if ready21 else 'false'}\n")
+              handle.write(f"increment22_checked={'true' if checked22 else 'false'}\n")
+              handle.write(f"increment22_exact={'true' if exact22 else 'false'}\n")
+          PY
+          cat /tmp/inc22-chain-env >> "$GITHUB_OUTPUT"
+
+      - name: Stop unless Increment 21 is authoritatively closed
+        if: steps.state.outputs.increment21_ready != 'true'
+        run: |
+          echo 'Increment 21 is not yet authoritatively closed; Increment 22 remains blocked.' >&2
+          exit 1
+
+      - name: Stop cleanly when Increment 22 is already closed
+        if: steps.state.outputs.increment22_checked == 'true'
+        run: echo 'Increment 22 is already closed on dev.'
+
+      - name: Require exact Increment 22 roadmap item
+        if: steps.state.outputs.increment22_checked != 'true' && steps.state.outputs.increment22_exact != 'true'
+        run: |
+          echo 'Authoritative Increment 22 title does not match the requested CIRCT legalizer item.' >&2
+          exit 1
+
+      - name: Locate existing Increment 22 PR
+        if: steps.state.outputs.increment22_checked != 'true' && steps.state.outputs.increment22_exact == 'true'
+        id: locate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: target
+        run: |
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head increment/22-circt-conversion-legalizer --state open --json number --jq '.[0].number // empty')
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+
+      - name: Materialize missing Increment 22 branch
+        if: steps.state.outputs.increment22_checked != 'true' && steps.state.outputs.increment22_exact == 'true' && steps.locate.outputs.pr == ''
+        working-directory: target
+        run: |
+          git checkout -B increment/22-circt-conversion-legalizer origin/dev
+          python3 ../automation/scripts/materialize_increment22.py .
+          python3 scripts/check_increment22.py
+          python3 -m unittest tests.compiler.test_increment22
+          git diff --check
+
+      - name: Install locked toolchains for new branch
+        if: steps.state.outputs.increment22_checked != 'true' && steps.state.outputs.increment22_exact == 'true' && steps.locate.outputs.pr == ''
+        working-directory: target
+        run: |
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+
+      - name: Validate new Increment 22 branch
+        if: steps.state.outputs.increment22_checked != 'true' && steps.state.outputs.increment22_exact == 'true' && steps.locate.outputs.pr == ''
+        working-directory: target
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          ./nodal style fix --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          python3 scripts/check_increment22.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          ./nodal core scala
+          ./nodal core native --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          compiler=out/native/release/bin/nodalc
+          "${compiler}" --nodal-circt-legalize core/compiler/test/IR/circt-legalizer.mlir | tee /tmp/inc22-chain-legalized.mlir
+          grep -F 'hw.constant' /tmp/inc22-chain-legalized.mlir
+          grep -F 'nodal.circt.strategy' /tmp/inc22-chain-legalized.mlir
+          if "${compiler}" --nodal-circt-legalize core/compiler/test/IR/circt-legalizer-invalid.mlir >/tmp/inc22-chain-invalid.log 2>&1; then exit 1; fi
+          grep -F 'NODAL-CIRCT-022-002' /tmp/inc22-chain-invalid.log
+          git diff --check
+
+      - name: Publish new branch and open PR
+        if: steps.state.outputs.increment22_checked != 'true' && steps.state.outputs.increment22_exact == 'true' && steps.locate.outputs.pr == ''
+        id: create
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: target
+        run: |
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 22 — add CIRCT conversion strategy and legalizer skeleton'
+          git push --force-with-lease origin HEAD:increment/22-circt-conversion-legalizer
+          pr=$(gh pr create --repo "$GITHUB_REPOSITORY" --base dev --head increment/22-circt-conversion-legalizer --title 'Increment 22 — CIRCT conversion strategy and legalizer skeleton' --body 'Adds the approved transactional Nodal-to-CIRCT legalizer skeleton, exact finite-width constant conversion, strict preflight, deterministic strategy metadata, native tests, structural checks, and read-only CI.' --json number --jq '.number')
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+
+      - name: Select PR number
+        if: steps.state.outputs.increment22_checked != 'true' && steps.state.outputs.increment22_exact == 'true'
+        id: selected
+        env:
+          EXISTING: ${{ steps.locate.outputs.pr }}
+          CREATED: ${{ steps.create.outputs.pr }}
+        run: |
+          pr="${EXISTING:-$CREATED}"
+          test -n "$pr"
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for implementation checks
+        if: steps.state.outputs.increment22_checked != 'true' && steps.state.outputs.increment22_exact == 'true'
+        id: implementation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.selected.outputs.pr }}
+        run: |
+          gh pr checks "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --required --watch --interval 20
+          head=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq '.headRefOid')
+          dedicated=$(gh run list --repo "$GITHUB_REPOSITORY" --commit "$head" --workflow increment-22-circt-conversion-legalizer.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          core=$(gh run list --repo "$GITHUB_REPOSITORY" --commit "$head" --workflow ci.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          test -n "$dedicated"; test -n "$core"
+          echo "head=$head" >> "$GITHUB_OUTPUT"; echo "dedicated=$dedicated" >> "$GITHUB_OUTPUT"; echo "core=$core" >> "$GITHUB_OUTPUT"
+
+      - name: Record evidence on Increment 22 branch
+        if: steps.state.outputs.increment22_checked != 'true' && steps.state.outputs.increment22_exact == 'true'
+        env:
+          PR_NUMBER: ${{ steps.selected.outputs.pr }}
+          DEDICATED_RUN: ${{ steps.implementation.outputs.dedicated }}
+          CORE_RUN: ${{ steps.implementation.outputs.core }}
+        working-directory: target
+        run: |
+          git fetch --no-tags origin increment/22-circt-conversion-legalizer:refs/remotes/origin/increment/22-circt-conversion-legalizer dev:refs/remotes/origin/dev
+          git checkout -B increment/22-circt-conversion-legalizer origin/increment/22-circt-conversion-legalizer
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          pr=int(os.environ['PR_NUMBER']); dedicated=int(os.environ['DEDICATED_RUN']); core=int(os.environ['CORE_RUN'])
+          path=Path('docs/roadmap/nodal-development-todo.md'); text=path.read_text()
+          match=re.search(r'^\*\*Revision:\*\* ([0-9.]+)$',text,re.M)
+          if not match: raise RuntimeError('roadmap revision missing')
+          parts=list(map(int,match.group(1).split('.'))); parts[-1]+=1; next_revision='.'.join(map(str,parts))
+          text=text[:match.start(1)]+next_revision+text[match.end(1):]
+          old='- [ ] **Increment 22 — CIRCT conversion strategy and legalizer skeleton**\n'
+          if text.count(old)!=1: raise RuntimeError('Increment 22 roadmap anchor mismatch')
+          replacement=(f'- [x] **Increment 22 — CIRCT conversion strategy and legalizer skeleton**\n'
+                       f'  - Evidence: [`NodalCirctConversionStrategy-DG-v1.0.md`](../design-gates/NodalCirctConversionStrategy-DG-v1.0.md), '
+                       f'[`increment22-circt-conversion-legalizer.md`](../implementation/increment22-circt-conversion-legalizer.md), '
+                       f'PR [#{pr}](https://github.com/pysolvesemi/Nodal/pull/{pr}), '
+                       f'dedicated validation run [{dedicated}](https://github.com/pysolvesemi/Nodal/actions/runs/{dedicated}), '
+                       f'and Core CI run [{core}](https://github.com/pysolvesemi/Nodal/actions/runs/{core}).\n')
+          path.write_text(text.replace(old,replacement,1))
+          manifest_path=Path('tests/compiler/fixtures/increment22/manifest.json'); manifest=json.loads(manifest_path.read_text())
+          manifest['status']='validated-circt-legalizer-skeleton'; manifest['evidence']={'pull_request':pr,'dedicated_run':dedicated,'core_ci_run':core}
+          manifest_path.write_text(json.dumps(manifest,indent=2)+'\n')
+          PY
+          python3 scripts/check_increment22.py
+          git diff --check
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/roadmap/nodal-development-todo.md tests/compiler/fixtures/increment22/manifest.json
+          git commit -m 'Increment 22 — record accepted CI evidence'
+          git push origin HEAD:increment/22-circt-conversion-legalizer
+
+      - name: Wait for evidence checks and merge
+        if: steps.state.outputs.increment22_checked != 'true' && steps.state.outputs.increment22_exact == 'true'
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.selected.outputs.pr }}
+        run: |
+          gh pr checks "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --required --watch --interval 20
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --delete-branch --subject 'Increment 22 — CIRCT conversion strategy and legalizer skeleton'
+          merge_sha=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json mergeCommit --jq '.mergeCommit.oid')
+          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for post-merge Core CI
+        if: steps.state.outputs.increment22_checked != 'true' && steps.state.outputs.increment22_exact == 'true'
+        id: postmerge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_SHA: ${{ steps.merge.outputs.merge_sha }}
+        run: |
+          run=''
+          for attempt in $(seq 1 90); do
+            run=$(gh run list --repo "$GITHUB_REPOSITORY" --branch dev --commit "$MERGE_SHA" --workflow ci.yml --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+            if [ -n "$run" ]; then break; fi
+            sleep 20
+          done
+          test -n "$run"
+          gh run watch "$run" --repo "$GITHUB_REPOSITORY" --exit-status
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+      - name: Publish chain status
+        if: always()
+        working-directory: automation
+        env:
+          JOB_STATUS: ${{ job.status }}
+          PR_NUMBER: ${{ steps.selected.outputs.pr }}
+          DEDICATED_RUN: ${{ steps.implementation.outputs.dedicated }}
+          CORE_RUN: ${{ steps.implementation.outputs.core }}
+          MERGE_SHA: ${{ steps.merge.outputs.merge_sha }}
+          POSTMERGE_RUN: ${{ steps.postmerge.outputs.run }}
+        run: |
+          mkdir -p status
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          state=json.loads(Path('/tmp/inc22-chain-state.json').read_text()) if Path('/tmp/inc22-chain-state.json').is_file() else {}
+          payload={'job_status':os.environ.get('JOB_STATUS'),'state':state,'pull_request':os.environ.get('PR_NUMBER') or None,'dedicated_run':os.environ.get('DEDICATED_RUN') or None,'core_run':os.environ.get('CORE_RUN') or None,'merge_sha':os.environ.get('MERGE_SHA') or None,'postmerge_run':os.environ.get('POSTMERGE_RUN') or None}
+          Path('status/increment22-chain.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')
+          PY
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add status/increment22-chain.json
+          git commit -m 'Automation — publish Increment 22 chain status' || true
+          git push origin HEAD:automation/inc21-inc22-probe-stage

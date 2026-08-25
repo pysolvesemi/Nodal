@@ -95,6 +95,21 @@ set_tests_properties(
     WILL_FAIL TRUE
 )
 
+foreach(_fixture IN ITEMS inventory operation)
+  add_test(
+    NAME nodal.native.cross-layer-diagnostics-rejects-${_fixture}
+    COMMAND nodalc
+      --split-input-file
+      "--pass-pipeline=builtin.module(nodal-verify-cross-layer-diagnostics)"
+      "${CMAKE_CURRENT_SOURCE_DIR}/IR/diagnostic-mapping-${_fixture}-invalid.mlir"
+  )
+  set_tests_properties(
+    nodal.native.cross-layer-diagnostics-rejects-${_fixture}
+    PROPERTIES
+      WILL_FAIL TRUE
+  )
+endforeach()
+
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
   DEPENDS

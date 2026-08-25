@@ -138,7 +138,7 @@ LogicalResult nodal::PlaceholderOp::verify() {
 }
 
 LogicalResult nodal::ModuleOp::verify() {
-  if (failed(requireText(getOperation(), SymbolTable::getSymbolAttrName(), "module symbol")))
+  if (failed(requireText(getOperation(), mlir::SymbolTable::getSymbolAttrName(), "module symbol")))
     return failure();
   return requireSingleBlock(getOperation());
 }
@@ -172,7 +172,8 @@ LogicalResult nodal::InstanceOp::verify() {
 }
 
 LogicalResult nodal::InterfaceOp::verify() {
-  if (failed(requireText(getOperation(), SymbolTable::getSymbolAttrName(), "interface symbol")))
+  if (failed(
+          requireText(getOperation(), mlir::SymbolTable::getSymbolAttrName(), "interface symbol")))
     return failure();
   return requireSingleBlock(getOperation());
 }
@@ -235,7 +236,8 @@ LogicalResult nodal::DomainOp::verify() {
 }
 
 LogicalResult nodal::DomainRequirementOp::verify() {
-  return requireText(getOperation(), SymbolTable::getSymbolAttrName(), "domain requirement symbol");
+  return requireText(getOperation(), mlir::SymbolTable::getSymbolAttrName(),
+                     "domain requirement symbol");
 }
 
 LogicalResult nodal::DomainBindOp::verify() {
@@ -417,7 +419,8 @@ LogicalResult nodal::EnumOp::verify() {
 }
 
 LogicalResult nodal::EnumCaseOp::verify() {
-  if (failed(requireText(getOperation(), SymbolTable::getSymbolAttrName(), "enum case symbol")))
+  if (failed(
+          requireText(getOperation(), mlir::SymbolTable::getSymbolAttrName(), "enum case symbol")))
     return failure();
   if (!getOperation()->getAttrOfType<IntegerAttr>("value"))
     return emitOpError("requires an integer value");
@@ -444,7 +447,8 @@ LogicalResult nodal::FsmOp::verify() {
     auto state = llvm::dyn_cast<nodal::FsmStateOp>(&operation);
     if (!state)
       continue;
-    if (auto name = operation.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName()))
+    if (auto name =
+            operation.getAttrOfType<StringAttr>(mlir::SymbolTable::getSymbolAttrName()))
       states.insert(name.getValue());
     if (auto initial = operation.getAttrOfType<BoolAttr>("initial")) {
       if (initial.getValue())

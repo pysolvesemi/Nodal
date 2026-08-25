@@ -1,0 +1,134 @@
+name: Automation Increment 21 Canonical Publish v2
+
+on:
+  push:
+    branches:
+      - automation/increment-21-bootstrap
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: automation-increment-21-canonical-publish-v2
+  cancel-in-progress: true
+
+jobs:
+  rebuild-and-hold:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 420
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/increment-21-bootstrap
+          path: automation
+
+      - name: Check out development branch
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+          path: target
+
+      - name: Wait for merged Increment 20 and drain older bootstrap runs
+        working-directory: target
+        run: |
+          ready=0
+          for attempt in $(seq 1 360); do
+            git fetch --no-tags origin dev:refs/remotes/origin/dev
+            git reset --hard origin/dev
+            if grep -Fq -- '- [x] **Increment 20 — Scala-to-MLIR bridge**' \
+                docs/roadmap/nodal-development-todo.md && \
+               grep -Fq '**Revision:** 1.24' docs/roadmap/nodal-development-todo.md; then
+              ready=1
+              break
+            fi
+            sleep 30
+          done
+          test "${ready}" = 1
+          sleep 420
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
+          git reset --hard origin/dev
+          git switch -C increment/21-native-verifier-pipeline origin/dev
+
+      - name: Materialize canonical Increment 21 state
+        working-directory: target
+        run: |
+          python3 ../automation/scripts/materialize_increment21.py \
+            . \
+            ../automation/automation/increment21
+          python3 ../automation/scripts/patch_increment21_compatibility.py .
+          python3 ../automation/scripts/patch_increment21_predecessor_checkers.py .
+          python3 ../automation/scripts/patch_increment21_compile_hygiene.py .
+          python3 ../automation/scripts/patch_increment21_session_transaction.py .
+          python3 ../automation/scripts/patch_increment21_final_hygiene.py .
+
+      - name: Restore locked native download cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('target/toolchains/lock.json', 'target/toolchains/checksums/*.sha256') }}
+
+      - name: Install locked native and lint toolchains
+        working-directory: target
+        run: |
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format, validate, build, and test canonical state
+        working-directory: target
+        run: |
+          "${RUNNER_TEMP}/nodal-lint-toolchain/bin/clang-format" -i \
+            core/compiler/include/nodal/Transforms/Verification.h \
+            core/compiler/lib/Transforms/Verification.cpp \
+            core/compiler/test/Unit/VerificationSessionTest.cpp
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 scripts/check_increment21.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          python3 core/compiler/test/run_increment21_tests.py \
+            out/native/release/bin/nodalc \
+            core/compiler/test/IR
+          git diff --check
+
+      - name: Commit canonical feature head
+        working-directory: target
+        run: |
+          git config user.name "pysolvesemi"
+          git config user.email "pysolvesemi@gmail.com"
+          git add .
+          git commit -m "Increment 21 — native staged verification pipeline"
+
+      - name: Publish and hold canonical feature head
+        working-directory: target
+        run: |
+          expected="$(git rev-parse HEAD)"
+          stable=0
+          for attempt in $(seq 1 50); do
+            remote="$(git ls-remote origin refs/heads/increment/21-native-verifier-pipeline | cut -f1)"
+            if [ "${remote}" != "${expected}" ]; then
+              git push --force-with-lease="refs/heads/increment/21-native-verifier-pipeline:${remote}" \
+                origin HEAD:increment/21-native-verifier-pipeline
+              stable=0
+            else
+              stable=$((stable + 1))
+              if [ "${stable}" -ge 5 ]; then
+                exit 0
+              fi
+            fi
+            sleep 30
+          done
+          echo 'feature head did not remain stable' >&2
+          exit 1

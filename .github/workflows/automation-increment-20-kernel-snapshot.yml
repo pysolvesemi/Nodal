@@ -1,0 +1,54 @@
+name: Automation Increment 20 Kernel Snapshot
+
+on:
+  push:
+    branches:
+      - automation/increment-20-complete
+
+permissions:
+  contents: write
+
+jobs:
+  patch-kernel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/increment-20-complete
+          path: automation
+
+      - name: Check out Increment 20 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/20-scala-mlir-bridge
+          fetch-depth: 0
+          path: target
+
+      - name: Apply bridge-required snapshot metadata
+        run: |
+          python3 automation/scripts/patch_increment20_kernel.py target
+
+      - name: Format and compile Scala core
+        working-directory: target
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment20.py
+          ./nodal core scala
+          git diff --check
+
+      - name: Commit validated kernel patch
+        working-directory: target
+        run: |
+          git config user.name "pysolvesemi"
+          git config user.email "pysolvesemi@gmail.com"
+          git add \
+            core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+            core/scala/api/src/nodal/CandidateApi.scala \
+            core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala \
+            core/scala/bridge/src/nodal/bridge/NativeCompilerClient.scala \
+            core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala
+          git commit -m "Increment 20 — preserve bridge construction metadata"
+          git push origin HEAD:increment/20-scala-mlir-bridge

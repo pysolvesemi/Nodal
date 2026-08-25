@@ -55,22 +55,22 @@ jobs:
 
           test_path = Path("tests/compiler/test_increment19.py")
           test = test_path.read_text(encoding="utf-8")
-          anchor = """    def test_rejects_missing_type_definition(self) -> None:
-"""
-          addition = """    def test_accepts_later_roadmap_revision(self) -> None:
-        temporary, root = self.temporary_repository()
-        self.addCleanup(temporary.cleanup)
-        path = root / "docs/roadmap/nodal-development-todo.md"
-        text = path.read_text(encoding="utf-8")
-        if "**Revision:** 1.24" not in text:
-            self.fail("expected closed Increment 20 roadmap revision")
-        path.write_text(
-            text.replace("**Revision:** 1.24", "**Revision:** 1.25", 1),
-            encoding="utf-8",
-        )
-        self.assertEqual(CHECKER.check_repository(root), [])
-
-"""
+          anchor = "    def test_rejects_missing_type_definition(self) -> None:\n"
+          addition = (
+              "    def test_accepts_later_roadmap_revision(self) -> None:\n"
+              "        temporary, root = self.temporary_repository()\n"
+              "        self.addCleanup(temporary.cleanup)\n"
+              "        path = root / \"docs/roadmap/nodal-development-todo.md\"\n"
+              "        text = path.read_text(encoding=\"utf-8\")\n"
+              "        if \"**Revision:** 1.24\" not in text:\n"
+              "            self.fail(\"expected closed Increment 20 roadmap revision\")\n"
+              "        path.write_text(\n"
+              "            text.replace(\"**Revision:** 1.24\", \"**Revision:** 1.25\", 1),\n"
+              "            encoding=\"utf-8\",\n"
+              "        )\n"
+              "        self.assertEqual(CHECKER.check_repository(root), [])\n"
+              "\n"
+          )
           if test.count(anchor) != 1:
               raise SystemExit("expected one Increment 19 mutation-test anchor")
           test_path.write_text(test.replace(anchor, addition + anchor, 1), encoding="utf-8")

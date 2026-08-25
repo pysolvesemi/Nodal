@@ -15,7 +15,17 @@ sealed trait Reset extends Data
 /** Backend-neutral expression node. Construction metadata remains private to Nodal. */
 sealed trait Expr[+A <: Data]
 
-private[nodal] final class KernelExpr[A <: Data](val operands: Vector[Any]) extends Expr[A]
+private[nodal] final case class KernelLiteral(
+    kind: String,
+    value: String,
+    dataType: KernelTypeDescriptor
+)
+
+private[nodal] final class KernelExpr[A <: Data](
+    val operands: Vector[Any],
+    val resultType: Option[KernelTypeDescriptor] = None,
+    val literal: Option[KernelLiteral] = None
+) extends Expr[A]
 
 /** Candidate declaration-time type descriptor. */
 sealed trait DataType[+A <: Data]
@@ -72,6 +82,7 @@ final class Param[A <: Data] private[nodal] (val default: Expr[A]) extends Expr[
   CandidateRuntime.declare(
     this,
     KernelSignalKind.Parameter,
+    dataType = CandidateRuntime.expressionDataType(default),
     attributes = Vector("default" -> default)
   )
 
@@ -156,7 +167,11 @@ object ClockRelation:
 final class ClockDomain private[nodal] (
     val name: String,
     val reset: Expr[Reset],
-    kind: KernelDomainKind
+    kind: KernelDomainKind,
+    private[nodal] val edge: Option[ClockEdge] = None,
+    private[nodal] val resetPolicy: Option[ResetPolicy] = None,
+    private[nodal] val resetPolarity: Option[ResetPolarity] = None,
+    private[nodal] val relation: Option[ClockRelation] = None
 ):
   CandidateRuntime.registerDomain(this, kind)
 
@@ -174,7 +189,10 @@ object ClockDomain:
     new ClockDomain(
       name,
       CandidateRuntime.expr(name, reset),
-      KernelDomainKind.External
+      KernelDomainKind.External,
+      edge = Some(edge),
+      resetPolicy = Some(reset),
+      resetPolarity = Some(resetPolarity)
     )
 
   def from(
@@ -187,7 +205,14 @@ object ClockDomain:
       name: String = "bound"
   ): ClockDomain =
     CandidateRuntime.statement(clock, edge, policy, polarity, frequency)
-    new ClockDomain(name, reset, KernelDomainKind.Bound)
+    new ClockDomain(
+      name,
+      reset,
+      KernelDomainKind.Bound,
+      edge = Some(edge),
+      resetPolicy = Some(policy),
+      resetPolarity = Some(polarity)
+    )
 
   def required(name: String = "default"): ClockDomain =
     new ClockDomain(
@@ -204,7 +229,12 @@ object ClockDomain:
       reset: Expr[Reset]
   ): ClockDomain =
     CandidateRuntime.statement(clock, from, relation)
-    new ClockDomain(name, reset, KernelDomainKind.Generated)
+    new ClockDomain(
+      name,
+      reset,
+      KernelDomainKind.Generated,
+      relation = Some(relation)
+    )
 
 /** Child-instance handle with typed selector-based overrides and domain bindings. */
 final class Instance[M <: Module] private[nodal] (private[nodal] val module: M):
@@ -491,8 +521,8 @@ extension (value: Double)
 
 extension (value: Int)
   def real: Expr[Real] = realLiteral(value.toDouble, "")
-  def integer: Expr[Integer] = CandidateRuntime.expr(value)
-  def U(width: Int): Expr[UInt] = CandidateRuntime.expr(value, width)
+  def integer: Expr[Integer] = CandidateRuntime.literalInteger(value)
+  def U(width: Int): Expr[UInt] = CandidateRuntime.literalUInt(value, width)
   def U(width: Expr[Integer]): Expr[UInt] = CandidateRuntime.expr(value, width)
   def V: Expr[Real] = realLiteral(value.toDouble, "V")
   def A: Expr[Real] = realLiteral(value.toDouble, "A")
@@ -506,10 +536,10 @@ extension (value: Int)
   def deg: Phase = new CandidatePhase(value.toDouble, "deg")
 
 extension (value: Boolean)
-  def B: Expr[Bool] = CandidateRuntime.expr(value)
+  def B: Expr[Bool] = CandidateRuntime.literalBool(value)
 
 private[nodal] def realLiteral(value: Double, unit: String): Expr[Real] =
-  CandidateRuntime.expr(value, unit)
+  CandidateRuntime.literalReal(value, unit)
 
 private[nodal] object CandidateRuntime:
   def dataType[A <: Data](kind: String, arguments: Any*): DataType[A] =
@@ -537,6 +567,65 @@ private[nodal] object CandidateRuntime:
       attributes: Vector[(String, Any)] = Vector.empty
   ): Unit =
     ConstructionKernel.declare(value, kind, dataType, explicitName, domain, attributes)
+
+  private def dataTypeFromDescriptor(
+      descriptor: KernelTypeDescriptor
+  ): DataType[? <: Data] = descriptor.kind match
+    case "Real" => Real
+    case "Integer" => Integer
+    case "Bool" => Bool
+    case _ => new KernelDataType[Data](descriptor)
+
+  def expressionDataType(value: Expr[?]): Option[DataType[? <: Data]] = value match
+    case expression: KernelExpr[?] =>
+      expression.resultType.map(dataTypeFromDescriptor)
+    case _ => None
+
+  private def literal[A <: Data](
+      descriptor: KernelTypeDescriptor,
+      kind: String,
+      value: String,
+      operands: Vector[Any]
+  ): Expr[A] =
+    val expression = new KernelExpr[A](
+      operands,
+      resultType = Some(descriptor),
+      literal = Some(KernelLiteral(kind, value, descriptor))
+    )
+    ConstructionKernel.expression(expression)
+    expression
+
+  def literalInteger(value: Int): Expr[Integer] =
+    literal(
+      KernelTypeDescriptor("Integer"),
+      "integer",
+      value.toString,
+      Vector(value)
+    )
+
+  def literalUInt(value: Int, width: Int): Expr[UInt] =
+    literal(
+      KernelTypeDescriptor("UInt", Vector(width)),
+      "integer",
+      value.toString,
+      Vector(value, width)
+    )
+
+  def literalBool(value: Boolean): Expr[Bool] =
+    literal(
+      KernelTypeDescriptor("Bool"),
+      "boolean",
+      value.toString,
+      Vector(value)
+    )
+
+  def literalReal(value: Double, unit: String): Expr[Real] =
+    literal(
+      KernelTypeDescriptor("Real"),
+      "real",
+      java.lang.Double.toString(value),
+      Vector(value, unit)
+    )
 
   def expr[A <: Data](values: Any*): Expr[A] =
     val expression = new KernelExpr[A](values.toVector)

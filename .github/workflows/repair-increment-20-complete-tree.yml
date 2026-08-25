@@ -1,0 +1,90 @@
+name: Repair Increment 20 Complete Tree
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-increment-20-complete-tree
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+          path: automation
+
+      - name: Check out Increment 20 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/20-scala-mlir-bridge
+          fetch-depth: 0
+          path: target
+
+      - name: Restore retained complete bridge files
+        working-directory: target
+        run: |
+          git fetch --all --prune
+          retained=d8ab8797133aa7ad3a4fc275f8409bc19481c307
+          git cat-file -e "${retained}^{commit}"
+          paths=(
+            core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala
+            core/scala/bridge/src/nodal/bridge/NativeCompilerClient.scala
+            core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala
+            docs/implementation/increment20-scala-mlir-bridge.md
+            tests/compiler/fixtures/increment20/manifest.json
+            scripts/check_increment20.py
+            tests/compiler/test_increment20.py
+            .github/workflows/increment-20-scala-mlir-bridge.yml
+          )
+          for path in "${paths[@]}"; do
+            git checkout "$retained" -- "$path"
+          done
+          python3 ../automation/scripts/patch_increment20_kernel.py .
+          git diff --check
+
+      - name: Install locked toolchains
+        working-directory: target
+        run: |
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+
+      - name: Format and validate complete bridge tree
+        working-directory: target
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          ./nodal style fix --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          python3 scripts/check_increment20.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          NODAL_NODALC="$PWD/out/native/release/bin/nodalc" ./nodal core scala
+          git diff --check
+
+      - name: Publish complete bridge tree
+        working-directory: target
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 20 — restore and validate complete bridge tree' || exit 0
+          for attempt in 1 2 3; do
+            if git push origin HEAD:increment/20-scala-mlir-bridge; then exit 0; fi
+            git fetch origin increment/20-scala-mlir-bridge
+            git rebase origin/increment/20-scala-mlir-bridge
+          done
+          exit 1

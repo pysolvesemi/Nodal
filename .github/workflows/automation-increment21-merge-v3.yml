@@ -1,0 +1,287 @@
+name: Automation Increment 21 Merge v3
+
+on:
+  push:
+    branches:
+      - automation/increment21-merge-v3
+
+permissions:
+  actions: write
+  checks: read
+  contents: write
+  pull-requests: write
+  statuses: read
+
+jobs:
+  close:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 170
+
+    steps:
+      - name: Check out dev
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Confirm or perform guarded PR 50 squash merge
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import base64
+          import json
+          import os
+          import subprocess
+          import time
+          from pathlib import Path
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          pr_number = 50
+
+          def run(*args: str) -> str:
+              return subprocess.run(
+                  list(args),
+                  check=True,
+                  text=True,
+                  capture_output=True,
+              ).stdout.strip()
+
+          def gh_json(*args: str) -> object:
+              return json.loads(run('gh', *args))
+
+          def pr() -> dict:
+              return gh_json(
+                  'pr', 'view', str(pr_number),
+                  '--repo', repo,
+                  '--json',
+                  'state,headRefOid,mergedAt,mergeCommit,isDraft,mergeable,url',
+              )
+
+          def content(path: str, ref: str) -> str:
+              payload = gh_json(
+                  'api', f'repos/{repo}/contents/{path}?ref={ref}'
+              )
+              return base64.b64decode(payload['content']).decode('utf-8')
+
+          current = pr()
+          merge_sha = None
+          final_dedicated = None
+          final_core = None
+
+          if current['state'] == 'MERGED' or current.get('mergedAt'):
+              merge_sha = current['mergeCommit']['oid']
+          else:
+              deadline = time.monotonic() + 9300
+              accepted = None
+              while time.monotonic() < deadline:
+                  current = pr()
+                  if current['state'] != 'OPEN' or current['isDraft']:
+                      time.sleep(20)
+                      continue
+                  head = current['headRefOid']
+                  roadmap = content(
+                      'docs/roadmap/nodal-development-todo.md', head
+                  )
+                  manifest = json.loads(
+                      content(
+                          'tests/compiler/fixtures/increment21/manifest.json',
+                          head,
+                      )
+                  )
+                  evidence = manifest.get('evidence', {})
+                  closed = (
+                      '**Revision:** 1.25' in roadmap
+                      and '- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**'
+                      in roadmap
+                      and '- [ ] **Increment 22 — Cross-layer diagnostic mapping**'
+                      in roadmap
+                      and manifest.get('status')
+                      == 'validated-native-semantic-pipeline'
+                      and all(
+                          isinstance(evidence.get(field), int)
+                          for field in (
+                              'pull_request',
+                              'dedicated_run',
+                              'core_ci_run',
+                          )
+                      )
+                  )
+                  if not closed:
+                      time.sleep(20)
+                      continue
+
+                  runs = gh_json(
+                      'run', 'list',
+                      '--repo', repo,
+                      '--commit', head,
+                      '--limit', '100',
+                      '--json',
+                      'databaseId,workflowName,status,conclusion,headSha,createdAt,url',
+                  )
+                  selected = {}
+                  for item in sorted(
+                      runs,
+                      key=lambda value: value['createdAt'],
+                      reverse=True,
+                  ):
+                      name = item['workflowName']
+                      if name in {
+                          'Increment 21 Native Semantic Pipeline',
+                          'Core CI',
+                      } and name not in selected:
+                          selected[name] = item
+                  if len(selected) != 2:
+                      time.sleep(20)
+                      continue
+                  if not all(
+                      item['status'] == 'completed'
+                      for item in selected.values()
+                  ):
+                      time.sleep(20)
+                      continue
+                  failures = [
+                      item for item in selected.values()
+                      if item['conclusion'] != 'success'
+                  ]
+                  if failures:
+                      raise SystemExit(
+                          'final PR-head validation failed: '
+                          + ', '.join(
+                              f"{item['workflowName']}={item['conclusion']}"
+                              for item in failures
+                          )
+                      )
+                  if current['mergeable'] == 'CONFLICTING':
+                      raise SystemExit('PR 50 has merge conflicts')
+                  accepted = {
+                      'head': head,
+                      'dedicated': selected[
+                          'Increment 21 Native Semantic Pipeline'
+                      ]['databaseId'],
+                      'core': selected['Core CI']['databaseId'],
+                  }
+                  break
+
+              if accepted is None:
+                  raise SystemExit(
+                      'PR 50 did not reach a final accepted evidence head'
+                  )
+              run(
+                  'gh', 'pr', 'merge', str(pr_number),
+                  '--repo', repo,
+                  '--squash',
+                  '--match-head-commit', accepted['head'],
+              )
+              current = pr()
+              if current['state'] != 'MERGED' or not current.get('mergeCommit'):
+                  raise SystemExit('PR 50 squash merge did not complete')
+              merge_sha = current['mergeCommit']['oid']
+              final_dedicated = accepted['dedicated']
+              final_core = accepted['core']
+
+          with Path(os.environ['GITHUB_OUTPUT']).open(
+              'a', encoding='utf-8'
+          ) as stream:
+              stream.write(f'merge_sha={merge_sha}\n')
+              if final_dedicated is not None:
+                  stream.write(
+                      f'final_dedicated={final_dedicated}\n'
+                  )
+                  stream.write(f'final_core={final_core}\n')
+          PY
+
+      - name: Dispatch post-merge Core CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run ci.yml --repo "${GITHUB_REPOSITORY}" --ref dev
+
+      - name: Require Core CI on exact merge SHA
+        id: postmerge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_SHA: ${{ steps.merge.outputs.merge_sha }}
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import subprocess
+          import time
+          from pathlib import Path
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          merge_sha = os.environ['MERGE_SHA']
+
+          def gh_json(*args: str) -> object:
+              result = subprocess.run(
+                  ['gh', *args],
+                  check=True,
+                  text=True,
+                  capture_output=True,
+              )
+              return json.loads(result.stdout)
+
+          deadline = time.monotonic() + 5700
+          accepted = None
+          while time.monotonic() < deadline:
+              runs = gh_json(
+                  'run', 'list',
+                  '--repo', repo,
+                  '--workflow', 'ci.yml',
+                  '--branch', 'dev',
+                  '--limit', '50',
+                  '--json',
+                  'databaseId,workflowName,status,conclusion,headSha,createdAt,url,event',
+              )
+              candidates = [
+                  item for item in runs
+                  if item['headSha'] == merge_sha
+              ]
+              if candidates:
+                  current = sorted(
+                      candidates,
+                      key=lambda item: item['createdAt'],
+                      reverse=True,
+                  )[0]
+                  if current['status'] == 'completed':
+                      if current['conclusion'] != 'success':
+                          raise SystemExit(
+                              'post-merge Core CI failed: '
+                              f"{current['conclusion']}"
+                          )
+                      accepted = current
+                      break
+              time.sleep(20)
+
+          if accepted is None:
+              raise SystemExit(
+                  'post-merge Core CI did not pass on the merge SHA'
+              )
+          with Path(os.environ['GITHUB_OUTPUT']).open(
+              'a', encoding='utf-8'
+          ) as stream:
+              stream.write(
+                  f"postmerge_core={accepted['databaseId']}\n"
+              )
+          PY
+
+      - name: Publish completed closure comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_SHA: ${{ steps.merge.outputs.merge_sha }}
+          FINAL_DEDICATED: ${{ steps.merge.outputs.final_dedicated }}
+          FINAL_CORE: ${{ steps.merge.outputs.final_core }}
+          POSTMERGE_CORE: ${{ steps.postmerge.outputs.postmerge_core }}
+        run: |
+          body="Increment 21 closure confirmed. Squash merge: \`${MERGE_SHA}\`; post-merge Core CI: ${POSTMERGE_CORE}."
+          if [ -n "${FINAL_DEDICATED}" ]; then
+            body="${body} Final PR-head dedicated run: ${FINAL_DEDICATED}; Core CI: ${FINAL_CORE}."
+          fi
+          gh pr comment 50 --repo "${GITHUB_REPOSITORY}" \
+            --body "${body} Roadmap revision 1.25 is closed and Increment 22 is next."

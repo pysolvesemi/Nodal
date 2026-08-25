@@ -1,0 +1,1 @@
+User-authorized controller retrigger after idempotent latest-head validation probes.

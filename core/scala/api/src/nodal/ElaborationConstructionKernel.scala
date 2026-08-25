@@ -53,7 +53,10 @@ private[nodal] final case class KernelDomainSnapshot(
     path: String,
     name: String,
     kind: String,
-    binding: Option[String]
+    binding: Option[String],
+    edge: Option[String] = None,
+    resetPolicy: Option[String] = None,
+    attributes: Vector[(String, String)] = Vector.empty
 )
 
 private[nodal] final case class KernelDeclarationSnapshot(
@@ -69,7 +72,8 @@ private[nodal] final case class KernelInstanceSnapshot(
     path: String,
     childModule: String,
     lexicalDomain: Option[String],
-    bindings: Vector[(String, String)]
+    bindings: Vector[(String, String)],
+    parameterBindings: Vector[(String, String)] = Vector.empty
 )
 
 private[nodal] final case class KernelModuleSnapshot(
@@ -390,6 +394,13 @@ private final class ConstructionSession(val options: EmitOptions):
     case long: Long => long.toString
     case double: Double => java.lang.Double.toString(double)
     case big: BigInt => big.toString
+    case expression: KernelExpr[?] if expression.literal.nonEmpty =>
+      expression.literal.map(_.value).getOrElse("")
+    case discipline: NamedDiscipline => discipline.name
+    case Electrical => "electrical"
+    case mode: DriveMode.Value[?] => mode.name
+    case placement: InoutPlacement => placement.toString
+    case profile: ResolutionProfile => profile.toString
     case dataType: DataType[?] => renderType(dataType, owner)
     case field: StructField[?] => s"${field.name}:${renderType(field.dataType, owner)}"
     case option: Option[?] => option.map(renderAny(_, owner)).getOrElse("none")
@@ -804,14 +815,69 @@ private final class ConstructionSession(val options: EmitOptions):
       else None
     edges.sortBy(edge => (edge.kind, edge.left, edge.right))
 
+  private def clockEdgeName(edge: ClockEdge): String = edge match
+    case ClockEdge.Rising => "rising"
+    case ClockEdge.Falling => "falling"
+
+  private def resetPolicyName(policy: ResetPolicy): String = policy match
+    case ResetPolicy.None => "none"
+    case ResetPolicy.Sync => "sync"
+    case ResetPolicy.Async => "async"
+    case _: ResetPolicy.AsyncAssertSyncRelease => "async_assert_sync_release"
+
+  private def resetPolicyAttributes(
+      policy: ResetPolicy
+  ): Vector[(String, String)] = policy match
+    case ResetPolicy.AsyncAssertSyncRelease(stages) =>
+      Vector("reset_stages" -> stages.toString)
+    case _ => Vector.empty
+
+  private def resetPolarityName(polarity: ResetPolarity): String = polarity match
+    case ResetPolarity.ActiveHigh => "active_high"
+    case ResetPolarity.ActiveLow => "active_low"
+
+  private def relationAttributes(
+      relation: ClockRelation
+  ): Vector[(String, String)] = relation match
+    case ClockRelation.Same => Vector("clock_relation" -> "alias")
+    case ClockRelation.Ratio(multiply, divide, _) =>
+      Vector(
+        "clock_relation" -> "ratio",
+        "clock_multiply" -> multiply.toString,
+        "clock_divide" -> divide.toString
+      )
+    case ClockRelation.Synchronous(phaseKnown) =>
+      Vector(
+        "clock_relation" -> "synchronous",
+        "clock_phase_known" -> phaseKnown.toString
+      )
+    case ClockRelation.MutuallyExclusive =>
+      Vector("clock_relation" -> "mutually_exclusive")
+    case ClockRelation.Asynchronous =>
+      Vector("clock_relation" -> "asynchronous")
+    case ClockRelation.Unknown => Vector("clock_relation" -> "unknown")
+
   private def snapshots(resolved: Map[DomainRef, String]): Vector[KernelModuleSnapshot] =
     records.values.toVector.sortBy(record => modulePath(record.handle)).map: module =>
       val domains = module.domains.toVector.map: domain =>
+        val policyAttributes =
+          domain.domain.resetPolicy.toVector.flatMap(resetPolicyAttributes)
+        val metadata =
+          domain.domain.resetPolarity
+            .map(value => Vector("reset_polarity" -> resetPolarityName(value)))
+            .getOrElse(Vector.empty) ++
+            domain.domain.relation
+              .map(relationAttributes)
+              .getOrElse(Vector.empty) ++
+            policyAttributes
         KernelDomainSnapshot(
           domainPath(domain.reference),
           domainName(domain.reference),
           domain.kind.label,
-          if domain.kind == KernelDomainKind.Required then resolved.get(domain.reference) else None
+          if domain.kind == KernelDomainKind.Required then resolved.get(domain.reference) else None,
+          domain.domain.edge.map(clockEdgeName),
+          domain.domain.resetPolicy.map(resetPolicyName),
+          metadata.sortBy(_._1)
         )
       val declarations = module.declarations.toVector.map: declaration =>
         KernelDeclarationSnapshot(
@@ -826,11 +892,36 @@ private final class ConstructionSession(val options: EmitOptions):
         val child = records(instance.child)
         val bindings = child.domains.filter(_.kind == KernelDomainKind.Required).flatMap: domain =>
           resolved.get(domain.reference).map(domain.name -> _)
+        val parameters = instance.parameterOverrides.toVector.map:
+          case (parameter, value) =>
+            val reference = parameter match
+              case candidate: AnyRef =>
+                Option(declarationIds.get(candidate)).getOrElse(
+                  fail(
+                    "NODAL-PARAMETER-BINDING-016",
+                    "instance parameter override targets an unknown parameter",
+                    Some(instancePath(module.handle, instance.ordinal))
+                  )
+                )
+              case _ =>
+                fail(
+                  "NODAL-PARAMETER-BINDING-016",
+                  "instance parameter override is not a declaration",
+                  Some(instancePath(module.handle, instance.ordinal))
+                )
+            if reference.module != instance.child then
+              fail(
+                "NODAL-PARAMETER-BINDING-017",
+                "instance parameter override targets another Module",
+                Some(instancePath(module.handle, instance.ordinal))
+              )
+            declarationName(reference) -> renderAny(value, module.handle)
         KernelInstanceSnapshot(
           instancePath(module.handle, instance.ordinal),
           modulePath(instance.child),
           instance.lexicalDomain.flatMap(domain => resolved.get(domainRef(domain))),
-          bindings.toVector
+          bindings.toVector.sortBy(_._1),
+          parameters.sortBy(_._1)
         )
       KernelModuleSnapshot(
         modulePath(module.handle),

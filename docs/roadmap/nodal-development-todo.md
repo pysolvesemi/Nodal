@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.23
+**Revision:** 1.24
 **Created:** 2026-08-20
 **Updated:** 2026-08-25
 **Status:** Active roadmap
@@ -848,7 +848,7 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Add target-neutral modules, ports, symbols, instances, symbolic parameters, signless/unsigned/signed finite-width types and constants, ranked shaped types with symbolic dimensions, canonical index/flatten/layout and structural-storage metadata, expression origin/materialization/observability metadata, structural generate regions, bounded hardware-iteration regions with typed induction variables/effects, semantic enum types/cases/canonical encodings, FSM definitions/regions/states/transitions/actions/completion/encoding policies, domain requirements/bindings, clock/reset relationships, state ownership, timing provenance, and crossing operations/types. Reuse CIRCT only after semantic comparison.
   - Evidence: [`NodalCoreMlirModel-DG-v1.0.md`](../design-gates/NodalCoreMlirModel-DG-v1.0.md), [`increment19-core-mlir-model.md`](../implementation/increment19-core-mlir-model.md), PR [#46](https://github.com/pysolvesemi/Nodal/pull/46), dedicated validation run [32829155720](https://github.com/pysolvesemi/Nodal/actions/runs/32829155720), and Core CI run [32829155633](https://github.com/pysolvesemi/Nodal/actions/runs/32829155633).
 
-- [ ] **Increment 20 — Scala-to-MLIR bridge**
+- [x] **Increment 20 — Scala-to-MLIR bridge**
   - Lower deterministic construction state to versioned textual MLIR with source locations and invoke `nodalc` through a clear process protocol.
 
 - [ ] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**

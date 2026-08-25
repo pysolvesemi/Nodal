@@ -368,13 +368,21 @@ def check_repository(root: Path) -> list[Problem]:
         if evidence != {"pull_request": None, "dedicated_run": None, "core_ci_run": None}:
             problems.append(Problem("NODAL-INC19-013", "pre-evidence manifest is malformed"))
     elif status == "validated-core-model":
-        if revision != (1, 23) or checked not in roadmap:
+        if revision < (1, 23) or checked not in roadmap:
             problems.append(Problem("NODAL-INC19-014", "validated roadmap state is invalid"))
         for field in ("pull_request", "dedicated_run", "core_ci_run"):
             if not isinstance(evidence.get(field), int):
                 problems.append(Problem("NODAL-INC19-014", f"missing integer evidence: {field}"))
-        if "- [ ] **Increment 20 — Scala-to-MLIR bridge**" not in roadmap:
-            problems.append(Problem("NODAL-INC19-014", "Increment 20 is not left unchecked"))
+        increment20_unchecked = (
+            "- [ ] **Increment 20 — Scala-to-MLIR bridge**" in roadmap
+        )
+        increment20_checked = (
+            "- [x] **Increment 20 — Scala-to-MLIR bridge**" in roadmap
+        )
+        if not increment20_unchecked and not increment20_checked:
+            problems.append(
+                Problem("NODAL-INC19-014", "Increment 20 roadmap item is missing")
+            )
     else:
         problems.append(Problem("NODAL-INC19-012", f"unexpected manifest status: {status!r}"))
 

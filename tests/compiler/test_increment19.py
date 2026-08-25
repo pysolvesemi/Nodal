@@ -46,6 +46,19 @@ class Increment19CheckerTests(unittest.TestCase):
     def test_repository_contract(self) -> None:
         self.assertEqual(CHECKER.check_repository(ROOT), [])
 
+    def test_accepts_later_roadmap_revision(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "docs/roadmap/nodal-development-todo.md"
+        text = path.read_text(encoding="utf-8")
+        if "**Revision:** 1.24" not in text:
+            self.fail("expected closed Increment 20 roadmap revision")
+        path.write_text(
+            text.replace("**Revision:** 1.24", "**Revision:** 1.25", 1),
+            encoding="utf-8",
+        )
+        self.assertEqual(CHECKER.check_repository(root), [])
+
     def test_rejects_missing_type_definition(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)

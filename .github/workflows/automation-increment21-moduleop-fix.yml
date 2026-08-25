@@ -21,14 +21,14 @@ jobs:
           ref: increment/21-roadmap-evidence-closure
           fetch-depth: 0
 
-      - name: Qualify builtin ModuleOp and repair const clone
+      - name: Repair MLIR operation typing and owning references
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import re
 
-          path = Path("core/compiler/lib/Transforms/Passes.cpp")
-          text = path.read_text(encoding="utf-8")
+          pass_path = Path("core/compiler/lib/Transforms/Passes.cpp")
+          text = pass_path.read_text(encoding="utf-8")
           pattern = re.compile(r"(?<!::)\bModuleOp\b")
           matches = pattern.findall(text)
           if not matches:
@@ -44,7 +44,20 @@ jobs:
                   f"const clone anchor count is {updated.count(old_clone)}, expected 1"
               )
           updated = updated.replace(old_clone, new_clone, 1)
-          path.write_text(updated, encoding="utf-8")
+          pass_path.write_text(updated, encoding="utf-8")
+
+          test_path = Path("core/compiler/test/Unit/SemanticPipelineTest.cpp")
+          test_text = test_path.read_text(encoding="utf-8")
+          old_access = "release->getAttrOfType<mlir::StringAttr>"
+          new_access = "release->getOperation()->getAttrOfType<mlir::StringAttr>"
+          if test_text.count(old_access) != 1:
+              raise SystemExit(
+                  f"owning-reference access count is {test_text.count(old_access)}, expected 1"
+              )
+          test_path.write_text(
+              test_text.replace(old_access, new_access, 1),
+              encoding="utf-8",
+          )
           print(f"qualified {len(matches)} builtin ModuleOp references")
           PY
 

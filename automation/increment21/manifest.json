@@ -1,0 +1,51 @@
+{
+  "increment": 21,
+  "title": "Native parse, staged semantic verification, and pass pipeline",
+  "public_api": "0.3",
+  "status": "implemented-awaiting-evidence",
+  "design_gate": "NodalNativeVerificationPipeline-DG-v1.0",
+  "pipeline_version": 1,
+  "stages": [
+    "construction",
+    "hierarchy",
+    "connectivity",
+    "type-shape",
+    "parameter-loop",
+    "enum-fsm",
+    "domain",
+    "protocol-pipeline",
+    "memory-effect",
+    "analog-mixed",
+    "target-capability"
+  ],
+  "passes": [
+    "nodal-verify-stage",
+    "nodal-transactional-gate"
+  ],
+  "pipelines": [
+    "nodal-gate-check",
+    "nodal-gate-normalize"
+  ],
+  "targets": [
+    "core",
+    "digital",
+    "analog",
+    "mixed"
+  ],
+  "transaction": {
+    "pre_acceptance_mutation": false,
+    "post_normalization_reverification": true,
+    "rollback_on_failure": true,
+    "preserve_last_accepted_session_state": true
+  },
+  "deferred": [
+    "circt-lowering",
+    "scheduling",
+    "optimization",
+    "backend-selection",
+    "hdl-emission",
+    "formal-proof",
+    "analog-solving"
+  ],
+  "evidence": {}
+}

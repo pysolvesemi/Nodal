@@ -1,0 +1,30 @@
+name: Kick Increment Finalizers
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  kick:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+          fetch-depth: 0
+      - name: Publish a bot-authored finalizer kick
+        run: |
+          mkdir -p status
+          printf '%s\n' "source_commit=${GITHUB_SHA}" > status/finalizer-kick.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add status/finalizer-kick.txt
+          git commit -m 'Automation — kick increment finalizers'
+          git push origin HEAD:automation/inc21-inc22-probe-stage

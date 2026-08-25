@@ -1,0 +1,104 @@
+name: Automation Increment 22 Integration v2
+
+on:
+  push:
+    branches:
+      - automation/increment22-integration-v2
+
+permissions:
+  contents: write
+
+concurrency:
+  group: automation-increment22-integration-v2
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/increment22-integration-v2
+          fetch-depth: 0
+
+      - name: Switch to Increment 22 and synchronize completed Increment 21
+        run: |
+          cp scripts/automation_patch_increment22_v2.py /tmp/patch_increment22.py
+          git fetch --no-tags origin \
+            dev \
+            increment/22-cross-layer-diagnostic-mapping
+          git checkout -B increment/22-cross-layer-diagnostic-mapping \
+            origin/increment/22-cross-layer-diagnostic-mapping
+          git config user.name 'pysolvesemi'
+          git config user.email 'pysolvesemi@gmail.com'
+          git merge --no-edit -X theirs origin/dev
+
+      - name: Apply cross-layer integration fixes
+        run: python3 /tmp/patch_increment22.py .
+
+      - name: Restore locked native and Scala caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/nodal/downloads
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-inc22-integration-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', 'toolchains/lock.json', 'toolchains/checksums/*.sha256', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-inc22-integration-${{ runner.os }}-
+            nodal-scala-${{ runner.os }}-
+
+      - name: Install locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Apply canonical formatting
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          find \
+            core/compiler/include/nodal/Diagnostics \
+            core/compiler/lib/Diagnostics \
+            core/compiler/lib/Transforms \
+            core/compiler/tools/nodalc \
+            -type f \( -name '*.h' -o -name '*.cpp' \) \
+            -print0 | xargs -0 \
+            "${RUNNER_TEMP}/nodal-lint-toolchain/bin/clang-format" -i
+          git diff --check
+
+      - name: Validate structural contracts and mutation suites
+        run: |
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 scripts/check_increment21.py
+          python3 scripts/check_increment22.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          git diff --check
+
+      - name: Compile and test Scala and native core
+        run: |
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Publish synchronized validated branch
+        run: |
+          git add -A
+          git diff --cached --check
+          git commit -m \
+            'Increment 22 — integrate mapped diagnostics across native and Scala layers'
+          git push --force-with-lease origin \
+            HEAD:increment/22-cross-layer-diagnostic-mapping

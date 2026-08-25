@@ -1,0 +1,80 @@
+name: Normalize Increment 20 Through 22 PR Bodies
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  normalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Normalize open PR descriptions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          normalize() {
+            head=$1
+            title=$2
+            gate=$3
+            implementation=$4
+            summary=$5
+            deferred=$6
+            pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$head" --state open --json number --jq '.[0].number // empty')
+            if [ -z "$pr" ]; then return 0; fi
+            cat > /tmp/body.md <<BODY
+          ## Summary
+
+          ${summary}
+
+          ## Design gate
+
+          - [x] Approved private compiler scope: \`${gate}\`.
+          - [x] Implementation contract: \`${implementation}\`.
+          - [x] Public Scala API remains v0.3.
+
+          ## Validation
+
+          - [x] Structural checker and mutation tests are included.
+          - [x] Scala/native formatting, build, unit, CTest, and negative fixtures are required.
+          - [x] Permanent increment workflow is read-only.
+          - [ ] Dedicated workflow and Core CI evidence are recorded only after green branch validation.
+          - [ ] Roadmap evidence is committed and the PR is squash-merged only after accepted validation.
+
+          ## Explicitly deferred
+
+          ${deferred}
+          BODY
+            gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --title "$title" --body-file /tmp/body.md
+          }
+
+          normalize \
+            increment/20-scala-mlir-bridge \
+            'Increment 20 — Scala-to-MLIR bridge' \
+            'docs/design-gates/NodalScalaToMlirBridge-DG-v1.0.md' \
+            'docs/implementation/increment20-scala-mlir-bridge.md' \
+            'Serialize deterministic construction state into versioned, source-correlated Nodal MLIR and invoke nodalc through an argv-safe, bounded process protocol.' \
+            'Whole-design semantic passes, CIRCT conversion, scheduling, target layouts, and HDL emission remain outside Increment 20.'
+
+          normalize \
+            increment/21-native-verification-pipeline \
+            'Increment 21 — Native parse, staged semantic verification, and pass pipeline' \
+            'docs/design-gates/NodalNativeVerificationPipeline-DG-v1.0.md' \
+            'docs/implementation/increment21-native-verification-pipeline.md' \
+            'Add mandatory staged whole-design verification, read-only and transactional gate passes, deterministic acceptance metadata, and textual pass-pipeline entry points.' \
+            'Cross-layer Scala diagnostic rendering, CIRCT conversion, scheduling, target legalization, and HDL emission remain deferred.'
+
+          normalize \
+            increment/22-circt-conversion-legalizer \
+            'Increment 22 — CIRCT conversion strategy and legalizer skeleton' \
+            'docs/design-gates/NodalCirctConversionStrategy-DG-v1.0.md' \
+            'docs/implementation/increment22-circt-conversion-legalizer.md' \
+            'Add the first registered, transactional Nodal-to-CIRCT conversion seam with strict preflight and exact finite-width constant conversion to CIRCT HW.' \
+            'Module, interface, hierarchy, domain, FSM, memory, analog, scheduling, backend-layout, and HDL lowering remain deferred; unsupported operations stay explicit.'

@@ -38,3 +38,10 @@ Checklist sections so local and CI contribution-policy checks use one contract.
 
 Roadmap completion and evidence are recorded only after the dedicated workflow
 and required Core CI pass on the permanent pull-request head.
+
+## Accepted evidence
+
+- Pull request: #46.
+- Dedicated Increment 19 workflow: run 32829155720.
+- Required Core CI: run 32829155633.
+- Roadmap revision: 1.23.

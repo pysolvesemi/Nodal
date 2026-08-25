@@ -12,11 +12,13 @@ target_link_libraries(nodalc
   PRIVATE
     NodalDialect
     NodalSupport
+    NodalTransforms
     CIRCTHW
     CIRCTSupport
     MLIRIR
     MLIROptLib
     MLIRParser
+    MLIRPass
     MLIRSupport
     MLIRTransforms
 )

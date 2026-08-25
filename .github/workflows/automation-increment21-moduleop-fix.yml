@@ -21,7 +21,7 @@ jobs:
           ref: increment/21-roadmap-evidence-closure
           fetch-depth: 0
 
-      - name: Qualify builtin ModuleOp references
+      - name: Qualify builtin ModuleOp and repair const clone
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -36,6 +36,14 @@ jobs:
           updated = pattern.sub("mlir::ModuleOp", text)
           if pattern.search(updated):
               raise SystemExit("unqualified ModuleOp reference remains")
+
+          old_clone = "accepted->clone()"
+          new_clone = "accepted.get().getOperation()->clone()"
+          if updated.count(old_clone) != 1:
+              raise SystemExit(
+                  f"const clone anchor count is {updated.count(old_clone)}, expected 1"
+              )
+          updated = updated.replace(old_clone, new_clone, 1)
           path.write_text(updated, encoding="utf-8")
           print(f"qualified {len(matches)} builtin ModuleOp references")
           PY
@@ -50,8 +58,12 @@ jobs:
 
       - name: Format and validate native compiler
         run: |
-          "${RUNNER_TEMP}/nodal-lint-toolchain/bin/clang-format" -i \
-            core/compiler/lib/Transforms/Passes.cpp
+          formatter="${RUNNER_TEMP}/nodal-lint-toolchain/bin/clang-format"
+          "${formatter}" -i \
+            core/compiler/include/nodal/Transforms/Passes.h \
+            core/compiler/lib/Transforms/Passes.cpp \
+            core/compiler/test/Unit/SemanticPipelineTest.cpp \
+            core/compiler/tools/nodalc/nodalc.cpp
           python3 scripts/check_increment21.py
           ./nodal core native \
             --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
@@ -62,6 +74,11 @@ jobs:
         run: |
           git config user.name "pysolvesemi"
           git config user.email "pysolvesemi@gmail.com"
-          git add core/compiler/lib/Transforms/Passes.cpp
-          git commit -m "Increment 21 — qualify builtin MLIR module operations"
+          git add \
+            core/compiler/include/nodal/Transforms/Passes.h \
+            core/compiler/lib/Transforms/Passes.cpp \
+            core/compiler/test/Unit/SemanticPipelineTest.cpp \
+            core/compiler/tools/nodalc/nodalc.cpp
+          git commit -m \
+            "Increment 21 — fix MLIR module typing and native formatting"
           git push origin HEAD:increment/21-roadmap-evidence-closure

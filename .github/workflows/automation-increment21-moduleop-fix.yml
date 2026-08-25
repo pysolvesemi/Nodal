@@ -1,0 +1,67 @@
+name: Automation Increment 21 ModuleOp Fix
+
+on:
+  push:
+    branches:
+      - automation/increment21-moduleop-fix
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  qualify-module-op:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out Increment 21 closure branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/21-roadmap-evidence-closure
+          fetch-depth: 0
+
+      - name: Qualify builtin ModuleOp references
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("core/compiler/lib/Transforms/Passes.cpp")
+          text = path.read_text(encoding="utf-8")
+          pattern = re.compile(r"(?<!::)\bModuleOp\b")
+          matches = pattern.findall(text)
+          if not matches:
+              raise SystemExit("no unqualified ModuleOp references found")
+          updated = pattern.sub("mlir::ModuleOp", text)
+          if pattern.search(updated):
+              raise SystemExit("unqualified ModuleOp reference remains")
+          path.write_text(updated, encoding="utf-8")
+          print(f"qualified {len(matches)} builtin ModuleOp references")
+          PY
+
+      - name: Install locked toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format and validate native compiler
+        run: |
+          "${RUNNER_TEMP}/nodal-lint-toolchain/bin/clang-format" -i \
+            core/compiler/lib/Transforms/Passes.cpp
+          python3 scripts/check_increment21.py
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Publish validated fix
+        run: |
+          git config user.name "pysolvesemi"
+          git config user.email "pysolvesemi@gmail.com"
+          git add core/compiler/lib/Transforms/Passes.cpp
+          git commit -m "Increment 21 — qualify builtin MLIR module operations"
+          git push origin HEAD:increment/21-roadmap-evidence-closure

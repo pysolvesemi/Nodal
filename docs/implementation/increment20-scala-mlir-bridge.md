@@ -11,6 +11,11 @@ module/domain/port/parameter/instance records, logical Interface ABI entries,
 resolved nets, conservative terminals, topology, names, origins, generated
 names, and source-map spans are emitted in deterministic order.
 
+The construction snapshot preserves exact literal types, clock edges, reset
+policies and polarities, generated-clock relationships, and child parameter
+bindings. This avoids recovering semantic facts from rendered Scala values or
+inventing missing native IR attributes at the bridge boundary.
+
 Only exact Increment 19 representations become dialect operations. Complete
 inventories remain attached to the builtin module so later native passes can
 validate information whose executable lowering is intentionally deferred.
@@ -28,5 +33,9 @@ temporary input on every path, and never promotes partial output after failure.
 Scala tests prove repeatability, insertion-order independence, source
 locations, bridge inventories, pre-launch rejection, argv-safe success,
 non-zero diagnostics, timeout cleanup, recovery, and optional locked-`nodalc`
-round-trip. The dedicated workflow builds the native compiler and runs the
-round-trip with `NODAL_NODALC` configured.
+round-trip. Existing hierarchy naming, duplicate-basename source discovery,
+parallel construction, and source-origin graph tests remain unchanged and pass
+with the expanded snapshot.
+
+The dedicated workflow builds the native compiler and runs the round-trip with
+`NODAL_NODALC` configured.

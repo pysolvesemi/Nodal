@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "increment": 19,
-  "status": "implemented-awaiting-evidence",
+  "status": "validated-core-model",
   "public_api": "0.3",
   "dialect": "nodal",
   "type_count": 13,
@@ -22,8 +22,8 @@
     "scheduling and optimization"
   ],
   "evidence": {
-    "pull_request": null,
-    "dedicated_run": null,
-    "core_ci_run": null
+    "pull_request": 46,
+    "dedicated_run": 32829155720,
+    "core_ci_run": 32829155633
   }
 }

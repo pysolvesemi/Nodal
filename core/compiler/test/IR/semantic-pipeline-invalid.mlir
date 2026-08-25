@@ -1,6 +1,7 @@
 // Construction closure failure.
 module attributes {nodal.verify.construction_closed = false} {
   "nodal.module"() <{metadata = {}, sym_name = "Top"}> ({
+  ^bb0:
   }) : () -> ()
 }
 
@@ -12,6 +13,7 @@ module attributes {
   nodal.verify.driver_coverage = false
 } {
   "nodal.module"() <{metadata = {}, sym_name = "Top"}> ({
+  ^bb0:
   }) : () -> ()
 }
 
@@ -24,6 +26,7 @@ module attributes {
   nodal.verify.latch_free = false
 } {
   "nodal.module"() <{metadata = {}, sym_name = "Top"}> ({
+  ^bb0:
   }) : () -> ()
 }
 
@@ -37,6 +40,7 @@ module attributes {
   nodal.verify.combinational_acyclic = false
 } {
   "nodal.module"() <{metadata = {}, sym_name = "Top"}> ({
+  ^bb0:
   }) : () -> ()
 }
 
@@ -108,6 +112,7 @@ module attributes {
   nodal.verify.enum_fsm = false
 } {
   "nodal.module"() <{metadata = {}, sym_name = "Top"}> ({
+  ^bb0:
   }) : () -> ()
 }
 
@@ -162,6 +167,7 @@ module attributes {
   nodal.verify.memory_effects = false
 } {
   "nodal.module"() <{metadata = {}, sym_name = "Top"}> ({
+  ^bb0:
   }) : () -> ()
 }
 
@@ -173,6 +179,7 @@ module attributes {
   nodal.verify.analog_topology = false
 } {
   "nodal.module"() <{metadata = {}, sym_name = "Top"}> ({
+  ^bb0:
   }) : () -> ()
 }
 

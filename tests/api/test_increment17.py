@@ -22,6 +22,33 @@ class Increment17ContractTests(unittest.TestCase):
         problems = MODULE.validate_files(ROOT)
         self.assertEqual([], problems, "\n".join(f"{p.code}: {p.message}" for p in problems))
 
+    def test_revision_1_21_keeps_increment18_unchecked(self) -> None:
+        problems: list[object] = []
+        MODULE.validate_increment18_successor_state(
+            "- [ ] **Increment 18 — Nodal MLIR dialect skeleton**\n",
+            (1, 21),
+            problems,
+        )
+        self.assertEqual([], problems)
+
+    def test_revision_1_22_accepts_completed_increment18(self) -> None:
+        problems: list[object] = []
+        MODULE.validate_increment18_successor_state(
+            "- [x] **Increment 18 — Nodal MLIR dialect skeleton**\n",
+            (1, 22),
+            problems,
+        )
+        self.assertEqual([], problems)
+
+    def test_revision_1_22_rejects_unchecked_increment18(self) -> None:
+        problems: list[object] = []
+        MODULE.validate_increment18_successor_state(
+            "- [ ] **Increment 18 — Nodal MLIR dialect skeleton**\n",
+            (1, 22),
+            problems,
+        )
+        self.assertEqual(["NODAL-INC17-036"], [problem.code for problem in problems])
+
 
 if __name__ == "__main__":
     unittest.main()

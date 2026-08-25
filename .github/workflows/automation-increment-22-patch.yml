@@ -1,4 +1,4 @@
-# Retry after preserving bracketed multidimensional index paths.
+# Retry after qualifying builtin MLIR module operations.
 name: Automation Increment 22 Patch
 
 on:
@@ -66,14 +66,12 @@ jobs:
             --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
             --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
 
-      - name: Publish validated integrations
+      - name: Publish complete validated implementation
         run: |
           git config user.name "pysolvesemi"
           git config user.email "pysolvesemi@gmail.com"
-          git add \
-            core/compiler/lib/Transforms/Passes.cpp \
-            core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala \
-            core/scala/bridge/src/nodal/bridge/NativeCompilerClient.scala
+          git add -A
+          git diff --cached --check
           git commit -m \
             "Increment 22 — integrate mapped diagnostics across native and Scala layers"
           git push origin HEAD:increment/22-cross-layer-diagnostic-mapping

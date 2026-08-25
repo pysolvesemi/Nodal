@@ -1,0 +1,644 @@
+#include "nodal/Diagnostics/DiagnosticMapping.h"
+
+#include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/NodalTypes.h"
+
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinLocationAttributes.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/Pass/PassRegistry.h"
+
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
+#include "llvm/Support/Casting.h"
+
+#include <algorithm>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <utility>
+
+using namespace mlir;
+
+namespace nodal {
+namespace {
+
+DictionaryAttr metadata(Operation *operation) {
+  return operation ? operation->getAttrOfType<DictionaryAttr>("metadata")
+                   : DictionaryAttr();
+}
+
+StringAttr stringAttribute(DictionaryAttr values, llvm::StringRef name) {
+  return values ? values.getAs<StringAttr>(name) : StringAttr();
+}
+
+std::optional<int64_t> integerAttribute(DictionaryAttr values,
+                                        llvm::StringRef name) {
+  if (!values)
+    return std::nullopt;
+  if (auto integer = values.getAs<IntegerAttr>(name))
+    return integer.getInt();
+  if (auto text = values.getAs<StringAttr>(name)) {
+    int64_t result = 0;
+    if (!text.getValue().getAsInteger(10, result))
+      return result;
+  }
+  return std::nullopt;
+}
+
+std::optional<bool> booleanAttribute(DictionaryAttr values,
+                                     llvm::StringRef name) {
+  if (!values)
+    return std::nullopt;
+  if (auto value = values.getAs<BoolAttr>(name))
+    return value.getValue();
+  if (auto text = values.getAs<StringAttr>(name)) {
+    if (text.getValue() == "true")
+      return true;
+    if (text.getValue() == "false")
+      return false;
+  }
+  return std::nullopt;
+}
+
+llvm::StringRef semanticPath(Operation *operation) {
+  for (Operation *current = operation; current; current = current->getParentOp()) {
+    if (auto value = stringAttribute(metadata(current), "semantic_path"))
+      return value.getValue();
+  }
+  return {};
+}
+
+llvm::StringRef explicitContext(Operation *operation, llvm::StringRef name) {
+  for (Operation *current = operation; current; current = current->getParentOp()) {
+    if (auto value = stringAttribute(metadata(current), name))
+      return value.getValue();
+  }
+  return {};
+}
+
+FileLineColLoc findFileLocation(Location location) {
+  if (!location)
+    return {};
+  if (auto file = llvm::dyn_cast<FileLineColLoc>(location))
+    return file;
+  if (auto name = llvm::dyn_cast<NameLoc>(location))
+    return findFileLocation(name.getChildLoc());
+  if (auto call = llvm::dyn_cast<CallSiteLoc>(location)) {
+    if (FileLineColLoc caller = findFileLocation(call.getCaller()))
+      return caller;
+    return findFileLocation(call.getCallee());
+  }
+  if (auto fused = llvm::dyn_cast<FusedLoc>(location)) {
+    for (Location nested : fused.getLocations()) {
+      if (FileLineColLoc file = findFileLocation(nested))
+        return file;
+    }
+  }
+  return {};
+}
+
+std::string hierarchyFallback(Operation *operation) {
+  llvm::SmallVector<std::string, 8> symbols;
+  for (Operation *current = operation; current; current = current->getParentOp()) {
+    if (auto symbol =
+            current->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName())) {
+      if (!symbol.getValue().empty())
+        symbols.push_back(symbol.getValue().str());
+    }
+  }
+  std::reverse(symbols.begin(), symbols.end());
+  std::string result;
+  for (const std::string &symbol : symbols) {
+    if (!result.empty())
+      result.append("::");
+    result.append(symbol);
+  }
+  return result;
+}
+
+std::string indexFallback(llvm::StringRef path) {
+  const size_t start = path.find('[');
+  if (start == llvm::StringRef::npos)
+    return {};
+  return path.drop_front(start).str();
+}
+
+std::string formatSourceRange(llvm::StringRef path, int64_t line,
+                              int64_t column, int64_t endLine,
+                              int64_t endColumn) {
+  if (path.empty() || line <= 0 || column <= 0)
+    return {};
+  if (endLine <= 0)
+    endLine = line;
+  if (endColumn <= 0)
+    endColumn = column;
+  return (path + ":" + llvm::Twine(line) + ":" + llvm::Twine(column) + "-" +
+          llvm::Twine(endLine) + ":" + llvm::Twine(endColumn))
+      .str();
+}
+
+void appendContext(InFlightDiagnostic &diagnostic,
+                   const DiagnosticContext &context) {
+  if (!context.semanticPath.empty())
+    diagnostic << " [semantic-path=" << context.semanticPath << "]";
+  if (!context.hierarchyPath.empty())
+    diagnostic << " [hierarchy-path=" << context.hierarchyPath << "]";
+  if (!context.indexPath.empty())
+    diagnostic << " [index-path=" << context.indexPath << "]";
+  if (!context.sourceRange.empty())
+    diagnostic << " [source-range=" << context.sourceRange << "]";
+}
+
+LogicalResult emitWithContext(Operation *operation, llvm::StringRef code,
+                              const llvm::Twine &message,
+                              const DiagnosticContext &context) {
+  InFlightDiagnostic diagnostic = operation->emitError();
+  diagnostic << code << ": " << message.str();
+  appendContext(diagnostic, context);
+  return failure();
+}
+
+Operation *findOperationByPath(ModuleOp module, llvm::StringRef path) {
+  Operation *found = nullptr;
+  module.walk([&](Operation *operation) {
+    if (!found && semanticPath(operation) == path)
+      found = operation;
+  });
+  return found;
+}
+
+DiagnosticContext sourceMapContext(ModuleOp module, llvm::StringRef path) {
+  DiagnosticContext context;
+  context.semanticPath = path.str();
+  context.hierarchyPath = path.str();
+  context.indexPath = indexFallback(path);
+
+  ArrayAttr sourceMap = module->getAttrOfType<ArrayAttr>("nodal.bridge.source_map");
+  if (!sourceMap)
+    return context;
+  for (Attribute attribute : sourceMap) {
+    auto entry = llvm::dyn_cast<DictionaryAttr>(attribute);
+    if (!entry)
+      continue;
+    auto semantic = entry.getAs<StringAttr>("semantic_path");
+    if (!semantic || semantic.getValue() != path)
+      continue;
+    auto source = entry.getAs<StringAttr>("source_path");
+    auto line = entry.getAs<IntegerAttr>("source_line");
+    auto column = entry.getAs<IntegerAttr>("source_column");
+    auto endLine = entry.getAs<IntegerAttr>("source_end_line");
+    auto endColumn = entry.getAs<IntegerAttr>("source_end_column");
+    if (source && line && column) {
+      context.sourceRange = formatSourceRange(
+          source.getValue(), line.getInt(), column.getInt(),
+          endLine ? endLine.getInt() : line.getInt(),
+          endColumn ? endColumn.getInt() : column.getInt());
+    }
+    break;
+  }
+  return context;
+}
+
+llvm::StringRef inventoryPath(DictionaryAttr entry) {
+  for (llvm::StringRef name : {llvm::StringRef("semantic_path"),
+                               llvm::StringRef("path"),
+                               llvm::StringRef("logical_path")}) {
+    if (auto value = entry.getAs<StringAttr>(name))
+      return value.getValue();
+  }
+  return {};
+}
+
+bool compatibleRoles(llvm::StringRef left, llvm::StringRef right) {
+  const std::pair<llvm::StringRef, llvm::StringRef> pair(left, right);
+  return pair == std::pair<llvm::StringRef, llvm::StringRef>("master", "slave") ||
+         pair == std::pair<llvm::StringRef, llvm::StringRef>("slave", "master") ||
+         pair == std::pair<llvm::StringRef, llvm::StringRef>("source", "sink") ||
+         pair == std::pair<llvm::StringRef, llvm::StringRef>("sink", "source") ||
+         pair == std::pair<llvm::StringRef, llvm::StringRef>("initiator", "target") ||
+         pair == std::pair<llvm::StringRef, llvm::StringRef>("target", "initiator") ||
+         pair ==
+             std::pair<llvm::StringRef, llvm::StringRef>("controller", "peripheral") ||
+         pair ==
+             std::pair<llvm::StringRef, llvm::StringRef>("peripheral", "controller") ||
+         pair == std::pair<llvm::StringRef, llvm::StringRef>("device", "environment") ||
+         pair == std::pair<llvm::StringRef, llvm::StringRef>("environment", "device");
+}
+
+bool inverseRoles(llvm::StringRef source, llvm::StringRef destination) {
+  return compatibleRoles(source, destination);
+}
+
+LogicalResult verifyInterfaceStorage(ModuleOp module) {
+  LogicalResult result = success();
+  module.walk([&](Operation *operation) {
+    for (llvm::StringRef name : {llvm::StringRef("type"),
+                                 llvm::StringRef("underlying_type"),
+                                 llvm::StringRef("state_type")}) {
+      auto type = operation->getAttrOfType<TypeAttr>(name);
+      if (type && llvm::isa<InterfaceType>(type.getValue()))
+        result = emitMappedFailure(operation, "NODAL-INTERFACE-STORAGE-001",
+                                   "Interface connectivity cannot be stored as a value");
+    }
+  });
+  return result;
+}
+
+LogicalResult verifyInterfaceDefinitions(ModuleOp module) {
+  struct InterfaceInfo {
+    llvm::StringSet<> roles;
+    llvm::StringSet<> members;
+  };
+  llvm::StringMap<InterfaceInfo> definitions;
+  for (Operation &operation : module.getBody()->getOperations()) {
+    if (operation.getName().getStringRef() != "nodal.interface")
+      continue;
+    auto symbol =
+        operation.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+    if (!symbol || operation.getNumRegions() != 1 || operation.getRegion(0).empty())
+      continue;
+    InterfaceInfo &info = definitions[symbol.getValue()];
+    for (Operation &nested : operation.getRegion(0).front()) {
+      auto nestedSymbol =
+          nested.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+      if (!nestedSymbol)
+        continue;
+      if (nested.getName().getStringRef() == "nodal.interface_role")
+        info.roles.insert(nestedSymbol.getValue());
+      else if (nested.getName().getStringRef() == "nodal.interface_member")
+        info.members.insert(nestedSymbol.getValue());
+    }
+  }
+
+  LogicalResult result = success();
+  module.walk([&](Operation *owner) {
+    if (owner->getName().getStringRef() != "nodal.module" ||
+        owner->getNumRegions() != 1 || owner->getRegion(0).empty())
+      return;
+    struct InstanceInfo {
+      std::string definition;
+      std::string role;
+    };
+    llvm::StringMap<InstanceInfo> instances;
+    for (Operation &operation : owner->getRegion(0).front()) {
+      if (operation.getName().getStringRef() != "nodal.interface_instance")
+        continue;
+      auto symbol =
+          operation.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+      auto definition = operation.getAttrOfType<FlatSymbolRefAttr>("definition");
+      auto role = operation.getAttrOfType<StringAttr>("role");
+      if (!symbol || !definition || !definitions.contains(definition.getValue()))
+        continue;
+      if (!role || !definitions[definition.getValue()].roles.contains(role.getValue())) {
+        result = emitMappedFailure(
+            &operation, "NODAL-INTERFACE-ROLE-001",
+            "Interface instance selects a missing or unknown role");
+        continue;
+      }
+      if (auto inverted = stringAttribute(metadata(&operation), "inverted_from")) {
+        if (!inverseRoles(inverted.getValue(), role.getValue()))
+          result = emitMappedFailure(
+              &operation, "NODAL-INTERFACE-INVERSION-001",
+              "Interface role inversion is not a defined complementary pair");
+      }
+      instances[symbol.getValue()] =
+          InstanceInfo{definition.getValue().str(), role.getValue().str()};
+    }
+
+    for (Operation &operation : owner->getRegion(0).front()) {
+      if (operation.getName().getStringRef() != "nodal.member_access")
+        continue;
+      auto instance = operation.getAttrOfType<FlatSymbolRefAttr>("instance");
+      auto path = operation.getAttrOfType<StringAttr>("path");
+      if (!instance || !path || !instances.contains(instance.getValue()))
+        continue;
+      llvm::StringRef member = path.getValue().split('.').first;
+      const InstanceInfo &info = instances[instance.getValue()];
+      if (!definitions[info.definition].members.contains(member))
+        result = emitMappedFailure(
+            &operation, "NODAL-INTERFACE-MEMBER-001",
+            llvm::Twine("Interface role references missing member '") + member + "'");
+      if (info.role == "monitor") {
+        if (auto access = stringAttribute(metadata(&operation), "access")) {
+          if (access.getValue() == "drive" || access.getValue() == "contribute")
+            result = emitMappedFailure(
+                &operation, "NODAL-INTERFACE-MONITOR-001",
+                "monitor role cannot drive or contribute to an Interface member");
+        }
+      }
+    }
+  });
+  return result;
+}
+
+LogicalResult verifyInterfaceInventories(ModuleOp module) {
+  LogicalResult result = success();
+  if (ArrayAttr connections =
+          module->getAttrOfType<ArrayAttr>("nodal.verify.interface_connections")) {
+    for (Attribute value : connections) {
+      auto entry = llvm::dyn_cast<DictionaryAttr>(value);
+      if (!entry)
+        continue;
+      auto left = entry.getAs<StringAttr>("left_role");
+      auto right = entry.getAs<StringAttr>("right_role");
+      if (left && right && !compatibleRoles(left.getValue(), right.getValue()))
+        result = emitMappedFailureForPath(
+            module, inventoryPath(entry), "NODAL-INTERFACE-ROLE-002",
+            llvm::Twine("incompatible Interface roles '") + left.getValue() + "' and '" +
+                right.getValue() + "'");
+    }
+  }
+
+  if (ArrayAttr actions =
+          module->getAttrOfType<ArrayAttr>("nodal.verify.interface_actions")) {
+    for (Attribute value : actions) {
+      auto entry = llvm::dyn_cast<DictionaryAttr>(value);
+      if (!entry)
+        continue;
+      auto role = entry.getAs<StringAttr>("role");
+      auto action = entry.getAs<StringAttr>("action");
+      if (role && action && role.getValue() == "monitor" &&
+          (action.getValue() == "drive" || action.getValue() == "contribute"))
+        result = emitMappedFailureForPath(
+            module, inventoryPath(entry), "NODAL-INTERFACE-MONITOR-001",
+            "monitor role cannot drive or contribute");
+    }
+  }
+
+  if (ArrayAttr inversions =
+          module->getAttrOfType<ArrayAttr>("nodal.verify.interface_inversions")) {
+    for (Attribute value : inversions) {
+      auto entry = llvm::dyn_cast<DictionaryAttr>(value);
+      if (!entry)
+        continue;
+      auto source = entry.getAs<StringAttr>("source_role");
+      auto destination = entry.getAs<StringAttr>("destination_role");
+      if (source && destination &&
+          !inverseRoles(source.getValue(), destination.getValue()))
+        result = emitMappedFailureForPath(
+            module, inventoryPath(entry), "NODAL-INTERFACE-INVERSION-001",
+            "invalid Interface role inversion");
+    }
+  }
+  return result;
+}
+
+LogicalResult verifyInterfaceLayouts(ModuleOp module) {
+  llvm::StringMap<std::string> emittedToLogical;
+  LogicalResult result = success();
+  module.walk([&](Operation *operation) {
+    if (operation->getName().getStringRef() != "nodal.interface_abi")
+      return;
+    auto logical = operation->getAttrOfType<StringAttr>("logical_path");
+    auto emitted = stringAttribute(metadata(operation), "emitted_path");
+    if (!logical || !emitted || emitted.getValue().empty())
+      return;
+    auto existing = emittedToLogical.find(emitted.getValue());
+    if (existing != emittedToLogical.end() && existing->second != logical.getValue())
+      result = emitMappedFailure(
+          operation, "NODAL-INTERFACE-LAYOUT-001",
+          llvm::Twine("Interface layout collision on emitted path '") +
+              emitted.getValue() + "'");
+    else
+      emittedToLogical[emitted.getValue()] = logical.getValue().str();
+  });
+  return result;
+}
+
+LogicalResult verifyOrdinaryDrivers(ModuleOp module) {
+  ArrayAttr drivers =
+      module->getAttrOfType<ArrayAttr>("nodal.verify.ordinary_drivers");
+  if (!drivers)
+    return success();
+  LogicalResult result = success();
+  for (Attribute value : drivers) {
+    auto entry = llvm::dyn_cast<DictionaryAttr>(value);
+    if (!entry)
+      continue;
+    auto count = entry.getAs<IntegerAttr>("count");
+    if (count && count.getInt() > 1)
+      result = emitMappedFailureForPath(
+          module, inventoryPath(entry), "NODAL-DRIVER-MULTIPLE-001",
+          "ordinary value has multiple active drivers");
+  }
+  return result;
+}
+
+LogicalResult verifyResolvedNets(ModuleOp module) {
+  LogicalResult result = success();
+  module.walk([&](Operation *operation) {
+    llvm::StringRef name = operation->getName().getStringRef();
+    if (name == "nodal.resolved_net") {
+      if (booleanAttribute(metadata(operation), "resolution_supported") ==
+          std::optional<bool>(false))
+        result = emitMappedFailure(
+            operation, "NODAL-INOUT-RESOLUTION-001",
+            "selected profile does not support this resolved-net capability");
+      return;
+    }
+    if (name != "nodal.net_drive" || operation->getNumOperands() == 0)
+      return;
+    auto net = llvm::dyn_cast<ResolvedType>(operation->getOperand(0).getType());
+    auto level = stringAttribute(metadata(operation), "drive_level");
+    if (!net || !level)
+      return;
+    if (net.getDriveMode() == "open_drain" && level.getValue() != "low" &&
+        level.getValue() != "0" && level.getValue() != "z")
+      result = emitMappedFailure(operation, "NODAL-INOUT-OPEN-DRAIN-001",
+                                 "open-drain endpoint may drive only low or high impedance");
+    if (net.getDriveMode() == "open_source" && level.getValue() != "high" &&
+        level.getValue() != "1" && level.getValue() != "z")
+      result = emitMappedFailure(operation, "NODAL-INOUT-OPEN-SOURCE-001",
+                                 "open-source endpoint may drive only high or high impedance");
+  });
+  return result;
+}
+
+LogicalResult verifyInoutPassThrough(ModuleOp module) {
+  ArrayAttr declarations = module->getAttrOfType<ArrayAttr>("nodal.bridge.declarations");
+  ArrayAttr topology = module->getAttrOfType<ArrayAttr>("nodal.bridge.topology");
+  if (!declarations || !topology)
+    return success();
+
+  llvm::StringMap<std::string> modes;
+  for (Attribute value : declarations) {
+    auto entry = llvm::dyn_cast<DictionaryAttr>(value);
+    if (!entry)
+      continue;
+    auto path = entry.getAs<StringAttr>("path");
+    auto attributes = entry.getAs<DictionaryAttr>("attributes");
+    auto mode = attributes ? attributes.getAs<StringAttr>("mode") : StringAttr();
+    if (path && mode)
+      modes[path.getValue()] = mode.getValue().str();
+  }
+
+  LogicalResult result = success();
+  for (Attribute value : topology) {
+    auto entry = llvm::dyn_cast<DictionaryAttr>(value);
+    if (!entry)
+      continue;
+    auto kind = entry.getAs<StringAttr>("kind");
+    auto left = entry.getAs<StringAttr>("left");
+    auto right = entry.getAs<StringAttr>("right");
+    if (!kind || kind.getValue() != "inout-pass-through" || !left || !right)
+      continue;
+    auto leftMode = modes.find(left.getValue());
+    auto rightMode = modes.find(right.getValue());
+    if (leftMode == modes.end() || rightMode == modes.end() ||
+        leftMode->second != rightMode->second)
+      result = emitMappedFailureForPath(
+          module, left.getValue(), "NODAL-INOUT-HIERARCHY-001",
+          "hierarchical inout pass-through does not preserve one resolved-net mode");
+  }
+  return result;
+}
+
+LogicalResult verifyAmsInventories(ModuleOp module) {
+  LogicalResult result = success();
+  if (ArrayAttr connections =
+          module->getAttrOfType<ArrayAttr>("nodal.verify.ams_connections")) {
+    for (Attribute value : connections) {
+      auto entry = llvm::dyn_cast<DictionaryAttr>(value);
+      if (!entry)
+        continue;
+      auto left = entry.getAs<StringAttr>("left_discipline");
+      auto right = entry.getAs<StringAttr>("right_discipline");
+      if (left && right && left.getValue() != right.getValue())
+        result = emitMappedFailureForPath(
+            module, inventoryPath(entry), "NODAL-AMS-DISCIPLINE-001",
+            "conservative connection joins incompatible disciplines");
+    }
+  }
+
+  if (ArrayAttr accesses =
+          module->getAttrOfType<ArrayAttr>("nodal.verify.ams_accesses")) {
+    for (Attribute value : accesses) {
+      auto entry = llvm::dyn_cast<DictionaryAttr>(value);
+      if (!entry)
+        continue;
+      if (booleanAttribute(entry, "allowed") == std::optional<bool>(false))
+        result = emitMappedFailureForPath(
+            module, inventoryPath(entry), "NODAL-AMS-ACCESS-001",
+            "role does not permit the requested conservative access");
+    }
+  }
+
+  if (ArrayAttr bridges =
+          module->getAttrOfType<ArrayAttr>("nodal.verify.implicit_bridges")) {
+    for (Attribute value : bridges) {
+      auto entry = llvm::dyn_cast<DictionaryAttr>(value);
+      if (!entry)
+        continue;
+      if (booleanAttribute(entry, "implicit") == std::optional<bool>(true))
+        result = emitMappedFailureForPath(
+            module, inventoryPath(entry), "NODAL-AMS-BRIDGE-001",
+            "analog/digital or conservative/signal-flow conversion requires an explicit bridge");
+    }
+  }
+
+  module.walk([&](Operation *operation) {
+    if (operation->getName().getStringRef() == "nodal.bridge" &&
+        booleanAttribute(metadata(operation), "implicit") ==
+            std::optional<bool>(true))
+      result = emitMappedFailure(
+          operation, "NODAL-AMS-BRIDGE-001",
+          "analog/digital or conservative/signal-flow conversion requires an explicit bridge");
+  });
+  return result;
+}
+
+class CrossLayerDiagnosticPass final
+    : public PassWrapper<CrossLayerDiagnosticPass, OperationPass<ModuleOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CrossLayerDiagnosticPass)
+
+  llvm::StringRef getArgument() const final {
+    return "nodal-verify-cross-layer-diagnostics";
+  }
+  llvm::StringRef getDescription() const final {
+    return "Verify and source-map cross-layer Interface, inout, and AMS diagnostics";
+  }
+
+  void runOnOperation() final {
+    ModuleOp module = getOperation();
+    LogicalResult result = success();
+    for (LogicalResult check : {
+             verifyInterfaceStorage(module),
+             verifyInterfaceDefinitions(module),
+             verifyInterfaceInventories(module),
+             verifyInterfaceLayouts(module),
+             verifyOrdinaryDrivers(module),
+             verifyResolvedNets(module),
+             verifyInoutPassThrough(module),
+             verifyAmsInventories(module),
+         }) {
+      if (failed(check))
+        result = failure();
+    }
+    if (failed(result)) {
+      signalPassFailure();
+      return;
+    }
+    markAllAnalysesPreserved();
+  }
+};
+
+} // namespace
+
+DiagnosticContext collectDiagnosticContext(Operation *operation) {
+  DiagnosticContext context;
+  llvm::StringRef semantic = semanticPath(operation);
+  context.semanticPath = semantic.str();
+  llvm::StringRef hierarchy = explicitContext(operation, "hierarchy_path");
+  context.hierarchyPath =
+      hierarchy.empty() ? hierarchyFallback(operation) : hierarchy.str();
+  llvm::StringRef index = explicitContext(operation, "index_path");
+  context.indexPath = index.empty() ? indexFallback(semantic) : index.str();
+
+  if (FileLineColLoc file = findFileLocation(operation->getLoc())) {
+    int64_t endLine = file.getLine();
+    int64_t endColumn = file.getColumn();
+    for (Operation *current = operation; current; current = current->getParentOp()) {
+      DictionaryAttr values = metadata(current);
+      if (std::optional<int64_t> value = integerAttribute(values, "source_end_line"))
+        endLine = *value;
+      if (std::optional<int64_t> value = integerAttribute(values, "source_end_column"))
+        endColumn = *value;
+      if (values && (values.get("source_end_line") || values.get("source_end_column")))
+        break;
+    }
+    context.sourceRange =
+        formatSourceRange(file.getFilename(), file.getLine(), file.getColumn(),
+                          endLine, endColumn);
+  }
+  return context;
+}
+
+LogicalResult emitMappedFailure(Operation *operation, llvm::StringRef code,
+                                const llvm::Twine &message) {
+  return emitWithContext(operation, code, message,
+                         collectDiagnosticContext(operation));
+}
+
+LogicalResult emitMappedFailureForPath(ModuleOp module,
+                                       llvm::StringRef semanticPathValue,
+                                       llvm::StringRef code,
+                                       const llvm::Twine &message) {
+  if (Operation *operation = findOperationByPath(module, semanticPathValue))
+    return emitMappedFailure(operation, code, message);
+  return emitWithContext(module.getOperation(), code, message,
+                         sourceMapContext(module, semanticPathValue));
+}
+
+std::unique_ptr<Pass> createCrossLayerDiagnosticPass() {
+  return std::make_unique<CrossLayerDiagnosticPass>();
+}
+
+void registerNodalDiagnosticPasses() {
+  static PassRegistration<CrossLayerDiagnosticPass> crossLayer;
+  (void)crossLayer;
+}
+
+} // namespace nodal

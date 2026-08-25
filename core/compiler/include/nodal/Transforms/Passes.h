@@ -21,8 +21,7 @@ llvm::StringRef stringifyGateProfile(GateProfile profile);
 void registerNodalPasses();
 
 /// Run one clone-before-commit verification transaction on `module`.
-mlir::LogicalResult runNodalPipelineTransaction(mlir::ModuleOp module,
-                                                GateProfile profile);
+mlir::LogicalResult runNodalPipelineTransaction(mlir::ModuleOp module, GateProfile profile);
 
 /// Retains the last accepted normalized module when a later candidate fails.
 class PipelineSession {

@@ -74,6 +74,9 @@ jobs:
             --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
           ./nodal core scala
 
+      # Explicit fixture inventory for structural contracts:
+      # core/compiler/test/IR/diagnostic-mapping-inventory-invalid.mlir
+      # core/compiler/test/IR/diagnostic-mapping-operation-invalid.mlir
       - name: Prove mapped Interface inout and AMS diagnostics
         run: |
           compiler=out/native/release/bin/nodalc

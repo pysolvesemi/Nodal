@@ -1,12 +1,11 @@
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 
-#include "nodal/Dialect/Nodal/NodalOps.h"
-#include "nodal/Dialect/Nodal/NodalTypes.h"
-
 #include "mlir/IR/BuiltinAttributes.h"
-#include "mlir/IR/BuiltinLocationAttributes.h"
+#include "mlir/IR/Location.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/NodalTypes.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
@@ -25,16 +24,14 @@ namespace nodal {
 namespace {
 
 DictionaryAttr metadata(Operation *operation) {
-  return operation ? operation->getAttrOfType<DictionaryAttr>("metadata")
-                   : DictionaryAttr();
+  return operation ? operation->getAttrOfType<DictionaryAttr>("metadata") : DictionaryAttr();
 }
 
 StringAttr stringAttribute(DictionaryAttr values, llvm::StringRef name) {
   return values ? values.getAs<StringAttr>(name) : StringAttr();
 }
 
-std::optional<int64_t> integerAttribute(DictionaryAttr values,
-                                        llvm::StringRef name) {
+std::optional<int64_t> integerAttribute(DictionaryAttr values, llvm::StringRef name) {
   if (!values)
     return std::nullopt;
   if (auto integer = values.getAs<IntegerAttr>(name))
@@ -47,8 +44,7 @@ std::optional<int64_t> integerAttribute(DictionaryAttr values,
   return std::nullopt;
 }
 
-std::optional<bool> booleanAttribute(DictionaryAttr values,
-                                     llvm::StringRef name) {
+std::optional<bool> booleanAttribute(DictionaryAttr values, llvm::StringRef name) {
   if (!values)
     return std::nullopt;
   if (auto value = values.getAs<BoolAttr>(name))
@@ -79,8 +75,6 @@ llvm::StringRef explicitContext(Operation *operation, llvm::StringRef name) {
 }
 
 FileLineColLoc findFileLocation(Location location) {
-  if (!location)
-    return {};
   if (auto file = llvm::dyn_cast<FileLineColLoc>(location))
     return file;
   if (auto name = llvm::dyn_cast<NameLoc>(location))
@@ -102,8 +96,7 @@ FileLineColLoc findFileLocation(Location location) {
 std::string hierarchyFallback(Operation *operation) {
   llvm::SmallVector<std::string, 8> symbols;
   for (Operation *current = operation; current; current = current->getParentOp()) {
-    if (auto symbol =
-            current->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName())) {
+    if (auto symbol = current->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName())) {
       if (!symbol.getValue().empty())
         symbols.push_back(symbol.getValue().str());
     }
@@ -125,8 +118,7 @@ std::string indexFallback(llvm::StringRef path) {
   return path.drop_front(start).str();
 }
 
-std::string formatSourceRange(llvm::StringRef path, int64_t line,
-                              int64_t column, int64_t endLine,
+std::string formatSourceRange(llvm::StringRef path, int64_t line, int64_t column, int64_t endLine,
                               int64_t endColumn) {
   if (path.empty() || line <= 0 || column <= 0)
     return {};
@@ -134,13 +126,12 @@ std::string formatSourceRange(llvm::StringRef path, int64_t line,
     endLine = line;
   if (endColumn <= 0)
     endColumn = column;
-  return (path + ":" + llvm::Twine(line) + ":" + llvm::Twine(column) + "-" +
-          llvm::Twine(endLine) + ":" + llvm::Twine(endColumn))
+  return (path + ":" + llvm::Twine(line) + ":" + llvm::Twine(column) + "-" + llvm::Twine(endLine) +
+          ":" + llvm::Twine(endColumn))
       .str();
 }
 
-void appendContext(InFlightDiagnostic &diagnostic,
-                   const DiagnosticContext &context) {
+void appendContext(InFlightDiagnostic &diagnostic, const DiagnosticContext &context) {
   if (!context.semanticPath.empty())
     diagnostic << " [semantic-path=" << context.semanticPath << "]";
   if (!context.hierarchyPath.empty())
@@ -152,15 +143,14 @@ void appendContext(InFlightDiagnostic &diagnostic,
 }
 
 LogicalResult emitWithContext(Operation *operation, llvm::StringRef code,
-                              const llvm::Twine &message,
-                              const DiagnosticContext &context) {
+                              const llvm::Twine &message, const DiagnosticContext &context) {
   InFlightDiagnostic diagnostic = operation->emitError();
   diagnostic << code << ": " << message.str();
   appendContext(diagnostic, context);
   return failure();
 }
 
-Operation *findOperationByPath(ModuleOp module, llvm::StringRef path) {
+Operation *findOperationByPath(mlir::ModuleOp module, llvm::StringRef path) {
   Operation *found = nullptr;
   module.walk([&](Operation *operation) {
     if (!found && semanticPath(operation) == path)
@@ -169,7 +159,7 @@ Operation *findOperationByPath(ModuleOp module, llvm::StringRef path) {
   return found;
 }
 
-DiagnosticContext sourceMapContext(ModuleOp module, llvm::StringRef path) {
+DiagnosticContext sourceMapContext(mlir::ModuleOp module, llvm::StringRef path) {
   DiagnosticContext context;
   context.semanticPath = path.str();
   context.hierarchyPath = path.str();
@@ -191,10 +181,9 @@ DiagnosticContext sourceMapContext(ModuleOp module, llvm::StringRef path) {
     auto endLine = entry.getAs<IntegerAttr>("source_end_line");
     auto endColumn = entry.getAs<IntegerAttr>("source_end_column");
     if (source && line && column) {
-      context.sourceRange = formatSourceRange(
-          source.getValue(), line.getInt(), column.getInt(),
-          endLine ? endLine.getInt() : line.getInt(),
-          endColumn ? endColumn.getInt() : column.getInt());
+      context.sourceRange = formatSourceRange(source.getValue(), line.getInt(), column.getInt(),
+                                              endLine ? endLine.getInt() : line.getInt(),
+                                              endColumn ? endColumn.getInt() : column.getInt());
     }
     break;
   }
@@ -202,8 +191,7 @@ DiagnosticContext sourceMapContext(ModuleOp module, llvm::StringRef path) {
 }
 
 llvm::StringRef inventoryPath(DictionaryAttr entry) {
-  for (llvm::StringRef name : {llvm::StringRef("semantic_path"),
-                               llvm::StringRef("path"),
+  for (llvm::StringRef name : {llvm::StringRef("semantic_path"), llvm::StringRef("path"),
                                llvm::StringRef("logical_path")}) {
     if (auto value = entry.getAs<StringAttr>(name))
       return value.getValue();
@@ -219,10 +207,8 @@ bool compatibleRoles(llvm::StringRef left, llvm::StringRef right) {
          pair == std::pair<llvm::StringRef, llvm::StringRef>("sink", "source") ||
          pair == std::pair<llvm::StringRef, llvm::StringRef>("initiator", "target") ||
          pair == std::pair<llvm::StringRef, llvm::StringRef>("target", "initiator") ||
-         pair ==
-             std::pair<llvm::StringRef, llvm::StringRef>("controller", "peripheral") ||
-         pair ==
-             std::pair<llvm::StringRef, llvm::StringRef>("peripheral", "controller") ||
+         pair == std::pair<llvm::StringRef, llvm::StringRef>("controller", "peripheral") ||
+         pair == std::pair<llvm::StringRef, llvm::StringRef>("peripheral", "controller") ||
          pair == std::pair<llvm::StringRef, llvm::StringRef>("device", "environment") ||
          pair == std::pair<llvm::StringRef, llvm::StringRef>("environment", "device");
 }
@@ -231,11 +217,10 @@ bool inverseRoles(llvm::StringRef source, llvm::StringRef destination) {
   return compatibleRoles(source, destination);
 }
 
-LogicalResult verifyInterfaceStorage(ModuleOp module) {
+LogicalResult verifyInterfaceStorage(mlir::ModuleOp module) {
   LogicalResult result = success();
   module.walk([&](Operation *operation) {
-    for (llvm::StringRef name : {llvm::StringRef("type"),
-                                 llvm::StringRef("underlying_type"),
+    for (llvm::StringRef name : {llvm::StringRef("type"), llvm::StringRef("underlying_type"),
                                  llvm::StringRef("state_type")}) {
       auto type = operation->getAttrOfType<TypeAttr>(name);
       if (type && llvm::isa<InterfaceType>(type.getValue()))
@@ -246,7 +231,7 @@ LogicalResult verifyInterfaceStorage(ModuleOp module) {
   return result;
 }
 
-LogicalResult verifyInterfaceDefinitions(ModuleOp module) {
+LogicalResult verifyInterfaceDefinitions(mlir::ModuleOp module) {
   struct InterfaceInfo {
     llvm::StringSet<> roles;
     llvm::StringSet<> members;
@@ -255,14 +240,12 @@ LogicalResult verifyInterfaceDefinitions(ModuleOp module) {
   for (Operation &operation : module.getBody()->getOperations()) {
     if (operation.getName().getStringRef() != "nodal.interface")
       continue;
-    auto symbol =
-        operation.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+    auto symbol = operation.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
     if (!symbol || operation.getNumRegions() != 1 || operation.getRegion(0).empty())
       continue;
     InterfaceInfo &info = definitions[symbol.getValue()];
     for (Operation &nested : operation.getRegion(0).front()) {
-      auto nestedSymbol =
-          nested.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+      auto nestedSymbol = nested.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
       if (!nestedSymbol)
         continue;
       if (nested.getName().getStringRef() == "nodal.interface_role")
@@ -274,8 +257,8 @@ LogicalResult verifyInterfaceDefinitions(ModuleOp module) {
 
   LogicalResult result = success();
   module.walk([&](Operation *owner) {
-    if (owner->getName().getStringRef() != "nodal.module" ||
-        owner->getNumRegions() != 1 || owner->getRegion(0).empty())
+    if (owner->getName().getStringRef() != "nodal.module" || owner->getNumRegions() != 1 ||
+        owner->getRegion(0).empty())
       return;
     struct InstanceInfo {
       std::string definition;
@@ -285,23 +268,21 @@ LogicalResult verifyInterfaceDefinitions(ModuleOp module) {
     for (Operation &operation : owner->getRegion(0).front()) {
       if (operation.getName().getStringRef() != "nodal.interface_instance")
         continue;
-      auto symbol =
-          operation.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+      auto symbol = operation.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
       auto definition = operation.getAttrOfType<FlatSymbolRefAttr>("definition");
       auto role = operation.getAttrOfType<StringAttr>("role");
       if (!symbol || !definition || !definitions.contains(definition.getValue()))
         continue;
       if (!role || !definitions[definition.getValue()].roles.contains(role.getValue())) {
-        result = emitMappedFailure(
-            &operation, "NODAL-INTERFACE-ROLE-001",
-            "Interface instance selects a missing or unknown role");
+        result = emitMappedFailure(&operation, "NODAL-INTERFACE-ROLE-001",
+                                   "Interface instance selects a missing or unknown role");
         continue;
       }
       if (auto inverted = stringAttribute(metadata(&operation), "inverted_from")) {
         if (!inverseRoles(inverted.getValue(), role.getValue()))
-          result = emitMappedFailure(
-              &operation, "NODAL-INTERFACE-INVERSION-001",
-              "Interface role inversion is not a defined complementary pair");
+          result =
+              emitMappedFailure(&operation, "NODAL-INTERFACE-INVERSION-001",
+                                "Interface role inversion is not a defined complementary pair");
       }
       instances[symbol.getValue()] =
           InstanceInfo{definition.getValue().str(), role.getValue().str()};
@@ -317,15 +298,15 @@ LogicalResult verifyInterfaceDefinitions(ModuleOp module) {
       llvm::StringRef member = path.getValue().split('.').first;
       const InstanceInfo &info = instances[instance.getValue()];
       if (!definitions[info.definition].members.contains(member))
-        result = emitMappedFailure(
-            &operation, "NODAL-INTERFACE-MEMBER-001",
-            llvm::Twine("Interface role references missing member '") + member + "'");
+        result = emitMappedFailure(&operation, "NODAL-INTERFACE-MEMBER-001",
+                                   llvm::Twine("Interface role references missing member '") +
+                                       member + "'");
       if (info.role == "monitor") {
         if (auto access = stringAttribute(metadata(&operation), "access")) {
           if (access.getValue() == "drive" || access.getValue() == "contribute")
-            result = emitMappedFailure(
-                &operation, "NODAL-INTERFACE-MONITOR-001",
-                "monitor role cannot drive or contribute to an Interface member");
+            result =
+                emitMappedFailure(&operation, "NODAL-INTERFACE-MONITOR-001",
+                                  "monitor role cannot drive or contribute to an Interface member");
         }
       }
     }
@@ -333,7 +314,7 @@ LogicalResult verifyInterfaceDefinitions(ModuleOp module) {
   return result;
 }
 
-LogicalResult verifyInterfaceInventories(ModuleOp module) {
+LogicalResult verifyInterfaceInventories(mlir::ModuleOp module) {
   LogicalResult result = success();
   if (ArrayAttr connections =
           module->getAttrOfType<ArrayAttr>("nodal.verify.interface_connections")) {
@@ -344,15 +325,13 @@ LogicalResult verifyInterfaceInventories(ModuleOp module) {
       auto left = entry.getAs<StringAttr>("left_role");
       auto right = entry.getAs<StringAttr>("right_role");
       if (left && right && !compatibleRoles(left.getValue(), right.getValue()))
-        result = emitMappedFailureForPath(
-            module, inventoryPath(entry), "NODAL-INTERFACE-ROLE-002",
-            llvm::Twine("incompatible Interface roles '") + left.getValue() + "' and '" +
-                right.getValue() + "'");
+        result = emitMappedFailureForPath(module, inventoryPath(entry), "NODAL-INTERFACE-ROLE-002",
+                                          llvm::Twine("incompatible Interface roles '") +
+                                              left.getValue() + "' and '" + right.getValue() + "'");
     }
   }
 
-  if (ArrayAttr actions =
-          module->getAttrOfType<ArrayAttr>("nodal.verify.interface_actions")) {
+  if (ArrayAttr actions = module->getAttrOfType<ArrayAttr>("nodal.verify.interface_actions")) {
     for (Attribute value : actions) {
       auto entry = llvm::dyn_cast<DictionaryAttr>(value);
       if (!entry)
@@ -361,9 +340,9 @@ LogicalResult verifyInterfaceInventories(ModuleOp module) {
       auto action = entry.getAs<StringAttr>("action");
       if (role && action && role.getValue() == "monitor" &&
           (action.getValue() == "drive" || action.getValue() == "contribute"))
-        result = emitMappedFailureForPath(
-            module, inventoryPath(entry), "NODAL-INTERFACE-MONITOR-001",
-            "monitor role cannot drive or contribute");
+        result =
+            emitMappedFailureForPath(module, inventoryPath(entry), "NODAL-INTERFACE-MONITOR-001",
+                                     "monitor role cannot drive or contribute");
     }
   }
 
@@ -375,17 +354,16 @@ LogicalResult verifyInterfaceInventories(ModuleOp module) {
         continue;
       auto source = entry.getAs<StringAttr>("source_role");
       auto destination = entry.getAs<StringAttr>("destination_role");
-      if (source && destination &&
-          !inverseRoles(source.getValue(), destination.getValue()))
-        result = emitMappedFailureForPath(
-            module, inventoryPath(entry), "NODAL-INTERFACE-INVERSION-001",
-            "invalid Interface role inversion");
+      if (source && destination && !inverseRoles(source.getValue(), destination.getValue()))
+        result =
+            emitMappedFailureForPath(module, inventoryPath(entry), "NODAL-INTERFACE-INVERSION-001",
+                                     "invalid Interface role inversion");
     }
   }
   return result;
 }
 
-LogicalResult verifyInterfaceLayouts(ModuleOp module) {
+LogicalResult verifyInterfaceLayouts(mlir::ModuleOp module) {
   llvm::StringMap<std::string> emittedToLogical;
   LogicalResult result = success();
   module.walk([&](Operation *operation) {
@@ -397,19 +375,17 @@ LogicalResult verifyInterfaceLayouts(ModuleOp module) {
       return;
     auto existing = emittedToLogical.find(emitted.getValue());
     if (existing != emittedToLogical.end() && existing->second != logical.getValue())
-      result = emitMappedFailure(
-          operation, "NODAL-INTERFACE-LAYOUT-001",
-          llvm::Twine("Interface layout collision on emitted path '") +
-              emitted.getValue() + "'");
+      result = emitMappedFailure(operation, "NODAL-INTERFACE-LAYOUT-001",
+                                 llvm::Twine("Interface layout collision on emitted path '") +
+                                     emitted.getValue() + "'");
     else
       emittedToLogical[emitted.getValue()] = logical.getValue().str();
   });
   return result;
 }
 
-LogicalResult verifyOrdinaryDrivers(ModuleOp module) {
-  ArrayAttr drivers =
-      module->getAttrOfType<ArrayAttr>("nodal.verify.ordinary_drivers");
+LogicalResult verifyOrdinaryDrivers(mlir::ModuleOp module) {
+  ArrayAttr drivers = module->getAttrOfType<ArrayAttr>("nodal.verify.ordinary_drivers");
   if (!drivers)
     return success();
   LogicalResult result = success();
@@ -419,23 +395,22 @@ LogicalResult verifyOrdinaryDrivers(ModuleOp module) {
       continue;
     auto count = entry.getAs<IntegerAttr>("count");
     if (count && count.getInt() > 1)
-      result = emitMappedFailureForPath(
-          module, inventoryPath(entry), "NODAL-DRIVER-MULTIPLE-001",
-          "ordinary value has multiple active drivers");
+      result = emitMappedFailureForPath(module, inventoryPath(entry), "NODAL-DRIVER-MULTIPLE-001",
+                                        "ordinary value has multiple active drivers");
   }
   return result;
 }
 
-LogicalResult verifyResolvedNets(ModuleOp module) {
+LogicalResult verifyResolvedNets(mlir::ModuleOp module) {
   LogicalResult result = success();
   module.walk([&](Operation *operation) {
     llvm::StringRef name = operation->getName().getStringRef();
     if (name == "nodal.resolved_net") {
       if (booleanAttribute(metadata(operation), "resolution_supported") ==
           std::optional<bool>(false))
-        result = emitMappedFailure(
-            operation, "NODAL-INOUT-RESOLUTION-001",
-            "selected profile does not support this resolved-net capability");
+        result =
+            emitMappedFailure(operation, "NODAL-INOUT-RESOLUTION-001",
+                              "selected profile does not support this resolved-net capability");
       return;
     }
     if (name != "nodal.net_drive" || operation->getNumOperands() == 0)
@@ -456,7 +431,7 @@ LogicalResult verifyResolvedNets(ModuleOp module) {
   return result;
 }
 
-LogicalResult verifyInoutPassThrough(ModuleOp module) {
+LogicalResult verifyInoutPassThrough(mlir::ModuleOp module) {
   ArrayAttr declarations = module->getAttrOfType<ArrayAttr>("nodal.bridge.declarations");
   ArrayAttr topology = module->getAttrOfType<ArrayAttr>("nodal.bridge.topology");
   if (!declarations || !topology)
@@ -495,10 +470,9 @@ LogicalResult verifyInoutPassThrough(ModuleOp module) {
   return result;
 }
 
-LogicalResult verifyAmsInventories(ModuleOp module) {
+LogicalResult verifyAmsInventories(mlir::ModuleOp module) {
   LogicalResult result = success();
-  if (ArrayAttr connections =
-          module->getAttrOfType<ArrayAttr>("nodal.verify.ams_connections")) {
+  if (ArrayAttr connections = module->getAttrOfType<ArrayAttr>("nodal.verify.ams_connections")) {
     for (Attribute value : connections) {
       auto entry = llvm::dyn_cast<DictionaryAttr>(value);
       if (!entry)
@@ -506,27 +480,23 @@ LogicalResult verifyAmsInventories(ModuleOp module) {
       auto left = entry.getAs<StringAttr>("left_discipline");
       auto right = entry.getAs<StringAttr>("right_discipline");
       if (left && right && left.getValue() != right.getValue())
-        result = emitMappedFailureForPath(
-            module, inventoryPath(entry), "NODAL-AMS-DISCIPLINE-001",
-            "conservative connection joins incompatible disciplines");
+        result = emitMappedFailureForPath(module, inventoryPath(entry), "NODAL-AMS-DISCIPLINE-001",
+                                          "conservative connection joins incompatible disciplines");
     }
   }
 
-  if (ArrayAttr accesses =
-          module->getAttrOfType<ArrayAttr>("nodal.verify.ams_accesses")) {
+  if (ArrayAttr accesses = module->getAttrOfType<ArrayAttr>("nodal.verify.ams_accesses")) {
     for (Attribute value : accesses) {
       auto entry = llvm::dyn_cast<DictionaryAttr>(value);
       if (!entry)
         continue;
       if (booleanAttribute(entry, "allowed") == std::optional<bool>(false))
-        result = emitMappedFailureForPath(
-            module, inventoryPath(entry), "NODAL-AMS-ACCESS-001",
-            "role does not permit the requested conservative access");
+        result = emitMappedFailureForPath(module, inventoryPath(entry), "NODAL-AMS-ACCESS-001",
+                                          "role does not permit the requested conservative access");
     }
   }
 
-  if (ArrayAttr bridges =
-          module->getAttrOfType<ArrayAttr>("nodal.verify.implicit_bridges")) {
+  if (ArrayAttr bridges = module->getAttrOfType<ArrayAttr>("nodal.verify.implicit_bridges")) {
     for (Attribute value : bridges) {
       auto entry = llvm::dyn_cast<DictionaryAttr>(value);
       if (!entry)
@@ -540,8 +510,7 @@ LogicalResult verifyAmsInventories(ModuleOp module) {
 
   module.walk([&](Operation *operation) {
     if (operation->getName().getStringRef() == "nodal.bridge" &&
-        booleanAttribute(metadata(operation), "implicit") ==
-            std::optional<bool>(true))
+        booleanAttribute(metadata(operation), "implicit") == std::optional<bool>(true))
       result = emitMappedFailure(
           operation, "NODAL-AMS-BRIDGE-001",
           "analog/digital or conservative/signal-flow conversion requires an explicit bridge");
@@ -550,19 +519,17 @@ LogicalResult verifyAmsInventories(ModuleOp module) {
 }
 
 class CrossLayerDiagnosticPass final
-    : public PassWrapper<CrossLayerDiagnosticPass, OperationPass<ModuleOp>> {
+    : public PassWrapper<CrossLayerDiagnosticPass, OperationPass<mlir::ModuleOp>> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CrossLayerDiagnosticPass)
 
-  llvm::StringRef getArgument() const final {
-    return "nodal-verify-cross-layer-diagnostics";
-  }
+  llvm::StringRef getArgument() const final { return "nodal-verify-cross-layer-diagnostics"; }
   llvm::StringRef getDescription() const final {
     return "Verify and source-map cross-layer Interface, inout, and AMS diagnostics";
   }
 
   void runOnOperation() final {
-    ModuleOp module = getOperation();
+    mlir::ModuleOp module = getOperation();
     LogicalResult result = success();
     for (LogicalResult check : {
              verifyInterfaceStorage(module),
@@ -592,8 +559,7 @@ DiagnosticContext collectDiagnosticContext(Operation *operation) {
   llvm::StringRef semantic = semanticPath(operation);
   context.semanticPath = semantic.str();
   llvm::StringRef hierarchy = explicitContext(operation, "hierarchy_path");
-  context.hierarchyPath =
-      hierarchy.empty() ? hierarchyFallback(operation) : hierarchy.str();
+  context.hierarchyPath = hierarchy.empty() ? hierarchyFallback(operation) : hierarchy.str();
   llvm::StringRef index = explicitContext(operation, "index_path");
   context.indexPath = index.empty() ? indexFallback(semantic) : index.str();
 
@@ -610,22 +576,18 @@ DiagnosticContext collectDiagnosticContext(Operation *operation) {
         break;
     }
     context.sourceRange =
-        formatSourceRange(file.getFilename(), file.getLine(), file.getColumn(),
-                          endLine, endColumn);
+        formatSourceRange(file.getFilename(), file.getLine(), file.getColumn(), endLine, endColumn);
   }
   return context;
 }
 
 LogicalResult emitMappedFailure(Operation *operation, llvm::StringRef code,
                                 const llvm::Twine &message) {
-  return emitWithContext(operation, code, message,
-                         collectDiagnosticContext(operation));
+  return emitWithContext(operation, code, message, collectDiagnosticContext(operation));
 }
 
-LogicalResult emitMappedFailureForPath(ModuleOp module,
-                                       llvm::StringRef semanticPathValue,
-                                       llvm::StringRef code,
-                                       const llvm::Twine &message) {
+LogicalResult emitMappedFailureForPath(mlir::ModuleOp module, llvm::StringRef semanticPathValue,
+                                       llvm::StringRef code, const llvm::Twine &message) {
   if (Operation *operation = findOperationByPath(module, semanticPathValue))
     return emitMappedFailure(operation, code, message);
   return emitWithContext(module.getOperation(), code, message,

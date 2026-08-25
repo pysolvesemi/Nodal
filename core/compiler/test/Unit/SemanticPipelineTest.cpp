@@ -131,18 +131,16 @@ int main() {
     return fail("failed candidate replaced the last accepted state");
 
   std::string invalidBefore = print(*invalid);
-  if (mlir::succeeded(
-          nodal::runNodalPipelineTransaction(*invalid, nodal::GateProfile::Default)))
+  if (mlir::succeeded(nodal::runNodalPipelineTransaction(*invalid, nodal::GateProfile::Default)))
     return fail("invalid in-place transaction was accepted");
   if (print(*invalid) != invalidBefore)
     return fail("failed in-place transaction mutated its input module");
 
   auto release = mlir::parseSourceString<mlir::ModuleOp>(validSource, &context);
-  if (!release || mlir::failed(
-                      nodal::runNodalPipelineTransaction(*release,
-                                                         nodal::GateProfile::Release)))
+  if (!release ||
+      mlir::failed(nodal::runNodalPipelineTransaction(*release, nodal::GateProfile::Release)))
     return fail("release transaction failed");
-  auto profile = release->getAttrOfType<mlir::StringAttr>("nodal.pipeline.profile");
+  auto profile = release->getOperation()->getAttrOfType<mlir::StringAttr>("nodal.pipeline.profile");
   if (!profile || profile.getValue() != "release")
     return fail("release transaction recorded the wrong profile");
 

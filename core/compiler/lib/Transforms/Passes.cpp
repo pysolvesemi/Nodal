@@ -1,8 +1,5 @@
 #include "nodal/Transforms/Passes.h"
 
-#include "nodal/Dialect/Nodal/NodalOps.h"
-#include "nodal/Dialect/Nodal/NodalTypes.h"
-
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/SymbolTable.h"
@@ -10,6 +7,9 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Support/LogicalResult.h"
+#include "nodal/Diagnostics/DiagnosticMapping.h"
+#include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/NodalTypes.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -60,10 +60,8 @@ struct InventoryAnalysis {
   unsigned nodalOperationCount = 0;
 };
 
-LogicalResult emitFailure(Operation *operation, llvm::StringRef code,
-                          const llvm::Twine &message) {
-  operation->emitError() << code << ": " << message;
-  return failure();
+LogicalResult emitFailure(Operation *operation, llvm::StringRef code, const llvm::Twine &message) {
+  return emitMappedFailure(operation, code, message);
 }
 
 bool isNamed(Operation *operation, llvm::StringRef name) {
@@ -92,12 +90,11 @@ std::optional<bool> booleanMetadata(Operation *operation, llvm::StringRef name) 
   return std::nullopt;
 }
 
-LogicalResult verifyGuard(ModuleOp module, llvm::StringRef attribute,
-                          llvm::StringRef code, llvm::StringRef label) {
+LogicalResult verifyGuard(mlir::ModuleOp module, llvm::StringRef attribute, llvm::StringRef code,
+                          llvm::StringRef label) {
   if (auto guard = module->getAttrOfType<BoolAttr>(attribute)) {
     if (!guard.getValue())
-      return emitFailure(module.getOperation(), code,
-                         llvm::Twine(label) + " reported failure");
+      return emitFailure(module.getOperation(), code, llvm::Twine(label) + " reported failure");
   }
   return success();
 }
@@ -151,8 +148,7 @@ bool integerFits(IntegerAttr value, Type type) {
   if (!width)
     return false;
   const bool isSigned = llvm::isa<SIntType>(type) ||
-                        (llvm::isa<IntegerType>(type) &&
-                         llvm::cast<IntegerType>(type).isSigned());
+                        (llvm::isa<IntegerType>(type) && llvm::cast<IntegerType>(type).isSigned());
   if (isSigned)
     return value.getValue().isSignedIntN(*width);
   return !value.getValue().isNegative() && value.getValue().isIntN(*width);
@@ -174,8 +170,7 @@ bool bindingFits(Attribute value, Type type) {
   return false;
 }
 
-LogicalResult verifyType(Type type, Operation *owner,
-                         const llvm::StringSet<> &parameters) {
+LogicalResult verifyType(Type type, Operation *owner, const llvm::StringSet<> &parameters) {
   if (auto shaped = llvm::dyn_cast<ShapedType>(type)) {
     llvm::SmallVector<llvm::StringRef> dimensions;
     shaped.getDimensions().split(dimensions, ',', -1, false);
@@ -187,8 +182,7 @@ LogicalResult verifyType(Type type, Operation *owner,
       int64_t numeric = 0;
       if (!dimension.getAsInteger(10, numeric)) {
         if (numeric <= 0)
-          return emitFailure(owner, "NODAL-VERIFY-TYPE-002",
-                             "shaped dimensions must be positive");
+          return emitFailure(owner, "NODAL-VERIFY-TYPE-002", "shaped dimensions must be positive");
       } else if (!isIdentifier(dimension) || !parameters.contains(dimension)) {
         return emitFailure(owner, "NODAL-VERIFY-TYPE-003",
                            llvm::Twine("unknown symbolic dimension '") + dimension + "'");
@@ -212,16 +206,16 @@ LogicalResult verifyType(Type type, Operation *owner,
   return success();
 }
 
-llvm::StringMap<Operation *> collectModuleDefinitions(ModuleOp module,
-                                                       LogicalResult &result) {
+llvm::StringMap<Operation *> collectModuleDefinitions(mlir::ModuleOp module,
+                                                      LogicalResult &result) {
   llvm::StringMap<Operation *> definitions;
   for (Operation &operation : module.getBody()->getOperations()) {
     if (!isNamed(&operation, "nodal.module"))
       continue;
     llvm::StringRef name = symbolName(&operation);
     if (name.empty()) {
-      result = emitFailure(&operation, "NODAL-VERIFY-HIERARCHY-001",
-                           "module definition lacks a symbol");
+      result =
+          emitFailure(&operation, "NODAL-VERIFY-HIERARCHY-001", "module definition lacks a symbol");
       continue;
     }
     if (!definitions.try_emplace(name, &operation).second)
@@ -231,7 +225,7 @@ llvm::StringMap<Operation *> collectModuleDefinitions(ModuleOp module,
   return definitions;
 }
 
-LogicalResult verifyConstruction(ModuleOp module) {
+LogicalResult verifyConstruction(mlir::ModuleOp module) {
   if (failed(verifyGuard(module, "nodal.verify.construction_closed",
                          "NODAL-VERIFY-CONSTRUCTION-001", "construction closure")))
     return failure();
@@ -261,11 +255,11 @@ LogicalResult verifyConstruction(ModuleOp module) {
   return result;
 }
 
-LogicalResult verifyDrivers(ModuleOp module) {
-  if (failed(verifyGuard(module, "nodal.verify.driver_coverage",
-                         "NODAL-VERIFY-DRIVER-001", "driver coverage")) ||
-      failed(verifyGuard(module, "nodal.verify.assignment_coverage",
-                         "NODAL-VERIFY-DRIVER-002", "assignment coverage")))
+LogicalResult verifyDrivers(mlir::ModuleOp module) {
+  if (failed(verifyGuard(module, "nodal.verify.driver_coverage", "NODAL-VERIFY-DRIVER-001",
+                         "driver coverage")) ||
+      failed(verifyGuard(module, "nodal.verify.assignment_coverage", "NODAL-VERIFY-DRIVER-002",
+                         "assignment coverage")))
     return failure();
 
   LogicalResult result = success();
@@ -311,14 +305,13 @@ LogicalResult verifyDrivers(ModuleOp module) {
   return result;
 }
 
-LogicalResult verifyLatches(ModuleOp module) {
-  return verifyGuard(module, "nodal.verify.latch_free", "NODAL-VERIFY-LATCH-001",
-                     "latch analysis");
+LogicalResult verifyLatches(mlir::ModuleOp module) {
+  return verifyGuard(module, "nodal.verify.latch_free", "NODAL-VERIFY-LATCH-001", "latch analysis");
 }
 
-LogicalResult verifyCycles(ModuleOp module) {
-  if (failed(verifyGuard(module, "nodal.verify.combinational_acyclic",
-                         "NODAL-VERIFY-CYCLE-001", "combinational-cycle analysis")))
+LogicalResult verifyCycles(mlir::ModuleOp module) {
+  if (failed(verifyGuard(module, "nodal.verify.combinational_acyclic", "NODAL-VERIFY-CYCLE-001",
+                         "combinational-cycle analysis")))
     return failure();
 
   auto inventory = module->getAttrOfType<ArrayAttr>("nodal.verify.combinational_edges");
@@ -362,9 +355,9 @@ LogicalResult verifyCycles(ModuleOp module) {
   return success();
 }
 
-LogicalResult verifyHierarchy(ModuleOp module) {
-  if (failed(verifyGuard(module, "nodal.verify.hierarchy_closed",
-                         "NODAL-VERIFY-HIERARCHY-003", "hierarchy closure")))
+LogicalResult verifyHierarchy(mlir::ModuleOp module) {
+  if (failed(verifyGuard(module, "nodal.verify.hierarchy_closed", "NODAL-VERIFY-HIERARCHY-003",
+                         "hierarchy closure")))
     return failure();
 
   LogicalResult result = success();
@@ -414,11 +407,11 @@ LogicalResult verifyHierarchy(ModuleOp module) {
   return success();
 }
 
-LogicalResult verifyTypes(ModuleOp module) {
-  if (failed(verifyGuard(module, "nodal.verify.width_sign_shape",
-                         "NODAL-VERIFY-TYPE-005", "width/sign/shape analysis")) ||
-      failed(verifyGuard(module, "nodal.verify.layout_storage",
-                         "NODAL-VERIFY-TYPE-006", "layout/storage analysis")))
+LogicalResult verifyTypes(mlir::ModuleOp module) {
+  if (failed(verifyGuard(module, "nodal.verify.width_sign_shape", "NODAL-VERIFY-TYPE-005",
+                         "width/sign/shape analysis")) ||
+      failed(verifyGuard(module, "nodal.verify.layout_storage", "NODAL-VERIFY-TYPE-006",
+                         "layout/storage analysis")))
     return failure();
 
   LogicalResult result = success();
@@ -475,9 +468,9 @@ Operation *findDirectSymbol(Operation *container, llvm::StringRef operationName,
   return nullptr;
 }
 
-LogicalResult verifyParameters(ModuleOp module) {
-  if (failed(verifyGuard(module, "nodal.verify.parameters_complete",
-                         "NODAL-VERIFY-PARAMETER-001", "parameter/generate/loop analysis")))
+LogicalResult verifyParameters(mlir::ModuleOp module) {
+  if (failed(verifyGuard(module, "nodal.verify.parameters_complete", "NODAL-VERIFY-PARAMETER-001",
+                         "parameter/generate/loop analysis")))
     return failure();
 
   LogicalResult result = success();
@@ -500,8 +493,8 @@ LogicalResult verifyParameters(ModuleOp module) {
             operation->getAttrOfType<DictionaryAttr>("parameter_bindings");
         if (parameterBindings) {
           for (NamedAttribute binding : parameterBindings) {
-            Operation *parameter = findDirectSymbol(targetModule, "nodal.parameter",
-                                                    binding.getName().getValue());
+            Operation *parameter =
+                findDirectSymbol(targetModule, "nodal.parameter", binding.getName().getValue());
             if (!parameter) {
               result = emitFailure(operation, "NODAL-VERIFY-PARAMETER-003",
                                    llvm::Twine("unknown parameter binding '") +
@@ -516,8 +509,7 @@ LogicalResult verifyParameters(ModuleOp module) {
           }
         }
 
-        DictionaryAttr domainBindings =
-            operation->getAttrOfType<DictionaryAttr>("domain_bindings");
+        DictionaryAttr domainBindings = operation->getAttrOfType<DictionaryAttr>("domain_bindings");
         llvm::StringSet<> requirements = directSymbols(targetModule, "nodal.domain_requirement");
         if (domainBindings) {
           for (NamedAttribute binding : domainBindings) {
@@ -531,8 +523,7 @@ LogicalResult verifyParameters(ModuleOp module) {
         }
       }
 
-      if (!isNamed(operation, "nodal.generate") &&
-          !isNamed(operation, "nodal.hardware_loop"))
+      if (!isNamed(operation, "nodal.generate") && !isNamed(operation, "nodal.hardware_loop"))
         return;
       auto lower = operation->getAttrOfType<IntegerAttr>("lower");
       auto upper = operation->getAttrOfType<IntegerAttr>("upper");
@@ -551,9 +542,9 @@ LogicalResult verifyParameters(ModuleOp module) {
   return result;
 }
 
-LogicalResult verifyEnumFsm(ModuleOp module) {
-  if (failed(verifyGuard(module, "nodal.verify.enum_fsm",
-                         "NODAL-VERIFY-FSM-001", "enum/FSM analysis")))
+LogicalResult verifyEnumFsm(mlir::ModuleOp module) {
+  if (failed(verifyGuard(module, "nodal.verify.enum_fsm", "NODAL-VERIFY-FSM-001",
+                         "enum/FSM analysis")))
     return failure();
 
   llvm::StringSet<> enumSymbols;
@@ -564,8 +555,7 @@ LogicalResult verifyEnumFsm(ModuleOp module) {
 
   LogicalResult result = success();
   module.walk([&](Operation *fsm) {
-    if (!isNamed(fsm, "nodal.fsm") || fsm->getNumRegions() != 1 ||
-        fsm->getRegion(0).empty())
+    if (!isNamed(fsm, "nodal.fsm") || fsm->getNumRegions() != 1 || fsm->getRegion(0).empty())
       return;
     auto stateType = fsm->getAttrOfType<TypeAttr>("state_type");
     auto enumType = stateType ? llvm::dyn_cast<EnumType>(stateType.getValue()) : EnumType();
@@ -644,11 +634,11 @@ LogicalResult verifyEnumFsm(ModuleOp module) {
   return result;
 }
 
-LogicalResult verifyDomains(ModuleOp module) {
-  if (failed(verifyGuard(module, "nodal.verify.clock_reset_domains",
-                         "NODAL-VERIFY-DOMAIN-001", "clock/reset-domain analysis")) ||
-      failed(verifyGuard(module, "nodal.verify.cdc_rdc_safe",
-                         "NODAL-VERIFY-DOMAIN-002", "CDC/RDC analysis")))
+LogicalResult verifyDomains(mlir::ModuleOp module) {
+  if (failed(verifyGuard(module, "nodal.verify.clock_reset_domains", "NODAL-VERIFY-DOMAIN-001",
+                         "clock/reset-domain analysis")) ||
+      failed(verifyGuard(module, "nodal.verify.cdc_rdc_safe", "NODAL-VERIFY-DOMAIN-002",
+                         "CDC/RDC analysis")))
     return failure();
 
   LogicalResult result = success();
@@ -659,8 +649,8 @@ LogicalResult verifyDomains(ModuleOp module) {
     llvm::StringSet<> domains = directSymbols(owner, "nodal.domain");
     llvm::StringSet<> requirements = directSymbols(owner, "nodal.domain_requirement");
     auto resolves = [&](FlatSymbolRefAttr reference) {
-      return reference &&
-             (domains.contains(reference.getValue()) || requirements.contains(reference.getValue()));
+      return reference && (domains.contains(reference.getValue()) ||
+                           requirements.contains(reference.getValue()));
     };
 
     for (Operation &operation : owner->getRegion(0).front()) {
@@ -671,12 +661,11 @@ LogicalResult verifyDomains(ModuleOp module) {
       } else if (isNamed(&operation, "nodal.domain_bind")) {
         FlatSymbolRefAttr requirement = flatReference(&operation, "requirement");
         FlatSymbolRefAttr actual = flatReference(&operation, "actual");
-        if (!requirement || !requirements.contains(requirement.getValue()) ||
-            !actual || !domains.contains(actual.getValue()))
+        if (!requirement || !requirements.contains(requirement.getValue()) || !actual ||
+            !domains.contains(actual.getValue()))
           result = emitFailure(&operation, "NODAL-VERIFY-DOMAIN-004",
                                "domain binding does not resolve requirement and actual domain");
-      } else if (isNamed(&operation, "nodal.fsm") ||
-                 isNamed(&operation, "nodal.state_owner")) {
+      } else if (isNamed(&operation, "nodal.fsm") || isNamed(&operation, "nodal.state_owner")) {
         if (!resolves(flatReference(&operation, "domain")))
           result = emitFailure(&operation, "NODAL-VERIFY-DOMAIN-005",
                                "state ownership domain does not resolve");
@@ -707,9 +696,9 @@ struct InterfaceInfo {
   llvm::StringSet<> members;
 };
 
-LogicalResult verifyProtocols(ModuleOp module) {
-  if (failed(verifyGuard(module, "nodal.verify.protocol_pipeline",
-                         "NODAL-VERIFY-PROTOCOL-001", "protocol/pipeline analysis")))
+LogicalResult verifyProtocols(mlir::ModuleOp module) {
+  if (failed(verifyGuard(module, "nodal.verify.protocol_pipeline", "NODAL-VERIFY-PROTOCOL-001",
+                         "protocol/pipeline analysis")))
     return failure();
 
   llvm::StringMap<InterfaceInfo> interfaces;
@@ -770,16 +759,17 @@ LogicalResult verifyProtocols(ModuleOp module) {
       llvm::StringRef member = path.getValue().split('.').first;
       const InstanceInfo &info = instances[instance.getValue()];
       if (!interfaces[info.definition].members.contains(member))
-        result = emitFailure(&operation, "NODAL-VERIFY-PROTOCOL-005",
-                             llvm::Twine("member access references unknown member '") + member + "'");
+        result =
+            emitFailure(&operation, "NODAL-VERIFY-PROTOCOL-005",
+                        llvm::Twine("member access references unknown member '") + member + "'");
     }
   });
   return result;
 }
 
-LogicalResult verifyEffects(ModuleOp module) {
-  if (failed(verifyGuard(module, "nodal.verify.memory_effects",
-                         "NODAL-VERIFY-EFFECT-001", "memory/effect analysis")))
+LogicalResult verifyEffects(mlir::ModuleOp module) {
+  if (failed(verifyGuard(module, "nodal.verify.memory_effects", "NODAL-VERIFY-EFFECT-001",
+                         "memory/effect analysis")))
     return failure();
 
   ArrayAttr declarations = module->getAttrOfType<ArrayAttr>("nodal.bridge.declarations");
@@ -796,9 +786,8 @@ LogicalResult verifyEffects(ModuleOp module) {
     DictionaryAttr attributes = declaration.getAs<DictionaryAttr>("attributes");
     if (kind.getValue() == "memory") {
       auto domain = declaration.getAs<StringAttr>("domain");
-      if (!domain || domain.getValue().empty() || !attributes ||
-          !attributes.get("readlatency") || !attributes.get("readunderwrite") ||
-          !attributes.get("ordering"))
+      if (!domain || domain.getValue().empty() || !attributes || !attributes.get("readlatency") ||
+          !attributes.get("readunderwrite") || !attributes.get("ordering"))
         return emitFailure(module.getOperation(), "NODAL-VERIFY-EFFECT-003",
                            "memory declaration lacks latency, ordering, or domain contract");
     } else if (kind.getValue() == "external-operation") {
@@ -811,11 +800,11 @@ LogicalResult verifyEffects(ModuleOp module) {
   return success();
 }
 
-LogicalResult verifyAnalog(ModuleOp module) {
-  if (failed(verifyGuard(module, "nodal.verify.analog_topology",
-                         "NODAL-VERIFY-ANALOG-001", "analog topology analysis")) ||
-      failed(verifyGuard(module, "nodal.verify.mixed_signal_bridges",
-                         "NODAL-VERIFY-ANALOG-002", "mixed-signal bridge analysis")))
+LogicalResult verifyAnalog(mlir::ModuleOp module) {
+  if (failed(verifyGuard(module, "nodal.verify.analog_topology", "NODAL-VERIFY-ANALOG-001",
+                         "analog topology analysis")) ||
+      failed(verifyGuard(module, "nodal.verify.mixed_signal_bridges", "NODAL-VERIFY-ANALOG-002",
+                         "mixed-signal bridge analysis")))
     return failure();
 
   LogicalResult result = success();
@@ -830,13 +819,13 @@ LogicalResult verifyAnalog(ModuleOp module) {
       if (name == "nodal.terminal" || name == "nodal.node" || name == "nodal.branch" ||
           name == "nodal.access")
         analog = true;
-      if (name == "nodal.port" || name == "nodal.resolved_net" ||
-          name == "nodal.net_drive" || name == "nodal.crossing")
+      if (name == "nodal.port" || name == "nodal.resolved_net" || name == "nodal.net_drive" ||
+          name == "nodal.crossing")
         digital = true;
       if (name == "nodal.bridge")
         bridge = true;
-      if ((name == "nodal.terminal" || name == "nodal.node") &&
-          operation->getNumResults() == 1 && operation->getResult(0).use_empty() &&
+      if ((name == "nodal.terminal" || name == "nodal.node") && operation->getNumResults() == 1 &&
+          operation->getResult(0).use_empty() &&
           booleanMetadata(operation, "allow_floating") != std::optional<bool>(true))
         result = emitFailure(operation, "NODAL-VERIFY-ANALOG-003",
                              "floating conservative terminal requires explicit approval");
@@ -848,9 +837,9 @@ LogicalResult verifyAnalog(ModuleOp module) {
   return result;
 }
 
-LogicalResult verifyCapabilities(ModuleOp module) {
-  if (failed(verifyGuard(module, "nodal.verify.target_capability",
-                         "NODAL-VERIFY-CAPABILITY-001", "target capability analysis")))
+LogicalResult verifyCapabilities(mlir::ModuleOp module) {
+  if (failed(verifyGuard(module, "nodal.verify.target_capability", "NODAL-VERIFY-CAPABILITY-001",
+                         "target capability analysis")))
     return failure();
 
   llvm::StringRef profile = "target_neutral";
@@ -865,8 +854,7 @@ LogicalResult verifyCapabilities(ModuleOp module) {
   module.walk([&](Operation *operation) {
     llvm::StringRef name = operation->getName().getStringRef();
     const bool analog = name == "nodal.terminal" || name == "nodal.node" ||
-                        name == "nodal.branch" || name == "nodal.access" ||
-                        name == "nodal.bridge";
+                        name == "nodal.branch" || name == "nodal.access" || name == "nodal.bridge";
     const bool digital = name == "nodal.resolved_net" || name == "nodal.net_driver" ||
                          name == "nodal.net_drive" || name == "nodal.crossing" ||
                          name == "nodal.fsm";
@@ -880,7 +868,7 @@ LogicalResult verifyCapabilities(ModuleOp module) {
   return result;
 }
 
-LogicalResult verifyStage(ModuleOp module, VerificationStage stage) {
+LogicalResult verifyStage(mlir::ModuleOp module, VerificationStage stage) {
   switch (stage) {
   case VerificationStage::Construction:
     return verifyConstruction(module);
@@ -913,8 +901,7 @@ LogicalResult verifyStage(ModuleOp module, VerificationStage stage) {
 }
 
 template <typename Derived, VerificationStage StageValue>
-class VerificationPassBase
-    : public PassWrapper<Derived, OperationPass<ModuleOp>> {
+class VerificationPassBase : public PassWrapper<Derived, OperationPass<mlir::ModuleOp>> {
 public:
   void runOnOperation() final {
     (void)this->template getAnalysis<InventoryAnalysis>();
@@ -926,21 +913,20 @@ public:
   }
 };
 
-#define NODAL_DEFINE_VERIFICATION_PASS(CLASS_NAME, ARGUMENT, DESCRIPTION, STAGE)               \
-  class CLASS_NAME final                                                                      \
-      : public VerificationPassBase<CLASS_NAME, VerificationStage::STAGE> {                   \
-  public:                                                                                     \
-    MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CLASS_NAME)                                  \
-    llvm::StringRef getArgument() const final { return ARGUMENT; }                            \
-    llvm::StringRef getDescription() const final { return DESCRIPTION; }                      \
+#define NODAL_DEFINE_VERIFICATION_PASS(CLASS_NAME, ARGUMENT, DESCRIPTION, STAGE)                   \
+  class CLASS_NAME final : public VerificationPassBase<CLASS_NAME, VerificationStage::STAGE> {     \
+  public:                                                                                          \
+    MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CLASS_NAME)                                       \
+    llvm::StringRef getArgument() const final { return ARGUMENT; }                                 \
+    llvm::StringRef getDescription() const final { return DESCRIPTION; }                           \
   }
 
 NODAL_DEFINE_VERIFICATION_PASS(VerifyConstructionPass, "nodal-verify-construction",
                                "Verify closed Nodal construction state", Construction);
 NODAL_DEFINE_VERIFICATION_PASS(VerifyDriversPass, "nodal-verify-drivers",
                                "Verify driver and assignment coverage", Drivers);
-NODAL_DEFINE_VERIFICATION_PASS(VerifyLatchesPass, "nodal-verify-latches",
-                               "Verify latch freedom", Latches);
+NODAL_DEFINE_VERIFICATION_PASS(VerifyLatchesPass, "nodal-verify-latches", "Verify latch freedom",
+                               Latches);
 NODAL_DEFINE_VERIFICATION_PASS(VerifyCyclesPass, "nodal-verify-cycles",
                                "Verify combinational-cycle freedom", Cycles);
 NODAL_DEFINE_VERIFICATION_PASS(VerifyHierarchyPass, "nodal-verify-hierarchy",
@@ -967,9 +953,9 @@ NODAL_DEFINE_VERIFICATION_PASS(VerifyCapabilitiesPass, "nodal-verify-capabilitie
 llvm::SmallVector<llvm::StringRef, 16> stageNames(GateProfile profile) {
   if (profile == GateProfile::Fast)
     return {"construction", "hierarchy", "types", "parameters", "domains", "capabilities"};
-  return {"construction", "drivers",      "latches",   "cycles",  "hierarchy",
-          "types",        "parameters",   "enum-fsm",  "domains", "protocols",
-          "effects",      "analog",       "capabilities"};
+  return {"construction", "drivers",    "latches",     "cycles",  "hierarchy",
+          "types",        "parameters", "enum-fsm",    "domains", "protocols",
+          "effects",      "analog",     "capabilities"};
 }
 
 void addVerifierPasses(OpPassManager &manager, GateProfile profile) {
@@ -990,11 +976,12 @@ void addVerifierPasses(OpPassManager &manager, GateProfile profile) {
     manager.addPass(std::make_unique<VerifyEffectsPass>());
     manager.addPass(std::make_unique<VerifyAnalogPass>());
   }
+  manager.addPass(createCrossLayerDiagnosticPass());
   manager.addPass(std::make_unique<VerifyCapabilitiesPass>());
 }
 
 class NormalizePipelinePass final
-    : public PassWrapper<NormalizePipelinePass, OperationPass<ModuleOp>> {
+    : public PassWrapper<NormalizePipelinePass, OperationPass<mlir::ModuleOp>> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(NormalizePipelinePass)
 
@@ -1006,7 +993,7 @@ public:
   }
 
   void runOnOperation() final {
-    ModuleOp module = getOperation();
+    mlir::ModuleOp module = getOperation();
     MLIRContext *context = module.getContext();
     llvm::SmallVector<Attribute, 16> stages;
     for (llvm::StringRef name : stageNames(profile))
@@ -1022,22 +1009,22 @@ private:
   GateProfile profile;
 };
 
-LogicalResult runPipeline(ModuleOp module, GateProfile profile) {
-  PassManager manager(module.getContext(), ModuleOp::getOperationName());
+LogicalResult runPipeline(mlir::ModuleOp module, GateProfile profile) {
+  PassManager manager(module.getContext(), mlir::ModuleOp::getOperationName());
   manager.enableVerifier(true);
   addVerifierPasses(manager, profile);
   manager.addPass(std::make_unique<NormalizePipelinePass>(profile));
   return manager.run(module);
 }
 
-void commitModule(ModuleOp destination, ModuleOp source) {
+void commitModule(mlir::ModuleOp destination, mlir::ModuleOp source) {
   destination->setLoc(source->getLoc());
   destination->setAttrs(source->getAttrDictionary());
   destination.getBodyRegion().takeBody(source.getBodyRegion());
 }
 
 class TransactionalGatePass final
-    : public PassWrapper<TransactionalGatePass, OperationPass<ModuleOp>> {
+    : public PassWrapper<TransactionalGatePass, OperationPass<mlir::ModuleOp>> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TransactionalGatePass)
 
@@ -1077,11 +1064,11 @@ PipelineSession::PipelineSession(MLIRContext *context) : context(context) {
 
 PipelineSession::~PipelineSession() = default;
 
-LogicalResult PipelineSession::accept(ModuleOp candidate, GateProfile profile) {
+LogicalResult PipelineSession::accept(mlir::ModuleOp candidate, GateProfile profile) {
   if (candidate.getContext() != context)
     return emitFailure(candidate.getOperation(), "NODAL-PIPELINE-TRANSACTION-001",
                        "candidate belongs to another MLIR context");
-  OwningOpRef<ModuleOp> working(llvm::cast<ModuleOp>(candidate->clone()));
+  OwningOpRef<mlir::ModuleOp> working(llvm::cast<mlir::ModuleOp>(candidate->clone()));
   if (failed(runPipeline(*working, profile)))
     return failure();
   accepted = std::move(working);
@@ -1090,18 +1077,19 @@ LogicalResult PipelineSession::accept(ModuleOp candidate, GateProfile profile) {
 
 bool PipelineSession::hasAccepted() const { return static_cast<bool>(accepted); }
 
-ModuleOp PipelineSession::getAccepted() const {
-  return accepted ? accepted.get() : ModuleOp();
+mlir::ModuleOp PipelineSession::getAccepted() const {
+  return accepted ? accepted.get() : mlir::ModuleOp();
 }
 
-OwningOpRef<ModuleOp> PipelineSession::cloneAccepted() const {
+OwningOpRef<mlir::ModuleOp> PipelineSession::cloneAccepted() const {
   if (!accepted)
     return {};
-  return OwningOpRef<ModuleOp>(llvm::cast<ModuleOp>(accepted->clone()));
+  return OwningOpRef<mlir::ModuleOp>(
+      llvm::cast<mlir::ModuleOp>(accepted.get().getOperation()->clone()));
 }
 
-LogicalResult runNodalPipelineTransaction(ModuleOp module, GateProfile profile) {
-  OwningOpRef<ModuleOp> working(llvm::cast<ModuleOp>(module->clone()));
+LogicalResult runNodalPipelineTransaction(mlir::ModuleOp module, GateProfile profile) {
+  OwningOpRef<mlir::ModuleOp> working(llvm::cast<mlir::ModuleOp>(module->clone()));
   if (failed(runPipeline(*working, profile)))
     return failure();
   commitModule(module, *working);
@@ -1124,8 +1112,7 @@ void registerNodalPasses() {
   static PassRegistration<VerifyCapabilitiesPass> capabilities;
 
   static PassPipelineRegistration<> fast(
-      "nodal-gate-fast", "Transactional fast Nodal semantic gate",
-      [](OpPassManager &manager) {
+      "nodal-gate-fast", "Transactional fast Nodal semantic gate", [](OpPassManager &manager) {
         manager.addPass(std::make_unique<TransactionalGatePass>(GateProfile::Fast));
       });
   static PassPipelineRegistration<> defaults(

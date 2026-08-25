@@ -10,11 +10,20 @@ import scala.collection.mutable
 private[nodal] final case class BridgeDiagnostic(
     code: String,
     message: String,
-    semanticPath: Option[String] = None
+    semanticPath: Option[String] = None,
+    hierarchyPath: Option[String] = None,
+    indexPath: Option[String] = None,
+    sourceRange: Option[String] = None
 ):
-  override def toString: String = semanticPath match
-    case Some(path) => s"$code: $message [$path]"
-    case None => s"$code: $message"
+  override def toString: String =
+    val context = Vector(
+      semanticPath.map(value => s"[semantic-path=$value]"),
+      hierarchyPath.map(value => s"[hierarchy-path=$value]"),
+      indexPath.map(value => s"[index-path=$value]"),
+      sourceRange.map(value => s"[source-range=$value]")
+    ).flatten
+    if context.isEmpty then s"$code: $message"
+    else s"$code: $message ${context.mkString(" ")}"
 
 private[nodal] final class BridgeException(val diagnostic: BridgeDiagnostic)
     extends IllegalArgumentException(diagnostic.toString)

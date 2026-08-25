@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "increment": 21,
-  "status": "implemented-awaiting-evidence",
+  "status": "validated-native-semantic-pipeline",
   "public_api": "0.3",
   "pipelines": [
     "nodal-gate-fast",
@@ -10,10 +10,12 @@
   ],
   "mandatory_default_stage_count": 13,
   "transaction": "clone-before-commit",
-  "closure_state": "contracts-green-awaiting-accepted-ci",
+  "closure_state": "accepted-evidence-recorded-awaiting-closed-state-ci",
+  "implementation_pull_request": 50,
+  "closure_pull_request": 51,
   "evidence": {
-    "pull_request": null,
-    "dedicated_run": null,
-    "core_ci_run": null
+    "pull_request": 51,
+    "dedicated_run": 32884043819,
+    "core_ci_run": 32884043761
   }
 }

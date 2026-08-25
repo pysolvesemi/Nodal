@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import shutil
 import sys
 import tempfile
@@ -51,12 +52,12 @@ class Increment19CheckerTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         path = root / "docs/roadmap/nodal-development-todo.md"
         text = path.read_text(encoding="utf-8")
-        if "**Revision:** 1.24" not in text:
-            self.fail("expected closed Increment 20 roadmap revision")
-        path.write_text(
-            text.replace("**Revision:** 1.24", "**Revision:** 1.25", 1),
-            encoding="utf-8",
-        )
+        match = re.search(r"^\*\*Revision:\*\* (\d+)\.(\d+)$", text, re.MULTILINE)
+        if match is None:
+            self.fail("expected one numeric roadmap revision")
+        current = match.group(0)
+        later = f"**Revision:** {match.group(1)}.{int(match.group(2)) + 1}"
+        path.write_text(text.replace(current, later, 1), encoding="utf-8")
         self.assertEqual(CHECKER.check_repository(root), [])
 
     def test_rejects_missing_type_definition(self) -> None:

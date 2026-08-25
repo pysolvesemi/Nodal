@@ -1,0 +1,44 @@
+name: Automation Increment 20 Evidence Trigger
+
+on:
+  push:
+    branches:
+      - automation/increment-20-complete
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: automation-increment-20-evidence-trigger
+  cancel-in-progress: true
+
+jobs:
+  ensure-workflow-pair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out Increment 20 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/20-scala-mlir-bridge
+          fetch-depth: 0
+
+      - name: Trigger a clean evidence head only when needed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="$(git rev-parse HEAD)"
+          runs="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${sha}&per_page=100")"
+          dedicated="$(printf '%s' "${runs}" | jq '[.workflow_runs[] | select(.name == "Increment 20 Scala-to-MLIR Bridge" and .conclusion == "success")] | length')"
+          core="$(printf '%s' "${runs}" | jq '[.workflow_runs[] | select(.name == "Core CI" and .conclusion == "success")] | length')"
+          if [ "${dedicated}" -gt 0 ] && [ "${core}" -gt 0 ]; then
+            echo "Current Increment 20 head already has accepted workflow evidence."
+            exit 0
+          fi
+          git config user.name "pysolvesemi"
+          git config user.email "pysolvesemi@gmail.com"
+          git commit --allow-empty -m "Increment 20 — trigger accepted evidence workflows"
+          git push origin HEAD:increment/20-scala-mlir-bridge

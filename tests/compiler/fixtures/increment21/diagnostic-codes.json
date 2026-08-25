@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "increment": 21,
+  "codes": {
+    "construction": "NODAL-VERIFY-CONSTRUCTION-001",
+    "drivers": "NODAL-VERIFY-DRIVER-001",
+    "latches": "NODAL-VERIFY-LATCH-001",
+    "cycles": "NODAL-VERIFY-CYCLE-001",
+    "hierarchy": "NODAL-VERIFY-HIERARCHY-004",
+    "types": "NODAL-VERIFY-TYPE-003",
+    "parameters": "NODAL-VERIFY-PARAMETER-003",
+    "enum_fsm": "NODAL-VERIFY-FSM-001",
+    "domains": "NODAL-VERIFY-DOMAIN-003",
+    "protocols": "NODAL-VERIFY-PROTOCOL-003",
+    "effects": "NODAL-VERIFY-EFFECT-001",
+    "analog": "NODAL-VERIFY-ANALOG-001",
+    "capabilities": "NODAL-VERIFY-CAPABILITY-003"
+  }
+}

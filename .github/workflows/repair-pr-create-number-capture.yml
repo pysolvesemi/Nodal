@@ -1,0 +1,64 @@
+name: Repair PR Create Number Capture
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+          fetch-depth: 0
+      - name: Replace unsupported gh pr create JSON flags
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          files = (
+              '.github/workflows/chain-and-close-increment-20.yml',
+              '.github/workflows/chain-and-close-increment-21.yml',
+              '.github/workflows/chain-and-close-increment-22.yml',
+              '.github/workflows/recover-increment-20-if-needed.yml',
+              '.github/workflows/recover-increment-21-if-needed.yml',
+              '.github/workflows/orchestrate-increment-22-with-status.yml',
+          )
+          pattern = re.compile(
+              r"(?P<indent>\s*)pr=\$\(gh pr create (?P<args>[^\n]*?) --json number --jq '\.number'\)"
+          )
+          for relative in files:
+              path = Path(relative)
+              if not path.is_file():
+                  continue
+              text = path.read_text(encoding='utf-8')
+              def replacement(match):
+                  indent = match.group('indent')
+                  args = match.group('args')
+                  return (
+                      f"{indent}pr_url=$(gh pr create {args})\n"
+                      f"{indent}pr=${{pr_url##*/}}"
+                  )
+              updated, count = pattern.subn(replacement, text)
+              if '--json number --jq' in updated and 'gh pr create' in updated:
+                  raise RuntimeError(f'{relative}: unsupported gh pr create JSON flags remain')
+              path.write_text(updated, encoding='utf-8')
+          PY
+          git diff --check
+      - name: Publish orchestration repair
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows
+          git commit -m 'Automation — repair PR number capture'
+          git push origin HEAD:automation/inc21-inc22-probe-stage

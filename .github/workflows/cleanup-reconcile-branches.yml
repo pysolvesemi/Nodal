@@ -1,0 +1,26 @@
+name: Cleanup Reconciliation Branches
+
+on:
+  push:
+    branches:
+      - automation/reconcile-increment-21-22-v11
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Delete superseded transient branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for suffix in '' '-v2' '-v3' '-v4' '-v5' '-v6' '-v7' '-v8' '-v9' '-v10'; do
+            branch="automation/reconcile-increment-21-22${suffix}"
+            encoded=${branch//\//%2F}
+            gh api --method DELETE \
+              "/repos/${GITHUB_REPOSITORY}/git/refs/heads/${encoded}" \
+              >/dev/null 2>&1 || true
+          done

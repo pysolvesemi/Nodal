@@ -1,0 +1,319 @@
+name: Automation Increment 20 Close
+
+on:
+  push:
+    branches:
+      - automation/increment-20-complete
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: automation-increment-20-close
+  cancel-in-progress: false
+
+jobs:
+  close:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/increment-20-complete
+          path: automation
+
+      - name: Check out Increment 20 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/20-scala-mlir-bridge
+          fetch-depth: 0
+          path: target
+
+      - name: Install final repaired bridge sources
+        run: |
+          cp automation/automation/increment20-repair/ScalaToMlirBridge.scala \
+            target/core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala
+          cp automation/automation/increment20-repair/NativeCompilerClientFixed.scala \
+            target/core/scala/bridge/src/nodal/bridge/NativeCompilerClient.scala
+          cp automation/automation/increment20-repair/ScalaToMlirBridgeTests.scala \
+            target/core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala
+          cp automation/automation/increment20-repair/check_increment20.py \
+            target/scripts/check_increment20.py
+          chmod +x target/scripts/check_increment20.py
+          python3 automation/automation/increment20-repair/patch_kernel.py target
+
+      - name: Restore locked dependency caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/nodal/downloads
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-inc20-close-${{ runner.os }}-${{ hashFiles('target/build.mill', 'target/.mill-version', 'target/mill', 'target/toolchains/lock.json', 'target/toolchains/checksums/*.sha256', 'target/toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-inc20-close-${{ runner.os }}-
+            nodal-scala-${{ runner.os }}-
+
+      - name: Install locked toolchains
+        working-directory: target
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Run full pre-evidence validation
+        working-directory: target
+        env:
+          NODAL_NODALC: ${{ github.workspace }}/target/out/native/release/bin/nodalc
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal core scala
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          git diff --check
+
+      - name: Publish implementation head and ensure pull request
+        id: publish
+        working-directory: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "pysolvesemi"
+          git config user.email "pysolvesemi@gmail.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No unpublished implementation changes'
+          else
+            git commit -m 'Increment 20 — complete deterministic Scala-to-MLIR bridge'
+            git push origin HEAD:increment/20-scala-mlir-bridge
+          fi
+
+          branch=increment/20-scala-mlir-bridge
+          pr=$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --head "$branch" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')
+          if [ -z "$pr" ]; then
+            gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --base dev \
+              --head "$branch" \
+              --draft \
+              --title 'Increment 20 — implement deterministic Scala-to-MLIR bridge' \
+              --body-file - <<'BODY'
+          ## Summary
+
+          - Serialize closed Scala construction snapshots into deterministic, versioned Nodal MLIR.
+          - Preserve hierarchy, domains, declarations, parameter/domain bindings, logical ABI, topology, semantic names, origin graph, and source spans.
+          - Invoke `nodalc` through an argv-safe, timeout-bounded process protocol with structured failure and cleanup handling.
+          - Keep public API v0.3 unchanged; native semantic passes and CIRCT lowering remain deferred.
+
+          ## Validation
+
+          - [x] Determinism and insertion-order independence.
+          - [x] Source-correlated UTF-8/LF textual MLIR.
+          - [x] Fake-process success, nonzero exit, timeout, cleanup, and recovery.
+          - [x] Locked native `nodalc` parse/normalize integration.
+          - [x] Increment 18/19 predecessor compatibility.
+          - [ ] Accepted dedicated and Core CI evidence.
+          - [ ] Roadmap revision 1.24 and squash merge.
+          BODY
+            pr=$(gh pr list \
+              --repo "$GITHUB_REPOSITORY" \
+              --head "$branch" \
+              --state open \
+              --json number \
+              --jq '.[0].number')
+          fi
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for accepted implementation-head CI
+        id: accepted
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMPLEMENTATION_SHA: ${{ steps.publish.outputs.sha }}
+        run: |
+          set -euo pipefail
+          wait_for_workflow() {
+            local workflow_name="$1"
+            local result_file="$2"
+            for attempt in $(seq 1 180); do
+              row=$(gh api \
+                "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${IMPLEMENTATION_SHA}&per_page=100" \
+                --jq ".workflow_runs[] | select(.name == \"${workflow_name}\") | [.id,.status,.conclusion] | @tsv" \
+                | head -1 || true)
+              if [ -n "$row" ]; then
+                IFS=$'\t' read -r id status conclusion <<< "$row"
+                if [ "$status" = completed ]; then
+                  test "$conclusion" = success
+                  echo "$id" > "$result_file"
+                  return 0
+                fi
+              fi
+              sleep 10
+            done
+            echo "Timed out waiting for ${workflow_name} on ${IMPLEMENTATION_SHA}" >&2
+            return 1
+          }
+          wait_for_workflow 'Increment 20 Scala-to-MLIR Bridge' /tmp/inc20-dedicated
+          wait_for_workflow 'Core CI' /tmp/inc20-core
+          echo "dedicated=$(cat /tmp/inc20-dedicated)" >> "$GITHUB_OUTPUT"
+          echo "core=$(cat /tmp/inc20-core)" >> "$GITHUB_OUTPUT"
+
+      - name: Record roadmap and manifest evidence
+        working-directory: target
+        env:
+          PR_NUMBER: ${{ steps.publish.outputs.pr }}
+          DEDICATED_RUN: ${{ steps.accepted.outputs.dedicated }}
+          CORE_RUN: ${{ steps.accepted.outputs.core }}
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+
+          roadmap_path = Path('docs/roadmap/nodal-development-todo.md')
+          roadmap = roadmap_path.read_text(encoding='utf-8')
+          roadmap = roadmap.replace('**Revision:** 1.23', '**Revision:** 1.24', 1)
+          old = (
+              '- [ ] **Increment 20 — Scala-to-MLIR bridge**\n'
+              '  - Lower deterministic construction state to versioned textual MLIR '
+              'with source locations and invoke `nodalc` through a clear process protocol.\n'
+          )
+          evidence = (
+              '- [x] **Increment 20 — Scala-to-MLIR bridge**\n'
+              '  - Lower deterministic construction state to versioned textual MLIR '
+              'with source locations and invoke `nodalc` through a clear process protocol.\n'
+              f"  - Evidence: [`NodalScalaToMlirBridge-DG-v1.0.md`]"
+              f"(../design-gates/NodalScalaToMlirBridge-DG-v1.0.md), "
+              f"[`increment20-scala-mlir-bridge.md`]"
+              f"(../implementation/increment20-scala-mlir-bridge.md), "
+              f"PR [#{os.environ['PR_NUMBER']}]"
+              f"(https://github.com/pysolvesemi/Nodal/pull/{os.environ['PR_NUMBER']}), "
+              f"dedicated run [{os.environ['DEDICATED_RUN']}]"
+              f"(https://github.com/pysolvesemi/Nodal/actions/runs/{os.environ['DEDICATED_RUN']}), "
+              f"and Core CI run [{os.environ['CORE_RUN']}]"
+              f"(https://github.com/pysolvesemi/Nodal/actions/runs/{os.environ['CORE_RUN']}).\n"
+          )
+          if old not in roadmap:
+              raise SystemExit('Increment 20 roadmap anchor not found')
+          roadmap_path.write_text(roadmap.replace(old, evidence, 1), encoding='utf-8')
+
+          manifest_path = Path('tests/compiler/fixtures/increment20/manifest.json')
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+          manifest['status'] = 'validated-scala-mlir-bridge'
+          manifest['evidence'] = {
+              'pull_request': int(os.environ['PR_NUMBER']),
+              'dedicated_run': int(os.environ['DEDICATED_RUN']),
+              'core_ci_run': int(os.environ['CORE_RUN']),
+          }
+          manifest_path.write_text(
+              json.dumps(manifest, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          git diff --check
+
+      - name: Publish closure head
+        id: closure
+        working-directory: target
+        run: |
+          git add \
+            docs/roadmap/nodal-development-todo.md \
+            tests/compiler/fixtures/increment20/manifest.json
+          git commit -m 'Increment 20 — record accepted CI evidence'
+          git push origin HEAD:increment/20-scala-mlir-bridge
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for closure-head CI and merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOSURE_SHA: ${{ steps.closure.outputs.sha }}
+          PR_NUMBER: ${{ steps.publish.outputs.pr }}
+        run: |
+          set -euo pipefail
+          wait_for_workflow() {
+            local workflow_name="$1"
+            for attempt in $(seq 1 180); do
+              row=$(gh api \
+                "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${CLOSURE_SHA}&per_page=100" \
+                --jq ".workflow_runs[] | select(.name == \"${workflow_name}\") | [.status,.conclusion] | @tsv" \
+                | head -1 || true)
+              if [ -n "$row" ]; then
+                IFS=$'\t' read -r status conclusion <<< "$row"
+                if [ "$status" = completed ]; then
+                  test "$conclusion" = success
+                  return 0
+                fi
+              fi
+              sleep 10
+            done
+            return 1
+          }
+          wait_for_workflow 'Increment 20 Scala-to-MLIR Bridge'
+          wait_for_workflow 'Core CI'
+          gh pr ready "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" || true
+          gh pr merge "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --squash \
+            --delete-branch \
+            --subject 'Increment 20 — implement deterministic Scala-to-MLIR bridge' \
+            --body 'Serialize deterministic construction state into versioned Nodal MLIR, preserve source-correlated inventories, and add the bounded native compiler process protocol with accepted CI evidence.'
+
+      - name: Require post-merge Core CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.publish.outputs.pr }}
+        run: |
+          set -euo pipefail
+          merge_sha=$(gh pr view "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json mergeCommit \
+            --jq '.mergeCommit.oid')
+          for attempt in $(seq 1 180); do
+            row=$(gh api \
+              "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${merge_sha}&per_page=100" \
+              --jq '.workflow_runs[] | select(.name == "Core CI") | [.status,.conclusion] | @tsv' \
+              | head -1 || true)
+            if [ -n "$row" ]; then
+              IFS=$'\t' read -r status conclusion <<< "$row"
+              if [ "$status" = completed ]; then
+                test "$conclusion" = success
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          echo "Post-merge Core CI did not complete" >&2
+          exit 1

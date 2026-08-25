@@ -32,7 +32,9 @@ weakening or rewriting the already validated dialect-bootstrap behavior.
 
 The permanent read-only workflow runs the Increment 18 compatibility checker,
 Increment 19 structural and mutation tests, the locked native build, CTest,
-custom and generic textual round trips, and negative verifier fixtures.
+custom and generic textual round trips, and negative verifier fixtures. Pull
+requests retain the repository-required Summary, Validation, Design gate, and
+Checklist sections so local and CI contribution-policy checks use one contract.
 
 Roadmap completion and evidence are recorded only after the dedicated workflow
 and required Core CI pass on the permanent pull-request head.

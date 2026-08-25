@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import shutil
 import sys
 import tempfile
@@ -17,6 +18,13 @@ SPEC.loader.exec_module(CHECKER)
 
 SUPPORT_FILES = (
     "docs/roadmap/nodal-development-todo.md",
+)
+
+INCREMENT21_OPEN = (
+    "- [ ] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**"
+)
+INCREMENT21_CLOSED = (
+    "- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**"
 )
 
 
@@ -74,30 +82,32 @@ class Increment20CheckerTests(unittest.TestCase):
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
         roadmap = root / "docs/roadmap/nodal-development-todo.md"
-        roadmap.write_text(
-            roadmap.read_text(encoding="utf-8")
-            .replace("**Revision:** 1.24", "**Revision:** 1.25", 1)
-            .replace(
-                "- [ ] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**",
-                "- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**",
-                1,
-            ),
-            encoding="utf-8",
+        text = roadmap.read_text(encoding="utf-8")
+        text = re.sub(
+            r"^\*\*Revision:\*\* \d+\.\d+$",
+            "**Revision:** 1.25",
+            text,
+            count=1,
+            flags=re.MULTILINE,
         )
+        text = text.replace(INCREMENT21_OPEN, INCREMENT21_CLOSED, 1)
+        roadmap.write_text(text, encoding="utf-8")
         self.assertEqual(CHECKER.check_repository(root), [])
 
     def test_rejects_revision_1_25_with_increment21_open(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
         roadmap = root / "docs/roadmap/nodal-development-todo.md"
-        roadmap.write_text(
-            roadmap.read_text(encoding="utf-8").replace(
-                "**Revision:** 1.24",
-                "**Revision:** 1.25",
-                1,
-            ),
-            encoding="utf-8",
+        text = roadmap.read_text(encoding="utf-8")
+        text = re.sub(
+            r"^\*\*Revision:\*\* \d+\.\d+$",
+            "**Revision:** 1.25",
+            text,
+            count=1,
+            flags=re.MULTILINE,
         )
+        text = text.replace(INCREMENT21_CLOSED, INCREMENT21_OPEN, 1)
+        roadmap.write_text(text, encoding="utf-8")
         self.assertIn("NODAL-INC20-008", self.codes(root))
 
 

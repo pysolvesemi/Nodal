@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - increment/21-native-semantic-pipeline
+      - increment/21-roadmap-evidence-closure
   pull_request:
     branches:
       - dev
@@ -94,31 +95,52 @@ jobs:
       - name: Prove every mandatory failure stage
         run: |
           compiler=out/native/release/bin/nodalc
-          log=/tmp/nodal-semantic-invalid.log
-          if "${compiler}" \
-              --split-input-file \
-              '--pass-pipeline=builtin.module(nodal-gate-default)' \
-              core/compiler/test/IR/semantic-pipeline-invalid.mlir \
-              >"${log}" 2>&1; then
-            echo 'invalid semantic-stage matrix was accepted' >&2
-            exit 1
-          fi
+          source=core/compiler/test/IR/semantic-pipeline-invalid.mlir
 
-          for code in \
-            NODAL-VERIFY-CONSTRUCTION-001 \
-            NODAL-VERIFY-DRIVER-001 \
-            NODAL-VERIFY-LATCH-001 \
-            NODAL-VERIFY-CYCLE-001 \
-            NODAL-VERIFY-HIERARCHY-004 \
-            NODAL-VERIFY-TYPE-003 \
-            NODAL-VERIFY-PARAMETER-003 \
-            NODAL-VERIFY-FSM-001 \
-            NODAL-VERIFY-DOMAIN-003 \
-            NODAL-VERIFY-PROTOCOL-003 \
-            NODAL-VERIFY-EFFECT-001 \
-            NODAL-VERIFY-ANALOG-001 \
-            NODAL-VERIFY-CAPABILITY-003; do
-            grep -F "${code}" "${log}"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path("core/compiler/test/IR/semantic-pipeline-invalid.mlir")
+          sections = [section.strip() for section in source.read_text(encoding="utf-8").split("// -----")]
+          if len(sections) != 13 or any(not section for section in sections):
+              raise SystemExit(f"expected 13 non-empty semantic failure fixtures, found {len(sections)}")
+          for index, section in enumerate(sections):
+              Path(f"/tmp/nodal-semantic-invalid-{index:02d}.mlir").write_text(
+                  section + "\n",
+                  encoding="utf-8",
+              )
+          PY
+
+          codes=(
+            NODAL-VERIFY-CONSTRUCTION-001
+            NODAL-VERIFY-DRIVER-001
+            NODAL-VERIFY-LATCH-001
+            NODAL-VERIFY-CYCLE-001
+            NODAL-VERIFY-HIERARCHY-004
+            NODAL-VERIFY-TYPE-003
+            NODAL-VERIFY-PARAMETER-003
+            NODAL-VERIFY-FSM-001
+            NODAL-VERIFY-DOMAIN-003
+            NODAL-VERIFY-PROTOCOL-003
+            NODAL-VERIFY-EFFECT-001
+            NODAL-VERIFY-ANALOG-001
+            NODAL-VERIFY-CAPABILITY-003
+          )
+
+          for index in "${!codes[@]}"; do
+            fixture=$(printf '/tmp/nodal-semantic-invalid-%02d.mlir' "${index}")
+            log=$(printf '/tmp/nodal-semantic-invalid-%02d.log' "${index}")
+            if "${compiler}" \
+                '--pass-pipeline=builtin.module(nodal-gate-default)' \
+                "${fixture}" >"${log}" 2>&1; then
+              echo "semantic failure fixture ${index} was accepted" >&2
+              exit 1
+            fi
+            if ! grep -F "${codes[${index}]}" "${log}"; then
+              echo "semantic failure fixture ${index} did not emit ${codes[${index}]}" >&2
+              cat "${log}" >&2
+              exit 1
+            fi
           done
 
           git diff --check

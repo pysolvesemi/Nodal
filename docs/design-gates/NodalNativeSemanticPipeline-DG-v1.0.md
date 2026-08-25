@@ -15,7 +15,8 @@ plugin or backend. This increment does not lower to CIRCT or emit HDL.
 
 ## Mandatory stage order
 
-The default and release gates run the following stages in order:
+The default and release gates run the following thirteen mandatory stages in
+order:
 
 1. construction closure and bridge-version compatibility;
 2. driver identity plus assignment coverage;
@@ -39,10 +40,10 @@ run all mandatory stages.
 
 ## Transaction contract
 
-Every named gate clones its input module, runs all selected verifier passes and
-the normalization pass on the clone, and commits the clone only after complete
-success. A parse, verifier, pass, or normalization failure leaves the caller's
-module unchanged.
+Every named gate uses a clone-before-commit transaction: it clones its input
+module, runs all selected verifier passes and the normalization pass on the
+clone, and commits the clone only after complete success. A parse, verifier,
+pass, or normalization failure leaves the caller's module unchanged.
 
 `PipelineSession` retains the most recent accepted normalized module. Rejecting
 a later candidate cannot replace, partially mutate, or invalidate that accepted

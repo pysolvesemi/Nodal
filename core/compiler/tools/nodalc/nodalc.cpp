@@ -22,6 +22,5 @@ int main(int argc, char **argv) {
     os << circt::getCirctVersion() << '\n';
   });
 
-  return mlir::failed(
-      mlir::MlirOptMain(argc, argv, "Nodal native compiler bootstrap", registry));
+  return mlir::failed(mlir::MlirOptMain(argc, argv, "Nodal native compiler bootstrap", registry));
 }

@@ -238,6 +238,10 @@ def check_repository(root: Path) -> list[Problem]:
         "- [ ] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**"
         in roadmap
     )
+    increment21_checked = (
+        "- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**"
+        in roadmap
+    )
 
     if status == "implemented-awaiting-evidence":
         if not unchecked or revision < (1, 23):
@@ -268,9 +272,20 @@ def check_repository(root: Path) -> list[Problem]:
             Problem("NODAL-INC20-008", f"unexpected manifest status: {status!r}")
         )
 
-    if not increment21_unchecked:
+    if revision < (1, 25):
+        if not increment21_unchecked:
+            problems.append(
+                Problem(
+                    "NODAL-INC20-008",
+                    "roadmap revisions before 1.25 must leave Increment 21 unchecked",
+                )
+            )
+    elif not increment21_checked:
         problems.append(
-            Problem("NODAL-INC20-008", "Increment 21 must remain unchecked")
+            Problem(
+                "NODAL-INC20-008",
+                "roadmap revision 1.25 or later must preserve completed Increment 21",
+            )
         )
 
     return problems

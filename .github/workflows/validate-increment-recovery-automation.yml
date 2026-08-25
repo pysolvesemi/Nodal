@@ -1,0 +1,49 @@
+name: Validate Increment Recovery Automation
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+      - name: Compile recovery and materializer scripts
+        run: |
+          python3 -m py_compile \
+            scripts/patch_increment20_kernel.py \
+            scripts/patch_increment20_complete.py \
+            scripts/materialize_increment21.py \
+            scripts/materialize_increment21_v2.py \
+            scripts/materialize_increment21_v3.py \
+            scripts/materialize_increment21_v4.py \
+            scripts/materialize_increment21_v5.py \
+            scripts/materialize_increment21_v6.py \
+            scripts/materialize_increment22.py \
+            scripts/materialize_increment22_v2.py \
+            scripts/materialize_increment22_v3.py \
+            scripts/materialize_increment22_v4.py \
+            scripts/materialize_increment22_v5.py \
+            scripts/materialize_increment22_v6.py
+      - name: Validate workflow YAML parses as mappings
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          try:
+              import yaml
+          except ImportError:
+              raise SystemExit(0)
+          for path in sorted(Path('.github/workflows').glob('*.yml')):
+              value=yaml.safe_load(path.read_text(encoding='utf-8'))
+              if not isinstance(value,dict):
+                  raise RuntimeError(f'{path} does not parse as a mapping')
+          PY

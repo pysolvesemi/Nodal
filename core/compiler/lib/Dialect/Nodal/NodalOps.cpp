@@ -447,8 +447,7 @@ LogicalResult nodal::FsmOp::verify() {
     auto state = llvm::dyn_cast<nodal::FsmStateOp>(&operation);
     if (!state)
       continue;
-    if (auto name =
-            operation.getAttrOfType<StringAttr>(mlir::SymbolTable::getSymbolAttrName()))
+    if (auto name = operation.getAttrOfType<StringAttr>(mlir::SymbolTable::getSymbolAttrName()))
       states.insert(name.getValue());
     if (auto initial = operation.getAttrOfType<BoolAttr>("initial")) {
       if (initial.getValue())

@@ -1,0 +1,113 @@
+name: Repair Increment 21 and 22 Known Native API
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-increment-21-22-known-native-api
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        branch:
+          - increment/21-native-verification-pipeline
+          - increment/22-circt-conversion-legalizer
+
+    steps:
+      - name: Wait for feature branch
+        id: wait
+        run: |
+          branch='${{ matrix.branch }}'
+          exists=false
+          for attempt in $(seq 1 90); do
+            if git ls-remote --exit-code https://github.com/${GITHUB_REPOSITORY}.git "refs/heads/${branch}" >/dev/null 2>&1; then
+              exists=true
+              break
+            fi
+            sleep 20
+          done
+          echo "exists=$exists" >> "$GITHUB_OUTPUT"
+
+      - name: Check out feature branch
+        if: steps.wait.outputs.exists == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
+
+      - name: Apply compatibility repairs
+        if: steps.wait.outputs.exists == 'true'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def add_include(path, anchor, include):
+              if not path.is_file(): return
+              text=path.read_text()
+              if include in text: return
+              if anchor not in text: raise RuntimeError(f'{path}: include anchor missing')
+              path.write_text(text.replace(anchor, anchor + include, 1))
+
+          inc21=Path('core/compiler/lib/Transforms/NodalVerification.cpp')
+          if inc21.is_file():
+              add_include(inc21, '#include "llvm/ADT/DenseMap.h"\n', '#include "llvm/ADT/STLExtras.h"\n')
+              add_include(inc21, '#include "llvm/ADT/StringSet.h"\n', '#include "llvm/ADT/Twine.h"\n')
+              text=inc21.read_text()
+              text=text.replace('operation->getParentOp() != module)', 'operation->getParentOp() != module.getOperation())')
+              text=text.replace('parseStage(stage);', 'parseStage(stage.getValue());')
+              text=text.replace('Twine("unknown verification stage \'") + stage + "\'"', 'Twine("unknown verification stage \'") + stage.getValue() + "\'"')
+              text=text.replace('builder.getStringAttr(targetProfile)', 'builder.getStringAttr(targetProfile.getValue())')
+              text=text.replace('runStage(getOperation(), *selected, targetProfile)', 'runStage(getOperation(), *selected, targetProfile.getValue())')
+              text=text.replace('runAllStages(getOperation(), targetProfile)', 'runAllStages(getOperation(), targetProfile.getValue())')
+              text=text.replace('runAllStages(*candidate, targetProfile)', 'runAllStages(*candidate, targetProfile.getValue())')
+              inc21.write_text(text)
+
+          inc22=Path('core/compiler/lib/Conversion/NodalToCirct.cpp')
+          if inc22.is_file():
+              add_include(inc22, '#include "mlir/Pass/PassManager.h"\n', '#include "mlir/Pass/PassRegistry.h"\n')
+              add_include(inc22, '#include <string>\n', '#include <utility>\n')
+              text=inc22.read_text()
+              text=text.replace('IntegerType::Unsigned)', 'IntegerType::SignednessSemantics::Unsigned)')
+              text=text.replace('IntegerType::Signed)', 'IntegerType::SignednessSemantics::Signed)')
+              text=text.replace('llvm::dyn_cast_or_null<IntegerType>(converted)', 'llvm::dyn_cast<IntegerType>(converted)')
+              inc22.write_text(text)
+          PY
+
+      - name: Install locked toolchains
+        if: steps.wait.outputs.exists == 'true'
+        run: |
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+
+      - name: Format and validate repaired branch
+        if: steps.wait.outputs.exists == 'true'
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          ./nodal style fix --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          if [ -f scripts/check_increment21.py ]; then python3 scripts/check_increment21.py; fi
+          if [ -f scripts/check_increment22.py ]; then python3 scripts/check_increment22.py; fi
+          ./nodal core scala
+          ./nodal core native --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Publish repairs
+        if: steps.wait.outputs.exists == 'true'
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Repair MLIR API compatibility for native increment pipeline'
+          git push origin HEAD:'${{ matrix.branch }}'

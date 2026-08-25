@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - increment/18-nodal-mlir-dialect-skeleton
+  pull_request:
+    branches:
+      - dev
   workflow_dispatch:
 
 permissions:

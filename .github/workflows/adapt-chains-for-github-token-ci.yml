@@ -1,0 +1,159 @@
+name: Adapt Chains for GitHub Token CI
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  adapt:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+          fetch-depth: 0
+      - name: Replace evidence-head waits and explicitly dispatch post-merge Core CI
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          specifications = {
+              '.github/workflows/chain-and-close-increment-20.yml': {
+                  'checker': 'python3 scripts/check_increment20.py',
+                  'evidence_start': '      - name: Wait for explicit evidence-head workflows\n',
+                  'merge_start': '      - name: Squash merge Increment 20\n',
+              },
+              '.github/workflows/chain-and-close-increment-21.yml': {
+                  'checker': 'python3 scripts/check_increment21.py',
+                  'evidence_start': '      - name: Wait for explicit evidence-head workflows\n',
+                  'merge_start': '      - name: Squash merge Increment 21\n',
+              },
+          }
+          for relative, spec in specifications.items():
+              path=Path(relative)
+              if not path.is_file(): continue
+              text=path.read_text(encoding='utf-8')
+              if spec['evidence_start'] in text:
+                  start=text.index(spec['evidence_start'])
+                  end=text.index(spec['merge_start'],start)
+                  replacement=f'''      - name: Validate evidence-only commit locally
+        id: evidence
+        working-directory: target
+        run: |
+          {spec['checker']}
+          git diff --check
+          echo "head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "dedicated=${{{{ steps.implementation.outputs.dedicated }}}}" >> "$GITHUB_OUTPUT"
+          echo "core=${{{{ steps.implementation.outputs.core }}}}" >> "$GITHUB_OUTPUT"
+
+'''
+                  text=text[:start]+replacement+text[end:]
+              postmerge_name='      - name: Wait for post-merge Core CI\n'
+              status_name='      - name: Publish chain status\n'
+              if postmerge_name in text and status_name in text:
+                  start=text.index(postmerge_name)
+                  end=text.index(status_name,start)
+                  condition_line=text[text.index('        if:',start,text.index('        id:',start))+8:text.index('\n',text.index('        if:',start,text.index('        id:',start))+8)] if '        if:' in text[start:text.index('        id:',start)] else ''
+                  # Preserve the existing step condition by extracting its line.
+                  block=text[start:end]
+                  condition=''
+                  for line in block.splitlines():
+                      if line.startswith('        if:'):
+                          condition=line+'\n'
+                          break
+                  replacement=f'''      - name: Dispatch and require post-merge Core CI
+{condition}        id: postmerge
+        env:
+          GH_TOKEN: ${{{{ github.token }}}}
+          MERGE_SHA: ${{{{ steps.merge.outputs.merge_sha }}}}
+        working-directory: target
+        run: |
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref dev
+          run=''
+          for attempt in $(seq 1 150); do
+            runs=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch dev --event workflow_dispatch --limit 50 --json databaseId,headSha,status,conclusion)
+            failed=$(jq -r --arg sha "$MERGE_SHA" '[.[] | select(.headSha==$sha and .status=="completed" and .conclusion!="success")] | first | .databaseId // empty' <<<"$runs")
+            if [ -n "$failed" ]; then gh run view "$failed" --repo "$GITHUB_REPOSITORY" --log-failed || true; exit 1; fi
+            run=$(jq -r --arg sha "$MERGE_SHA" '[.[] | select(.headSha==$sha and .status=="completed" and .conclusion=="success")] | first | .databaseId // empty' <<<"$runs")
+            if [ -n "$run" ]; then break; fi
+            sleep 20
+          done
+          test -n "$run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+'''
+                  text=text[:start]+replacement+text[end:]
+              path.write_text(text,encoding='utf-8')
+
+          # The older Increment 22 chain uses different step names; apply the same policy.
+          path=Path('.github/workflows/chain-and-close-increment-22.yml')
+          if path.is_file():
+              text=path.read_text(encoding='utf-8')
+              start_name='      - name: Wait for evidence checks and merge\n'
+              post_name='      - name: Wait for post-merge Core CI\n'
+              status_name='      - name: Publish chain status\n'
+              if start_name in text and post_name in text:
+                  start=text.index(start_name)
+                  end=text.index(post_name,start)
+                  block=text[start:end]
+                  # Split the previous combined evidence wait+merge into local validation+merge.
+                  replacement='''      - name: Validate evidence-only commit locally and merge
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.selected.outputs.pr }}
+        working-directory: target
+        run: |
+          python3 scripts/check_increment22.py
+          git diff --check
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --delete-branch --subject 'Increment 22 — CIRCT conversion strategy and legalizer skeleton'
+          merge_sha=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json mergeCommit --jq '.mergeCommit.oid')
+          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
+
+'''
+                  text=text[:start]+replacement+text[end:]
+              if post_name in text and status_name in text:
+                  start=text.index(post_name)
+                  end=text.index(status_name,start)
+                  replacement='''      - name: Dispatch and require post-merge Core CI
+        id: postmerge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_SHA: ${{ steps.merge.outputs.merge_sha }}
+        working-directory: target
+        run: |
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref dev
+          run=''
+          for attempt in $(seq 1 150); do
+            runs=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch dev --event workflow_dispatch --limit 50 --json databaseId,headSha,status,conclusion)
+            failed=$(jq -r --arg sha "$MERGE_SHA" '[.[] | select(.headSha==$sha and .status=="completed" and .conclusion!="success")] | first | .databaseId // empty' <<<"$runs")
+            if [ -n "$failed" ]; then gh run view "$failed" --repo "$GITHUB_REPOSITORY" --log-failed || true; exit 1; fi
+            run=$(jq -r --arg sha "$MERGE_SHA" '[.[] | select(.headSha==$sha and .status=="completed" and .conclusion=="success")] | first | .databaseId // empty' <<<"$runs")
+            if [ -n "$run" ]; then break; fi
+            sleep 20
+          done
+          test -n "$run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+'''
+                  text=text[:start]+replacement+text[end:]
+              path.write_text(text,encoding='utf-8')
+          PY
+          git diff --check
+      - name: Publish chain adaptation
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/chain-and-close-increment-20.yml \
+            .github/workflows/chain-and-close-increment-21.yml \
+            .github/workflows/chain-and-close-increment-22.yml
+          git commit -m 'Automation — adapt chains for token-suppressed CI events'
+          git push origin HEAD:automation/inc21-inc22-probe-stage

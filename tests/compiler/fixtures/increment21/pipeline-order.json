@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "increment": 21,
+  "fast": [
+    "construction",
+    "hierarchy",
+    "types",
+    "parameters",
+    "domains",
+    "capabilities"
+  ],
+  "default": [
+    "construction",
+    "drivers",
+    "latches",
+    "cycles",
+    "hierarchy",
+    "types",
+    "parameters",
+    "enum-fsm",
+    "domains",
+    "protocols",
+    "effects",
+    "analog",
+    "capabilities"
+  ],
+  "release": [
+    "construction",
+    "drivers",
+    "latches",
+    "cycles",
+    "hierarchy",
+    "types",
+    "parameters",
+    "enum-fsm",
+    "domains",
+    "protocols",
+    "effects",
+    "analog",
+    "capabilities"
+  ]
+}

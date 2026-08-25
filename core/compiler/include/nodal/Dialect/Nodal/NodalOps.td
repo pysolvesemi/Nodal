@@ -442,7 +442,7 @@ def Nodal_EnumCaseOp : Nodal_Op<"enum_case",
   let summary = "Named semantic enum case with an explicit ABI value";
   let arguments = (ins
     SymbolNameAttr:$sym_name,
-    IntegerAttr:$value,
+    APIntAttr:$value,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;
@@ -481,7 +481,7 @@ def Nodal_FsmTransitionOp : Nodal_Op<"fsm_transition",
   let summary = "Explicit FSM transition with deterministic priority";
   let arguments = (ins
     FlatSymbolRefAttr:$destination,
-    IntegerAttr:$priority,
+    APIntAttr:$priority,
     StrAttr:$condition,
     DictionaryAttr:$metadata
   );

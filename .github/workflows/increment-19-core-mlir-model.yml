@@ -81,7 +81,7 @@ jobs:
           # core-model-invalid-fsm.mlir.
           declare -A expected=(
             [width]='width must be greater than zero'
-            [net]='drive mode must match the resolved net'
+            [net]='driver and value types must match the resolved net'
             [enum]='duplicates an existing enum value'
             [fsm]='references an unknown destination state'
           )

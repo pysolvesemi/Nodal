@@ -5,6 +5,7 @@ add_mlir_library(NodalTransforms
     "${NODAL_REPOSITORY_ROOT}/core/compiler/include/nodal/Transforms"
 
   LINK_LIBS PUBLIC
+    NodalDiagnostics
     NodalDialect
     MLIRIR
     MLIRParser

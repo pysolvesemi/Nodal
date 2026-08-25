@@ -1,0 +1,70 @@
+name: Reconcile Increment 21 and 22
+
+on:
+  push:
+    branches:
+      - automation/reconcile-increment-21-22-v11
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out current dev
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Publish an authoritative prerequisite marker
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          roadmap_path = Path('docs/roadmap/nodal-development-todo.md')
+          roadmap = roadmap_path.read_text(encoding='utf-8')
+          manifest_path = Path('tests/compiler/fixtures/increment21/manifest.json')
+          manifest = {}
+          if manifest_path.exists():
+              manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+
+          checked = '- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**' in roadmap
+          checker = Path('scripts/check_increment21.py').is_file()
+          workflow = Path('.github/workflows/increment-21-native-verification-pipeline.yml').is_file() or Path('.github/workflows/increment-21-native-parse-semantic-pipeline.yml').is_file()
+          status = str(manifest.get('status', ''))
+          evidence = manifest.get('evidence', {}) if isinstance(manifest, dict) else {}
+          evidence_ok = all(isinstance(evidence.get(key), int) for key in ('pull_request', 'dedicated_run', 'core_ci_run'))
+          completed = checked and checker and workflow and status.startswith('validated') and evidence_ok
+
+          revision_match = re.search(r'^\*\*Revision:\*\* ([0-9.]+)$', roadmap, re.MULTILINE)
+          report = {
+              'dev_sha': __import__('subprocess').check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              'roadmap_revision': revision_match.group(1) if revision_match else None,
+              'increment21_checked': checked,
+              'checker_present': checker,
+              'workflow_present': workflow,
+              'manifest_present': manifest_path.exists(),
+              'manifest_status': status,
+              'evidence_ok': evidence_ok,
+              'completed': completed,
+          }
+          Path('/tmp/increment-state.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
+          Path('/tmp/marker').write_text('complete' if completed else 'incomplete', encoding='utf-8')
+          PY
+
+          state=$(cat /tmp/marker)
+          marker_branch="automation/state-inc21-${state}"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -B "${marker_branch}"
+          mkdir -p .nodal/automation
+          cp /tmp/increment-state.json .nodal/automation/increment-21-state.json
+          git add .nodal/automation/increment-21-state.json
+          git commit -m "Automation — record authoritative Increment 21 state"
+          git push --force origin "HEAD:${marker_branch}"

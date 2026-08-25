@@ -10,6 +10,7 @@
   ],
   "mandatory_default_stage_count": 13,
   "transaction": "clone-before-commit",
+  "closure_state": "validating-merged-implementation",
   "evidence": {
     "pull_request": null,
     "dedicated_run": null,

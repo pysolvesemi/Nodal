@@ -1,0 +1,136 @@
+name: Materialize Increment 22
+
+on:
+  push:
+    branches:
+      - automation/reconcile-increment-21-22-v11
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: materialize-increment-22
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/reconcile-increment-21-22-v11
+          path: automation
+
+      - name: Check out authoritative dev
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+          path: target
+
+      - name: Materialize only after Increment 21 closure
+        working-directory: target
+        run: |
+          git checkout -B increment/22-circt-conversion-legalizer-skeleton
+          cp ../automation/scripts/materialize_increment22.py scripts/materialize_increment22.py
+          python3 scripts/materialize_increment22.py
+          rm scripts/materialize_increment22.py
+
+      - name: Install locked toolchains
+        working-directory: target
+        run: |
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/native"
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/lint"
+
+      - name: Apply canonical formatting
+        working-directory: target
+        run: |
+          "${RUNNER_TEMP}/lint/bin/clang-format" -i \
+            core/compiler/include/nodal/Conversion/CIRCT/CIRCTLegalizer.h \
+            core/compiler/lib/Conversion/CIRCT/CIRCTLegalizer.cpp
+          ./mill mill.scalalib.scalafmt/reformatAll
+          git diff --check
+
+      - name: Validate structure and predecessor contracts
+        working-directory: target
+        run: |
+          python3 scripts/check_increment21.py
+          python3 scripts/check_increment22.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          ./nodal check --contracts-only --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/lint" --base-ref origin/dev
+
+      - name: Build and test the native compiler
+        working-directory: target
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/native" \
+            --lint-toolchain "${RUNNER_TEMP}/lint"
+          compiler=out/native/release/bin/nodalc
+          "${compiler}" \
+            '--pass-pipeline=builtin.module(nodal-circt-legalizer{profile=audit})' \
+            core/compiler/test/IR/circt-legalizer-structural.mlir \
+            | tee /tmp/circt-audit.mlir
+          grep -F 'nodal.circt.legalizer.version' /tmp/circt-audit.mlir
+          grep -F 'nodal.circt.converted_ops = 0' /tmp/circt-audit.mlir
+          "${compiler}" \
+            '--pass-pipeline=builtin.module(nodal-circt-legalizer{profile=circt-hw-structural fail-on-deferred=true})' \
+            core/compiler/test/IR/circt-legalizer-structural.mlir \
+            | tee /tmp/circt-structural.mlir
+          if "${compiler}" \
+              '--pass-pipeline=builtin.module(nodal-circt-legalizer{profile=circt-hw-structural fail-on-deferred=true})' \
+              core/compiler/test/IR/circt-legalizer-deferred.mlir \
+              >/tmp/circt-deferred.log 2>&1; then
+            echo 'deferred analog operation was accepted' >&2
+            exit 1
+          fi
+          grep -F 'NODAL-CIRCT-LEGALIZE-002' /tmp/circt-deferred.log
+
+      - name: Publish Increment 22 branch and pull request
+        working-directory: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 22 — add CIRCT conversion legalizer skeleton'
+          git push --force-with-lease origin \
+            HEAD:increment/22-circt-conversion-legalizer-skeleton
+
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" \
+            --head increment/22-circt-conversion-legalizer-skeleton \
+            --state open --json number --jq '.[0].number // empty')
+          if [ -z "$pr" ]; then
+            gh pr create --repo "$GITHUB_REPOSITORY" \
+              --base dev \
+              --head increment/22-circt-conversion-legalizer-skeleton \
+              --title 'Increment 22 — CIRCT conversion strategy and legalizer skeleton' \
+              --body-file - <<'BODY'
+          ## Summary
+
+          - Define the explicit versioned boundary between canonical Nodal MLIR and future CIRCT lowering.
+          - Register `nodal-circt-legalizer` and `nodal-circt-legalize-pipeline`.
+          - Use MLIR `ConversionTarget` and partial-conversion infrastructure without claiming any completed rewrite.
+          - Publish deterministic ready/deferred inventories for audit, structural-HW, and digital-HW profiles.
+          - Reject deferred operations on request with stable diagnostics and preserve public API v0.3.
+
+          ## Deliberately deferred
+
+          Actual Nodal-to-CIRCT rewrite patterns, CIRCT type conversion, interface flattening, domain/state lowering, scheduling, backend translation, and HDL emission remain later roadmap work.
+
+          ## Validation
+
+          - [x] Increment 21 closure is required by the materializer and checker.
+          - [x] Structural checker and mutation tests pass.
+          - [x] Locked native configure/build/lint/CTest pass before publication.
+          - [x] Audit and strict structural pipelines pass.
+          - [x] Strict structural profile rejects an analog terminal with `NODAL-CIRCT-LEGALIZE-002`.
+          - [ ] Dedicated PR workflow and Core CI evidence pending.
+          BODY
+          fi

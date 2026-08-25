@@ -45,6 +45,20 @@ class Increment18CheckTests(unittest.TestCase):
     def test_current_repository_passes(self) -> None:
         self.assertEqual(CHECKER.check_repository(REPOSITORY_ROOT), [])
 
+    def test_accepts_successor_roadmap_revision(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "docs/roadmap/nodal-development-todo.md"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "**Revision:** 1.23",
+                "**Revision:** 1.24",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(CHECKER.check_repository(root), [])
+
     def test_rejects_missing_operation_tablegen(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)

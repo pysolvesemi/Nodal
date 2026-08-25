@@ -22,19 +22,20 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
-          def one(text: str, old: str, new: str, label: str) -> str:
-              count = text.count(old)
+          def sub_one(text: str, pattern: str, replacement: str, label: str) -> str:
+              updated, count = re.subn(pattern, replacement, text, count=1, flags=re.MULTILINE)
               if count != 1:
                   raise SystemExit(f"{label}: expected one match, found {count}")
-              return text.replace(old, new, 1)
+              return updated
 
           path = Path("core/scala/api/src/nodal/CandidateApi.scala")
           text = path.read_text(encoding="utf-8")
 
-          text = one(
+          text = sub_one(
               text,
-              "private[nodal] final class KernelExpr[A <: Data](val operands: Vector[Any]) extends Expr[A]",
+              r"private\[nodal\] final class KernelExpr\[A <: Data\]\(val operands: Vector\[Any\]\) extends Expr\[A\]",
               """private[nodal] final case class KernelLiteral(
               kind: String,
               value: String,
@@ -49,29 +50,18 @@ jobs:
               "KernelExpr metadata",
           )
 
-          text = one(
+          text = sub_one(
               text,
-              """  CandidateRuntime.declare(
-              this,
-              KernelSignalKind.Parameter,
-              attributes = Vector("default" -> default)
-            )""",
-              """  CandidateRuntime.declare(
-              this,
-              KernelSignalKind.Parameter,
+              r"KernelSignalKind\.Parameter,\n\s+attributes = Vector\(\"default\" -> default\)",
+              """KernelSignalKind.Parameter,
               dataType = CandidateRuntime.expressionDataType(default),
-              attributes = Vector("default" -> default)
-            )""",
+              attributes = Vector("default" -> default)""",
               "parameter type capture",
           )
 
-          text = one(
+          text = sub_one(
               text,
-              """final class ClockDomain private[nodal] (
-              val name: String,
-              val reset: Expr[Reset],
-              kind: KernelDomainKind
-          ):""",
+              r"final class ClockDomain private\[nodal\] \(\n\s+val name: String,\n\s+val reset: Expr\[Reset\],\n\s+kind: KernelDomainKind\n\):",
               """final class ClockDomain private[nodal] (
               val name: String,
               val reset: Expr[Reset],
@@ -84,17 +74,10 @@ jobs:
               "clock domain metadata",
           )
 
-          text = one(
+          text = sub_one(
               text,
-              """    new ClockDomain(
-              name,
-              CandidateRuntime.expr(name, reset),
-              KernelDomainKind.External
-            )""",
-              """    new ClockDomain(
-              name,
-              CandidateRuntime.expr(name, reset),
-              KernelDomainKind.External,
+              r"KernelDomainKind\.External\n\s+\)",
+              """KernelDomainKind.External,
               edge = Some(edge),
               resetPolicy = Some(reset),
               resetPolarity = Some(resetPolarity)
@@ -102,10 +85,10 @@ jobs:
               "external domain metadata",
           )
 
-          text = one(
+          text = sub_one(
               text,
-              "    new ClockDomain(name, reset, KernelDomainKind.Bound)",
-              """    new ClockDomain(
+              r"new ClockDomain\(name, reset, KernelDomainKind\.Bound\)",
+              """new ClockDomain(
               name,
               reset,
               KernelDomainKind.Bound,
@@ -116,52 +99,30 @@ jobs:
               "bound domain metadata",
           )
 
-          text = one(
+          text = sub_one(
               text,
-              """  def generated(
-              name: String,
-              clock: Expr[Clock],
-              from: ClockDomain,
-              relation: ClockRelation,
-              reset: Expr[Reset]
-            ): ClockDomain =
-              CandidateRuntime.statement(clock, from, relation)
-              new ClockDomain(name, reset, KernelDomainKind.Generated)""",
-              """  def generated(
-              name: String,
-              clock: Expr[Clock],
-              from: ClockDomain,
-              relation: ClockRelation,
-              reset: Expr[Reset]
-            ): ClockDomain =
-              CandidateRuntime.statement(clock, from, relation)
-              new ClockDomain(
-                name,
-                reset,
-                KernelDomainKind.Generated,
-                relation = Some(relation)
-              )""",
+              r"new ClockDomain\(name, reset, KernelDomainKind\.Generated\)",
+              """new ClockDomain(
+              name,
+              reset,
+              KernelDomainKind.Generated,
+              relation = Some(relation)
+            )""",
               "generated domain metadata",
           )
 
-          text = one(
+          text = sub_one(
               text,
-              """  def integer: Expr[Integer] = CandidateRuntime.expr(value)
-              def U(width: Int): Expr[UInt] = CandidateRuntime.expr(value, width)
-              def U(width: Expr[Integer]): Expr[UInt] = CandidateRuntime.expr(value, width)""",
-              """  def integer: Expr[Integer] = CandidateRuntime.literalInteger(value)
+              r"def integer: Expr\[Integer\] = CandidateRuntime\.expr\(value\)\n\s+def U\(width: Int\): Expr\[UInt\] = CandidateRuntime\.expr\(value, width\)\n\s+def U\(width: Expr\[Integer\]\): Expr\[UInt\] = CandidateRuntime\.expr\(value, width\)",
+              """def integer: Expr[Integer] = CandidateRuntime.literalInteger(value)
               def U(width: Int): Expr[UInt] = CandidateRuntime.literalUInt(value, width)
               def U(width: Expr[Integer]): Expr[UInt] = CandidateRuntime.expr(value, width)""",
               "integer literals",
           )
 
-          text = one(
+          text = sub_one(
               text,
-              """extension (value: Boolean)
-              def B: Expr[Bool] = CandidateRuntime.expr(value)
-
-          private[nodal] def realLiteral(value: Double, unit: String): Expr[Real] =
-              CandidateRuntime.expr(value, unit)""",
+              r"extension \(value: Boolean\)\n\s+def B: Expr\[Bool\] = CandidateRuntime\.expr\(value\)\n\nprivate\[nodal\] def realLiteral\(value: Double, unit: String\): Expr\[Real\] =\n\s+CandidateRuntime\.expr\(value, unit\)",
               """extension (value: Boolean)
               def B: Expr[Bool] = CandidateRuntime.literalBool(value)
 
@@ -170,12 +131,9 @@ jobs:
               "boolean and real literals",
           )
 
-          text = one(
+          text = sub_one(
               text,
-              """  def expr[A <: Data](values: Any*): Expr[A] =
-              val expression = new KernelExpr[A](values.toVector)
-              ConstructionKernel.expression(expression)
-              expression""",
+              r"  def expr\[A <: Data\]\(values: Any\*\): Expr\[A\] =\n\s+val expression = new KernelExpr\[A\]\(values\.toVector\)\n\s+ConstructionKernel\.expression\(expression\)\n\s+expression",
               """  private def dataTypeFromDescriptor(
               descriptor: KernelTypeDescriptor
             ): DataType[? <: Data] = descriptor.kind match

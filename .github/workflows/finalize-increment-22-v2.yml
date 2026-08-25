@@ -1,0 +1,240 @@
+name: Finalize Increment 22 V2
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+  checks: read
+
+concurrency:
+  group: finalize-increment-22-v2
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    if: github.event_name == 'workflow_dispatch' || github.actor == 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+          fetch-depth: 0
+          path: automation
+
+      - name: Check out authoritative dev
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+          path: target
+
+      - name: Evaluate authoritative state
+        id: state
+        working-directory: target
+        run: |
+          python3 - <<'PY'
+          import json,re
+          from pathlib import Path
+          roadmap=Path('docs/roadmap/nodal-development-todo.md').read_text(encoding='utf-8')
+          def entry(n):
+              m=re.search(rf'^- \[([ xX])\] \*\*Increment {n} — ([^*]+)\*\*',roadmap,re.M)
+              return {'checked':bool(m and m.group(1).lower()=='x'),'title':m.group(2).strip() if m else None}
+          def manifest(n):
+              p=Path(f'tests/compiler/fixtures/increment{n}/manifest.json')
+              return json.loads(p.read_text()) if p.is_file() else {}
+          e21=entry(21);e22=entry(22);m21=manifest(21);m22=manifest(22)
+          ev21=m21.get('evidence',{});ev22=m22.get('evidence',{})
+          ready21=e21['checked'] and m21.get('status') in {'validated-native-verification-pipeline','validated-staged-semantic-pipeline'} and all(isinstance(ev21.get(k),int) for k in ('pull_request','dedicated_run','core_ci_run'))
+          done22=e22['checked'] and m22.get('status')=='validated-circt-legalizer-skeleton' and all(isinstance(ev22.get(k),int) for k in ('pull_request','dedicated_run','core_ci_run'))
+          accepted_title=e22['title'] in {'CIRCT conversion strategy and legalizer skeleton','Cross-layer diagnostic mapping'}
+          payload={'increment21_ready':ready21,'increment22_complete':done22,'increment22_title':e22['title'],'title_accepted':accepted_title,'increment22_status':m22.get('status')}
+          Path('/tmp/inc22-v2-state.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')
+          Path('/tmp/inc22-v2-env').write_text(f"increment21_ready={'true' if ready21 else 'false'}\nincrement22_complete={'true' if done22 else 'false'}\ntitle_accepted={'true' if accepted_title else 'false'}\n")
+          print(json.dumps(payload,indent=2,sort_keys=True))
+          PY
+          cat /tmp/inc22-v2-env >> "$GITHUB_OUTPUT"
+
+      - name: Defer until Increment 21 is accepted
+        if: steps.state.outputs.increment21_ready != 'true'
+        run: echo 'Increment 21 is not yet accepted; Increment 22 finalization is deferred.'
+
+      - name: Stop cleanly when Increment 22 is already complete
+        if: steps.state.outputs.increment21_ready == 'true' && steps.state.outputs.increment22_complete == 'true'
+        run: echo 'Increment 22 is already complete on authoritative dev.'
+
+      - name: Reject an unrelated Increment 22 assignment
+        if: steps.state.outputs.increment21_ready == 'true' && steps.state.outputs.increment22_complete != 'true' && steps.state.outputs.title_accepted != 'true'
+        run: |
+          echo 'Increment 22 roadmap assignment is unrelated to the requested legalizer.' >&2
+          exit 1
+
+      - name: Locate Increment 22 PR
+        if: steps.state.outputs.increment21_ready == 'true' && steps.state.outputs.increment22_complete != 'true' && steps.state.outputs.title_accepted == 'true'
+        id: pr
+        working-directory: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head increment/22-circt-conversion-legalizer --state open --json number --jq '.[0].number // empty')
+          echo "number=$pr" >> "$GITHUB_OUTPUT"
+
+      - name: Materialize missing Increment 22 PR
+        if: steps.state.outputs.increment21_ready == 'true' && steps.state.outputs.increment22_complete != 'true' && steps.state.outputs.title_accepted == 'true' && steps.pr.outputs.number == ''
+        id: create
+        working-directory: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git checkout -B increment/22-circt-conversion-legalizer origin/dev
+          python3 ../automation/scripts/materialize_increment22_v8.py .
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment22.py
+          python3 -m unittest tests.compiler.test_increment22
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 22 — add CIRCT conversion strategy and legalizer skeleton'
+          git push --force-with-lease origin HEAD:increment/22-circt-conversion-legalizer
+          pr_url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base dev --head increment/22-circt-conversion-legalizer --title 'Increment 22 — CIRCT conversion strategy and legalizer skeleton' --body 'Adds the approved transactional Nodal-to-CIRCT legalizer skeleton, strict preflight, exact finite-width standalone constant conversion, deterministic strategy metadata, native fixtures, mutation tests, and read-only CI.')
+          echo "number=${pr_url##*/}" >> "$GITHUB_OUTPUT"
+          echo 'created=true' >> "$GITHUB_OUTPUT"
+
+      - name: Select PR
+        if: steps.state.outputs.increment21_ready == 'true' && steps.state.outputs.increment22_complete != 'true' && steps.state.outputs.title_accepted == 'true'
+        id: selected
+        env:
+          EXISTING: ${{ steps.pr.outputs.number }}
+          CREATED: ${{ steps.create.outputs.number }}
+        run: |
+          number="${EXISTING:-$CREATED}"
+          test -n "$number"
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      - name: Require user-triggered implementation-head CI
+        if: steps.state.outputs.increment21_ready == 'true' && steps.state.outputs.increment22_complete != 'true' && steps.state.outputs.title_accepted == 'true' && steps.create.outputs.created != 'true'
+        id: ci
+        working-directory: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.selected.outputs.number }}
+        run: |
+          head=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq '.headRefOid')
+          dedicated='';core=''
+          for attempt in $(seq 1 150); do
+            runs=$(gh run list --repo "$GITHUB_REPOSITORY" --commit "$head" --limit 100 --json databaseId,name,status,conclusion)
+            latest_dedicated=$(jq -c '[.[] | select(.name=="Increment 22 CIRCT Conversion Legalizer")] | first // {}' <<<"$runs")
+            latest_core=$(jq -c '[.[] | select(.name=="Core CI")] | first // {}' <<<"$runs")
+            for item in "$latest_dedicated" "$latest_core"; do
+              status=$(jq -r '.status // empty' <<<"$item"); conclusion=$(jq -r '.conclusion // empty' <<<"$item"); id=$(jq -r '.databaseId // empty' <<<"$item")
+              if [ "$status" = completed ] && [ "$conclusion" != success ]; then gh run view "$id" --repo "$GITHUB_REPOSITORY" --log-failed || true; exit 1; fi
+            done
+            dedicated=$(jq -r 'select(.status=="completed" and .conclusion=="success") | .databaseId // empty' <<<"$latest_dedicated")
+            core=$(jq -r 'select(.status=="completed" and .conclusion=="success") | .databaseId // empty' <<<"$latest_core")
+            if [ -n "$dedicated" ] && [ -n "$core" ]; then break; fi
+            sleep 20
+          done
+          test -n "$dedicated";test -n "$core"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "dedicated=$dedicated" >> "$GITHUB_OUTPUT"
+          echo "core=$core" >> "$GITHUB_OUTPUT"
+
+      - name: Record evidence and merge
+        if: steps.state.outputs.increment21_ready == 'true' && steps.state.outputs.increment22_complete != 'true' && steps.state.outputs.title_accepted == 'true' && steps.create.outputs.created != 'true'
+        id: merge
+        working-directory: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.selected.outputs.number }}
+          DEDICATED_RUN: ${{ steps.ci.outputs.dedicated }}
+          CORE_RUN: ${{ steps.ci.outputs.core }}
+        run: |
+          git fetch --no-tags origin increment/22-circt-conversion-legalizer:refs/remotes/origin/increment/22-circt-conversion-legalizer dev:refs/remotes/origin/dev
+          git checkout -B increment/22-circt-conversion-legalizer origin/increment/22-circt-conversion-legalizer
+          python3 - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          pr=int(os.environ['PR_NUMBER']);dedicated=int(os.environ['DEDICATED_RUN']);core=int(os.environ['CORE_RUN'])
+          path=Path('docs/roadmap/nodal-development-todo.md');text=path.read_text(encoding='utf-8')
+          match=re.search(r'^\*\*Revision:\*\* ([0-9.]+)$',text,re.M)
+          if not match:raise RuntimeError('roadmap revision missing')
+          parts=list(map(int,match.group(1).split('.')));parts[-1]+=1;revision='.'.join(map(str,parts))
+          text=text[:match.start(1)]+revision+text[match.end(1):]
+          old='- [ ] **Increment 22 — CIRCT conversion strategy and legalizer skeleton**\n'
+          if text.count(old)!=1:raise RuntimeError('aligned Increment 22 anchor missing')
+          replacement=(f'- [x] **Increment 22 — CIRCT conversion strategy and legalizer skeleton**\n'
+                       f'  - Evidence: [`NodalCirctConversionStrategy-DG-v1.0.md`](../design-gates/NodalCirctConversionStrategy-DG-v1.0.md), '
+                       f'[`increment22-circt-conversion-legalizer.md`](../implementation/increment22-circt-conversion-legalizer.md), '
+                       f'PR [#{pr}](https://github.com/pysolvesemi/Nodal/pull/{pr}), '
+                       f'dedicated validation run [{dedicated}](https://github.com/pysolvesemi/Nodal/actions/runs/{dedicated}), '
+                       f'and Core CI run [{core}](https://github.com/pysolvesemi/Nodal/actions/runs/{core}).\n')
+          path.write_text(text.replace(old,replacement,1),encoding='utf-8')
+          manifest_path=Path('tests/compiler/fixtures/increment22/manifest.json');manifest=json.loads(manifest_path.read_text())
+          manifest['status']='validated-circt-legalizer-skeleton';manifest['evidence']={'pull_request':pr,'dedicated_run':dedicated,'core_ci_run':core}
+          manifest_path.write_text(json.dumps(manifest,indent=2)+'\n')
+          PY
+          python3 scripts/check_increment22.py
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/roadmap/nodal-development-todo.md tests/compiler/fixtures/increment22/manifest.json
+          git commit -m 'Increment 22 — record accepted CI evidence'
+          git push origin HEAD:increment/22-circt-conversion-legalizer
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --delete-branch --subject 'Increment 22 — CIRCT conversion strategy and legalizer skeleton'
+          merge_sha=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json mergeCommit --jq '.mergeCommit.oid')
+          echo "sha=$merge_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch post-merge Core CI
+        if: steps.merge.outputs.sha != ''
+        id: postmerge
+        working-directory: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_SHA: ${{ steps.merge.outputs.sha }}
+        run: |
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref dev
+          run=''
+          for attempt in $(seq 1 150); do
+            runs=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch dev --event workflow_dispatch --limit 50 --json databaseId,headSha,status,conclusion)
+            item=$(jq -c --arg sha "$MERGE_SHA" '[.[] | select(.headSha==$sha)] | first // {}' <<<"$runs")
+            status=$(jq -r '.status // empty' <<<"$item");conclusion=$(jq -r '.conclusion // empty' <<<"$item");id=$(jq -r '.databaseId // empty' <<<"$item")
+            if [ "$status" = completed ] && [ "$conclusion" != success ]; then gh run view "$id" --repo "$GITHUB_REPOSITORY" --log-failed || true;exit 1;fi
+            if [ "$status" = completed ] && [ "$conclusion" = success ]; then run=$id;break;fi
+            sleep 20
+          done
+          test -n "$run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+      - name: Publish finalizer status
+        if: always()
+        working-directory: automation
+        env:
+          JOB_STATUS: ${{ job.status }}
+          PR_NUMBER: ${{ steps.selected.outputs.number }}
+          HEAD_SHA: ${{ steps.ci.outputs.head }}
+          DEDICATED_RUN: ${{ steps.ci.outputs.dedicated }}
+          CORE_RUN: ${{ steps.ci.outputs.core }}
+          MERGE_SHA: ${{ steps.merge.outputs.sha }}
+          POSTMERGE_RUN: ${{ steps.postmerge.outputs.run }}
+        run: |
+          mkdir -p status
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          state=json.loads(Path('/tmp/inc22-v2-state.json').read_text()) if Path('/tmp/inc22-v2-state.json').is_file() else {}
+          keys=('JOB_STATUS','PR_NUMBER','HEAD_SHA','DEDICATED_RUN','CORE_RUN','MERGE_SHA','POSTMERGE_RUN')
+          Path('status/increment22-finalizer-v2.json').write_text(json.dumps({'state':state,**{k.lower():os.environ.get(k) or None for k in keys}},indent=2,sort_keys=True)+'\n')
+          PY
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add status/increment22-finalizer-v2.json
+          git commit -m 'Automation — publish Increment 22 v2 finalizer status' || true
+          git push origin HEAD:automation/inc21-inc22-probe-stage

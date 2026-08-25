@@ -1,0 +1,10 @@
+{
+  "core_run": null,
+  "dedicated_run": null,
+  "final_head": null,
+  "implementation_head": null,
+  "job_status": "failure",
+  "merge_sha": null,
+  "postmerge_run": null,
+  "pr_number": null
+}

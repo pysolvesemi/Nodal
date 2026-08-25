@@ -20,6 +20,16 @@ def main() -> None:
     args = parser.parse_args()
     root = args.root.resolve()
 
+    diagnostic_path = root / "core/compiler/lib/Diagnostics/DiagnosticMapping.cpp"
+    diagnostic = diagnostic_path.read_text(encoding="utf-8")
+    diagnostic = replace_once(
+        diagnostic,
+        '#include "mlir/IR/BuiltinLocationAttributes.h"',
+        '#include "mlir/IR/Location.h"',
+        "pinned MLIR location header",
+    )
+    diagnostic_path.write_text(diagnostic, encoding="utf-8")
+
     passes_path = root / "core/compiler/lib/Transforms/Passes.cpp"
     passes = passes_path.read_text(encoding="utf-8")
     passes = replace_once(

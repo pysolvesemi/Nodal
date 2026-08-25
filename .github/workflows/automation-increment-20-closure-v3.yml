@@ -1,0 +1,103 @@
+name: Automation Increment 20 Closure v3
+
+on:
+  push:
+    branches:
+      - automation/increment-20-complete
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+  checks: read
+  statuses: read
+
+concurrency:
+  group: automation-increment-20-closure-v3
+  cancel-in-progress: true
+
+jobs:
+  close-latest-head:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/increment-20-complete
+          path: automation
+
+      - name: Allow current feature workflows to settle
+        run: sleep 300
+
+      - name: Check out latest Increment 20 feature head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/20-scala-mlir-bridge
+          fetch-depth: 0
+          path: target
+
+      - name: Ensure bridge-required snapshot metadata
+        working-directory: target
+        run: |
+          if ! grep -Fq 'edge: Option[String] = None' \
+              core/scala/api/src/nodal/ElaborationConstructionKernel.scala; then
+            python3 ../automation/scripts/patch_increment20_kernel.py .
+          fi
+          ./mill mill.scalalib.scalafmt/reformatAll
+          if ! git diff --quiet; then
+            git config user.name "pysolvesemi"
+            git config user.email "pysolvesemi@gmail.com"
+            git add \
+              core/scala/api/src/nodal/CandidateApi.scala \
+              core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+              core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala \
+              core/scala/bridge/src/nodal/bridge/NativeCompilerClient.scala \
+              core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala
+            git commit -m "Increment 20 — finalize bridge construction metadata"
+            git push origin HEAD:increment/20-scala-mlir-bridge
+          fi
+
+      - name: Restore locked native and Scala caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/nodal/downloads
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-inc20-close-v3-${{ runner.os }}-${{ hashFiles('target/build.mill', 'target/.mill-version', 'target/mill', 'target/toolchains/lock.json', 'target/toolchains/checksums/*.sha256', 'target/toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-inc20-${{ runner.os }}-
+            nodal-scala-${{ runner.os }}-
+
+      - name: Install locked toolchains
+        working-directory: target
+        run: |
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate latest Increment 20 head
+        working-directory: target
+        run: |
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          NODAL_NODALC="${GITHUB_WORKSPACE}/target/out/native/release/bin/nodalc" ./nodal core scala
+          git diff --check
+
+      - name: Close and squash-merge Increment 20
+        working-directory: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ../automation/scripts/close_increment20_v2.py

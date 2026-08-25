@@ -1,0 +1,168 @@
+name: Recover Increment 21 If Needed
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: recover-increment-21-if-needed
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+          path: automation
+
+      - name: Check out authoritative dev
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+          path: target
+
+      - name: Decide whether recovery is required
+        id: state
+        working-directory: target
+        run: |
+          python3 - <<'PY'
+          import json, re
+          from pathlib import Path
+          roadmap = Path('docs/roadmap/nodal-development-todo.md').read_text(encoding='utf-8')
+          def checked(number):
+              match = re.search(rf'^- \[([ xX])\] \*\*Increment {number} — ', roadmap, re.M)
+              return bool(match and match.group(1).lower() == 'x')
+          def status(number):
+              path = Path(f'tests/compiler/fixtures/increment{number}/manifest.json')
+              return json.loads(path.read_text()) if path.is_file() else {}
+          inc20 = status(20); inc21 = status(21)
+          evidence20 = inc20.get('evidence', {})
+          ready20 = checked(20) and inc20.get('status') == 'validated-scala-mlir-bridge' and all(
+              isinstance(evidence20.get(key), int) for key in ('pull_request','dedicated_run','core_ci_run'))
+          evidence21 = inc21.get('evidence', {})
+          done21 = checked(21) and inc21.get('status') in {
+              'validated-native-verification-pipeline','validated-staged-semantic-pipeline'} and all(
+              isinstance(evidence21.get(key), int) for key in ('pull_request','dedicated_run','core_ci_run'))
+          Path('/tmp/inc21-state.json').write_text(json.dumps({
+              'increment20_ready': ready20,
+              'increment20_status': inc20.get('status'),
+              'increment21_complete': done21,
+              'increment21_status': inc21.get('status'),
+          }, indent=2) + '\n')
+          with Path('/tmp/inc21-env').open('w') as handle:
+              handle.write(f"increment20_ready={'true' if ready20 else 'false'}\n")
+              handle.write(f"increment21_complete={'true' if done21 else 'false'}\n")
+          PY
+          cat /tmp/inc21-env >> "$GITHUB_OUTPUT"
+
+      - name: Stop when Increment 20 is not an accepted predecessor
+        if: steps.state.outputs.increment20_ready != 'true'
+        run: |
+          echo 'Increment 21 recovery is blocked because authoritative dev has not closed Increment 20.' >&2
+          exit 1
+
+      - name: Materialize Increment 21 fallback
+        if: steps.state.outputs.increment20_ready == 'true' && steps.state.outputs.increment21_complete != 'true'
+        working-directory: target
+        run: |
+          git checkout -B increment/21-native-verification-pipeline origin/dev
+          python3 ../automation/scripts/materialize_increment21.py .
+          python3 scripts/check_increment21.py
+          python3 -m unittest tests.compiler.test_increment21
+          git diff --check
+
+      - name: Install locked toolchains
+        if: steps.state.outputs.increment20_ready == 'true' && steps.state.outputs.increment21_complete != 'true'
+        working-directory: target
+        run: |
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+
+      - name: Validate Increment 21 fallback
+        id: validation
+        if: steps.state.outputs.increment20_ready == 'true' && steps.state.outputs.increment21_complete != 'true'
+        working-directory: target
+        run: |
+          set -o pipefail
+          ./mill mill.scalalib.scalafmt/reformatAll
+          ./nodal style fix --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          python3 scripts/check_increment21.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          ./nodal core scala
+          ./nodal core native --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" 2>&1 | tee /tmp/inc21-native.log
+          compiler=out/native/release/bin/nodalc
+          "${compiler}" --nodal-transactional-gate core/compiler/test/IR/native-gate-valid.mlir | tee /tmp/inc21-gate.mlir
+          grep -F 'nodal.verification.accepted' /tmp/inc21-gate.mlir
+          if "${compiler}" --nodal-gate-check core/compiler/test/IR/native-gate-invalid-hierarchy.mlir >/tmp/inc21-invalid.log 2>&1; then exit 1; fi
+          grep -F 'NODAL-VERIFY-HIERARCHY-001' /tmp/inc21-invalid.log
+          git diff --check
+
+      - name: Publish Increment 21 fallback branch and PR
+        id: publish
+        if: steps.validation.outcome == 'success'
+        working-directory: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 21 — add native staged semantic verification pipeline'
+          git push --force-with-lease origin HEAD:increment/21-native-verification-pipeline
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head increment/21-native-verification-pipeline --state open --json number --jq '.[0].number // empty')
+          if [ -z "$pr" ]; then
+            pr=$(gh pr create --repo "$GITHUB_REPOSITORY" --base dev --head increment/21-native-verification-pipeline \
+              --title 'Increment 21 — Native parse, staged semantic verification, and pass pipeline' \
+              --body 'Implements mandatory named semantic stages, read-only and transactional gates, deterministic acceptance metadata, textual pass pipelines, native unit/negative fixtures, and read-only CI. Roadmap closure remains pending accepted CI evidence.' \
+              --json number --jq '.number')
+          fi
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish recovery status
+        if: always()
+        working-directory: automation
+        env:
+          JOB_STATUS: ${{ job.status }}
+          VALIDATION_OUTCOME: ${{ steps.validation.outcome }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+          PR_NUMBER: ${{ steps.publish.outputs.pr }}
+          FEATURE_SHA: ${{ steps.publish.outputs.sha }}
+        run: |
+          mkdir -p status
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          state = json.loads(Path('/tmp/inc21-state.json').read_text()) if Path('/tmp/inc21-state.json').is_file() else {}
+          payload = {
+              'job_status': os.environ.get('JOB_STATUS'),
+              'state': state,
+              'validation_outcome': os.environ.get('VALIDATION_OUTCOME'),
+              'publish_outcome': os.environ.get('PUBLISH_OUTCOME'),
+              'pull_request': int(os.environ['PR_NUMBER']) if os.environ.get('PR_NUMBER','').isdigit() else None,
+              'feature_sha': os.environ.get('FEATURE_SHA') or None,
+          }
+          for name in ('inc21-native.log','inc21-invalid.log'):
+              path = Path('/tmp') / name
+              if path.is_file(): payload[name] = path.read_text(errors='replace').splitlines()[-120:]
+          Path('status/increment21-recovery.json').write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add status/increment21-recovery.json
+          git commit -m 'Automation — publish Increment 21 recovery status' || true
+          git push origin HEAD:automation/inc21-inc22-probe-stage

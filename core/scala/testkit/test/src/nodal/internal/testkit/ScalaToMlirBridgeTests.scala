@@ -203,19 +203,17 @@ object ScalaToMlirBridgeTests extends TestSuite:
           val directory = workDirectory()
           try
             val document = ScalaToMlirBridge.lower(new BridgeTop)
-            val result = NativeCompilerClient.run(
-              document,
-              NativeCompilerRequest(
-                executable = Path.of(executable).toAbsolutePath,
-                arguments = Vector("--mlir-print-op-generic"),
-                workingDirectory = directory,
-                timeout = Duration.ofSeconds(30)
+            val success = NativeCompilerClient
+              .run(
+                document,
+                NativeCompilerRequest(
+                  executable = Path.of(executable).toAbsolutePath,
+                  arguments = Vector("--mlir-print-op-generic"),
+                  workingDirectory = directory,
+                  timeout = Duration.ofSeconds(30)
+                )
               )
-            )
-            result match
-              case success: NativeCompilerSuccess =>
-                assert(success.normalizedMlir.contains("nodal.bridge.schema"))
-                assert(success.normalizedMlir.contains("\"nodal.module\""))
-              case failure: NativeCompilerFailure =>
-                throw new java.lang.AssertionError(failure.toString)
+              .asInstanceOf[NativeCompilerSuccess]
+            assert(success.normalizedMlir.contains("nodal.bridge.schema"))
+            assert(success.normalizedMlir.contains("\"nodal.module\""))
           finally delete(directory)

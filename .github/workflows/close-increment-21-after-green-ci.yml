@@ -1,0 +1,162 @@
+name: Close Increment 21 After Green CI
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+  checks: read
+
+concurrency:
+  group: close-increment-21-after-green-ci
+  cancel-in-progress: false
+
+jobs:
+  close:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+          fetch-depth: 0
+
+      - name: Detect whether Increment 21 already closed
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
+          roadmap=$(git show origin/dev:docs/roadmap/nodal-development-todo.md)
+          if grep -Fq -- '- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**' <<<"$roadmap"; then
+            echo 'already_closed=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'already_closed=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Wait for Increment 21 PR
+        if: steps.state.outputs.already_closed != 'true'
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr=''
+          for attempt in $(seq 1 90); do
+            pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head increment/21-native-verification-pipeline --state open --json number --jq '.[0].number // empty')
+            if [ -n "$pr" ]; then break; fi
+            sleep 20
+          done
+          test -n "$pr"
+          echo "number=$pr" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for implementation checks
+        if: steps.state.outputs.already_closed != 'true'
+        id: implementation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          gh pr checks "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --required --watch --interval 20
+          head=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq '.headRefOid')
+          dedicated=$(gh run list --repo "$GITHUB_REPOSITORY" --commit "$head" --workflow increment-21-native-verification-pipeline.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          core=$(gh run list --repo "$GITHUB_REPOSITORY" --commit "$head" --workflow ci.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          test -n "$dedicated"; test -n "$core"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "dedicated=$dedicated" >> "$GITHUB_OUTPUT"
+          echo "core=$core" >> "$GITHUB_OUTPUT"
+
+      - name: Record evidence
+        if: steps.state.outputs.already_closed != 'true'
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          DEDICATED_RUN: ${{ steps.implementation.outputs.dedicated }}
+          CORE_RUN: ${{ steps.implementation.outputs.core }}
+        run: |
+          git fetch --no-tags origin increment/21-native-verification-pipeline:refs/remotes/origin/increment/21-native-verification-pipeline dev:refs/remotes/origin/dev
+          git checkout -B increment/21-native-verification-pipeline origin/increment/21-native-verification-pipeline
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          pr=int(os.environ['PR_NUMBER']); dedicated=int(os.environ['DEDICATED_RUN']); core=int(os.environ['CORE_RUN'])
+          path=Path('docs/roadmap/nodal-development-todo.md'); text=path.read_text()
+          if text.count('**Revision:** 1.24') != 1: raise RuntimeError('expected roadmap revision 1.24')
+          text=text.replace('**Revision:** 1.24','**Revision:** 1.25',1)
+          old='- [ ] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**\n'
+          if text.count(old) != 1: raise RuntimeError('Increment 21 roadmap anchor mismatch')
+          evidence=(f'- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**\n'
+                    f'  - Evidence: [`NodalNativeVerificationPipeline-DG-v1.0.md`](../design-gates/NodalNativeVerificationPipeline-DG-v1.0.md), '
+                    f'[`increment21-native-verification-pipeline.md`](../implementation/increment21-native-verification-pipeline.md), '
+                    f'PR [#{pr}](https://github.com/pysolvesemi/Nodal/pull/{pr}), '
+                    f'dedicated validation run [{dedicated}](https://github.com/pysolvesemi/Nodal/actions/runs/{dedicated}), '
+                    f'and Core CI run [{core}](https://github.com/pysolvesemi/Nodal/actions/runs/{core}).\n')
+          text=text.replace(old,evidence,1); path.write_text(text)
+          manifest_path=Path('tests/compiler/fixtures/increment21/manifest.json'); manifest=json.loads(manifest_path.read_text())
+          manifest['status']='validated-native-verification-pipeline'; manifest['evidence']={'pull_request':pr,'dedicated_run':dedicated,'core_ci_run':core}
+          manifest_path.write_text(json.dumps(manifest,indent=2)+'\n')
+          PY
+          python3 scripts/check_increment21.py
+          git diff --check
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/roadmap/nodal-development-todo.md tests/compiler/fixtures/increment21/manifest.json
+          git commit -m 'Increment 21 — record accepted CI evidence'
+          git push origin HEAD:increment/21-native-verification-pipeline
+
+      - name: Wait for evidence checks and merge
+        if: steps.state.outputs.already_closed != 'true'
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          gh pr checks "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --required --watch --interval 20
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --delete-branch --subject 'Increment 21 — Native parse, staged semantic verification, and pass pipeline'
+          merge_sha=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json mergeCommit --jq '.mergeCommit.oid')
+          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for post-merge Core CI
+        if: steps.state.outputs.already_closed != 'true'
+        id: postmerge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_SHA: ${{ steps.merge.outputs.merge_sha }}
+        run: |
+          run=''
+          for attempt in $(seq 1 90); do
+            run=$(gh run list --repo "$GITHUB_REPOSITORY" --branch dev --commit "$MERGE_SHA" --workflow ci.yml --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+            if [ -n "$run" ]; then break; fi
+            sleep 20
+          done
+          test -n "$run"
+          gh run watch "$run" --repo "$GITHUB_REPOSITORY" --exit-status
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+      - name: Publish closure status
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          ALREADY_CLOSED: ${{ steps.state.outputs.already_closed }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          DEDICATED_RUN: ${{ steps.implementation.outputs.dedicated }}
+          CORE_RUN: ${{ steps.implementation.outputs.core }}
+          MERGE_SHA: ${{ steps.merge.outputs.merge_sha }}
+          POSTMERGE_RUN: ${{ steps.postmerge.outputs.run }}
+        run: |
+          git checkout automation/inc21-inc22-probe-stage
+          mkdir -p status
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          keys=('JOB_STATUS','ALREADY_CLOSED','PR_NUMBER','DEDICATED_RUN','CORE_RUN','MERGE_SHA','POSTMERGE_RUN')
+          Path('status/increment21-closure.json').write_text(json.dumps({key.lower():os.environ.get(key) or None for key in keys},indent=2,sort_keys=True)+'\n')
+          PY
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add status/increment21-closure.json
+          git commit -m 'Automation — publish Increment 21 closure status' || true
+          git push origin HEAD:automation/inc21-inc22-probe-stage

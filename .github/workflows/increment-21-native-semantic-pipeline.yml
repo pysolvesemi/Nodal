@@ -1,0 +1,124 @@
+name: Increment 21 Native Semantic Pipeline
+
+on:
+  push:
+    branches:
+      - increment/21-native-semantic-pipeline
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-21-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semantic-pipeline:
+    name: increment-21/native-semantic-pipeline
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore locked native download cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
+
+      - name: Install locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate structural and predecessor contracts
+        run: |
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 scripts/check_increment21.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          git diff --check
+
+      - name: Build, lint, and test native compiler
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Prove named normalized gate pipelines
+        run: |
+          compiler=out/native/release/bin/nodalc
+          filecheck="${RUNNER_TEMP}/nodal-native-toolchain/bin/FileCheck"
+          fixture=core/compiler/test/IR/semantic-pipeline-valid.mlir
+
+          "${compiler}" \
+            '--pass-pipeline=builtin.module(nodal-gate-fast)' \
+            "${fixture}" \
+            | tee /tmp/nodal-gate-fast.mlir \
+            | "${filecheck}" "${fixture}" --check-prefix=FAST
+
+          "${compiler}" \
+            '--pass-pipeline=builtin.module(nodal-gate-default)' \
+            "${fixture}" \
+            | tee /tmp/nodal-gate-default.mlir \
+            | "${filecheck}" "${fixture}" --check-prefix=DEFAULT
+
+          "${compiler}" \
+            '--pass-pipeline=builtin.module(nodal-gate-release)' \
+            "${fixture}" \
+            | tee /tmp/nodal-gate-release.mlir \
+            | "${filecheck}" "${fixture}" --check-prefix=RELEASE
+
+          grep -F 'nodal.pipeline.stages' /tmp/nodal-gate-default.mlir
+          grep -F 'nodal.pipeline.normalized = "v1"' /tmp/nodal-gate-release.mlir
+
+      - name: Prove every mandatory failure stage
+        run: |
+          compiler=out/native/release/bin/nodalc
+          log=/tmp/nodal-semantic-invalid.log
+          if "${compiler}" \
+              --split-input-file \
+              '--pass-pipeline=builtin.module(nodal-gate-default)' \
+              core/compiler/test/IR/semantic-pipeline-invalid.mlir \
+              >"${log}" 2>&1; then
+            echo 'invalid semantic-stage matrix was accepted' >&2
+            exit 1
+          fi
+
+          for code in \
+            NODAL-VERIFY-CONSTRUCTION-001 \
+            NODAL-VERIFY-DRIVER-001 \
+            NODAL-VERIFY-LATCH-001 \
+            NODAL-VERIFY-CYCLE-001 \
+            NODAL-VERIFY-HIERARCHY-004 \
+            NODAL-VERIFY-TYPE-003 \
+            NODAL-VERIFY-PARAMETER-003 \
+            NODAL-VERIFY-FSM-001 \
+            NODAL-VERIFY-DOMAIN-003 \
+            NODAL-VERIFY-PROTOCOL-003 \
+            NODAL-VERIFY-EFFECT-001 \
+            NODAL-VERIFY-ANALOG-001 \
+            NODAL-VERIFY-CAPABILITY-003; do
+            grep -F "${code}" "${log}"
+          done
+
+          git diff --check

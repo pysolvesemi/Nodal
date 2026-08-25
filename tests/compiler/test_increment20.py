@@ -70,34 +70,35 @@ class Increment20CheckerTests(unittest.TestCase):
         )
         self.assertIn("NODAL-INC20-007", self.codes(root))
 
-    def test_accepts_successor_roadmap_revision(self) -> None:
+    def test_accepts_completed_increment21_successor_state(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
-        manifest = root / "tests/compiler/fixtures/increment20/manifest.json"
-        manifest.write_text(
-            manifest.read_text(encoding="utf-8")
-            .replace(
-                '"status": "implemented-awaiting-evidence"',
-                '"status": "validated-scala-mlir-bridge"',
-            )
-            .replace(
-                '"evidence": {}',
-                '"evidence": {"pull_request": 1, "dedicated_run": 2, "core_ci_run": 3}',
-            ),
-            encoding="utf-8",
-        )
         roadmap = root / "docs/roadmap/nodal-development-todo.md"
         roadmap.write_text(
             roadmap.read_text(encoding="utf-8")
-            .replace("**Revision:** 1.23", "**Revision:** 1.25", 1)
+            .replace("**Revision:** 1.24", "**Revision:** 1.25", 1)
             .replace(
-                "- [ ] **Increment 20 — Scala-to-MLIR bridge**",
-                "- [x] **Increment 20 — Scala-to-MLIR bridge**",
+                "- [ ] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**",
+                "- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**",
                 1,
             ),
             encoding="utf-8",
         )
         self.assertEqual(CHECKER.check_repository(root), [])
+
+    def test_rejects_revision_1_25_with_increment21_open(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        roadmap = root / "docs/roadmap/nodal-development-todo.md"
+        roadmap.write_text(
+            roadmap.read_text(encoding="utf-8").replace(
+                "**Revision:** 1.24",
+                "**Revision:** 1.25",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC20-008", self.codes(root))
 
 
 if __name__ == "__main__":

@@ -56,3 +56,25 @@ add_test(
   NAME nodal.native.core-model-unit
   COMMAND nodal-core-model-unit-tests
 )
+
+add_executable(nodal-semantic-pipeline-unit-tests
+  SemanticPipelineTest.cpp
+)
+
+llvm_update_compile_flags(nodal-semantic-pipeline-unit-tests)
+
+target_link_libraries(nodal-semantic-pipeline-unit-tests
+  PRIVATE
+    NodalDialect
+    NodalTransforms
+    MLIRIR
+    MLIRParser
+    MLIRPass
+    MLIRSupport
+    LLVMSupport
+)
+
+add_test(
+  NAME nodal.native.semantic-pipeline-unit
+  COMMAND nodal-semantic-pipeline-unit-tests
+)

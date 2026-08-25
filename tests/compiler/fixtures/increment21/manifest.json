@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "increment": 21,
+  "status": "implemented-awaiting-evidence",
+  "public_api": "0.3",
+  "pipelines": [
+    "nodal-gate-fast",
+    "nodal-gate-default",
+    "nodal-gate-release"
+  ],
+  "mandatory_default_stage_count": 13,
+  "transaction": "clone-before-commit",
+  "evidence": {
+    "pull_request": null,
+    "dedicated_run": null,
+    "core_ci_run": null
+  }
+}

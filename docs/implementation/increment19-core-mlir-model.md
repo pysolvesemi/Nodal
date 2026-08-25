@@ -22,6 +22,12 @@ conservative terminals/branches, and explicit mixed-signal bridges are distinct.
 Canonical enum ABI identity is distinct from local FSM storage encoding.
 Domains and crossings retain source/destination identity and declared kind.
 
+## Predecessor compatibility
+
+The Increment 18 `nodal.placeholder` verifier retains its exact non-empty-label
+contract and diagnostic text. Increment 19 adds new types and operations without
+weakening or rewriting the already validated dialect-bootstrap behavior.
+
 ## Validation
 
 The permanent read-only workflow runs the Increment 18 compatibility checker,

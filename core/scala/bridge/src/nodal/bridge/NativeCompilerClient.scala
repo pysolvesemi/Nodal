@@ -62,7 +62,7 @@ private[nodal] object NativeCompilerClient:
         )
       )
     else if !Files.isRegularFile(request.executable) ||
-        !Files.isExecutable(request.executable)
+      !Files.isExecutable(request.executable)
     then
       Some(
         failure(

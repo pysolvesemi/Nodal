@@ -667,19 +667,18 @@ ${indent(body, 2)}
 
     private def originInventory: String =
       array(
-        snapshot.origins.sortBy(entry => (entry.semanticPath, entry.id)).map:
-          entry =>
-            dictionary(
-              Vector(
-                "id" -> quoted(entry.id),
-                "path" -> quoted(entry.semanticPath),
-                "kind" -> quoted(entry.kind),
-                "operation" -> quoted(entry.operation),
-                "parents" -> array(entry.parents.sorted.map(quoted)),
-                "sink" -> optionalString(entry.sink),
-                "inlined" -> boolean(entry.inlined)
-              ) ++ entry.source.toVector.flatMap(source => sourceFields(source))
-            )
+        snapshot.origins.sortBy(entry => (entry.semanticPath, entry.id)).map: entry =>
+          dictionary(
+            Vector(
+              "id" -> quoted(entry.id),
+              "path" -> quoted(entry.semanticPath),
+              "kind" -> quoted(entry.kind),
+              "operation" -> quoted(entry.operation),
+              "parents" -> array(entry.parents.sorted.map(quoted)),
+              "sink" -> optionalString(entry.sink),
+              "inlined" -> boolean(entry.inlined)
+            ) ++ entry.source.toVector.flatMap(source => sourceFields(source))
+          )
       )
 
     private def generatedNameInventory: String =
@@ -745,7 +744,7 @@ ${indent(body, 2)}
         name: String,
         results: Vector[String] = Vector.empty,
         operands: Vector[String] = Vector.empty,
-        attributes: Vector[(String, String)] = Vector.empty,
+        attributes: Vector[(String, String)],
         regions: Vector[String] = Vector.empty,
         operandTypes: Vector[String] = Vector.empty,
         resultTypes: Vector[String] = Vector.empty,

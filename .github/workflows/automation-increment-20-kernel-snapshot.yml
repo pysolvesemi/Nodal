@@ -30,6 +30,19 @@ jobs:
       - name: Apply bridge-required snapshot metadata
         run: |
           python3 automation/scripts/patch_increment20_kernel.py target
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path(
+              "target/core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
+          )
+          text = path.read_text(encoding="utf-8")
+          old = "throw new AssertionError(failure.toString)"
+          new = "throw new java.lang.AssertionError(failure.toString)"
+          if text.count(old) != 1:
+              raise SystemExit("expected one ambiguous AssertionError construction")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
 
       - name: Format and compile Scala core
         working-directory: target

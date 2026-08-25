@@ -1,0 +1,21 @@
+{
+  "feature_sha": null,
+  "job_status": "success",
+  "precondition": {
+    "increment21_checked": true,
+    "increment21_complete": false,
+    "increment21_evidence": {
+      "core_ci_run": 32884043761,
+      "dedicated_run": 32884043819,
+      "pull_request": 51
+    },
+    "increment21_manifest_status": "validated-native-semantic-pipeline",
+    "increment21_title": "Native parse, staged semantic verification, and pass pipeline",
+    "increment22_title": "Cross-layer diagnostic mapping",
+    "increment22_unchecked_exact": false,
+    "roadmap_revision": "1.25"
+  },
+  "publish_outcome": "skipped",
+  "pull_request": null,
+  "validation_outcome": "skipped"
+}

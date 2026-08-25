@@ -11,6 +11,10 @@ module/domain/port/parameter/instance records, logical Interface ABI entries,
 resolved nets, conservative terminals, topology, names, origins, generated
 names, and source-map spans are emitted in deterministic order.
 
+The bridge implementation is owned by the existing internal
+`nodal.internal.bridge` namespace. No bridge class or process protocol is added
+to the frozen public `nodal` package.
+
 The construction snapshot preserves exact literal types, clock edges, reset
 policies and polarities, generated-clock relationships, and child parameter
 bindings. This avoids recovering semantic facts from rendered Scala values or

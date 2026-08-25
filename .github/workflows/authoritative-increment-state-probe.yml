@@ -1,0 +1,104 @@
+name: Authoritative Increment 21 and 22 State Probe
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out probe branch
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+          fetch-depth: 0
+
+      - name: Fetch authoritative dev and record state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
+          mkdir -p status
+          python3 - <<'PY'
+          from __future__ import annotations
+          import json
+          import re
+          import subprocess
+          from pathlib import Path
+
+          roadmap = subprocess.check_output(
+              ["git", "show", "origin/dev:docs/roadmap/nodal-development-todo.md"],
+              text=True,
+          )
+          dev_sha = subprocess.check_output(
+              ["git", "rev-parse", "origin/dev"], text=True
+          ).strip()
+
+          revision_match = re.search(r"^\*\*Revision:\*\*\s+([^\n]+)$", roadmap, re.M)
+          def entry(number: int):
+              pattern = rf"^- \[([ xX])\] \*\*Increment {number} — ([^*]+)\*\*"
+              match = re.search(pattern, roadmap, re.M)
+              return {
+                  "found": bool(match),
+                  "checked": bool(match and match.group(1).lower() == "x"),
+                  "title": match.group(2).strip() if match else None,
+              }
+
+          def gh_json(args):
+              output = subprocess.check_output(["gh", *args], text=True)
+              return json.loads(output)
+
+          prs = gh_json([
+              "pr", "list", "--repo", "pysolvesemi/Nodal", "--state", "all",
+              "--limit", "100", "--json",
+              "number,title,state,isDraft,headRefName,baseRefName,mergedAt,mergeCommit,url"
+          ])
+          relevant = [
+              pr for pr in prs
+              if pr.get("headRefName", "").startswith("increment/21")
+              or pr.get("headRefName", "").startswith("increment/22")
+              or "Increment 21" in pr.get("title", "")
+              or "Increment 22" in pr.get("title", "")
+          ]
+
+          branches = gh_json([
+              "api", "repos/pysolvesemi/Nodal/branches?per_page=100"
+          ])
+          relevant_branches = sorted(
+              b["name"] for b in branches
+              if b["name"].startswith("increment/21")
+              or b["name"].startswith("increment/22")
+          )
+
+          payload = {
+              "dev_sha": dev_sha,
+              "roadmap_revision": revision_match.group(1).strip() if revision_match else None,
+              "increment_20": entry(20),
+              "increment_21": entry(21),
+              "increment_22": entry(22),
+              "relevant_branches": relevant_branches,
+              "relevant_pull_requests": relevant,
+          }
+          Path("status/increment-21-22.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+
+      - name: Publish probe result
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add status/increment-21-22.json
+          git commit -m 'Automation — publish authoritative Increment 21 and 22 state'
+          git push origin HEAD:automation/inc21-inc22-probe-stage

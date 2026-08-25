@@ -1,0 +1,17 @@
+{
+  "feature_sha": null,
+  "job_status": "success",
+  "publish_outcome": "skipped",
+  "pull_request": null,
+  "state": {
+    "checked": true,
+    "complete": true,
+    "evidence": {
+      "core_ci_run": 32850253829,
+      "dedicated_run": 32850253855,
+      "pull_request": 49
+    },
+    "status": "validated-scala-mlir-bridge"
+  },
+  "validation_outcome": "skipped"
+}

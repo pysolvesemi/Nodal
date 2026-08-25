@@ -40,12 +40,12 @@ jobs:
               value: String,
               dataType: KernelTypeDescriptor
           )
-          
+
           private[nodal] final class KernelExpr[A <: Data](
               val operands: Vector[Any],
               val resultType: Option[KernelTypeDescriptor] = None,
               val literal: Option[KernelLiteral] = None
-          ) extends Expr[A]""".replace("          ", ""),
+          ) extends Expr[A]""",
               "KernelExpr metadata",
           )
 
@@ -55,13 +55,13 @@ jobs:
               this,
               KernelSignalKind.Parameter,
               attributes = Vector("default" -> default)
-          )""".replace("          ", ""),
+            )""",
               """  CandidateRuntime.declare(
               this,
               KernelSignalKind.Parameter,
               dataType = CandidateRuntime.expressionDataType(default),
               attributes = Vector("default" -> default)
-          )""".replace("          ", ""),
+            )""",
               "parameter type capture",
           )
 
@@ -71,7 +71,7 @@ jobs:
               val name: String,
               val reset: Expr[Reset],
               kind: KernelDomainKind
-          ):""".replace("          ", ""),
+          ):""",
               """final class ClockDomain private[nodal] (
               val name: String,
               val reset: Expr[Reset],
@@ -80,7 +80,7 @@ jobs:
               private[nodal] val resetPolicy: Option[ResetPolicy] = None,
               private[nodal] val resetPolarity: Option[ResetPolarity] = None,
               private[nodal] val relation: Option[ClockRelation] = None
-          ):""".replace("          ", ""),
+          ):""",
               "clock domain metadata",
           )
 
@@ -90,7 +90,7 @@ jobs:
               name,
               CandidateRuntime.expr(name, reset),
               KernelDomainKind.External
-            )""".replace("          ", ""),
+            )""",
               """    new ClockDomain(
               name,
               CandidateRuntime.expr(name, reset),
@@ -98,7 +98,7 @@ jobs:
               edge = Some(edge),
               resetPolicy = Some(reset),
               resetPolarity = Some(resetPolarity)
-            )""".replace("          ", ""),
+            )""",
               "external domain metadata",
           )
 
@@ -112,7 +112,7 @@ jobs:
               edge = Some(edge),
               resetPolicy = Some(policy),
               resetPolarity = Some(polarity)
-            )""".replace("          ", ""),
+            )""",
               "bound domain metadata",
           )
 
@@ -126,7 +126,7 @@ jobs:
               reset: Expr[Reset]
             ): ClockDomain =
               CandidateRuntime.statement(clock, from, relation)
-              new ClockDomain(name, reset, KernelDomainKind.Generated)""".replace("          ", ""),
+              new ClockDomain(name, reset, KernelDomainKind.Generated)""",
               """  def generated(
               name: String,
               clock: Expr[Clock],
@@ -140,33 +140,33 @@ jobs:
                 reset,
                 KernelDomainKind.Generated,
                 relation = Some(relation)
-              )""".replace("          ", ""),
+              )""",
               "generated domain metadata",
           )
 
           text = one(
               text,
               """  def integer: Expr[Integer] = CandidateRuntime.expr(value)
-            def U(width: Int): Expr[UInt] = CandidateRuntime.expr(value, width)
-            def U(width: Expr[Integer]): Expr[UInt] = CandidateRuntime.expr(value, width)""".replace("          ", ""),
+              def U(width: Int): Expr[UInt] = CandidateRuntime.expr(value, width)
+              def U(width: Expr[Integer]): Expr[UInt] = CandidateRuntime.expr(value, width)""",
               """  def integer: Expr[Integer] = CandidateRuntime.literalInteger(value)
-            def U(width: Int): Expr[UInt] = CandidateRuntime.literalUInt(value, width)
-            def U(width: Expr[Integer]): Expr[UInt] = CandidateRuntime.expr(value, width)""".replace("          ", ""),
+              def U(width: Int): Expr[UInt] = CandidateRuntime.literalUInt(value, width)
+              def U(width: Expr[Integer]): Expr[UInt] = CandidateRuntime.expr(value, width)""",
               "integer literals",
           )
 
           text = one(
               text,
               """extension (value: Boolean)
-            def B: Expr[Bool] = CandidateRuntime.expr(value)
-          
+              def B: Expr[Bool] = CandidateRuntime.expr(value)
+
           private[nodal] def realLiteral(value: Double, unit: String): Expr[Real] =
-            CandidateRuntime.expr(value, unit)""".replace("          ", ""),
+              CandidateRuntime.expr(value, unit)""",
               """extension (value: Boolean)
-            def B: Expr[Bool] = CandidateRuntime.literalBool(value)
-          
+              def B: Expr[Bool] = CandidateRuntime.literalBool(value)
+
           private[nodal] def realLiteral(value: Double, unit: String): Expr[Real] =
-            CandidateRuntime.literalReal(value, unit)""".replace("          ", ""),
+              CandidateRuntime.literalReal(value, unit)""",
               "boolean and real literals",
           )
 
@@ -175,7 +175,7 @@ jobs:
               """  def expr[A <: Data](values: Any*): Expr[A] =
               val expression = new KernelExpr[A](values.toVector)
               ConstructionKernel.expression(expression)
-              expression""".replace("          ", ""),
+              expression""",
               """  private def dataTypeFromDescriptor(
               descriptor: KernelTypeDescriptor
             ): DataType[? <: Data] = descriptor.kind match
@@ -183,12 +183,12 @@ jobs:
               case "Integer" => Integer
               case "Bool" => Bool
               case _ => new KernelDataType[Data](descriptor)
-          
+
             def expressionDataType(value: Expr[?]): Option[DataType[? <: Data]] = value match
               case expression: KernelExpr[?] =>
                 expression.resultType.map(dataTypeFromDescriptor)
               case _ => None
-          
+
             private def literal[A <: Data](
               descriptor: KernelTypeDescriptor,
               kind: String,
@@ -202,7 +202,7 @@ jobs:
               )
               ConstructionKernel.expression(expression)
               expression
-          
+
             def literalInteger(value: Int): Expr[Integer] =
               literal(
                 KernelTypeDescriptor("Integer"),
@@ -210,7 +210,7 @@ jobs:
                 value.toString,
                 Vector(value)
               )
-          
+
             def literalUInt(value: Int, width: Int): Expr[UInt] =
               literal(
                 KernelTypeDescriptor("UInt", Vector(width)),
@@ -218,7 +218,7 @@ jobs:
                 value.toString,
                 Vector(value, width)
               )
-          
+
             def literalBool(value: Boolean): Expr[Bool] =
               literal(
                 KernelTypeDescriptor("Bool"),
@@ -226,7 +226,7 @@ jobs:
                 value.toString,
                 Vector(value)
               )
-          
+
             def literalReal(value: Double, unit: String): Expr[Real] =
               literal(
                 KernelTypeDescriptor("Real"),
@@ -234,11 +234,11 @@ jobs:
                 java.lang.Double.toString(value),
                 Vector(value, unit)
               )
-          
+
             def expr[A <: Data](values: Any*): Expr[A] =
               val expression = new KernelExpr[A](values.toVector)
               ConstructionKernel.expression(expression)
-              expression""".replace("          ", ""),
+              expression""",
               "literal runtime",
           )
 

@@ -65,6 +65,9 @@ foreach(_fixture IN ITEMS width net enum fsm)
   )
 endforeach()
 
+# The loop below materializes the three stable test identities required by the
+# Increment 21 contract: semantic-pipeline-fast, semantic-pipeline-default,
+# and semantic-pipeline-release.
 foreach(_profile IN ITEMS fast default release)
   add_test(
     NAME nodal.native.semantic-pipeline-${_profile}

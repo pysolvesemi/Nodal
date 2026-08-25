@@ -1,0 +1,301 @@
+name: Chain and Close Increment 20
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+  checks: read
+
+concurrency:
+  group: chain-and-close-increment-20
+  cancel-in-progress: false
+
+jobs:
+  chain:
+    if: github.event_name == 'workflow_dispatch' || github.actor == 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+          fetch-depth: 0
+          path: automation
+
+      - name: Check out Increment 20 feature branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/20-scala-mlir-bridge
+          fetch-depth: 0
+          path: target
+
+      - name: Evaluate authoritative state
+        id: state
+        working-directory: target
+        run: |
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
+          python3 - <<'PY'
+          import json,re,subprocess
+          from pathlib import Path
+          roadmap=subprocess.check_output(['git','show','origin/dev:docs/roadmap/nodal-development-todo.md'],text=True)
+          match=re.search(r'^- \[([ xX])\] \*\*Increment 20 — ([^*]+)\*\*',roadmap,re.M)
+          checked=bool(match and match.group(1).lower()=='x')
+          title=match.group(2).strip() if match else None
+          try: manifest=json.loads(subprocess.check_output(['git','show','origin/dev:tests/compiler/fixtures/increment20/manifest.json'],text=True))
+          except Exception: manifest={}
+          evidence=manifest.get('evidence',{})
+          complete=checked and manifest.get('status')=='validated-scala-mlir-bridge' and all(isinstance(evidence.get(k),int) for k in ('pull_request','dedicated_run','core_ci_run'))
+          exact=title=='Scala-to-MLIR bridge'
+          payload={'complete':complete,'checked':checked,'title':title,'exact':exact,'manifest_status':manifest.get('status'),'evidence':evidence}
+          Path('/tmp/inc20-chain-state.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')
+          Path('/tmp/inc20-chain-env').write_text(f"complete={'true' if complete else 'false'}\nexact={'true' if exact else 'false'}\n")
+          print(json.dumps(payload,indent=2,sort_keys=True))
+          PY
+          cat /tmp/inc20-chain-env >> "$GITHUB_OUTPUT"
+
+      - name: Stop cleanly when Increment 20 is already closed
+        if: steps.state.outputs.complete == 'true'
+        run: echo 'Increment 20 is already closed on authoritative dev.'
+
+      - name: Require the roadmap Increment 20 contract
+        if: steps.state.outputs.complete != 'true' && steps.state.outputs.exact != 'true'
+        run: |
+          echo 'Authoritative Increment 20 title does not match Scala-to-MLIR bridge.' >&2
+          exit 1
+
+      - name: Locate existing Increment 20 PR
+        if: steps.state.outputs.complete != 'true' && steps.state.outputs.exact == 'true'
+        id: locate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: target
+        run: |
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head increment/20-scala-mlir-bridge --state open --json number --jq '.[0].number // empty')
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+
+      - name: Rebase and restore the complete bridge tree when no PR exists
+        if: steps.state.outputs.complete != 'true' && steps.state.outputs.exact == 'true' && steps.locate.outputs.pr == ''
+        working-directory: target
+        run: |
+          git rebase origin/dev
+          retained=d8ab8797133aa7ad3a4fc275f8409bc19481c307
+          git cat-file -e "${retained}^{commit}"
+          paths=(
+            core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala
+            core/scala/bridge/src/nodal/bridge/NativeCompilerClient.scala
+            core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala
+            docs/implementation/increment20-scala-mlir-bridge.md
+            tests/compiler/fixtures/increment20/manifest.json
+            scripts/check_increment20.py
+            tests/compiler/test_increment20.py
+            .github/workflows/increment-20-scala-mlir-bridge.yml
+          )
+          for path in "${paths[@]}"; do git checkout "$retained" -- "$path"; done
+          python3 ../automation/scripts/patch_increment20_kernel.py .
+          python3 scripts/check_increment20.py
+          python3 -m unittest tests.compiler.test_increment20
+          git diff --check
+
+      - name: Install locked toolchains for a restored branch
+        if: steps.state.outputs.complete != 'true' && steps.state.outputs.exact == 'true' && steps.locate.outputs.pr == ''
+        working-directory: target
+        run: |
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+
+      - name: Validate a restored Increment 20 branch
+        if: steps.state.outputs.complete != 'true' && steps.state.outputs.exact == 'true' && steps.locate.outputs.pr == ''
+        working-directory: target
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          ./nodal style fix --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          python3 scripts/check_increment20.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          ./nodal core scala
+          ./nodal core native --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          NODAL_NODALC="$PWD/out/native/release/bin/nodalc" ./nodal core scala
+          git diff --check
+
+      - name: Publish restored branch and open PR
+        if: steps.state.outputs.complete != 'true' && steps.state.outputs.exact == 'true' && steps.locate.outputs.pr == ''
+        id: create
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: target
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 20 — complete Scala-to-MLIR bridge'
+          git push --force-with-lease origin HEAD:increment/20-scala-mlir-bridge
+          pr=$(gh pr create --repo "$GITHUB_REPOSITORY" --base dev --head increment/20-scala-mlir-bridge --title 'Increment 20 — Scala-to-MLIR bridge' --body 'Completes deterministic source-correlated construction-state serialization, the versioned argv-safe nodalc protocol, timeout/nonzero/cleanup handling, native round-trip, mutation tests, and read-only CI.' --json number --jq '.number')
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+
+      - name: Select PR number
+        if: steps.state.outputs.complete != 'true' && steps.state.outputs.exact == 'true'
+        id: selected
+        env:
+          EXISTING: ${{ steps.locate.outputs.pr }}
+          CREATED: ${{ steps.create.outputs.pr }}
+        run: |
+          pr="${EXISTING:-$CREATED}"
+          test -n "$pr"
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for explicit implementation-head workflows
+        if: steps.state.outputs.complete != 'true' && steps.state.outputs.exact == 'true'
+        id: implementation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.selected.outputs.pr }}
+        working-directory: target
+        run: |
+          head=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq '.headRefOid')
+          dedicated=''; core=''
+          for attempt in $(seq 1 150); do
+            runs=$(gh run list --repo "$GITHUB_REPOSITORY" --commit "$head" --limit 100 --json databaseId,name,status,conclusion)
+            failed=$(jq -r '[.[] | select((.name=="Increment 20 Scala-to-MLIR Bridge" or .name=="Core CI") and .status=="completed" and .conclusion!="success")] | first | .databaseId // empty' <<<"$runs")
+            if [ -n "$failed" ]; then gh run view "$failed" --repo "$GITHUB_REPOSITORY" --log-failed || true; exit 1; fi
+            dedicated=$(jq -r '[.[] | select(.name=="Increment 20 Scala-to-MLIR Bridge" and .status=="completed" and .conclusion=="success")] | first | .databaseId // empty' <<<"$runs")
+            core=$(jq -r '[.[] | select(.name=="Core CI" and .status=="completed" and .conclusion=="success")] | first | .databaseId // empty' <<<"$runs")
+            if [ -n "$dedicated" ] && [ -n "$core" ]; then break; fi
+            sleep 20
+          done
+          test -n "$dedicated"; test -n "$core"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "dedicated=$dedicated" >> "$GITHUB_OUTPUT"
+          echo "core=$core" >> "$GITHUB_OUTPUT"
+
+      - name: Record accepted implementation evidence
+        if: steps.state.outputs.complete != 'true' && steps.state.outputs.exact == 'true'
+        env:
+          PR_NUMBER: ${{ steps.selected.outputs.pr }}
+          DEDICATED_RUN: ${{ steps.implementation.outputs.dedicated }}
+          CORE_RUN: ${{ steps.implementation.outputs.core }}
+        working-directory: target
+        run: |
+          git fetch --no-tags origin increment/20-scala-mlir-bridge:refs/remotes/origin/increment/20-scala-mlir-bridge dev:refs/remotes/origin/dev
+          git checkout -B increment/20-scala-mlir-bridge origin/increment/20-scala-mlir-bridge
+          python3 - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          pr=int(os.environ['PR_NUMBER']); dedicated=int(os.environ['DEDICATED_RUN']); core=int(os.environ['CORE_RUN'])
+          path=Path('docs/roadmap/nodal-development-todo.md'); text=path.read_text(encoding='utf-8')
+          match=re.search(r'^\*\*Revision:\*\* ([0-9.]+)$',text,re.M)
+          if not match: raise RuntimeError('roadmap revision missing')
+          parts=list(map(int,match.group(1).split('.'))); parts[-1]+=1; next_revision='.'.join(map(str,parts))
+          text=text[:match.start(1)]+next_revision+text[match.end(1):]
+          old='- [ ] **Increment 20 — Scala-to-MLIR bridge**\n'
+          if text.count(old)!=1: raise RuntimeError('Increment 20 roadmap anchor mismatch')
+          replacement=(f'- [x] **Increment 20 — Scala-to-MLIR bridge**\n'
+                       f'  - Evidence: [`NodalScalaToMlirBridge-DG-v1.0.md`](../design-gates/NodalScalaToMlirBridge-DG-v1.0.md), '
+                       f'[`increment20-scala-mlir-bridge.md`](../implementation/increment20-scala-mlir-bridge.md), '
+                       f'PR [#{pr}](https://github.com/pysolvesemi/Nodal/pull/{pr}), '
+                       f'dedicated validation run [{dedicated}](https://github.com/pysolvesemi/Nodal/actions/runs/{dedicated}), '
+                       f'and Core CI run [{core}](https://github.com/pysolvesemi/Nodal/actions/runs/{core}).\n')
+          path.write_text(text.replace(old,replacement,1),encoding='utf-8')
+          manifest_path=Path('tests/compiler/fixtures/increment20/manifest.json'); manifest=json.loads(manifest_path.read_text())
+          manifest['status']='validated-scala-mlir-bridge'; manifest['evidence']={'pull_request':pr,'dedicated_run':dedicated,'core_ci_run':core}
+          manifest_path.write_text(json.dumps(manifest,indent=2)+'\n')
+          PY
+          python3 scripts/check_increment20.py
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/roadmap/nodal-development-todo.md tests/compiler/fixtures/increment20/manifest.json
+          git commit -m 'Increment 20 — record accepted CI evidence'
+          git push origin HEAD:increment/20-scala-mlir-bridge
+
+      - name: Wait for explicit evidence-head workflows
+        if: steps.state.outputs.complete != 'true' && steps.state.outputs.exact == 'true'
+        id: evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.selected.outputs.pr }}
+        working-directory: target
+        run: |
+          head=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq '.headRefOid')
+          dedicated=''; core=''
+          for attempt in $(seq 1 150); do
+            runs=$(gh run list --repo "$GITHUB_REPOSITORY" --commit "$head" --limit 100 --json databaseId,name,status,conclusion)
+            failed=$(jq -r '[.[] | select((.name=="Increment 20 Scala-to-MLIR Bridge" or .name=="Core CI") and .status=="completed" and .conclusion!="success")] | first | .databaseId // empty' <<<"$runs")
+            if [ -n "$failed" ]; then gh run view "$failed" --repo "$GITHUB_REPOSITORY" --log-failed || true; exit 1; fi
+            dedicated=$(jq -r '[.[] | select(.name=="Increment 20 Scala-to-MLIR Bridge" and .status=="completed" and .conclusion=="success")] | first | .databaseId // empty' <<<"$runs")
+            core=$(jq -r '[.[] | select(.name=="Core CI" and .status=="completed" and .conclusion=="success")] | first | .databaseId // empty' <<<"$runs")
+            if [ -n "$dedicated" ] && [ -n "$core" ]; then break; fi
+            sleep 20
+          done
+          test -n "$dedicated"; test -n "$core"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "dedicated=$dedicated" >> "$GITHUB_OUTPUT"
+          echo "core=$core" >> "$GITHUB_OUTPUT"
+
+      - name: Squash merge Increment 20
+        if: steps.state.outputs.complete != 'true' && steps.state.outputs.exact == 'true'
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.selected.outputs.pr }}
+        working-directory: target
+        run: |
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --delete-branch --subject 'Increment 20 — Scala-to-MLIR bridge'
+          merge_sha=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json mergeCommit --jq '.mergeCommit.oid')
+          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for post-merge Core CI
+        if: steps.state.outputs.complete != 'true' && steps.state.outputs.exact == 'true'
+        id: postmerge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_SHA: ${{ steps.merge.outputs.merge_sha }}
+        working-directory: target
+        run: |
+          run=''
+          for attempt in $(seq 1 150); do
+            runs=$(gh run list --repo "$GITHUB_REPOSITORY" --branch dev --commit "$MERGE_SHA" --limit 100 --json databaseId,name,status,conclusion)
+            failed=$(jq -r '[.[] | select(.name=="Core CI" and .status=="completed" and .conclusion!="success")] | first | .databaseId // empty' <<<"$runs")
+            if [ -n "$failed" ]; then gh run view "$failed" --repo "$GITHUB_REPOSITORY" --log-failed || true; exit 1; fi
+            run=$(jq -r '[.[] | select(.name=="Core CI" and .status=="completed" and .conclusion=="success")] | first | .databaseId // empty' <<<"$runs")
+            if [ -n "$run" ]; then break; fi
+            sleep 20
+          done
+          test -n "$run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+      - name: Publish chain status
+        if: always()
+        working-directory: automation
+        env:
+          JOB_STATUS: ${{ job.status }}
+          PR_NUMBER: ${{ steps.selected.outputs.pr }}
+          IMPLEMENTATION_HEAD: ${{ steps.implementation.outputs.head }}
+          IMPLEMENTATION_DEDICATED_RUN: ${{ steps.implementation.outputs.dedicated }}
+          IMPLEMENTATION_CORE_RUN: ${{ steps.implementation.outputs.core }}
+          EVIDENCE_HEAD: ${{ steps.evidence.outputs.head }}
+          EVIDENCE_DEDICATED_RUN: ${{ steps.evidence.outputs.dedicated }}
+          EVIDENCE_CORE_RUN: ${{ steps.evidence.outputs.core }}
+          MERGE_SHA: ${{ steps.merge.outputs.merge_sha }}
+          POSTMERGE_RUN: ${{ steps.postmerge.outputs.run }}
+        run: |
+          mkdir -p status
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          state=json.loads(Path('/tmp/inc20-chain-state.json').read_text()) if Path('/tmp/inc20-chain-state.json').is_file() else {}
+          keys=('JOB_STATUS','PR_NUMBER','IMPLEMENTATION_HEAD','IMPLEMENTATION_DEDICATED_RUN','IMPLEMENTATION_CORE_RUN','EVIDENCE_HEAD','EVIDENCE_DEDICATED_RUN','EVIDENCE_CORE_RUN','MERGE_SHA','POSTMERGE_RUN')
+          payload={'state':state,**{key.lower():os.environ.get(key) or None for key in keys}}
+          Path('status/increment20-chain.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add status/increment20-chain.json
+          git commit -m 'Automation — publish Increment 20 chain status' || true
+          git push origin HEAD:automation/inc21-inc22-probe-stage

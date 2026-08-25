@@ -18,9 +18,10 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 def qualify_builtin_modules(text: str) -> str:
     # Inside namespace nodal, an unqualified ModuleOp names the Nodal dialect
     # operation. Every transaction and pass in these files owns the builtin
-    # MLIR module, so make that type explicit and use its Region-valued body API.
+    # MLIR module, so make that type explicit. The pinned builtin ModuleOp
+    # exposes its body as a Block pointer.
     text = re.sub(r"(?<![:A-Za-z0-9_])ModuleOp(?![A-Za-z0-9_])", "mlir::ModuleOp", text)
-    return text.replace(".getBody()->getOperations()", ".getBody().getOperations()")
+    return text.replace(".getBody().getOperations()", ".getBody()->getOperations()")
 
 
 def main() -> None:
@@ -85,6 +86,17 @@ def main() -> None:
         "cross-layer pass insertion",
     )
     passes = qualify_builtin_modules(passes)
+    passes = replace_once(
+        passes,
+        '''  return OwningOpRef<mlir::ModuleOp>(
+      llvm::cast<mlir::ModuleOp>(accepted->clone()));
+''',
+        '''  auto acceptedModule = accepted.get();
+  return OwningOpRef<mlir::ModuleOp>(
+      llvm::cast<mlir::ModuleOp>(acceptedModule->clone()));
+''',
+        "const-safe accepted module clone",
+    )
     passes_path.write_text(passes, encoding="utf-8")
 
     bridge_path = root / "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala"

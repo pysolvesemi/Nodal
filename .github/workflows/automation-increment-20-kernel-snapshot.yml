@@ -20,6 +20,62 @@ jobs:
           ref: increment/20-scala-mlir-bridge
           fetch-depth: 0
 
+      - name: Make Increment 19 checker successor-aware
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          checker_path = Path("scripts/check_increment19.py")
+          checker = checker_path.read_text(encoding="utf-8")
+          replacements = (
+              (
+                  "if revision != (1, 23) or checked not in roadmap:",
+                  "if revision < (1, 23) or checked not in roadmap:",
+              ),
+              (
+                  """        if "- [ ] **Increment 20 — Scala-to-MLIR bridge**" not in roadmap:
+            problems.append(Problem("NODAL-INC19-014", "Increment 20 is not left unchecked"))""",
+                  """        increment20_unchecked = (
+            "- [ ] **Increment 20 — Scala-to-MLIR bridge**" in roadmap
+        )
+        increment20_checked = (
+            "- [x] **Increment 20 — Scala-to-MLIR bridge**" in roadmap
+        )
+        if not increment20_unchecked and not increment20_checked:
+            problems.append(
+                Problem("NODAL-INC19-014", "Increment 20 roadmap item is missing")
+            )""",
+              ),
+          )
+          for old, new in replacements:
+              if checker.count(old) != 1:
+                  raise SystemExit(f"expected one Increment 19 checker fragment: {old!r}")
+              checker = checker.replace(old, new, 1)
+          checker_path.write_text(checker, encoding="utf-8")
+
+          test_path = Path("tests/compiler/test_increment19.py")
+          test = test_path.read_text(encoding="utf-8")
+          anchor = """    def test_rejects_missing_type_definition(self) -> None:
+"""
+          addition = """    def test_accepts_later_roadmap_revision(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "docs/roadmap/nodal-development-todo.md"
+        text = path.read_text(encoding="utf-8")
+        if "**Revision:** 1.24" not in text:
+            self.fail("expected closed Increment 20 roadmap revision")
+        path.write_text(
+            text.replace("**Revision:** 1.24", "**Revision:** 1.25", 1),
+            encoding="utf-8",
+        )
+        self.assertEqual(CHECKER.check_repository(root), [])
+
+"""
+          if test.count(anchor) != 1:
+              raise SystemExit("expected one Increment 19 mutation-test anchor")
+          test_path.write_text(test.replace(anchor, addition + anchor, 1), encoding="utf-8")
+          PY
+
       - name: Record accepted evidence and close roadmap item
         run: |
           python3 - <<'PY'
@@ -69,6 +125,7 @@ jobs:
           python3 scripts/check_increment18.py
           python3 scripts/check_increment19.py
           python3 scripts/check_increment20.py
+          python3 tests/compiler/test_increment19.py
           python3 tests/compiler/test_increment20.py
           python3 scripts/check_markdown.py
           git diff --check
@@ -78,6 +135,8 @@ jobs:
           git config user.name "pysolvesemi"
           git config user.email "pysolvesemi@gmail.com"
           git add \
+            scripts/check_increment19.py \
+            tests/compiler/test_increment19.py \
             tests/compiler/fixtures/increment20/manifest.json \
             docs/roadmap/nodal-development-todo.md
           git commit -m "Increment 20 — close roadmap with accepted evidence"

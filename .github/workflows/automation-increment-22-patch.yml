@@ -18,26 +18,26 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: automation/increment-22-patch
-          path: automation
-
-      - name: Check out Increment 22 branch
-        uses: actions/checkout@v6
-        with:
-          ref: increment/22-cross-layer-diagnostic-mapping
           fetch-depth: 0
-          path: target
+
+      - name: Switch root checkout to Increment 22
+        run: |
+          cp scripts/patch_increment22.py /tmp/patch_increment22.py
+          git fetch --no-tags origin \
+            increment/22-cross-layer-diagnostic-mapping
+          git checkout -B increment/22-cross-layer-diagnostic-mapping \
+            origin/increment/22-cross-layer-diagnostic-mapping
 
       - name: Apply focused source integrations
-        run: python3 automation/scripts/patch_increment22.py target
+        run: python3 /tmp/patch_increment22.py .
 
       - name: Restore native download cache
         uses: actions/cache@v5
         with:
           path: ~/.cache/nodal/downloads
-          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('target/toolchains/lock.json', 'target/toolchains/checksums/*.sha256') }}
+          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
 
       - name: Install locked native and lint toolchains
-        working-directory: target
         run: |
           ./nodal bootstrap \
             --mode prebuilt \
@@ -46,7 +46,6 @@ jobs:
             --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
 
       - name: Apply canonical formatting
-        working-directory: target
         run: |
           ./mill mill.scalalib.scalafmt/reformatAll
           find \
@@ -60,7 +59,6 @@ jobs:
           git diff --check
 
       - name: Compile and test Scala and native core
-        working-directory: target
         run: |
           ./nodal core scala
           ./nodal core native \
@@ -68,7 +66,6 @@ jobs:
             --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
 
       - name: Publish validated integrations
-        working-directory: target
         run: |
           git config user.name "pysolvesemi"
           git config user.email "pysolvesemi@gmail.com"
@@ -76,5 +73,6 @@ jobs:
             core/compiler/lib/Transforms/Passes.cpp \
             core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala \
             core/scala/bridge/src/nodal/bridge/NativeCompilerClient.scala
-          git commit -m "Increment 22 — integrate mapped diagnostics across native and Scala layers"
+          git commit -m \
+            "Increment 22 — integrate mapped diagnostics across native and Scala layers"
           git push origin HEAD:increment/22-cross-layer-diagnostic-mapping

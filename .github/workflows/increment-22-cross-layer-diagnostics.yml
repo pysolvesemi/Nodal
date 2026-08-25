@@ -1,0 +1,122 @@
+name: Increment 22 Cross-Layer Diagnostics
+
+on:
+  push:
+    branches:
+      - increment/22-cross-layer-diagnostic-mapping
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-22-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cross-layer-diagnostics:
+    name: increment-22/cross-layer-diagnostics
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore locked native and Scala caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/nodal/downloads
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-inc22-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', 'toolchains/lock.json', 'toolchains/checksums/*.sha256', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-inc22-${{ runner.os }}-
+            nodal-scala-${{ runner.os }}-
+
+      - name: Install locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate contracts and diagnostic catalog
+        run: |
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 scripts/check_increment21.py
+          python3 scripts/check_increment22.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          git diff --check
+
+      - name: Build, lint, and test Scala and native core
+        env:
+          NODAL_NODALC: ${{ github.workspace }}/out/native/release/bin/nodalc
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal core scala
+
+      - name: Prove mapped Interface inout and AMS diagnostics
+        run: |
+          compiler=out/native/release/bin/nodalc
+          pipeline='builtin.module(nodal-verify-cross-layer-diagnostics)'
+
+          for fixture in inventory operation; do
+            log="/tmp/diagnostic-mapping-${fixture}.log"
+            if "${compiler}" \
+                --split-input-file \
+                "--pass-pipeline=${pipeline}" \
+                "core/compiler/test/IR/diagnostic-mapping-${fixture}-invalid.mlir" \
+                >"${log}" 2>&1; then
+              echo "invalid diagnostic fixture ${fixture} was accepted" >&2
+              exit 1
+            fi
+          done
+
+          inventory=/tmp/diagnostic-mapping-inventory.log
+          operation=/tmp/diagnostic-mapping-operation.log
+          grep -F 'NODAL-INTERFACE-ROLE-002' "${inventory}"
+          grep -F 'NODAL-INTERFACE-MONITOR-001' "${inventory}"
+          grep -F 'NODAL-INTERFACE-INVERSION-001' "${inventory}"
+          grep -F 'NODAL-DRIVER-MULTIPLE-001' "${inventory}"
+          grep -F 'NODAL-INOUT-HIERARCHY-001' "${inventory}"
+          grep -F 'NODAL-AMS-DISCIPLINE-001' "${inventory}"
+          grep -F 'NODAL-AMS-ACCESS-001' "${inventory}"
+          grep -F 'NODAL-AMS-BRIDGE-001' "${inventory}"
+          grep -F '[semantic-path=Top.link]' "${inventory}"
+          grep -F '[source-range=src/Top.scala:12:7-12:24]' "${inventory}"
+
+          grep -F 'NODAL-INTERFACE-STORAGE-001' "${operation}"
+          grep -F 'NODAL-INTERFACE-LAYOUT-001' "${operation}"
+          grep -F 'NODAL-INOUT-RESOLUTION-001' "${operation}"
+          grep -F 'NODAL-INOUT-OPEN-DRAIN-001' "${operation}"
+          grep -F '[hierarchy-path=Top]' "${operation}"
+          grep -F '[source-range=src/Top.scala:70:5-70:30]' "${operation}"
+
+      - name: Prove Increment 21 gate integration remains accepted
+        run: |
+          compiler=out/native/release/bin/nodalc
+          "${compiler}" \
+            '--pass-pipeline=builtin.module(nodal-gate-default)' \
+            core/compiler/test/IR/semantic-pipeline-valid.mlir \
+            | tee /tmp/increment22-valid.mlir
+          grep -F 'nodal.pipeline.normalized' /tmp/increment22-valid.mlir
+          git diff --check

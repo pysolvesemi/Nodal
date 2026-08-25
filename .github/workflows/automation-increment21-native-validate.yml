@@ -1,0 +1,110 @@
+name: Automation Increment 21 Native Validate
+
+on:
+  push:
+    branches:
+      - automation/increment21-native-validate
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+
+    steps:
+      - name: Check out Increment 21
+        uses: actions/checkout@v6
+        with:
+          ref: increment/21-native-semantic-pipeline
+          fetch-depth: 0
+
+      - name: Apply compile-sensitive transaction fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('core/compiler/lib/Transforms/Passes.cpp')
+          text = path.read_text(encoding='utf-8')
+          if '#include <cassert>' not in text:
+              text = text.replace('#include <functional>\n', '#include <cassert>\n#include <functional>\n', 1)
+          if '#include "llvm/Support/ErrorHandling.h"' not in text:
+              text = text.replace(
+                  '#include "llvm/ADT/Twine.h"\n',
+                  '#include "llvm/ADT/Twine.h"\n#include "llvm/Support/ErrorHandling.h"\n',
+                  1,
+              )
+          text = text.replace('accepted->clone()', 'accepted.get()->clone()')
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Install locked lint and native toolchains
+        run: |
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+
+      - name: Apply canonical formatting
+        run: |
+          "${RUNNER_TEMP}/nodal-lint-toolchain/bin/clang-format" -i \
+            core/compiler/include/nodal/Transforms/Passes.h \
+            core/compiler/lib/Transforms/Passes.cpp \
+            core/compiler/test/Unit/SemanticPipelineTest.cpp \
+            core/compiler/tools/nodalc/nodalc.cpp
+          python3 scripts/check_formatting_baseline.py
+          git diff --check
+
+      - name: Validate structural contracts
+        run: |
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 scripts/check_increment21.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+
+      - name: Build and test the pinned native compiler
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Exercise named pipelines and failure matrix
+        run: |
+          compiler=out/native/release/bin/nodalc
+          fixture=core/compiler/test/IR/semantic-pipeline-valid.mlir
+          for profile in fast default release; do
+            "${compiler}" \
+              "--pass-pipeline=builtin.module(nodal-gate-${profile})" \
+              "${fixture}" \
+              >"/tmp/nodal-gate-${profile}.mlir"
+            grep -F "nodal.pipeline.profile = \"${profile}\"" \
+              "/tmp/nodal-gate-${profile}.mlir"
+          done
+
+          if "${compiler}" --split-input-file \
+              '--pass-pipeline=builtin.module(nodal-gate-default)' \
+              core/compiler/test/IR/semantic-pipeline-invalid.mlir \
+              >/tmp/nodal-invalid.log 2>&1; then
+            echo 'invalid semantic-stage matrix was accepted' >&2
+            exit 1
+          fi
+          grep -F 'NODAL-VERIFY-CAPABILITY-003' /tmp/nodal-invalid.log
+
+      - name: Publish validated formatting and fixes
+        run: |
+          git config user.name 'pysolvesemi'
+          git config user.email 'pysolvesemi@gmail.com'
+          git add \
+            core/compiler/include/nodal/Transforms/Passes.h \
+            core/compiler/lib/Transforms/Passes.cpp \
+            core/compiler/test/Unit/SemanticPipelineTest.cpp \
+            core/compiler/tools/nodalc/nodalc.cpp
+          if ! git diff --cached --quiet; then
+            git commit -m 'Increment 21 — apply validated native formatting fixes'
+            git push origin HEAD:increment/21-native-semantic-pipeline
+          fi

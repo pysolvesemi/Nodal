@@ -1,0 +1,71 @@
+name: Activate Increment 22 Roadmap Alignment
+
+on:
+  push:
+    branches:
+      - automation/inc21-inc22-probe-stage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: activate-increment-22-roadmap-alignment
+  cancel-in-progress: false
+
+jobs:
+  activate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: automation/inc21-inc22-probe-stage
+          fetch-depth: 0
+
+      - name: Update the chain to accept and migrate the retained roadmap item
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path=Path('.github/workflows/chain-and-close-increment-22.yml')
+          text=path.read_text(encoding='utf-8')
+          old="exact22=title22=='CIRCT conversion strategy and legalizer skeleton'"
+          new="exact22=title22 in {'CIRCT conversion strategy and legalizer skeleton', 'Cross-layer diagnostic mapping'}"
+          if old in text:
+              text=text.replace(old,new,1)
+          elif new not in text:
+              raise RuntimeError('Increment 22 title predicate anchor is missing')
+          text=text.replace(
+              'python3 ../automation/scripts/materialize_increment22.py .',
+              'python3 ../automation/scripts/materialize_increment22_v2.py .'
+          )
+          path.write_text(text,encoding='utf-8')
+
+          path=Path('.github/workflows/orchestrate-increment-22-with-status.yml')
+          text=path.read_text(encoding='utf-8')
+          old="and inc22.group(2).strip() == 'CIRCT conversion strategy and legalizer skeleton'"
+          new="and inc22.group(2).strip() in {'CIRCT conversion strategy and legalizer skeleton', 'Cross-layer diagnostic mapping'}"
+          if old in text:
+              text=text.replace(old,new,1)
+          elif new not in text:
+              raise RuntimeError('orchestration title predicate anchor is missing')
+          text=text.replace(
+              'python3 ../automation/scripts/materialize_increment22.py .',
+              'python3 ../automation/scripts/materialize_increment22_v2.py .'
+          )
+          path.write_text(text,encoding='utf-8')
+          PY
+          git diff --check
+
+      - name: Publish aligned chain
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            .github/workflows/chain-and-close-increment-22.yml \
+            .github/workflows/orchestrate-increment-22-with-status.yml
+          git commit -m 'Automation — align Increment 22 roadmap assignment'
+          git push origin HEAD:automation/inc21-inc22-probe-stage

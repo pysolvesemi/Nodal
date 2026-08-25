@@ -1,0 +1,114 @@
+name: Automation Increment 21 Transaction Session
+
+on:
+  push:
+    branches:
+      - automation/increment-21-bootstrap
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: automation-increment-21-transaction-session
+  cancel-in-progress: true
+
+jobs:
+  patch-and-prove:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/increment-21-bootstrap
+          path: automation
+
+      - name: Check out feature branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/21-native-verifier-pipeline
+          fetch-depth: 0
+          path: target
+
+      - name: Wait for stable materialized feature head
+        working-directory: target
+        run: |
+          stable=0
+          previous=''
+          for attempt in $(seq 1 240); do
+            git fetch --no-tags origin \
+              increment/21-native-verifier-pipeline:refs/remotes/origin/increment/21-native-verifier-pipeline
+            git reset --hard origin/increment/21-native-verifier-pipeline
+            current="$(git rev-parse HEAD)"
+            if test -f scripts/check_increment21.py && \
+               test -f core/compiler/lib/Transforms/Verification.cpp && \
+               test "${current}" = "${previous}"; then
+              stable=1
+              break
+            fi
+            previous="${current}"
+            sleep 30
+          done
+          test "${stable}" = 1
+
+      - name: Apply complete Increment 21 hardening set
+        working-directory: target
+        run: |
+          python3 ../automation/scripts/patch_increment21_compatibility.py .
+          python3 ../automation/scripts/patch_increment21_compile_hygiene.py .
+          python3 ../automation/scripts/patch_increment21_session_transaction.py .
+          git config user.name "pysolvesemi"
+          git config user.email "pysolvesemi@gmail.com"
+          if ! git diff --quiet; then
+            git add \
+              scripts/check_native_compiler_bootstrap.py \
+              core/compiler/lib/Transforms/Verification.cpp
+            git commit -m "Increment 21 — align transactional verification session"
+            git push origin HEAD:increment/21-native-verifier-pipeline
+          fi
+
+      - name: Restore locked native download cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('target/toolchains/lock.json', 'target/toolchains/checksums/*.sha256') }}
+
+      - name: Install locked native and lint toolchains
+        working-directory: target
+        run: |
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format, validate, build, and test
+        working-directory: target
+        run: |
+          "${RUNNER_TEMP}/nodal-lint-toolchain/bin/clang-format" -i \
+            core/compiler/include/nodal/Transforms/Verification.h \
+            core/compiler/lib/Transforms/Verification.cpp \
+            core/compiler/test/Unit/VerificationSessionTest.cpp
+          if ! git diff --quiet; then
+            git add \
+              core/compiler/include/nodal/Transforms/Verification.h \
+              core/compiler/lib/Transforms/Verification.cpp \
+              core/compiler/test/Unit/VerificationSessionTest.cpp
+            git commit -m "Increment 21 — format transactional native verifier"
+            git push origin HEAD:increment/21-native-verifier-pipeline
+          fi
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 scripts/check_increment21.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          python3 core/compiler/test/run_increment21_tests.py \
+            out/native/release/bin/nodalc \
+            core/compiler/test/IR

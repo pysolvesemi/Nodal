@@ -1,0 +1,11 @@
+{
+  "dev_sha": "982451d0f7f22d3f5867db0c996e6416c1c79a98",
+  "roadmap_revision": "1.25",
+  "increment21_checked": true,
+  "checker_present": true,
+  "workflow_present": false,
+  "manifest_present": true,
+  "manifest_status": "validated-native-semantic-pipeline",
+  "evidence_ok": true,
+  "completed": false
+}

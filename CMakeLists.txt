@@ -33,11 +33,13 @@ include(HandleLLVMOptions)
 
 # LLVM helper modules may repopulate LLVM_DEFINITIONS after package discovery.
 # Normalize again immediately before applying them to Nodal's directory scope.
+# The locked LLVM/MLIR/CIRCT headers are third-party toolchain inputs, so they
+# are system includes and do not transfer their internal diagnostics to Nodal.
 nodal_normalize_llvm_definitions()
 
-include_directories(${LLVM_INCLUDE_DIRS})
-include_directories(${MLIR_INCLUDE_DIRS})
-include_directories(${CIRCT_INCLUDE_DIRS})
+include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
+include_directories(SYSTEM ${MLIR_INCLUDE_DIRS})
+include_directories(SYSTEM ${CIRCT_INCLUDE_DIRS})
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/core/compiler/include")
 include_directories("${CMAKE_BINARY_DIR}/include")
 link_directories(${LLVM_BUILD_LIBRARY_DIR})

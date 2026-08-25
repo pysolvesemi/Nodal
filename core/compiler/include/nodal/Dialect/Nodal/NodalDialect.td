@@ -15,12 +15,15 @@ def Nodal_Dialect : Dialect {
   let summary = "Private compiler IR for Nodal hardware construction";
   let description = [{
     The Nodal dialect is the authoritative private compiler IR beneath the
-    frozen Scala public API. Increment 18 registers only the dialect and a
-    verified semantics-free placeholder operation. Hardware-semantic
-    operations are introduced by later increments.
+    frozen Scala public API. Increment 18 establishes dialect registration and
+    the verified semantics-free placeholder operation. Increment 19 adds the
+    canonical type and structural operation schema while leaving lowering and
+    backend behavior to later increments.
   }];
-  // `useDefaultAttributePrinterParser = 1` remains deferred until a later
-  // increment introduces Nodal-owned attribute definitions and dispatch.
+  let useDefaultTypePrinterParser = 1;
+  let extraClassDeclaration = [{
+    void registerTypes();
+  }];
 }
 
 #endif // NODAL_DIALECT_NODAL_NODALDIALECT_TD

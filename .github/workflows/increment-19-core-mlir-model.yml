@@ -1,0 +1,99 @@
+name: Increment 19 Core MLIR Model
+
+on:
+  push:
+    branches:
+      - increment/19-core-mlir-model
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-19-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-model:
+    name: increment-19/core-mlir-model
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore locked native download cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
+
+      - name: Install locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate structural and predecessor contracts
+        run: |
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          git diff --check
+
+      - name: Build, lint, and test the native compiler
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Prove canonical IR and negative diagnostics
+        run: |
+          compiler=out/native/release/bin/nodalc
+          "${compiler}" core/compiler/test/IR/core-model.mlir \
+            | tee /tmp/nodal-core-model.mlir
+          grep -F '"nodal.module"' /tmp/nodal-core-model.mlir
+          grep -F '"nodal.fsm"' /tmp/nodal-core-model.mlir
+
+          "${compiler}" --mlir-print-op-generic \
+            core/compiler/test/IR/core-model.mlir \
+            | tee /tmp/nodal-core-model-generic.mlir
+          grep -F '"nodal.interface"' /tmp/nodal-core-model-generic.mlir
+          grep -F '!nodal.shaped' /tmp/nodal-core-model-generic.mlir
+
+          # Exact inventory: core-model-invalid-width.mlir,
+          # core-model-invalid-net.mlir, core-model-invalid-enum.mlir, and
+          # core-model-invalid-fsm.mlir.
+          declare -A expected=(
+            [width]='width must be greater than zero'
+            [net]='driver and value types must match the resolved net'
+            [enum]='duplicates an existing enum value'
+            [fsm]='requires exactly one initial FSM state'
+          )
+          for fixture in width net enum fsm; do
+            log="/tmp/core-model-invalid-${fixture}.log"
+            if "${compiler}" \
+                "core/compiler/test/IR/core-model-invalid-${fixture}.mlir" \
+                >"${log}" 2>&1; then
+              echo "invalid ${fixture} fixture was accepted" >&2
+              exit 1
+            fi
+            grep -F "${expected[${fixture}]}" "${log}"
+          done
+
+          git diff --check

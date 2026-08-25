@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -81,6 +82,16 @@ def _require(
     for fragment in fragments:
         if fragment not in text:
             problems.append(Problem(code, f"{subject} lacks: {fragment}"))
+
+
+def _roadmap_revision(text: str) -> tuple[int, ...]:
+    matches = re.findall(r"^\*\*Revision:\*\* ([0-9.]+)$", text, re.MULTILINE)
+    if len(matches) != 1:
+        return ()
+    try:
+        return tuple(int(part) for part in matches[0].split("."))
+    except ValueError:
+        return ()
 
 
 def check_repository(root: Path) -> list[Problem]:
@@ -213,7 +224,7 @@ def check_repository(root: Path) -> list[Problem]:
         (
             'let name = "nodal";',
             'let cppNamespace = "::nodal";',
-            "remains deferred until a later",
+            "useDefaultTypePrinterParser = 1",
             "semantics-free placeholder operation",
         ),
         problems,
@@ -368,6 +379,7 @@ def check_repository(root: Path) -> list[Problem]:
 
     status = manifest.get("status")
     evidence = manifest.get("evidence", {})
+    revision = _roadmap_revision(roadmap)
     unchecked = "- [ ] **Increment 18 — Nodal MLIR dialect skeleton**" in roadmap
     checked = "- [x] **Increment 18 — Nodal MLIR dialect skeleton**" in roadmap
     if status == "implemented-awaiting-evidence":
@@ -379,11 +391,11 @@ def check_repository(root: Path) -> list[Problem]:
                 )
             )
     elif status == "validated-dialect-skeleton":
-        if not checked or "**Revision:** 1.22" not in roadmap:
+        if not checked or revision < (1, 22):
             problems.append(
                 Problem(
                     "NODAL-MLIR-010",
-                    "validated state must close Increment 18 at revision 1.22",
+                    "validated state must close Increment 18 at revision 1.22 or later",
                 )
             )
         for field in ("pull_request", "dedicated_run", "core_ci_run"):

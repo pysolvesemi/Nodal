@@ -5,7 +5,9 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/IR/SymbolTable.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
+#include "nodal/Dialect/Nodal/NodalTypes.h"
 
 #define GET_OP_CLASSES
 #include "nodal/Dialect/Nodal/NodalOps.h.inc"

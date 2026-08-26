@@ -1,0 +1,128 @@
+name: Increment 23 Backend Framework
+
+on:
+  push:
+    branches:
+      - increment/23-backend-framework-capability-profiles
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-23-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-framework:
+    name: increment-23/backend-framework
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore locked native and Scala caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/nodal/downloads
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-inc23-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', 'toolchains/lock.json', 'toolchains/checksums/*.sha256', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-inc23-${{ runner.os }}-
+            nodal-inc22-${{ runner.os }}-
+            nodal-scala-${{ runner.os }}-
+
+      - name: Install locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate contracts and mutation tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          for increment in 18 19 20 21 22 23; do
+            python3 "scripts/check_increment${increment}.py"
+          done
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          git diff --check
+
+      - name: Build lint and test native and Scala core
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          NODAL_NODALC="${PWD}/out/native/release/bin/nodalc" \
+            ./nodal core scala
+          git diff --check
+
+      - name: Prove registered translations exact goldens and atomic failure
+        run: |
+          set -euo pipefail
+          translator="${PWD}/out/native/release/bin/nodal-translate"
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "${scratch}"' EXIT
+
+          "${translator}" --help | tee "${scratch}/help.txt"
+          grep -F 'nodal-to-verilog-a' "${scratch}/help.txt"
+          grep -F 'nodal-to-verilog-ams' "${scratch}/help.txt"
+
+          "${translator}" \
+            --nodal-to-verilog-a \
+            core/compiler/test/IR/backend-minimal-analog.mlir \
+            > "${scratch}/analog-1.va"
+          "${translator}" \
+            --nodal-to-verilog-a \
+            core/compiler/test/IR/backend-minimal-analog.mlir \
+            > "${scratch}/analog-2.va"
+          cmp "${scratch}/analog-1.va" "${scratch}/analog-2.va"
+          diff -u \
+            tests/compiler/fixtures/increment23/golden/minimal-analog.va \
+            "${scratch}/analog-1.va"
+
+          "${translator}" \
+            --nodal-to-verilog-ams \
+            core/compiler/test/IR/backend-minimal-ams.mlir \
+            > "${scratch}/mixed.vams"
+          diff -u \
+            tests/compiler/fixtures/increment23/golden/minimal-ams.vams \
+            "${scratch}/mixed.vams"
+
+          if "${translator}" \
+              --nodal-to-verilog-a \
+              core/compiler/test/IR/backend-invalid-config.mlir \
+              > "${scratch}/invalid.va" 2> "${scratch}/invalid.err"; then
+            echo 'invalid backend configuration was accepted' >&2
+            exit 1
+          fi
+          test ! -s "${scratch}/invalid.va"
+          grep -F 'NODAL-BACKEND-CONFIG-002' "${scratch}/invalid.err"
+
+          if "${translator}" \
+              --nodal-to-verilog-a \
+              core/compiler/test/IR/backend-unsupported-verilog-a.mlir \
+              > "${scratch}/unsupported.va" 2> "${scratch}/unsupported.err"; then
+            echo 'unsupported backend operation was accepted' >&2
+            exit 1
+          fi
+          test ! -s "${scratch}/unsupported.va"
+          grep -F 'NODAL-BACKEND-CAPABILITY-001' "${scratch}/unsupported.err"

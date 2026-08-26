@@ -80,7 +80,7 @@ Dependent tracks own implementations, vendor/tool adapters, generated collateral
   - Record standard version, UVM reference implementation, vendor profile, feature decisions, defines, adapter hashes, source hashes, commands, and unsupported capabilities.
   - Do not generate production UVM/UVM-MS code or vendor scripts in Foundation.
 
-- [ ] **Foundation Increment 152 — Direct procedural HDL testbench projection architecture readiness**
+- [x] **Foundation Increment 152 — Direct procedural HDL testbench projection architecture readiness**
   - Accept ADR 0025 and freeze a Procedural HDL Testbench IR lowering seam beneath the canonical Verification Semantic IR; it is generated-language IR, not a second authoring model.
   - Define portable Verilog-2005 and standards-oriented Verilog-AMS testbench profile boundaries, stable logical Interface/Register/test/check identities, source maps, manifests, normalized pass/fail results, and deterministic artifact hashes.
   - Classify every selected Verification IR operation as directly embedded, precomputed replay, companion-runtime-required, or unsupported. Unsupported behavior must fail generation; silent omission is forbidden.

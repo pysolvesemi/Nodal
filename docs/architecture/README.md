@@ -41,6 +41,7 @@ Accepted ADRs must not be edited to reverse their decision. A material change re
 | [0023](0023-unified-hvl-native-sim-uvm-uvmms-architecture.md) | Author verification once in target-neutral Nodal HVL/Verification IR, execute it through the native simulation runtime or project it to UVM/UVM-MS, and isolate simulator/vendor differences in thin capability profiles. |
 | [0024](0024-minimal-asic-advanced-io-readiness-boundary.md) | Keep Foundation limited to target-neutral source-synchronous I/O, ASIC timing/sign-off, power, DFT/DFx, and hard-macro identity seams; defer implementation to independently numbered ASIC and memory-interface tracks. |
 | [0025](0025-generated-procedural-hdl-testbench-projections.md) | Add capability-checked standalone Verilog and Verilog-AMS testbench projections while keeping Nodal Verification IR canonical, Icarus as the portable digital reference, and open AMS execution distinct from full Verilog-AMS support. |
+| [0026](0026-native-digital-simulator-adapter-architecture.md) | Keep Nodal HVL in the native runtime; connect Verilator through a cached compiled C++ model behind a stable C ABI and connect Icarus through an external VVP process, VPI, and versioned shared-memory/IPC transport. |
 
 ADR 0012 owns general plugin discovery, resolution, loading, trust, lifecycle, and provenance. ADR 0013 layers the target-HDL-specific structured representations, pass profiles, preservation rules, and proof obligations on that common plugin foundation. Installing either a plugin or pass is inert until the project resolves and explicitly selects it in a locked plan.
 
@@ -57,6 +58,8 @@ ADR 0023 specializes the simulation, Interface/Register, property, AMS, plugin/t
 ADR 0024 limits the extra Foundation work discovered from controller/PHY-class ASIC research to semantic identities and adapter seams only. Source-synchronous timing, ASIC constraints/sign-off, power intent, DFT/DFx, and hard-macro multi-view identity are visible to core, while SDC/UPF/DFT tooling, custom PHY implementation, PDK flows, and LPDDR/DFI libraries remain dependent-track work.
 
 ADR 0025 extends ADR 0023 with a capability-limited Procedural HDL Testbench IR and standalone Verilog/Verilog-AMS projections. It requires explicit embedded/replay/companion/unsupported classification, keeps Icarus and Verilator profiles distinct, and forbids representing the OpenVAF/ngspice harness as general full-Verilog-AMS execution.
+
+ADR 0026 specializes the native digital side of ADR 0023. Verilator uses a cached generated C++ DUT model behind a versioned C ABI and JVM native binding; Icarus uses an external VVP process with VPI and versioned shared-memory/IPC transport. Nodal owns HVL scheduling and semantics, while each simulator owns only RTL execution within declared synchronization barriers.
 
 ## Proposed records
 

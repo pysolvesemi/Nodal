@@ -1,0 +1,122 @@
+name: Align generated verification roadmap indexes
+
+on:
+  push:
+    branches:
+      - increment/147-verification-projection-roadmap
+    paths:
+      - .github/workflows/roadmap-verification-index-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  align-indexes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Align compact and detailed verification roadmaps
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          main_path = Path('docs/roadmap/nodal-development-todo.md')
+          main = main_path.read_text()
+
+          old_intro = "Detailed rationale and dependent-track plans are in [`dependent-productivity-and-verification-tracks-v0.1-plan.md`](dependent-productivity-and-verification-tracks-v0.1-plan.md). Verification backend ownership is defined by [ADR 0023](../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md). Foundation adds only the architecture/public seams needed to prevent later FPGA/UVM/UVM-MS work from being blocked by core design limitations; dependent-track implementations remain outside Foundation."
+          new_intro = "Detailed rationale and dependent-track plans are in [`dependent-productivity-and-verification-tracks-v0.1-plan.md`](dependent-productivity-and-verification-tracks-v0.1-plan.md). Verification backend ownership is defined by [ADR 0023](../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md), extended by [ADR 0025](../architecture/0025-generated-procedural-testbench-projections.md). Foundation adds only the architecture/public seams needed to reserve native execution, procedural Verilog/Verilog-AMS testbench generation, UVM/UVM-MS generation, capability profiles, and result evidence; dependent-track implementations remain outside Foundation."
+          if old_intro not in main:
+              raise SystemExit('Phase 10 introduction anchor not found')
+          main = main.replace(old_intro, new_intro, 1)
+
+          digital = '''## Digital Verification Track — blocked by Foundation; numbering restarts
+
+Nodal HVL is canonical. Native execution, generated procedural Verilog testbenches, and generated UVM are sibling projections of one Verification Semantic IR; neither generated target is the simulation foundation.
+
+- [ ] **Digital Verification Increment 1 — Nodal HVL native digital simulation vertical slice**
+- [ ] **Digital Verification Increment 2 — Scenarios, sequences, constrained stimulus, and replay**
+- [ ] **Digital Verification Increment 3 — Agents, drivers, monitors, scoreboards, and reference models**
+- [ ] **Digital Verification Increment 4 — Functional coverage and verification reporting**
+- [ ] **Digital Verification Increment 5 — Properties, protocol checks, and register-model verification**
+- [ ] **Digital Verification Increment 6 — Generated Verilog testbench projection and open-source execution**
+- [ ] **Digital Verification Increment 7 — Verification SystemVerilog and digital UVM generation**
+- [ ] **Digital Verification Increment 8 — Commercial simulator profiles**
+- [ ] **Digital Verification Increment 9 — Native, Verilog-testbench, and UVM semantic parity**
+- [ ] **Digital Verification Increment 10 — Reusable digital VIP qualification**
+- [ ] **Digital Verification Increment 11 — Scale, performance, compatibility, and verification release gate**
+'''
+          main, count = re.subn(
+              r'## Digital Verification Track — blocked by Foundation; numbering restarts\n.*?(?=\n## Analog/Mixed-Signal Verification Track — blocked by Foundation; numbering restarts)',
+              digital.rstrip(),
+              main,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f'Digital compact-track replacement count: {count}')
+
+          ams = '''## Analog/Mixed-Signal Verification Track — blocked by Foundation; numbering restarts
+
+This track is separate from Digital Verification but reuses its target-neutral transaction/component concepts and the Foundation AMS semantics. Native execution, generated procedural Verilog-AMS testbenches, and UVM-MS are sibling projections. Open-source Verilog-AMS execution is enabled only for a version-pinned subset that passes its conformance profile.
+
+- [ ] **AMS Verification Increment 1 — Nodal HVL native mixed-signal simulation vertical slice**
+- [ ] **AMS Verification Increment 2 — Analog/mixed-signal agents, drivers, monitors, and scoreboards**
+- [ ] **AMS Verification Increment 3 — PVT, sweeps, stochastic stimulus, and deterministic replay**
+- [ ] **AMS Verification Increment 4 — Analog measurements and functional coverage**
+- [ ] **AMS Verification Increment 5 — Mixed-signal properties and register/control interaction**
+- [ ] **AMS Verification Increment 6 — Generated Verilog-AMS testbench projection**
+- [ ] **AMS Verification Increment 7 — Open-source Verilog-AMS conformance profiles and explicit split-harness fallback**
+- [ ] **AMS Verification Increment 8 — UVM-MS generation from Verification IR**
+- [ ] **AMS Verification Increment 9 — Commercial mixed-signal simulator profiles**
+- [ ] **AMS Verification Increment 10 — Native, Verilog-AMS-testbench, and UVM-MS semantic parity**
+- [ ] **AMS Verification Increment 11 — Reusable AMS VIP qualification**
+- [ ] **AMS Verification Increment 12 — Scale, performance, compatibility, and AMS verification release gate**
+'''
+          main, count = re.subn(
+              r'## Analog/Mixed-Signal Verification Track — blocked by Foundation; numbering restarts\n.*?(?=\n## Deferred reusable library roadmap)',
+              ams.rstrip(),
+              main,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f'AMS compact-track replacement count: {count}')
+
+          main_path.write_text(main)
+
+          detail_path = Path('docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md')
+          detail = detail_path.read_text()
+          detail = detail.replace(
+              '  - Do not generate production UVM/UVM-MS code or vendor scripts in Foundation.\n## Foundation completion barrier',
+              '  - Do not generate production UVM/UVM-MS code or vendor scripts in Foundation.\n\n## Foundation completion barrier',
+              1,
+          )
+          detail = detail.replace(
+              '  - Publish supported HVL/native/Verilog-testbench/UVM/SystemVerilog/simulator capability and limitations matrices plus a reusable VIP author conformance kit.\n---',
+              '  - Publish supported HVL/native/Verilog-testbench/UVM/SystemVerilog/simulator capability and limitations matrices plus a reusable VIP author conformance kit.\n\n---',
+              1,
+          )
+          detail_path.write_text(detail)
+
+          Path('.github/workflows/roadmap-verification-index-fix.yml').unlink()
+          PY
+      - name: Validate aligned indexes
+        run: |
+          set -euo pipefail
+          test "$(grep -c '^\- \[ \] \*\*Digital Verification Increment ' docs/roadmap/nodal-development-todo.md)" -eq 11
+          test "$(grep -c '^\- \[ \] \*\*AMS Verification Increment ' docs/roadmap/nodal-development-todo.md)" -eq 12
+          grep -q 'Digital Verification Increment 6 — Generated Verilog testbench projection' docs/roadmap/nodal-development-todo.md
+          grep -q 'AMS Verification Increment 7 — Open-source Verilog-AMS conformance profiles' docs/roadmap/nodal-development-todo.md
+          test ! -e .github/workflows/roadmap-verification-index-fix.yml
+      - name: Commit aligned indexes
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/roadmap .github/workflows/roadmap-verification-index-fix.yml
+          git diff --cached --check
+          git commit -m 'Increment 147 — align verification roadmap indexes'
+          git push origin HEAD

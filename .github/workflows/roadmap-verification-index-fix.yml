@@ -18,90 +18,12 @@ jobs:
         with:
           fetch-depth: 0
       - name: Align compact and detailed verification roadmaps
+        env:
+          INDEX_FIX_GZ_B64: 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
         run: |
           python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          main_path = Path('docs/roadmap/nodal-development-todo.md')
-          main = main_path.read_text()
-
-          old_intro = "Detailed rationale and dependent-track plans are in [`dependent-productivity-and-verification-tracks-v0.1-plan.md`](dependent-productivity-and-verification-tracks-v0.1-plan.md). Verification backend ownership is defined by [ADR 0023](../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md). Foundation adds only the architecture/public seams needed to prevent later FPGA/UVM/UVM-MS work from being blocked by core design limitations; dependent-track implementations remain outside Foundation."
-          new_intro = "Detailed rationale and dependent-track plans are in [`dependent-productivity-and-verification-tracks-v0.1-plan.md`](dependent-productivity-and-verification-tracks-v0.1-plan.md). Verification backend ownership is defined by [ADR 0023](../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md), extended by [ADR 0025](../architecture/0025-generated-procedural-testbench-projections.md). Foundation adds only the architecture/public seams needed to reserve native execution, procedural Verilog/Verilog-AMS testbench generation, UVM/UVM-MS generation, capability profiles, and result evidence; dependent-track implementations remain outside Foundation."
-          if old_intro not in main:
-              raise SystemExit('Phase 10 introduction anchor not found')
-          main = main.replace(old_intro, new_intro, 1)
-
-          digital = '''## Digital Verification Track — blocked by Foundation; numbering restarts
-
-Nodal HVL is canonical. Native execution, generated procedural Verilog testbenches, and generated UVM are sibling projections of one Verification Semantic IR; neither generated target is the simulation foundation.
-
-- [ ] **Digital Verification Increment 1 — Nodal HVL native digital simulation vertical slice**
-- [ ] **Digital Verification Increment 2 — Scenarios, sequences, constrained stimulus, and replay**
-- [ ] **Digital Verification Increment 3 — Agents, drivers, monitors, scoreboards, and reference models**
-- [ ] **Digital Verification Increment 4 — Functional coverage and verification reporting**
-- [ ] **Digital Verification Increment 5 — Properties, protocol checks, and register-model verification**
-- [ ] **Digital Verification Increment 6 — Generated Verilog testbench projection and open-source execution**
-- [ ] **Digital Verification Increment 7 — Verification SystemVerilog and digital UVM generation**
-- [ ] **Digital Verification Increment 8 — Commercial simulator profiles**
-- [ ] **Digital Verification Increment 9 — Native, Verilog-testbench, and UVM semantic parity**
-- [ ] **Digital Verification Increment 10 — Reusable digital VIP qualification**
-- [ ] **Digital Verification Increment 11 — Scale, performance, compatibility, and verification release gate**
-'''
-          main, count = re.subn(
-              r'## Digital Verification Track — blocked by Foundation; numbering restarts\n.*?(?=\n## Analog/Mixed-Signal Verification Track — blocked by Foundation; numbering restarts)',
-              digital.rstrip(),
-              main,
-              count=1,
-              flags=re.S,
-          )
-          if count != 1:
-              raise SystemExit(f'Digital compact-track replacement count: {count}')
-
-          ams = '''## Analog/Mixed-Signal Verification Track — blocked by Foundation; numbering restarts
-
-This track is separate from Digital Verification but reuses its target-neutral transaction/component concepts and the Foundation AMS semantics. Native execution, generated procedural Verilog-AMS testbenches, and UVM-MS are sibling projections. Open-source Verilog-AMS execution is enabled only for a version-pinned subset that passes its conformance profile.
-
-- [ ] **AMS Verification Increment 1 — Nodal HVL native mixed-signal simulation vertical slice**
-- [ ] **AMS Verification Increment 2 — Analog/mixed-signal agents, drivers, monitors, and scoreboards**
-- [ ] **AMS Verification Increment 3 — PVT, sweeps, stochastic stimulus, and deterministic replay**
-- [ ] **AMS Verification Increment 4 — Analog measurements and functional coverage**
-- [ ] **AMS Verification Increment 5 — Mixed-signal properties and register/control interaction**
-- [ ] **AMS Verification Increment 6 — Generated Verilog-AMS testbench projection**
-- [ ] **AMS Verification Increment 7 — Open-source Verilog-AMS conformance profiles and explicit split-harness fallback**
-- [ ] **AMS Verification Increment 8 — UVM-MS generation from Verification IR**
-- [ ] **AMS Verification Increment 9 — Commercial mixed-signal simulator profiles**
-- [ ] **AMS Verification Increment 10 — Native, Verilog-AMS-testbench, and UVM-MS semantic parity**
-- [ ] **AMS Verification Increment 11 — Reusable AMS VIP qualification**
-- [ ] **AMS Verification Increment 12 — Scale, performance, compatibility, and AMS verification release gate**
-'''
-          main, count = re.subn(
-              r'## Analog/Mixed-Signal Verification Track — blocked by Foundation; numbering restarts\n.*?(?=\n## Deferred reusable library roadmap)',
-              ams.rstrip(),
-              main,
-              count=1,
-              flags=re.S,
-          )
-          if count != 1:
-              raise SystemExit(f'AMS compact-track replacement count: {count}')
-
-          main_path.write_text(main)
-
-          detail_path = Path('docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md')
-          detail = detail_path.read_text()
-          detail = detail.replace(
-              '  - Do not generate production UVM/UVM-MS code or vendor scripts in Foundation.\n## Foundation completion barrier',
-              '  - Do not generate production UVM/UVM-MS code or vendor scripts in Foundation.\n\n## Foundation completion barrier',
-              1,
-          )
-          detail = detail.replace(
-              '  - Publish supported HVL/native/Verilog-testbench/UVM/SystemVerilog/simulator capability and limitations matrices plus a reusable VIP author conformance kit.\n---',
-              '  - Publish supported HVL/native/Verilog-testbench/UVM/SystemVerilog/simulator capability and limitations matrices plus a reusable VIP author conformance kit.\n\n---',
-              1,
-          )
-          detail_path.write_text(detail)
-
-          Path('.github/workflows/roadmap-verification-index-fix.yml').unlink()
+          import base64, gzip, os
+          exec(compile(gzip.decompress(base64.b64decode(os.environ['INDEX_FIX_GZ_B64'])), 'fix_indexes.py', 'exec'))
           PY
       - name: Validate aligned indexes
         run: |

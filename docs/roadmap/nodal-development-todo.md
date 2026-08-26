@@ -1380,7 +1380,7 @@ This independently schedulable phase closes the cross-layer continuous-time arch
 
 ## Phase 10 — Foundation comments, FPGA-readiness, and HVL verification-readiness
 
-Detailed rationale and dependent-track plans are in [`dependent-productivity-and-verification-tracks-v0.1-plan.md`](dependent-productivity-and-verification-tracks-v0.1-plan.md). Verification backend ownership is defined by [ADR 0023](../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md). Foundation adds only the architecture/public seams needed to prevent later FPGA/UVM/UVM-MS work from being blocked by core design limitations; dependent-track implementations remain outside Foundation.
+Detailed rationale and dependent-track plans are in [`dependent-productivity-and-verification-tracks-v0.1-plan.md`](dependent-productivity-and-verification-tracks-v0.1-plan.md). Verification backend ownership is defined by [ADR 0023](../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md), extended by [ADR 0025](../architecture/0025-generated-procedural-testbench-projections.md). Foundation adds only the architecture/public seams needed to reserve native execution, procedural Verilog/Verilog-AMS testbench generation, UVM/UVM-MS generation, capability profiles, and result evidence; dependent-track implementations remain outside Foundation.
 
 - [ ] **Foundation Increment 143 — Comment/documentation IR architecture and public API gate**
   - Freeze automatic ScalaDoc/unambiguous leading-comment capture plus an explicit target-neutral comment/documentation API for guaranteed placement.
@@ -1440,34 +1440,35 @@ See [`dependent-productivity-and-verification-tracks-v0.1-plan.md`](dependent-pr
 
 ## Digital Verification Track — blocked by Foundation; numbering restarts
 
-Nodal HVL is canonical. Native/open-source execution and generated UVM are sibling projections of one Verification Semantic IR; generated UVM is not the simulation foundation.
+Nodal HVL is canonical. Native execution, generated procedural Verilog testbenches, and generated UVM are sibling projections of one Verification Semantic IR; neither generated target is the simulation foundation.
 
 - [ ] **Digital Verification Increment 1 — Nodal HVL native digital simulation vertical slice**
 - [ ] **Digital Verification Increment 2 — Scenarios, sequences, constrained stimulus, and replay**
 - [ ] **Digital Verification Increment 3 — Agents, drivers, monitors, scoreboards, and reference models**
 - [ ] **Digital Verification Increment 4 — Functional coverage and verification reporting**
 - [ ] **Digital Verification Increment 5 — Properties, protocol checks, and register-model verification**
-- [ ] **Digital Verification Increment 6 — Verification SystemVerilog and digital UVM generation**
-- [ ] **Digital Verification Increment 7 — Commercial simulator profiles**
-- [ ] **Digital Verification Increment 8 — Cross-backend semantic parity**
-- [ ] **Digital Verification Increment 9 — Reusable digital VIP qualification**
-- [ ] **Digital Verification Increment 10 — Scale, performance, compatibility, and verification release gate**
-
+- [ ] **Digital Verification Increment 6 — Generated Verilog testbench projection and open-source execution**
+- [ ] **Digital Verification Increment 7 — Verification SystemVerilog and digital UVM generation**
+- [ ] **Digital Verification Increment 8 — Commercial simulator profiles**
+- [ ] **Digital Verification Increment 9 — Native, Verilog-testbench, and UVM semantic parity**
+- [ ] **Digital Verification Increment 10 — Reusable digital VIP qualification**
+- [ ] **Digital Verification Increment 11 — Scale, performance, compatibility, and verification release gate**
 ## Analog/Mixed-Signal Verification Track — blocked by Foundation; numbering restarts
 
-This track is separate from Digital Verification but reuses its target-neutral transaction/component concepts and the Foundation AMS semantics. UVM-MS generation is a backend, not native mixed-signal simulation.
+This track is separate from Digital Verification but reuses its target-neutral transaction/component concepts and the Foundation AMS semantics. Native execution, generated procedural Verilog-AMS testbenches, and UVM-MS are sibling projections. Open-source Verilog-AMS execution is enabled only for a version-pinned subset that passes its conformance profile.
 
 - [ ] **AMS Verification Increment 1 — Nodal HVL native mixed-signal simulation vertical slice**
 - [ ] **AMS Verification Increment 2 — Analog/mixed-signal agents, drivers, monitors, and scoreboards**
 - [ ] **AMS Verification Increment 3 — PVT, sweeps, stochastic stimulus, and deterministic replay**
 - [ ] **AMS Verification Increment 4 — Analog measurements and functional coverage**
 - [ ] **AMS Verification Increment 5 — Mixed-signal properties and register/control interaction**
-- [ ] **AMS Verification Increment 6 — UVM-MS generation from Verification IR**
-- [ ] **AMS Verification Increment 7 — Commercial mixed-signal simulator profiles**
-- [ ] **AMS Verification Increment 8 — Native versus UVM-MS semantic parity**
-- [ ] **AMS Verification Increment 9 — Reusable UVM-MS VIP qualification**
-- [ ] **AMS Verification Increment 10 — Scale, portability, and mixed-signal verification release gate**
-
+- [ ] **AMS Verification Increment 6 — Generated Verilog-AMS testbench projection**
+- [ ] **AMS Verification Increment 7 — Open-source Verilog-AMS conformance profiles and explicit split-harness fallback**
+- [ ] **AMS Verification Increment 8 — UVM-MS generation from Verification IR**
+- [ ] **AMS Verification Increment 9 — Commercial mixed-signal simulator profiles**
+- [ ] **AMS Verification Increment 10 — Native, Verilog-AMS-testbench, and UVM-MS semantic parity**
+- [ ] **AMS Verification Increment 11 — Reusable AMS VIP qualification**
+- [ ] **AMS Verification Increment 12 — Scale, performance, compatibility, and AMS verification release gate**
 ## Deferred reusable library roadmap
 
 No official reusable model/component library or production plugin is implemented by Increment 115. Increments 116-123 define the future core register-factory and qualification track; they do not populate `libraries/` yet. After the core API, extension surface, packaging model, and preview release are proven, independently approved library/plugin roadmaps may populate `libraries/`, `plugins/`, or separate repositories while preserving the public-core dependency contract.

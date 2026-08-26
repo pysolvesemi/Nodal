@@ -77,6 +77,7 @@ Dependent tracks own implementations, vendor/tool adapters, generated collateral
   - Define vendor-neutral common source plus thin simulator profiles. Any required `ifdef` is confined to generated vendor adapter/include units, not common VIP/test logic.
   - Record standard version, UVM reference implementation, vendor profile, feature decisions, defines, adapter hashes, source hashes, commands, source maps, and unsupported capabilities.
   - Do not generate production UVM/UVM-MS code or vendor scripts in Foundation.
+
 ## Foundation completion barrier
 
 The barrier opens only when every checkbox in the Foundation track, including Increments 143-149 and any later Foundation item added before release, is complete with required CI/evidence.
@@ -177,6 +178,7 @@ Numbering restarts for this track.
 - [ ] **Digital Verification Increment 11 — Scale, performance, compatibility, and verification release gate**
   - Exercise large testbench hierarchies, many agents, long regressions, parallel tests, deterministic caching, generated-Verilog compile/runtime scale, coverage merge, UVM compile/runtime scale, and source-map performance.
   - Publish supported HVL/native/Verilog-testbench/UVM/SystemVerilog/simulator capability and limitations matrices plus a reusable VIP author conformance kit.
+
 ---
 
 # Analog/Mixed-Signal Verification Track — blocked by Foundation

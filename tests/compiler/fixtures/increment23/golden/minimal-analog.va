@@ -1,0 +1,16 @@
+/* Nodal backend framework v1
+ * profile: verilog-a
+ * check-profile: default
+ * shaped-layout: scalar-or-flat
+ * materialization: safe-inline
+ * naming: semantic
+ */
+`include "constants.vams"
+`include "disciplines.vams"
+
+module Alpha;
+endmodule
+
+module Zeta;
+endmodule
+

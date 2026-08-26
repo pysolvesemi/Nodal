@@ -1,0 +1,13 @@
+/* Nodal backend framework v1
+ * profile: verilog-ams
+ * check-profile: release
+ * shaped-layout: flat-packed
+ * materialization: readable
+ * naming: semantic
+ */
+`include "constants.vams"
+`include "disciplines.vams"
+
+module MixedTop;
+endmodule
+

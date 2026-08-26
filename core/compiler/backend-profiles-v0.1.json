@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "version": "0.1",
+  "public_api": "0.3-unchanged",
+  "selection": "explicit-translation",
+  "profiles": [
+    {
+      "id": "verilog-a",
+      "translation": "nodal-to-verilog-a",
+      "design_kinds": [
+        "analog"
+      ],
+      "shaped_value_layout": "scalar-or-flat",
+      "expression_materialization": "safe-inline",
+      "naming": "semantic",
+      "default_check_profile": "default",
+      "target_verification": "builtin-framework-v1",
+      "target_reparse": "builtin-structural-v1"
+    },
+    {
+      "id": "verilog-ams",
+      "translation": "nodal-to-verilog-ams",
+      "design_kinds": [
+        "analog",
+        "mixed_signal"
+      ],
+      "shaped_value_layout": "flat-packed",
+      "expression_materialization": "readable",
+      "naming": "semantic",
+      "default_check_profile": "default",
+      "target_verification": "builtin-framework-v1",
+      "target_reparse": "builtin-structural-v1"
+    }
+  ],
+  "check_profiles": [
+    "fast",
+    "default",
+    "release"
+  ],
+  "transaction": "clone-gate-buffer-verify-reparse-publish",
+  "unsupported_feature_policy": "reject-with-stable-diagnostic"
+}

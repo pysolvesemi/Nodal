@@ -143,5 +143,23 @@ class Increment22CheckerTests(unittest.TestCase):
         self.assertIn("NODAL-INC22-009", self.codes(root))
 
 
+    def test_accepts_validated_increment23_successor(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        roadmap = root / "docs/roadmap/nodal-development-todo.md"
+        roadmap.write_text(
+            roadmap.read_text(encoding="utf-8")
+            .replace("**Revision:** 1.26", "**Revision:** 1.27", 1)
+            .replace(
+                "- [ ] **Increment 23 — Backend framework and capability profiles**",
+                "- [x] **Increment 23 — Backend framework and capability profiles**",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(CHECKER.check_repository(root), [])
+
+
+
 if __name__ == "__main__":
     unittest.main()

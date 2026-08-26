@@ -309,6 +309,7 @@ def check_repository(root: Path) -> list[Problem]:
     increment22_unchecked = "- [ ] **Increment 22 — Cross-layer diagnostic mapping**" in roadmap
     increment22_checked = "- [x] **Increment 22 — Cross-layer diagnostic mapping**" in roadmap
     increment23_unchecked = "- [ ] **Increment 23 — Backend framework and capability profiles**" in roadmap
+    increment23_checked = "- [x] **Increment 23 — Backend framework and capability profiles**" in roadmap
     status = manifest.get("status")
     evidence = manifest.get("evidence", {})
 
@@ -341,8 +342,21 @@ def check_repository(root: Path) -> list[Problem]:
     else:
         problems.append(Problem("NODAL-INC22-009", f"unexpected manifest status: {status!r}"))
 
-    if not increment23_unchecked:
-        problems.append(Problem("NODAL-INC22-009", "Increment 23 must remain unchecked"))
+    if revision < (1, 27):
+        if not increment23_unchecked:
+            problems.append(
+                Problem(
+                    "NODAL-INC22-009",
+                    "Increment 23 must remain unchecked before roadmap revision 1.27",
+                )
+            )
+    elif not increment23_checked:
+        problems.append(
+            Problem(
+                "NODAL-INC22-009",
+                "Increment 23 must be checked at roadmap revision 1.27 or later",
+            )
+        )
 
     return problems
 

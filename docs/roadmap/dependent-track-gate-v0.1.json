@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "active",
-  "roadmap_revision": "1.26",
+  "roadmap_revision": "1.27",
   "verification_plan_revision": "0.2",
   "foundation_track": {
     "roadmap": "docs/roadmap/nodal-development-todo.md",

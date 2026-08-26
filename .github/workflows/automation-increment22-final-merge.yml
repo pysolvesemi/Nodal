@@ -1,0 +1,132 @@
+name: Automation Increment 22 Final Merge
+
+on:
+  push:
+    branches:
+      - automation/increment22-final-merge
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: automation-increment22-final-merge
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    name: increment-22/merge-closed-state
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out Increment 22 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/22-cross-layer-diagnostic-mapping
+          fetch-depth: 0
+
+      - name: Wait for recorded closed state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ready=false
+          for attempt in $(seq 1 360); do
+            git fetch --no-tags origin \
+              increment/22-cross-layer-diagnostic-mapping
+            git reset --hard \
+              origin/increment/22-cross-layer-diagnostic-mapping
+            if python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          from pathlib import Path
+
+          roadmap = Path("docs/roadmap/nodal-development-todo.md").read_text(
+              encoding="utf-8"
+          )
+          manifest = json.loads(
+              Path("tests/compiler/fixtures/increment22/manifest.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          assert "**Revision:** 1.26" in roadmap
+          assert "- [x] **Increment 22 — Cross-layer diagnostic mapping**" in roadmap
+          assert "- [ ] **Increment 23 — Backend framework and capability profiles**" in roadmap
+          assert manifest["status"] == "validated-cross-layer-diagnostics"
+          assert manifest["evidence"]["pull_request"] == 53
+          assert isinstance(manifest["evidence"]["dedicated_run"], int)
+          assert isinstance(manifest["evidence"]["core_ci_run"], int)
+          PY
+            then
+              ready=true
+              break
+            fi
+            sleep 10
+          done
+          test "${ready}" = true
+
+      - name: Require final-head dedicated and Core CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head_sha=$(git rev-parse HEAD)
+          test "$(gh api /repos/${GITHUB_REPOSITORY}/pulls/53 --jq .head.sha)" = "${head_sha}"
+
+          completed=false
+          for attempt in $(seq 1 360); do
+            runs=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${head_sha}&per_page=100")
+            dedicated=$(jq -r '[.workflow_runs[] | select(.name == "Increment 22 Cross-Layer Diagnostics" and .conclusion == "success")] | length' <<<"${runs}")
+            core=$(jq -r '[.workflow_runs[] | select(.name == "Core CI" and .conclusion == "success")] | length' <<<"${runs}")
+            if [ "${dedicated}" -ge 1 ] && [ "${core}" -ge 1 ]; then
+              completed=true
+              break
+            fi
+            sleep 10
+          done
+          test "${completed}" = true
+
+      - name: Require all review threads resolved
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          unresolved=$(gh api graphql \
+            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}}}}}' \
+            -F owner=pysolvesemi \
+            -F name=Nodal \
+            -F number=53 \
+            --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length')
+          test "${unresolved}" = 0
+
+      - name: Squash-merge Increment 22
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr merge 53 \
+            --repo "${GITHUB_REPOSITORY}" \
+            --squash \
+            --subject 'Increment 22 — implement cross-layer diagnostic mapping' \
+            --body 'Add stable cross-layer diagnostics, source/hierarchy/index mapping, Interface/inout/AMS checks, Scala process normalization, accepted CI evidence, and roadmap revision 1.26.'
+          test "$(gh api /repos/${GITHUB_REPOSITORY}/pulls/53 --jq .merged)" = true
+          gh api /repos/${GITHUB_REPOSITORY}/pulls/53 --jq .merge_commit_sha \
+            > /tmp/increment22-merge-sha
+
+      - name: Require post-merge Core CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          merge_sha=$(cat /tmp/increment22-merge-sha)
+          completed=false
+          for attempt in $(seq 1 360); do
+            runs=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${merge_sha}&per_page=100")
+            core=$(jq -r '[.workflow_runs[] | select(.name == "Core CI" and .event == "push" and .conclusion == "success")] | length' <<<"${runs}")
+            if [ "${core}" -ge 1 ]; then
+              completed=true
+              break
+            fi
+            sleep 10
+          done
+          test "${completed}" = true
+          echo "Increment 22 merged at ${merge_sha} with green post-merge Core CI"

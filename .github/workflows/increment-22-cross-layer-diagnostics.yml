@@ -156,6 +156,14 @@ jobs:
                           raise SystemExit(
                               f"{fixture.name} section {index}: missing {missing}"
                           )
+                      if (
+                          required[0] == "NODAL-INTERFACE-ROLE-002"
+                          and "[hierarchy-path=" in combined
+                      ):
+                          print(combined)
+                          raise SystemExit(
+                              "inventory-only diagnostics must not invent hierarchy context"
+                          )
                       print(f"verified {fixture.name} section {index}: {required[0]}")
           PY
 

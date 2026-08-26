@@ -33,6 +33,6 @@ module {
     %driver = "nodal.net_driver"(%net) <{driver_id = "Top.irq", metadata = {}}> : (!nodal.resolved<"open_drain", !nodal.bits<1>>) -> !nodal.driver<!nodal.bits<1>>
     %value = "nodal.constant"() <{metadata = {}, value = 1 : i64}> : () -> !nodal.bits<1>
     %enable = "nodal.constant"() <{metadata = {}, value = true}> : () -> i1
-    "nodal.net_drive"(%net, %driver, %value, %enable) <{metadata = {drive_level = "high", hierarchy_path = "Top", semantic_path = "Top.irq", source_end_column = 30 : i64, source_end_line = 70 : i64}, mode = "open_drain"}> : (!nodal.resolved<"open_drain", !nodal.bits<1>>, !nodal.driver<!nodal.bits<1>>, !nodal.bits<1>, i1) -> ()
+    "nodal.net_drive"(%net, %driver, %value, %enable) <{metadata = {drive_level = "high", hierarchy_path = "Top", semantic_path = "Top.irq", source_end_column = 30 : i64, source_end_line = 70 : i64}, mode = "open_drain"}> : (!nodal.resolved<"open_drain", !nodal.bits<1>>, !nodal.driver<!nodal.bits<1>>, !nodal.bits<1>, i1) -> () loc(unknown)
   }) : () -> () loc("src/Top.scala":70:5)
 }

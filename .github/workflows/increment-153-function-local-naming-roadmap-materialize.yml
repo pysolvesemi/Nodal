@@ -1,6 +1,9 @@
 name: Increment 153 Function-local Naming Roadmap Materializer
 
 on:
+  push:
+    branches:
+      - increment/153-function-local-semantic-naming-roadmap
   pull_request:
     branches:
       - dev
@@ -19,7 +22,7 @@ concurrency:
 jobs:
   materialize:
     name: increment-153/materialize-roadmap
-    if: github.head_ref == 'increment/153-function-local-semantic-naming-roadmap' && github.actor != 'github-actions[bot]'
+    if: (github.event_name == 'push' || github.head_ref == 'increment/153-function-local-semantic-naming-roadmap') && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 
@@ -209,7 +212,7 @@ jobs:
           gate_path.write_text(json.dumps(gate, indent=2) + "\n", encoding="utf-8")
           PY
 
-          rm -f .github/workflows/increment-153-function-local-naming-roadmap-materialize.yml
+          rm -f .github/workflows/increment-153-function-local-naming-roadmap-materialize.yml .increment153-materialize-trigger
 
           python3 -m json.tool docs/roadmap/dependent-track-gate-v0.1.json >/dev/null
           python3 scripts/check_markdown.py
@@ -221,7 +224,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/roadmap/nodal-development-todo.md docs/roadmap/dependent-track-gate-v0.1.json .github/workflows/increment-153-function-local-naming-roadmap-materialize.yml
+          git add -A
           git commit -m "Increment 153 — add function-local semantic naming roadmap"
           git pull --rebase origin increment/153-function-local-semantic-naming-roadmap
           git push origin HEAD:increment/153-function-local-semantic-naming-roadmap

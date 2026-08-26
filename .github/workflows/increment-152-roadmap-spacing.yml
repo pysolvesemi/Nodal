@@ -1,0 +1,55 @@
+name: Fix Increment 152 roadmap separators
+
+on:
+  push:
+    branches:
+      - increment/152-main-roadmap-synchronization
+    paths:
+      - .github/workflows/increment-152-roadmap-spacing.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix-roadmap-separators:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Add Markdown separators
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('docs/roadmap/nodal-development-todo.md')
+          text = path.read_text()
+          replacements = (
+              (
+                  '- [ ] **Digital Verification Increment 12 — Scale, performance, compatibility, and verification release gate**\n## Analog/Mixed-Signal Verification Track',
+                  '- [ ] **Digital Verification Increment 12 — Scale, performance, compatibility, and verification release gate**\n\n## Analog/Mixed-Signal Verification Track',
+              ),
+              (
+                  '- [ ] **AMS Verification Increment 12 — Scale, portability, and mixed-signal verification release gate**\n## Deferred reusable library roadmap',
+                  '- [ ] **AMS Verification Increment 12 — Scale, portability, and mixed-signal verification release gate**\n\n## Deferred reusable library roadmap',
+              ),
+          )
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'roadmap separator anchor mismatch: {old}')
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+          Path('.github/workflows/increment-152-roadmap-spacing.yml').unlink()
+          PY
+      - name: Validate and commit
+        run: |
+          set -euo pipefail
+          grep -q $'verification release gate**\n\n## Analog/Mixed-Signal Verification Track' docs/roadmap/nodal-development-todo.md
+          grep -q $'mixed-signal verification release gate**\n\n## Deferred reusable library roadmap' docs/roadmap/nodal-development-todo.md
+          test ! -e .github/workflows/increment-152-roadmap-spacing.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/roadmap/nodal-development-todo.md .github/workflows/increment-152-roadmap-spacing.yml
+          git diff --cached --check
+          git commit -m 'Increment 152 — fix controlling roadmap separators'
+          git push origin HEAD

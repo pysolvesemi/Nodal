@@ -56,6 +56,12 @@ def main() -> None:
     tests = tests_path.read_text(encoding="utf-8")
     tests = replace_once(
         tests,
+        '.replace("**Revision:** 1.24", "**Revision:** 1.26", 1)',
+        '.replace("**Revision:** 1.25", "**Revision:** 1.26", 1)',
+        "use current roadmap revision in successor-state test",
+    )
+    tests = replace_once(
+        tests,
         '''            .replace(
                 "- [ ] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**",
                 "- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**",

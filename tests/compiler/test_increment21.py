@@ -119,35 +119,33 @@ class Increment21CheckerTests(unittest.TestCase):
             encoding="utf-8",
         )
         roadmap = root / "docs/roadmap/nodal-development-todo.md"
-        roadmap.write_text(
-            roadmap.read_text(encoding="utf-8")
-            .replace("**Revision:** 1.25", "**Revision:** 1.26", 1)
-            .replace(
-                "- [ ] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**",
-                "- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**",
-                1,
-            )
-            .replace(
-                "- [ ] **Increment 22 — Cross-layer diagnostic mapping**",
-                "- [x] **Increment 22 — Cross-layer diagnostic mapping**",
-                1,
-            ),
-            encoding="utf-8",
+        text = roadmap.read_text(encoding="utf-8")
+        text = text.replace("**Revision:** 1.25", "**Revision:** 1.26", 1)
+        text = text.replace(
+            "- [ ] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**",
+            "- [x] **Increment 21 — Native parse, staged semantic verification, and pass pipeline**",
+            1,
         )
+        text = text.replace(
+            "- [ ] **Increment 22 — Cross-layer diagnostic mapping**",
+            "- [x] **Increment 22 — Cross-layer diagnostic mapping**",
+            1,
+        )
+        roadmap.write_text(text, encoding="utf-8")
         self.assertEqual(CHECKER.check_repository(root), [])
 
     def test_rejects_unchecked_increment22_at_revision_126(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
         roadmap = root / "docs/roadmap/nodal-development-todo.md"
-        roadmap.write_text(
-            roadmap.read_text(encoding="utf-8").replace(
-                "**Revision:** 1.25",
-                "**Revision:** 1.26",
-                1,
-            ),
-            encoding="utf-8",
+        text = roadmap.read_text(encoding="utf-8")
+        text = text.replace("**Revision:** 1.25", "**Revision:** 1.26", 1)
+        text = text.replace(
+            "- [x] **Increment 22 — Cross-layer diagnostic mapping**",
+            "- [ ] **Increment 22 — Cross-layer diagnostic mapping**",
+            1,
         )
+        roadmap.write_text(text, encoding="utf-8")
         self.assertIn("NODAL-INC21-011", self.codes(root))
 
 

@@ -342,19 +342,36 @@ def check_repository(root: Path) -> list[Problem]:
     else:
         problems.append(Problem("NODAL-INC22-009", f"unexpected manifest status: {status!r}"))
 
-    if revision < (1, 27):
-        if not increment23_unchecked:
+    increment23_status = None
+    increment23_manifest = root / "tests/compiler/fixtures/increment23/manifest.json"
+    if increment23_manifest.is_file():
+        try:
+            increment23_value = json.loads(
+                increment23_manifest.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError) as exc:
             problems.append(
                 Problem(
                     "NODAL-INC22-009",
-                    "Increment 23 must remain unchecked before roadmap revision 1.27",
+                    f"cannot read Increment 23 successor evidence: {exc}",
                 )
             )
-    elif not increment23_checked:
+        else:
+            increment23_status = increment23_value.get("status")
+
+    if increment23_status == "validated-backend-framework":
+        if not increment23_checked:
+            problems.append(
+                Problem(
+                    "NODAL-INC22-009",
+                    "validated Increment 23 evidence requires its roadmap item to be checked",
+                )
+            )
+    elif not increment23_unchecked:
         problems.append(
             Problem(
                 "NODAL-INC22-009",
-                "Increment 23 must be checked at roadmap revision 1.27 or later",
+                "Increment 23 must remain unchecked until validated evidence exists",
             )
         )
 

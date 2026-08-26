@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import shutil
 import sys
@@ -21,6 +22,7 @@ SUPPORT_FILES = (
     "core/scala/bridge/src/nodal/bridge/NativeCompilerClient.scala",
     "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala",
     "docs/roadmap/nodal-development-todo.md",
+    "tests/compiler/fixtures/increment23/manifest.json",
 )
 
 
@@ -146,11 +148,21 @@ class Increment22CheckerTests(unittest.TestCase):
     def test_accepts_validated_increment23_successor(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
+        manifest_path = root / "tests/compiler/fixtures/increment23/manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "validated-backend-framework"
+        manifest["evidence"] = {
+            "pull_request": 1,
+            "dedicated_run": 2,
+            "core_ci_run": 3,
+        }
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2) + "\n",
+            encoding="utf-8",
+        )
         roadmap = root / "docs/roadmap/nodal-development-todo.md"
         roadmap.write_text(
-            roadmap.read_text(encoding="utf-8")
-            .replace("**Revision:** 1.26", "**Revision:** 1.27", 1)
-            .replace(
+            roadmap.read_text(encoding="utf-8").replace(
                 "- [ ] **Increment 23 — Backend framework and capability profiles**",
                 "- [x] **Increment 23 — Backend framework and capability profiles**",
                 1,

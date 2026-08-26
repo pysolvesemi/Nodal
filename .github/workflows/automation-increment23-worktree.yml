@@ -141,10 +141,11 @@ jobs:
           test ! -s "${scratch}/unsupported.va"
           grep -F 'NODAL-BACKEND-CAPABILITY-001' "${scratch}/unsupported.err"
 
-      - name: Publish validated implementation
+      - name: Publish validated non-workflow implementation
         working-directory: worktree
         run: |
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          rm .github/workflows/increment-23-backend-framework.yml
           git config user.name 'github-actions[bot]'
           git config user.email \
             '41898282+github-actions[bot]@users.noreply.github.com'

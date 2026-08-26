@@ -58,11 +58,13 @@ has completed.
 
 ## Target parser edge contracts
 
-Portable module identifiers exclude Verilog-family and AMS reserved words. Target
-verification counts complete module declaration and `endmodule` lines rather
-than substrings, so legal names such as `myendmoduleBlock` remain valid. Every
-profile-owned module attribute is type-checked before defaults are considered;
-a present non-string attribute is malformed configuration, not an absent value.
+Portable module identifiers exclude Verilog-family and AMS reserved words.
+Target verification counts complete module declaration and `endmodule` lines
+rather than substrings, so legal names such as `myendmoduleBlock` remain valid.
+Every profile-owned module attribute is type-checked before defaults are
+considered; a present non-string attribute is malformed configuration, not an
+absent value. Native regression fixtures lock all three edge cases and verify
+that every rejected candidate leaves the caller's output buffer unchanged.
 
 ## Validation
 

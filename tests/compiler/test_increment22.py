@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import shutil
 import sys
 import tempfile
@@ -125,7 +126,14 @@ class Increment22CheckerTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         roadmap = root / "docs/roadmap/nodal-development-todo.md"
         text = roadmap.read_text(encoding="utf-8")
-        text = text.replace("**Revision:** 1.26", "**Revision:** 1.25", 1)
+        text, count = re.subn(
+            r"^\*\*Revision:\*\* [0-9.]+$",
+            "**Revision:** 1.25",
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        self.assertEqual(count, 1)
         text = text.replace(
             "- [ ] **Increment 22 — Cross-layer diagnostic mapping**",
             "- [x] **Increment 22 — Cross-layer diagnostic mapping**",

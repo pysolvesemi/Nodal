@@ -1417,6 +1417,7 @@ Detailed rationale and dependent-track plans are in [`dependent-productivity-and
   - Define vendor-neutral common source plus thin simulator profiles. Any required `ifdef` is confined to generated vendor adapter/include units, not common VIP/test logic.
   - Record standard version, UVM reference implementation, vendor profile, feature decisions, defines, adapter hashes, source hashes, commands, source maps, and unsupported capabilities.
   - Do not generate production UVM/UVM-MS code or vendor scripts in Foundation.
+
 ## Foundation completion barrier
 
 > **Blocked:** no FPGA Productivity, Digital Verification, or Analog/Mixed-Signal Verification implementation increment may start until every Foundation increment is complete, including any Foundation item appended after Increment 149 before the barrier is released.
@@ -1453,6 +1454,7 @@ Nodal HVL is canonical. Native execution, generated procedural Verilog testbench
 - [ ] **Digital Verification Increment 9 — Native, Verilog-testbench, and UVM semantic parity**
 - [ ] **Digital Verification Increment 10 — Reusable digital VIP qualification**
 - [ ] **Digital Verification Increment 11 — Scale, performance, compatibility, and verification release gate**
+
 ## Analog/Mixed-Signal Verification Track — blocked by Foundation; numbering restarts
 
 This track is separate from Digital Verification but reuses its target-neutral transaction/component concepts and the Foundation AMS semantics. Native execution, generated procedural Verilog-AMS testbenches, and UVM-MS are sibling projections. Open-source Verilog-AMS execution is enabled only for a version-pinned subset that passes its conformance profile.
@@ -1469,6 +1471,7 @@ This track is separate from Digital Verification but reuses its target-neutral t
 - [ ] **AMS Verification Increment 10 — Native, Verilog-AMS-testbench, and UVM-MS semantic parity**
 - [ ] **AMS Verification Increment 11 — Reusable AMS VIP qualification**
 - [ ] **AMS Verification Increment 12 — Scale, performance, compatibility, and AMS verification release gate**
+
 ## Deferred reusable library roadmap
 
 No official reusable model/component library or production plugin is implemented by Increment 115. Increments 116-123 define the future core register-factory and qualification track; they do not populate `libraries/` yet. After the core API, extension surface, packaging model, and preview release are proven, independently approved library/plugin roadmaps may populate `libraries/`, `plugins/`, or separate repositories while preserving the public-core dependency contract.

@@ -1454,6 +1454,7 @@ Nodal HVL is canonical. Native/open-source execution, generated procedural Veril
 - [ ] **Digital Verification Increment 10 — Native, Verilog-testbench, and UVM semantic parity**
 - [ ] **Digital Verification Increment 11 — Reusable digital VIP qualification**
 - [ ] **Digital Verification Increment 12 — Scale, performance, compatibility, and verification release gate**
+
 ## Analog/Mixed-Signal Verification Track — blocked by Foundation; numbering restarts
 
 This track is separate from Digital Verification but reuses its target-neutral transaction/component concepts and Foundation AMS semantics. Native/open execution, generated open AMS harness or Verilog-AMS testbench, and UVM-MS are sibling projections; none replaces the canonical Nodal HVL environment.
@@ -1470,6 +1471,7 @@ This track is separate from Digital Verification but reuses its target-neutral t
 - [ ] **AMS Verification Increment 10 — Native, open-harness, Verilog-AMS-testbench, and UVM-MS semantic parity**
 - [ ] **AMS Verification Increment 11 — Reusable mixed-signal VIP qualification**
 - [ ] **AMS Verification Increment 12 — Scale, portability, and mixed-signal verification release gate**
+
 ## Deferred reusable library roadmap
 
 No official reusable model/component library or production plugin is implemented by Increment 115. Increments 116-123 define the future core register-factory and qualification track; they do not populate `libraries/` yet. After the core API, extension surface, packaging model, and preview release are proven, independently approved library/plugin roadmaps may populate `libraries/`, `plugins/`, or separate repositories while preserving the public-core dependency contract.

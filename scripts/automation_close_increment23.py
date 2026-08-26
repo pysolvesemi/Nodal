@@ -11,7 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "tests/compiler/fixtures/increment23/manifest.json"
 ROADMAP = ROOT / "docs/roadmap/nodal-development-todo.md"
 
-PR_NUMBER = 61
+IMPLEMENTATION_PR_NUMBER = 61
+CLOSURE_PR_NUMBER = 63
 DEDICATED_RUN = 32966834961
 CORE_CI_RUN = 32966835105
 
@@ -28,7 +29,7 @@ def close_manifest() -> None:
 
     data["status"] = "validated-backend-framework"
     data["evidence"] = {
-        "pull_request": PR_NUMBER,
+        "pull_request": IMPLEMENTATION_PR_NUMBER,
         "dedicated_run": DEDICATED_RUN,
         "core_ci_run": CORE_CI_RUN,
     }
@@ -61,11 +62,14 @@ def close_roadmap() -> None:
     evidence = (
         "  - Evidence: [`NodalBackendFramework-DG-v1.0.md`](../design-gates/"
         "NodalBackendFramework-DG-v1.0.md), [`increment23-backend-framework.md`]"
-        "(../implementation/increment23-backend-framework.md), PR [#61]"
-        "(https://github.com/pysolvesemi/Nodal/pull/61), dedicated validation run "
-        "[32966834961](https://github.com/pysolvesemi/Nodal/actions/runs/32966834961), "
-        "and Core CI run [32966835105]"
-        "(https://github.com/pysolvesemi/Nodal/actions/runs/32966835105)."
+        "(../implementation/increment23-backend-framework.md), implementation PR "
+        f"[#{IMPLEMENTATION_PR_NUMBER}](https://github.com/pysolvesemi/Nodal/pull/"
+        f"{IMPLEMENTATION_PR_NUMBER}), closure PR [#{CLOSURE_PR_NUMBER}]"
+        f"(https://github.com/pysolvesemi/Nodal/pull/{CLOSURE_PR_NUMBER}), dedicated "
+        f"validation run [{DEDICATED_RUN}]"
+        f"(https://github.com/pysolvesemi/Nodal/actions/runs/{DEDICATED_RUN}), and "
+        f"Core CI run [{CORE_CI_RUN}]"
+        f"(https://github.com/pysolvesemi/Nodal/actions/runs/{CORE_CI_RUN})."
     )
 
     if heading_closed in text:

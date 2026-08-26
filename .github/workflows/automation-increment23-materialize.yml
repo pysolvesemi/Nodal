@@ -41,6 +41,15 @@ jobs:
             > target/scripts/automation_materialize_increment23.py
           test "$(sha256sum target/scripts/automation_materialize_increment23.py | awk '{print $1}')" \
             = "a24ad49cc248df7190fd392bcebb4682a6d9342da5bc3fcdfb7655c1f2e5d351"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("target/scripts/automation_materialize_increment23.py")
+          lines = path.read_text(encoding="utf-8").splitlines()
+          for index in range(50, 93):
+              lines[index] = lines[index].replace("\\\\n", "\\n")
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
           cd target
           PYTHONDONTWRITEBYTECODE=1 \
             python3 scripts/automation_materialize_increment23.py

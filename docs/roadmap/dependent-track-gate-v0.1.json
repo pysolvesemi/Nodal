@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "active",
-  "roadmap_revision": "1.19",
+  "roadmap_revision": "1.27",
   "foundation_track": {
     "roadmap": "docs/roadmap/nodal-development-todo.md",
     "completion_rule": "all-foundation-checkboxes-complete",
@@ -27,13 +27,15 @@
       "id": "digital-verification",
       "display_name": "Digital Verification",
       "numbering_starts_at": 1,
-      "implementation_status": "blocked-by-foundation"
+      "implementation_status": "blocked-by-foundation",
+      "planned_increment_count": 11
     },
     {
       "id": "ams-verification",
       "display_name": "Analog/Mixed-Signal Verification",
       "numbering_starts_at": 1,
-      "implementation_status": "blocked-by-foundation"
+      "implementation_status": "blocked-by-foundation",
+      "planned_increment_count": 12
     },
     {
       "id": "asic-productivity-signoff",
@@ -55,10 +57,18 @@
     "canonical_semantics": "nodal-verification-semantic-ir",
     "native_simulation_depends_on_generated_uvm": false,
     "generated_backends": [
+      "verilog-testbench",
+      "verilog-ams-testbench",
       "uvm",
       "uvm-ms"
     ],
-    "vendor_variation_policy": "thin-adapter-profile"
+    "vendor_variation_policy": "thin-adapter-profile",
+    "projection_adr": "docs/architecture/0025-generated-procedural-testbench-projections.md",
+    "native_simulation_depends_on_generated_testbench": false,
+    "artifact_generation_and_execution_are_separate_gates": true,
+    "digital_open_source_profile": "icarus-conformance-with-capability-checked-verilator-fast-profile",
+    "verilog_ams_open_source_profile": "bounded-version-pinned-conformance-only-no-full-language-claim",
+    "verilog_a_open_source_path_is_full_verilog_ams_evidence": false
   },
   "asic_advanced_io_architecture": {
     "adr": "docs/architecture/0024-minimal-asic-advanced-io-readiness-boundary.md",

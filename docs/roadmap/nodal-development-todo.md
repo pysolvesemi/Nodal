@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.26
+**Revision:** 1.27
 **Created:** 2026-08-20
 **Updated:** 2026-08-26
 **Status:** Active roadmap
@@ -58,6 +58,7 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Classify memory, external, analog, stateful, observational, and side-effecting operations explicitly so scheduling, optimization, and verification never guess latency or purity.
 - Classify complete designs as digital-only, analog-only, or mixed-signal. `Backend.Auto` selects the narrowest compatible backend, including portable Verilog for digital-only designs.
 - Verify generated pure-digital HDL through a pinned open-source matrix using Verilator, Icarus Verilog, Yosys, SBY, and optional cocotb interoperability.
+- Author verification once in Nodal HVL/Verification Semantic IR and keep native execution, generated procedural Verilog testbenches, generated procedural Verilog-AMS testbenches, UVM, and UVM-MS as sibling capability-checked projections. Generated-artifact acceptance and simulator execution are separate gates; no parser flag, Verilog-A model path, or silent fallback proves full Verilog-AMS testbench support.
 - Keep future user-authored formal properties target-neutral and domain-aware in Nodal IR; do not make raw SVA strings, SBY files, or one solver define public semantics.
 - Separate formal property authoring, target lowering, harness generation, and proof-engine execution so formal-only constructs cannot silently alter synthesizable behavior or ordinary simulation.
 - Permit checker RTL only for an explicitly selected immediate Boolean assertion. Concurrent or temporal properties, sampled history, assumptions, covers, symbolic formal values, and generated verification monitors remain verification-only and never enter synthesizable DUT RTL.
@@ -1396,19 +1397,26 @@ Detailed rationale and dependent-track plans are in [`dependent-productivity-and
   - Do not implement vendor constraints, board libraries, FPGA builds/programming, timing-closure exploration, or debug insertion in Foundation.
 
 - [ ] **Foundation Increment 147 — Nodal HVL Verification Semantic IR and public API architecture gate**
-  - Freeze target-neutral tests/scenarios, transactions, processes/events/time, drivers/monitors/agents, scoreboards/reference models, constrained stimulus, deterministic replay, functional coverage, properties/checks, register bindings, reusable VIP packaging, and AMS verification extensions.
-  - Bind verification endpoints to logical Interface/Register identities rather than generated HDL hierarchy strings.
+  - Freeze target-neutral verification semantics for tests/scenarios, transactions, typed endpoints, processes/events/time, deterministic cancellation and fork/join, drivers/monitors/agents, scoreboards/reference models, analysis streams, configuration/resources, random variables/constraints/seeds/replay, functional coverage, properties/checks, register-model bindings, reusable VIP packaging, and analog/mixed-signal verification intent.
+  - Bind drivers/monitors to logical Nodal `Interface` identities and register verification to canonical Register IR identities rather than generated HDL hierarchy strings.
+  - Freeze stable verification/component/transaction/check/coverage IDs, source maps, capability requirements, backend exclusions, normalized results, replay manifests, and cross-backend parity rules.
+  - Reserve explicit sibling projection identities for native execution, procedural Verilog testbench, procedural Verilog-AMS testbench, UVM, and UVM-MS. Exact public spellings remain deferred to this design gate.
+  - Do not implement a testbench generator, simulator, UVM library, or UVM-MS bridge in Foundation.
 
-- [ ] **Foundation Increment 148 — Native verification runtime and generated-SystemVerilog IR readiness**
-  - Freeze the native Nodal verification scheduler/runtime contract independently of UVM and the simulator-adapter boundary needed for direct Verilator/Icarus and future open mixed-signal execution.
-  - Define a verification-SystemVerilog IR sufficient for generated UVM/VIP classes, interfaces/virtual interfaces, clocking blocks, dynamic containers, processes/events/mailboxes/semaphores, constraints/randomization, covergroups, properties, and DPI/VPI shims.
-  - Do not implement complete HVL runtime or UVM generation in Foundation.
+- [ ] **Foundation Increment 148 — Native verification runtime and procedural-testbench projection architecture readiness**
+  - Freeze the Nodal verification scheduler/runtime contract independently of every generated target: simulation time, delta/event ordering, clocks, waits, processes, cancellation, timeout, deterministic seed/replay, transaction recording, coverage sampling, failure identity, and simulator callback semantics.
+  - Define the simulator-adapter boundary for direct Verilator/Icarus execution and future mixed-signal adapters without requiring generated testbench source or UVM support.
+  - Define a target-neutral Procedural Testbench IR sufficient for generated Verilog-2001 and Verilog-AMS 2023 testbenches: modules/bindings, variables/nets/terminals/disciplines, processes, delays/events/waits, bounded concurrency, tasks/functions, drive/sample/check/scoreboard operations, wave/results, analog stimulus/measurement/tolerance/event intent, deterministic naming, source maps, and capability diagnostics.
+  - Separate generated-artifact acceptance from simulator execution evidence and freeze versioned tool capability manifests. Reserve Icarus as the digital event-driven conformance profile, Verilator as a capability-checked fast profile, and bounded research profiles for partial open-source Verilog-AMS execution; do not claim that Verilog-A model support or VAMS parsing equals full Verilog-AMS simulation.
+  - Do not implement the complete native HVL runtime, production Verilog/Verilog-AMS testbench generators, co-simulation runtime, or simulator qualification in Foundation.
 
 - [ ] **Foundation Increment 149 — UVM/UVM-MS projection and vendor-profile architecture readiness**
-  - Accept ADR 0023 and freeze Verification Semantic IR -> UVM/UVM-MS projections while keeping `nodal sim` independent of generated UVM.
-  - Freeze UVM component/TLM/factory/config/phase/objection/RAL mappings, UVM-MS structural/class bridge identities, vendor-neutral common source, and thin VCS/Questa/Xcelium profile seams.
-  - Confine unavoidable vendor `ifdef`s to generated adapter/include units; do not scatter them through common VIP logic.
-
+  - Apply ADRs 0023 and 0025 and freeze Verification Semantic IR -> UVM/UVM-MS projections as siblings of native execution and procedural Verilog/Verilog-AMS testbench projections.
+  - Define mappings for tests/envs/agents/drivers/monitors/sequencers/sequences/items/scoreboards/TLM/analysis/factory/config/phases/objections/coverage/reporting and generated UVM RAL integration.
+  - Define UVM-MS structural/class bridge identities, mixed-signal endpoints, analog stimulus/monitor/measurement contracts, and capability mapping to Foundation AMS semantics.
+  - Define vendor-neutral common source plus thin simulator profiles. Any required `ifdef` is confined to generated vendor adapter/include units, not common VIP/test logic.
+  - Record standard version, UVM reference implementation, vendor profile, feature decisions, defines, adapter hashes, source hashes, commands, source maps, and unsupported capabilities.
+  - Do not generate production UVM/UVM-MS code or vendor scripts in Foundation.
 ## Foundation completion barrier
 
 > **Blocked:** no FPGA Productivity, Digital Verification, or Analog/Mixed-Signal Verification implementation increment may start until every Foundation increment is complete, including any Foundation item appended after Increment 149 before the barrier is released.

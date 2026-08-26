@@ -17,7 +17,7 @@ jobs:
   implement:
     name: increment-23/materialize-and-validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
       - name: Check out automation source
@@ -54,6 +54,42 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 \
             python3 scripts/automation_materialize_increment23.py
           rm scripts/automation_materialize_increment23.py
+
+      - name: Strengthen mutation-sensitive checker contracts
+        working-directory: target
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/check_increment23.py")
+          text = path.read_text(encoding="utf-8")
+          anchor = "\n    return problems\n\n\ndef main("
+          if text.count(anchor) != 1:
+              raise RuntimeError("Increment 23 checker return anchor is not unique")
+          checks = '''
+    if "  output << candidate;\\n  return success();" not in backend:
+        problems.append(
+            Problem(
+                "NODAL-INC23-004",
+                "backend candidate must be published only after target verify and reparse hooks",
+            )
+        )
+    for owned_attribute in (
+        "nodal.backend.shaped_layout",
+        "nodal.backend.materialization",
+        "nodal.backend.naming",
+    ):
+        if owned_attribute not in backend:
+            problems.append(
+                Problem(
+                    "NODAL-INC23-004",
+                    f"backend profile ownership check lacks attribute: {owned_attribute}",
+                )
+            )
+'''
+          text = text.replace(anchor, "\n" + checks + anchor, 1)
+          path.write_text(text, encoding="utf-8")
+          PY
 
       - name: Restore locked native and Scala caches
         uses: actions/cache@v5
@@ -119,6 +155,10 @@ jobs:
           scratch="$(mktemp -d)"
           trap 'rm -rf "${scratch}"' EXIT
 
+          "${translator}" --help | tee "${scratch}/help.txt"
+          grep -F 'nodal-to-verilog-a' "${scratch}/help.txt"
+          grep -F 'nodal-to-verilog-ams' "${scratch}/help.txt"
+
           "${translator}" \
             --nodal-to-verilog-a \
             core/compiler/test/IR/backend-minimal-analog.mlir \
@@ -165,7 +205,6 @@ jobs:
       - name: Publish validated implementation
         working-directory: target
         run: |
-          rm -f .github/workflows/increment-23-backend-framework.yml
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           git status --short
           git config user.name 'github-actions[bot]'

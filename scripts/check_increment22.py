@@ -309,6 +309,7 @@ def check_repository(root: Path) -> list[Problem]:
     increment22_unchecked = "- [ ] **Increment 22 — Cross-layer diagnostic mapping**" in roadmap
     increment22_checked = "- [x] **Increment 22 — Cross-layer diagnostic mapping**" in roadmap
     increment23_unchecked = "- [ ] **Increment 23 — Backend framework and capability profiles**" in roadmap
+    increment23_checked = "- [x] **Increment 23 — Backend framework and capability profiles**" in roadmap
     status = manifest.get("status")
     evidence = manifest.get("evidence", {})
 
@@ -341,8 +342,38 @@ def check_repository(root: Path) -> list[Problem]:
     else:
         problems.append(Problem("NODAL-INC22-009", f"unexpected manifest status: {status!r}"))
 
-    if not increment23_unchecked:
-        problems.append(Problem("NODAL-INC22-009", "Increment 23 must remain unchecked"))
+    increment23_status = None
+    increment23_manifest = root / "tests/compiler/fixtures/increment23/manifest.json"
+    if increment23_manifest.is_file():
+        try:
+            increment23_value = json.loads(
+                increment23_manifest.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            problems.append(
+                Problem(
+                    "NODAL-INC22-009",
+                    f"cannot read Increment 23 successor evidence: {exc}",
+                )
+            )
+        else:
+            increment23_status = increment23_value.get("status")
+
+    if increment23_status == "validated-backend-framework":
+        if not increment23_checked:
+            problems.append(
+                Problem(
+                    "NODAL-INC22-009",
+                    "validated Increment 23 evidence requires its roadmap item to be checked",
+                )
+            )
+    elif not increment23_unchecked:
+        problems.append(
+            Problem(
+                "NODAL-INC22-009",
+                "Increment 23 must remain unchecked until validated evidence exists",
+            )
+        )
 
     return problems
 

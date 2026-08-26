@@ -2,7 +2,12 @@
   "schema": 1,
   "version": "0.1",
   "public_api": "0.3-unchanged",
-  "context_fields": ["semantic-path", "hierarchy-path", "index-path", "source-range"],
+  "context_fields": [
+    "semantic-path",
+    "hierarchy-path",
+    "index-path",
+    "source-range"
+  ],
   "families": {
     "interface": [
       "NODAL-INTERFACE-STORAGE-001",
@@ -31,6 +36,16 @@
       "NODAL-DIAGNOSTIC-PASS-001",
       "NODAL-DIAGNOSTIC-BACKEND-001",
       "NODAL-DIAGNOSTIC-EXTERNAL-001"
+    ],
+    "backend-framework": [
+      "NODAL-BACKEND-CONFIG-001",
+      "NODAL-BACKEND-CONFIG-002",
+      "NODAL-BACKEND-PROFILE-001",
+      "NODAL-BACKEND-PROFILE-002",
+      "NODAL-BACKEND-CAPABILITY-001",
+      "NODAL-BACKEND-NAMING-001",
+      "NODAL-BACKEND-VERIFY-001",
+      "NODAL-BACKEND-REPARSE-001"
     ]
   },
   "preserved_prefixes": [
@@ -38,6 +53,7 @@
     "NODAL-BRIDGE-PROCESS-",
     "NODAL-CONSTRUCT-",
     "NODAL-VERIFY-",
-    "NODAL-PIPELINE-TRANSACTION-"
+    "NODAL-PIPELINE-TRANSACTION-",
+    "NODAL-BACKEND-"
   ]
 }

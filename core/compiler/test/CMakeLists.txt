@@ -110,9 +110,69 @@ foreach(_fixture IN ITEMS inventory operation)
   )
 endforeach()
 
+add_test(
+  NAME nodal.native.backend-translation-registration
+  COMMAND nodal-translate --help
+)
+set_tests_properties(
+  nodal.native.backend-translation-registration
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal-to-verilog-a"
+)
+
+add_test(
+  NAME nodal.native.backend-verilog-a
+  COMMAND nodal-translate
+    --nodal-to-verilog-a
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/backend-minimal-analog.mlir"
+)
+set_tests_properties(
+  nodal.native.backend-verilog-a
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "module Alpha;"
+)
+
+add_test(
+  NAME nodal.native.backend-verilog-ams
+  COMMAND nodal-translate
+    --nodal-to-verilog-ams
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/backend-minimal-ams.mlir"
+)
+set_tests_properties(
+  nodal.native.backend-verilog-ams
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "module MixedTop;"
+)
+
+add_test(
+  NAME nodal.native.backend-rejects-invalid-config
+  COMMAND nodal-translate
+    --nodal-to-verilog-a
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/backend-invalid-config.mlir"
+)
+set_tests_properties(
+  nodal.native.backend-rejects-invalid-config
+  PROPERTIES
+    WILL_FAIL TRUE
+)
+
+add_test(
+  NAME nodal.native.backend-rejects-unsupported-verilog-a
+  COMMAND nodal-translate
+    --nodal-to-verilog-a
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/backend-unsupported-verilog-a.mlir"
+)
+set_tests_properties(
+  nodal.native.backend-rejects-unsupported-verilog-a
+  PROPERTIES
+    WILL_FAIL TRUE
+)
+
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
   DEPENDS
+    nodal-backend-unit-tests
+    nodal-translate
     nodalc
     nodal-native-unit-tests
     nodal-dialect-unit-tests

@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "increment": 23,
+  "status": "implemented-awaiting-evidence",
+  "public_api": "0.3",
+  "profile_catalog": "core/compiler/backend-profiles-v0.1.json",
+  "translations": [
+    "nodal-to-verilog-a",
+    "nodal-to-verilog-ams"
+  ],
+  "transaction": "clone-gate-buffer-verify-reparse-publish",
+  "target_hooks": [
+    "verify",
+    "reparse"
+  ],
+  "evidence": {
+    "pull_request": null,
+    "dedicated_run": null,
+    "core_ci_run": null
+  }
+}

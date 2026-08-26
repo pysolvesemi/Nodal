@@ -78,3 +78,25 @@ add_test(
   NAME nodal.native.semantic-pipeline-unit
   COMMAND nodal-semantic-pipeline-unit-tests
 )
+
+add_executable(nodal-backend-unit-tests
+  BackendTest.cpp
+)
+
+llvm_update_compile_flags(nodal-backend-unit-tests)
+
+target_link_libraries(nodal-backend-unit-tests
+  PRIVATE
+    NodalBackend
+    NodalDialect
+    CIRCTHW
+    MLIRIR
+    MLIRParser
+    MLIRSupport
+    LLVMSupport
+)
+
+add_test(
+  NAME nodal.native.backend-unit
+  COMMAND nodal-backend-unit-tests
+)

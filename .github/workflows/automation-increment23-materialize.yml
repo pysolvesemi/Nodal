@@ -56,40 +56,7 @@ jobs:
           rm scripts/automation_materialize_increment23.py
 
       - name: Strengthen mutation-sensitive checker contracts
-        working-directory: target
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("scripts/check_increment23.py")
-          text = path.read_text(encoding="utf-8")
-          anchor = "\n    return problems\n\n\ndef main("
-          if text.count(anchor) != 1:
-              raise RuntimeError("Increment 23 checker return anchor is not unique")
-          checks = '''
-    if "  output << candidate;\\n  return success();" not in backend:
-        problems.append(
-            Problem(
-                "NODAL-INC23-004",
-                "backend candidate must be published only after target verify and reparse hooks",
-            )
-        )
-    for owned_attribute in (
-        "nodal.backend.shaped_layout",
-        "nodal.backend.materialization",
-        "nodal.backend.naming",
-    ):
-        if owned_attribute not in backend:
-            problems.append(
-                Problem(
-                    "NODAL-INC23-004",
-                    f"backend profile ownership check lacks attribute: {owned_attribute}",
-                )
-            )
-'''
-          text = text.replace(anchor, "\n" + checks + anchor, 1)
-          path.write_text(text, encoding="utf-8")
-          PY
+        run: python3 automation/scripts/patch_increment23_checker.py target
 
       - name: Restore locked native and Scala caches
         uses: actions/cache@v5

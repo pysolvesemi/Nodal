@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.26
+**Revision:** 1.27
 **Created:** 2026-08-20
 **Updated:** 2026-08-26
 **Status:** Active roadmap
@@ -58,6 +58,9 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Classify memory, external, analog, stateful, observational, and side-effecting operations explicitly so scheduling, optimization, and verification never guess latency or purity.
 - Classify complete designs as digital-only, analog-only, or mixed-signal. `Backend.Auto` selects the narrowest compatible backend, including portable Verilog for digital-only designs.
 - Verify generated pure-digital HDL through a pinned open-source matrix using Verilator, Icarus Verilog, Yosys, SBY, and optional cocotb interoperability.
+- Author verification once in Nodal HVL and treat native execution, generated portable Verilog testbenches, generated Verilog-AMS testbenches, generated digital UVM, and generated UVM-MS as capability-checked sibling projections of one Verification Semantic IR; no generated language is a semantic authority.
+- Qualify generated portable Verilog testbenches on a pinned open-source digital simulator matrix. Treat generated Verilog-AMS testbench execution on open-source tools as an explicitly bounded capability profile, never a blanket promise; native Nodal mixed-signal execution remains the default open path.
+- Require every generated testbench projection to carry a deterministic DUT/testbench ABI and artifact manifest covering files and compile order, logical Interface/Register identities, clocks/resets/time units, terminals/disciplines/bridges where applicable, seed/replay, source maps, requested features, selected simulator profile, and unsupported-capability diagnostics.
 - Keep future user-authored formal properties target-neutral and domain-aware in Nodal IR; do not make raw SVA strings, SBY files, or one solver define public semantics.
 - Separate formal property authoring, target lowering, harness generation, and proof-engine execution so formal-only constructs cannot silently alter synthesizable behavior or ordinary simulation.
 - Permit checker RTL only for an explicitly selected immediate Boolean assertion. Concurrent or temporal properties, sampled history, assumptions, covers, symbolic formal values, and generated verification monitors remain verification-only and never enter synthesizable DUT RTL.
@@ -1379,7 +1382,7 @@ This independently schedulable phase closes the cross-layer continuous-time arch
 
 ## Phase 10 — Foundation comments, FPGA-readiness, and HVL verification-readiness
 
-Detailed rationale and dependent-track plans are in [`dependent-productivity-and-verification-tracks-v0.1-plan.md`](dependent-productivity-and-verification-tracks-v0.1-plan.md). Verification backend ownership is defined by [ADR 0023](../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md). Foundation adds only the architecture/public seams needed to prevent later FPGA/UVM/UVM-MS work from being blocked by core design limitations; dependent-track implementations remain outside Foundation.
+Detailed rationale and dependent-track plans are in [`dependent-productivity-and-verification-tracks-v0.1-plan.md`](dependent-productivity-and-verification-tracks-v0.1-plan.md), with the generated-testbench feasibility boundary in [`generated-testbench-projections-feasibility-v0.1.md`](generated-testbench-projections-feasibility-v0.1.md). Verification semantic ownership is defined by [ADR 0023](../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md), and the portable Verilog/Verilog-AMS testbench projections are added by [ADR 0025](../architecture/0025-generated-verilog-family-testbench-projections.md). Foundation adds only the architecture/public seams needed to prevent later FPGA and verification implementations from being blocked by core design limitations; dependent-track implementations remain outside Foundation.
 
 - [ ] **Foundation Increment 143 — Comment/documentation IR architecture and public API gate**
   - Freeze automatic ScalaDoc/unambiguous leading-comment capture plus an explicit target-neutral comment/documentation API for guaranteed placement.
@@ -1409,9 +1412,15 @@ Detailed rationale and dependent-track plans are in [`dependent-productivity-and
   - Freeze UVM component/TLM/factory/config/phase/objection/RAL mappings, UVM-MS structural/class bridge identities, vendor-neutral common source, and thin VCS/Questa/Xcelium profile seams.
   - Confine unavoidable vendor `ifdef`s to generated adapter/include units; do not scatter them through common VIP logic.
 
+- [ ] **Foundation Increment 150 — Generated Verilog-family testbench projection architecture readiness**
+  - Accept ADR 0025 and freeze target-neutral projection identities for native execution, portable Verilog testbench, digital UVM, Verilog-AMS testbench, and UVM-MS without making any emitted testbench language canonical.
+  - Freeze the minimum Verification IR-to-testbench projection seam plus a common DUT/testbench ABI and artifact manifest for logical endpoint identity, compile order, time/domain metadata, AMS disciplines/bridges, seed/replay, source maps, capabilities, and normalized results.
+  - Require deterministic naming and fail-closed diagnostics when a Verification IR feature cannot be represented by the selected testbench or simulator profile.
+  - Do not implement a renderer, runner, UVM library, mixed-signal solver, or production simulator adapter in Foundation, and do not claim general open-source Verilog-AMS execution.
+
 ## Foundation completion barrier
 
-> **Blocked:** no FPGA Productivity, Digital Verification, or Analog/Mixed-Signal Verification implementation increment may start until every Foundation increment is complete, including any Foundation item appended after Increment 149 before the barrier is released.
+> **Blocked:** no FPGA Productivity, Digital Verification, or Analog/Mixed-Signal Verification implementation increment may start until every Foundation increment is complete, including Foundation Increment 150 and any later Foundation item appended before the barrier is released.
 
 Research and feasibility work may continue while blocked. Any newly discovered core architecture requirement belongs in Foundation.
 
@@ -1432,33 +1441,37 @@ See [`dependent-productivity-and-verification-tracks-v0.1-plan.md`](dependent-pr
 
 ## Digital Verification Track — blocked by Foundation; numbering restarts
 
-Nodal HVL is canonical. Native/open-source execution and generated UVM are sibling projections of one Verification Semantic IR; generated UVM is not the simulation foundation.
+Nodal HVL is canonical. Native/open-source execution, generated portable Verilog testbenches, and generated UVM are capability-checked sibling projections of one Verification Semantic IR; no generated testbench is the simulation foundation.
 
 - [ ] **Digital Verification Increment 1 — Nodal HVL native digital simulation vertical slice**
 - [ ] **Digital Verification Increment 2 — Scenarios, sequences, constrained stimulus, and replay**
 - [ ] **Digital Verification Increment 3 — Agents, drivers, monitors, scoreboards, and reference models**
 - [ ] **Digital Verification Increment 4 — Functional coverage and verification reporting**
 - [ ] **Digital Verification Increment 5 — Properties, protocol checks, and register-model verification**
-- [ ] **Digital Verification Increment 6 — Verification SystemVerilog and digital UVM generation**
-- [ ] **Digital Verification Increment 7 — Commercial simulator profiles**
-- [ ] **Digital Verification Increment 8 — Cross-backend semantic parity**
-- [ ] **Digital Verification Increment 9 — Reusable digital VIP qualification**
-- [ ] **Digital Verification Increment 10 — Scale, performance, compatibility, and verification release gate**
+- [ ] **Digital Verification Increment 6 — Portable Verilog testbench generation from Verification IR**
+- [ ] **Digital Verification Increment 7 — Open-source Verilog testbench simulator profiles**
+- [ ] **Digital Verification Increment 8 — Verification SystemVerilog and digital UVM generation**
+- [ ] **Digital Verification Increment 9 — Commercial and capability-qualified UVM simulator profiles**
+- [ ] **Digital Verification Increment 10 — Native, Verilog-testbench, and UVM semantic parity**
+- [ ] **Digital Verification Increment 11 — Reusable digital VIP multi-projection qualification**
+- [ ] **Digital Verification Increment 12 — Scale, performance, compatibility, and verification release gate**
 
 ## Analog/Mixed-Signal Verification Track — blocked by Foundation; numbering restarts
 
-This track is separate from Digital Verification but reuses its target-neutral transaction/component concepts and the Foundation AMS semantics. UVM-MS generation is a backend, not native mixed-signal simulation.
+This track is separate from Digital Verification but reuses its target-neutral transaction/component concepts and the Foundation AMS semantics. Native execution, generated Verilog-AMS testbenches, and generated UVM-MS are sibling projections; open-source Verilog-AMS execution is enabled only for a separately proven capability profile.
 
 - [ ] **AMS Verification Increment 1 — Nodal HVL native mixed-signal simulation vertical slice**
 - [ ] **AMS Verification Increment 2 — Analog/mixed-signal agents, drivers, monitors, and scoreboards**
 - [ ] **AMS Verification Increment 3 — PVT, sweeps, stochastic stimulus, and deterministic replay**
 - [ ] **AMS Verification Increment 4 — Analog measurements and functional coverage**
 - [ ] **AMS Verification Increment 5 — Mixed-signal properties and register/control interaction**
-- [ ] **AMS Verification Increment 6 — UVM-MS generation from Verification IR**
-- [ ] **AMS Verification Increment 7 — Commercial mixed-signal simulator profiles**
-- [ ] **AMS Verification Increment 8 — Native versus UVM-MS semantic parity**
-- [ ] **AMS Verification Increment 9 — Reusable UVM-MS VIP qualification**
-- [ ] **AMS Verification Increment 10 — Scale, portability, and mixed-signal verification release gate**
+- [ ] **AMS Verification Increment 6 — Verilog-AMS testbench generation from Verification IR**
+- [ ] **AMS Verification Increment 7 — Open-source Verilog-AMS subset conformance and capability gate**
+- [ ] **AMS Verification Increment 8 — UVM-MS generation from Verification IR**
+- [ ] **AMS Verification Increment 9 — Commercial mixed-signal simulator profiles**
+- [ ] **AMS Verification Increment 10 — Native, Verilog-AMS-testbench, and UVM-MS semantic parity**
+- [ ] **AMS Verification Increment 11 — Reusable mixed-signal VIP multi-projection qualification**
+- [ ] **AMS Verification Increment 12 — Scale, portability, and mixed-signal verification release gate**
 
 ## Deferred reusable library roadmap
 

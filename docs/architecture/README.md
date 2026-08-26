@@ -40,6 +40,7 @@ Accepted ADRs must not be edited to reverse their decision. A material change re
 | [0022](0022-layered-continuous-time-hybrid-dae-architecture.md) | Preserve source analog intent through layered semantic, topology, hybrid equation, analysis, and solver representations with explicit analog islands, state, events, capabilities, and model-validity evidence. |
 | [0023](0023-unified-hvl-native-sim-uvm-uvmms-architecture.md) | Author verification once in target-neutral Nodal HVL/Verification IR, execute it through the native simulation runtime or project it to UVM/UVM-MS, and isolate simulator/vendor differences in thin capability profiles. |
 | [0024](0024-minimal-asic-advanced-io-readiness-boundary.md) | Keep Foundation limited to target-neutral source-synchronous I/O, ASIC timing/sign-off, power, DFT/DFx, and hard-macro identity seams; defer implementation to independently numbered ASIC and memory-interface tracks. |
+| [0025](0025-generated-verilog-family-testbench-projections.md) | Extend the canonical Nodal HVL architecture with capability-checked portable Verilog and Verilog-AMS testbench projections beside native simulation and UVM/UVM-MS. |
 
 ADR 0012 owns general plugin discovery, resolution, loading, trust, lifecycle, and provenance. ADR 0013 layers the target-HDL-specific structured representations, pass profiles, preservation rules, and proof obligations on that common plugin foundation. Installing either a plugin or pass is inert until the project resolves and explicitly selects it in a locked plan.
 
@@ -54,6 +55,8 @@ ADR 0022 specializes the analog semantic, AMS backend, optimization, simulator-a
 ADR 0023 specializes the simulation, Interface/Register, property, AMS, plugin/tool-adapter, and generated-language boundaries for verification. Nodal HVL and Verification Semantic IR remain authoritative; native/open-source simulation and generated UVM/UVM-MS are capability-checked sibling projections with vendor differences isolated in thin profiles.
 
 ADR 0024 limits the extra Foundation work discovered from controller/PHY-class ASIC research to semantic identities and adapter seams only. Source-synchronous timing, ASIC constraints/sign-off, power intent, DFT/DFx, and hard-macro multi-view identity are visible to core, while SDC/UPF/DFT tooling, custom PHY implementation, PDK flows, and LPDDR/DFI libraries remain dependent-track work.
+
+ADR 0025 extends ADR 0023 without changing semantic ownership: Nodal HVL and Verification Semantic IR remain canonical, while native execution, portable Verilog testbench, digital UVM, Verilog-AMS testbench, and UVM-MS are capability-checked sibling projections sharing one DUT/testbench ABI, artifact manifest, replay identity, and fail-closed diagnostics.
 
 ## Proposed records
 

@@ -30,16 +30,16 @@ def patch_checker(root: Path) -> None:
         if owned_attribute not in backend:
             problems.append(
                 Problem(
-                    "NODAL-INC23-004",
+                    "NAL-INC23-004",
                     f"backend profile ownership check lacks attribute: {owned_attribute}",
                 )
             )
-'''
+'''.replace("NAL-INC23-004", "NODAL-INC23-004")
     text = text.replace(anchor, "\n" + checks + anchor, 1)
     path.write_text(text, encoding="utf-8")
 
 
-def patch_scala_test_parallelism(root: Path) -> None:
+def patch_scala_test_environment(root: Path) -> None:
     path = root / "build.mill"
     text = path.read_text(encoding="utf-8")
     old = '''      object test extends ScalaTests:
@@ -49,9 +49,10 @@ def patch_scala_test_parallelism(root: Path) -> None:
     new = '''      object test extends ScalaTests:
         def mvnDeps = Seq(mvn"com.lihaoyi::utest:0.9.1")
         def testFramework = "utest.runner.Framework"
-        // Source-semantic naming tests observe stack/source ownership and must
-        // not race other elaboration test classes in separate forked JVMs.
+        // Source-semantic naming tests inspect repository-owned Scala source.
+        // Run one fork from the repository root so source lookup is deterministic.
         def testParallelism = false
+        def testSandboxWorkingDir = false
 '''
     if new in text:
         return
@@ -68,7 +69,7 @@ def main() -> None:
     args = parser.parse_args()
     root = args.root.resolve()
     patch_checker(root)
-    patch_scala_test_parallelism(root)
+    patch_scala_test_environment(root)
 
 
 if __name__ == "__main__":

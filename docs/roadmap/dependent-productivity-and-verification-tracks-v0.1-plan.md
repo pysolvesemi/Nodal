@@ -1,13 +1,15 @@
 # Foundation-gated FPGA and verification tracks v0.1 plan
 
 **Status:** Normative roadmap target
-**Revision:** 0.2
+**Revision:** 0.3
 **Updated:** 2026-08-26
 **Foundation:** the main Nodal incremental roadmap
 **Dependent tracks:** FPGA Productivity, Digital Verification, Analog/Mixed-Signal Verification
 **Verification architecture:** [ADR 0023](../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md)
 **Direct HDL testbench architecture:** [ADR 0025](../architecture/0025-generated-procedural-hdl-testbench-projections.md)
+**Native digital simulator architecture:** [ADR 0026](../architecture/0026-native-digital-simulator-adapter-architecture.md)
 **Feasibility and staging detail:** [`generated-hdl-testbench-projections-v0.1-plan.md`](generated-hdl-testbench-projections-v0.1-plan.md)
+**Native adapter staging detail:** [`native-digital-simulator-adapters-v0.1-plan.md`](native-digital-simulator-adapters-v0.1-plan.md)
 
 ## Global dependency rule
 
@@ -67,10 +69,14 @@ Dependent tracks own implementations, vendor/tool adapters, generated collateral
   - Define analog/mixed-signal verification extensions for quantities, tolerances, measurements, crossings/events, PVT/sweep context, and bridge provenance without implementing UVM-MS.
 
 - [ ] **Foundation Increment 148 — Native verification runtime and generated-SystemVerilog IR readiness**
-  - Freeze the Nodal verification scheduler/runtime contract independently of UVM: simulation time, delta/event ordering, clocks, waits, processes, cancellation, timeout, deterministic seed/replay, transaction recording, coverage sampling, failure identity, and simulator callback semantics.
-  - Define the simulator-adapter boundary needed for direct open-source execution through Verilator/Icarus and for future mixed-signal open-source adapters without requiring UVM support in those tools.
+  - Accept ADR 0026 and freeze the Nodal verification scheduler/runtime contract independently of UVM: simulation time, delta/event ordering, clocks, waits, processes, cancellation, timeout, deterministic seed/replay, transaction recording, coverage sampling, failure identity, and simulator callback semantics.
+  - Freeze common adapter ownership: Nodal owns HVL scheduling, transactions, randomization, coverage, checks, logical endpoint identity, and normalized results; a simulator adapter owns only DUT compilation/elaboration, RTL evaluation, signal access, callbacks, waves, diagnostics, and cleanup.
+  - Freeze the primary Verilator path as generated Verilog -> Verilator C++ DUT model -> generated stable C ABI -> cached native shared library -> JVM FFI/JNI. Nodal HVL remains in the Nodal runtime; Verilator-generated C++ classes are not a public ABI and VPI is not the default fast access path.
+  - Freeze the independent Icarus path as generated Verilog -> `iverilog` -> VVP image -> external `vvp` process -> versioned VPI module -> shared-memory or versioned IPC transport. Icarus does not require DUT-to-C++ translation; native C/C++ is limited to the adapter.
+  - Freeze deterministic write/evaluate/settle/event synchronization barriers, width-safe value transport, four-state/profile handling, time conversion, timeout/cancellation/finish precedence, crash recovery, and explicit scheduler-difference classification.
+  - Freeze separate Verilator model, Icarus VVP image, adapter, and run cache identities plus tool/profile/source-map/command/result manifests; test seeds that do not alter the DUT must not force Verilator recompilation.
   - Define a verification-SystemVerilog IR sufficient for generated UVM/VIP: packages, classes/inheritance/polymorphism/parameterized classes, interfaces/virtual interfaces/clocking blocks, tasks/functions, dynamic containers, processes/events/mailboxes/semaphores, constrained randomization, covergroups, properties, DPI/VPI shims, and deterministic naming/source maps.
-  - Do not implement the complete native HVL runtime, UVM generator, or commercial simulator adapters in Foundation.
+  - Do not implement the complete native HVL runtime, Verilator wrapper, JVM binding, Icarus VPI/transport adapter, UVM generator, or commercial simulator adapters in Foundation.
 
 - [ ] **Foundation Increment 149 — UVM/UVM-MS projection and vendor-profile architecture readiness**
   - Accept ADR 0023 and freeze the projection from Verification Semantic IR to digital UVM and UVM-MS rather than making UVM the canonical Nodal execution model.
@@ -148,8 +154,11 @@ Numbering restarts for this track.
 Numbering restarts for this track.
 
 - [ ] **Digital Verification Increment 1 — Nodal HVL native digital simulation vertical slice**
-  - Implement the Verification IR/native runtime vertical slice for tests, deterministic processes/time, clocks/resets, typed transactions, direct signal/interface access, failures, waveforms, seeds, and replay.
-  - Run generated Verilog directly through Verilator as the primary fast adapter and Icarus as an independent event-driven adapter; generated UVM and generated HDL testbenches are not involved.
+  - Implement one Verification IR/native runtime vertical slice for tests, deterministic processes/time, clocks/resets, typed transactions, direct logical Interface access, failures, waveforms, seeds, replay, and normalized results.
+  - Implement Verilator as the primary fast native adapter by compiling generated Verilog to a C++ DUT model, generating a stable C ABI wrapper, compiling/linking a cached native shared library, and binding it through the approved JVM native mechanism. Use direct batched model access; keep Nodal HVL on the JVM/runtime side.
+  - Implement Icarus as an independent event-driven native adapter by compiling generated Verilog to a VVP image, launching an external `vvp` process, loading a versioned Nodal VPI module, and using shared memory or versioned IPC for batched reads/writes, callbacks, run-until/time advance, four-state values, waves, timeout, crash detection, and cleanup.
+  - Implement the common scheduler barrier contract: resume Nodal processes, batch writes, evaluate/settle the simulator, return ordered event/value batches, resume monitors/checks/coverage, and select the next event/time command.
+  - Add differential smoke tests across native Verilator and native Icarus for combinational settle, sequential/nonblocking updates, clocks/resets, waits, multiple clocks, inout/high-Z where supported, timeout, finish, waves, replay, and source-level failures. Generated UVM and generated standalone HDL testbenches are not involved.
 
 - [ ] **Digital Verification Increment 2 — Scenarios, sequences, constrained stimulus, and replay**
   - Implement reusable scenarios/sequence graphs, random variables/constraints/distributions, deterministic seed hierarchy, value-stream capture, exact replay, parallel stimulus, cancellation, timeout, and capability diagnostics.
@@ -169,9 +178,10 @@ Numbering restarts for this track.
   - Generate deterministic DUT wrappers, clocks/resets, flattened Interface helpers, tasks/functions, monitors/checks, error counters, wave controls, source maps, manifests, and vector/expected-result replay files where required.
   - Reject operations that are neither directly representable nor legally precomputable; do not silently reduce test intent.
 
-- [ ] **Digital Verification Increment 7 — Open-source Verilog testbench execution and qualification**
-  - Qualify Icarus as the required event-driven profile for compile/elaboration/run, file I/O, timing/events, four-state behavior, inout, waveforms, timeouts, plusargs, and deterministic pass/fail.
-  - Qualify a declared Verilator subset separately with differential fixtures for timing, event ordering, two-state/four-state differences, inout, file I/O, waves, timeout, and termination.
+- [ ] **Digital Verification Increment 7 — Standalone open-source Verilog testbench execution and qualification**
+  - Qualify Icarus as the required standalone event-driven profile for DUT plus generated `tb.v`, file I/O, timing/events, four-state behavior, inout, waveforms, timeouts, plusargs, and deterministic pass/fail.
+  - Qualify a declared standalone Verilator testbench/timing subset separately with differential fixtures for timing, event ordering, two-state/four-state differences, inout, file I/O, waves, timeout, and termination.
+  - Keep this mode independent of the native JVM-to-Verilator and JVM-to-Icarus adapters: no live Nodal runtime is required, and profile IDs, cache keys, manifests, and failure classes remain distinct.
   - Emit exact tool/version/options/capability manifests and reject unsupported profile combinations before execution.
 
 - [ ] **Digital Verification Increment 8 — Verification SystemVerilog and digital UVM generation**
@@ -182,10 +192,10 @@ Numbering restarts for this track.
   - Qualify thin VCS-family, Questa-family, and Xcelium-family profiles for compile/elaboration/run, DPI/VPI, UVM library selection, waves, coverage, reporting, and known compatibility workarounds.
   - Keep common UVM source identical wherever standards support it; confine unavoidable vendor `ifdef`s to adapter packages/includes.
 
-- [ ] **Digital Verification Increment 10 — Native, Verilog-testbench, and UVM semantic parity**
-  - Run the same Nodal HVL tests in native/open-source, generated-Verilog-testbench, and generated-UVM modes.
-  - Compare deterministic stimulus streams, transaction ordering, protocol behavior, checks, scoreboards, register behavior, coverage intent/results, termination, and source-level failure identities.
-  - Classify scheduler, random-solver, four-state, and profile limitations rather than hiding them.
+- [ ] **Digital Verification Increment 10 — Native Verilator, native Icarus, Verilog-testbench, and UVM semantic parity**
+  - Run each applicable Nodal HVL test through four explicit modes: native Verilator, native Icarus, generated standalone portable Verilog testbench, and generated UVM.
+  - Compare canonical deterministic stimulus/value streams, transaction ordering, protocol behavior, checks, scoreboards, register behavior, coverage intent/results, timeout/cancellation/termination, replay artifacts, and source-level failure identities.
+  - Classify scheduler, timing, random-solver, two-state/four-state, inout, and profile limitations rather than hiding them; an unsupported result is never parity success.
 
 - [ ] **Digital Verification Increment 11 — Reusable digital VIP qualification**
   - Author representative protocol VIP only in Nodal HVL—at minimum `Valid`/`Stream`, APB, and AXI4-Lite or another approved protocol—and generate native BFM/agents, portable Verilog testbench collateral where expressible, and UVM VIP.
@@ -193,7 +203,9 @@ Numbering restarts for this track.
 
 - [ ] **Digital Verification Increment 12 — Scale, performance, compatibility, and verification release gate**
   - Exercise large testbench hierarchies, many agents, long regressions, parallel tests, deterministic caching, vector/replay volume, coverage merge, procedural-Verilog generation/runtime, UVM compile/runtime scale, and source-map performance.
-  - Publish supported HVL/native/Verilog-testbench/UVM/SystemVerilog/simulator capability and limitations matrices plus a reusable VIP author conformance kit.
+  - Benchmark Verilator code generation/C++ compilation/link, cold and warm model-cache behavior, native-call batching, evaluation throughput, and memory separately from Icarus compile/VVP startup, VPI/shared-memory-or-IPC latency, event throughput, four-state transport, process cleanup, and memory.
+  - Exercise many tests reusing one compiled Verilator model and many concurrent external Icarus processes; prove cache invalidation over RTL, parameters, wrapper ABI, tool versions/options, native toolchain/platform, plugins, timing, trace, coverage, and optimization settings.
+  - Publish supported HVL/native-Verilator/native-Icarus/standalone-Verilog-testbench/UVM/SystemVerilog/host-toolchain capability and limitations matrices plus a reusable VIP author conformance kit.
 
 ---
 
@@ -257,7 +269,9 @@ The requested architecture is feasible and valuable with two binding rules:
 1. the common representation remains a **Nodal Verification Semantic IR**, not UVM, Verilog, or Verilog-AMS; and
 2. generated procedural HDL testbenches are capability-limited projections that must reject or explicitly precompute unsupported behavior.
 
-Portable Verilog testbench generation for generated Verilog RTL is practical and becomes a required open-source path with Icarus as the event-driven reference and a separately qualified Verilator subset.
+For native digital execution, Nodal now freezes two different adapter architectures: Verilator is the primary fast compiled-model path using a generated C++ DUT model behind a stable C ABI and JVM native binding; Icarus is the independent event-driven path using an external VVP process, VPI, and versioned shared-memory/IPC transport. Nodal HVL remains in the Nodal runtime in both cases.
+
+Portable Verilog testbench generation for generated Verilog RTL is practical and becomes a separate required open-source path with Icarus as the standalone event-driven reference and a separately qualified Verilator subset. It must not be confused with native Icarus execution.
 
 Verilog-AMS testbench generation is valid at the language level and is added as a future projection. Current open-source AMS execution remains based on native Nodal HVL plus Verilog-A/OSDI, SPICE/XSPICE, and digital co-simulation adapters. Nodal must not claim general open-source Verilog-AMS-testbench support until a selected adapter passes the exact capability suite.
 

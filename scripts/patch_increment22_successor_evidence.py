@@ -76,6 +76,13 @@ def main() -> None:
 
     tests_path = root / "tests/compiler/test_increment22.py"
     tests = tests_path.read_text(encoding="utf-8")
+    if "import json\n" not in tests:
+        tests = replace_once(
+            tests,
+            "import importlib.util\n",
+            "import importlib.util\nimport json\n",
+            "Increment 22 test JSON import",
+        )
     tests = replace_once(
         tests,
         '''SUPPORT_FILES = (
@@ -123,7 +130,7 @@ def main() -> None:
             "core_ci_run": 3,
         }
         manifest_path.write_text(
-            json.dumps(manifest, indent=2) + "\n",
+            json.dumps(manifest, indent=2) + "\\n",
             encoding="utf-8",
         )
         roadmap = root / "docs/roadmap/nodal-development-todo.md"

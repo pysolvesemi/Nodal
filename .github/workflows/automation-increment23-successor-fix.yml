@@ -1,0 +1,52 @@
+name: Automation Increment 23 Successor Compatibility Fix
+
+on:
+  push:
+    branches:
+      - automation/increment23-materialize
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: automation-increment23-successor-fix
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/increment23-materialize
+          path: automation
+
+      - name: Check out Increment 23 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/23-backend-framework-capability-profiles
+          fetch-depth: 0
+          path: worktree
+
+      - name: Apply evidence-aware successor compatibility
+        run: |
+          python3 automation/scripts/patch_increment22_successor_evidence.py worktree
+          cd worktree
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_increment22.py
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_increment23.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+            tests.compiler.test_increment22 \
+            tests.compiler.test_increment23
+          git diff --check
+
+      - name: Publish compatibility repair
+        working-directory: worktree
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email \
+            '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/check_increment22.py tests/compiler/test_increment22.py
+          git commit -m 'Increment 23 — make predecessor checker evidence-aware'
+          git push origin HEAD:increment/23-backend-framework-capability-profiles

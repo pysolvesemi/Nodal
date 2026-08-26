@@ -1,0 +1,34 @@
+name: Automation Increment 23 Rebase
+
+on:
+  push:
+    branches:
+      - automation/increment23-materialize
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: automation-increment23-rebase
+  cancel-in-progress: true
+
+jobs:
+  rebase:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out Increment 23 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/23-backend-framework-capability-profiles
+          fetch-depth: 0
+
+      - name: Rebase on current dev and publish
+        run: |
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
+          git config user.name 'github-actions[bot]'
+          git config user.email \
+            '41898282+github-actions[bot]@users.noreply.github.com'
+          git rebase origin/dev
+          git push --force-with-lease \
+            origin HEAD:increment/23-backend-framework-capability-profiles

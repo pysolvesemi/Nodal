@@ -50,7 +50,7 @@ object CrossLayerDiagnosticTests extends TestSuite:
 
     test("parser and pass failures receive distinct fallback families"):
       val parser = NativeDiagnosticMapper.classify(
-        "input.mlir:1:4: error: expected operation name\n",
+        "/tmp/nodal-scala-mlir-123456/input.mlir:1:4: error: expected operation name\n",
         1
       )
       val pass = NativeDiagnosticMapper.classify(
@@ -59,6 +59,8 @@ object CrossLayerDiagnosticTests extends TestSuite:
       )
 
       assert(parser.code == "NODAL-DIAGNOSTIC-PARSER-001")
+      assert(parser.message.contains("<bridge-input>:1:4"))
+      assert(!parser.message.contains("nodal-scala-mlir-123456"))
       assert(pass.code == "NODAL-DIAGNOSTIC-PASS-001")
 
     test("native compiler client preserves mapped native diagnostics"):

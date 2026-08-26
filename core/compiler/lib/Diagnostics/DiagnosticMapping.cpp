@@ -162,7 +162,6 @@ Operation *findOperationByPath(mlir::ModuleOp module, llvm::StringRef path) {
 DiagnosticContext sourceMapContext(mlir::ModuleOp module, llvm::StringRef path) {
   DiagnosticContext context;
   context.semanticPath = path.str();
-  context.hierarchyPath = path.str();
   context.indexPath = indexFallback(path);
 
   ArrayAttr sourceMap = module->getAttrOfType<ArrayAttr>("nodal.bridge.source_map");
@@ -175,6 +174,8 @@ DiagnosticContext sourceMapContext(mlir::ModuleOp module, llvm::StringRef path) 
     auto semantic = entry.getAs<StringAttr>("semantic_path");
     if (!semantic || semantic.getValue() != path)
       continue;
+    if (auto hierarchy = entry.getAs<StringAttr>("hierarchy_path"))
+      context.hierarchyPath = hierarchy.getValue().str();
     auto source = entry.getAs<StringAttr>("source_path");
     auto line = entry.getAs<IntegerAttr>("source_line");
     auto column = entry.getAs<IntegerAttr>("source_column");
@@ -563,7 +564,10 @@ DiagnosticContext collectDiagnosticContext(Operation *operation) {
   llvm::StringRef index = explicitContext(operation, "index_path");
   context.indexPath = index.empty() ? indexFallback(semantic) : index.str();
 
-  if (FileLineColLoc file = findFileLocation(operation->getLoc())) {
+  FileLineColLoc file;
+  for (Operation *current = operation; current && !file; current = current->getParentOp())
+    file = findFileLocation(current->getLoc());
+  if (file) {
     int64_t endLine = file.getLine();
     int64_t endColumn = file.getColumn();
     for (Operation *current = operation; current; current = current->getParentOp()) {

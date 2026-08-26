@@ -81,6 +81,45 @@ class Increment22CheckerTests(unittest.TestCase):
         )
         self.assertIn("NODAL-INC22-007", self.codes(root))
 
+    def test_rejects_invented_inventory_hierarchy(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Diagnostics/DiagnosticMapping.cpp"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "  context.semanticPath = path.str();\n  context.indexPath",
+                "  context.semanticPath = path.str();\n  context.hierarchyPath = path.str();\n  context.indexPath",
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC22-004", self.codes(root))
+
+    def test_rejects_missing_ancestor_source_lookup(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Diagnostics/DiagnosticMapping.cpp"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "current && !file",
+                "current && false",
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC22-004", self.codes(root))
+
+    def test_rejects_unsanitized_staged_input_path(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/scala/bridge/src/nodal/bridge/NativeDiagnosticMapper.scala"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "<bridge-input>",
+                "<temporary-input>",
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC22-006", self.codes(root))
+
     def test_rejects_premature_roadmap_closure(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)

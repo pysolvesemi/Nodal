@@ -183,11 +183,19 @@ def check_repository(root: Path) -> list[Problem]:
             "source-range=",
             "nodal-verify-cross-layer-diagnostics",
             "markAllAnalysesPreserved",
+            "current && !file",
         ) + REQUIRED_CODES[:15],
         problems,
         "NODAL-INC22-004",
         "native diagnostic mapper",
     )
+    if "context.hierarchyPath = path.str();" in native:
+        problems.append(
+            Problem(
+                "NODAL-INC22-004",
+                "inventory-only diagnostics invent hierarchy context from semantic paths",
+            )
+        )
     require(
         passes,
         (
@@ -207,6 +215,8 @@ def check_repository(root: Path) -> list[Problem]:
             "hierarchy-path",
             "index-path",
             "source-range",
+            "StagedInputPath",
+            "<bridge-input>",
         ),
         problems,
         "NODAL-INC22-006",

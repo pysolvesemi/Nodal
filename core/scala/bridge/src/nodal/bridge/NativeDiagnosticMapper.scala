@@ -7,6 +7,8 @@ private[nodal] object NativeDiagnosticMapper:
   private val BracketedIndexPath = raw"\[index-path=(\[[^\]]*\])\]".r
   private val PlainIndexPath = raw"\[index-path=([^\]]+)\]".r
   private val SourceRange = raw"\[source-range=([^\]]+)\]".r
+  private val StagedInputPath =
+    raw"""(?:[A-Za-z]:)?(?:[^\s:]*[/\\])*input\.mlir""".r
 
   def classify(standardError: String, exitCode: Int): BridgeDiagnostic =
     val normalized = standardError.replace("\r\n", "\n").replace('\r', '\n')
@@ -52,4 +54,5 @@ private[nodal] object NativeDiagnosticMapper:
     text.linesIterator
       .map(_.trim)
       .find(_.nonEmpty)
+      .map(line => StagedInputPath.replaceAllIn(line, "<bridge-input>"))
       .getOrElse(s"native compiler exited with status $exitCode")

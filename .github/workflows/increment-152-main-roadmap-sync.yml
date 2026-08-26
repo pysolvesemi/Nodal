@@ -1,0 +1,205 @@
+name: Synchronize Increment 152 into the controlling roadmap
+
+on:
+  push:
+    branches:
+      - increment/152-main-roadmap-synchronization
+    paths:
+      - .github/workflows/increment-152-main-roadmap-sync.yml
+
+permissions:
+  contents: write
+
+jobs:
+  synchronize-roadmap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Synchronize Foundation and verification indexes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          roadmap_path = Path("docs/roadmap/nodal-development-todo.md")
+          roadmap = roadmap_path.read_text()
+
+          if roadmap.count("**Revision:** 1.26") != 1:
+              raise SystemExit("unexpected controlling-roadmap revision")
+          roadmap = roadmap.replace("**Revision:** 1.26", "**Revision:** 1.27", 1)
+
+          old_intro = (
+              "Detailed rationale and dependent-track plans are in "
+              "[`dependent-productivity-and-verification-tracks-v0.1-plan.md`]"
+              "(dependent-productivity-and-verification-tracks-v0.1-plan.md). "
+              "Verification backend ownership is defined by [ADR 0023]"
+              "(../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md). "
+              "Foundation adds only the architecture/public seams needed to prevent later "
+              "FPGA/UVM/UVM-MS work from being blocked by core design limitations; "
+              "dependent-track implementations remain outside Foundation."
+          )
+          new_intro = (
+              "Detailed rationale and dependent-track plans are in "
+              "[`dependent-productivity-and-verification-tracks-v0.1-plan.md`]"
+              "(dependent-productivity-and-verification-tracks-v0.1-plan.md). "
+              "Verification backend ownership is defined by [ADR 0023]"
+              "(../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md), "
+              "and direct procedural HDL testbench projections are defined by [ADR 0025]"
+              "(../architecture/0025-generated-procedural-hdl-testbench-projections.md). "
+              "Foundation reserves only the architecture/public seams needed for future "
+              "native verification, procedural Verilog/Verilog-AMS testbench, UVM, and "
+              "UVM-MS work; dependent-track implementations remain outside Foundation."
+          )
+          if roadmap.count(old_intro) != 1:
+              raise SystemExit("Phase 10 introduction anchor mismatch")
+          roadmap = roadmap.replace(old_intro, new_intro, 1)
+
+          insertion_anchor = (
+              "  - Confine unavoidable vendor `ifdef`s to generated adapter/include units; "
+              "do not scatter them through common VIP logic.\n\n"
+              "## Foundation completion barrier"
+          )
+          foundation_152 = (
+              "  - Confine unavoidable vendor `ifdef`s to generated adapter/include units; "
+              "do not scatter them through common VIP logic.\n\n"
+              "- [x] **Foundation Increment 152 — Direct procedural HDL testbench projection architecture readiness**\n"
+              "  - Accept ADR 0025 and freeze a Procedural HDL Testbench IR lowering seam "
+              "beneath the canonical Verification Semantic IR; it is generated-language IR, "
+              "not a second authoring model.\n"
+              "  - Define portable Verilog-2005 and standards-oriented Verilog-AMS testbench "
+              "profiles, stable Interface/Register/test/check identities, source maps, "
+              "manifests, deterministic replay sidecars, normalized results, and artifact hashes.\n"
+              "  - Classify every selected Verification IR operation as embedded, precomputed "
+              "replay, companion-runtime-required, or unsupported; unsupported behavior must "
+              "fail generation rather than be silently omitted.\n"
+              "  - Make Icarus the required event-driven portable-Verilog reference, qualify "
+              "Verilator separately, and permit direct open-source Verilog-AMS execution only "
+              "after exact capability conformance.\n"
+              "  - Keep Foundation architecture-only: no testbench generator, simulator runner, "
+              "open AMS harness, UVM/UVM-MS generator, or verification library is implemented here.\n"
+              "  - Evidence: [ADR 0025](../architecture/0025-generated-procedural-hdl-testbench-projections.md), "
+              "[staging plan](generated-hdl-testbench-projections-v0.1-plan.md), "
+              "[PR #56](https://github.com/pysolvesemi/Nodal/pull/56), and "
+              "[closure PR #58](https://github.com/pysolvesemi/Nodal/pull/58).\n\n"
+              "## Foundation completion barrier"
+          )
+          if roadmap.count(insertion_anchor) != 1:
+              raise SystemExit("Foundation Increment 152 insertion anchor mismatch")
+          roadmap = roadmap.replace(insertion_anchor, foundation_152, 1)
+
+          old_barrier = (
+              "> **Blocked:** no FPGA Productivity, Digital Verification, or Analog/Mixed-Signal "
+              "Verification implementation increment may start until every Foundation increment "
+              "is complete, including any Foundation item appended after Increment 149 before "
+              "the barrier is released."
+          )
+          new_barrier = (
+              "> **Blocked:** no FPGA Productivity, Digital Verification, or Analog/Mixed-Signal "
+              "Verification implementation increment may start until every Foundation increment "
+              "is complete, including architecture-only Increments 150-152 recorded in companion "
+              "plans and any later Foundation item added before the barrier is released."
+          )
+          if roadmap.count(old_barrier) != 1:
+              raise SystemExit("Foundation barrier anchor mismatch")
+          roadmap = roadmap.replace(old_barrier, new_barrier, 1)
+
+          digital = '''## Digital Verification Track — blocked by Foundation; numbering restarts
+
+Nodal HVL is canonical. Native/open-source execution, generated procedural Verilog testbenches, and generated UVM are sibling projections of one Verification Semantic IR; no generated backend is the simulation foundation.
+
+- [ ] **Digital Verification Increment 1 — Nodal HVL native digital simulation vertical slice**
+- [ ] **Digital Verification Increment 2 — Scenarios, sequences, constrained stimulus, and replay**
+- [ ] **Digital Verification Increment 3 — Agents, drivers, monitors, scoreboards, and reference models**
+- [ ] **Digital Verification Increment 4 — Functional coverage and verification reporting**
+- [ ] **Digital Verification Increment 5 — Properties, protocol checks, and register-model verification**
+- [ ] **Digital Verification Increment 6 — Portable Verilog testbench generation**
+- [ ] **Digital Verification Increment 7 — Open-source Verilog testbench execution and qualification**
+- [ ] **Digital Verification Increment 8 — Verification SystemVerilog and digital UVM generation**
+- [ ] **Digital Verification Increment 9 — Commercial simulator profiles**
+- [ ] **Digital Verification Increment 10 — Native, Verilog-testbench, and UVM semantic parity**
+- [ ] **Digital Verification Increment 11 — Reusable digital VIP qualification**
+- [ ] **Digital Verification Increment 12 — Scale, performance, compatibility, and verification release gate**
+'''
+          roadmap, count = re.subn(
+              r"## Digital Verification Track — blocked by Foundation; numbering restarts\n.*?(?=\n## Analog/Mixed-Signal Verification Track — blocked by Foundation; numbering restarts)",
+              digital.rstrip(),
+              roadmap,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f"Digital compact roadmap replacement count: {count}")
+
+          ams = '''## Analog/Mixed-Signal Verification Track — blocked by Foundation; numbering restarts
+
+This track is separate from Digital Verification but reuses its target-neutral transaction/component concepts and Foundation AMS semantics. Native/open execution, generated open AMS harness or Verilog-AMS testbench, and UVM-MS are sibling projections; none replaces the canonical Nodal HVL environment.
+
+- [ ] **AMS Verification Increment 1 — Nodal HVL native mixed-signal simulation vertical slice**
+- [ ] **AMS Verification Increment 2 — Analog/mixed-signal agents, drivers, monitors, and scoreboards**
+- [ ] **AMS Verification Increment 3 — PVT, sweeps, stochastic stimulus, and deterministic replay**
+- [ ] **AMS Verification Increment 4 — Analog measurements and functional coverage**
+- [ ] **AMS Verification Increment 5 — Mixed-signal properties and register/control interaction**
+- [ ] **AMS Verification Increment 6 — Standards-oriented Verilog-AMS testbench generation**
+- [ ] **AMS Verification Increment 7 — Open-source AMS harness generation and capability-qualified execution**
+- [ ] **AMS Verification Increment 8 — UVM-MS generation from Verification IR**
+- [ ] **AMS Verification Increment 9 — Commercial mixed-signal simulator profiles**
+- [ ] **AMS Verification Increment 10 — Native, open-harness, Verilog-AMS-testbench, and UVM-MS semantic parity**
+- [ ] **AMS Verification Increment 11 — Reusable mixed-signal VIP qualification**
+- [ ] **AMS Verification Increment 12 — Scale, portability, and mixed-signal verification release gate**
+'''
+          roadmap, count = re.subn(
+              r"## Analog/Mixed-Signal Verification Track — blocked by Foundation; numbering restarts\n.*?(?=\n## Deferred reusable library roadmap)",
+              ams.rstrip(),
+              roadmap,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f"AMS compact roadmap replacement count: {count}")
+
+          roadmap_path.write_text(roadmap)
+
+          test_path = Path("tests/compiler/test_increment22.py")
+          test = test_path.read_text()
+          if "import re\n" not in test:
+              test = test.replace("import importlib.util\n", "import importlib.util\nimport re\n", 1)
+          old_test = '        text = text.replace("**Revision:** 1.26", "**Revision:** 1.25", 1)\n'
+          new_test = (
+              '        text, count = re.subn(\n'
+              '            r"^\\*\\*Revision:\\*\\* [0-9.]+$",\n'
+              '            "**Revision:** 1.25",\n'
+              '            text,\n'
+              '            count=1,\n'
+              '            flags=re.MULTILINE,\n'
+              '        )\n'
+              '        self.assertEqual(count, 1)\n'
+          )
+          if test.count(old_test) != 1:
+              raise SystemExit("Increment 22 revision-regression anchor mismatch")
+          test_path.write_text(test.replace(old_test, new_test, 1))
+
+          Path(".github/workflows/increment-152-main-roadmap-sync.yml").unlink()
+          PY
+      - name: Validate synchronized roadmap
+        run: |
+          set -euo pipefail
+          grep -q '^\*\*Revision:\*\* 1.27$' docs/roadmap/nodal-development-todo.md
+          test "$(grep -c '^\- \[x\] \*\*Foundation Increment 152 ' docs/roadmap/nodal-development-todo.md)" -eq 1
+          test "$(grep -c '^\- \[ \] \*\*Digital Verification Increment ' docs/roadmap/nodal-development-todo.md)" -eq 12
+          test "$(grep -c '^\- \[ \] \*\*AMS Verification Increment ' docs/roadmap/nodal-development-todo.md)" -eq 12
+          grep -q 'Digital Verification Increment 6 — Portable Verilog testbench generation' docs/roadmap/nodal-development-todo.md
+          grep -q 'AMS Verification Increment 7 — Open-source AMS harness generation' docs/roadmap/nodal-development-todo.md
+          grep -q 're.subn' tests/compiler/test_increment22.py
+          python3 -m unittest tests.compiler.test_increment22
+          test ! -e .github/workflows/increment-152-main-roadmap-sync.yml
+      - name: Commit synchronized roadmap
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/roadmap/nodal-development-todo.md tests/compiler/test_increment22.py .github/workflows/increment-152-main-roadmap-sync.yml
+          git diff --cached --check
+          git commit -m 'Increment 152 — synchronize controlling verification roadmap'
+          git push origin HEAD

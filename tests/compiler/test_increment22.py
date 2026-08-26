@@ -124,14 +124,14 @@ class Increment22CheckerTests(unittest.TestCase):
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
         roadmap = root / "docs/roadmap/nodal-development-todo.md"
-        roadmap.write_text(
-            roadmap.read_text(encoding="utf-8").replace(
-                "- [ ] **Increment 22 — Cross-layer diagnostic mapping**",
-                "- [x] **Increment 22 — Cross-layer diagnostic mapping**",
-                1,
-            ),
-            encoding="utf-8",
+        text = roadmap.read_text(encoding="utf-8")
+        text = text.replace("**Revision:** 1.26", "**Revision:** 1.25", 1)
+        text = text.replace(
+            "- [ ] **Increment 22 — Cross-layer diagnostic mapping**",
+            "- [x] **Increment 22 — Cross-layer diagnostic mapping**",
+            1,
         )
+        roadmap.write_text(text, encoding="utf-8")
         self.assertIn("NODAL-INC22-009", self.codes(root))
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Make Increment 22 successor compatibility depend on evidence, not roadmap revision."""
+"""Make Increment 22 successor compatibility depend on evidence, never global roadmap revision."""
 
 from __future__ import annotations
 

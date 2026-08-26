@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "increment": 22,
+  "status": "validated-cross-layer-diagnostics",
+  "public_api": "0.3",
+  "diagnostic_catalog": "core/compiler/diagnostics-v0.1.json",
+  "native_pass": "nodal-verify-cross-layer-diagnostics",
+  "context_fields": [
+    "semantic-path",
+    "hierarchy-path",
+    "index-path",
+    "source-range"
+  ],
+  "evidence": {
+    "pull_request": 53,
+    "dedicated_run": 32944621396,
+    "core_ci_run": 32944621448
+  }
+}

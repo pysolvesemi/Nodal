@@ -161,12 +161,17 @@ private[nodal] object NativeCompilerClient:
               )
             )
           else
-            result = Some(
-              NativeCompilerFailure(
+            val mapped = NativeDiagnosticMapper.classify(standardError, exitCode)
+            val diagnostic =
+              if mapped.code == "NODAL-DIAGNOSTIC-EXTERNAL-001" then
                 BridgeDiagnostic(
                   "NODAL-BRIDGE-PROCESS-007",
                   s"native compiler exited with status $exitCode"
-                ),
+                )
+              else mapped
+            result = Some(
+              NativeCompilerFailure(
+                diagnostic,
                 command,
                 standardOutput,
                 standardError,

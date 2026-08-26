@@ -1,0 +1,178 @@
+name: Increment 22 Cross-Layer Diagnostics
+
+on:
+  push:
+    branches:
+      - increment/22-cross-layer-diagnostic-mapping
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-22-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cross-layer-diagnostics:
+    name: increment-22/cross-layer-diagnostics
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore locked native and Scala caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/nodal/downloads
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-inc22-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', 'toolchains/lock.json', 'toolchains/checksums/*.sha256', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-inc22-${{ runner.os }}-
+            nodal-scala-${{ runner.os }}-
+
+      - name: Install locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate contracts and diagnostic catalog
+        run: |
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 scripts/check_increment21.py
+          python3 scripts/check_increment22.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          git diff --check
+
+      - name: Build, lint, and test Scala and native core
+        env:
+          NODAL_NODALC: ${{ github.workspace }}/out/native/release/bin/nodalc
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal core scala
+
+      # Explicit fixture inventory for structural contracts:
+      # core/compiler/test/IR/diagnostic-mapping-inventory-invalid.mlir
+      # core/compiler/test/IR/diagnostic-mapping-operation-invalid.mlir
+      - name: Prove mapped Interface inout and AMS diagnostics
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import re
+          import subprocess
+          import tempfile
+          from pathlib import Path
+
+          compiler = Path("out/native/release/bin/nodalc").resolve()
+          pipeline = "builtin.module(nodal-verify-cross-layer-diagnostics)"
+          matrices = (
+              (
+                  Path("core/compiler/test/IR/diagnostic-mapping-inventory-invalid.mlir"),
+                  (
+                      ("NODAL-INTERFACE-ROLE-002", "[semantic-path=Top.link]", "[source-range=src/Top.scala:12:7-12:24]"),
+                      ("NODAL-INTERFACE-MONITOR-001",),
+                      ("NODAL-INTERFACE-INVERSION-001",),
+                      ("NODAL-DRIVER-MULTIPLE-001",),
+                      ("NODAL-INOUT-HIERARCHY-001",),
+                      ("NODAL-AMS-DISCIPLINE-001",),
+                      ("NODAL-AMS-ACCESS-001",),
+                      ("NODAL-AMS-BRIDGE-001",),
+                  ),
+              ),
+              (
+                  Path("core/compiler/test/IR/diagnostic-mapping-operation-invalid.mlir"),
+                  (
+                      ("NODAL-INTERFACE-STORAGE-001",),
+                      ("NODAL-INTERFACE-LAYOUT-001",),
+                      ("NODAL-INOUT-RESOLUTION-001",),
+                      ("NODAL-INOUT-OPEN-DRAIN-001", "[hierarchy-path=Top]", "[source-range=src/Top.scala:70:5-70:30]"),
+                  ),
+              ),
+          )
+
+          with tempfile.TemporaryDirectory(prefix="nodal-inc22-diagnostics-") as directory:
+              root = Path(directory)
+              for fixture, expected_sections in matrices:
+                  sections = [
+                      section.strip() + "\n"
+                      for section in re.split(
+                          r"(?m)^// -----\s*$",
+                          fixture.read_text(encoding="utf-8"),
+                      )
+                      if section.strip()
+                  ]
+                  if len(sections) != len(expected_sections):
+                      raise SystemExit(
+                          f"{fixture}: found {len(sections)} sections; "
+                          f"expected {len(expected_sections)}"
+                      )
+                  for index, (section, required) in enumerate(
+                      zip(sections, expected_sections, strict=True)
+                  ):
+                      path = root / f"{fixture.stem}-{index:02d}.mlir"
+                      path.write_text(section, encoding="utf-8")
+                      completed = subprocess.run(
+                          [
+                              str(compiler),
+                              f"--pass-pipeline={pipeline}",
+                              str(path),
+                          ],
+                          text=True,
+                          capture_output=True,
+                          check=False,
+                      )
+                      combined = completed.stdout + completed.stderr
+                      if completed.returncode == 0:
+                          raise SystemExit(
+                              f"{fixture.name} section {index}: invalid input was accepted"
+                          )
+                      missing = [fragment for fragment in required if fragment not in combined]
+                      if missing:
+                          print(combined)
+                          raise SystemExit(
+                              f"{fixture.name} section {index}: missing {missing}"
+                          )
+                      if (
+                          required[0] == "NODAL-INTERFACE-ROLE-002"
+                          and "[hierarchy-path=" in combined
+                      ):
+                          print(combined)
+                          raise SystemExit(
+                              "inventory-only diagnostics must not invent hierarchy context"
+                          )
+                      print(f"verified {fixture.name} section {index}: {required[0]}")
+          PY
+
+      - name: Prove Increment 21 gate integration remains accepted
+        run: |
+          compiler=out/native/release/bin/nodalc
+          "${compiler}" \
+            '--pass-pipeline=builtin.module(nodal-gate-default)' \
+            core/compiler/test/IR/semantic-pipeline-valid.mlir \
+            | tee /tmp/increment22-valid.mlir
+          grep -F 'nodal.pipeline.normalized' /tmp/increment22-valid.mlir
+          git diff --check

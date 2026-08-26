@@ -2,6 +2,7 @@
 #include "circt/Support/Version.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
+#include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Support/Version.h"
 #include "nodal/Transforms/Passes.h"
@@ -15,6 +16,7 @@ int main(int argc, char **argv) {
 
   mlir::DialectRegistry registry;
   registry.insert<circt::hw::HWDialect, nodal::NodalDialect>();
+  nodal::registerNodalDiagnosticPasses();
   nodal::registerNodalPasses();
 
   llvm::cl::AddExtraVersionPrinter([](llvm::raw_ostream &os) {

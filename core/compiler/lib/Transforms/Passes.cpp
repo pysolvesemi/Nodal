@@ -7,6 +7,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Support/LogicalResult.h"
+#include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 
@@ -60,8 +61,7 @@ struct InventoryAnalysis {
 };
 
 LogicalResult emitFailure(Operation *operation, llvm::StringRef code, const llvm::Twine &message) {
-  operation->emitError() << code << ": " << message;
-  return failure();
+  return emitMappedFailure(operation, code, message);
 }
 
 bool isNamed(Operation *operation, llvm::StringRef name) {
@@ -976,6 +976,7 @@ void addVerifierPasses(OpPassManager &manager, GateProfile profile) {
     manager.addPass(std::make_unique<VerifyEffectsPass>());
     manager.addPass(std::make_unique<VerifyAnalogPass>());
   }
+  manager.addPass(createCrossLayerDiagnosticPass());
   manager.addPass(std::make_unique<VerifyCapabilitiesPass>());
 }
 

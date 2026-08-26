@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "version": "0.1",
+  "public_api": "0.3-unchanged",
+  "context_fields": ["semantic-path", "hierarchy-path", "index-path", "source-range"],
+  "families": {
+    "interface": [
+      "NODAL-INTERFACE-STORAGE-001",
+      "NODAL-INTERFACE-ROLE-001",
+      "NODAL-INTERFACE-ROLE-002",
+      "NODAL-INTERFACE-MEMBER-001",
+      "NODAL-INTERFACE-MONITOR-001",
+      "NODAL-INTERFACE-INVERSION-001",
+      "NODAL-INTERFACE-LAYOUT-001"
+    ],
+    "driver-and-inout": [
+      "NODAL-DRIVER-MULTIPLE-001",
+      "NODAL-INOUT-OPEN-DRAIN-001",
+      "NODAL-INOUT-OPEN-SOURCE-001",
+      "NODAL-INOUT-RESOLUTION-001",
+      "NODAL-INOUT-HIERARCHY-001"
+    ],
+    "analog-and-mixed-signal": [
+      "NODAL-AMS-DISCIPLINE-001",
+      "NODAL-AMS-ACCESS-001",
+      "NODAL-AMS-BRIDGE-001"
+    ],
+    "cross-layer-fallback": [
+      "NODAL-DIAGNOSTIC-PARSER-001",
+      "NODAL-DIAGNOSTIC-VERIFIER-001",
+      "NODAL-DIAGNOSTIC-PASS-001",
+      "NODAL-DIAGNOSTIC-BACKEND-001",
+      "NODAL-DIAGNOSTIC-EXTERNAL-001"
+    ]
+  },
+  "preserved_prefixes": [
+    "NODAL-BRIDGE-",
+    "NODAL-BRIDGE-PROCESS-",
+    "NODAL-CONSTRUCT-",
+    "NODAL-VERIFY-",
+    "NODAL-PIPELINE-TRANSACTION-"
+  ]
+}

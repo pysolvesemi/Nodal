@@ -18,7 +18,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: agent/generated-verilog-family-testbench-roadmap
-          fetch-depth: 2
+          fetch-depth: 4
 
       - name: Recover and run the staged editor
         shell: bash
@@ -30,7 +30,8 @@ jobs:
 
           workflow = ".github/workflows/generated-testbench-roadmap-edit.yml"
           previous = subprocess.check_output(
-              ["git", "show", f"HEAD^:{workflow}"], text=True
+              ["git", "show", f"b072f1b800308de19e1f6be474a8e13ffd67454b:{workflow}"],
+              text=True,
           )
           marker = "          python3 - <<'PY'\n"
           start = previous.index(marker) + len(marker)
@@ -42,6 +43,18 @@ jobs:
           Path("/tmp/apply_generated_testbench_roadmap.py").write_text(code)
           PY
           python3 /tmp/apply_generated_testbench_roadmap.py
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md")
+          text = path.read_text()
+          old = ")  \n**Feasibility boundary:**"
+          new = ")\n\n**Feasibility boundary:**"
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one metadata line-break marker, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1))
+          PY
 
           if [[ -f scripts/check_architecture.py ]]; then
             python3 scripts/check_architecture.py

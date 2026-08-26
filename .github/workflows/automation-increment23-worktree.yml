@@ -1,0 +1,153 @@
+name: Automation Increment 23 Worktree Validation
+
+on:
+  push:
+    branches:
+      - automation/increment23-materialize
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: automation-increment23-worktree
+  cancel-in-progress: true
+
+jobs:
+  implement:
+    name: increment-23/worktree-validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/increment23-materialize
+          path: automation
+
+      - name: Check out Increment 23 worktree
+        uses: actions/checkout@v6
+        with:
+          ref: increment/23-backend-framework-capability-profiles
+          fetch-depth: 0
+          path: worktree
+
+      - name: Materialize implementation
+        run: |
+          cat automation/scripts/increment23-materializer/part*.b64 \
+            | tr -d '\n' \
+            | base64 -d \
+            > worktree/scripts/automation_materialize_increment23.py
+          test "$(sha256sum worktree/scripts/automation_materialize_increment23.py | awk '{print $1}')" \
+            = "a24ad49cc248df7190fd392bcebb4682a6d9342da5bc3fcdfb7655c1f2e5d351"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("worktree/scripts/automation_materialize_increment23.py")
+          lines = path.read_text(encoding="utf-8").splitlines()
+          for index in range(50, 93):
+              lines[index] = lines[index].replace("\\\\n", "\\n")
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+          cd worktree
+          PYTHONDONTWRITEBYTECODE=1 \
+            python3 scripts/automation_materialize_increment23.py
+          rm scripts/automation_materialize_increment23.py
+          cd ..
+          python3 automation/scripts/patch_increment23_checker.py worktree
+
+      - name: Install locked toolchains
+        working-directory: worktree
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          "${RUNNER_TEMP}/nodal-lint-toolchain/bin/clang-format" -i \
+            core/compiler/include/nodal/Backend/Backend.h \
+            core/compiler/lib/Backend/Backend.cpp \
+            core/compiler/tools/nodal-translate/nodal-translate.cpp \
+            core/compiler/test/Unit/BackendTest.cpp
+
+      - name: Validate repository contracts
+        working-directory: worktree
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          for increment in 18 19 20 21 22 23; do
+            python3 "scripts/check_increment${increment}.py"
+          done
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          python3 scripts/check_formatting_baseline.py
+          python3 scripts/check_markdown.py
+          python3 scripts/check_package_visibility.py
+          git diff --check
+
+      - name: Build and test native and Scala core
+        working-directory: worktree
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          NODAL_NODALC="${PWD}/out/native/release/bin/nodalc" \
+            ./nodal core scala
+          git diff --check
+
+      - name: Prove translations and failure atomicity
+        working-directory: worktree
+        run: |
+          set -euo pipefail
+          translator="${PWD}/out/native/release/bin/nodal-translate"
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "${scratch}"' EXIT
+
+          "${translator}" --help | tee "${scratch}/help.txt"
+          grep -F 'nodal-to-verilog-a' "${scratch}/help.txt"
+          grep -F 'nodal-to-verilog-ams' "${scratch}/help.txt"
+
+          "${translator}" --nodal-to-verilog-a \
+            core/compiler/test/IR/backend-minimal-analog.mlir \
+            > "${scratch}/analog-1.va"
+          "${translator}" --nodal-to-verilog-a \
+            core/compiler/test/IR/backend-minimal-analog.mlir \
+            > "${scratch}/analog-2.va"
+          cmp "${scratch}/analog-1.va" "${scratch}/analog-2.va"
+          diff -u tests/compiler/fixtures/increment23/golden/minimal-analog.va \
+            "${scratch}/analog-1.va"
+
+          "${translator}" --nodal-to-verilog-ams \
+            core/compiler/test/IR/backend-minimal-ams.mlir \
+            > "${scratch}/mixed.vams"
+          diff -u tests/compiler/fixtures/increment23/golden/minimal-ams.vams \
+            "${scratch}/mixed.vams"
+
+          if "${translator}" --nodal-to-verilog-a \
+            core/compiler/test/IR/backend-invalid-config.mlir \
+            > "${scratch}/invalid.va" 2> "${scratch}/invalid.err"; then
+            exit 1
+          fi
+          test ! -s "${scratch}/invalid.va"
+          grep -F 'NODAL-BACKEND-CONFIG-002' "${scratch}/invalid.err"
+
+          if "${translator}" --nodal-to-verilog-a \
+            core/compiler/test/IR/backend-unsupported-verilog-a.mlir \
+            > "${scratch}/unsupported.va" 2> "${scratch}/unsupported.err"; then
+            exit 1
+          fi
+          test ! -s "${scratch}/unsupported.va"
+          grep -F 'NODAL-BACKEND-CAPABILITY-001' "${scratch}/unsupported.err"
+
+      - name: Publish validated implementation
+        working-directory: worktree
+        run: |
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          git config user.name 'github-actions[bot]'
+          git config user.email \
+            '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 23 — implement backend framework and capability profiles'
+          git push origin HEAD:increment/23-backend-framework-capability-profiles

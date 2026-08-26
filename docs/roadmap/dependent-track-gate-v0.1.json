@@ -65,6 +65,7 @@
     "vendor_variation_policy": "thin-adapter-profile",
     "projection_adr": "docs/architecture/0025-generated-procedural-testbench-projections.md",
     "native_simulation_depends_on_generated_testbench": false,
+    "verification_systemverilog_ir_readiness_reserved_in_foundation": true,
     "artifact_generation_and_execution_are_separate_gates": true,
     "digital_open_source_profile": "icarus-conformance-with-capability-checked-verilator-fast-profile",
     "verilog_ams_open_source_profile": "bounded-version-pinned-conformance-only-no-full-language-claim",

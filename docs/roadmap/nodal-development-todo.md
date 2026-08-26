@@ -1412,6 +1412,7 @@ Detailed rationale and dependent-track plans are in [`dependent-productivity-and
 
 - [ ] **Foundation Increment 149 — UVM/UVM-MS projection and vendor-profile architecture readiness**
   - Apply ADRs 0023 and 0025 and freeze Verification Semantic IR -> UVM/UVM-MS projections as siblings of native execution and procedural Verilog/Verilog-AMS testbench projections.
+  - Freeze Verification SystemVerilog IR readiness for packages/classes, interfaces, typed class/struct containers, concurrency/process control, constrained-random hooks, functional coverage, DPI/VPI boundaries, source maps, and capability diagnostics required by UVM/UVM-MS generation.
   - Define mappings for tests/envs/agents/drivers/monitors/sequencers/sequences/items/scoreboards/TLM/analysis/factory/config/phases/objections/coverage/reporting and generated UVM RAL integration.
   - Define UVM-MS structural/class bridge identities, mixed-signal endpoints, analog stimulus/monitor/measurement contracts, and capability mapping to Foundation AMS semantics.
   - Define vendor-neutral common source plus thin simulator profiles. Any required `ifdef` is confined to generated vendor adapter/include units, not common VIP/test logic.

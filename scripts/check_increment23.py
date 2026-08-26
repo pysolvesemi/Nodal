@@ -594,6 +594,28 @@ def check_repository(root: Path) -> list[Problem]:
         )
 
 
+    for fragment in (
+        "kVerilogReservedIdentifiers",
+        '"input"',
+        "Attribute raw = module->getAttr(attribute)",
+        "countModuleDeclarations",
+        "countExactLines",
+    ):
+        if fragment not in backend:
+            problems.append(
+                Problem(
+                    "NODAL-INC23-004",
+                    f"backend target parser lacks review contract: {fragment}",
+                )
+            )
+    if "countOccurrences" in backend:
+        problems.append(
+            Problem(
+                "NODAL-INC23-004",
+                "backend target verification uses substring occurrence counting",
+            )
+        )
+
     if "  output << candidate;\n  return success();" not in backend:
         problems.append(
             Problem(

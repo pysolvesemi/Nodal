@@ -56,6 +56,14 @@ manifest and roadmap checkbox together. A global roadmap revision may advance
 for planning-only changes and therefore never proves that a compiler increment
 has completed.
 
+## Target parser edge contracts
+
+Portable module identifiers exclude Verilog-family and AMS reserved words. Target
+verification counts complete module declaration and `endmodule` lines rather
+than substrings, so legal names such as `myendmoduleBlock` remain valid. Every
+profile-owned module attribute is type-checked before defaults are considered;
+a present non-string attribute is malformed configuration, not an absent value.
+
 ## Validation
 
 The native unit test exercises the direct API and injected rejecting hooks.

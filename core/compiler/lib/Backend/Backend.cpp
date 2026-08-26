@@ -60,6 +60,35 @@ llvm::StringRef symbolName(Operation *operation) {
   return {};
 }
 
+constexpr llvm::StringLiteral kVerilogReservedIdentifiers[] = {
+    "always",     "analog",       "and",         "assign",      "automatic",
+    "begin",      "branch",       "buf",         "bufif0",      "bufif1",
+    "case",       "casex",        "casez",       "cell",        "cmos",
+    "config",     "deassign",     "default",     "defparam",    "design",
+    "disable",    "discipline",   "edge",        "else",        "end",
+    "endcase",    "endconfig",    "endfunction", "endgenerate", "endmodule",
+    "endnature",  "endprimitive", "endspecify",  "endtable",    "endtask",
+    "event",      "flow",         "for",         "force",       "forever",
+    "fork",       "function",     "generate",    "genvar",      "ground",
+    "highz0",     "highz1",       "if",          "ifnone",      "incdir",
+    "include",    "initial",      "inout",       "input",       "instance",
+    "integer",    "join",         "large",       "liblist",     "library",
+    "localparam", "macromodule",  "medium",      "module",      "nand",
+    "nature",     "negedge",      "nmos",        "nor",         "noshowcancelled",
+    "not",        "notif0",       "notif1",      "or",          "output",
+    "parameter",  "pmos",         "posedge",     "potential",   "primitive",
+    "pull0",      "pull1",        "pulldown",    "pullup",      "rcmos",
+    "real",       "realtime",     "reg",         "release",     "repeat",
+    "rnmos",      "rpmos",        "rtran",       "rtranif0",    "rtranif1",
+    "scalared",   "signed",       "small",       "specify",     "specparam",
+    "strong0",    "strong1",      "supply0",     "supply1",     "table",
+    "task",       "time",         "tran",        "tranif0",     "tranif1",
+    "tri",        "tri0",         "tri1",        "triand",      "trior",
+    "trireg",     "unsigned",     "use",         "vectored",    "wait",
+    "wand",       "weak0",        "weak1",       "while",       "wire",
+    "wor",        "xnor",         "xor",
+};
+
 bool isIdentifier(llvm::StringRef value) {
   if (value.empty() || !(llvm::isAlpha(value.front()) || value.front() == '_'))
     return false;
@@ -67,13 +96,19 @@ bool isIdentifier(llvm::StringRef value) {
     if (!(llvm::isAlnum(character) || character == '_' || character == '$'))
       return false;
   }
-  return true;
+  return !llvm::is_contained(kVerilogReservedIdentifiers, value);
 }
 
 FailureOr<GateProfile> parseCheckProfile(ModuleOp module, GateProfile defaultProfile) {
-  auto value = module->getAttrOfType<StringAttr>("nodal.backend.check_profile");
-  if (!value)
+  Attribute raw = module->getAttr("nodal.backend.check_profile");
+  if (!raw)
     return defaultProfile;
+  auto value = llvm::dyn_cast<StringAttr>(raw);
+  if (!value) {
+    (void)emitMappedFailure(module.getOperation(), "NODAL-BACKEND-CONFIG-001",
+                            "CheckProfile must be a string attribute");
+    return failure();
+  }
   if (value.getValue() == "fast")
     return GateProfile::Fast;
   if (value.getValue() == "default")
@@ -87,8 +122,14 @@ FailureOr<GateProfile> parseCheckProfile(ModuleOp module, GateProfile defaultPro
 
 LogicalResult requireOwnedSetting(ModuleOp module, llvm::StringRef attribute,
                                   llvm::StringRef expected, llvm::StringRef label) {
-  auto value = module->getAttrOfType<StringAttr>(attribute);
-  if (!value || value.getValue() == expected)
+  Attribute raw = module->getAttr(attribute);
+  if (!raw)
+    return success();
+  auto value = llvm::dyn_cast<StringAttr>(raw);
+  if (!value)
+    return emitMappedFailure(module.getOperation(), "NODAL-BACKEND-CONFIG-002",
+                             llvm::Twine(label) + " must be a string attribute");
+  if (value.getValue() == expected)
     return success();
   return emitMappedFailure(module.getOperation(), "NODAL-BACKEND-CONFIG-002",
                            llvm::Twine(label) +
@@ -98,8 +139,13 @@ LogicalResult requireOwnedSetting(ModuleOp module, llvm::StringRef attribute,
 
 LogicalResult verifyDesignKind(ModuleOp module, const BackendProfile &profile) {
   llvm::StringRef kind = "target_neutral";
-  if (auto value = module->getAttrOfType<StringAttr>("nodal.target.profile"))
+  if (Attribute raw = module->getAttr("nodal.target.profile")) {
+    auto value = llvm::dyn_cast<StringAttr>(raw);
+    if (!value)
+      return emitMappedFailure(module.getOperation(), "NODAL-BACKEND-PROFILE-001",
+                               "design kind must be a string attribute");
     kind = value.getValue();
+  }
 
   if (kind == "analog" && profile.supportsAnalog)
     return success();
@@ -162,16 +208,19 @@ void renderCandidate(llvm::ArrayRef<Operation *> definitions,
   }
 }
 
-size_t countOccurrences(llvm::StringRef text, llvm::StringRef needle) {
-  size_t count = 0;
-  size_t offset = 0;
-  while (true) {
-    size_t found = text.find(needle, offset);
-    if (found == llvm::StringRef::npos)
-      return count;
-    ++count;
-    offset = found + needle.size();
-  }
+size_t countModuleDeclarations(llvm::StringRef text) {
+  llvm::SmallVector<llvm::StringRef, 32> lines;
+  text.split(lines, '\n', -1, true);
+  return llvm::count_if(lines, [](llvm::StringRef line) {
+    line = line.trim();
+    return line.starts_with("module ") && line.ends_with(";");
+  });
+}
+
+size_t countExactLines(llvm::StringRef text, llvm::StringRef expected) {
+  llvm::SmallVector<llvm::StringRef, 32> lines;
+  text.split(lines, '\n', -1, true);
+  return llvm::count_if(lines, [&](llvm::StringRef line) { return line.trim() == expected; });
 }
 
 class BuiltinTargetVerificationHooks final : public TargetVerificationHooks {
@@ -187,7 +236,7 @@ public:
         (llvm::Twine(" * profile: ") + configuration.profile->id + "\n").str();
     if (!candidate.contains(expectedProfile))
       return failure();
-    if (countOccurrences(candidate, "module ") != countOccurrences(candidate, "endmodule"))
+    if (countModuleDeclarations(candidate) != countExactLines(candidate, "endmodule"))
       return failure();
     return success();
   }
@@ -282,7 +331,13 @@ llvm::StringRef stringifyNamingPolicy(NamingPolicy policy) {
 FailureOr<BackendConfiguration> resolveBackendConfiguration(ModuleOp module, BackendKind kind) {
   const BackendProfile &profile = getBackendProfile(kind);
 
-  if (auto selected = module->getAttrOfType<StringAttr>("nodal.backend.profile")) {
+  if (Attribute raw = module->getAttr("nodal.backend.profile")) {
+    auto selected = llvm::dyn_cast<StringAttr>(raw);
+    if (!selected) {
+      (void)emitMappedFailure(module.getOperation(), "NODAL-BACKEND-PROFILE-002",
+                              "backend profile must be a string attribute");
+      return failure();
+    }
     if (selected.getValue() != profile.id) {
       (void)emitMappedFailure(module.getOperation(), "NODAL-BACKEND-PROFILE-002",
                               llvm::Twine("translation '") + profile.translation +

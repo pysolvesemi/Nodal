@@ -91,6 +91,40 @@ class Increment23CheckerTests(unittest.TestCase):
         )
         self.assertIn("NODAL-INC23-004", self.codes(root))
 
+    def test_rejects_missing_reserved_keyword_check(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Backend/Backend.cpp"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace('    "input",', '    "input_removed",', 1),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC23-004", self.codes(root))
+
+    def test_rejects_substring_terminator_counting(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Backend/Backend.cpp"
+        path.write_text(
+            path.read_text(encoding="utf-8") + "\n// countOccurrences\n",
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC23-004", self.codes(root))
+
+    def test_rejects_untyped_profile_owned_setting(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Backend/Backend.cpp"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "Attribute raw = module->getAttr(attribute)",
+                "auto raw = module->getAttrOfType<StringAttr>(attribute)",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC23-004", self.codes(root))
+
     def test_rejects_missing_backend_diagnostic(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)

@@ -30,6 +30,40 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kReservedModule = R"mlir(
+module attributes {
+  nodal.backend.profile = "verilog-a",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "input"}> ({
+  ^bb0:
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kEndmoduleSubstringModule = R"mlir(
+module attributes {
+  nodal.backend.profile = "verilog-a",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "myendmoduleBlock"}> ({
+  ^bb0:
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kMalformedLayout = R"mlir(
+module attributes {
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = 1 : i64,
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "Top"}> ({
+  ^bb0:
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kUnsupportedModule = R"mlir(
 module attributes {
   nodal.backend.profile = "verilog-a",
@@ -111,6 +145,40 @@ int main() {
   const size_t zeta = first.find("module Zeta;");
   if (alpha == std::string::npos || zeta == std::string::npos || alpha >= zeta)
     return fail("module output is not sorted by semantic name");
+
+  auto reserved = parse(context, kReservedModule);
+  if (!reserved)
+    return fail("could not parse the reserved-keyword fixture");
+  std::string reservedOutput = "sentinel";
+  llvm::raw_string_ostream reservedStream(reservedOutput);
+  if (mlir::succeeded(nodal::emitBackend(*reserved, nodal::BackendKind::VerilogA, reservedStream)))
+    return fail("reserved Verilog module name was accepted");
+  reservedStream.flush();
+  if (reservedOutput != "sentinel")
+    return fail("reserved-name failure published partial output");
+
+  auto substring = parse(context, kEndmoduleSubstringModule);
+  if (!substring)
+    return fail("could not parse the endmodule-substring fixture");
+  std::string substringOutput;
+  llvm::raw_string_ostream substringStream(substringOutput);
+  if (mlir::failed(nodal::emitBackend(*substring, nodal::BackendKind::VerilogA, substringStream)))
+    return fail("valid identifier containing endmodule was rejected");
+  substringStream.flush();
+  if (substringOutput.find("module myendmoduleBlock;") == std::string::npos)
+    return fail("endmodule-substring module was not emitted");
+
+  auto malformed = parse(context, kMalformedLayout);
+  if (!malformed)
+    return fail("could not parse the malformed-layout fixture");
+  std::string malformedOutput = "sentinel";
+  llvm::raw_string_ostream malformedStream(malformedOutput);
+  if (mlir::succeeded(
+          nodal::emitBackend(*malformed, nodal::BackendKind::VerilogA, malformedStream)))
+    return fail("non-string profile-owned layout was accepted");
+  malformedStream.flush();
+  if (malformedOutput != "sentinel")
+    return fail("malformed profile setting published partial output");
 
   auto unsupported = parse(context, kUnsupportedModule);
   if (!unsupported)

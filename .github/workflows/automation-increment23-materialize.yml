@@ -1,0 +1,167 @@
+name: Automation Increment 23 Materialize
+
+on:
+  push:
+    branches:
+      - automation/increment23-materialize
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: automation-increment23-materialize
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    name: increment-23/materialize-and-validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/increment23-materialize
+          path: automation
+
+      - name: Check out Increment 23 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/23-backend-framework-capability-profiles
+          fetch-depth: 0
+          path: target
+
+      - name: Reconstruct and apply Increment 23 materializer
+        run: |
+          cat automation/scripts/increment23-materializer/part*.b64 \
+            | tr -d '\n' \
+            | base64 -d \
+            > target/scripts/automation_materialize_increment23.py
+          test "$(sha256sum target/scripts/automation_materialize_increment23.py | awk '{print $1}')" \
+            = "a24ad49cc248df7190fd392bcebb4682a6d9342da5bc3fcdfb7655c1f2e5d351"
+          cd target
+          PYTHONDONTWRITEBYTECODE=1 \
+            python3 scripts/automation_materialize_increment23.py
+          rm scripts/automation_materialize_increment23.py
+
+      - name: Restore locked native and Scala caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/nodal/downloads
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-inc23-${{ runner.os }}-${{ hashFiles('target/build.mill', 'target/.mill-version', 'target/mill', 'target/toolchains/lock.json', 'target/toolchains/checksums/*.sha256', 'target/toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-inc23-${{ runner.os }}-
+            nodal-inc22-${{ runner.os }}-
+            nodal-scala-${{ runner.os }}-
+
+      - name: Install locked toolchains and format native sources
+        working-directory: target
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          "${RUNNER_TEMP}/nodal-lint-toolchain/bin/clang-format" -i \
+            core/compiler/include/nodal/Backend/Backend.h \
+            core/compiler/lib/Backend/Backend.cpp \
+            core/compiler/tools/nodal-translate/nodal-translate.cpp \
+            core/compiler/test/Unit/BackendTest.cpp
+
+      - name: Validate contracts and mutation tests
+        working-directory: target
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 scripts/check_increment21.py
+          python3 scripts/check_increment22.py
+          python3 scripts/check_increment23.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          python3 scripts/check_formatting_baseline.py
+          python3 scripts/check_markdown.py
+          python3 scripts/check_package_visibility.py
+          git diff --check
+
+      - name: Build lint and test native and Scala core
+        working-directory: target
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          NODAL_NODALC="${PWD}/out/native/release/bin/nodalc" \
+            ./nodal core scala
+          git diff --check
+
+      - name: Prove exact deterministic backend artifacts
+        working-directory: target
+        run: |
+          set -euo pipefail
+          translator="${PWD}/out/native/release/bin/nodal-translate"
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "${scratch}"' EXIT
+
+          "${translator}" \
+            --nodal-to-verilog-a \
+            core/compiler/test/IR/backend-minimal-analog.mlir \
+            > "${scratch}/analog-1.va"
+          "${translator}" \
+            --nodal-to-verilog-a \
+            core/compiler/test/IR/backend-minimal-analog.mlir \
+            > "${scratch}/analog-2.va"
+          cmp "${scratch}/analog-1.va" "${scratch}/analog-2.va"
+          diff -u \
+            tests/compiler/fixtures/increment23/golden/minimal-analog.va \
+            "${scratch}/analog-1.va"
+
+          "${translator}" \
+            --nodal-to-verilog-ams \
+            core/compiler/test/IR/backend-minimal-ams.mlir \
+            > "${scratch}/mixed.vams"
+          diff -u \
+            tests/compiler/fixtures/increment23/golden/minimal-ams.vams \
+            "${scratch}/mixed.vams"
+
+          if "${translator}" \
+            --nodal-to-verilog-a \
+            core/compiler/test/IR/backend-invalid-config.mlir \
+            > "${scratch}/invalid.va" \
+            2> "${scratch}/invalid.err"; then
+            echo "invalid backend configuration was accepted" >&2
+            exit 1
+          fi
+          test ! -s "${scratch}/invalid.va"
+          grep -F 'NODAL-BACKEND-CONFIG-002' "${scratch}/invalid.err"
+
+          if "${translator}" \
+            --nodal-to-verilog-a \
+            core/compiler/test/IR/backend-unsupported-verilog-a.mlir \
+            > "${scratch}/unsupported.va" \
+            2> "${scratch}/unsupported.err"; then
+            echo "unsupported backend operation was accepted" >&2
+            exit 1
+          fi
+          test ! -s "${scratch}/unsupported.va"
+          grep -F 'NODAL-BACKEND-CAPABILITY-001' "${scratch}/unsupported.err"
+
+      - name: Publish validated implementation
+        working-directory: target
+        run: |
+          rm -f .github/workflows/increment-23-backend-framework.yml
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          git status --short
+          git config user.name 'github-actions[bot]'
+          git config user.email \
+            '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 23 — implement backend framework and capability profiles'
+          git push origin HEAD:increment/23-backend-framework-capability-profiles

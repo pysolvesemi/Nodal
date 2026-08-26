@@ -39,8 +39,16 @@ The complete machine-readable inventory is
 `NativeDiagnosticMapper` preserves a native `NODAL-*` code and parses mapped
 semantic, hierarchy, index, and source-range suffixes. Uncoded native failures
 receive parser, verifier, pass, backend, or external-tool fallback families.
-The Increment 20 generic nonzero-process contract remains unchanged for an
-unclassified external process failure.
+Temporary bridge staging paths are normalized before fallback diagnostics are
+published. The Increment 20 generic nonzero-process contract remains unchanged
+for an unclassified external process failure.
+
+## Predecessor compatibility
+
+The Increment 21 structural checker remains binding at roadmap revision 1.25,
+where Increment 22 must be unchecked. At revision 1.26 and later it requires the
+completed Increment 22 state instead, so historical validation remains strict
+without rejecting valid successor revisions.
 
 ## Deferred boundary
 

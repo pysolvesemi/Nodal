@@ -1,19 +1,22 @@
 {
   "schema": 1,
   "status": "active",
-  "roadmap_revision": "1.19",
+  "roadmap_revision": "1.26",
+  "verification_plan_revision": "0.2",
   "foundation_track": {
     "roadmap": "docs/roadmap/nodal-development-todo.md",
     "completion_rule": "all-foundation-checkboxes-complete",
     "architecture_discoveries_return_to_foundation": true,
     "extensions": [
-      "docs/roadmap/asic-memory-dependent-tracks-v0.1-plan.md"
+      "docs/roadmap/asic-memory-dependent-tracks-v0.1-plan.md",
+      "docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md"
     ],
-    "latest_foundation_increment": 151,
+    "latest_foundation_increment": 152,
     "foundation_increment_150_is_architecture_only": true,
     "foundation_increment_151_is_architecture_only": true,
+    "foundation_increment_152_is_architecture_only": true,
     "foundation_extension_plan_is_normative": true,
-    "foundation_contains_asic_or_memory_implementation_todos": false,
+    "foundation_contains_asic_memory_or_verification_backend_implementation_todos": false,
     "dependent_track_implementation_is_not_a_foundation_exit_criterion": true
   },
   "dependent_tracks": [
@@ -21,18 +24,21 @@
       "id": "fpga-productivity",
       "display_name": "FPGA Productivity",
       "numbering_starts_at": 1,
+      "planned_increment_count": 10,
       "implementation_status": "blocked-by-foundation"
     },
     {
       "id": "digital-verification",
       "display_name": "Digital Verification",
       "numbering_starts_at": 1,
+      "planned_increment_count": 12,
       "implementation_status": "blocked-by-foundation"
     },
     {
       "id": "ams-verification",
       "display_name": "Analog/Mixed-Signal Verification",
       "numbering_starts_at": 1,
+      "planned_increment_count": 12,
       "implementation_status": "blocked-by-foundation"
     },
     {
@@ -51,13 +57,23 @@
     }
   ],
   "verification_architecture": {
-    "adr": "docs/architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md",
+    "canonical_adr": "docs/architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md",
+    "procedural_hdl_projection_adr": "docs/architecture/0025-generated-procedural-hdl-testbench-projections.md",
     "canonical_semantics": "nodal-verification-semantic-ir",
     "native_simulation_depends_on_generated_uvm": false,
+    "native_simulation_depends_on_generated_hdl_testbench": false,
+    "generated_hdl_testbench_is_canonical_semantics": false,
     "generated_backends": [
+      "portable-verilog-testbench",
+      "verilog-ams-testbench",
       "uvm",
       "uvm-ms"
     ],
+    "portable_verilog_reference_profile": "icarus-event-driven",
+    "portable_verilog_secondary_profile": "verilator-qualified-subset",
+    "verilog_ams_open_source_execution_status": "capability-gated-not-baseline",
+    "open_source_ams_baseline": "native-hvl-plus-verilog-a-osdi-spice-xspice-and-digital-cosimulation-adapters",
+    "unsupported_feature_policy": "fail-or-explicitly-precompute-never-silently-omit",
     "vendor_variation_policy": "thin-adapter-profile"
   },
   "asic_advanced_io_architecture": {
@@ -69,6 +85,7 @@
     "implementation_deferred_to_future_separately_approved_tracks": true
   },
   "detailed_plans": [
-    "docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md"
+    "docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md",
+    "docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md"
   ]
 }

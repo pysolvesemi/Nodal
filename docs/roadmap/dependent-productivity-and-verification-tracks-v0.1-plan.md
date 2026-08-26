@@ -1,9 +1,13 @@
 # Foundation-gated FPGA and verification tracks v0.1 plan
 
 **Status:** Normative roadmap target
+**Revision:** 0.2
+**Updated:** 2026-08-26
 **Foundation:** the main Nodal incremental roadmap
 **Dependent tracks:** FPGA Productivity, Digital Verification, Analog/Mixed-Signal Verification
 **Verification architecture:** [ADR 0023](../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md)
+**Direct HDL testbench architecture:** [ADR 0025](../architecture/0025-generated-procedural-hdl-testbench-projections.md)
+**Feasibility and staging detail:** [`generated-hdl-testbench-projections-v0.1-plan.md`](generated-hdl-testbench-projections-v0.1-plan.md)
 
 ## Global dependency rule
 
@@ -24,7 +28,7 @@ Foundation owns architecture and public contracts for:
 - simulation/tool-adapter SPI;
 - target-neutral properties and coverage identities;
 - plugin and backend capability negotiation;
-- verification semantic IR and generated-language/backend seams;
+- verification semantic IR and native/procedural-HDL/UVM/UVM-MS projection seams;
 - FPGA platform/resource/constraint/report/debug semantic seams.
 
 Dependent tracks own implementations, vendor/tool adapters, generated collateral, reusable VIP, board libraries, and qualification after the barrier opens.
@@ -76,9 +80,18 @@ Dependent tracks own implementations, vendor/tool adapters, generated collateral
   - Record standard version, UVM reference implementation, vendor profile, feature decisions, defines, adapter hashes, source hashes, commands, and unsupported capabilities.
   - Do not generate production UVM/UVM-MS code or vendor scripts in Foundation.
 
+- [ ] **Foundation Increment 152 — Direct procedural HDL testbench projection architecture readiness**
+  - Accept ADR 0025 and freeze a Procedural HDL Testbench IR lowering seam beneath the canonical Verification Semantic IR; it is generated-language IR, not a second authoring model.
+  - Define portable Verilog-2005 and standards-oriented Verilog-AMS testbench profile boundaries, stable logical Interface/Register/test/check identities, source maps, manifests, normalized pass/fail results, and deterministic artifact hashes.
+  - Classify every selected Verification IR operation as directly embedded, precomputed replay, companion-runtime-required, or unsupported. Unsupported behavior must fail generation; silent omission is forbidden.
+  - Define deterministic stimulus/expected-result sidecar contracts, seed/replay provenance, waveform/termination policy, and cross-backend parity identities.
+  - Make Icarus the required event-driven reference for portable Verilog testbenches and Verilator a separately qualified subset.
+  - Distinguish full Verilog-AMS testbench source generation from the practical open AMS harness based on Verilog-A/OSDI, SPICE/XSPICE, and digital co-simulation adapters. Open-source Verilog-AMS execution is enabled only after exact capability conformance.
+  - Do not implement Verilog/Verilog-AMS testbench generation, replay lowering, simulator runners, open AMS co-simulation, UVM/UVM-MS generation, or verification libraries in Foundation.
+
 ## Foundation completion barrier
 
-The barrier opens only when every checkbox in the Foundation track, including Increments 143-149 and any later Foundation item added before release, is complete with required CI/evidence.
+The barrier opens only when every checkbox in the Foundation track is complete with required CI/evidence, including Increments 143-149, architecture-only Increments 150-151 defined by the ASIC/memory extension plan, Foundation Increment 152, and any later Foundation item added before release.
 
 The three dependent tracks are then independently schedulable unless they declare additional track-local prerequisites.
 
@@ -136,7 +149,7 @@ Numbering restarts for this track.
 
 - [ ] **Digital Verification Increment 1 — Nodal HVL native digital simulation vertical slice**
   - Implement the Verification IR/native runtime vertical slice for tests, deterministic processes/time, clocks/resets, typed transactions, direct signal/interface access, failures, waveforms, seeds, and replay.
-  - Run generated Verilog directly through Verilator as the primary fast adapter and Icarus as an independent event-driven adapter; generated UVM is not involved.
+  - Run generated Verilog directly through Verilator as the primary fast adapter and Icarus as an independent event-driven adapter; generated UVM and generated HDL testbenches are not involved.
 
 - [ ] **Digital Verification Increment 2 — Scenarios, sequences, constrained stimulus, and replay**
   - Implement reusable scenarios/sequence graphs, random variables/constraints/distributions, deterministic seed hierarchy, value-stream capture, exact replay, parallel stimulus, cancellation, timeout, and capability diagnostics.
@@ -151,25 +164,36 @@ Numbering restarts for this track.
   - Integrate the Foundation property layer with simulation checks and formal hooks.
   - Generate register frontdoor/backdoor operations, predictors, access-policy checks, reset/side-effect/collision coverage, and register scoreboards from canonical Register IR.
 
-- [ ] **Digital Verification Increment 6 — Verification SystemVerilog and digital UVM generation**
+- [ ] **Digital Verification Increment 6 — Portable Verilog testbench generation**
+  - Lower the supported Verification IR subset through Procedural HDL Testbench IR and render standalone Verilog-2005 testbenches for generated portable Verilog RTL.
+  - Generate deterministic DUT wrappers, clocks/resets, flattened Interface helpers, tasks/functions, monitors/checks, error counters, wave controls, source maps, manifests, and vector/expected-result replay files where required.
+  - Reject operations that are neither directly representable nor legally precomputable; do not silently reduce test intent.
+
+- [ ] **Digital Verification Increment 7 — Open-source Verilog testbench execution and qualification**
+  - Qualify Icarus as the required event-driven profile for compile/elaboration/run, file I/O, timing/events, four-state behavior, inout, waveforms, timeouts, plusargs, and deterministic pass/fail.
+  - Qualify a declared Verilator subset separately with differential fixtures for timing, event ordering, two-state/four-state differences, inout, file I/O, waves, timeout, and termination.
+  - Emit exact tool/version/options/capability manifests and reject unsupported profile combinations before execution.
+
+- [ ] **Digital Verification Increment 8 — Verification SystemVerilog and digital UVM generation**
   - Render standards-oriented SystemVerilog/UVM from the same Verification IR: test/env/agent/driver/monitor/sequencer/sequence/item/scoreboard/TLM/factory/config/phases/objections/coverage/reporting and UVM RAL.
   - Generate reusable packages/VIP with deterministic hierarchy/names and source maps.
 
-- [ ] **Digital Verification Increment 7 — Commercial simulator profiles**
+- [ ] **Digital Verification Increment 9 — Commercial simulator profiles**
   - Qualify thin VCS-family, Questa-family, and Xcelium-family profiles for compile/elaboration/run, DPI/VPI, UVM library selection, waves, coverage, reporting, and known compatibility workarounds.
   - Keep common UVM source identical wherever standards support it; confine unavoidable vendor `ifdef`s to adapter packages/includes.
 
-- [ ] **Digital Verification Increment 8 — Cross-backend semantic parity**
-  - Run the same Nodal HVL tests in native/open-source mode and generated-UVM mode and compare transaction ordering, checks, scoreboards, register behavior, deterministic replay streams, coverage intent/results, termination, and source-level failures.
-  - Classify scheduler/random-solver differences rather than hiding them.
+- [ ] **Digital Verification Increment 10 — Native, Verilog-testbench, and UVM semantic parity**
+  - Run the same Nodal HVL tests in native/open-source, generated-Verilog-testbench, and generated-UVM modes.
+  - Compare deterministic stimulus streams, transaction ordering, protocol behavior, checks, scoreboards, register behavior, coverage intent/results, termination, and source-level failure identities.
+  - Classify scheduler, random-solver, four-state, and profile limitations rather than hiding them.
 
-- [ ] **Digital Verification Increment 9 — Reusable digital VIP qualification**
-  - Author representative protocol VIP only in Nodal HVL—at minimum `Valid`/`Stream`, APB, and AXI4-Lite or another approved protocol—and generate both native BFM/agents and UVM VIP.
+- [ ] **Digital Verification Increment 11 — Reusable digital VIP qualification**
+  - Author representative protocol VIP only in Nodal HVL—at minimum `Valid`/`Stream`, APB, and AXI4-Lite or another approved protocol—and generate native BFM/agents, portable Verilog testbench collateral where expressible, and UVM VIP.
   - Qualify active/passive modes, protocol assertions, constrained traffic, coverage, scoreboards, configuration, errors, reset, backpressure, and reuse in an external consumer project.
 
-- [ ] **Digital Verification Increment 10 — Scale, performance, compatibility, and verification release gate**
-  - Exercise large testbench hierarchies, many agents, long regressions, parallel tests, deterministic caching, coverage merge, UVM compile/runtime scale, and source-map performance.
-  - Publish supported HVL/UVM/SystemVerilog/vendor capability and limitations matrices plus a reusable VIP author conformance kit.
+- [ ] **Digital Verification Increment 12 — Scale, performance, compatibility, and verification release gate**
+  - Exercise large testbench hierarchies, many agents, long regressions, parallel tests, deterministic caching, vector/replay volume, coverage merge, procedural-Verilog generation/runtime, UVM compile/runtime scale, and source-map performance.
+  - Publish supported HVL/native/Verilog-testbench/UVM/SystemVerilog/simulator capability and limitations matrices plus a reusable VIP author conformance kit.
 
 ---
 
@@ -179,7 +203,7 @@ Numbering restarts for this track and remains separate from Digital Verification
 
 - [ ] **AMS Verification Increment 1 — Nodal HVL native mixed-signal simulation vertical slice**
   - Extend the native Verification IR/runtime to typed physical quantities, analog terminals/signal-flow values, measurements, tolerances, crossings/events, waveform stimulus, PVT/environment context, and mixed digital/analog synchronization.
-  - Execute through available open Verilog-A/solver and digital adapters without requiring generated UVM-MS.
+  - Execute through available open Verilog-A/solver and digital adapters without requiring generated Verilog-AMS testbenches or UVM-MS.
 
 - [ ] **AMS Verification Increment 2 — Analog/mixed-signal agents, drivers, monitors, and scoreboards**
   - Implement mixed-signal transaction schemas, analog stimulus sources, samplers/monitors, tolerance-aware scoreboards/reference models, event correlation, mixed interface bindings, and reusable active/passive agent patterns.
@@ -194,28 +218,47 @@ Numbering restarts for this track and remains separate from Digital Verification
 - [ ] **AMS Verification Increment 5 — Mixed-signal properties and register/control interaction**
   - Add bridge/event/control-loop checks, analog envelope assertions, initialization/settling checks, mode transition verification, mixed register/control sequences, and source-level failure correlation using Foundation property and Register IR identities.
 
-- [ ] **AMS Verification Increment 6 — UVM-MS generation from Verification IR**
-  - Generate UVM-MS 1.0-oriented class and structural verification collateral from the same Nodal HVL environment, including mixed-signal agents, analog stimulus/monitor bridges, scoreboards, transactions, coverage, configuration, and reuse of generated digital UVM components where appropriate.
-  - Keep native simulation independent of UVM-MS.
+- [ ] **AMS Verification Increment 6 — Standards-oriented Verilog-AMS testbench generation**
+  - Lower the supported Verification IR subset through Procedural HDL Testbench IR and generate a capability-declared Verilog-AMS top-level testbench for a generated Verilog-AMS DUT.
+  - Generate mixed hierarchy, analog stimulus sources/contributions, digital control, bridge/connect metadata, events, measurements, tolerances, checks, termination, source maps, manifests, and deterministic sidecar data where legal.
+  - Rendering a Verilog-AMS file does not claim open-source executability; the selected simulator profile must prove every required digital, analog, event, analysis, connect, and solver capability.
 
-- [ ] **AMS Verification Increment 7 — Commercial mixed-signal simulator profiles**
+- [ ] **AMS Verification Increment 7 — Open-source AMS harness generation and capability-qualified execution**
+  - Generate the practical open harness bundle from the same Verification IR using supported Verilog-A/OSDI models, SPICE/XSPICE stimulus and analyses, digital Verilog/co-simulation collateral, replay data, and normalized results.
+  - Qualify OpenVAF/ngspice and selected digital/co-simulation adapters by exact feature profile.
+  - Permit direct generated Verilog-AMS-testbench execution only for an open adapter that passes the required conformance suite; never infer full support from parsing alone.
+
+- [ ] **AMS Verification Increment 8 — UVM-MS generation from Verification IR**
+  - Generate UVM-MS 1.0-oriented class and structural verification collateral from the same Nodal HVL environment, including mixed-signal agents, analog stimulus/monitor bridges, scoreboards, transactions, coverage, configuration, and reuse of generated digital UVM components where appropriate.
+  - Keep native simulation and direct HDL/open-harness projections independent of UVM-MS.
+
+- [ ] **AMS Verification Increment 9 — Commercial mixed-signal simulator profiles**
   - Qualify thin VCS-family, Questa-family, and Xcelium-family AMS/UVM-MS profiles according to available licensed environments and supported standards.
+  - Also qualify generated Verilog-AMS testbench profiles where supported.
   - Isolate compile/elaboration/binding/connect-rule/real-net/waveform/vendor workarounds in adapter units and manifests.
 
-- [ ] **AMS Verification Increment 8 — Native versus UVM-MS semantic parity**
-  - Compare the same Nodal HVL environment across native/open and generated-UVM-MS runs for transactions, analog stimulus, event timing within declared tolerances, measurements, scoreboards, register/control behavior, coverage intent, termination, and failure IDs.
-  - Classify solver/scheduling/tolerance differences explicitly.
+- [ ] **AMS Verification Increment 10 — Native, open-harness, Verilog-AMS-testbench, and UVM-MS semantic parity**
+  - Compare the same Nodal HVL environment across native/open execution, the open AMS harness, generated Verilog-AMS testbench runs on capable tools, and generated UVM-MS.
+  - Compare transactions, analog stimulus, event timing within declared tolerances, measurements, scoreboards, register/control behavior, coverage intent, termination, deterministic replay artifacts, and failure IDs.
+  - Classify solver, scheduling, tolerance, connect, and unsupported-feature differences explicitly.
 
-- [ ] **AMS Verification Increment 9 — Reusable UVM-MS VIP qualification**
-  - Author representative mixed-signal VIP only in Nodal HVL, then generate native and UVM-MS forms.
+- [ ] **AMS Verification Increment 11 — Reusable mixed-signal VIP qualification**
+  - Author representative mixed-signal VIP only in Nodal HVL, then generate native/open-harness behavior, Verilog-AMS collateral where supported, and UVM-MS forms.
   - Qualify at least one converter/control-loop-oriented VIP with digital control plus analog terminals/measurements, reusable configuration, active/passive modes, scoreboards, coverage, PVT scenarios, and external consumer reuse.
 
-- [ ] **AMS Verification Increment 10 — Scale, portability, and mixed-signal verification release gate**
-  - Exercise multiple analog islands, many digital agents, long regressions, PVT/Monte Carlo matrices, waveform/result volume, coverage merge, UVM-MS compile/runtime scale, source maps, and failure reduction.
-  - Publish supported HVL/UVM-MS/simulator/analysis/real-net/connect-rule capability and limitations matrices plus a reusable mixed-signal VIP conformance kit.
+- [ ] **AMS Verification Increment 12 — Scale, portability, and mixed-signal verification release gate**
+  - Exercise multiple analog islands, many digital agents, long regressions, PVT/Monte Carlo matrices, waveform/result volume, replay artifacts, generated Verilog-AMS and open-harness scale, coverage merge, UVM-MS compile/runtime scale, source maps, and failure reduction.
+  - Publish supported HVL/native/open-harness/Verilog-AMS-testbench/UVM-MS/simulator/analysis/real-net/connect-rule capability and limitations matrices plus a reusable mixed-signal VIP conformance kit.
 
 ## Feasibility conclusion
 
-The requested architecture is feasible and valuable with one critical rule: the common representation must be a **Nodal Verification Semantic IR**, not a UVM IR. Digital UVM and UVM-MS are generated projections. This keeps `nodal sim` fast and open-source-friendly while allowing the same testbench and VIP source to enter commercial UVM flows unchanged at the Nodal level.
+The requested architecture is feasible and valuable with two binding rules:
 
-The latest standards baseline for the dependent verification tracks is IEEE 1800-2023 SystemVerilog, IEEE 1800.2-2020 UVM with the current Accellera reference implementation selected by profile, and Accellera UVM-MS 1.0. Version selection remains explicit and lockable so later standards/reference releases do not silently change generated verification behavior.
+1. the common representation remains a **Nodal Verification Semantic IR**, not UVM, Verilog, or Verilog-AMS; and
+2. generated procedural HDL testbenches are capability-limited projections that must reject or explicitly precompute unsupported behavior.
+
+Portable Verilog testbench generation for generated Verilog RTL is practical and becomes a required open-source path with Icarus as the event-driven reference and a separately qualified Verilator subset.
+
+Verilog-AMS testbench generation is valid at the language level and is added as a future projection. Current open-source AMS execution remains based on native Nodal HVL plus Verilog-A/OSDI, SPICE/XSPICE, and digital co-simulation adapters. Nodal must not claim general open-source Verilog-AMS-testbench support until a selected adapter passes the exact capability suite.
+
+The standards baseline remains IEEE 1800-2023 SystemVerilog, IEEE 1800.2-2020 UVM with the selected Accellera reference implementation locked by profile, Accellera UVM-MS 1.0, and Verilog-AMS 2023. Version selection remains explicit so later standards or reference releases do not silently change generated verification behavior.

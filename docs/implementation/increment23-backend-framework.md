@@ -49,6 +49,13 @@ It rejects every nested Nodal operation with
 mistaken for implementation of analog expressions or contributions, which begin
 in Increment 24.
 
+## Successor compatibility
+
+Historical checkers determine successor completion from the successor evidence
+manifest and roadmap checkbox together. A global roadmap revision may advance
+for planning-only changes and therefore never proves that a compiler increment
+has completed.
+
 ## Validation
 
 The native unit test exercises the direct API and injected rejecting hooks.

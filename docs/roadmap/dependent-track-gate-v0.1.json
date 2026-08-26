@@ -2,16 +2,18 @@
   "schema": 1,
   "status": "active",
   "roadmap_revision": "1.27",
-  "verification_plan_revision": "0.2",
+  "verification_plan_revision": "0.3",
   "foundation_track": {
     "roadmap": "docs/roadmap/nodal-development-todo.md",
     "completion_rule": "all-foundation-checkboxes-complete",
     "architecture_discoveries_return_to_foundation": true,
     "extensions": [
       "docs/roadmap/asic-memory-dependent-tracks-v0.1-plan.md",
-      "docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md"
+      "docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md",
+      "docs/roadmap/native-digital-simulator-adapters-v0.1-plan.md"
     ],
     "latest_foundation_increment": 152,
+    "foundation_increment_148_owns_native_adapter_contracts": true,
     "foundation_increment_150_is_architecture_only": true,
     "foundation_increment_151_is_architecture_only": true,
     "foundation_increment_152_is_architecture_only": true,
@@ -59,10 +61,40 @@
   "verification_architecture": {
     "canonical_adr": "docs/architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md",
     "procedural_hdl_projection_adr": "docs/architecture/0025-generated-procedural-hdl-testbench-projections.md",
+    "native_digital_adapter_adr": "docs/architecture/0026-native-digital-simulator-adapter-architecture.md",
     "canonical_semantics": "nodal-verification-semantic-ir",
     "native_simulation_depends_on_generated_uvm": false,
     "native_simulation_depends_on_generated_hdl_testbench": false,
     "generated_hdl_testbench_is_canonical_semantics": false,
+    "native_runtime_owns_hvl_scheduling_randomization_transactions_coverage_and_results": true,
+    "simulator_adapters_own_dut_execution_signal_access_callbacks_waves_and_cleanup_only": true,
+    "native_digital_adapters": {
+      "verilator": {
+        "role": "primary-fast-native-adapter",
+        "dut_execution_model": "generated-verilog-to-cpp-model-to-native-shared-library",
+        "runtime_boundary": "versioned-generated-c-abi-over-jvm-ffi-or-jni",
+        "primary_signal_access": "direct-width-safe-batched-model-wrapper-access",
+        "vpi_is_primary_path": false,
+        "nodal_hvl_compiled_to_cpp": false,
+        "compiled_model_cache_required": true
+      },
+      "icarus": {
+        "role": "independent-event-driven-native-adapter",
+        "dut_execution_model": "generated-verilog-to-vvp-image-in-external-vvp-process",
+        "runtime_boundary": "versioned-vpi-module-over-shared-memory-or-ipc",
+        "dut_compiled_to_cpp": false,
+        "libvvp_embedding_required": false,
+        "four_state_profile": "preserve-where-supported"
+      }
+    },
+    "native_scheduler_barrier": "nodal-resume-batch-write-simulator-evaluate-settle-return-events-nodal-resume",
+    "native_icarus_is_distinct_from_standalone_generated_verilog_testbench": true,
+    "native_parity_modes": [
+      "native-verilator",
+      "native-icarus",
+      "standalone-portable-verilog-testbench",
+      "generated-uvm"
+    ],
     "generated_backends": [
       "portable-verilog-testbench",
       "verilog-ams-testbench",
@@ -86,6 +118,7 @@
   },
   "detailed_plans": [
     "docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md",
-    "docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md"
+    "docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md",
+    "docs/roadmap/native-digital-simulator-adapters-v0.1-plan.md"
   ]
 }

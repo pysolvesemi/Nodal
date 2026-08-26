@@ -1,0 +1,133 @@
+name: Automation Increment 22 Evidence Closure v5
+
+on:
+  push:
+    branches:
+      - automation/increment22-evidence-closure-v5
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: automation-increment22-evidence-closure-v5
+  cancel-in-progress: false
+
+jobs:
+  close-evidence:
+    name: increment-22/close-state-independent-evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out Increment 22 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/22-cross-layer-diagnostic-mapping
+          fetch-depth: 0
+
+      - name: Require accepted final implementation evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          expected_head=637d7f7ffa54858fdee60f0c4dad5dc59a27f016
+          actual_head=$(gh api "/repos/${GITHUB_REPOSITORY}/pulls/53" --jq .head.sha)
+          test "${actual_head}" = "${expected_head}"
+
+          for run in 32944621396 32944621448; do
+            completed=false
+            for attempt in $(seq 1 180); do
+              status=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run}" --jq .status)
+              if [ "${status}" = completed ]; then
+                conclusion=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run}" --jq .conclusion)
+                test "${conclusion}" = success
+                completed=true
+                break
+              fi
+              sleep 10
+            done
+            test "${completed}" = true
+          done
+
+      - name: Record roadmap and manifest closure
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          from pathlib import Path
+
+          roadmap_path = Path("docs/roadmap/nodal-development-todo.md")
+          roadmap = roadmap_path.read_text(encoding="utf-8")
+
+          replacements = (
+              ("**Revision:** 1.25", "**Revision:** 1.26"),
+              ("**Updated:** 2026-08-25", "**Updated:** 2026-08-26"),
+              (
+                  "- [ ] **Increment 22 — Cross-layer diagnostic mapping**",
+                  "- [x] **Increment 22 — Cross-layer diagnostic mapping**",
+              ),
+          )
+          for old, new in replacements:
+              count = roadmap.count(old)
+              if count != 1:
+                  raise SystemExit(f"roadmap anchor {old!r}: expected 1, found {count}")
+              roadmap = roadmap.replace(old, new, 1)
+
+          description = (
+              "  - Map construction, driver/latch/cycle/hierarchy, shape/rank/layout/storage/index, materialization/naming/source-span, parser, verifier, pass, backend, external-tool, signed literal/conversion/mixed-sign/width/shift, loop stage/bound/body/dependency/effect/profile, enum encoding/decode/exhaustiveness, FSM graph/transition/recursion/illegal-state, domain-binding, CDC, RDC, gate/mux, protocol/pipeline, memory/effect, analog/mixed-signal, and waiver diagnostics back to Scala locations, hierarchy/index paths, and stable codes.\n"
+          )
+          evidence = (
+              "  - Evidence: [`NodalCrossLayerDiagnostics-DG-v1.0.md`](../design-gates/NodalCrossLayerDiagnostics-DG-v1.0.md), [`increment22-cross-layer-diagnostic-mapping.md`](../implementation/increment22-cross-layer-diagnostic-mapping.md), PR [#53](https://github.com/pysolvesemi/Nodal/pull/53), dedicated validation run [32944621396](https://github.com/pysolvesemi/Nodal/actions/runs/32944621396), and Core CI run [32944621448](https://github.com/pysolvesemi/Nodal/actions/runs/32944621448).\n"
+          )
+          if roadmap.count(description) != 1:
+              raise SystemExit(
+                  f"Increment 22 description anchor count is {roadmap.count(description)}"
+              )
+          roadmap = roadmap.replace(description, description + evidence, 1)
+          roadmap_path.write_text(roadmap, encoding="utf-8")
+
+          manifest_path = Path("tests/compiler/fixtures/increment22/manifest.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          manifest["status"] = "validated-cross-layer-diagnostics"
+          manifest["evidence"] = {
+              "pull_request": 53,
+              "dedicated_run": 32944621396,
+              "core_ci_run": 32944621448,
+          }
+          manifest_path.write_text(
+              json.dumps(manifest, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Validate closed Increment 22 state
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 scripts/check_increment18.py
+          python3 scripts/check_increment19.py
+          python3 scripts/check_increment20.py
+          python3 scripts/check_increment21.py
+          python3 scripts/check_increment22.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          python3 scripts/check_markdown.py
+          python3 scripts/check_package_visibility.py
+          git diff --check
+
+      - name: Publish evidence closure
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email \
+            '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            docs/roadmap/nodal-development-todo.md \
+            tests/compiler/fixtures/increment22/manifest.json
+          git commit -m 'Increment 22 — record accepted CI evidence'
+          git push origin HEAD:increment/22-cross-layer-diagnostic-mapping

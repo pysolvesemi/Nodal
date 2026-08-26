@@ -50,6 +50,13 @@ where Increment 22 must be unchecked. At revision 1.26 and later it requires the
 completed Increment 22 state instead, so historical validation remains strict
 without rejecting valid successor revisions.
 
+## Closure
+
+Roadmap revision 1.26 records Increment 22 as complete. The accepted
+implementation evidence is PR #53, dedicated Increment 22 run `32944621396`,
+and Core CI run `32944621448`; the permanent workflow and all historical
+checkers remain read-only and successor-compatible.
+
 ## Deferred boundary
 
 CIRCT conversion, backend legalization, target reparse, HDL generation, and

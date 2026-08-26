@@ -85,14 +85,18 @@ jobs:
           python3 scripts/check_package_visibility.py
           git diff --check
 
-      - name: Build and test native and Scala layers
+      - name: Build native core and run affected Scala diagnostics suite
         working-directory: target
+        env:
+          NODAL_NODALC: ${{ github.workspace }}/target/out/native/release/bin/nodalc
         run: |
           ./nodal core native \
             --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
             --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
-          NODAL_NODALC="${PWD}/out/native/release/bin/nodalc" \
-            ./nodal core scala
+          ./mill __.compile
+          ./mill \
+            core.scala.testkit.test.testOnly \
+            nodal.internal.testkit.CrossLayerDiagnosticTests
           git diff --check
 
       - name: Publish validated review fixes

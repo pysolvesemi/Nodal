@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "active",
-  "roadmap_revision": "1.27",
+  "roadmap_revision": "1.28",
   "verification_plan_revision": "0.3",
   "foundation_track": {
     "roadmap": "docs/roadmap/nodal-development-todo.md",
@@ -12,14 +12,16 @@
       "docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md",
       "docs/roadmap/native-digital-simulator-adapters-v0.1-plan.md"
     ],
-    "latest_foundation_increment": 152,
+    "latest_foundation_increment": 157,
     "foundation_increment_148_owns_native_adapter_contracts": true,
     "foundation_increment_150_is_architecture_only": true,
     "foundation_increment_151_is_architecture_only": true,
     "foundation_increment_152_is_architecture_only": true,
     "foundation_extension_plan_is_normative": true,
     "foundation_contains_asic_memory_or_verification_backend_implementation_todos": false,
-    "dependent_track_implementation_is_not_a_foundation_exit_criterion": true
+    "dependent_track_implementation_is_not_a_foundation_exit_criterion": true,
+    "function_local_semantic_naming_closure_required": true,
+    "foundation_increments_153_through_157_own_naming_closure": true
   },
   "dependent_tracks": [
     {

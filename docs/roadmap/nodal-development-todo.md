@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.27
+**Revision:** 1.28
 **Created:** 2026-08-20
 **Updated:** 2026-08-26
 **Status:** Active roadmap
@@ -53,6 +53,7 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Represent multidimensional structural values with semantic rank, parameterized dimensions, stable row-major indexing, and explicit target layouts. Keep `Vec` structural and `Mem` addressable; target unpacked-array syntax never defines memory semantics.
 - Map portable-Verilog multidimensional ports to deterministic flat packed carriers and future SystemVerilog ports to unpacked multidimensional arrays of packed elements by default, with explicit packed-layout interoperability when requested.
 - Keep pure combinational expressions in typed DAG form and inline compiler-generated single-use expressions whenever exact width/sign/four-state semantics permit. Materialize only for a declared reason and give every required net/state a deterministic semantic name.
+- Preserve Scala lexical binders through helper-function calls as structured caller/local name paths. A materialized helper-local value uses a readable name such as `pixelResult_widenedSum`; a safely inlined single-use expression retains its binder and aliases in IR/source maps without forcing an unnecessary HDL wire. Reserve `_net_*` for genuinely unnamed Nodal-owned combinational values, prefer semantic operation or sink-derived names, and prohibit `_zz*` and traversal-counter identities in accepted generated HDL.
 - Reject invalid hardware through mandatory staged construction, semantic-graph, MLIR, target-legalization, reparse, lint, and synthesis gates before an HDL artifact is accepted. Core safety verifiers cannot be disabled by plugins or optimization passes.
 - Preserve physical dimensions for analog and mixed-signal quantities and reject incompatible equations before HDL generation without exposing verbose unit types in normal source.
 - Classify memory, external, analog, stateful, observational, and side-effecting operations explicitly so scheduling, optimization, and verification never guess latency or purity.
@@ -999,6 +1000,11 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
 
 
 - [ ] **Increment 65 — Digital-only classification, Backend.Auto, and portable Verilog backend**
+  - Treat Foundation Increments 153-157 as mandatory naming prerequisites. Lower structured caller/local paths into deterministic portable-Verilog identifiers and preserve raw binders, aliases, provenance, definition/invocation locations, and materialization reasons in manifests and source maps.
+  - Preserve safe expression inlining: source such as `val widenedName = a + b; out := widenedName` may emit `assign out = a + b;` when exact semantics permit, while `widenedName` remains traceable in IR/source maps and no wire is materialized solely to expose the name.
+  - When materialization is required, emit caller-prefixed helper-local names such as `pixelResult_widenedSum`; repeated calls must produce semantic paths such as `leftResult_widenedSum` and `rightResult_widenedSum`. A returned value may emit as `pixelResult` while retaining `pixelResult_clippedSum` as an alias.
+  - Use `_net_<operation>_<stable-index>` only for genuinely unnamed Nodal-owned combinational objects, with corresponding `_reg_*`, `_mem_*`, `_inst_*`, and `_gen_*` namespaces for other generated objects. Never emit `_zz*`, `_T*`, `_GEN*`, traversal-counter-only, `expr_<number>`, or `tmp_<number>` names for accepted Nodal-owned HDL.
+  - Add exact goldens for ordinary/local/nested methods, lambdas, multiline expressions, separately compiled libraries, repeated calls, loops/generate/unrolling, sharing/CSE, backticked or reserved identifiers, collision sanitization, safe-inline/readable/debug materialization profiles, different working directories, and repeated builds. Record the selected name, original binder, aliases, provenance, materialization reason, sanitization, and collision qualification.
   - Deterministically flatten nested `Interface`/`Struct`/`Valid`/`Stream` members, emit logical Interface ABI/source-map manifests, and lower supported digital inout to net-typed ports plus explicit width-safe tri-state assignments. Reject analog members and profile-unsupported internal resolved nets without silent mux conversion.
   - Implement transitive digital-only/analog-only/mixed-signal classification, construct inventories, deterministic `Backend.Auto` selection, explicit capability rejection, and machine-readable selection evidence.
   - Emit the portable synthesizable Verilog profile with exact signed vector ports/wires/registers/parameters/localparams/memories/aggregate fields, explicitly sized signed literals, typed shifts/casts, parameterized multidimensional `Vec` ports as canonical flat packed carriers, verified row-major offset/slice/reshape formulas, deterministic signed element views, structural `Vec` versus `Mem` evidence, structural `genvar` generate loops, bounded procedural `for` loops or verified unrolled equivalents, symbolic parameters/generate, hierarchy, flattened aggregates/protocols, canonical enum vectors and member `localparam`s, enum configuration parameters, flat/hierarchical/parallel FSM state and completion logic, clocks/resets, memories, CDC/RDC, automatic pipelines, black boxes, explicitly synthesized immediate assertions, verification-only formal hooks, safe expression inlining and semantic temporary/state naming, materialization/shape/storage/signed/loop/enum/FSM manifests, expression-level source maps, deterministic formatting, target reparse, and exact golden fixtures.
@@ -1034,6 +1040,10 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Verify domain bindings, direct/combinational crossings, multi-bit misuse, pulses, reconvergence, reset release/reconvergence, generated clocks, gates/muxes, analog/digital legality, conversion loops, aggregate/shaped driver paths, latches, combinational/ready loops, structural-storage intent, drivers, waivers, and profile restrictions.
 
 - [ ] **Increment 72 — Complete Verilog-AMS backend skeleton**
+  - Treat Foundation Increments 153-157 as mandatory naming prerequisites and preserve the same structured source binder, caller aliases, provenance, and definition/invocation identity used by portable Verilog.
+  - Apply function-local naming parity to analog procedural locals, user-defined analog-function locals, intermediate quantities, event expressions, branch/access calculations, mixed-signal bridge/conversion temporaries, and digital logic inside Verilog-AMS. Safely inline only where analog, event, scheduling, and contribution semantics remain exact; otherwise materialize the retained semantic name.
+  - Apply target-specific keyword, scope, escaping, and collision rules without losing the original Scala binder. Prefer semantic operation/branch/event/sink names for generated objects and prohibit Nodal-owned `_zz*` or traversal-counter fallbacks.
+  - Add Verilog-A/Verilog-AMS parity goldens and manifests covering helper calls, repeated invocations, analog functions, events, contributions, conversion paths, readable/debug materialization, source maps, target reparse, and deterministic cross-backend name correlation.
   - Flatten logical mixed-signal interfaces deterministically, including protocol leaves, resolved digital inout nets, discipline-qualified terminals, signal-flow values, and explicit bridges; emit the same Interface ABI/source-map manifest used by portable Verilog.
   - Emit explicit inferred clock/reset ports; signed digital vectors/parameters/literals/casts; parameterized multidimensional digital values using the portable flat ABI and signed element views; structural generate and bounded procedural/unrolled loops; canonical enum localparams/vectors; flat, nested, parallel, timed, and bounded-procedure FSM state/action/completion logic; event processes lowered from high-level state and automatic schedules; fixed/valid/elastic pipeline registers and control; synchronizers/FIFOs; reset logic; gates/muxes; analog/digital declarations; disciplines; connect constructs; hierarchy; parameters; safe expression inlining and deterministic semantic state/temporary names; shape/layout/storage/materialization/check/signed/loop/enum/FSM/latency/schedule metadata; expression-level source maps; and mandatory target verification/reparse evidence.
 
@@ -1417,9 +1427,40 @@ Detailed rationale and dependent-track plans are in [`dependent-productivity-and
   - Keep Foundation architecture-only: no testbench generator, simulator runner, open AMS harness, UVM/UVM-MS generator, or verification library is implemented here.
   - Evidence: [ADR 0025](../architecture/0025-generated-procedural-hdl-testbench-projections.md), [staging plan](generated-hdl-testbench-projections-v0.1-plan.md), [PR #56](https://github.com/pysolvesemi/Nodal/pull/56), and [closure PR #58](https://github.com/pysolvesemi/Nodal/pull/58).
 
+- [ ] **Foundation Increment 153 — Function-local lexical naming and alias contract**
+  - Freeze a target-neutral structured name-path contract with the priority `explicit user name > caller prefix plus function-local binder > lexical binder > outer/member alias > semantic role or sink affinity > generated fallback` while keeping public API v0.3 unchanged.
+  - Retain raw Scala binders and aliases for hardware-producing `val`, `var`, and `lazy val` declarations inside ordinary methods, local methods, lambdas, nested blocks, loop bodies, and match branches, together with lexical owner, definition span, invocation context, and provenance.
+  - Keep raw Scala spelling separate from target-HDL sanitization and collision resolution; preserve both inner function-local names and outer call-site aliases rather than replacing one with the other.
+  - Separate naming from materialization: an expression keeps source-level naming metadata when safely inlined, while `keep`, observability, readable/debug policy, sharing, typing, or target legality independently decides whether an HDL object is emitted.
+
+- [ ] **Foundation Increment 154 — Scala 3 compiler-derived binder and naming-scope capture**
+  - Replace runtime stack/source-line inspection as the naming authority with Scala 3 compile-time typed-tree capture of binders, owners, expansion positions, and call-site naming scopes; retain runtime inspection only as a diagnostic fallback.
+  - Propagate an outer binding such as `pixelResult` into helper construction so a local `widenedSum` carries the structured path `pixelResult / widenedSum` without requiring user annotations or source changes.
+  - Cover multiline right-hand sides, backticked identifiers, private/nested helpers, lambdas, separately compiled libraries or JARs, unavailable source files at elaboration time, and deterministic diagnostics when no trustworthy binder exists.
+  - Add compile-positive, compile-negative, macro-expansion, separate-compilation, and source-unavailable fixtures proving that naming does not depend on `StackWalker`, filesystem layout, or runtime source parsing.
+
+- [ ] **Foundation Increment 155 — Helper invocation identity, return aliases, and collision semantics**
+  - Define deterministic caller-qualified emission such as `pixelResult_widenedSum`, `leftResult_widenedSum`, and `rightResult_widenedSum` for repeated helper invocations while retaining the original local binder as a source alias.
+  - When a helper return and outer binding denote the same final value, prefer the outer call-site name such as `pixelResult` for the emitted object and retain `pixelResult_clippedSum` as an alias; emit a separate local object only when materialization policy requires one.
+  - Define nested-helper, local-function, recursion-policy, loop, symbolic-generate, unrolling, cloning, parameterized invocation, and hierarchy qualification rules using definition origin and invocation origin as distinct identities.
+  - Resolve collisions with semantic caller paths and stable source/call-site digests only as the final qualifier; never use pass traversal order or an opaque counter as semantic identity.
+
+- [ ] **Foundation Increment 156 — Function-local naming metadata in the Scala bridge and Nodal MLIR**
+  - Extend the construction snapshot, bridge protocol, and Nodal MLIR with target-neutral equivalents of `nodal.source_name`, `nodal.source_aliases`, `nodal.name_provenance`, `nodal.lexical_scope`, `nodal.definition_loc`, `nodal.invocation_path`, and `nodal.materialization_boundary`.
+  - Preserve raw names, aliases, definition and invocation locations, source maps, and structured paths through parser/printer round trips, normalized textual IR, bridge versioning, cache keys, and deterministic fingerprints.
+  - Keep aliases on safely inlined expressions, assign distinct invocation identities to clones or unrolled instances without losing their original binders, and defer target keyword escaping/sanitization to the selected backend.
+  - Add byte-stability, bridge round-trip, clone/unroll, source-map, and mutation tests that fail when any source-bound value loses its lexical naming metadata.
+
+- [ ] **Foundation Increment 157 — Name preservation, generated namespaces, and verifier closure**
+  - Define mandatory behavior for inlining, materialization, common-subexpression elimination, dead-code elimination, cloning/unrolling, retiming/automatic pipelining, dialect conversion, target lowering, and optimization plugins: source-bound names and aliases survive every semantics-preserving transformation.
+  - Add a mandatory verifier that rejects a materialized source-bound value whose lexical name path was lost or replaced by an anonymous fallback, while allowing a safely inlined value to remain metadata-only.
+  - Reserve deterministic Nodal-owned generated namespaces such as `_net_<operation>_<stable-index>`, `_reg_<role>_<stable-index>`, `_mem_<role>_<stable-index>`, `_inst_<type>_<stable-index>`, and `_gen_<role>_<stable-index>`; prefer operation, sink, protocol, domain, or structural-role names before the generic fallback.
+  - Allocate fallback suffixes only after normalized IR ordering so unrelated pass changes, working directories, JVM identity, or source traversal do not renumber accepted output. Prohibit Nodal-owned `_zz*`, `_T*`, `_GEN*`, `expr_<number>`, and `tmp_<number>` identifiers in accepted HDL.
+  - Add pass-by-pass mutation tests, declaration-order permutations, repeated-build goldens, and source-bound-versus-genuinely-unnamed inventories proving that `_net_*` is used only when no meaningful source, caller, sink, or role name exists.
+
 ## Foundation completion barrier
 
-> **Blocked:** no FPGA Productivity, Digital Verification, or Analog/Mixed-Signal Verification implementation increment may start until every Foundation increment is complete, including architecture-only Increments 150-152 recorded in companion plans and any later Foundation item added before the barrier is released.
+> **Blocked:** no FPGA Productivity, Digital Verification, or Analog/Mixed-Signal Verification implementation increment may start until every Foundation increment is complete, including architecture-only Increments 150-152 recorded in companion plans, function-local semantic-naming Increments 153-157, and any later Foundation item added before the barrier is released.
 
 Research and feasibility work may continue while blocked. Any newly discovered core architecture requirement belongs in Foundation.
 
@@ -1494,6 +1535,7 @@ When an increment is completed:
 - MLIR pass plugin API: <https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Tools/Plugins/PassPlugin.h>
 - MLIR dialect plugin API: <https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Tools/Plugins/DialectPlugin.h>
 - CIRCT dialects: <https://circt.llvm.org/docs/Dialects/>
+- Chisel naming and helper-function prefixes: <https://www.chisel-lang.org/docs/explanations/naming>
 - Chisel modules and implicit clock/reset: <https://www.chisel-lang.org/docs/explanations/modules>
 - Chisel sequential circuits: <https://www.chisel-lang.org/docs/explanations/sequential-circuits>
 - Chisel multiple clock domains: <https://www.chisel-lang.org/docs/explanations/multi-clock>

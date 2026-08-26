@@ -1,0 +1,63 @@
+name: Automation Increment 22 Successor Checker
+
+on:
+  push:
+    branches:
+      - automation/increment22-successor-checker
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    name: increment-22/successor-checker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out automation source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/increment22-successor-checker
+          path: automation
+
+      - name: Check out Increment 22 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/22-cross-layer-diagnostic-mapping
+          fetch-depth: 0
+          path: target
+
+      - name: Apply successor-aware checker update
+        run: |
+          cp \
+            automation/scripts/automation_patch_increment21_successor.py \
+            target/scripts/automation_patch_increment21_successor.py
+          cd target
+          PYTHONDONTWRITEBYTECODE=1 \
+            python3 scripts/automation_patch_increment21_successor.py
+          rm scripts/automation_patch_increment21_successor.py
+
+      - name: Validate current and simulated successor states
+        working-directory: target
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 scripts/check_increment21.py
+          python3 scripts/check_increment22.py
+          python3 tests/compiler/test_increment21.py
+          python3 tests/compiler/test_increment22.py
+          git diff --check
+
+      - name: Publish checker compatibility update
+        working-directory: target
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email \
+            '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            scripts/check_increment21.py \
+            tests/compiler/test_increment21.py
+          git commit -m 'Increment 22 — make Increment 21 checker successor-aware'
+          git push origin HEAD:increment/22-cross-layer-diagnostic-mapping

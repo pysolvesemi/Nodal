@@ -1,0 +1,100 @@
+name: Increment 24 Minimal Analog IR
+
+on:
+  push:
+    branches:
+      - increment/24-minimal-analog-expression-contribution-ir
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-24-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analog-ir:
+    name: increment-24/minimal-analog-ir
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore locked native and Scala caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/nodal/downloads
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-inc24-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', 'toolchains/lock.json', 'toolchains/checksums/*.sha256', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-inc24-${{ runner.os }}-
+            nodal-inc23-${{ runner.os }}-
+            nodal-inc22-${{ runner.os }}-
+            nodal-scala-${{ runner.os }}-
+
+      - name: Install locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate contracts and mutation tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          for increment in 18 19 20 21 22 23 24; do
+            python3 "scripts/check_increment${increment}.py"
+          done
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          ./nodal check \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          git diff --check
+
+      - name: Build lint and test native and Scala core
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          NODAL_NODALC="${PWD}/out/native/release/bin/nodalc" \
+            ./nodal core scala
+
+      - name: Prove RC equation and stable analog rejections
+        run: |
+          set -euo pipefail
+          compiler="${PWD}/out/native/release/bin/nodalc"
+          "${compiler}" \
+            --pass-pipeline='builtin.module(nodal-gate-default)' \
+            core/compiler/test/IR/analog-expression-rc.mlir \
+            | tee /tmp/analog-expression-rc.mlir
+          grep -F 'nodal.contribute' /tmp/analog-expression-rc.mlir
+          grep -F 'nodal.analog_ddt' /tmp/analog-expression-rc.mlir
+          if "${compiler}" \
+              core/compiler/test/IR/analog-expression-invalid-parameter.mlir \
+              >/tmp/invalid-parameter.out 2>/tmp/invalid-parameter.err; then
+            echo 'unknown analog parameter was accepted' >&2
+            exit 1
+          fi
+          grep -F 'NODAL-ANALOG-PARAMETER-001' /tmp/invalid-parameter.err
+          if "${compiler}" \
+              core/compiler/test/IR/analog-expression-invalid-contribution.mlir \
+              >/tmp/invalid-contribution.out 2>/tmp/invalid-contribution.err; then
+            echo 'invalid analog contribution kind was accepted' >&2
+            exit 1
+          fi
+          grep -F 'NODAL-ANALOG-CONTRIBUTION-001' /tmp/invalid-contribution.err

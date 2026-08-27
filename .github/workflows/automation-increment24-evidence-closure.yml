@@ -77,21 +77,22 @@ jobs:
           test_path = Path("tests/compiler/test_increment24.py")
           tests = test_path.read_text(encoding="utf-8")
           anchor = "    def test_accepts_validated_successor_state(self) -> None:\n"
-          addition = '''    def test_rejects_premature_roadmap_closure(self) -> None:
-              temporary, root = self.temporary_repository()
-              self.addCleanup(temporary.cleanup)
-              roadmap = root / "docs/roadmap/nodal-development-todo.md"
-              roadmap.write_text(
-                  roadmap.read_text(encoding="utf-8").replace(
-                      "- [ ] **Increment 24 — Minimal analog expression and contribution IR**",
-                      "- [x] **Increment 24 — Minimal analog expression and contribution IR**",
-                      1,
-                  ),
-                  encoding="utf-8",
-              )
-              self.assertIn("NODAL-INC24-010", self.codes(root))
-
-          '''
+          addition = (
+              "    def test_rejects_premature_roadmap_closure(self) -> None:\n"
+              "        temporary, root = self.temporary_repository()\n"
+              "        self.addCleanup(temporary.cleanup)\n"
+              "        roadmap = root / \"docs/roadmap/nodal-development-todo.md\"\n"
+              "        roadmap.write_text(\n"
+              "            roadmap.read_text(encoding=\"utf-8\").replace(\n"
+              "                \"- [ ] **Increment 24 — Minimal analog expression and contribution IR**\",\n"
+              "                \"- [x] **Increment 24 — Minimal analog expression and contribution IR**\",\n"
+              "                1,\n"
+              "            ),\n"
+              "            encoding=\"utf-8\",\n"
+              "        )\n"
+              "        self.assertIn(\"NODAL-INC24-010\", self.codes(root))\n"
+              "\n"
+          )
           if tests.count(anchor) != 1:
               raise RuntimeError("Increment 24 acceptance-test anchor is not unique")
           tests = tests.replace(anchor, addition + anchor, 1)

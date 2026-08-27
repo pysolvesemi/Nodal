@@ -152,6 +152,7 @@ class Increment23CheckerTests(unittest.TestCase):
     def test_rejects_premature_roadmap_closure(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
+
         roadmap = root / "docs/roadmap/nodal-development-todo.md"
         roadmap.write_text(
             roadmap.read_text(encoding="utf-8").replace(
@@ -161,6 +162,20 @@ class Increment23CheckerTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+
+        manifest_path = root / "tests/compiler/fixtures/increment23/manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "implemented-awaiting-evidence"
+        manifest["evidence"] = {
+            "pull_request": None,
+            "dedicated_run": None,
+            "core_ci_run": None,
+        }
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
         self.assertIn("NODAL-INC23-010", self.codes(root))
 
     def test_accepts_validated_closure_state(self) -> None:

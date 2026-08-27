@@ -18,6 +18,7 @@ SPEC.loader.exec_module(CHECKER)
 
 SUPPORT_FILES = (
     "docs/roadmap/nodal-development-todo.md",
+    "tests/compiler/fixtures/increment27/manifest.json",
 )
 
 
@@ -146,6 +147,35 @@ class Increment26CheckerTests(unittest.TestCase):
             .replace(
                 "- [ ] **Increment 26 — Deterministic output and reproducibility contract**",
                 "- [x] **Increment 26 — Deterministic output and reproducibility contract**",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(CHECKER.check_repository(root), [])
+
+
+    def test_accepts_validated_increment27_successor(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        successor_path = root / "tests/compiler/fixtures/increment27/manifest.json"
+        successor = json.loads(successor_path.read_text(encoding="utf-8"))
+        successor["status"] = "validated-natures-disciplines"
+        successor["evidence"] = {
+            "pull_request": 1,
+            "dedicated_run": 2,
+            "core_ci_run": 3,
+        }
+        successor_path.write_text(
+            json.dumps(successor, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        roadmap = root / "docs/roadmap/nodal-development-todo.md"
+        roadmap.write_text(
+            roadmap.read_text(encoding="utf-8")
+            .replace("**Revision:** 1.32", "**Revision:** 1.33", 1)
+            .replace(
+                "- [ ] **Increment 27 — Natures and disciplines**",
+                "- [x] **Increment 27 — Natures and disciplines**",
                 1,
             ),
             encoding="utf-8",

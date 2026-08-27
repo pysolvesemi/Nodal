@@ -1,5 +1,6 @@
 add_mlir_dialect_library(NodalDialect
   NodalDialect.cpp
+  NatureDiscipline.cpp
   NodalOps.cpp
   NodalTypes.cpp
 

@@ -328,6 +328,70 @@ def Nodal_NetDriveOp : Nodal_Op<"net_drive"> {
   let hasVerifier = 1;
 }
 
+
+//===----------------------------------------------------------------------===//
+// Analog natures, disciplines, and normalized imports
+//===----------------------------------------------------------------------===//
+
+def Nodal_NatureOp : Nodal_Op<"nature", [Symbol]> {
+  let summary = "Canonical analog nature declaration";
+  let description = [{
+    A nature records a canonical unit spelling, one access-function identity,
+    and a positive finite absolute tolerance. Nature identity remains nominal;
+    imports resolve to one canonical declaration before compatibility checks.
+  }];
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    StrAttr:$units,
+    StrAttr:$access,
+    F64Attr:$abstol,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
+def Nodal_NatureImportOp : Nodal_Op<"nature_import", [Symbol]> {
+  let summary = "Hash-pinned local alias of a canonical nature declaration";
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    FlatSymbolRefAttr:$target,
+    StrAttr:$source,
+    StrAttr:$definition_hash,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
+def Nodal_DisciplineOp : Nodal_Op<"discipline", [Symbol]> {
+  let summary = "Analog discipline declaration";
+  let description = [{
+    A discipline selects a continuous or discrete domain, one potential
+    nature, and an optional flow nature. Absence of flow denotes a
+    signal-flow discipline; presence of both denotes a conservative
+    discipline.
+  }];
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    StrAttr:$domain,
+    FlatSymbolRefAttr:$potential,
+    OptionalAttr<FlatSymbolRefAttr>:$flow,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
+def Nodal_DisciplineImportOp : Nodal_Op<"discipline_import", [Symbol]> {
+  let summary = "Hash-pinned local alias of a canonical discipline declaration";
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    FlatSymbolRefAttr:$target,
+    StrAttr:$source,
+    StrAttr:$definition_hash,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // Conservative connectivity and explicit mixed-signal bridges
 //===----------------------------------------------------------------------===//

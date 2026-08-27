@@ -1,0 +1,49 @@
+{
+  "increment": 27,
+  "title": "Natures and disciplines",
+  "public_api": "0.3",
+  "status": "implemented-awaiting-evidence",
+  "operations": [
+    "nodal.nature",
+    "nodal.nature_import",
+    "nodal.discipline",
+    "nodal.discipline_import"
+  ],
+  "nature_fields": [
+    "units",
+    "access",
+    "abstol"
+  ],
+  "discipline_fields": [
+    "domain",
+    "potential",
+    "flow"
+  ],
+  "domains": [
+    "continuous",
+    "discrete"
+  ],
+  "imports": {
+    "normalized_alias": true,
+    "source_provenance": true,
+    "definition_hash": "sha256-lowercase",
+    "cycle_rejection": true
+  },
+  "compatibility": "canonical-domain-potential-optional-flow",
+  "diagnostics": [
+    "NODAL-NATURE-DECL-001",
+    "NODAL-NATURE-UNITS-001",
+    "NODAL-NATURE-ACCESS-001",
+    "NODAL-NATURE-ACCESS-002",
+    "NODAL-NATURE-TOLERANCE-001",
+    "NODAL-NATURE-IMPORT-001",
+    "NODAL-NATURE-IMPORT-002",
+    "NODAL-DISCIPLINE-DECL-001",
+    "NODAL-DISCIPLINE-DOMAIN-001",
+    "NODAL-DISCIPLINE-POTENTIAL-001",
+    "NODAL-DISCIPLINE-FLOW-001",
+    "NODAL-DISCIPLINE-IMPORT-001",
+    "NODAL-DISCIPLINE-IMPORT-002"
+  ],
+  "evidence": {}
+}

@@ -117,6 +117,17 @@ private[nodal] final case class KernelAnalogRegionSnapshot(
     contributions: Vector[KernelAnalogContributionSnapshot]
 )
 
+private[nodal] final case class KernelWaiverSnapshot(
+    kind: String,
+    id: String,
+    reason: String,
+    relation: String,
+    semanticPath: String,
+    sourceValue: Option[String],
+    destinationDomain: Option[String],
+    source: Option[SourceSpan]
+)
+
 private[nodal] final case class ConstructionSnapshot(
     root: String,
     modules: Vector[KernelModuleSnapshot],
@@ -127,7 +138,8 @@ private[nodal] final case class ConstructionSnapshot(
     origins: Vector[KernelOriginSnapshot] = Vector.empty,
     generatedNames: Vector[KernelGeneratedNameSnapshot] = Vector.empty,
     sourceMap: Vector[SourceMapEntry] = Vector.empty,
-    analogRegions: Vector[KernelAnalogRegionSnapshot] = Vector.empty
+    analogRegions: Vector[KernelAnalogRegionSnapshot] = Vector.empty,
+    waivers: Vector[KernelWaiverSnapshot] = Vector.empty
 )
 
 private final case class DomainRef(module: Long, index: Int)
@@ -983,6 +995,33 @@ private final class ConstructionSession(val options: EmitOptions):
         instances
       )
 
+  private def relationName(relation: ClockRelation): String =
+    relationAttributes(relation).collectFirst:
+      case ("clock_relation", value) => value
+    .getOrElse("unknown")
+
+  private def waiverSnapshots(
+      sourceMap: Vector[SourceMapEntry]
+  ): Vector[KernelWaiverSnapshot] =
+    val sourceByPath = sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
+    expressionValues.toVector.flatMap:
+      case (reference, expression) =>
+        expression.operands.collectFirst:
+          case waiver: CdcWaiver =>
+            val path = expressionPath(reference)
+            KernelWaiverSnapshot(
+              "cdc",
+              waiver.id,
+              waiver.reason,
+              relationName(waiver.relation),
+              path,
+              expression.operands.headOption.flatMap(pathOf),
+              expression.operands.collectFirst:
+                case domain: ClockDomain => domainPath(domainRef(domain)),
+              sourceByPath.get(path)
+            )
+    .sortBy(waiver => (waiver.semanticPath, waiver.id))
+
   private def analogSnapshots(): Vector[KernelAnalogRegionSnapshot] =
     analogRegions.toVector.sortBy(region => (modulePath(region.module), region.ordinal)).map:
       region =>
@@ -1085,7 +1124,8 @@ private final class ConstructionSession(val options: EmitOptions):
       semantic.origins,
       semantic.generatedNames,
       semantic.sourceMap,
-      analogSnapshots()
+      analogSnapshots(),
+      waiverSnapshots(semantic.sourceMap)
     )
     val kind = classify(snapshot)
     val report = DesignReport(

@@ -1,0 +1,111 @@
+name: Increment 26 Reproducibility Contract
+
+on:
+  push:
+    branches:
+      - increment/26-deterministic-output-reproducibility-contract
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-26-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reproducibility:
+    name: increment-26/reproducibility-contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore locked native and Scala caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/nodal/downloads
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-inc26-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', 'toolchains/lock.json', 'toolchains/checksums/*.sha256', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-inc26-${{ runner.os }}-
+            nodal-inc25-${{ runner.os }}-
+            nodal-scala-${{ runner.os }}-
+
+      - name: Install locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate contracts and mutation tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          for increment in 18 19 20 21 22 23 24 25; do
+            python3 "scripts/check_increment${increment}.py"
+          done
+          python3 scripts/check_increment26.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          ./nodal check \
+            --contracts-only \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          git diff --check
+
+      - name: Build lint and test native and Scala core
+        env:
+          NODAL_NODALC: ${{ github.workspace }}/out/native/release/bin/nodalc
+          NODAL_TRANSLATE: ${{ github.workspace }}/out/native/release/bin/nodal-translate
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal core scala
+          git diff --check
+
+      - name: Prove repeated native MLIR and Verilog-A bytes
+        run: |
+          set -euo pipefail
+          compiler="${PWD}/out/native/release/bin/nodalc"
+          translator="${PWD}/out/native/release/bin/nodal-translate"
+          first="$(mktemp -d)"
+          second="$(mktemp -d)"
+          trap 'rm -rf "${first}" "${second}"' EXIT
+
+          "${compiler}" \
+            --pass-pipeline='builtin.module(nodal-gate-default)' \
+            core/compiler/test/IR/rc-filter-vertical-slice.mlir \
+            > "${first}/normalized.mlir"
+          "${compiler}" \
+            --pass-pipeline='builtin.module(nodal-gate-default)' \
+            core/compiler/test/IR/rc-filter-vertical-slice.mlir \
+            > "${second}/normalized.mlir"
+          cmp "${first}/normalized.mlir" "${second}/normalized.mlir"
+
+          "${translator}" \
+            --nodal-to-verilog-a \
+            "${first}/normalized.mlir" \
+            > "${first}/output.va"
+          "${translator}" \
+            --nodal-to-verilog-a \
+            "${second}/normalized.mlir" \
+            > "${second}/output.va"
+          cmp "${first}/output.va" "${second}/output.va"
+          diff -u \
+            tests/compiler/fixtures/increment25/golden/rc-filter.va \
+            "${first}/output.va"

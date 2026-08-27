@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "increment": 26,
+  "status": "implemented-awaiting-evidence",
+  "public_api": "0.3",
+  "contract": "nodal.reproducibility",
+  "contract_version": 1,
+  "artifacts": [
+    "construction.json",
+    "source.mlir",
+    "normalized.mlir",
+    "output.va"
+  ],
+  "inventories": [
+    "shape_layout_storage",
+    "materialization",
+    "semantic_names",
+    "expression_source_map",
+    "check_inventory",
+    "waivers",
+    "domain_manifest",
+    "cdc_rdc_report"
+  ],
+  "evidence": {}
+}

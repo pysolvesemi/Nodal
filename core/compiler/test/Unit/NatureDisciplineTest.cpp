@@ -1,8 +1,9 @@
+#include "nodal/Dialect/Nodal/NatureDiscipline.h"
+
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
-#include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 
@@ -82,15 +83,12 @@ int main() {
   auto imported = mlir::FlatSymbolRefAttr::get(&context, "electrical_imported");
   auto thermal = mlir::FlatSymbolRefAttr::get(&context, "thermal_signal");
 
-  auto compatible = nodal::areDisciplinesCompatible(
-      valid->getOperation(), electrical, monitor);
-  auto aliasCompatible = nodal::areDisciplinesCompatible(
-      valid->getOperation(), electrical, imported);
-  auto incompatible = nodal::areDisciplinesCompatible(
-      valid->getOperation(), electrical, thermal);
-  if (mlir::failed(compatible) || !*compatible ||
-      mlir::failed(aliasCompatible) || !*aliasCompatible ||
-      mlir::failed(incompatible) || *incompatible)
+  auto compatible = nodal::areDisciplinesCompatible(valid->getOperation(), electrical, monitor);
+  auto aliasCompatible =
+      nodal::areDisciplinesCompatible(valid->getOperation(), electrical, imported);
+  auto incompatible = nodal::areDisciplinesCompatible(valid->getOperation(), electrical, thermal);
+  if (mlir::failed(compatible) || !*compatible || mlir::failed(aliasCompatible) ||
+      !*aliasCompatible || mlir::failed(incompatible) || *incompatible)
     return fail("canonical discipline compatibility is incorrect");
 
   if (mlir::parseSourceString<mlir::ModuleOp>(kInvalidTolerance, &context))

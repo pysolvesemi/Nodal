@@ -36,8 +36,7 @@ Operation *findTopLevelSymbol(mlir::ModuleOp module, llvm::StringRef symbol) {
   return nullptr;
 }
 
-FailureOr<Operation *> resolveDeclaration(Operation *scope,
-                                          FlatSymbolRefAttr reference,
+FailureOr<Operation *> resolveDeclaration(Operation *scope, FlatSymbolRefAttr reference,
                                           llvm::StringRef declarationName,
                                           llvm::StringRef importName) {
   mlir::ModuleOp module = enclosingBuiltinModule(scope);
@@ -68,8 +67,7 @@ bool isTopLevelSymbol(Operation *operation) {
 }
 
 bool hasCanonicalSymbol(Operation *operation) {
-  auto symbol =
-      operation->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+  auto symbol = operation->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
   return symbol && !symbol.getValue().trim().empty() &&
          symbol.getValue() == symbol.getValue().trim();
 }
@@ -93,57 +91,46 @@ bool isCanonicalText(llvm::StringRef value) {
 
 bool isSha256(llvm::StringRef value) {
   return value.size() == 64 && llvm::all_of(value, [](char character) {
-           return llvm::isDigit(character) ||
-                  (character >= 'a' && character <= 'f');
+           return llvm::isDigit(character) || (character >= 'a' && character <= 'f');
          });
 }
 
-LogicalResult verifyImportedAlias(Operation *operation,
-                                  llvm::StringRef kind,
-                                  llvm::StringRef importCode,
-                                  llvm::StringRef provenanceCode,
-                                  FailureOr<Operation *> (*resolver)(
-                                      Operation *, FlatSymbolRefAttr)) {
+LogicalResult verifyImportedAlias(Operation *operation, llvm::StringRef kind,
+                                  llvm::StringRef importCode, llvm::StringRef provenanceCode,
+                                  FailureOr<Operation *> (*resolver)(Operation *,
+                                                                     FlatSymbolRefAttr)) {
   if (!isTopLevelSymbol(operation) || !hasCanonicalSymbol(operation))
     return operation->emitOpError()
-           << importCode << ": " << kind
-           << " import must be a top-level canonical symbol";
+           << importCode << ": " << kind << " import must be a top-level canonical symbol";
 
   auto source = operation->getAttrOfType<StringAttr>("source");
   auto hash = operation->getAttrOfType<StringAttr>("definition_hash");
-  if (!source || !isCanonicalText(source.getValue()) || !hash ||
-      !isSha256(hash.getValue()))
+  if (!source || !isCanonicalText(source.getValue()) || !hash || !isSha256(hash.getValue()))
     return operation->emitOpError()
            << provenanceCode << ": " << kind
            << " import requires canonical source text and lowercase SHA-256";
 
   auto target = operation->getAttrOfType<FlatSymbolRefAttr>("target");
   if (!target || failed(resolver(operation, target)))
-    return operation->emitOpError()
-           << importCode << ": " << kind
-           << " import target is missing, cyclic, or has the wrong kind";
+    return operation->emitOpError() << importCode << ": " << kind
+                                    << " import target is missing, cyclic, or has the wrong kind";
   return success();
 }
 
 } // namespace
 
-FailureOr<Operation *>
-nodal::resolveNatureDeclaration(Operation *scope,
-                                FlatSymbolRefAttr reference) {
-  return resolveDeclaration(scope, reference, "nodal.nature",
-                            "nodal.nature_import");
+FailureOr<Operation *> nodal::resolveNatureDeclaration(Operation *scope,
+                                                       FlatSymbolRefAttr reference) {
+  return resolveDeclaration(scope, reference, "nodal.nature", "nodal.nature_import");
 }
 
-FailureOr<Operation *>
-nodal::resolveDisciplineDeclaration(Operation *scope,
-                                    FlatSymbolRefAttr reference) {
-  return resolveDeclaration(scope, reference, "nodal.discipline",
-                            "nodal.discipline_import");
+FailureOr<Operation *> nodal::resolveDisciplineDeclaration(Operation *scope,
+                                                           FlatSymbolRefAttr reference) {
+  return resolveDeclaration(scope, reference, "nodal.discipline", "nodal.discipline_import");
 }
 
-FailureOr<bool>
-nodal::areDisciplinesCompatible(Operation *scope, FlatSymbolRefAttr lhs,
-                                FlatSymbolRefAttr rhs) {
+FailureOr<bool> nodal::areDisciplinesCompatible(Operation *scope, FlatSymbolRefAttr lhs,
+                                                FlatSymbolRefAttr rhs) {
   FailureOr<Operation *> left = resolveDisciplineDeclaration(scope, lhs);
   FailureOr<Operation *> right = resolveDisciplineDeclaration(scope, rhs);
   if (failed(left) || failed(right))
@@ -158,10 +145,8 @@ nodal::areDisciplinesCompatible(Operation *scope, FlatSymbolRefAttr lhs,
 
   auto leftPotential = (*left)->getAttrOfType<FlatSymbolRefAttr>("potential");
   auto rightPotential = (*right)->getAttrOfType<FlatSymbolRefAttr>("potential");
-  FailureOr<Operation *> canonicalLeftPotential =
-      resolveNatureDeclaration(*left, leftPotential);
-  FailureOr<Operation *> canonicalRightPotential =
-      resolveNatureDeclaration(*right, rightPotential);
+  FailureOr<Operation *> canonicalLeftPotential = resolveNatureDeclaration(*left, leftPotential);
+  FailureOr<Operation *> canonicalRightPotential = resolveNatureDeclaration(*right, rightPotential);
   if (failed(canonicalLeftPotential) || failed(canonicalRightPotential))
     return failure();
   if (*canonicalLeftPotential != *canonicalRightPotential)
@@ -174,10 +159,8 @@ nodal::areDisciplinesCompatible(Operation *scope, FlatSymbolRefAttr lhs,
   if (!leftFlow)
     return true;
 
-  FailureOr<Operation *> canonicalLeftFlow =
-      resolveNatureDeclaration(*left, leftFlow);
-  FailureOr<Operation *> canonicalRightFlow =
-      resolveNatureDeclaration(*right, rightFlow);
+  FailureOr<Operation *> canonicalLeftFlow = resolveNatureDeclaration(*left, leftFlow);
+  FailureOr<Operation *> canonicalRightFlow = resolveNatureDeclaration(*right, rightFlow);
   if (failed(canonicalLeftFlow) || failed(canonicalRightFlow))
     return failure();
   return *canonicalLeftFlow == *canonicalRightFlow;
@@ -185,44 +168,36 @@ nodal::areDisciplinesCompatible(Operation *scope, FlatSymbolRefAttr lhs,
 
 LogicalResult nodal::NatureOp::verify() {
   if (!isTopLevelSymbol(getOperation()) || !hasCanonicalSymbol(getOperation()))
-    return emitOpError(
-        "NODAL-NATURE-DECL-001: nature must be a top-level canonical symbol");
+    return emitOpError("NODAL-NATURE-DECL-001: nature must be a top-level canonical symbol");
 
   auto units = getOperation()->getAttrOfType<StringAttr>("units");
   if (!units || !isCanonicalText(units.getValue()))
-    return emitOpError(
-        "NODAL-NATURE-UNITS-001: units must be non-empty canonical text");
+    return emitOpError("NODAL-NATURE-UNITS-001: units must be non-empty canonical text");
 
   auto access = getOperation()->getAttrOfType<StringAttr>("access");
   if (!access || !isIdentifier(access.getValue()))
-    return emitOpError(
-        "NODAL-NATURE-ACCESS-001: access must be a canonical identifier");
+    return emitOpError("NODAL-NATURE-ACCESS-001: access must be a canonical identifier");
 
   auto tolerance = getOperation()->getAttrOfType<FloatAttr>("abstol");
   if (!tolerance || !std::isfinite(tolerance.getValueAsDouble()) ||
       tolerance.getValueAsDouble() <= 0.0)
-    return emitOpError(
-        "NODAL-NATURE-TOLERANCE-001: abstol must be positive and finite");
+    return emitOpError("NODAL-NATURE-TOLERANCE-001: abstol must be positive and finite");
 
   mlir::ModuleOp module = enclosingBuiltinModule(getOperation());
   for (Operation &candidate : module.getBody()->getOperations()) {
-    if (&candidate == getOperation() ||
-        candidate.getName().getStringRef() != "nodal.nature")
+    if (&candidate == getOperation() || candidate.getName().getStringRef() != "nodal.nature")
       continue;
     auto other = candidate.getAttrOfType<StringAttr>("access");
     if (other && other.getValue() == access.getValue())
-      return emitOpError()
-             << "NODAL-NATURE-ACCESS-002: access function '"
-             << access.getValue() << "' is owned by another nature";
+      return emitOpError() << "NODAL-NATURE-ACCESS-002: access function '" << access.getValue()
+                           << "' is owned by another nature";
   }
   return success();
 }
 
 LogicalResult nodal::NatureImportOp::verify() {
-  return verifyImportedAlias(getOperation(), "nature",
-                             "NODAL-NATURE-IMPORT-001",
-                             "NODAL-NATURE-IMPORT-002",
-                             nodal::resolveNatureDeclaration);
+  return verifyImportedAlias(getOperation(), "nature", "NODAL-NATURE-IMPORT-001",
+                             "NODAL-NATURE-IMPORT-002", nodal::resolveNatureDeclaration);
 }
 
 LogicalResult nodal::DisciplineOp::verify() {
@@ -231,32 +206,24 @@ LogicalResult nodal::DisciplineOp::verify() {
         "NODAL-DISCIPLINE-DECL-001: discipline must be a top-level canonical symbol");
 
   auto domain = getOperation()->getAttrOfType<StringAttr>("domain");
-  if (!domain || (domain.getValue() != "continuous" &&
-                  domain.getValue() != "discrete"))
-    return emitOpError(
-        "NODAL-DISCIPLINE-DOMAIN-001: domain must be continuous or discrete");
+  if (!domain || (domain.getValue() != "continuous" && domain.getValue() != "discrete"))
+    return emitOpError("NODAL-DISCIPLINE-DOMAIN-001: domain must be continuous or discrete");
 
-  auto potential =
-      getOperation()->getAttrOfType<FlatSymbolRefAttr>("potential");
+  auto potential = getOperation()->getAttrOfType<FlatSymbolRefAttr>("potential");
   FailureOr<Operation *> potentialNature =
       nodal::resolveNatureDeclaration(getOperation(), potential);
   if (!potential || failed(potentialNature))
-    return emitOpError(
-        "NODAL-DISCIPLINE-POTENTIAL-001: potential must resolve to a nature");
+    return emitOpError("NODAL-DISCIPLINE-POTENTIAL-001: potential must resolve to a nature");
 
   if (auto flow = getOperation()->getAttrOfType<FlatSymbolRefAttr>("flow")) {
-    FailureOr<Operation *> flowNature =
-        nodal::resolveNatureDeclaration(getOperation(), flow);
+    FailureOr<Operation *> flowNature = nodal::resolveNatureDeclaration(getOperation(), flow);
     if (failed(flowNature) || *flowNature == *potentialNature)
-      return emitOpError(
-          "NODAL-DISCIPLINE-FLOW-001: flow must resolve to a distinct nature");
+      return emitOpError("NODAL-DISCIPLINE-FLOW-001: flow must resolve to a distinct nature");
   }
   return success();
 }
 
 LogicalResult nodal::DisciplineImportOp::verify() {
-  return verifyImportedAlias(getOperation(), "discipline",
-                             "NODAL-DISCIPLINE-IMPORT-001",
-                             "NODAL-DISCIPLINE-IMPORT-002",
-                             nodal::resolveDisciplineDeclaration);
+  return verifyImportedAlias(getOperation(), "discipline", "NODAL-DISCIPLINE-IMPORT-001",
+                             "NODAL-DISCIPLINE-IMPORT-002", nodal::resolveDisciplineDeclaration);
 }

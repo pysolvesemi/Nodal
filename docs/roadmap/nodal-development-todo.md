@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.33
+**Revision:** 1.34
 **Created:** 2026-08-20
 **Updated:** 2026-08-27
 **Status:** Active roadmap
@@ -38,6 +38,13 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Support first-class digital `inout` through explicit typed read/drive/high-impedance semantics, resolved-net identity, open-drain/push-pull modes, black-box and hierarchical pass-through, and capability-checked internal tri-state use; never silently rewrite unsupported resolution into a mux.
 - Keep digital resolved `inout`, conservative AMS terminals, directional analog signal-flow values, and discrete real nets as distinct semantic categories. Require explicit bridges for every analog/digital or conservative/signal-flow conversion.
 - Preserve source-semantic analog constructs separately from normalized topology, hybrid equation systems, analysis projections, target AMS IR, and solver-facing representations; no simulator callback ABI or emitted HDL text defines Nodal semantics.
+- Treat source-level continuous equations as unordered simultaneous constraints. Preserve authored left/right expressions and a canonical solver-neutral residual; do not infer execution order, causal direction, or division-based rearrangement in the frontend.
+- Keep first-class equations, additive potential/flow contributions, procedural analog assignments, and conservative connections as distinct semantic operations with separate ordering, accumulation, ownership, and legality rules.
+- Generate conservative connection equations from terminal connection sets: compatible potentials are equal and signed flows sum to zero, with branch orientation and provenance retained.
+- Support partial and concrete physical-component contracts with local equation/unknown balance checks before whole-design island and DAE verification.
+- Analyze a logically flattened topology/equation view while retaining source hierarchy and emitting hierarchical Verilog-A/Verilog-AMS wherever the selected target permits.
+- Distinguish ordinary parameters, structural parameters, and dynamic values. Topology, component count, equation count, shape, or structural rank may change only through elaboration/static generation or an explicitly capability-gated variable-topology contract.
+- Lower general equations through a capability-checked equation-to-target legalizer that may select a safe potential/flow form, introduce an explicit auxiliary unknown or branch, preserve a target-supported form, or reject the target; never silently approximate or orient an equation merely to emit HDL.
 - Partition continuous behavior into explicit `AnalogIsland`s with stable topology, unknown, equation, contribution, state, event, noise, analysis, capability, and source identities.
 - Make analog state, initialization, discontinuities, event iteration, analysis context, environment/PVT, derivatives, solver hints, and model-validity envelopes explicit and machine-readable rather than backend side effects.
 - Negotiate simulator and solver capabilities before execution, reject unsupported behavior without approximation, and keep a native analog solver optional for the initial release.
@@ -82,6 +89,10 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 
 - Prefer short names such as `Module`, `Param`, `ClockDomain`, `Reg`, `Electrical`, `Real`, `Integer`, `Bool`, `Bits`, and `UInt`.
 - Preserve analog and mixed-signal terms such as `analog`, `initial`, `on`, `discipline`, `nature`, `V`, `I`, `ddt`, `idt`, `cross`, `timer`, `transition`, and `<+`.
+- Freeze a first-class unordered equation block and explicit equation-construction form while keeping `<+` contribution and procedural assignment visibly distinct.
+- Evaluate `equation(lhs, rhs)` and concise operator candidates through compile prototypes; do not overload `===` unless Boolean equality, type resolution, and diagnostics remain unambiguous.
+- Provide acausal conservative terminal/branch, reusable one-port/two-port, partial/concrete component, initial-equation, state-initialization, and reinitialization candidates in the continuous-time gate.
+- Use Scala traits, abstract classes, factories, and typed interfaces for replaceable model implementations rather than copying Modelica redeclaration syntax.
 - Do not copy backend event-process syntax into ordinary synchronous source.
 - Provide a compact automatic-pipeline surface centered on `pipe`, `delay`, protocol-typed transactions, latency/throughput policies, automatic sideband alignment, and optional hard stage constraints. Do not expose node/link plumbing in ordinary datapath source.
 - Freeze value staging, lossless numeric/width rules, directionless aggregates, exact connections, physical quantities, memory/external effects, and automatic pipelines in one coherent public API v0.3 gate.
@@ -878,14 +889,19 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
 
 ## Phase 2 — Analog language and Verilog-A profile
 
+**Phase 2 dependency gate:** Increment 32 must not begin until the equation/component checkpoint of Increment 133 is approved. That checkpoint freezes unordered equation semantics; equation, contribution, and procedural-assignment separation; conservative connection equations; terminal/branch and partial/concrete component contracts; local balance; structural parameters; initialization equations; and unsupported-target behavior. The remaining analysis, PVT, noise, validity, and solver-hint portions of Increment 133 may complete later without weakening this prerequisite.
+
 - [x] **Increment 27 — Natures and disciplines**
   - Implement units, access functions, tolerances, domains, potential/flow associations, declarations, imports, and compatibility.
 
 - [ ] **Increment 28 — Electrical nodes, nets, and branches**
-  - Implement scalar nodes, ground/reference behavior, implicit/named branches, directions, connectivity, aliases, and ownership.
+  - Implement scalar conservative terminals/nodes, ground/reference behavior, implicit/named branches, port directions, aliases, connection-set identity, branch orientation, ownership, and source hierarchy.
+  - Generate compatible-potential equality and signed zero-sum flow-conservation equations from connection sets, retaining provenance for later residual construction and target lowering.
+  - Define partial versus concrete physical-component connectivity ownership without treating conservative terminals as directional signal flow.
 
 - [ ] **Increment 29 — Parameters, constants, ranges, and units**
   - Implement supported parameter kinds, constraints, constant expressions, overrides, unit-aware literals, and lossless native HDL rendering.
+  - Classify ordinary parameters, structural parameters, and dynamic values; require topology, component count, equation count, shape, or rank changes to be elaboration-time or static target generation, and diagnose unsupported parameter-envelope structural changes.
 
 - [ ] **Increment 30 — Analog numeric types and expression typing**
   - Define promotion, physical compatibility, comparisons/logical results, conditionals, invalid operations, and folding boundaries.
@@ -893,8 +909,11 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
 - [ ] **Increment 31 — Potential and flow access functions**
   - Implement `V`, `I`, discipline-specific access, one/two-node forms, branches, probes, and validation.
 
-- [ ] **Increment 32 — Analog blocks and contribution semantics**
-  - Implement analog regions, `<+`, potential/flow contributions, equation participation, ordering, and illegal procedural use.
+- [ ] **Increment 32 — First-class analog equations, blocks, and contribution semantics**
+  - Implement analog regions, unordered first-class equations, and `<+` potential/flow contributions as distinct source-semantic operations; keep both distinct from Increment 33 procedural assignment.
+  - Preserve authored equation sides, stable equation identity, physical dimensions, guards, analysis applicability, and canonical residual intent without premature causal orientation or unsafe algebraic division.
+  - Define additive contribution accumulation, source-order independence, equation/contribution interaction, illegal procedural use, and stable diagnostics.
+  - Require the approved equation/component checkpoint from Increment 133 before implementation begins.
 
 - [ ] **Increment 33 — Analog variables and procedural assignment**
   - Implement local variables, initialization, procedural assignment, scopes, read-before-write diagnostics, and lowering.
@@ -933,10 +952,11 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Implement analysis-dependent behavior, temperature/environment access, initial/final semantics, and portability policy.
 
 - [ ] **Increment 45 — Analog canonicalization passes**
-  - Implement safe folding, algebraic normalization, dead declaration removal, branch/access normalization, and no contribution reordering.
+  - Implement safe folding, residual-preserving algebraic normalization, dead declaration removal, branch/access normalization, and deterministic common-expression handling.
+  - Prohibit unproved equation orientation, division by possibly zero expressions, contribution reordering, state movement, topology change, or residual elimination; retain before/after equation provenance.
 
 - [ ] **Increment 46 — Analog semantic lint suite**
-  - Detect floating nodes, discipline conflicts, branch misuse, unit errors, unreachable events, discontinuities, parameter risks, and portability hazards.
+  - Detect floating nodes, discipline conflicts, branch misuse, unit errors, local/global equation imbalance, structural singularity, unsafe equation orientation or division, invalid structural-parameter envelopes, unreachable events, discontinuities, parameter risks, and portability hazards.
 
 - [ ] **Increment 47 — Verilog-A capability profile and feature matrix**
   - Publish exact `.va` coverage, reject AMS-only constructs early, document simulator portability, and expose machine-readable features.
@@ -1333,20 +1353,24 @@ This independently schedulable phase closes the cross-layer continuous-time arch
   - Evidence: [`0022-layered-continuous-time-hybrid-dae-architecture.md`](../architecture/0022-layered-continuous-time-hybrid-dae-architecture.md), [`continuous-time-ams-v0.1-plan.md`](continuous-time-ams-v0.1-plan.md), and [`continuous-time-ams-v0.1-surface.json`](continuous-time-ams-v0.1-surface.json).
 
 - [ ] **Increment 133 — Analog semantic API and analysis contract design gate**
-  - Compile and compare public candidates for equations/contributions, explicit analog state and initialization, event tolerance and discontinuity declarations, analysis context, environment/PVT access, noise identity/correlation, validity envelopes, and solver-hint metadata.
-  - Publish `NodalContinuousTimeApi-DG-v0.1.md`, a machine-readable public surface, migration notes, stable diagnostics, positive/negative fixtures, and an external reusable-model fixture.
-  - Keep frontend, equation normalization, solver, and backend behavior inert.
+  - Schedule an equation/component API checkpoint ahead of Increment 32 while retaining the complete continuous-time API gate in this increment.
+  - Compile and compare public candidates for unordered equations, contributions, procedural-assignment distinction, conservative terminals/branches/connections, partial/concrete component balance, structural parameters, initial equations, explicit analog state and reinitialization, event tolerance and discontinuity declarations, analysis context, environment/PVT access, noise identity/correlation, validity envelopes, and solver-hint metadata.
+  - Publish `NodalEquationComponentApi-DG-v0.1.md`, a machine-readable checkpoint surface, migration notes, stable diagnostics, compile-positive/negative fixtures, and one external reusable physical-component fixture. Increment 32 may start only after this checkpoint is accepted.
+  - Publish the complete `NodalContinuousTimeApi-DG-v0.1.md` and machine-readable public surface before closing Increment 133.
+  - Keep frontend, equation normalization, solver, and backend behavior inert throughout the design gate.
 
 - [ ] **Increment 134 — Source-semantic analog IR, `AnalogIsland`, and stable identities**
-  - Implement source-semantic operations for contributions, equations, operators, events, analyses, noise, environment, connect constructs, and solver hints.
-  - Build deterministic islands and stable IDs for topology objects, unknowns, equations, state, events, noise, bridges, and analyses.
-  - Add normalized parse/print, source maps, parameter formulas/envelopes, mutation tests, and semantic manifests.
+  - Implement distinct source-semantic operations for equations, contributions, procedural assignments, connections, operators, events, analyses, noise, environment, and solver hints.
+  - Preserve authored equation left/right expressions separately from later residual form and retain terminal, branch, connection-set, component, partial/concrete, local-balance, structural-parameter, hierarchy, dimension, guard, analysis, and source-span metadata.
+  - Build deterministic islands and stable IDs for topology objects, components, unknowns, equations, contributions, state, events, noise, bridges, and analyses.
+  - Add normalized parse/print, source maps, parameter formulas/envelopes, mutation tests, local semantic inventories, and semantic manifests.
 
 - [ ] **Increment 135 — Topology expansion, residual DAE construction, and structural verification**
-  - Expand conservative connections and contribution sets into solver-neutral residual systems while preserving provenance.
-  - Classify continuous, derivative, algebraic, discrete, parameter, environment, independent, and input variables.
-  - Implement incidence/dependency graphs, structural matching, block decomposition, equation/unknown balance, reference/conservation checks, singularity, algebraic loops, initialization structure, variable-topology classification, and parameter-envelope checks.
-  - Reject unsupported higher-index or variable-structure systems explicitly; do not perform unapproved index reduction.
+  - Build a logically flattened hierarchy/topology/equation view for analysis without requiring flattened target emission.
+  - Expand conservative connection sets, first-class equations, and contribution sets into solver-neutral residual systems while preserving authored equation, component, branch, orientation, and hierarchy provenance.
+  - Classify continuous, derivative, algebraic, discrete, parameter, structural-parameter, environment, independent, and input variables.
+  - Implement local component balance plus whole-island incidence/dependency graphs, structural matching, block decomposition, equation/unknown balance, references, conservation, singularity, algebraic loops, initialization structure, variable-topology classification, and parameter-envelope checks.
+  - Keep residual construction independent of target causal orientation; reject unsupported higher-index or variable-structure systems explicitly and do not perform unapproved index reduction.
 
 - [ ] **Increment 136 — Continuous state, initialization, operators, and hidden-state reporting**
   - Implement state ownership for `ddt`, `idt`, Laplace/Z-domain operators, delay, transition, slew, hysteresis, sample/hold, and bridge state.
@@ -1380,7 +1404,9 @@ This independently schedulable phase closes the cross-layer continuous-time arch
 
 - [ ] **Increment 141 — Verilog-A/Verilog-AMS and solver-facing lowering parity**
   - Prove source-semantic, residual/analysis, and target-lowering correspondence for supported constructs.
-  - Emit deterministic state, event, noise, analysis, environment, contribution, and source-map metadata alongside Verilog-A/Verilog-AMS.
+  - Implement a capability-checked equation-to-target legalizer that selects direct potential/flow contributions only after dimension, singularity, parameter-envelope, state/event, analysis, numerical-conditioning, and target-capability checks; otherwise introduce explicit auxiliary branches/unknowns where legal or reject the target.
+  - Preserve source module hierarchy where legal while using the logically flattened view only for analysis and proof.
+  - Emit deterministic state, event, noise, analysis, environment, contribution, source-map, and per-equation legalization metadata, including source equation, residual, selected target form, reason, introduced objects, and target location.
   - Add target reparse, OpenVAF/OSDI where supported, ngspice and mixed-signal adapter differential fixtures, and explicit capability rejection.
   - Do not claim waveform equivalence as proof for unsupported structural transformations.
 
@@ -1389,6 +1415,22 @@ This independently schedulable phase closes the cross-layer continuous-time arch
   - Exercise large sparse islands, hierarchy, repeated models, deterministic ordering, derivative/Jacobian performance, cache keys, and memory/runtime budgets.
   - Qualify one external reusable analog model package using only public contracts, including model/environment/validity/solver manifests and portability reports.
   - Publish a capability and limitations matrix for higher-index DAE, dynamic topology, advanced analyses, stochastic features, and simulator extensions.
+
+### Optional analog component-library track
+
+This dependent track begins only after the Increment 133 equation/component checkpoint and the relevant Increments 134-142 contracts. It lives under `libraries/`, uses only public Nodal contracts, and never becomes a dependency of `core/`.
+
+- [ ] **Library Increment AL-01 — Physical-component interfaces and analog-basic pilot**
+  - Define public one-port/two-port, source/load, ground/reference, partial/concrete balance, factory/replacement, parameter-validity, and model-validity conventions.
+  - Implement and qualify resistor, capacitor, inductor, ideal sources, controlled sources, and switch components with units, legal parameter ranges, local balance, generated-HDL goldens, and applicable DC/transient/AC evidence.
+
+- [ ] **Library Increment AL-02 — Electrothermal composition pilot**
+  - Add thermal terminal/nature/discipline use, thermal capacitance and conductance, power-to-heat coupling, a temperature-dependent resistor, and electrothermal RC examples.
+  - Prove electrical-only and coupled models reuse the same conservative connector/equation architecture and reject dimension, balance, PVT, and validity-envelope failures.
+
+- [ ] **Library Increment AL-03 — Library portability, reuse, and release qualification**
+  - Add parameter matrices, hierarchy and repeated-instance tests, source-to-HDL traceability, cross-simulator capability reports, semantic versioning, compatibility metadata, and package/release evidence.
+  - Keep Modelica-style stream connectors, fluid mixing, full redeclaration semantics, automatic high-index DAE reduction, and production compact-model coverage deferred.
 
 ## Phase 10 — Foundation comments, FPGA-readiness, and HVL verification-readiness
 

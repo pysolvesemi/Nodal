@@ -99,7 +99,7 @@ jobs:
             core/compiler/lib/Dialect/Nodal/NodalOps.cpp \
             core/compiler/lib/Transforms/Passes.cpp \
             core/compiler/test/Unit/AnalogExpressionTest.cpp
-          rm -f .github/workflows/automation-increment24-current-materializer.yml
+          git rm -f .github/workflows/automation-increment24-current-materializer.yml
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
 
       - name: Validate Increment 18 through Increment 24 contracts

@@ -171,6 +171,9 @@ def check_repository(root: Path) -> list[Problem]:
         "currentTimeMillis",
         "UUID.randomUUID",
         "expression.operands.sorted",
+        "snapshot.analogRegions.sortBy",
+        "region.expressions.sortBy",
+        "region.contributions.sortBy",
     )
     for fragment in forbidden:
         if fragment in contract:
@@ -192,6 +195,7 @@ def check_repository(root: Path) -> list[Problem]:
             "NODAL_TRANSLATE",
             "fixture-cdc-waiver",
             "permuted",
+            "analogRegions = snapshot.analogRegions",
         ),
         problems,
         "NODAL-INC26-004",

@@ -56,8 +56,8 @@ construction -> canonical MLIR -> mandatory semantic gate -> target translation
              -> target verify/reparse -> private buffer -> publish
 ```
 
-A failed construction, bridge, verifier, translator, target verifier, or reparse step publishes no
-accepted HDL or reproducibility manifest. The manifest describes only a completed accepted
+A failed construction, bridge, verifier, translator, target verifier, or reparse step
+publishes no accepted HDL or reproducibility manifest. The manifest describes only a completed accepted
 transaction.
 
 ## Verification obligations

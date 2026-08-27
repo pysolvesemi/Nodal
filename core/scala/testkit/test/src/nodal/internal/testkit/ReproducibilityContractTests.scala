@@ -80,11 +80,7 @@ object ReproducibilityContractTests extends TestSuite:
       ),
       generatedNames = snapshot.generatedNames.reverse,
       sourceMap = snapshot.sourceMap.reverse,
-      analogRegions = snapshot.analogRegions.reverse.map: region =>
-        region.copy(
-          expressions = region.expressions.reverse,
-          contributions = region.contributions.reverse
-        )
+      analogRegions = snapshot.analogRegions
     )
 
   private def success(

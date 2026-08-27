@@ -465,13 +465,12 @@ private[nodal] object ReproducibilityContract:
           )
       ),
       "topology" -> array(
-        snapshot.topology.sortBy(edge => (edge.kind, edge.left, edge.right)).map:
-          edge =>
-            obj(
-              "kind" -> string(edge.kind),
-              "left" -> string(edge.left),
-              "right" -> string(edge.right)
-            )
+        snapshot.topology.sortBy(edge => (edge.kind, edge.left, edge.right)).map: edge =>
+          obj(
+            "kind" -> string(edge.kind),
+            "left" -> string(edge.left),
+            "right" -> string(edge.right)
+          )
       ),
       "names" -> semanticNames(snapshot),
       "origins" -> array(
@@ -500,22 +499,22 @@ private[nodal] object ReproducibilityContract:
             )
       ),
       "analog_regions" -> array(
-        snapshot.analogRegions.sortBy(_.path).map: region =>
+        snapshot.analogRegions.map: region =>
           obj(
             "path" -> string(region.path),
             "module" -> string(region.module),
             "expressions" -> array(
-              region.expressions.sortBy(_.path).map: expression =>
+              region.expressions.map: expression =>
                 obj(
                   "path" -> string(expression.path),
                   "operation" -> string(expression.operation),
-                  "operands" -> array(expression.operands.sorted.map(string)),
+                  "operands" -> array(expression.operands.map(string)),
                   "literal" -> optionalString(expression.literal),
                   "unit" -> optionalString(expression.unit)
                 )
             ),
             "contributions" -> array(
-              region.contributions.sortBy(_.path).map: contribution =>
+              region.contributions.map: contribution =>
                 obj(
                   "path" -> string(contribution.path),
                   "target" -> string(contribution.target),

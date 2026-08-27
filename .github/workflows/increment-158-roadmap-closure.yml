@@ -1,0 +1,87 @@
+name: Increment 158 Roadmap Closure
+
+on:
+  push:
+    branches:
+      - increment/158-equation-oriented-ams-roadmap-closure
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-158-roadmap-closure
+  cancel-in-progress: false
+
+jobs:
+  close-roadmap:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out closure branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: increment/158-equation-oriented-ams-roadmap-closure
+
+      - name: Record authoritative Increment 158 closure
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("docs/roadmap/nodal-development-todo.md")
+          text = path.read_text(encoding="utf-8")
+
+          revision_old = "**Revision:** 1.34"
+          revision_new = "**Revision:** 1.35"
+          if text.count(revision_old) != 1:
+              raise RuntimeError(
+                  f"roadmap revision anchor count is {text.count(revision_old)}"
+              )
+          text = text.replace(revision_old, revision_new, 1)
+
+          anchor = (
+              "  - Add pass-by-pass mutation tests, declaration-order permutations, "
+              "repeated-build goldens, and source-bound-versus-genuinely-unnamed "
+              "inventories proving that `_net_*` is used only when no meaningful source, "
+              "caller, sink, or role name exists.\n"
+          )
+          addition = anchor + (
+              "\n- [x] **Foundation Increment 158 — Equation-oriented analog roadmap synchronization**\n"
+              "  - Record first-class unordered continuous equations separately from additive potential/flow contributions, procedural analog assignments, and conservative connections.\n"
+              "  - Record conservative connection equations, partial/concrete physical-component balance, structural parameters, logical flattening with hierarchy-preserving emission, residual-preserving canonicalization, and capability-checked equation-to-target legalization.\n"
+              "  - Make the Increment 133 equation/component API checkpoint a prerequisite for Increment 32 and add the dependent analog-basic/electrothermal library pilot track without changing frozen public syntax or implementing compiler behavior.\n"
+              "  - Evidence: [roadmap PR #74](https://github.com/pysolvesemi/Nodal/pull/74), [materialization run 33090381745](https://github.com/pysolvesemi/Nodal/actions/runs/33090381745), [Core CI run 33090944261](https://github.com/pysolvesemi/Nodal/actions/runs/33090944261), and passing Increment 13-27 regression runs attached to PR #74.\n"
+          )
+          if text.count(anchor) != 1:
+              raise RuntimeError(f"Increment 157 anchor count is {text.count(anchor)}")
+          if "Foundation Increment 158 — Equation-oriented analog roadmap synchronization" in text:
+              raise RuntimeError("Increment 158 closure already exists")
+          text = text.replace(anchor, addition, 1)
+
+          required = [
+              "**Revision:** 1.35",
+              "Foundation Increment 158 — Equation-oriented analog roadmap synchronization",
+              "roadmap PR #74",
+              "Core CI run 33090944261",
+          ]
+          for marker in required:
+              if marker not in text:
+                  raise RuntimeError(f"required closure marker missing: {marker}")
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Commit closure and remove temporary workflow
+        run: |
+          rm -f .github/workflows/increment-158-roadmap-closure.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Increment 158 — record equation-oriented roadmap evidence"
+          git pull --rebase origin increment/158-equation-oriented-ams-roadmap-closure
+          git push origin HEAD:increment/158-equation-oriented-ams-roadmap-closure

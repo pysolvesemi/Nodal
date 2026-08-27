@@ -382,6 +382,62 @@ def Nodal_BridgeOp : Nodal_Op<"bridge"> {
 }
 
 //===----------------------------------------------------------------------===//
+// Minimal analog expressions and contributions
+//===----------------------------------------------------------------------===//
+
+def Nodal_AnalogOp : Nodal_Op<"analog", [HasParent<"ModuleOp">, NoTerminator]> {
+  let summary = "Continuous-time analog equation region";
+  let arguments = (ins DictionaryAttr:$metadata);
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+}
+
+def Nodal_RealLiteralOp : Nodal_Op<"real_literal", [HasParent<"AnalogOp">]> {
+  let summary = "Finite real literal in an analog expression";
+  let arguments = (ins F64Attr:$value, DictionaryAttr:$metadata);
+  let results = (outs F64:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_ParameterRefOp : Nodal_Op<"parameter_ref", [HasParent<"AnalogOp">]> {
+  let summary = "Typed reference to an enclosing real parameter";
+  let arguments = (ins FlatSymbolRefAttr:$parameter, DictionaryAttr:$metadata);
+  let results = (outs F64:$result);
+  let hasVerifier = 1;
+}
+
+class Nodal_AnalogBinaryOp<string mnemonic, string description>
+    : Nodal_Op<mnemonic, [HasParent<"AnalogOp">]> {
+  let summary = description;
+  let arguments = (ins F64:$lhs, F64:$rhs, DictionaryAttr:$metadata);
+  let results = (outs F64:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogAddOp : Nodal_AnalogBinaryOp<"analog_add", "Analog real addition">;
+def Nodal_AnalogSubOp : Nodal_AnalogBinaryOp<"analog_sub", "Analog real subtraction">;
+def Nodal_AnalogMulOp : Nodal_AnalogBinaryOp<"analog_mul", "Analog real multiplication">;
+def Nodal_AnalogDivOp : Nodal_AnalogBinaryOp<"analog_div", "Analog real division">;
+
+def Nodal_AnalogDdtOp : Nodal_Op<"analog_ddt", [HasParent<"AnalogOp">]> {
+  let summary = "Continuous-time derivative of a real analog expression";
+  let arguments = (ins F64:$input, DictionaryAttr:$metadata);
+  let results = (outs F64:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_ContributeOp : Nodal_Op<"contribute", [HasParent<"AnalogOp">]> {
+  let summary = "Potential or flow contribution to a conservative branch";
+  let arguments = (ins
+    Nodal_BranchType:$branch,
+    F64:$value,
+    StrAttr:$kind,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // Domain crossings and timing provenance
 //===----------------------------------------------------------------------===//
 

@@ -55,6 +55,41 @@ jobs:
             python3 "/tmp/${script}.py" .
           done
 
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/compiler/test_increment24.py")
+          text = path.read_text(encoding="utf-8")
+          old_parameter = '''        path.write_text(path.read_text(encoding="utf-8").replace("unknown parameter '", "unknown reference '"), encoding="utf-8")
+'''
+          new_parameter = '''        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "LogicalResult nodal::ParameterRefOp::verify()",
+                "LogicalResult nodal::MissingParameterRefOp::verify()",
+                1,
+            ),
+            encoding="utf-8",
+        )
+'''
+          old_pipeline = '''        path.write_text(path.read_text(encoding="utf-8").replace(' || name == "nodal.contribute"', "", 1), encoding="utf-8")
+'''
+          new_pipeline = '''        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                '"nodal.contribute"',
+                '"nodal.missing_contribution"',
+            ),
+            encoding="utf-8",
+        )
+'''
+          if text.count(old_parameter) != 1:
+              raise RuntimeError("parameter mutation-test anchor is not unique")
+          if text.count(old_pipeline) != 1:
+              raise RuntimeError("pipeline mutation-test anchor is not unique")
+          text = text.replace(old_parameter, new_parameter, 1)
+          text = text.replace(old_pipeline, new_pipeline, 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+
       - name: Install locked toolchains and format native changes
         run: |
           set -euo pipefail

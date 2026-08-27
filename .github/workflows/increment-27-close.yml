@@ -1,0 +1,86 @@
+name: Increment 27 Evidence Closure
+
+on:
+  push:
+    branches:
+      - increment/27-evidence-closure
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-27-close-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  close:
+    if: github.actor != 'github-actions[bot]'
+    name: increment-27/evidence-closure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out closure branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/27-evidence-closure
+          fetch-depth: 0
+
+      - name: Configure commit identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Record accepted evidence and close roadmap item
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest_path = Path('tests/compiler/fixtures/increment27/manifest.json')
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+          if manifest.get('increment') != 27 or manifest.get('public_api') != '0.3':
+              raise SystemExit('Increment 27 manifest identity changed unexpectedly')
+          manifest['status'] = 'validated-natures-disciplines'
+          manifest['evidence'] = {
+              'pull_request': 71,
+              'dedicated_run': 33086550852,
+              'core_ci_run': 33086550923,
+          }
+          manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+
+          roadmap_path = Path('docs/roadmap/nodal-development-todo.md')
+          roadmap = roadmap_path.read_text(encoding='utf-8')
+          replacements = {
+              '**Revision:** 1.32': '**Revision:** 1.33',
+              '- [ ] **Increment 27 — Natures and disciplines**':
+                  '- [x] **Increment 27 — Natures and disciplines**',
+          }
+          for old, new in replacements.items():
+              if roadmap.count(old) != 1:
+                  raise SystemExit(f'expected exactly one roadmap anchor: {old!r}')
+              roadmap = roadmap.replace(old, new, 1)
+          if '- [ ] **Increment 28 — Electrical nodes, nets, and branches**' not in roadmap:
+              raise SystemExit('Increment 28 must remain open')
+          roadmap_path.write_text(roadmap, encoding='utf-8')
+          PY
+
+      - name: Validate closure state
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 scripts/check_increment26.py
+          python3 scripts/check_increment27.py
+          python3 -m unittest \
+            tests.compiler.test_increment26 \
+            tests.compiler.test_increment27
+          git diff --check
+
+      - name: Commit accepted evidence
+        run: |
+          git add \
+            docs/roadmap/nodal-development-todo.md \
+            tests/compiler/fixtures/increment27/manifest.json
+          git commit -m "Increment 27 — record accepted evidence"
+          git push origin HEAD:increment/27-evidence-closure

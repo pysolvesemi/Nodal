@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.34
+**Revision:** 1.35
 **Created:** 2026-08-20
 **Updated:** 2026-08-27
 **Status:** Active roadmap
@@ -1502,6 +1502,12 @@ Detailed rationale and dependent-track plans are in [`dependent-productivity-and
   - Reserve deterministic Nodal-owned generated namespaces such as `_net_<operation>_<stable-index>`, `_reg_<role>_<stable-index>`, `_mem_<role>_<stable-index>`, `_inst_<type>_<stable-index>`, and `_gen_<role>_<stable-index>`; prefer operation, sink, protocol, domain, or structural-role names before the generic fallback.
   - Allocate fallback suffixes only after normalized IR ordering so unrelated pass changes, working directories, JVM identity, or source traversal do not renumber accepted output. Prohibit Nodal-owned `_zz*`, `_T*`, `_GEN*`, `expr_<number>`, and `tmp_<number>` identifiers in accepted HDL.
   - Add pass-by-pass mutation tests, declaration-order permutations, repeated-build goldens, and source-bound-versus-genuinely-unnamed inventories proving that `_net_*` is used only when no meaningful source, caller, sink, or role name exists.
+
+- [x] **Foundation Increment 158 — Equation-oriented analog roadmap synchronization**
+  - Record first-class unordered continuous equations separately from additive potential/flow contributions, procedural analog assignments, and conservative connections.
+  - Record conservative connection equations, partial/concrete physical-component balance, structural parameters, logical flattening with hierarchy-preserving emission, residual-preserving canonicalization, and capability-checked equation-to-target legalization.
+  - Make the Increment 133 equation/component API checkpoint a prerequisite for Increment 32 and add the dependent analog-basic/electrothermal library pilot track without changing frozen public syntax or implementing compiler behavior.
+  - Evidence: [roadmap PR #74](https://github.com/pysolvesemi/Nodal/pull/74), [materialization run 33090381745](https://github.com/pysolvesemi/Nodal/actions/runs/33090381745), [Core CI run 33090944261](https://github.com/pysolvesemi/Nodal/actions/runs/33090944261), and passing Increment 13-27 regression runs attached to PR #74.
 
 ## Foundation completion barrier
 

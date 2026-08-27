@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "increment": 24,
+  "status": "implemented-awaiting-evidence",
+  "public_api": "0.3",
+  "analog_region": "nodal.analog",
+  "expression_operations": [
+    "nodal.real_literal",
+    "nodal.parameter_ref",
+    "nodal.analog_add",
+    "nodal.analog_sub",
+    "nodal.analog_mul",
+    "nodal.analog_div",
+    "nodal.analog_ddt"
+  ],
+  "contribution_operation": "nodal.contribute",
+  "fixture": "core/compiler/test/IR/analog-expression-rc.mlir",
+  "evidence": {}
+}

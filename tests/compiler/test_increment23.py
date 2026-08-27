@@ -23,7 +23,10 @@ class Increment23CheckerTests(unittest.TestCase):
     ) -> tuple[tempfile.TemporaryDirectory[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         root = Path(temporary.name)
-        for relative in dict.fromkeys(CHECKER.EXPECTED_FILES):
+        support_files = (
+            "tests/compiler/fixtures/increment24/manifest.json",
+        )
+        for relative in dict.fromkeys(CHECKER.EXPECTED_FILES + support_files):
             source = ROOT / relative
             destination = root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -177,6 +180,34 @@ class Increment23CheckerTests(unittest.TestCase):
         )
 
         self.assertIn("NODAL-INC23-010", self.codes(root))
+
+    def test_accepts_validated_increment24_successor(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+
+        manifest_path = root / "tests/compiler/fixtures/increment24/manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "validated-minimal-analog-ir"
+        manifest["evidence"] = {
+            "pull_request": 1,
+            "dedicated_run": 2,
+            "core_ci_run": 3,
+        }
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        roadmap = root / "docs/roadmap/nodal-development-todo.md"
+        roadmap.write_text(
+            roadmap.read_text(encoding="utf-8").replace(
+                "- [ ] **Increment 24 — Minimal analog expression and contribution IR**",
+                "- [x] **Increment 24 — Minimal analog expression and contribution IR**",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(CHECKER.check_repository(root), [])
 
     def test_accepts_validated_closure_state(self) -> None:
         temporary, root = self.temporary_repository()

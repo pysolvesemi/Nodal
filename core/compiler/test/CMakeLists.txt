@@ -168,6 +168,43 @@ set_tests_properties(
     WILL_FAIL TRUE
 )
 
+
+add_test(
+  NAME nodal.native.analog-expression-roundtrip
+  COMMAND nodalc
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-expression-rc.mlir"
+)
+set_tests_properties(
+  nodal.native.analog-expression-roundtrip
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal[.]contribute"
+)
+
+add_test(
+  NAME nodal.native.analog-expression-generic
+  COMMAND nodalc
+    --mlir-print-op-generic
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-expression-rc.mlir"
+)
+set_tests_properties(
+  nodal.native.analog-expression-generic
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal[.]analog_ddt"
+)
+
+foreach(_fixture IN ITEMS parameter contribution)
+  add_test(
+    NAME nodal.native.analog-expression-rejects-invalid-${_fixture}
+    COMMAND nodalc
+      "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-expression-invalid-${_fixture}.mlir"
+  )
+  set_tests_properties(
+    nodal.native.analog-expression-rejects-invalid-${_fixture}
+    PROPERTIES
+      WILL_FAIL TRUE
+  )
+endforeach()
+
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
   DEPENDS
@@ -178,6 +215,7 @@ add_custom_target(check-nodal-native
     nodal-dialect-unit-tests
     nodal-core-model-unit-tests
     nodal-semantic-pipeline-unit-tests
+    nodal-analog-expression-unit-tests
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
   USES_TERMINAL
 )

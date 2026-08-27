@@ -547,6 +547,9 @@ def check_repository(root: Path) -> list[Problem]:
     increment24_unchecked = (
         "- [ ] **Increment 24 — Minimal analog expression and contribution IR**" in roadmap
     )
+    increment24_checked = (
+        "- [x] **Increment 24 — Minimal analog expression and contribution IR**" in roadmap
+    )
     status = manifest.get("status")
     evidence = manifest.get("evidence", {})
 
@@ -588,9 +591,37 @@ def check_repository(root: Path) -> list[Problem]:
             Problem("NODAL-INC23-010", f"unexpected manifest status: {status!r}")
         )
 
-    if not increment24_unchecked:
+    increment24_status = None
+    increment24_manifest = root / "tests/compiler/fixtures/increment24/manifest.json"
+    if increment24_manifest.is_file():
+        try:
+            increment24_value = json.loads(
+                increment24_manifest.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            problems.append(
+                Problem(
+                    "NODAL-INC23-010",
+                    f"cannot read Increment 24 successor evidence: {exc}",
+                )
+            )
+        else:
+            increment24_status = increment24_value.get("status")
+
+    if increment24_status == "validated-minimal-analog-ir":
+        if not increment24_checked:
+            problems.append(
+                Problem(
+                    "NODAL-INC23-010",
+                    "validated Increment 24 evidence requires its roadmap item to be checked",
+                )
+            )
+    elif not increment24_unchecked:
         problems.append(
-            Problem("NODAL-INC23-010", "Increment 24 must remain unchecked")
+            Problem(
+                "NODAL-INC23-010",
+                "Increment 24 must remain unchecked until validated evidence exists",
+            )
         )
 
 

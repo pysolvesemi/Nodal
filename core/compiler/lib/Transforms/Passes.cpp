@@ -817,7 +817,10 @@ LogicalResult verifyAnalog(mlir::ModuleOp module) {
     owner->walk([&](Operation *operation) {
       llvm::StringRef name = operation->getName().getStringRef();
       if (name == "nodal.terminal" || name == "nodal.node" || name == "nodal.branch" ||
-          name == "nodal.access")
+          name == "nodal.access" || name == "nodal.analog" || name == "nodal.real_literal" ||
+          name == "nodal.parameter_ref" || name == "nodal.analog_add" ||
+          name == "nodal.analog_sub" || name == "nodal.analog_mul" || name == "nodal.analog_div" ||
+          name == "nodal.analog_ddt" || name == "nodal.contribute")
         analog = true;
       if (name == "nodal.port" || name == "nodal.resolved_net" || name == "nodal.net_drive" ||
           name == "nodal.crossing")
@@ -853,8 +856,12 @@ LogicalResult verifyCapabilities(mlir::ModuleOp module) {
   LogicalResult result = success();
   module.walk([&](Operation *operation) {
     llvm::StringRef name = operation->getName().getStringRef();
-    const bool analog = name == "nodal.terminal" || name == "nodal.node" ||
-                        name == "nodal.branch" || name == "nodal.access" || name == "nodal.bridge";
+    const bool analog =
+        name == "nodal.terminal" || name == "nodal.node" || name == "nodal.branch" ||
+        name == "nodal.access" || name == "nodal.bridge" || name == "nodal.analog" ||
+        name == "nodal.real_literal" || name == "nodal.parameter_ref" ||
+        name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
+        name == "nodal.analog_div" || name == "nodal.analog_ddt" || name == "nodal.contribute";
     const bool digital = name == "nodal.resolved_net" || name == "nodal.net_driver" ||
                          name == "nodal.net_drive" || name == "nodal.crossing" ||
                          name == "nodal.fsm";

@@ -100,3 +100,23 @@ add_test(
   NAME nodal.native.backend-unit
   COMMAND nodal-backend-unit-tests
 )
+
+add_executable(nodal-analog-expression-unit-tests
+  AnalogExpressionTest.cpp
+)
+
+llvm_update_compile_flags(nodal-analog-expression-unit-tests)
+
+target_link_libraries(nodal-analog-expression-unit-tests
+  PRIVATE
+    NodalDialect
+    MLIRIR
+    MLIRParser
+    MLIRSupport
+    LLVMSupport
+)
+
+add_test(
+  NAME nodal.native.analog-expression-unit
+  COMMAND nodal-analog-expression-unit-tests
+)

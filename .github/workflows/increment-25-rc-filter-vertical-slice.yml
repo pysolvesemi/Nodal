@@ -1,0 +1,74 @@
+name: Increment 25 RC Filter Vertical Slice
+
+on:
+  push:
+    branches:
+      - increment/25-rc-filter-end-to-end
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-25-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rc-filter:
+    name: increment-25/rc-filter-vertical-slice
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore locked native and Scala caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/nodal/downloads
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-inc25-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', 'toolchains/lock.json', 'toolchains/checksums/*.sha256', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-inc25-${{ runner.os }}-
+            nodal-inc24-${{ runner.os }}-
+            nodal-scala-${{ runner.os }}-
+
+      - name: Install locked native and lint toolchains
+        run: |
+          ./nodal bootstrap             --mode prebuilt             --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap             --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate contracts and mutation tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          for increment in 18 19 20 21 22 23 24; do
+            python3 "scripts/check_increment${increment}.py"
+          done
+          python3 scripts/check_increment25.py
+          python3 -m unittest discover             -s tests/compiler             -p 'test_*.py'
+          ./nodal check             --contracts-only             --online-toolchain             --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"             --base-ref origin/dev
+          git diff --check
+
+      - name: Build lint and test native and Scala core
+        env:
+          NODAL_NODALC: ${{ github.workspace }}/out/native/release/bin/nodalc
+          NODAL_TRANSLATE: ${{ github.workspace }}/out/native/release/bin/nodal-translate
+        run: |
+          ./nodal core native             --toolchain "${RUNNER_TEMP}/nodal-native-toolchain"             --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal core scala
+
+      - name: Prove exact direct-MLIR Verilog-A output
+        run: |
+          set -euo pipefail
+          translator="${PWD}/out/native/release/bin/nodal-translate"
+          "${translator}"             --nodal-to-verilog-a             core/compiler/test/IR/rc-filter-vertical-slice.mlir             > /tmp/rc-filter.va
+          diff -u             tests/compiler/fixtures/increment25/golden/rc-filter.va             /tmp/rc-filter.va

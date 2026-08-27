@@ -25,6 +25,7 @@ class Increment23CheckerTests(unittest.TestCase):
         root = Path(temporary.name)
         support_files = (
             "tests/compiler/fixtures/increment24/manifest.json",
+            "core/compiler/lib/Backend/AnalogVerticalSlice.cpp",
         )
         for relative in dict.fromkeys(CHECKER.EXPECTED_FILES + support_files):
             source = ROOT / relative
@@ -239,6 +240,22 @@ class Increment23CheckerTests(unittest.TestCase):
         )
 
         self.assertEqual(CHECKER.check_repository(root), [])
+
+    def test_rejects_missing_delegated_target_parser(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        backend = root / "core/compiler/lib/Backend/Backend.cpp"
+        backend.write_text(
+            backend.read_text(encoding="utf-8")
+            .replace("countModuleDeclarations", "removedModuleCounter")
+            .replace("countExactLines", "removedExactCounter"),
+            encoding="utf-8",
+        )
+        extension = root / "core/compiler/lib/Backend/AnalogVerticalSlice.cpp"
+        extension.parent.mkdir(parents=True, exist_ok=True)
+        extension.write_text("no target parser delegation\n", encoding="utf-8")
+        self.assertIn("NODAL-INC23-004", self.codes(root))
+
 
 
 if __name__ == "__main__":

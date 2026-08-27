@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "increment": 25,
+  "status": "validated-rc-vertical-slice",
+  "public_api": "0.3",
+  "scala_fixture": "core/scala/testkit/test/src/nodal/internal/testkit/RcVerticalSliceTests.scala",
+  "mlir_fixture": "core/compiler/test/IR/rc-filter-vertical-slice.mlir",
+  "golden": "tests/compiler/fixtures/increment25/golden/rc-filter.va",
+  "pipeline": [
+    "scala-construction",
+    "nodal-mlir",
+    "nodal-gate-default",
+    "nodal-to-verilog-a",
+    "target-verify",
+    "target-reparse"
+  ],
+  "evidence": {
+    "pull_request": 68,
+    "dedicated_run": 33068184835,
+    "core_ci_run": 33068184714
+  }
+}

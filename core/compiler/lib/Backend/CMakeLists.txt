@@ -1,4 +1,5 @@
 add_mlir_library(NodalBackend
+  AnalogVerticalSlice.cpp
   Backend.cpp
 
   ADDITIONAL_HEADER_DIRS

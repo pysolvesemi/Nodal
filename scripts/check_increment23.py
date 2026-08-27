@@ -137,6 +137,15 @@ def check_repository(root: Path) -> list[Problem]:
         problems,
         "NODAL-INC23-004",
     )
+    backend_extension_path = (
+        root / "core/compiler/lib/Backend/AnalogVerticalSlice.cpp"
+    )
+    backend_extension = (
+        backend_extension_path.read_text(encoding="utf-8")
+        if backend_extension_path.is_file()
+        else ""
+    )
+    backend_contract = backend + "\n" + backend_extension
     include_cmake = read(
         root / "core/compiler/include/nodal/CMakeLists.txt",
         problems,
@@ -217,7 +226,7 @@ def check_repository(root: Path) -> list[Problem]:
         "backend public native header",
     )
     require(
-        backend,
+        backend_contract,
         (
             "nodal-to-verilog-a",
             "nodal-to-verilog-ams",
@@ -629,8 +638,6 @@ def check_repository(root: Path) -> list[Problem]:
         "kVerilogReservedIdentifiers",
         '"input"',
         "Attribute raw = module->getAttr(attribute)",
-        "countModuleDeclarations",
-        "countExactLines",
     ):
         if fragment not in backend:
             problems.append(
@@ -639,7 +646,23 @@ def check_repository(root: Path) -> list[Problem]:
                     f"backend target parser lacks review contract: {fragment}",
                 )
             )
-    if "countOccurrences" in backend:
+    legacy_target_parser = (
+        "countModuleDeclarations" in backend
+        and "countExactLines" in backend
+    )
+    delegated_target_parser = (
+        "verifyBackendTarget" in backend_contract
+        and "reparseBackendTarget" in backend_contract
+    )
+    if not legacy_target_parser and not delegated_target_parser:
+        problems.append(
+            Problem(
+                "NODAL-INC23-004",
+                "backend target parser lacks either the original exact-line contract "
+                "or the verified Increment 25 delegation",
+            )
+        )
+    if "countOccurrences" in backend_contract:
         problems.append(
             Problem(
                 "NODAL-INC23-004",

@@ -8,8 +8,13 @@
 `include "constants.vams"
 `include "disciplines.vams"
 
-module Alpha;
-endmodule
+module RcFilter(n, p);
+  inout n, p;
+  electrical n, p;
+  parameter real C = 1e-12;
+  parameter real R = 1000;
 
-module Zeta;
+  analog begin
+    I(p, n) <+ ((V(p, n) / R) + (C * ddt(V(p, n))));
+  end
 endmodule

@@ -94,3 +94,15 @@
 /core/scala/testkit/test/src/nodal/SemanticOriginTests.scala @pysolvesemi
 /docs/design-gates/NodalSemanticOriginNaming-DG-v1.0.md @pysolvesemi
 /docs/implementation/increment17-source-origin-naming.md @pysolvesemi
+
+# Increment 25 RC end-to-end vertical slice.
+/core/compiler/include/nodal/Backend/AnalogVerticalSlice.h @pysolvesemi
+/core/compiler/lib/Backend/AnalogVerticalSlice.cpp @pysolvesemi
+/core/compiler/test/IR/rc-filter-vertical-slice.mlir @pysolvesemi
+/core/scala/testkit/test/src/nodal/internal/testkit/RcVerticalSliceTests.scala @pysolvesemi
+/tests/compiler/fixtures/increment25/ @pysolvesemi
+/scripts/check_increment25.py @pysolvesemi
+/tests/compiler/test_increment25.py @pysolvesemi
+/.github/workflows/increment-25-rc-filter-vertical-slice.yml @pysolvesemi
+/docs/design-gates/NodalRcVerticalSlice-DG-v1.0.md @pysolvesemi
+/docs/implementation/increment25-rc-vertical-slice.md @pysolvesemi

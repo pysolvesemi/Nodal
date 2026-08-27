@@ -6,6 +6,7 @@
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Tools/mlir-translate/Translation.h"
+#include "nodal/Backend/AnalogVerticalSlice.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 
@@ -158,18 +159,7 @@ LogicalResult verifyDesignKind(ModuleOp module, const BackendProfile &profile) {
 }
 
 LogicalResult verifySupportedOperations(ModuleOp module, const BackendProfile &profile) {
-  LogicalResult result = success();
-  module.walk([&](Operation *operation) {
-    if (failed(result) || operation == module.getOperation())
-      return;
-    llvm::StringRef name = operation->getName().getStringRef();
-    if (name == "nodal.module")
-      return;
-    result = emitMappedFailure(operation, "NODAL-BACKEND-CAPABILITY-001",
-                               llvm::Twine("operation '") + name +
-                                   "' is not yet supported by profile '" + profile.id + "'");
-  });
-  return result;
+  return verifyBackendOperations(module, profile);
 }
 
 LogicalResult collectDefinitions(ModuleOp module, llvm::SmallVectorImpl<Operation *> &definitions) {
@@ -188,89 +178,22 @@ LogicalResult collectDefinitions(ModuleOp module, llvm::SmallVectorImpl<Operatio
   return success();
 }
 
-void renderCandidate(llvm::ArrayRef<Operation *> definitions,
-                     const BackendConfiguration &configuration, llvm::raw_ostream &output) {
-  output << "/* Nodal backend framework v1\n";
-  output << " * profile: " << configuration.profile->id << "\n";
-  output << " * check-profile: " << stringifyGateProfile(configuration.checkProfile) << "\n";
-  output << " * shaped-layout: " << stringifyShapedValueLayout(configuration.shapedValueLayout)
-         << "\n";
-  output << " * materialization: " << stringifyMaterializationPolicy(configuration.materialization)
-         << "\n";
-  output << " * naming: " << stringifyNamingPolicy(configuration.naming) << "\n";
-  output << " */\n";
-  output << "`include \"constants.vams\"\n";
-  output << "`include \"disciplines.vams\"\n\n";
-
-  for (Operation *definition : definitions) {
-    output << "module " << symbolName(definition) << ";\n";
-    output << "endmodule\n\n";
-  }
-}
-
-size_t countModuleDeclarations(llvm::StringRef text) {
-  llvm::SmallVector<llvm::StringRef, 32> lines;
-  text.split(lines, '\n', -1, true);
-  return llvm::count_if(lines, [](llvm::StringRef line) {
-    line = line.trim();
-    return line.starts_with("module ") && line.ends_with(";");
-  });
-}
-
-size_t countExactLines(llvm::StringRef text, llvm::StringRef expected) {
-  llvm::SmallVector<llvm::StringRef, 32> lines;
-  text.split(lines, '\n', -1, true);
-  return llvm::count_if(lines, [&](llvm::StringRef line) { return line.trim() == expected; });
+LogicalResult renderCandidate(llvm::ArrayRef<Operation *> definitions,
+                              const BackendConfiguration &configuration,
+                              llvm::raw_ostream &output) {
+  return renderBackendCandidate(definitions, configuration, output);
 }
 
 class BuiltinTargetVerificationHooks final : public TargetVerificationHooks {
 public:
   LogicalResult verifyTarget(llvm::StringRef candidate,
                              const BackendConfiguration &configuration) const final {
-    if (candidate.empty() || !candidate.starts_with("/* Nodal backend framework v1\n"))
-      return failure();
-    if (!candidate.ends_with("\n") || candidate.contains('\r') || candidate.contains('\0'))
-      return failure();
-
-    std::string expectedProfile =
-        (llvm::Twine(" * profile: ") + configuration.profile->id + "\n").str();
-    if (!candidate.contains(expectedProfile))
-      return failure();
-    if (countModuleDeclarations(candidate) != countExactLines(candidate, "endmodule"))
-      return failure();
-    return success();
+    return verifyBackendTarget(candidate, configuration);
   }
 
-  LogicalResult reparseTarget(llvm::StringRef candidate, const BackendConfiguration &) const final {
-    llvm::SmallVector<llvm::StringRef, 32> lines;
-    candidate.split(lines, '\n', -1, true);
-
-    bool insideModule = false;
-    bool sawModule = false;
-    for (llvm::StringRef line : lines) {
-      line = line.trim();
-      if (line.empty() || line.starts_with("/*") || line.starts_with("*") ||
-          line.starts_with("`include "))
-        continue;
-      if (line.starts_with("module ") && line.ends_with(";")) {
-        if (insideModule)
-          return failure();
-        llvm::StringRef name = line.drop_front(sizeof("module ") - 1).drop_back().trim();
-        if (!isIdentifier(name))
-          return failure();
-        insideModule = true;
-        sawModule = true;
-        continue;
-      }
-      if (line == "endmodule") {
-        if (!insideModule)
-          return failure();
-        insideModule = false;
-        continue;
-      }
-      return failure();
-    }
-    return sawModule && !insideModule ? success() : failure();
+  LogicalResult reparseTarget(llvm::StringRef candidate,
+                              const BackendConfiguration &configuration) const final {
+    return reparseBackendTarget(candidate, configuration);
   }
 };
 
@@ -391,7 +314,8 @@ LogicalResult emitBackend(ModuleOp module, BackendKind kind, llvm::raw_ostream &
 
   std::string candidate;
   llvm::raw_string_ostream candidateStream(candidate);
-  renderCandidate(definitions, *configuration, candidateStream);
+  if (failed(renderCandidate(definitions, *configuration, candidateStream)))
+    return failure();
   candidateStream.flush();
 
   const TargetVerificationHooks &selectedHooks =

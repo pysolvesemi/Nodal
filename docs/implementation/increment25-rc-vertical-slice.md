@@ -21,3 +21,10 @@ deterministic while retaining source-owner disambiguation.
 The Scala and direct-MLIR paths are compared to one exact golden. Failures in
 construction, bridge lowering, semantic verification, capability checking,
 target verification, or target reparse publish no partial HDL.
+
+## Accepted evidence
+
+- Pull request: `68`.
+- Dedicated Increment 25 workflow: `33068184835`.
+- Core CI workflow: `33068184714`.
+- Increment 22 compatibility workflow: `33068184871`.

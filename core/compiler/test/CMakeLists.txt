@@ -218,6 +218,43 @@ set_tests_properties(
     PASS_REGULAR_EXPRESSION "I[(]p, n[)] <[+]"
 )
 
+
+add_test(
+  NAME nodal.native.natures-disciplines-roundtrip
+  COMMAND nodalc
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/natures-disciplines.mlir"
+)
+set_tests_properties(
+  nodal.native.natures-disciplines-roundtrip
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal[.]discipline_import"
+)
+
+add_test(
+  NAME nodal.native.natures-disciplines-generic
+  COMMAND nodalc
+    --mlir-print-op-generic
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/natures-disciplines.mlir"
+)
+set_tests_properties(
+  nodal.native.natures-disciplines-generic
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal[.]nature_import"
+)
+
+foreach(_fixture IN ITEMS tolerance association import-cycle)
+  add_test(
+    NAME nodal.native.natures-disciplines-rejects-${_fixture}
+    COMMAND nodalc
+      "${CMAKE_CURRENT_SOURCE_DIR}/IR/natures-disciplines-invalid-${_fixture}.mlir"
+  )
+  set_tests_properties(
+    nodal.native.natures-disciplines-rejects-${_fixture}
+    PROPERTIES
+      WILL_FAIL TRUE
+  )
+endforeach()
+
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
   DEPENDS
@@ -229,6 +266,7 @@ add_custom_target(check-nodal-native
     nodal-core-model-unit-tests
     nodal-semantic-pipeline-unit-tests
     nodal-analog-expression-unit-tests
+    nodal-nature-discipline-unit-tests
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
   USES_TERMINAL
 )

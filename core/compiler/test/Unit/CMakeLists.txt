@@ -120,3 +120,23 @@ add_test(
   NAME nodal.native.analog-expression-unit
   COMMAND nodal-analog-expression-unit-tests
 )
+
+add_executable(nodal-nature-discipline-unit-tests
+  NatureDisciplineTest.cpp
+)
+
+llvm_update_compile_flags(nodal-nature-discipline-unit-tests)
+
+target_link_libraries(nodal-nature-discipline-unit-tests
+  PRIVATE
+    NodalDialect
+    MLIRIR
+    MLIRParser
+    MLIRSupport
+    LLVMSupport
+)
+
+add_test(
+  NAME nodal.native.nature-discipline-unit
+  COMMAND nodal-nature-discipline-unit-tests
+)

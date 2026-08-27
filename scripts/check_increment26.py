@@ -293,6 +293,7 @@ def check_repository(root: Path) -> list[Problem]:
         in roadmap
     )
     increment27_open = "- [ ] **Increment 27 — Natures and disciplines**" in roadmap
+    increment27_done = "- [x] **Increment 27 — Natures and disciplines**" in roadmap
     status = manifest.get("status")
     evidence = manifest.get("evidence", {})
 
@@ -326,8 +327,27 @@ def check_repository(root: Path) -> list[Problem]:
         problems.append(
             Problem("NODAL-INC26-008", f"unexpected manifest status: {status!r}")
         )
-    if not increment27_open:
-        problems.append(Problem("NODAL-INC26-008", "Increment 27 must remain unchecked"))
+    if increment27_open:
+        pass
+    elif increment27_done:
+        successor_path = root / "tests/compiler/fixtures/increment27/manifest.json"
+        try:
+            successor = json.loads(read(successor_path, problems, "NODAL-INC26-008"))
+        except json.JSONDecodeError as exc:
+            problems.append(Problem("NODAL-INC26-008", f"invalid Increment 27 successor manifest: {exc}"))
+            successor = {}
+        if successor.get("increment") != 27 or successor.get("public_api") != "0.3":
+            problems.append(Problem("NODAL-INC26-008", "Increment 27 successor identity/public API mismatch"))
+        if successor.get("status") != "validated-natures-disciplines":
+            problems.append(Problem("NODAL-INC26-008", "checked Increment 27 lacks validated successor evidence"))
+        successor_evidence = successor.get("evidence", {})
+        for field in ("pull_request", "dedicated_run", "core_ci_run"):
+            if not isinstance(successor_evidence.get(field), int):
+                problems.append(Problem("NODAL-INC26-008", f"Increment 27 successor lacks integer evidence field: {field}"))
+        if revision < (1, 33):
+            problems.append(Problem("NODAL-INC26-008", "checked Increment 27 requires roadmap revision 1.33 or later"))
+    else:
+        problems.append(Problem("NODAL-INC26-008", "Increment 27 roadmap state is neither open nor validated"))
 
     return problems
 

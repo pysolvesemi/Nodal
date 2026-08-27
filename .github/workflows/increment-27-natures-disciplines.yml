@@ -1,0 +1,104 @@
+name: Increment 27 Natures and Disciplines
+
+on:
+  push:
+    branches:
+      - increment/27-natures-disciplines
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-27-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nature-discipline:
+    name: increment-27/natures-disciplines
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore locked native and Scala caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/nodal/downloads
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-inc27-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', 'toolchains/lock.json', 'toolchains/checksums/*.sha256', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-inc27-${{ runner.os }}-
+            nodal-inc26-${{ runner.os }}-
+            nodal-inc25-${{ runner.os }}-
+            nodal-scala-${{ runner.os }}-
+
+      - name: Install locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate contracts and mutation tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          for increment in $(seq 18 27); do
+            python3 "scripts/check_increment${increment}.py"
+          done
+          python3 scripts/check_increment27.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          git diff --check
+
+      - name: Build lint and test native core
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Prove declarations imports compatibility and stable rejections
+        run: |
+          set -euo pipefail
+          compiler="${PWD}/out/native/release/bin/nodalc"
+          "${compiler}" \
+            --pass-pipeline='builtin.module(nodal-gate-default)' \
+            core/compiler/test/IR/natures-disciplines.mlir \
+            | tee /tmp/natures-disciplines.mlir
+          grep -F 'nodal.nature_import' /tmp/natures-disciplines.mlir
+          grep -F 'nodal.discipline_import' /tmp/natures-disciplines.mlir
+
+          if "${compiler}" core/compiler/test/IR/natures-disciplines-invalid-tolerance.mlir >/tmp/tolerance.out 2>/tmp/tolerance.err; then
+            echo 'non-positive nature tolerance was accepted' >&2
+            exit 1
+          fi
+          grep -F 'NODAL-NATURE-TOLERANCE-001' /tmp/tolerance.err
+
+          if "${compiler}" core/compiler/test/IR/natures-disciplines-invalid-association.mlir >/tmp/association.out 2>/tmp/association.err; then
+            echo 'unknown discipline flow nature was accepted' >&2
+            exit 1
+          fi
+          grep -F 'NODAL-DISCIPLINE-FLOW-001' /tmp/association.err
+
+          if "${compiler}" core/compiler/test/IR/natures-disciplines-invalid-import-cycle.mlir >/tmp/import.out 2>/tmp/import.err; then
+            echo 'cyclic nature import was accepted' >&2
+            exit 1
+          fi
+          grep -F 'NODAL-NATURE-IMPORT-001' /tmp/import.err

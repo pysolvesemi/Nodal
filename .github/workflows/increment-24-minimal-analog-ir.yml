@@ -54,9 +54,10 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
-          for increment in 18 19 20 21 22 23 24; do
+          for increment in 18 19 20 21 22 23; do
             python3 "scripts/check_increment${increment}.py"
           done
+          python3 scripts/check_increment24.py
           python3 -m unittest discover \
             -s tests/compiler \
             -p 'test_*.py'

@@ -3,6 +3,7 @@
 **Revision:** v1.0
 **Status:** Approved
 **Scope:** compiler-vertical-slice
+**Scope:** public-api
 **Public API:** unchanged at 0.3
 **Approved authority:** standing Nodal increment implementation and merge authorization
 
@@ -14,6 +15,11 @@ real parameters, `analog`, `V(p, n)`, `I(p, n)`, real arithmetic, `ddt`, and one
 flow contribution must pass through the construction kernel, source-correlated
 Nodal MLIR, the mandatory native verification transaction, and deterministic
 Verilog-A emission.
+
+The `public-api` scope approval covers implementation changes beneath the
+already frozen v0.3 Scala source files. It does not add, remove, rename, or
+retype a public symbol; the external API contract and machine-readable v0.3
+surface remain unchanged.
 
 ## Binding boundary
 

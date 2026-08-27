@@ -62,11 +62,13 @@ jobs:
           mapfile -t changed < <(git diff --name-only origin/dev)
           printf 'Final closure diff:\n'
           printf '  %s\n' "${changed[@]}"
-          test "${#changed[@]}" -eq 2
+          test "${#changed[@]}" -eq 3
           printf '%s\n' "${changed[@]}" \
             | grep -Fx 'docs/roadmap/nodal-development-todo.md'
           printf '%s\n' "${changed[@]}" \
             | grep -Fx 'tests/compiler/fixtures/increment23/manifest.json'
+          printf '%s\n' "${changed[@]}" \
+            | grep -Fx 'tests/compiler/test_increment23.py'
           grep -F '**Revision:** 1.29' \
             docs/roadmap/nodal-development-todo.md
           grep -F -- '- [x] **Increment 23 — Backend framework and capability profiles**' \

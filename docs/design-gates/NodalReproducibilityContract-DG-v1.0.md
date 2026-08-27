@@ -3,6 +3,7 @@
 **Revision:** v1.0
 **Status:** Approved
 **Scope:** compiler-reproducibility
+**Scope:** public-api
 **Public API:** unchanged at 0.3
 **Approved authority:** standing Nodal increment implementation and merge authorization
 

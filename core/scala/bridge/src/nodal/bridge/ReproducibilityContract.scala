@@ -51,11 +51,15 @@ private[nodal] object ReproducibilityContract:
       workingDirectory: Path,
       timeout: Duration = Duration.ofSeconds(60)
   ): Either[NativeCompilerFailure, ReproducibilityBundle] =
-    val snapshot = ConstructionKernel.inspect(
-      top,
-      EmitOptions(backend = Backend.VerilogA)
-    )
-    captureSnapshot(snapshot, nodalc, translator, workingDirectory, timeout)
+    try
+      val snapshot = ConstructionKernel.inspect(
+        top,
+        EmitOptions(backend = Backend.VerilogA)
+      )
+      captureSnapshot(snapshot, nodalc, translator, workingDirectory, timeout)
+    catch
+      case exception: ConstructionException =>
+        Left(constructionFailure(exception))
 
   def captureSnapshot(
       snapshot: ConstructionSnapshot,
@@ -157,6 +161,21 @@ private[nodal] object ReproducibilityContract:
         manifestText,
         digest(manifestText)
       )
+    )
+
+  private def constructionFailure(
+      exception: ConstructionException
+  ): NativeCompilerFailure =
+    NativeCompilerFailure(
+      BridgeDiagnostic(
+        exception.diagnostic.code,
+        exception.diagnostic.message,
+        exception.diagnostic.semanticPath
+      ),
+      Vector.empty,
+      "",
+      "",
+      None
     )
 
   private def backendName(backend: Backend): String = backend match
@@ -336,17 +355,18 @@ private[nodal] object ReproducibilityContract:
     array(checks.map(check => obj("id" -> string(check), "required" -> bool(true))))
 
   private def waiverInventory(snapshot: ConstructionSnapshot): JsonValue =
-    val entries = snapshot.origins
-      .filter(origin => origin.operation.toLowerCase(java.util.Locale.ROOT).contains("waive"))
-      .sortBy(origin => (origin.semanticPath, origin.id))
-      .map: origin =>
+    val entries = snapshot.waivers
+      .sortBy(waiver => (waiver.semanticPath, waiver.id))
+      .map: waiver =>
         obj(
-          "origin_id" -> string(origin.id),
-          "semantic_path" -> string(origin.semanticPath),
-          "operation" -> string(origin.operation),
-          "source" -> source(origin.source),
-          "parents" -> array(origin.parents.sorted.map(string)),
-          "sink" -> optionalString(origin.sink)
+          "kind" -> string(waiver.kind),
+          "id" -> string(waiver.id),
+          "reason" -> string(waiver.reason),
+          "relation" -> string(waiver.relation),
+          "semantic_path" -> string(waiver.semanticPath),
+          "source_value" -> optionalString(waiver.sourceValue),
+          "destination_domain" -> optionalString(waiver.destinationDomain),
+          "source" -> source(waiver.source)
         )
     array(entries)
 
@@ -384,6 +404,20 @@ private[nodal] object ReproducibilityContract:
           "parents" -> array(origin.parents.sorted.map(string)),
           "sink" -> optionalString(origin.sink)
         )
+    val waiverEntries = snapshot.waivers
+      .sortBy(waiver => (waiver.semanticPath, waiver.id))
+      .map: waiver =>
+        obj(
+          "record_kind" -> string("waiver"),
+          "kind" -> string(waiver.kind),
+          "id" -> string(waiver.id),
+          "reason" -> string(waiver.reason),
+          "relation" -> string(waiver.relation),
+          "semantic_path" -> string(waiver.semanticPath),
+          "source_value" -> optionalString(waiver.sourceValue),
+          "destination_domain" -> optionalString(waiver.destinationDomain),
+          "source" -> source(waiver.source)
+        )
     val generatedEntries = snapshot.generatedNames
       .filter(entry =>
         Set("crossing", "synchronizer", "reset-controller").contains(entry.category)
@@ -397,7 +431,7 @@ private[nodal] object ReproducibilityContract:
           "name" -> string(entry.name),
           "origin" -> string(entry.origin)
         )
-    array(originEntries ++ generatedEntries)
+    array(originEntries ++ waiverEntries ++ generatedEntries)
 
   private def snapshotJson(snapshot: ConstructionSnapshot): JsonValue =
     obj(
@@ -523,7 +557,8 @@ private[nodal] object ReproducibilityContract:
                 )
             )
           )
-      )
+      ),
+      "waivers" -> waiverInventory(snapshot)
     )
 
   private def attributes(values: Vector[(String, String)]): JsonValue =

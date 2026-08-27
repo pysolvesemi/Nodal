@@ -49,6 +49,23 @@ class Increment26CheckerTests(unittest.TestCase):
         ).unlink()
         self.assertIn("NODAL-INC26-001", self.codes(root))
 
+    def test_rejects_missing_construction_failure_channel(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = (
+            root
+            / "core/scala/bridge/src/nodal/bridge/ReproducibilityContract.scala"
+        )
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "case exception: ConstructionException",
+                "case exception: IllegalArgumentException",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC26-003", self.codes(root))
+
     def test_rejects_time_dependent_manifest(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)

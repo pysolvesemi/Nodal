@@ -80,7 +80,8 @@ object ReproducibilityContractTests extends TestSuite:
       ),
       generatedNames = snapshot.generatedNames.reverse,
       sourceMap = snapshot.sourceMap.reverse,
-      analogRegions = snapshot.analogRegions
+      analogRegions = snapshot.analogRegions,
+      waivers = snapshot.waivers.reverse
     )
 
   private def success(
@@ -94,7 +95,63 @@ object ReproducibilityContractTests extends TestSuite:
       identity
     )
 
+  private def topLevelArrayObjectCount(text: String, key: String): Int =
+    val marker = s"\"$key\":"
+    val keyIndex = text.indexOf(marker)
+    assert(keyIndex >= 0)
+    val open = text.indexOf('[', keyIndex + marker.length)
+    assert(open >= 0)
+
+    var arrayDepth = 1
+    var objectDepth = 0
+    var inString = false
+    var escaped = false
+    var objects = 0
+    var index = open + 1
+    while index < text.length && arrayDepth > 0 do
+      val character = text.charAt(index)
+      if inString then
+        if escaped then escaped = false
+        else
+          character match
+            case '\\' => escaped = true
+            case '"' => inString = false
+            case _ => ()
+      else
+        character match
+          case '"' => inString = true
+          case '[' => arrayDepth += 1
+          case ']' => arrayDepth -= 1
+          case '{' =>
+            if arrayDepth == 1 && objectDepth == 0 then objects += 1
+            objectDepth += 1
+          case '}' => objectDepth -= 1
+          case _ => ()
+      index += 1
+
+    assert(arrayDepth == 0)
+    assert(objectDepth == 0)
+    objects
+
   val tests: Tests = Tests:
+    test("construction failures use declared result channel"):
+      val directory = workDirectory()
+      try
+        ReproducibilityContract.capture(
+          new UnboundKernelRoot,
+          directory.resolve("missing-nodalc"),
+          directory.resolve("missing-translate"),
+          directory
+        ) match
+          case Left(failure) =>
+            assert(failure.diagnostic.code == "NODAL-ROOT-DOMAIN-016")
+            assert(failure.command.isEmpty)
+            assert(failure.standardOutput.isEmpty)
+            assert(failure.standardError.isEmpty)
+            assert(failure.exitCode.isEmpty)
+          case Right(_) => assert(false)
+      finally delete(directory)
+
     test("canonical artifacts survive repeated construction and valid traversal orders"):
       val firstSnapshot = ConstructionKernel.inspect(
         new RcFilter,
@@ -131,9 +188,14 @@ object ReproducibilityContractTests extends TestSuite:
       assert(report.contains("\"waivers\""))
       assert(report.contains("\"domain_manifest\""))
       assert(report.contains("\"cdc_rdc_report\""))
-      assert(report.contains("fixture-cdc-waiver") || report.contains("waive"))
+      val waiverEntries = topLevelArrayObjectCount(report, "waivers")
+      val crossingEntries = topLevelArrayObjectCount(report, "cdc_rdc_report")
+      assert(waiverEntries > 0)
+      assert(crossingEntries > 0)
+      assert(report.contains("\"id\": \"fixture-cdc-waiver\""))
+      assert(report.contains("\"reason\": \"exercise deterministic waiver inventory\""))
+      assert(report.contains("\"relation\": \"asynchronous\""))
       assert(report.contains("core"))
-      assert(report.contains("cdc") || report.contains("synchronizer"))
       assert(!report.contains("nodal-scala-mlir-"))
 
     test("verified MLIR HDL and manifest are byte-identical across work directories"):

@@ -144,6 +144,9 @@ def check_repository(root: Path) -> list[Problem]:
             "final case class ReproducibilityManifest",
             "final case class ReproducibilityBundle",
             "captureSnapshot",
+            "case exception: ConstructionException",
+            "constructionFailure(exception)",
+            "snapshot.waivers",
             "canonicalSnapshot",
             "construction.json",
             "source.mlir",
@@ -189,6 +192,9 @@ def check_repository(root: Path) -> list[Problem]:
         (
             "canonical artifacts survive repeated construction and valid traversal orders",
             "manifest retains deterministic inventories and empty-or-explicit reports",
+            "construction failures use declared result channel",
+            "topLevelArrayObjectCount",
+            "fixture-cdc-waiver",
             "verified MLIR HDL and manifest are byte-identical across work directories",
             "ReproducibilityContract.captureSnapshot",
             "NODAL_NODALC",
@@ -207,6 +213,7 @@ def check_repository(root: Path) -> list[Problem]:
         (
             "**Status:** Approved",
             "**Scope:** compiler-reproducibility",
+            "**Scope:** public-api",
             "**Public API:** unchanged at 0.3",
             "Ordered expression operands",
             "An unavailable category is represented by a deterministic empty array",

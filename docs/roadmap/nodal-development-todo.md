@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.28
+**Revision:** 1.29
 **Created:** 2026-08-20
 **Updated:** 2026-08-26
 **Status:** Active roadmap
@@ -861,8 +861,9 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Map construction, driver/latch/cycle/hierarchy, shape/rank/layout/storage/index, materialization/naming/source-span, parser, verifier, pass, backend, external-tool, signed literal/conversion/mixed-sign/width/shift, loop stage/bound/body/dependency/effect/profile, enum encoding/decode/exhaustiveness, FSM graph/transition/recursion/illegal-state, domain-binding, CDC, RDC, gate/mux, protocol/pipeline, memory/effect, analog/mixed-signal, and waiver diagnostics back to Scala locations, hierarchy/index paths, and stable codes.
   - Evidence: [`NodalCrossLayerDiagnostics-DG-v1.0.md`](../design-gates/NodalCrossLayerDiagnostics-DG-v1.0.md), [`increment22-cross-layer-diagnostic-mapping.md`](../implementation/increment22-cross-layer-diagnostic-mapping.md), PR [#53](https://github.com/pysolvesemi/Nodal/pull/53), dedicated validation run [32944621396](https://github.com/pysolvesemi/Nodal/actions/runs/32944621396), and Core CI run [32944621448](https://github.com/pysolvesemi/Nodal/actions/runs/32944621448).
 
-- [ ] **Increment 23 — Backend framework and capability profiles**
+- [x] **Increment 23 — Backend framework and capability profiles**
   - Add translation registration, deterministic output handling, profile-owned shaped-value layouts, expression materialization/naming and CheckProfile configuration, transactional target verification/reparse hooks, `verilog-a`/`verilog-ams` profiles, and explicit unsupported-feature errors.
+  - Evidence: [`NodalBackendFramework-DG-v1.0.md`](../design-gates/NodalBackendFramework-DG-v1.0.md), [`increment23-backend-framework.md`](../implementation/increment23-backend-framework.md), implementation PR [#61](https://github.com/pysolvesemi/Nodal/pull/61), closure PR [#63](https://github.com/pysolvesemi/Nodal/pull/63), dedicated validation run [32966834961](https://github.com/pysolvesemi/Nodal/actions/runs/32966834961), and Core CI run [32966835105](https://github.com/pysolvesemi/Nodal/actions/runs/32966835105).
 
 - [ ] **Increment 24 — Minimal analog expression and contribution IR**
   - Add real literals, parameter references, arithmetic, electrical potential access, analog region, and contribution sufficient for a minimal RC equation.

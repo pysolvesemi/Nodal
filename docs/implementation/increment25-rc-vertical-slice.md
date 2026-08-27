@@ -14,6 +14,10 @@ MLIR and Increment 23 backend transaction for a minimal RC model.
    target structure, reparses the supported subset, and only then publishes the
    exact Verilog-A bytes.
 
+Source-correlation lookup prunes generated build trees before descent and treats
+disappearing entries as non-candidates. This keeps parallel forked elaboration
+deterministic while retaining source-owner disambiguation.
+
 The Scala and direct-MLIR paths are compared to one exact golden. Failures in
 construction, bridge lowering, semantic verification, capability checking,
 target verification, or target reparse publish no partial HDL.

@@ -2,7 +2,7 @@
   "increment": 27,
   "title": "Natures and disciplines",
   "public_api": "0.3",
-  "status": "implemented-awaiting-evidence",
+  "status": "validated-natures-disciplines",
   "operations": [
     "nodal.nature",
     "nodal.nature_import",
@@ -45,5 +45,9 @@
     "NODAL-DISCIPLINE-IMPORT-001",
     "NODAL-DISCIPLINE-IMPORT-002"
   ],
-  "evidence": {}
+  "evidence": {
+    "pull_request": 71,
+    "dedicated_run": 33086550852,
+    "core_ci_run": 33086550923
+  }
 }

@@ -67,8 +67,25 @@ class Increment27CheckerTests(unittest.TestCase):
     def test_rejects_premature_roadmap_closure(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
+
+        manifest_path = root / "tests/compiler/fixtures/increment27/manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "implemented-awaiting-evidence"
+        manifest["evidence"] = {}
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
         roadmap = root / "docs/roadmap/nodal-development-todo.md"
-        roadmap.write_text(roadmap.read_text(encoding="utf-8").replace("- [ ] **Increment 27 — Natures and disciplines**", "- [x] **Increment 27 — Natures and disciplines**", 1), encoding="utf-8")
+        roadmap.write_text(
+            roadmap.read_text(encoding="utf-8").replace(
+                "- [ ] **Increment 27 — Natures and disciplines**",
+                "- [x] **Increment 27 — Natures and disciplines**",
+                1,
+            ),
+            encoding="utf-8",
+        )
         self.assertIn("NODAL-INC27-016", self.codes(root))
 
     def test_accepts_validated_state(self) -> None:

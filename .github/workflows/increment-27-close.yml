@@ -70,6 +70,7 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
+          rm .github/workflows/increment-27-close.yml
           python3 scripts/check_increment26.py
           python3 scripts/check_increment27.py
           python3 -m unittest \

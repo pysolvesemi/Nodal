@@ -1,8 +1,8 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.29
+**Revision:** 1.30
 **Created:** 2026-08-20
-**Updated:** 2026-08-26
+**Updated:** 2026-08-27
 **Status:** Active roadmap
 **Primary language target:** Verilog-AMS 2023
 **Analog-only compatibility target:** Verilog-A
@@ -865,8 +865,9 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Add translation registration, deterministic output handling, profile-owned shaped-value layouts, expression materialization/naming and CheckProfile configuration, transactional target verification/reparse hooks, `verilog-a`/`verilog-ams` profiles, and explicit unsupported-feature errors.
   - Evidence: [`NodalBackendFramework-DG-v1.0.md`](../design-gates/NodalBackendFramework-DG-v1.0.md), [`increment23-backend-framework.md`](../implementation/increment23-backend-framework.md), implementation PR [#61](https://github.com/pysolvesemi/Nodal/pull/61), closure PR [#63](https://github.com/pysolvesemi/Nodal/pull/63), dedicated validation run [32966834961](https://github.com/pysolvesemi/Nodal/actions/runs/32966834961), and Core CI run [32966835105](https://github.com/pysolvesemi/Nodal/actions/runs/32966835105).
 
-- [ ] **Increment 24 — Minimal analog expression and contribution IR**
+- [x] **Increment 24 — Minimal analog expression and contribution IR**
   - Add real literals, parameter references, arithmetic, electrical potential access, analog region, and contribution sufficient for a minimal RC equation.
+  - Evidence: [`NodalMinimalAnalogIr-DG-v1.0.md`](../design-gates/NodalMinimalAnalogIr-DG-v1.0.md), [`increment24-minimal-analog-ir.md`](../implementation/increment24-minimal-analog-ir.md), implementation PR [#66](https://github.com/pysolvesemi/Nodal/pull/66), dedicated validation run [33039547022](https://github.com/pysolvesemi/Nodal/actions/runs/33039547022), and Core CI run [33039546995](https://github.com/pysolvesemi/Nodal/actions/runs/33039546995).
 
 - [ ] **Increment 25 — RC filter end-to-end vertical slice**
   - Compile Scala RC through construction, Nodal MLIR, verification, and Verilog-A emission with exact golden output and failures.

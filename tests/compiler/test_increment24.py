@@ -68,6 +68,21 @@ class Increment24CheckerTests(unittest.TestCase):
         path.write_text(path.read_text(encoding="utf-8").replace("contents: read", "contents: write"), encoding="utf-8")
         self.assertIn("NODAL-INC24-009", self.codes(root))
 
+    def test_rejects_premature_roadmap_closure(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        manifest_path = root / "tests/compiler/fixtures/increment24/manifest.json"
+        manifest = __import__("json").loads(
+            manifest_path.read_text(encoding="utf-8")
+        )
+        manifest["status"] = "implemented-awaiting-evidence"
+        manifest["evidence"] = {}
+        manifest_path.write_text(
+            __import__("json").dumps(manifest, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC24-010", self.codes(root))
+
     def test_accepts_validated_successor_state(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)

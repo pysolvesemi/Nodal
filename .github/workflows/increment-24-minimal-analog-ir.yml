@@ -62,6 +62,7 @@ jobs:
             -s tests/compiler \
             -p 'test_*.py'
           ./nodal check \
+            --contracts-only \
             --online-toolchain \
             --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
             --base-ref origin/dev

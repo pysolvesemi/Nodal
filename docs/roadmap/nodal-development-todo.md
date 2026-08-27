@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.31
+**Revision:** 1.32
 **Created:** 2026-08-20
 **Updated:** 2026-08-27
 **Status:** Active roadmap
@@ -872,8 +872,9 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
 - [x] **Increment 25 — RC filter end-to-end vertical slice**
   - Compile Scala RC through construction, Nodal MLIR, verification, and Verilog-A emission with exact golden output and failures.
 
-- [ ] **Increment 26 — Deterministic output and reproducibility contract**
+- [x] **Increment 26 — Deterministic output and reproducibility contract**
   - Prove byte-identical MLIR, HDL, shape/layout and storage manifests, materialization decisions/reasons, semantic names, expression source maps, check inventories/waivers, domain manifests, and CDC/RDC reports across repeated builds and valid traversal orders.
+  - Evidence: [`NodalReproducibilityContract-DG-v1.0.md`](../design-gates/NodalReproducibilityContract-DG-v1.0.md), [`increment26-reproducibility-contract.md`](../implementation/increment26-reproducibility-contract.md), implementation PR [#69](https://github.com/pysolvesemi/Nodal/pull/69), dedicated validation run [33078619538](https://github.com/pysolvesemi/Nodal/actions/runs/33078619538), and Core CI run [33078619501](https://github.com/pysolvesemi/Nodal/actions/runs/33078619501).
 
 ## Phase 2 — Analog language and Verilog-A profile
 

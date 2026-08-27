@@ -58,6 +58,12 @@ jobs:
               test_text.replace(mutation_anchor, mutation_replacement, 1),
               encoding='utf-8',
           )
+
+          cmake = Path('core/compiler/test/Unit/CMakeLists.txt')
+          cmake.write_text(
+              cmake.read_text(encoding='utf-8').rstrip() + '\n',
+              encoding='utf-8',
+          )
           PY
 
       - name: Validate structural contracts before commit

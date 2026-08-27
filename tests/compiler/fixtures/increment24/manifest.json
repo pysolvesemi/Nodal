@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "increment": 24,
-  "status": "implemented-awaiting-evidence",
+  "status": "validated-minimal-analog-ir",
   "public_api": "0.3",
   "analog_region": "nodal.analog",
   "expression_operations": [
@@ -15,5 +15,9 @@
   ],
   "contribution_operation": "nodal.contribute",
   "fixture": "core/compiler/test/IR/analog-expression-rc.mlir",
-  "evidence": {}
+  "evidence": {
+    "pull_request": 66,
+    "dedicated_run": 33039547022,
+    "core_ci_run": 33039546995
+  }
 }

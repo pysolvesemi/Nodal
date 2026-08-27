@@ -22,6 +22,7 @@ class Problem:
 
 EXPECTED_FILES = (
     "core/scala/api/src/nodal/CandidateApi.scala",
+    "core/scala/api/src/nodal/SemanticOriginKernel.scala",
     "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",
     "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala",
     "core/scala/testkit/test/src/nodal/internal/testkit/RcVerticalSliceTests.scala",
@@ -79,6 +80,11 @@ def check_repository(root: Path) -> list[Problem]:
             problems.append(Problem("NODAL-INC25-002", f"temporary closure file remains: {relative}"))
 
     api = read(root / "core/scala/api/src/nodal/CandidateApi.scala", problems, "NODAL-INC25-003")
+    origin_kernel = read(
+        root / "core/scala/api/src/nodal/SemanticOriginKernel.scala",
+        problems,
+        "NODAL-INC25-013",
+    )
     kernel = read(root / "core/scala/api/src/nodal/ElaborationConstructionKernel.scala", problems, "NODAL-INC25-004")
     bridge = read(root / "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala", problems, "NODAL-INC25-005")
     backend = read(root / "core/compiler/lib/Backend/AnalogVerticalSlice.cpp", problems, "NODAL-INC25-006")
@@ -90,6 +96,25 @@ def check_repository(root: Path) -> list[Problem]:
     roadmap = read(root / "docs/roadmap/nodal-development-todo.md", problems, "NODAL-INC25-012")
 
     require(api, ("val operation: Option[String]", "analogExpr", "analogBlock", "analogContribution", '"potential_access"', '"flow_access"', '"analog_ddt"'), problems, "NODAL-INC25-003", "Scala analog operation capture")
+    require(
+        origin_kernel,
+        (
+            "Files.walkFileTree(",
+            "FileVisitResult.SKIP_SUBTREE",
+            "visitFileFailed",
+            "postVisitDirectory",
+        ),
+        problems,
+        "NODAL-INC25-013",
+        "source-location traversal",
+    )
+    if "Files.walk(root)" in origin_kernel:
+        problems.append(
+            Problem(
+                "NODAL-INC25-013",
+                "source-location traversal descends through volatile generated trees",
+            )
+        )
     require(kernel, ("KernelAnalogRegionSnapshot", "withAnalogRegion", "analogSnapshots()", "analogRegions: Vector[KernelAnalogRegionSnapshot]"), problems, "NODAL-INC25-004", "construction analog snapshot")
     require(bridge, ("compileToVerilogA", "renderAnalogRegion", '"nodal.analog"', '"nodal.parameter_ref"', '"nodal.contribute"', "NODAL-RC-OPERATION-001", "NODAL-RC-BRANCH-001"), problems, "NODAL-INC25-005", "Scala-to-MLIR RC lowering")
     require(backend, ("verifyBackendOperations", "renderBackendCandidate", "renderExpression", "ddt(", " <+ ", "parameter real", "reparseBackendTarget"), problems, "NODAL-INC25-006", "Verilog-A RC backend")

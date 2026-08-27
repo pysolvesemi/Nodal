@@ -56,6 +56,22 @@ class Increment25CheckerTests(unittest.TestCase):
         )
         self.assertIn("NODAL-INC25-005", self.codes(root))
 
+    def test_rejects_source_locator_that_descends_into_generated_trees(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/scala/api/src/nodal/SemanticOriginKernel.scala"
+        text = path.read_text(encoding="utf-8")
+        self.assertEqual(text.count("FileVisitResult.SKIP_SUBTREE"), 1)
+        path.write_text(
+            text.replace(
+                "FileVisitResult.SKIP_SUBTREE",
+                "FileVisitResult.CONTINUE",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC25-013", self.codes(root))
+
     def test_rejects_writable_permanent_workflow(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)

@@ -3,7 +3,8 @@ package nodal
 import java.lang.StackWalker
 import java.lang.reflect.{Field, Modifier}
 import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path}
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.{FileVisitResult, Files, Path, SimpleFileVisitor}
 import java.security.MessageDigest
 import java.util.IdentityHashMap
 
@@ -419,25 +420,54 @@ private[nodal] final class SemanticOriginBuilder:
     val root = repositoryRoot
     if !Files.isDirectory(root) then None
     else
-      val stream = Files.walk(root)
+      val candidates = mutable.ArrayBuffer.empty[Path]
       try
-        val candidates = stream
-          .iterator()
-          .asScala
-          .filter(path => Files.isRegularFile(path) && path.getFileName.toString == fileName)
-          .filter(path => sourceSegments(path).intersect(ignoredSourceSegments).isEmpty)
-          .toVector
-          .sortBy(path => (path.getNameCount, repositoryPath(path)))
-        candidates match
-          case Vector() => None
-          case Vector(single) => Some(single)
-          case _ =>
-            val scored = candidates.map(path => path -> sourceIdentityScore(path, ownerClass))
-            val bestScore = scored.map(_._2).max
-            val winners = scored.collect:
-              case (path, score) if score == bestScore => path
-            if bestScore > 0 && winners.size == 1 then winners.headOption else None
-      finally stream.close()
+        val _ = Files.walkFileTree(
+          root,
+          new SimpleFileVisitor[Path]:
+            override def preVisitDirectory(
+                directory: Path,
+                attributes: BasicFileAttributes
+            ): FileVisitResult =
+              if directory != root &&
+                attributes.isDirectory &&
+                ignoredSourceSegments.contains(directory.getFileName.toString)
+              then FileVisitResult.SKIP_SUBTREE
+              else FileVisitResult.CONTINUE
+
+            override def visitFile(
+                file: Path,
+                attributes: BasicFileAttributes
+            ): FileVisitResult =
+              if attributes.isRegularFile && file.getFileName.toString == fileName
+              then candidates += file
+              FileVisitResult.CONTINUE
+
+            override def visitFileFailed(
+                _file: Path,
+                _exception: java.io.IOException
+            ): FileVisitResult =
+              FileVisitResult.CONTINUE
+
+            override def postVisitDirectory(
+                _directory: Path,
+                _exception: java.io.IOException
+            ): FileVisitResult =
+              FileVisitResult.CONTINUE
+        )
+      catch case _: java.io.IOException => ()
+      val ordered = candidates.toVector
+        .filter(path => sourceSegments(path).intersect(ignoredSourceSegments).isEmpty)
+        .sortBy(path => (path.getNameCount, repositoryPath(path)))
+      ordered match
+        case Vector() => None
+        case Vector(single) => Some(single)
+        case _ =>
+          val scored = ordered.map(path => path -> sourceIdentityScore(path, ownerClass))
+          val bestScore = scored.map(_._2).max
+          val winners = scored.collect:
+            case (path, score) if score == bestScore => path
+          if bestScore > 0 && winners.size == 1 then winners.headOption else None
 
   private def sourceSegments(path: Path): Set[String] =
     path.iterator().asScala.map(_.toString).toSet

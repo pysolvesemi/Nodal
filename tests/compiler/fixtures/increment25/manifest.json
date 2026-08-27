@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "increment": 25,
-  "status": "implemented-awaiting-evidence",
+  "status": "validated-rc-vertical-slice",
   "public_api": "0.3",
   "scala_fixture": "core/scala/testkit/test/src/nodal/internal/testkit/RcVerticalSliceTests.scala",
   "mlir_fixture": "core/compiler/test/IR/rc-filter-vertical-slice.mlir",
@@ -14,5 +14,9 @@
     "target-verify",
     "target-reparse"
   ],
-  "evidence": {}
+  "evidence": {
+    "pull_request": 68,
+    "dedicated_run": 33068184835,
+    "core_ci_run": 33068184714
+  }
 }

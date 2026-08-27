@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.30
+**Revision:** 1.31
 **Created:** 2026-08-20
 **Updated:** 2026-08-27
 **Status:** Active roadmap
@@ -869,7 +869,7 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Add real literals, parameter references, arithmetic, electrical potential access, analog region, and contribution sufficient for a minimal RC equation.
   - Evidence: [`NodalMinimalAnalogIr-DG-v1.0.md`](../design-gates/NodalMinimalAnalogIr-DG-v1.0.md), [`increment24-minimal-analog-ir.md`](../implementation/increment24-minimal-analog-ir.md), implementation PR [#66](https://github.com/pysolvesemi/Nodal/pull/66), dedicated validation run [33039547022](https://github.com/pysolvesemi/Nodal/actions/runs/33039547022), and Core CI run [33039546995](https://github.com/pysolvesemi/Nodal/actions/runs/33039546995).
 
-- [ ] **Increment 25 — RC filter end-to-end vertical slice**
+- [x] **Increment 25 — RC filter end-to-end vertical slice**
   - Compile Scala RC through construction, Nodal MLIR, verification, and Verilog-A emission with exact golden output and failures.
 
 - [ ] **Increment 26 — Deterministic output and reproducibility contract**

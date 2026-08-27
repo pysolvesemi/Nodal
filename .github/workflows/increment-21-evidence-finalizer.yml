@@ -39,8 +39,9 @@ jobs:
           git fetch --no-tags origin dev
           git checkout origin/dev -- \
             .github/workflows/increment-21-evidence-finalizer.yml
-          rm scripts/automation_close_increment23.py
-          rm .github/workflows/automation-increment23-evidence-closure.yml
+          git rm \
+            scripts/automation_close_increment23.py \
+            .github/workflows/automation-increment23-evidence-closure.yml
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
 
       - name: Validate closed state and exact final diff

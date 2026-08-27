@@ -148,6 +148,7 @@ def check_repository(root: Path) -> list[Problem]:
     inc24_open = "- [ ] **Increment 24 — Minimal analog expression and contribution IR**" in roadmap
     inc24_done = "- [x] **Increment 24 — Minimal analog expression and contribution IR**" in roadmap
     inc25_open = "- [ ] **Increment 25 — RC filter end-to-end vertical slice**" in roadmap
+    inc25_done = "- [x] **Increment 25 — RC filter end-to-end vertical slice**" in roadmap
     status = manifest.get("status")
     evidence = manifest.get("evidence", {})
     if not inc23:
@@ -163,8 +164,62 @@ def check_repository(root: Path) -> list[Problem]:
                 problems.append(Problem("NODAL-INC24-010", f"validated manifest lacks integer evidence field: {field}"))
     else:
         problems.append(Problem("NODAL-INC24-010", f"unexpected manifest status: {status!r}"))
-    if not inc25_open:
-        problems.append(Problem("NODAL-INC24-010", "Increment 25 must remain unchecked"))
+    if inc25_open:
+        pass
+    elif inc25_done:
+        successor_path = root / "tests/compiler/fixtures/increment25/manifest.json"
+        try:
+            successor = json.loads(
+                read(successor_path, problems, "NODAL-INC24-010")
+            )
+        except json.JSONDecodeError as exc:
+            problems.append(
+                Problem(
+                    "NODAL-INC24-010",
+                    f"invalid Increment 25 successor manifest: {exc}",
+                )
+            )
+            successor = {}
+        if (
+            successor.get("increment") != 25
+            or successor.get("public_api") != "0.3"
+        ):
+            problems.append(
+                Problem(
+                    "NODAL-INC24-010",
+                    "Increment 25 successor identity/public API mismatch",
+                )
+            )
+        if successor.get("status") != "validated-rc-vertical-slice":
+            problems.append(
+                Problem(
+                    "NODAL-INC24-010",
+                    "checked Increment 25 lacks validated successor evidence",
+                )
+            )
+        successor_evidence = successor.get("evidence", {})
+        for field in ("pull_request", "dedicated_run", "core_ci_run"):
+            if not isinstance(successor_evidence.get(field), int):
+                problems.append(
+                    Problem(
+                        "NODAL-INC24-010",
+                        f"Increment 25 successor lacks integer evidence field: {field}",
+                    )
+                )
+        if rev < (1, 31):
+            problems.append(
+                Problem(
+                    "NODAL-INC24-010",
+                    "checked Increment 25 requires roadmap revision 1.31 or later",
+                )
+            )
+    else:
+        problems.append(
+            Problem(
+                "NODAL-INC24-010",
+                "Increment 25 roadmap state is neither open nor validated",
+            )
+        )
     return problems
 
 

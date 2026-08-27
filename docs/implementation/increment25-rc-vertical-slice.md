@@ -22,6 +22,10 @@ The Scala and direct-MLIR paths are compared to one exact golden. Failures in
 construction, bridge lowering, semantic verification, capability checking,
 target verification, or target reparse publish no partial HDL.
 
+The Increment 24 predecessor checker accepts the closed successor only when the
+Increment 25 manifest, evidence fields, public API identity, and roadmap
+revision agree.
+
 ## Accepted evidence
 
 - Pull request: `68`.

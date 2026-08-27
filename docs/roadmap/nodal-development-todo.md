@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.32
+**Revision:** 1.33
 **Created:** 2026-08-20
 **Updated:** 2026-08-27
 **Status:** Active roadmap
@@ -878,7 +878,7 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
 
 ## Phase 2 — Analog language and Verilog-A profile
 
-- [ ] **Increment 27 — Natures and disciplines**
+- [x] **Increment 27 — Natures and disciplines**
   - Implement units, access functions, tolerances, domains, potential/flow associations, declarations, imports, and compatibility.
 
 - [ ] **Increment 28 — Electrical nodes, nets, and branches**

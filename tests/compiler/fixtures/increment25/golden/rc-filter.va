@@ -1,0 +1,20 @@
+/* Nodal backend framework v1
+ * profile: verilog-a
+ * check-profile: default
+ * shaped-layout: scalar-or-flat
+ * materialization: safe-inline
+ * naming: semantic
+ */
+`include "constants.vams"
+`include "disciplines.vams"
+
+module RcFilter(n, p);
+  inout n, p;
+  electrical n, p;
+  parameter real C = 1e-12;
+  parameter real R = 1000;
+
+  analog begin
+    I(p, n) <+ ((V(p, n) / R) + (C * ddt(V(p, n))));
+  end
+endmodule

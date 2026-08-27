@@ -24,7 +24,8 @@ private[nodal] final case class KernelLiteral(
 private[nodal] final class KernelExpr[A <: Data](
     val operands: Vector[Any],
     val resultType: Option[KernelTypeDescriptor] = None,
-    val literal: Option[KernelLiteral] = None
+    val literal: Option[KernelLiteral] = None,
+    val operation: Option[String] = None
 ) extends Expr[A]
 
 /** Candidate declaration-time type descriptor. */
@@ -83,7 +84,10 @@ final class Param[A <: Data] private[nodal] (val default: Expr[A]) extends Expr[
     this,
     KernelSignalKind.Parameter,
     dataType = CandidateRuntime.expressionDataType(default),
-    attributes = Vector("default" -> default)
+    attributes = Vector(
+      "default" -> default,
+      "unit" -> CandidateRuntime.expressionUnit(default).getOrElse("")
+    )
   )
 
 /** Candidate digital signal or port. */
@@ -434,28 +438,32 @@ final class Event private[nodal] ()
 enum Edge:
   case Either, Rising, Falling
 
-def analog(body: => Unit): Unit = CandidateRuntime.block(body)
+def analog(body: => Unit): Unit = CandidateRuntime.analogBlock(body)
 
 def initial(body: => Unit): Unit = CandidateRuntime.block(body)
 
 def on(event: Event)(body: => Unit): Unit = CandidateRuntime.block(event, body)
 
-def V[D <: Discipline](node: Node[D]): Expr[Real] = CandidateRuntime.expr(node)
+def V[D <: Discipline](node: Node[D]): Expr[Real] =
+  CandidateRuntime.analogExpr("potential_access", node)
 
 def V[D <: Discipline](positive: Node[D], negative: Node[D]): Expr[Real] =
-  CandidateRuntime.expr(positive, negative)
+  CandidateRuntime.analogExpr("potential_access", positive, negative)
 
-def I[D <: Discipline](node: Node[D]): Expr[Real] = CandidateRuntime.expr(node)
+def I[D <: Discipline](node: Node[D]): Expr[Real] =
+  CandidateRuntime.analogExpr("flow_access", node)
 
 def I[D <: Discipline](positive: Node[D], negative: Node[D]): Expr[Real] =
-  CandidateRuntime.expr(positive, negative)
+  CandidateRuntime.analogExpr("flow_access", positive, negative)
 
-def ddt(value: Expr[Real]): Expr[Real] = CandidateRuntime.expr(value)
+def ddt(value: Expr[Real]): Expr[Real] =
+  CandidateRuntime.analogExpr("analog_ddt", value)
 
-def idt(value: Expr[Real]): Expr[Real] = CandidateRuntime.expr(value)
+def idt(value: Expr[Real]): Expr[Real] =
+  CandidateRuntime.analogExpr("unsupported_idt", value)
 
 def idt(value: Expr[Real], initialValue: Expr[Real]): Expr[Real] =
-  CandidateRuntime.expr(value, initialValue)
+  CandidateRuntime.analogExpr("unsupported_idt", value, initialValue)
 
 def cross(value: Expr[Real], edge: Edge = Edge.Either): Event =
   CandidateRuntime.event(value, edge)
@@ -484,16 +492,21 @@ object lowlevel:
   def process(event: Event)(body: => Unit): Unit = CandidateRuntime.block(event, body)
 
 extension (left: Expr[Real])
-  def +(right: Expr[Real]): Expr[Real] = CandidateRuntime.expr(left, right)
-  def -(right: Expr[Real]): Expr[Real] = CandidateRuntime.expr(left, right)
-  def *(right: Expr[Real]): Expr[Real] = CandidateRuntime.expr(left, right)
-  def /(right: Expr[Real]): Expr[Real] = CandidateRuntime.expr(left, right)
+  def +(right: Expr[Real]): Expr[Real] =
+    CandidateRuntime.analogExpr("analog_add", left, right)
+  def -(right: Expr[Real]): Expr[Real] =
+    CandidateRuntime.analogExpr("analog_sub", left, right)
+  def *(right: Expr[Real]): Expr[Real] =
+    CandidateRuntime.analogExpr("analog_mul", left, right)
+  def /(right: Expr[Real]): Expr[Real] =
+    CandidateRuntime.analogExpr("analog_div", left, right)
   def unary_- : Expr[Real] = CandidateRuntime.expr(left)
   def >(right: Expr[Real]): Expr[Bool] = CandidateRuntime.expr(left, right)
   def >=(right: Expr[Real]): Expr[Bool] = CandidateRuntime.expr(left, right)
   def <(right: Expr[Real]): Expr[Bool] = CandidateRuntime.expr(left, right)
   def <=(right: Expr[Real]): Expr[Bool] = CandidateRuntime.expr(left, right)
-  infix def <+(value: Expr[Real]): Unit = CandidateRuntime.statement(left, value)
+  infix def <+(value: Expr[Real]): Unit =
+    CandidateRuntime.analogContribution(left, value)
 
 extension (left: Expr[UInt])
   @targetName("uintAddition")
@@ -581,6 +594,11 @@ private[nodal] object CandidateRuntime:
       expression.resultType.map(dataTypeFromDescriptor)
     case _ => None
 
+  def expressionUnit(value: Expr[?]): Option[String] = value match
+    case expression: KernelExpr[?] if expression.literal.exists(_.kind == "real") =>
+      expression.operands.lift(1).collect { case unit: String => unit }
+    case _ => None
+
   private def literal[A <: Data](
       descriptor: KernelTypeDescriptor,
       kind: String,
@@ -590,7 +608,8 @@ private[nodal] object CandidateRuntime:
     val expression = new KernelExpr[A](
       operands,
       resultType = Some(descriptor),
-      literal = Some(KernelLiteral(kind, value, descriptor))
+      literal = Some(KernelLiteral(kind, value, descriptor)),
+      operation = Some(if kind == "real" then "real_literal" else kind)
     )
     ConstructionKernel.expression(expression)
     expression
@@ -631,6 +650,20 @@ private[nodal] object CandidateRuntime:
     val expression = new KernelExpr[A](values.toVector)
     ConstructionKernel.expression(expression)
     expression
+
+  def analogExpr(operation: String, values: Any*): Expr[Real] =
+    val expression = new KernelExpr[Real](
+      values.toVector,
+      operation = Some(operation)
+    )
+    ConstructionKernel.expression(expression)
+    expression
+
+  def analogBlock(body: => Unit): Unit =
+    ConstructionKernel.analogBlock(body)
+
+  def analogContribution(target: Expr[Real], value: Expr[Real]): Unit =
+    ConstructionKernel.operation("analog-contribute", target, value)
 
   def statement(values: Any*): Unit = ConstructionKernel.operation("statement", values*)
 

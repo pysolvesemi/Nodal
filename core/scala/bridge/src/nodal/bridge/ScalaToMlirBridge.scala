@@ -3,7 +3,9 @@ package nodal.internal.bridge
 import nodal.*
 
 import java.nio.charset.StandardCharsets
+import java.nio.file.Path
 import java.security.MessageDigest
+import java.time.Duration
 
 import scala.collection.mutable
 
@@ -35,6 +37,11 @@ private[nodal] final case class NodalMlirDocument(
     sha256: String
 )
 
+private[nodal] final case class VerilogAVerticalSliceResult(
+    mlir: String,
+    verilogA: String
+)
+
 private[nodal] object ScalaToMlirBridge:
   val Schema: String = "nodal.scala-to-mlir"
   val Version: Int = 1
@@ -43,7 +50,7 @@ private[nodal] object ScalaToMlirBridge:
       top: => Module,
       options: EmitOptions = EmitOptions()
   ): NodalMlirDocument =
-    fromSnapshot(ConstructionKernel.inspect(top, options))
+    fromSnapshot(ConstructionKernel.inspect(top, options), options.backend)
 
   def compile(
       top: => Module,
@@ -52,9 +59,57 @@ private[nodal] object ScalaToMlirBridge:
   ): NativeCompilerResult =
     NativeCompilerClient.run(lower(top, options), request)
 
-  def fromSnapshot(snapshot: ConstructionSnapshot): NodalMlirDocument =
-    val text = new Renderer(snapshot).render()
+  def fromSnapshot(
+      snapshot: ConstructionSnapshot,
+      backend: Backend = Backend.Auto
+  ): NodalMlirDocument =
+    val text = new Renderer(snapshot, backend).render()
     NodalMlirDocument(Schema, Version, text, digest(text))
+
+  def compileToVerilogA(
+      top: => Module,
+      nodalc: Path,
+      translator: Path,
+      workingDirectory: Path,
+      timeout: Duration = Duration.ofSeconds(30)
+  ): Either[NativeCompilerFailure, VerilogAVerticalSliceResult] =
+    val document = lower(top, EmitOptions(backend = Backend.VerilogA))
+    NativeCompilerClient.run(
+      document,
+      NativeCompilerRequest(
+        executable = nodalc,
+        arguments = Vector(
+          "--pass-pipeline=builtin.module(nodal-gate-default)"
+        ),
+        workingDirectory = workingDirectory,
+        timeout = timeout
+      )
+    ) match
+      case failure: NativeCompilerFailure => Left(failure)
+      case normalized: NativeCompilerSuccess =>
+        val normalizedDocument = NodalMlirDocument(
+          Schema,
+          Version,
+          normalized.normalizedMlir,
+          digest(normalized.normalizedMlir)
+        )
+        NativeCompilerClient.run(
+          normalizedDocument,
+          NativeCompilerRequest(
+            executable = translator,
+            arguments = Vector("--nodal-to-verilog-a"),
+            workingDirectory = workingDirectory,
+            timeout = timeout
+          )
+        ) match
+          case failure: NativeCompilerFailure => Left(failure)
+          case emitted: NativeCompilerSuccess =>
+            Right(
+              VerilogAVerticalSliceResult(
+                normalized.normalizedMlir,
+                emitted.normalizedMlir
+              )
+            )
 
   private def digest(text: String): String =
     val bytes = MessageDigest
@@ -62,14 +117,14 @@ private[nodal] object ScalaToMlirBridge:
       .digest(text.getBytes(StandardCharsets.UTF_8))
     bytes.map(value => f"${value & 0xff}%02x").mkString
 
-  private final class Renderer(snapshot: ConstructionSnapshot):
+  private final class Renderer(snapshot: ConstructionSnapshot, backend: Backend):
     private val modules = snapshot.modules.sortBy(_.path)
     private val sourceByPath = snapshot.sourceMap
       .sortBy(entry => (entry.semanticPath, entry.source.path, entry.source.line))
       .map(entry => entry.semanticPath -> entry.source)
       .toMap
     private val moduleSymbols = modules.map(module =>
-      module.path -> stableSymbol("module", module.path)
+      module.path -> stableModuleSymbol(module.path)
     ).toMap
 
     def render(): String =
@@ -84,14 +139,80 @@ private[nodal] object ScalaToMlirBridge:
         "nodal.bridge.origins" -> originInventory,
         "nodal.bridge.generated_names" -> generatedNameInventory,
         "nodal.bridge.topology" -> topologyInventory,
-        "nodal.bridge.source_map" -> sourceMapInventory
-      )
+        "nodal.bridge.source_map" -> sourceMapInventory,
+        "nodal.target.profile" -> quoted(targetProfile),
+        "nodal.backend.profile" -> quoted(backendProfile),
+        "nodal.backend.check_profile" -> quoted("default"),
+        "nodal.backend.shaped_layout" -> quoted(
+          if backendProfile == "verilog-a" then "scalar-or-flat" else "flat-packed"
+        ),
+        "nodal.backend.materialization" -> quoted(
+          if backendProfile == "verilog-a" then "safe-inline" else "readable"
+        ),
+        "nodal.backend.naming" -> quoted("semantic")
+      ) ++ mandatoryVerificationAttributes
       normalize(
         s"""module attributes ${dictionary(attributes)} {
 ${indent(body, 2)}
 }
 """
       )
+
+    private def targetProfile: String =
+      val analogKinds = Set(
+        "analog-input",
+        "analog-output",
+        "analog-inout",
+        "analog-node",
+        "conservative-terminal",
+        "analog-signal"
+      )
+      val declarationKinds = modules.flatMap(_.declarations.map(_.kind)).toSet
+      val digitalKinds = Set(
+        "input",
+        "output",
+        "state",
+        "wire",
+        "register",
+        "memory",
+        "digital-inout"
+      )
+      val analog = snapshot.analogRegions.nonEmpty || declarationKinds.exists(analogKinds.contains)
+      val digital = declarationKinds.exists(digitalKinds.contains) ||
+        snapshot.interfaceAbi.nonEmpty ||
+        snapshot.resolvedNets.nonEmpty
+      (digital, analog) match
+        case (true, true) => "mixed_signal"
+        case (false, true) => "analog"
+        case (true, false) => "digital"
+        case _ => "target_neutral"
+
+    private def backendProfile: String = backend match
+      case Backend.VerilogA => "verilog-a"
+      case Backend.VerilogAMS => "verilog-ams"
+      case Backend.Auto => if targetProfile == "analog" then "verilog-a" else "verilog-ams"
+      case Backend.Verilog => "verilog"
+
+    private def mandatoryVerificationAttributes: Vector[(String, String)] =
+      Vector(
+        "analog_topology",
+        "assignment_coverage",
+        "cdc_rdc_safe",
+        "clock_reset_domains",
+        "combinational_acyclic",
+        "construction_closed",
+        "driver_coverage",
+        "enum_fsm",
+        "hierarchy_closed",
+        "latch_free",
+        "layout_storage",
+        "memory_effects",
+        "mixed_signal_bridges",
+        "parameters_complete",
+        "protocol_pipeline",
+        "target_capability",
+        "width_sign_shape"
+      ).map(name => s"nodal.verify.$name" -> boolean(true))
 
     private def validate(): Unit =
       requireUnique(
@@ -138,6 +259,15 @@ ${indent(body, 2)}
       val localDomains = module.domains.map(domain =>
         domain.name -> stableLocalSymbol("domain", domain.name)
       ).toMap
+      val declarationsByPath = module.declarations.map(declaration =>
+        declaration.path -> declaration
+      ).toMap
+      val parameterSymbols = module.declarations
+        .filter(_.kind == "parameter")
+        .map(declaration =>
+          declaration.path -> stableLocalSymbol("parameter", declaration.name)
+        )
+        .toMap
 
       module.domains.sortBy(_.path).foreach: domain =>
         val symbol = localDomains(domain.name)
@@ -312,6 +442,70 @@ ${indent(body, 2)}
               )
             case _ => ()
 
+      val accessBranches = mutable.LinkedHashMap.empty[String, (String, String)]
+      val accessExpressions = analogRegionsFor(module).flatMap(_.expressions)
+        .filter(expression =>
+          expression.operation == "potential_access" || expression.operation == "flow_access"
+        )
+      val branchKeys = accessExpressions.map: expression =>
+        if expression.operands.size != 2 then
+          fail(
+            "NODAL-RC-BRANCH-001",
+            "Increment 25 requires a two-terminal V(p,n) or I(p,n) access",
+            Some(expression.path)
+          )
+        expression.operands(0) -> expression.operands(1)
+      val uniqueBranchKeys = branchKeys.distinct.sortBy(identity)
+      val branchByKey = uniqueBranchKeys.zipWithIndex.map: (key, index) =>
+        val (positivePath, negativePath) = key
+        val positive = values.getOrElse(
+          positivePath,
+          fail("NODAL-RC-BRANCH-002", "positive terminal is unavailable", Some(positivePath))
+        )
+        val negative = values.getOrElse(
+          negativePath,
+          fail("NODAL-RC-BRANCH-002", "negative terminal is unavailable", Some(negativePath))
+        )
+        if positive._2 != negative._2 then
+          fail(
+            "NODAL-RC-BRANCH-003",
+            "RC access terminals have incompatible disciplines",
+            Some(positivePath)
+          )
+        val result = s"%analog_branch_$index"
+        val resultType =
+          s"""!nodal.branch<${quoted(terminalDiscipline(positive._2, positivePath))}>"""
+        body += operation(
+          "nodal.branch",
+          results = Vector(result),
+          operands = Vector(positive._1, negative._1),
+          operandTypes = Vector(positive._2, negative._2),
+          resultTypes = Vector(resultType),
+          attributes = Vector(
+            "metadata" -> bridgeMetadata(
+              s"$positivePath->$negativePath",
+              Vector("vertical_slice" -> quoted("rc"))
+            )
+          ),
+          semanticPath = positivePath
+        )
+        key -> (result -> resultType)
+      .toMap
+      accessExpressions.foreach: expression =>
+        accessBranches.update(
+          expression.path,
+          branchByKey(expression.operands(0) -> expression.operands(1))
+        )
+
+      analogRegionsFor(module).zipWithIndex.foreach: (region, regionIndex) =>
+        body += renderAnalogRegion(
+          region,
+          regionIndex,
+          declarationsByPath,
+          parameterSymbols,
+          accessBranches
+        )
+
       operation(
         "nodal.module",
         attributes = Vector(
@@ -323,6 +517,184 @@ ${indent(body, 2)}
         ),
         regions = Vector(body.mkString("\n")),
         semanticPath = module.path
+      )
+
+    private def analogRegionsFor(
+        module: KernelModuleSnapshot
+    ): Vector[KernelAnalogRegionSnapshot] =
+      snapshot.analogRegions.filter(_.module == module.path).sortBy(_.path)
+
+    private def renderAnalogRegion(
+        region: KernelAnalogRegionSnapshot,
+        regionIndex: Int,
+        declarationsByPath: Map[String, KernelDeclarationSnapshot],
+        parameterSymbols: Map[String, String],
+        accessBranches: mutable.LinkedHashMap[String, (String, String)]
+    ): String =
+      val lines = mutable.ArrayBuffer.empty[String]
+      val values = mutable.LinkedHashMap.empty[String, (String, String)]
+      val parameterValues = mutable.LinkedHashMap.empty[String, (String, String)]
+
+      def parameterValue(path: String): (String, String) =
+        parameterValues.getOrElseUpdate(
+          path,
+          declarationsByPath.get(path) match
+            case Some(declaration)
+                if declaration.kind == "parameter" &&
+                  declaration.dataType.contains("Real") =>
+              val symbol = parameterSymbols.getOrElse(
+                path,
+                fail("NODAL-RC-PARAMETER-001", "real parameter symbol is unavailable", Some(path))
+              )
+              val result = s"%analog_${regionIndex}_parameter_${parameterValues.size}"
+              lines += operation(
+                "nodal.parameter_ref",
+                results = Vector(result),
+                resultTypes = Vector("f64"),
+                attributes = Vector(
+                  "parameter" -> symbolReference(symbol),
+                  "metadata" -> bridgeMetadata(path, Vector.empty)
+                ),
+                semanticPath = path
+              )
+              result -> "f64"
+            case _ =>
+              fail(
+                "NODAL-RC-PARAMETER-001",
+                "analog operand is not an enclosing Real parameter",
+                Some(path)
+              )
+        )
+
+      def operand(path: String): (String, String) =
+        values.get(path).orElse(parameterValues.get(path)).getOrElse:
+          if parameterSymbols.contains(path) then parameterValue(path)
+          else
+            fail(
+              "NODAL-RC-ORDER-001",
+              "analog expression operand is unavailable or was defined out of order",
+              Some(path)
+            )
+
+      region.expressions.zipWithIndex.foreach: (expression, index) =>
+        val result = s"%analog_${regionIndex}_expr_$index"
+        val metadata = bridgeMetadata(
+          expression.path,
+          expression.unit.toVector.map(unit => "unit" -> quoted(unit))
+        )
+        expression.operation match
+          case "real_literal" =>
+            val value = expression.literal.flatMap(_.toDoubleOption).getOrElse(
+              fail("NODAL-RC-LITERAL-001", "real literal is unavailable", Some(expression.path))
+            )
+            lines += operation(
+              "nodal.real_literal",
+              results = Vector(result),
+              resultTypes = Vector("f64"),
+              attributes = Vector(
+                "value" -> s"${java.lang.Double.toString(value)} : f64",
+                "metadata" -> metadata
+              ),
+              semanticPath = expression.path
+            )
+            values.update(expression.path, result -> "f64")
+          case "potential_access" | "flow_access" =>
+            val branch = accessBranches.getOrElse(
+              expression.path,
+              fail(
+                "NODAL-RC-BRANCH-004",
+                "analog access branch is unavailable",
+                Some(expression.path)
+              )
+            )
+            val kind = if expression.operation == "potential_access" then "potential" else "flow"
+            lines += operation(
+              "nodal.access",
+              results = Vector(result),
+              operands = Vector(branch._1),
+              operandTypes = Vector(branch._2),
+              resultTypes = Vector("f64"),
+              attributes = Vector(
+                "kind" -> quoted(kind),
+                "metadata" -> metadata
+              ),
+              semanticPath = expression.path
+            )
+            values.update(expression.path, result -> "f64")
+          case "analog_add" | "analog_sub" | "analog_mul" | "analog_div" =>
+            if expression.operands.size != 2 then
+              fail(
+                "NODAL-RC-ARITY-001",
+                "binary analog operation has invalid arity",
+                Some(expression.path)
+              )
+            val lhs = operand(expression.operands(0))
+            val rhs = operand(expression.operands(1))
+            lines += operation(
+              s"nodal.${expression.operation}",
+              results = Vector(result),
+              operands = Vector(lhs._1, rhs._1),
+              operandTypes = Vector(lhs._2, rhs._2),
+              resultTypes = Vector("f64"),
+              attributes = Vector("metadata" -> metadata),
+              semanticPath = expression.path
+            )
+            values.update(expression.path, result -> "f64")
+          case "analog_ddt" =>
+            if expression.operands.size != 1 then
+              fail("NODAL-RC-ARITY-001", "ddt operation has invalid arity", Some(expression.path))
+            val input = operand(expression.operands.head)
+            lines += operation(
+              "nodal.analog_ddt",
+              results = Vector(result),
+              operands = Vector(input._1),
+              operandTypes = Vector(input._2),
+              resultTypes = Vector("f64"),
+              attributes = Vector("metadata" -> metadata),
+              semanticPath = expression.path
+            )
+            values.update(expression.path, result -> "f64")
+          case operationName =>
+            fail(
+              "NODAL-RC-OPERATION-001",
+              s"analog operation '$operationName' is outside the Increment 25 RC subset",
+              Some(expression.path)
+            )
+
+      region.contributions.foreach: contribution =>
+        val branch = accessBranches.getOrElse(
+          contribution.target,
+          fail(
+            "NODAL-RC-CONTRIBUTION-001",
+            "contribution branch is unavailable",
+            Some(contribution.path)
+          )
+        )
+        val value = operand(contribution.value)
+        lines += operation(
+          "nodal.contribute",
+          operands = Vector(branch._1, value._1),
+          operandTypes = Vector(branch._2, value._2),
+          attributes = Vector(
+            "kind" -> quoted(contribution.kind),
+            "metadata" -> bridgeMetadata(
+              contribution.path,
+              Vector("vertical_slice" -> quoted("rc"))
+            )
+          ),
+          semanticPath = contribution.path
+        )
+
+      operation(
+        "nodal.analog",
+        attributes = Vector(
+          "metadata" -> bridgeMetadata(
+            region.path,
+            Vector("vertical_slice" -> quoted("rc"))
+          )
+        ),
+        regions = Vector(lines.mkString("\n")),
+        semanticPath = region.path
       )
 
     private def renderPort(
@@ -573,9 +945,19 @@ ${indent(body, 2)}
             "Boolean default is incompatible with parameter type",
             Some(path)
           )
+      else if dataType == "f64" then
+        value.toDoubleOption
+          .map(number => s"${java.lang.Double.toString(number)} : f64")
+          .getOrElse(
+            fail(
+              "NODAL-BRIDGE-021",
+              s"unsupported real parameter default '$value'",
+              Some(path)
+            )
+          )
       else
         value.toLongOption match
-          case Some(number) if dataType != "f64" => s"$number : i64"
+          case Some(number) => s"$number : i64"
           case _ =>
             fail(
               "NODAL-BRIDGE-021",
@@ -824,10 +1206,11 @@ ${indent(region, 2)}
 
     private def symbolReference(symbol: String): String = s"@$symbol"
 
-    private def stableSymbol(category: String, value: String): String =
-      val base = normalizeSymbol(value)
-      val suffix = ScalaToMlirBridge.digest(s"$category:$value").take(10)
-      s"${base}_$suffix"
+    private def stableModuleSymbol(value: String): String =
+      val base = normalizeSymbol(lastSegment(value))
+      val collisions = modules.count(module => normalizeSymbol(lastSegment(module.path)) == base)
+      if collisions == 1 then base
+      else s"${base}_${ScalaToMlirBridge.digest(s"module:$value").take(10)}"
 
     private def stableLocalSymbol(category: String, value: String): String =
       val base = normalizeSymbol(value)

@@ -205,6 +205,19 @@ foreach(_fixture IN ITEMS parameter contribution)
   )
 endforeach()
 
+
+add_test(
+  NAME nodal.native.rc-filter-vertical-slice
+  COMMAND nodal-translate
+    --nodal-to-verilog-a
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/rc-filter-vertical-slice.mlir"
+)
+set_tests_properties(
+  nodal.native.rc-filter-vertical-slice
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "I[(]p, n[)] <[+]"
+)
+
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
   DEPENDS

@@ -95,6 +95,28 @@ private[nodal] final case class KernelResolvedNetSnapshot(
 
 private[nodal] final case class KernelTopologyEdge(kind: String, left: String, right: String)
 
+private[nodal] final case class KernelAnalogExpressionSnapshot(
+    path: String,
+    operation: String,
+    operands: Vector[String],
+    literal: Option[String],
+    unit: Option[String]
+)
+
+private[nodal] final case class KernelAnalogContributionSnapshot(
+    path: String,
+    target: String,
+    value: String,
+    kind: String
+)
+
+private[nodal] final case class KernelAnalogRegionSnapshot(
+    path: String,
+    module: String,
+    expressions: Vector[KernelAnalogExpressionSnapshot],
+    contributions: Vector[KernelAnalogContributionSnapshot]
+)
+
 private[nodal] final case class ConstructionSnapshot(
     root: String,
     modules: Vector[KernelModuleSnapshot],
@@ -104,7 +126,8 @@ private[nodal] final case class ConstructionSnapshot(
     names: Vector[KernelNameSnapshot] = Vector.empty,
     origins: Vector[KernelOriginSnapshot] = Vector.empty,
     generatedNames: Vector[KernelGeneratedNameSnapshot] = Vector.empty,
-    sourceMap: Vector[SourceMapEntry] = Vector.empty
+    sourceMap: Vector[SourceMapEntry] = Vector.empty,
+    analogRegions: Vector[KernelAnalogRegionSnapshot] = Vector.empty
 )
 
 private final case class DomainRef(module: Long, index: Int)
@@ -150,6 +173,10 @@ private final class ModuleRecord(
 
 private final case class Operation(kind: String, values: Vector[Any])
 
+private final class AnalogRegionRecord(val module: Long, val ordinal: Int):
+  val expressions: mutable.ArrayBuffer[ExpressionRef] = mutable.ArrayBuffer.empty
+  val contributions: mutable.ArrayBuffer[(Any, Any)] = mutable.ArrayBuffer.empty
+
 /** One mutable transaction. JVM identity is used only for transient lookup; stable paths use
   * hierarchy, explicit names, and deterministic local ordinals.
   */
@@ -164,6 +191,10 @@ private final class ConstructionSession(val options: EmitOptions):
   private val moduleStack: mutable.ArrayBuffer[ModuleRecord] = mutable.ArrayBuffer.empty
   private val domainStack: mutable.ArrayBuffer[ClockDomain] = mutable.ArrayBuffer.empty
   private val operations: mutable.ArrayBuffer[Operation] = mutable.ArrayBuffer.empty
+  private val expressionValues: mutable.LinkedHashMap[ExpressionRef, KernelExpr[?]] =
+    mutable.LinkedHashMap.empty
+  private val analogRegions: mutable.ArrayBuffer[AnalogRegionRecord] = mutable.ArrayBuffer.empty
+  private val analogStack: mutable.ArrayBuffer[AnalogRegionRecord] = mutable.ArrayBuffer.empty
   private val semanticOrigin = new SemanticOriginBuilder
   private var semanticResult: Option[SemanticOriginResult] = None
 
@@ -251,7 +282,10 @@ private final class ConstructionSession(val options: EmitOptions):
     module.expressionCount += 1
     expressionIds.put(value, reference)
     val operands = value match
-      case expression: KernelExpr[?] => expression.operands
+      case expression: KernelExpr[?] =>
+        expressionValues.update(reference, expression)
+        analogStack.lastOption.foreach(_.expressions += reference)
+        expression.operands
       case _ => Vector.empty
     semanticOrigin.captureExpression(module.handle, reference.index, value, operands)
 
@@ -319,7 +353,25 @@ private final class ConstructionSession(val options: EmitOptions):
 
   def currentDomain: Option[ClockDomain] = domainStack.lastOption
 
+  def withAnalogRegion[A](body: => A): A =
+    val module = currentModule
+    val record =
+      new AnalogRegionRecord(module.handle, analogRegions.count(_.module == module.handle))
+    analogRegions += record
+    analogStack += record
+    try body
+    finally
+      val removed = analogStack.remove(analogStack.size - 1)
+      if removed ne record then fail("NODAL-ANALOG-LIFECYCLE-001", "analog region stack is corrupt")
+
   def operation(kind: String, values: Any*): Unit =
+    if kind == "analog-contribute" then
+      val region = analogStack.lastOption.getOrElse(
+        fail("NODAL-ANALOG-LIFECYCLE-002", "analog contribution is outside an analog region")
+      )
+      if values.size != 2 then
+        fail("NODAL-ANALOG-LIFECYCLE-003", "analog contribution requires target and value")
+      region.contributions += ((values(0), values(1)))
     val captured = Operation(kind, values.toVector)
     operations += captured
     moduleStack.lastOption.foreach(module =>
@@ -931,6 +983,64 @@ private final class ConstructionSession(val options: EmitOptions):
         instances
       )
 
+  private def analogSnapshots(): Vector[KernelAnalogRegionSnapshot] =
+    analogRegions.toVector.sortBy(region => (modulePath(region.module), region.ordinal)).map:
+      region =>
+        val expressions = region.expressions.distinct.toVector.map: reference =>
+          val expression = expressionValues.getOrElse(
+            reference,
+            fail(
+              "NODAL-ANALOG-SNAPSHOT-001",
+              "analog expression reference has no captured value",
+              Some(expressionPath(reference))
+            )
+          )
+          val operandPaths = expression.operands.toVector.map: operand =>
+            pathOf(operand).getOrElse(
+              fail(
+                "NODAL-ANALOG-SNAPSHOT-002",
+                s"analog expression operand '${renderAny(operand, reference.module)}' has no semantic path",
+                Some(expressionPath(reference))
+              )
+            )
+          KernelAnalogExpressionSnapshot(
+            expressionPath(reference),
+            expression.operation.getOrElse("unsupported_generic"),
+            operandPaths,
+            expression.literal.map(_.value),
+            expression.operands.lift(1).collect { case unit: String => unit }
+          )
+        val byPath = expressions.map(expression => expression.path -> expression).toMap
+        val contributions = region.contributions.toVector.zipWithIndex.map:
+          case ((target, value), index) =>
+            val targetPath = pathOf(target).getOrElse(
+              fail("NODAL-ANALOG-SNAPSHOT-003", "contribution target has no semantic path")
+            )
+            val valuePath = pathOf(value).getOrElse(
+              fail("NODAL-ANALOG-SNAPSHOT-004", "contribution value has no semantic path")
+            )
+            val kind = byPath.get(targetPath).map(_.operation) match
+              case Some("potential_access") => "potential"
+              case Some("flow_access") => "flow"
+              case _ =>
+                fail(
+                  "NODAL-ANALOG-SNAPSHOT-005",
+                  "contribution target must be V(...) or I(...) access",
+                  Some(targetPath)
+                )
+            KernelAnalogContributionSnapshot(
+              s"${modulePath(region.module)}.analog_${region.ordinal}.contribution_$index",
+              targetPath,
+              valuePath,
+              kind
+            )
+        KernelAnalogRegionSnapshot(
+          s"${modulePath(region.module)}.analog_${region.ordinal}",
+          modulePath(region.module),
+          expressions,
+          contributions
+        )
+
   private def classify(snapshot: ConstructionSnapshot): DesignKind =
     val kinds = snapshot.modules.flatMap(_.declarations.map(_.kind)).toSet
     val analogKinds = Set(
@@ -974,7 +1084,8 @@ private final class ConstructionSession(val options: EmitOptions):
       semantic.names,
       semantic.origins,
       semantic.generatedNames,
-      semantic.sourceMap
+      semantic.sourceMap,
+      analogSnapshots()
     )
     val kind = classify(snapshot)
     val report = DesignReport(
@@ -1051,6 +1162,10 @@ private[nodal] object ConstructionKernel:
     case None => body
 
   def block[A](body: => A): A = body
+
+  def analogBlock[A](body: => A): A = active match
+    case Some(session) => session.withAnalogRegion(body)
+    case None => body
 
   def currentDomain: Option[ClockDomain] = active.flatMap(_.currentDomain)
 

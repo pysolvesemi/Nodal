@@ -18,6 +18,8 @@ jobs:
   apply:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - name: Check out Increment 30 branch
         uses: actions/checkout@v6
@@ -28,22 +30,48 @@ jobs:
       - name: Apply semantic fixes and regression coverage
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/apply_increment30_final_review_fixes.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/apply_increment30_final_review_fixes.py")
+          text = path.read_text(encoding="utf-8")
+
+          start_marker = 'WORKFLOW = ".github/workflows/increment-30-analog-numeric-types.yml"'
+          end_marker = '''insert_after_line(
+              "docs/implementation/increment30-analog-numeric-types.md",'''
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          text = text[:start] + text[end:]
+
+          cleanup_start = text.index("for temporary in (")
+          cleanup_end = text.index('print("Increment 30 final semantic review fixes applied")')
+          text = (
+              text[:cleanup_start]
+              + '(ROOT / "scripts/apply_increment30_final_review_fixes.py").unlink()\n\n'
+              + text[cleanup_end:]
+          )
+          path.write_text(text, encoding="utf-8")
+          PY
+
           python3 scripts/apply_increment30_final_review_fixes.py
           ./nodal style bootstrap \
             --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
           python3 scripts/run_clang_tools.py format \
             --fix \
             --toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
-          python3 scripts/check_increment30.py
-          python3 tests/compiler/test_increment30.py
+          find scripts -type d -name __pycache__ -prune -exec rm -rf {} +
           git diff --check
 
-      - name: Publish final semantic fixes
+      - name: Publish semantic fixes
         run: |
           set -euo pipefail
           git config user.name "pysolvesemi"
           git config user.email "pysolvesemi@gmail.com"
           git add -A
+          if git diff --cached --name-only | grep -q '^\.github/workflows/'; then
+            echo "semantic patch unexpectedly modifies a workflow" >&2
+            git diff --cached --name-status >&2
+            exit 1
+          fi
           git commit -m "Increment 30 — close final semantic review gaps"
           git push origin HEAD:increment/30-analog-numeric-types

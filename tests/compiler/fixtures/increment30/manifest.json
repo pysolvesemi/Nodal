@@ -2,7 +2,7 @@
   "increment": 30,
   "title": "Analog numeric types and expression typing",
   "public_api": "0.3",
-  "status": "implementation-started",
+  "status": "implemented-awaiting-evidence",
   "prerequisite": {
     "increment": 29,
     "status": "validated-parameter-constant-unit",
@@ -104,5 +104,15 @@
   ],
   "evidence": {
     "start_commit": "1c1ab49da71f0f52d2af3d93e40a92f4643be776"
+  },
+  "implementation": {
+    "quantity_type": "Nodal_QuantityType",
+    "type_helper": "AnalogNumericTypeInfo",
+    "verify_pass": "nodal-verify-analog-numeric",
+    "fold_pass": "nodal-fold-analog-constants",
+    "folding_form": "provenance-retaining-annotations",
+    "backend_erasure": "verifyAnalogQuantityErasure",
+    "positive_fixture": "core/compiler/test/IR/analog-numeric-typing.mlir",
+    "backend_fixture": "core/compiler/test/IR/analog-numeric-backend.mlir"
   }
 }

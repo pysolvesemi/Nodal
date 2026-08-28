@@ -5,6 +5,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Support/LogicalResult.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
+#include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 
 #include "llvm/ADT/APInt.h"
@@ -114,15 +115,6 @@ Operation *enclosingSemanticModule(Operation *operation) {
   return nullptr;
 }
 
-LogicalResult verifyAnalogBinary(Operation *operation) {
-  for (Value operand : operation->getOperands()) {
-    if (!operand.getType().isF64())
-      return operation->emitOpError("NODAL-ANALOG-ARITHMETIC-001: operands must be f64");
-  }
-  if (operation->getNumResults() != 1 || !operation->getResult(0).getType().isF64())
-    return operation->emitOpError("NODAL-ANALOG-ARITHMETIC-001: result must be f64");
-  return success();
-}
 
 LogicalResult verifyLoop(Operation *operation) {
   if (failed(requireText(operation, "induction", "induction name")))
@@ -375,79 +367,65 @@ LogicalResult nodal::BranchOp::verify() {
 }
 
 LogicalResult nodal::AccessOp::verify() {
-  const llvm::StringRef kind = textAttr(getOperation(), "kind");
-  if (!oneOf(kind, {"potential", "flow"}))
-    return emitOpError() << "NODAL-ANALOG-ACCESS-001: unsupported access kind '" << kind << "'";
-  if (getOperation()->getNumResults() != 1 || !getOperation()->getResult(0).getType().isF64())
-    return emitOpError("NODAL-ANALOG-ACCESS-002: potential and flow access must produce f64");
-  return success();
+  return nodal::verifyAnalogNumericOperation(getOperation());
 }
 
 LogicalResult nodal::AnalogOp::verify() {
   if (failed(requireSingleBlock(getOperation())))
     return emitOpError("NODAL-ANALOG-REGION-001: analog region requires one body block");
   for (Operation &operation : getOperation()->getRegion(0).front()) {
-    if (!llvm::isa<nodal::RealLiteralOp, nodal::ParameterRefOp, nodal::AnalogAddOp,
-                   nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp, nodal::AnalogDdtOp,
+    if (!llvm::isa<nodal::RealLiteralOp, nodal::AnalogIntegerLiteralOp, nodal::ParameterRefOp,
+                   nodal::AnalogAddOp, nodal::AnalogSubOp, nodal::AnalogMulOp,
+                   nodal::AnalogDivOp, nodal::AnalogNegOp, nodal::AnalogCompareOp,
+                   nodal::AnalogLogicOp, nodal::AnalogSelectOp, nodal::AnalogDdtOp,
                    nodal::AccessOp, nodal::ContributeOp>(operation))
       return operation.emitOpError(
-          "NODAL-ANALOG-REGION-002: operation is not legal in the minimal analog region");
+          "NODAL-ANALOG-REGION-002: operation is not legal in the analog numeric region");
   }
   return success();
 }
 
 LogicalResult nodal::RealLiteralOp::verify() {
-  auto value = getOperation()->getAttrOfType<FloatAttr>("value");
-  if (!value || !value.getValue().isFinite())
-    return emitOpError("NODAL-ANALOG-LITERAL-001: real literal must be finite");
-  return success();
+  return nodal::verifyAnalogNumericOperation(getOperation());
+}
+
+LogicalResult nodal::AnalogIntegerLiteralOp::verify() {
+  return nodal::verifyAnalogNumericOperation(getOperation());
 }
 
 LogicalResult nodal::ParameterRefOp::verify() {
-  auto reference = getOperation()->getAttrOfType<FlatSymbolRefAttr>("parameter");
-  if (!reference)
-    return emitOpError("NODAL-ANALOG-PARAMETER-001: parameter reference is required");
-  Operation *owner = enclosingSemanticModule(getOperation());
-  if (!owner || owner->getNumRegions() != 1 || owner->getRegion(0).empty())
-    return emitOpError("NODAL-ANALOG-PARAMETER-001: enclosing module is unavailable");
-  for (Operation &operation : owner->getRegion(0).front()) {
-    if (!llvm::isa<nodal::ParameterOp>(operation))
-      continue;
-    auto symbol = operation.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
-    if (!symbol || symbol.getValue() != reference.getValue())
-      continue;
-    auto type = operation.getAttrOfType<TypeAttr>("type");
-    if (!type || !type.getValue().isF64())
-      return emitOpError("NODAL-ANALOG-PARAMETER-002: referenced parameter must have type f64");
-    return success();
-  }
-  return emitOpError() << "NODAL-ANALOG-PARAMETER-001: unknown parameter '" << reference.getValue()
-                       << "'";
+  return nodal::verifyAnalogNumericOperation(getOperation());
 }
 
-LogicalResult nodal::AnalogAddOp::verify() { return verifyAnalogBinary(getOperation()); }
-LogicalResult nodal::AnalogSubOp::verify() { return verifyAnalogBinary(getOperation()); }
-LogicalResult nodal::AnalogMulOp::verify() { return verifyAnalogBinary(getOperation()); }
-LogicalResult nodal::AnalogDivOp::verify() { return verifyAnalogBinary(getOperation()); }
-
+LogicalResult nodal::AnalogAddOp::verify() {
+  return nodal::verifyAnalogNumericOperation(getOperation());
+}
+LogicalResult nodal::AnalogSubOp::verify() {
+  return nodal::verifyAnalogNumericOperation(getOperation());
+}
+LogicalResult nodal::AnalogMulOp::verify() {
+  return nodal::verifyAnalogNumericOperation(getOperation());
+}
+LogicalResult nodal::AnalogDivOp::verify() {
+  return nodal::verifyAnalogNumericOperation(getOperation());
+}
+LogicalResult nodal::AnalogNegOp::verify() {
+  return nodal::verifyAnalogNumericOperation(getOperation());
+}
+LogicalResult nodal::AnalogCompareOp::verify() {
+  return nodal::verifyAnalogNumericOperation(getOperation());
+}
+LogicalResult nodal::AnalogLogicOp::verify() {
+  return nodal::verifyAnalogNumericOperation(getOperation());
+}
+LogicalResult nodal::AnalogSelectOp::verify() {
+  return nodal::verifyAnalogNumericOperation(getOperation());
+}
 LogicalResult nodal::AnalogDdtOp::verify() {
-  if (!getOperation()->getOperand(0).getType().isF64() ||
-      !getOperation()->getResult(0).getType().isF64())
-    return emitOpError("NODAL-ANALOG-DDT-001: ddt input and result must be f64");
-  return success();
+  return nodal::verifyAnalogNumericOperation(getOperation());
 }
-
 LogicalResult nodal::ContributeOp::verify() {
-  const llvm::StringRef kind = textAttr(getOperation(), "kind");
-  if (!oneOf(kind, {"potential", "flow"}))
-    return emitOpError() << "NODAL-ANALOG-CONTRIBUTION-001: unsupported contribution kind '" << kind
-                         << "'";
-  auto branch = llvm::cast<nodal::BranchType>(getOperation()->getOperand(0).getType());
-  if (branch.getDiscipline().trim().empty())
-    return emitOpError("NODAL-ANALOG-CONTRIBUTION-002: branch discipline must not be empty");
-  if (!getOperation()->getOperand(1).getType().isF64())
-    return emitOpError("NODAL-ANALOG-CONTRIBUTION-003: contribution value must be f64");
-  return success();
+  return nodal::verifyAnalogNumericOperation(getOperation());
 }
 
 LogicalResult nodal::BridgeOp::verify() {

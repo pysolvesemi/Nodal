@@ -9,6 +9,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
+#include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
@@ -827,9 +828,13 @@ LogicalResult verifyAnalog(mlir::ModuleOp module) {
           name == "nodal.branch" || name == "nodal.connection_set" ||
           name == "nodal.potential_equality" || name == "nodal.reference_potential" ||
           name == "nodal.flow_conservation" || name == "nodal.access" || name == "nodal.analog" ||
-          name == "nodal.real_literal" || name == "nodal.parameter_ref" ||
-          name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
-          name == "nodal.analog_div" || name == "nodal.analog_ddt" || name == "nodal.contribute")
+          name == "nodal.real_literal" || name == "nodal.analog_integer_literal" ||
+          name == "nodal.parameter_ref" || name == "nodal.analog_add" ||
+          name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
+          name == "nodal.analog_div" || name == "nodal.analog_neg" ||
+          name == "nodal.analog_compare" || name == "nodal.analog_logic" ||
+          name == "nodal.analog_select" || name == "nodal.analog_ddt" ||
+          name == "nodal.contribute")
         analog = true;
       if (name == "nodal.port" || name == "nodal.resolved_net" || name == "nodal.net_drive" ||
           name == "nodal.crossing")
@@ -871,9 +876,13 @@ LogicalResult verifyCapabilities(mlir::ModuleOp module) {
         name == "nodal.branch" || name == "nodal.connection_set" ||
         name == "nodal.potential_equality" || name == "nodal.reference_potential" ||
         name == "nodal.flow_conservation" || name == "nodal.access" || name == "nodal.bridge" ||
-        name == "nodal.analog" || name == "nodal.real_literal" || name == "nodal.parameter_ref" ||
-        name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
-        name == "nodal.analog_div" || name == "nodal.analog_ddt" || name == "nodal.contribute";
+        name == "nodal.analog" || name == "nodal.real_literal" ||
+        name == "nodal.analog_integer_literal" || name == "nodal.parameter_ref" ||
+        name == "nodal.analog_add" || name == "nodal.analog_sub" ||
+        name == "nodal.analog_mul" || name == "nodal.analog_div" ||
+        name == "nodal.analog_neg" || name == "nodal.analog_compare" ||
+        name == "nodal.analog_logic" || name == "nodal.analog_select" ||
+        name == "nodal.analog_ddt" || name == "nodal.contribute";
     const bool digital = name == "nodal.resolved_net" || name == "nodal.net_driver" ||
                          name == "nodal.net_drive" || name == "nodal.crossing" ||
                          name == "nodal.fsm";
@@ -971,10 +980,11 @@ NODAL_DEFINE_VERIFICATION_PASS(VerifyCapabilitiesPass, "nodal-verify-capabilitie
 
 llvm::SmallVector<llvm::StringRef, 16> stageNames(GateProfile profile) {
   if (profile == GateProfile::Fast)
-    return {"construction", "hierarchy", "types", "parameters", "domains", "capabilities"};
+    return {"construction", "hierarchy", "types", "parameters", "analog-numeric",
+            "domains", "capabilities"};
   return {"construction", "drivers",    "latches",     "cycles",  "hierarchy",
-          "types",        "parameters", "enum-fsm",    "domains", "protocols",
-          "effects",      "analog",     "capabilities"};
+          "types",        "parameters", "analog-numeric", "enum-fsm", "domains",
+          "protocols",    "effects",    "analog",          "capabilities"};
 }
 
 void addVerifierPasses(OpPassManager &manager, GateProfile profile) {
@@ -987,6 +997,8 @@ void addVerifierPasses(OpPassManager &manager, GateProfile profile) {
   manager.addPass(std::make_unique<VerifyHierarchyPass>());
   manager.addPass(std::make_unique<VerifyTypesPass>());
   manager.addPass(std::make_unique<VerifyParametersPass>());
+  manager.addPass(std::make_unique<FoldAnalogConstantsPass>());
+  manager.addPass(std::make_unique<VerifyAnalogNumericPass>());
   if (profile != GateProfile::Fast)
     manager.addPass(std::make_unique<VerifyEnumFsmPass>());
   manager.addPass(std::make_unique<VerifyDomainsPass>());
@@ -1014,6 +1026,41 @@ public:
   void runOnOperation() final {
     if (failed(materializeConservativeConnectivity(getOperation())))
       signalPassFailure();
+  }
+};
+
+class FoldAnalogConstantsPass final
+    : public PassWrapper<FoldAnalogConstantsPass, OperationPass<mlir::ModuleOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldAnalogConstantsPass)
+
+  llvm::StringRef getArgument() const final { return "nodal-fold-analog-constants"; }
+  llvm::StringRef getDescription() const final {
+    return "Annotate pure analog numeric constants while retaining authored operations";
+  }
+
+  void runOnOperation() final {
+    if (failed(foldAnalogNumericConstants(getOperation())))
+      signalPassFailure();
+  }
+};
+
+class VerifyAnalogNumericPass final
+    : public PassWrapper<VerifyAnalogNumericPass, OperationPass<mlir::ModuleOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VerifyAnalogNumericPass)
+
+  llvm::StringRef getArgument() const final { return "nodal-verify-analog-numeric"; }
+  llvm::StringRef getDescription() const final {
+    return "Verify analog numeric promotion, dimensions, logic, and selection";
+  }
+
+  void runOnOperation() final {
+    if (failed(verifyAnalogNumericModel(getOperation()))) {
+      signalPassFailure();
+      return;
+    }
+    markAllAnalysesPreserved();
   }
 };
 
@@ -1143,6 +1190,8 @@ void registerNodalPasses() {
   static PassRegistration<VerifyHierarchyPass> hierarchy;
   static PassRegistration<VerifyTypesPass> types;
   static PassRegistration<VerifyParametersPass> parameters;
+  static PassRegistration<FoldAnalogConstantsPass> analogFolding;
+  static PassRegistration<VerifyAnalogNumericPass> analogNumeric;
   static PassRegistration<VerifyEnumFsmPass> enumFsm;
   static PassRegistration<VerifyDomainsPass> domains;
   static PassRegistration<VerifyProtocolsPass> protocols;
@@ -1173,6 +1222,8 @@ void registerNodalPasses() {
   (void)hierarchy;
   (void)types;
   (void)parameters;
+  (void)analogFolding;
+  (void)analogNumeric;
   (void)enumFsm;
   (void)domains;
   (void)protocols;

@@ -128,6 +128,43 @@ class Increment30CheckerTests(unittest.TestCase):
         path.write_text(text, encoding="utf-8")
         self.assertIn("NODAL-INC30-006", self.codes(root))
 
+    def test_rejects_missing_native_quantity_type(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/include/nodal/Dialect/Nodal/NodalTypes.td"
+        path.write_text(path.read_text(encoding="utf-8").replace("Nodal_QuantityType", "MissingQuantityType", 1), encoding="utf-8")
+        self.assertIn("NODAL-INC30-010", self.codes(root))
+
+    def test_rejects_missing_native_verifier_pass(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Transforms/Passes.cpp"
+        path.write_text(path.read_text(encoding="utf-8").replace("nodal-verify-analog-numeric", "missing-analog-verifier", 1), encoding="utf-8")
+        self.assertIn("NODAL-INC30-010", self.codes(root))
+
+    def test_rejects_missing_folding_provenance(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp"
+        path.write_text(path.read_text(encoding="utf-8").replace("nodal.folded_provenance", "lost.folded.provenance", 1), encoding="utf-8")
+        self.assertIn("NODAL-INC30-010", self.codes(root))
+
+    def test_rejects_missing_backend_quantity_gate(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Backend/AnalogVerticalSlice.cpp"
+        path.write_text(path.read_text(encoding="utf-8").replace("verifyAnalogQuantityErasure", "skipQuantityVerification", 1), encoding="utf-8")
+        self.assertIn("NODAL-INC30-010", self.codes(root))
+
+    def test_rejects_missing_implemented_status(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "tests/compiler/fixtures/increment30/manifest.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest["status"] = "implementation-started"
+        path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        self.assertIn("NODAL-INC30-007", self.codes(root))
+
 
 if __name__ == "__main__":
     unittest.main()

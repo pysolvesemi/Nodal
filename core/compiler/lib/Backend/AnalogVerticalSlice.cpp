@@ -4,6 +4,7 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
+#include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 
@@ -44,12 +45,17 @@ constexpr llvm::StringLiteral kSupportedOperations[] = {
     "nodal.branch",
     "nodal.analog",
     "nodal.real_literal",
+    "nodal.analog_integer_literal",
     "nodal.parameter_ref",
     "nodal.access",
     "nodal.analog_add",
     "nodal.analog_sub",
     "nodal.analog_mul",
     "nodal.analog_div",
+    "nodal.analog_neg",
+    "nodal.analog_compare",
+    "nodal.analog_logic",
+    "nodal.analog_select",
     "nodal.analog_ddt",
     "nodal.contribute",
 };
@@ -111,6 +117,26 @@ FailureOr<std::string> renderBranch(Value value, ModuleRenderState &state, llvm:
       .str();
 }
 
+std::optional<std::string> renderFoldedExpression(Operation *operation) {
+  auto folded = operation->getAttrOfType<BoolAttr>("nodal.folded");
+  if (!folded || !folded.getValue())
+    return std::nullopt;
+  Attribute value = operation->getAttr("nodal.folded_value");
+  if (auto boolean = llvm::dyn_cast_or_null<BoolAttr>(value))
+    return boolean.getValue() ? std::string("1") : std::string("0");
+  if (auto real = llvm::dyn_cast_or_null<FloatAttr>(value)) {
+    if (!std::isfinite(real.getValueAsDouble()))
+      return std::nullopt;
+    return formatReal(real.getValueAsDouble());
+  }
+  if (auto integer = llvm::dyn_cast_or_null<IntegerAttr>(value)) {
+    llvm::SmallString<64> rendered;
+    integer.getValue().toString(rendered, 10, true);
+    return rendered.str().str();
+  }
+  return std::nullopt;
+}
+
 FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
   if (auto iterator = state.expressions.find(value); iterator != state.expressions.end())
     return iterator->second;
@@ -121,8 +147,10 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
   llvm::StringRef name = operation->getName().getStringRef();
   std::string rendered;
 
-  if (name == "nodal.const_literal" || name == "nodal.const_parameter_ref" ||
-      name == "nodal.const_expr") {
+  if (auto folded = renderFoldedExpression(operation)) {
+    rendered = *folded;
+  } else if (name == "nodal.const_literal" || name == "nodal.const_parameter_ref" ||
+             name == "nodal.const_expr") {
     auto expression = nodal::renderParameterConstantExpression(value);
     if (failed(expression))
       return failure();
@@ -132,6 +160,13 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
     if (!literal || !std::isfinite(literal.getValueAsDouble()))
       return failure();
     rendered = formatReal(literal.getValueAsDouble());
+  } else if (name == "nodal.analog_integer_literal") {
+    auto literal = operation->getAttrOfType<IntegerAttr>("value");
+    if (!literal)
+      return failure();
+    llvm::SmallString<64> spelling;
+    literal.getValue().toString(spelling, 10, true);
+    rendered = spelling.str().str();
   } else if (name == "nodal.parameter_ref") {
     auto parameter = operation->getAttrOfType<FlatSymbolRefAttr>("parameter");
     if (!parameter)
@@ -161,6 +196,11 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
     if (failed(input))
       return failure();
     rendered = (llvm::Twine("ddt(") + *input + ")").str();
+  } else if (name == "nodal.analog_neg") {
+    auto input = renderExpression(operation->getOperand(0), state);
+    if (failed(input))
+      return failure();
+    rendered = (llvm::Twine("(-") + *input + ")").str();
   } else if (name == "nodal.analog_add" || name == "nodal.analog_sub" ||
              name == "nodal.analog_mul" || name == "nodal.analog_div") {
     if (operation->getNumOperands() != 2)
@@ -174,6 +214,46 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
                                : name == "nodal.analog_mul" ? "*"
                                                             : "/";
     rendered = (llvm::Twine("(") + *lhs + " " + spelling + " " + *rhs + ")").str();
+  } else if (name == "nodal.analog_compare") {
+    auto lhs = renderExpression(operation->getOperand(0), state);
+    auto rhs = renderExpression(operation->getOperand(1), state);
+    auto predicate = operation->getAttrOfType<StringAttr>("predicate");
+    if (failed(lhs) || failed(rhs) || !predicate)
+      return failure();
+    llvm::StringRef spelling = predicate.getValue() == "eq"   ? "=="
+                               : predicate.getValue() == "ne" ? "!="
+                               : predicate.getValue() == "lt" ? "<"
+                               : predicate.getValue() == "le" ? "<="
+                               : predicate.getValue() == "gt" ? ">"
+                                                               : ">=";
+    rendered = (llvm::Twine("(") + *lhs + " " + spelling + " " + *rhs + ")").str();
+  } else if (name == "nodal.analog_logic") {
+    auto operatorName = operation->getAttrOfType<StringAttr>("operator_name");
+    if (!operatorName)
+      return failure();
+    if (operatorName.getValue() == "not") {
+      auto input = renderExpression(operation->getOperand(0), state);
+      if (failed(input))
+        return failure();
+      rendered = (llvm::Twine("(!") + *input + ")").str();
+    } else {
+      auto lhs = renderExpression(operation->getOperand(0), state);
+      auto rhs = renderExpression(operation->getOperand(1), state);
+      if (failed(lhs) || failed(rhs))
+        return failure();
+      llvm::StringRef spelling = operatorName.getValue() == "and"   ? "&&"
+                                 : operatorName.getValue() == "or"  ? "||"
+                                                                    : "^";
+      rendered = (llvm::Twine("(") + *lhs + " " + spelling + " " + *rhs + ")").str();
+    }
+  } else if (name == "nodal.analog_select") {
+    auto condition = renderExpression(operation->getOperand(0), state);
+    auto trueValue = renderExpression(operation->getOperand(1), state);
+    auto falseValue = renderExpression(operation->getOperand(2), state);
+    if (failed(condition) || failed(trueValue) || failed(falseValue))
+      return failure();
+    rendered = (llvm::Twine("(") + *condition + " ? " + *trueValue + " : " + *falseValue + ")")
+                   .str();
   } else {
     return failure();
   }
@@ -569,6 +649,8 @@ bool validIdentifierList(llvm::StringRef value) {
 } // namespace
 
 LogicalResult verifyBackendOperations(ModuleOp module, const BackendProfile &profile) {
+  if (failed(verifyAnalogQuantityErasure(module)))
+    return failure();
   LogicalResult result = success();
   module.walk([&](Operation *operation) {
     if (failed(result) || operation == module.getOperation())

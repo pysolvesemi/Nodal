@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the Increment 30 analog numeric typing implementation-start contract."""
+"""Validate the Increment 30 analog numeric typing implementation contract."""
 
 from __future__ import annotations
 
@@ -30,6 +30,25 @@ EXPECTED_FILES = (
     ".github/workflows/increment-30-analog-numeric-types.yml",
     "docs/roadmap/nodal-development-todo.md",
     "tests/compiler/fixtures/increment29/manifest.json",
+    "core/compiler/include/nodal/Dialect/Nodal/AnalogNumeric.h",
+    "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp",
+    "core/compiler/include/nodal/Dialect/Nodal/NodalTypes.td",
+    "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td",
+    "core/compiler/lib/Dialect/Nodal/NodalTypes.cpp",
+    "core/compiler/lib/Dialect/Nodal/NodalOps.cpp",
+    "core/compiler/lib/Transforms/Passes.cpp",
+    "core/compiler/lib/Backend/AnalogVerticalSlice.cpp",
+    "core/compiler/diagnostics-v0.1.json",
+    "core/compiler/test/CMakeLists.txt",
+    "core/compiler/test/IR/analog-numeric-typing.mlir",
+    "core/compiler/test/IR/analog-numeric-backend.mlir",
+    "core/compiler/test/IR/analog-numeric-invalid-type.mlir",
+    "core/compiler/test/IR/analog-numeric-invalid-promotion.mlir",
+    "core/compiler/test/IR/analog-numeric-invalid-dimension.mlir",
+    "core/compiler/test/IR/analog-numeric-invalid-compare.mlir",
+    "core/compiler/test/IR/analog-numeric-invalid-logic.mlir",
+    "core/compiler/test/IR/analog-numeric-invalid-select.mlir",
+    "core/compiler/test/IR/analog-numeric-invalid-divide.mlir",
 )
 
 TEMPORARY_FILES = (
@@ -202,6 +221,10 @@ def check_repository(root: Path) -> list[Problem]:
             "permissions:\n  contents: read",
             "implementation-started",
             "analog-numeric-surface.json",
+            "nodal-verify-analog-numeric",
+            "nodal-fold-analog-constants",
+            "analog-numeric-typing.mlir",
+            "analog-numeric-backend.mlir",
         ),
         problems,
         "NODAL-INC30-005",
@@ -212,6 +235,8 @@ def check_repository(root: Path) -> list[Problem]:
 
     if manifest.get("increment") != 30 or manifest.get("public_api") != "0.3":
         problems.append(Problem("NODAL-INC30-007", "manifest identity/public API mismatch"))
+    if manifest.get("status") == "implementation-started":
+        problems.append(Problem("NODAL-INC30-007", "native implementation has not been materialized"))
     if manifest.get("status") not in {
         "implementation-started",
         "implemented-awaiting-evidence",
@@ -268,6 +293,37 @@ def check_repository(root: Path) -> list[Problem]:
     if surface.get("folding", {}).get("requiresPureConstantGraph") is not True:
         problems.append(Problem("NODAL-INC30-008", "surface folding purity boundary is missing"))
 
+    native_contracts = {
+        "core/compiler/include/nodal/Dialect/Nodal/NodalTypes.td": (
+            "Nodal_QuantityType", "canonical physical dimension signature"),
+        "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td": (
+            "Nodal_AnalogIntegerLiteralOp", "Nodal_AnalogCompareOp",
+            "Nodal_AnalogLogicOp", "Nodal_AnalogSelectOp"),
+        "core/compiler/include/nodal/Dialect/Nodal/AnalogNumeric.h": (
+            "AnalogNumericTypeInfo", "verifyAnalogNumericModel",
+            "foldAnalogNumericConstants", "verifyAnalogQuantityErasure"),
+        "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp": (
+            "combineAnalogDimensions", "NODAL-ANALOG-PROMOTION-001",
+            "nodal.folded_provenance", "NODAL-ANALOG-DIVIDE-001"),
+        "core/compiler/lib/Transforms/Passes.cpp": (
+            "nodal-fold-analog-constants", "nodal-verify-analog-numeric"),
+        "core/compiler/lib/Backend/AnalogVerticalSlice.cpp": (
+            "verifyAnalogQuantityErasure", "nodal.analog_select",
+            "renderFoldedExpression"),
+        "core/compiler/test/CMakeLists.txt": (
+            "nodal.native.analog-numeric-typing", "analog-numeric-rejects"),
+    }
+    for relative, fragments in native_contracts.items():
+        require(read(root / relative, problems, "NODAL-INC30-010"), fragments, problems,
+                "NODAL-INC30-010", relative)
+
+    diagnostics = load_json(root / "core/compiler/diagnostics-v0.1.json", problems,
+                            "NODAL-INC30-011")
+    catalog = diagnostics.get("families", {}).get("analog-numeric-typing", [])
+    for code in PLANNED_DIAGNOSTICS:
+        if code not in catalog:
+            problems.append(Problem("NODAL-INC30-011", f"diagnostic catalog lacks: {code}"))
+
     if predecessor.get("status") != "validated-parameter-constant-unit":
         problems.append(Problem("NODAL-INC30-009", "Increment 29 prerequisite is not validated"))
 
@@ -306,7 +362,7 @@ def main(argv: list[str] | None = None) -> int:
     if problems:
         print(f"Increment 30 check failed with {len(problems)} problem(s)", file=sys.stderr)
         return 1
-    print("Increment 30 analog numeric typing start contract passed")
+    print("Increment 30 analog numeric typing implementation contract passed")
     return 0
 
 

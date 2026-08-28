@@ -4,6 +4,7 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
+#include "nodal/Dialect/Nodal/ParameterModel.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -26,10 +27,28 @@ namespace nodal {
 namespace {
 
 constexpr llvm::StringLiteral kSupportedOperations[] = {
-    "nodal.module",     "nodal.parameter",  "nodal.terminal",     "nodal.node",
-    "nodal.branch",     "nodal.analog",     "nodal.real_literal", "nodal.parameter_ref",
-    "nodal.access",     "nodal.analog_add", "nodal.analog_sub",   "nodal.analog_mul",
-    "nodal.analog_div", "nodal.analog_ddt", "nodal.contribute",
+    "nodal.unit",
+    "nodal.module",
+    "nodal.parameter",
+    "nodal.const_literal",
+    "nodal.const_parameter_ref",
+    "nodal.const_expr",
+    "nodal.parameter_value",
+    "nodal.parameter_constraint",
+    "nodal.parameter_envelope",
+    "nodal.terminal",
+    "nodal.node",
+    "nodal.branch",
+    "nodal.analog",
+    "nodal.real_literal",
+    "nodal.parameter_ref",
+    "nodal.access",
+    "nodal.analog_add",
+    "nodal.analog_sub",
+    "nodal.analog_mul",
+    "nodal.analog_div",
+    "nodal.analog_ddt",
+    "nodal.contribute",
 };
 
 llvm::StringRef symbolName(Operation *operation) {
@@ -99,7 +118,13 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
   llvm::StringRef name = operation->getName().getStringRef();
   std::string rendered;
 
-  if (name == "nodal.real_literal") {
+  if (name == "nodal.const_literal" || name == "nodal.const_parameter_ref" ||
+      name == "nodal.const_expr") {
+    auto expression = nodal::renderParameterConstantExpression(value);
+    if (failed(expression))
+      return failure();
+    rendered = *expression;
+  } else if (name == "nodal.real_literal") {
     auto literal = operation->getAttrOfType<FloatAttr>("value");
     if (!literal || !std::isfinite(literal.getValueAsDouble()))
       return failure();
@@ -208,6 +233,60 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
   return success();
 }
 
+Operation *findParameterValue(Operation *definition, llvm::StringRef parameter) {
+  Region &region = definition->getRegion(0);
+  if (!llvm::hasSingleElement(region))
+    return nullptr;
+  for (Operation &operation : region.front()) {
+    if (operation.getName().getStringRef() != "nodal.parameter_value")
+      continue;
+    auto reference = operation.getAttrOfType<FlatSymbolRefAttr>("parameter");
+    if (reference && reference.getValue() == parameter)
+      return &operation;
+  }
+  return nullptr;
+}
+
+llvm::SmallVector<Operation *, 4> findParameterConstraints(Operation *definition,
+                                                           llvm::StringRef parameter) {
+  llvm::SmallVector<Operation *, 4> constraints;
+  Region &region = definition->getRegion(0);
+  if (!llvm::hasSingleElement(region))
+    return constraints;
+  for (Operation &operation : region.front()) {
+    if (operation.getName().getStringRef() != "nodal.parameter_constraint")
+      continue;
+    auto reference = operation.getAttrOfType<FlatSymbolRefAttr>("parameter");
+    if (reference && reference.getValue() == parameter)
+      constraints.push_back(&operation);
+  }
+  return constraints;
+}
+
+FailureOr<std::string> legacyParameterInitializer(Operation *parameter) {
+  llvm::StringRef kind = nodal::getParameterKind(parameter);
+  Attribute value = parameter->getAttr("default_value");
+  if (kind == "real") {
+    auto real = llvm::dyn_cast<FloatAttr>(value);
+    if (!real || !std::isfinite(real.getValueAsDouble()))
+      return failure();
+    return formatReal(real.getValueAsDouble()) + nodal::getParameterUnitNativeSuffix(parameter);
+  }
+  if (kind == "integer") {
+    auto integer = llvm::dyn_cast<IntegerAttr>(value);
+    if (!integer)
+      return failure();
+    return std::to_string(integer.getInt());
+  }
+  if (kind == "boolean") {
+    if (auto boolean = llvm::dyn_cast<BoolAttr>(value))
+      return boolean.getValue() ? std::string("1") : std::string("0");
+    if (auto integer = llvm::dyn_cast<IntegerAttr>(value))
+      return integer.getInt() != 0 ? std::string("1") : std::string("0");
+  }
+  return failure();
+}
+
 LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::raw_ostream &output) {
   Region &region = analog->getRegion(0);
   if (!llvm::hasSingleElement(region))
@@ -289,13 +368,53 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
   }
 
   for (Operation *parameter : parameters) {
-    auto type = parameter->getAttrOfType<TypeAttr>("type");
-    auto value = parameter->getAttrOfType<FloatAttr>("default_value");
-    if (!type || !type.getValue().isF64() || !value || !std::isfinite(value.getValueAsDouble()))
-      return emitMappedFailure(parameter, "NODAL-BACKEND-RC-004",
-                               "RC parameters must be finite real values");
-    output << "  parameter real " << symbolName(parameter) << " = "
-           << formatReal(value.getValueAsDouble()) << ";\n";
+    llvm::StringRef kind = nodal::getParameterKind(parameter);
+    llvm::StringRef nativeType = kind == "real"                           ? "real"
+                                 : kind == "integer" || kind == "boolean" ? "integer"
+                                                                          : "";
+    if (nativeType.empty())
+      return emitMappedFailure(parameter, "NODAL-BACKEND-PARAMETER-001",
+                               "unsupported native parameter kind");
+
+    FailureOr<std::string> initializer = failure();
+    if (Operation *value = findParameterValue(definition, symbolName(parameter)))
+      initializer = nodal::renderParameterConstantExpression(value->getOperand(0));
+    else
+      initializer = legacyParameterInitializer(parameter);
+    if (failed(initializer))
+      return emitMappedFailure(parameter, "NODAL-BACKEND-PARAMETER-001",
+                               "parameter initializer is not losslessly renderable");
+
+    output << "  parameter " << nativeType << " " << symbolName(parameter) << " = " << *initializer;
+    for (Operation *constraint : findParameterConstraints(definition, symbolName(parameter))) {
+      llvm::StringRef constraintKind =
+          constraint->getAttrOfType<StringAttr>("constraint_kind").getValue();
+      if (constraintKind == "range") {
+        auto lower = nodal::renderParameterConstantExpression(constraint->getOperand(0));
+        auto upper = nodal::renderParameterConstantExpression(constraint->getOperand(1));
+        auto lowerInclusive = constraint->getAttrOfType<BoolAttr>("lower_inclusive");
+        auto upperInclusive = constraint->getAttrOfType<BoolAttr>("upper_inclusive");
+        if (failed(lower) || failed(upper) || !lowerInclusive || !upperInclusive)
+          return emitMappedFailure(constraint, "NODAL-BACKEND-PARAMETER-002",
+                                   "range constraint is not losslessly renderable");
+        output << " from " << (lowerInclusive.getValue() ? "[" : "(") << *lower << ":" << *upper
+               << (upperInclusive.getValue() ? "]" : ")");
+      } else if (constraintKind == "exclude") {
+        auto excluded = nodal::renderParameterConstantExpression(constraint->getOperand(0));
+        if (failed(excluded))
+          return emitMappedFailure(constraint, "NODAL-BACKEND-PARAMETER-002",
+                                   "exclusion constraint is not losslessly renderable");
+        output << " exclude " << *excluded;
+      } else {
+        return emitMappedFailure(constraint, "NODAL-BACKEND-PARAMETER-002",
+                                 "unsupported native parameter constraint");
+      }
+    }
+    output << ";";
+    std::string unit = nodal::getParameterUnitSymbol(parameter);
+    if (!unit.empty())
+      output << " // unit: " << unit;
+    output << "\n";
   }
 
   if ((!ports.empty() || !nodes.empty() || !parameters.empty()) && !analogs.empty())

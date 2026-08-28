@@ -1,0 +1,75 @@
+{
+  "increment": 29,
+  "title": "Parameters, constants, ranges, and units",
+  "public_api": "0.3",
+  "status": "implemented-awaiting-evidence",
+  "parameter_kinds": [
+    "real",
+    "integer",
+    "boolean"
+  ],
+  "classifications": [
+    "ordinary",
+    "structural",
+    "dynamic"
+  ],
+  "operations": [
+    "nodal.unit",
+    "nodal.const_literal",
+    "nodal.const_parameter_ref",
+    "nodal.const_expr",
+    "nodal.parameter_value",
+    "nodal.parameter_constraint",
+    "nodal.parameter_override",
+    "nodal.parameter_envelope",
+    "nodal.dynamic_value"
+  ],
+  "constraint_kinds": [
+    "range",
+    "exclude"
+  ],
+  "constant_operators": [
+    "add",
+    "sub",
+    "mul",
+    "div",
+    "mod",
+    "neg",
+    "not"
+  ],
+  "structural_effects": [
+    "topology",
+    "component_count",
+    "equation_count",
+    "shape",
+    "rank"
+  ],
+  "native_rendering": "lossless-verilog-a-verilog-ams-spelling",
+  "diagnostics": [
+    "NODAL-UNIT-DECL-001",
+    "NODAL-UNIT-SCALE-001",
+    "NODAL-UNIT-SUFFIX-001",
+    "NODAL-PARAMETER-KIND-001",
+    "NODAL-PARAMETER-CLASS-001",
+    "NODAL-PARAMETER-UNIT-001",
+    "NODAL-CONSTANT-LITERAL-001",
+    "NODAL-CONSTANT-EXPR-001",
+    "NODAL-CONSTANT-CYCLE-001",
+    "NODAL-PARAMETER-DEFAULT-001",
+    "NODAL-PARAMETER-CONSTRAINT-001",
+    "NODAL-PARAMETER-OVERRIDE-001",
+    "NODAL-PARAMETER-ENVELOPE-001",
+    "NODAL-PARAMETER-STRUCTURAL-001",
+    "NODAL-DYNAMIC-VALUE-001",
+    "NODAL-BACKEND-PARAMETER-001",
+    "NODAL-BACKEND-PARAMETER-002"
+  ],
+  "deferred": [
+    "public Scala syntax",
+    "string and aggregate parameters",
+    "affine and composite units",
+    "general analog expression promotion",
+    "hierarchical override emission"
+  ],
+  "evidence": {}
+}

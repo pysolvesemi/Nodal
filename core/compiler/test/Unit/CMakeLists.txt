@@ -161,3 +161,24 @@ add_test(
   NAME nodal.native.conservative-connectivity-unit
   COMMAND nodal-conservative-connectivity-unit-tests
 )
+
+
+add_executable(nodal-parameter-model-unit-tests
+  ParameterModelTest.cpp
+)
+
+llvm_update_compile_flags(nodal-parameter-model-unit-tests)
+
+target_link_libraries(nodal-parameter-model-unit-tests
+  PRIVATE
+    NodalDialect
+    MLIRIR
+    MLIRParser
+    MLIRSupport
+    LLVMSupport
+)
+
+add_test(
+  NAME nodal.native.parameter-model-unit
+  COMMAND nodal-parameter-model-unit-tests
+)

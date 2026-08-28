@@ -63,12 +63,21 @@ def Nodal_PortOp : Nodal_Op<"port", [HasParent<"ModuleOp">, Symbol]> {
 
 def Nodal_ParameterOp : Nodal_Op<"parameter",
     [HasParent<"ModuleOp">, Symbol]> {
-  let summary = "Symbolic target-visible module parameter";
+  let summary = "Typed target-visible ordinary or structural parameter";
+  let description = [{
+    `variability` retains the existing fixed/symbolic target-visibility contract.
+    The optional `parameter_kind`, `classification`, and `unit` attributes add
+    the Increment 29 semantic model without invalidating legacy IR. New IR uses
+    real/integer/boolean kinds and ordinary/structural classifications.
+  }];
   let arguments = (ins
     SymbolNameAttr:$sym_name,
     TypeAttr:$type,
     AnyAttr:$default_value,
     StrAttr:$variability,
+    OptionalAttr<StrAttr>:$parameter_kind,
+    OptionalAttr<StrAttr>:$classification,
+    OptionalAttr<FlatSymbolRefAttr>:$unit,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;
@@ -211,6 +220,117 @@ def Nodal_ResetRelationOp : Nodal_Op<"reset_relation",
     StrAttr:$kind,
     DictionaryAttr:$metadata
   );
+  let hasVerifier = 1;
+}
+
+
+//===----------------------------------------------------------------------===//
+// Units, compile-time expressions, constraints, overrides, and envelopes
+//===----------------------------------------------------------------------===//
+
+def Nodal_UnitOp : Nodal_Op<"unit", [Symbol]> {
+  let summary = "Canonical physical-unit declaration for parameter literals";
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    StrAttr:$symbol,
+    StrAttr:$dimension,
+    F64Attr:$scale,
+    StrAttr:$native_suffix,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
+def Nodal_ConstLiteralOp : Nodal_Op<"const_literal"> {
+  let summary = "Losslessly spelled compile-time scalar literal";
+  let arguments = (ins
+    AnyAttr:$value,
+    StrAttr:$spelling,
+    OptionalAttr<FlatSymbolRefAttr>:$unit,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_ConstParameterRefOp : Nodal_Op<"const_parameter_ref"> {
+  let summary = "Compile-time reference to a module parameter";
+  let arguments = (ins
+    FlatSymbolRefAttr:$parameter,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_ConstExprOp : Nodal_Op<"const_expr"> {
+  let summary = "Typed target-neutral compile-time scalar expression";
+  let arguments = (ins
+    Variadic<AnyType>:$operands,
+    StrAttr:$operator_name,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_ParameterValueOp : Nodal_Op<"parameter_value",
+    [HasParent<"ModuleOp">]> {
+  let summary = "Lossless default-expression attachment for one parameter";
+  let arguments = (ins
+    AnyType:$value,
+    FlatSymbolRefAttr:$parameter,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
+def Nodal_ParameterConstraintOp : Nodal_Op<"parameter_constraint",
+    [HasParent<"ModuleOp">]> {
+  let summary = "Native range or exclusion constraint for one parameter";
+  let arguments = (ins
+    Variadic<AnyType>:$values,
+    FlatSymbolRefAttr:$parameter,
+    StrAttr:$constraint_kind,
+    BoolAttr:$lower_inclusive,
+    BoolAttr:$upper_inclusive,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
+def Nodal_ParameterOverrideOp : Nodal_Op<"parameter_override",
+    [HasParent<"ModuleOp">]> {
+  let summary = "Lossless typed override of an instantiated module parameter";
+  let arguments = (ins
+    AnyType:$value,
+    FlatSymbolRefAttr:$instance,
+    FlatSymbolRefAttr:$parameter,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
+def Nodal_ParameterEnvelopeOp : Nodal_Op<"parameter_envelope",
+    [HasParent<"ModuleOp">]> {
+  let summary = "Static structural-effect envelope for one parameter";
+  let arguments = (ins
+    FlatSymbolRefAttr:$parameter,
+    ArrayAttr:$effects,
+    StrAttr:$policy,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
+def Nodal_DynamicValueOp : Nodal_Op<"dynamic_value"> {
+  let summary = "Explicit marker for a runtime value excluded from constant evaluation";
+  let arguments = (ins
+    AnyType:$input,
+    StrAttr:$origin,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 

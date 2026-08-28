@@ -45,6 +45,9 @@ EXPECTED_FILES = (
     "tests/compiler/test_increment27.py",
     "scripts/check_increment28.py",
     ".github/workflows/increment-28-electrical-connectivity.yml",
+    "tests/compiler/fixtures/increment29/manifest.json",
+    "scripts/check_increment29.py",
+    "tests/compiler/test_increment29.py",
 )
 
 TEMPORARY_FILES = (
@@ -519,8 +522,37 @@ def check_repository(root: Path) -> list[Problem]:
                 )
     else:
         problems.append(Problem("NODAL-INC28-019", f"unexpected manifest status: {status!r}"))
-    if not increment29_open:
-        problems.append(Problem("NODAL-INC28-019", "Increment 29 must remain unchecked"))
+    increment29_done = (
+        "- [x] **Increment 29 — Parameters, constants, ranges, and units**"
+        in roadmap
+    )
+    increment30_open = (
+        "- [ ] **Increment 30 — Analog numeric types and expression typing**"
+        in roadmap
+    )
+    successor_path = root / "tests/compiler/fixtures/increment29/manifest.json"
+    try:
+        successor = json.loads(read(successor_path, problems, "NODAL-INC28-019"))
+    except json.JSONDecodeError as exc:
+        problems.append(Problem("NODAL-INC28-019", f"invalid Increment 29 manifest: {exc}"))
+        successor = {}
+    successor_status = successor.get("status")
+    successor_evidence = successor.get("evidence", {})
+    if successor.get("increment") != 29 or successor.get("public_api") != "0.3":
+        problems.append(Problem("NODAL-INC28-019", "Increment 29 successor identity mismatch"))
+    if successor_status == "implemented-awaiting-evidence":
+        if not increment29_open or rev < (1, 36):
+            problems.append(Problem("NODAL-INC28-019", "Increment 29 pre-evidence state is inconsistent"))
+    elif successor_status == "validated-parameter-constant-unit":
+        if not increment29_done or rev < (1, 37):
+            problems.append(Problem("NODAL-INC28-019", "validated Increment 29 state is inconsistent"))
+        for field in ("pull_request", "dedicated_run", "core_ci_run"):
+            if not isinstance(successor_evidence.get(field), int):
+                problems.append(Problem("NODAL-INC28-019", f"Increment 29 lacks evidence field: {field}"))
+    else:
+        problems.append(Problem("NODAL-INC28-019", f"unexpected Increment 29 status: {successor_status!r}"))
+    if not increment30_open:
+        problems.append(Problem("NODAL-INC28-019", "Increment 30 must remain unchecked"))
 
     return problems
 

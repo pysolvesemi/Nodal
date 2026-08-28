@@ -1,0 +1,327 @@
+#!/usr/bin/env python3
+"""Apply the reviewed Increment 30 fixed-parameter unit-scale correction."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def replace_once(relative: str, old: str, new: str) -> None:
+    path = ROOT / relative
+    text = path.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(
+            f"{relative}: expected exactly one replacement site, found {count}"
+        )
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def write(relative: str, content: str) -> None:
+    path = ROOT / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+replace_once(
+    "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp",
+    '''FailureOr<std::string> parameterDimension(Operation *parameter) {
+  auto reference = parameter->getAttrOfType<FlatSymbolRefAttr>("unit");
+  if (!reference)
+    return std::string("1");
+  Operation *unit = findTopLevelUnit(parameter, reference.getValue());
+  if (!unit)
+    return failure();
+  llvm::StringRef dimension = textAttr(unit, "dimension");
+  if (!isCanonicalDimensionSignature(dimension))
+    return failure();
+  return dimension.str();
+}
+
+bool semanticTypeMatches(Type type, AnalogNumericKind kind, llvm::StringRef dimension) {''',
+    '''FailureOr<std::string> parameterDimension(Operation *parameter) {
+  auto reference = parameter->getAttrOfType<FlatSymbolRefAttr>("unit");
+  if (!reference)
+    return std::string("1");
+  Operation *unit = findTopLevelUnit(parameter, reference.getValue());
+  if (!unit)
+    return failure();
+  llvm::StringRef dimension = textAttr(unit, "dimension");
+  if (!isCanonicalDimensionSignature(dimension))
+    return failure();
+  return dimension.str();
+}
+
+FailureOr<double> parameterScale(Operation *parameter) {
+  auto reference = parameter->getAttrOfType<FlatSymbolRefAttr>("unit");
+  if (!reference)
+    return 1.0;
+  Operation *unit = findTopLevelUnit(parameter, reference.getValue());
+  auto scale = unit ? unit->getAttrOfType<FloatAttr>("scale") : FloatAttr();
+  if (!scale || !std::isfinite(scale.getValueAsDouble()) ||
+      scale.getValueAsDouble() <= 0.0)
+    return failure();
+  return scale.getValueAsDouble();
+}
+
+bool semanticTypeMatches(Type type, AnalogNumericKind kind, llvm::StringRef dimension) {''',
+)
+
+replace_once(
+    "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp",
+    '''  if (result.kind == AnalogNumericKind::Real) {
+    auto value = llvm::dyn_cast_or_null<FloatAttr>(valueAttribute);
+    if (!value || !std::isfinite(value.getValueAsDouble()))
+      return errorResult(operation, "NODAL-ANALOG-FOLD-001",
+                         "fixed real parameter has no finite canonical default", reportErrors);
+    result.real = value.getValueAsDouble();
+    return constantResult(std::move(result));
+  }
+''',
+    '''  if (result.kind == AnalogNumericKind::Real) {
+    auto value = llvm::dyn_cast_or_null<FloatAttr>(valueAttribute);
+    auto scale = parameterScale(parameter);
+    if (!value || failed(scale) || !std::isfinite(value.getValueAsDouble()))
+      return errorResult(operation, "NODAL-ANALOG-FOLD-001",
+                         "fixed real parameter has no finite canonical default or unit scale",
+                         reportErrors);
+    result.real = value.getValueAsDouble() * *scale;
+    if (!std::isfinite(result.real))
+      return errorResult(operation, "NODAL-ANALOG-FOLD-001",
+                         "fixed real parameter scale produced a non-finite result",
+                         reportErrors);
+    return constantResult(std::move(result));
+  }
+''',
+)
+
+write(
+    "core/compiler/test/IR/analog-numeric-parameter-scale.mlir",
+    '''module {
+  "nodal.unit"() <{dimension = "resistance", metadata = {}, native_suffix = "k", scale = 1.0e3 : f64, sym_name = "kOhm", symbol = "kOhm"}> : () -> ()
+  "nodal.module"() <{metadata = {}, sym_name = "ParameterScale"}> ({
+  ^bb0:
+    "nodal.parameter"() <{classification = "ordinary", default_value = 2.0 : f64, metadata = {}, parameter_kind = "real", sym_name = "R", type = f64, unit = @kOhm, variability = "fixed"}> : () -> ()
+    "nodal.analog"() <{metadata = {}}> ({
+    ^bb0:
+      %r = "nodal.parameter_ref"() <{metadata = {}, parameter = @R}> : () -> !nodal.quantity<"real", "resistance">
+      %one = "nodal.real_literal"() <{metadata = {}, value = 1.0 : f64}> : () -> !nodal.quantity<"real", "1">
+      %scaled = "nodal.analog_mul"(%r, %one) <{metadata = {identity = "parameter_scale"}}> : (!nodal.quantity<"real", "resistance">, !nodal.quantity<"real", "1">) -> !nodal.quantity<"real", "resistance">
+    }) : () -> ()
+  }) : () -> ()
+}
+''',
+)
+
+replace_once(
+    "core/compiler/test/CMakeLists.txt",
+    '''set_tests_properties(
+  nodal.native.analog-numeric-select-promotion
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal[.]folded_kind = .real."
+)
+
+add_test(
+  NAME nodal.native.analog-numeric-rejects-dimension-overflow
+''',
+    '''set_tests_properties(
+  nodal.native.analog-numeric-select-promotion
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal[.]folded_kind = .real."
+)
+
+add_test(
+  NAME nodal.native.analog-numeric-parameter-scale
+  COMMAND nodalc
+    "--pass-pipeline=builtin.module(nodal-fold-analog-constants,nodal-verify-analog-numeric)"
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-numeric-parameter-scale.mlir"
+)
+set_tests_properties(
+  nodal.native.analog-numeric-parameter-scale
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal[.]folded_value = 2[.]000000e[+]03"
+)
+
+add_test(
+  NAME nodal.native.analog-numeric-rejects-dimension-overflow
+''',
+)
+
+replace_once(
+    ".github/workflows/increment-30-analog-numeric-types.yml",
+    '''          grep -F 'nodal.folded_kind = "real"' /tmp/analog-numeric-select-promotion.mlir
+          grep -E 'nodal[.]folded_value = 2([.]0+e[+]00)? : f64' /tmp/analog-numeric-select-promotion.mlir
+
+          check_rejection() {
+''',
+    '''          grep -F 'nodal.folded_kind = "real"' /tmp/analog-numeric-select-promotion.mlir
+          grep -E 'nodal[.]folded_value = 2([.]0+e[+]00)? : f64' /tmp/analog-numeric-select-promotion.mlir
+
+          "${compiler}" \\
+            --pass-pipeline="${pipeline}" \\
+            core/compiler/test/IR/analog-numeric-parameter-scale.mlir \\
+            | tee /tmp/analog-numeric-parameter-scale.mlir
+          grep -F 'nodal.folded_dimension = "resistance"' /tmp/analog-numeric-parameter-scale.mlir
+          grep -E 'nodal[.]folded_value = (2([.]0+)?e[+]03|2000([.]0+)?) : f64' /tmp/analog-numeric-parameter-scale.mlir
+
+          check_rejection() {
+''',
+)
+
+replace_once(
+    "scripts/check_increment30.py",
+    '''    "core/compiler/test/IR/analog-numeric-select-promotion.mlir",
+    "core/compiler/test/IR/analog-numeric-backend-fold-boundary.mlir",
+''',
+    '''    "core/compiler/test/IR/analog-numeric-select-promotion.mlir",
+    "core/compiler/test/IR/analog-numeric-parameter-scale.mlir",
+    "core/compiler/test/IR/analog-numeric-backend-fold-boundary.mlir",
+''',
+)
+
+replace_once(
+    "scripts/check_increment30.py",
+    '''    ".github/workflows/increment-30-final-review-fixes.yml",
+    "scripts/apply_increment30_final_review_fixes.py",
+)
+''',
+    '''    ".github/workflows/increment-30-final-review-fixes.yml",
+    ".github/workflows/increment-30-review-fixes.yml",
+    ".github/workflows/increment-30-parameter-scale-fix.yml",
+    "scripts/apply_increment30_final_review_fixes.py",
+    "scripts/apply_increment30_parameter_scale_fix.py",
+)
+''',
+)
+
+replace_once(
+    "scripts/check_increment30.py",
+    '''            "analog-numeric-typing.mlir",
+            "analog-numeric-backend.mlir",
+        ),
+''',
+    '''            "analog-numeric-typing.mlir",
+            "analog-numeric-select-promotion.mlir",
+            "analog-numeric-parameter-scale.mlir",
+            "analog-numeric-backend.mlir",
+        ),
+''',
+)
+
+replace_once(
+    "scripts/check_increment30.py",
+    '''    if surface.get("folding", {}).get("requiresPureConstantGraph") is not True:
+        problems.append(Problem("NODAL-INC30-008", "surface folding purity boundary is missing"))
+
+    native_contracts = {
+''',
+    '''    if surface.get("folding", {}).get("requiresPureConstantGraph") is not True:
+        problems.append(Problem("NODAL-INC30-008", "surface folding purity boundary is missing"))
+    if surface.get("folding", {}).get("parameterUnitScale") != "canonicalize-before-fold":
+        problems.append(Problem("NODAL-INC30-008", "surface parameter unit-scale rule is missing"))
+    if folding.get("parameter_unit_scale") != "canonicalize-before-fold":
+        problems.append(Problem("NODAL-INC30-007", "manifest parameter unit-scale rule is missing"))
+
+    native_contracts = {
+''',
+)
+
+replace_once(
+    "scripts/check_increment30.py",
+    '''        "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp": (
+            "__builtin_sub_overflow",
+            "clearFoldAttributes",
+            "conditional fold does not match the promoted result kind",
+        ),
+''',
+    '''        "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp": (
+            "__builtin_sub_overflow",
+            "clearFoldAttributes",
+            "FailureOr<double> parameterScale(Operation *parameter)",
+            "fixed real parameter scale produced a non-finite result",
+            "conditional fold does not match the promoted result kind",
+        ),
+''',
+)
+
+replace_once(
+    "scripts/check_increment30.py",
+    '''        "core/compiler/test/CMakeLists.txt": (
+            "analog-numeric-select-promotion",
+            "analog-numeric-backend-fold-boundary",
+            "analog-numeric-rejects-dimension-overflow",
+        ),
+    }
+''',
+    '''        "core/compiler/test/CMakeLists.txt": (
+            "analog-numeric-select-promotion",
+            "analog-numeric-parameter-scale",
+            "analog-numeric-backend-fold-boundary",
+            "analog-numeric-rejects-dimension-overflow",
+        ),
+        "core/compiler/test/IR/analog-numeric-parameter-scale.mlir": (
+            "unit = @kOhm",
+            "parameter = @R",
+            "identity = \"parameter_scale\"",
+        ),
+    }
+''',
+)
+
+replace_once(
+    "tests/compiler/test_increment30.py",
+    '''    def test_rejects_missing_implemented_status(self) -> None:
+''',
+    '''    def test_rejects_missing_parameter_unit_scale_normalization(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "FailureOr<double> parameterScale(Operation *parameter)",
+                "FailureOr<double> ignoreParameterScale(Operation *parameter)",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC30-010", self.codes(root))
+
+    def test_rejects_temporary_parameter_scale_helper(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / ".github/workflows/increment-30-parameter-scale-fix.yml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("temporary\n", encoding="utf-8")
+        self.assertIn("NODAL-INC30-002", self.codes(root))
+
+    def test_rejects_missing_implemented_status(self) -> None:
+''',
+)
+
+replace_once(
+    "docs/implementation/increment30-analog-numeric-types.md",
+    '''- Conditional folding preserves promoted result kinds, including integer-to-real arms.
+- Fold annotations are recomputed and ignored outside the frozen pure-expression boundary.
+''',
+    '''- Conditional folding preserves promoted result kinds, including integer-to-real arms.
+- Fixed parameter folding applies the declared unit scale before materializing a
+  canonical dimension-only quantity value.
+- Fold annotations are recomputed and ignored outside the frozen pure-expression boundary.
+''',
+)
+
+manifest_path = ROOT / "tests/compiler/fixtures/increment30/manifest.json"
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+manifest["folding"]["parameter_unit_scale"] = "canonicalize-before-fold"
+manifest["implementation"]["parameter_scale_fixture"] = (
+    "core/compiler/test/IR/analog-numeric-parameter-scale.mlir"
+)
+manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+surface_path = ROOT / "tests/compiler/fixtures/increment30/analog-numeric-surface.json"
+surface = json.loads(surface_path.read_text(encoding="utf-8"))
+surface["folding"]["parameterUnitScale"] = "canonicalize-before-fold"
+surface_path.write_text(json.dumps(surface, indent=2) + "\n", encoding="utf-8")

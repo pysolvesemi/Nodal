@@ -987,6 +987,9 @@ llvm::SmallVector<llvm::StringRef, 16> stageNames(GateProfile profile) {
           "protocols",    "effects",    "analog",          "capabilities"};
 }
 
+std::unique_ptr<Pass> createFoldAnalogConstantsPass();
+std::unique_ptr<Pass> createVerifyAnalogNumericPass();
+
 void addVerifierPasses(OpPassManager &manager, GateProfile profile) {
   manager.addPass(std::make_unique<VerifyConstructionPass>());
   if (profile != GateProfile::Fast) {
@@ -997,8 +1000,8 @@ void addVerifierPasses(OpPassManager &manager, GateProfile profile) {
   manager.addPass(std::make_unique<VerifyHierarchyPass>());
   manager.addPass(std::make_unique<VerifyTypesPass>());
   manager.addPass(std::make_unique<VerifyParametersPass>());
-  manager.addPass(std::make_unique<FoldAnalogConstantsPass>());
-  manager.addPass(std::make_unique<VerifyAnalogNumericPass>());
+  manager.addPass(createFoldAnalogConstantsPass());
+  manager.addPass(createVerifyAnalogNumericPass());
   if (profile != GateProfile::Fast)
     manager.addPass(std::make_unique<VerifyEnumFsmPass>());
   manager.addPass(std::make_unique<VerifyDomainsPass>());
@@ -1063,6 +1066,14 @@ public:
     markAllAnalysesPreserved();
   }
 };
+
+std::unique_ptr<Pass> createFoldAnalogConstantsPass() {
+  return std::make_unique<FoldAnalogConstantsPass>();
+}
+
+std::unique_ptr<Pass> createVerifyAnalogNumericPass() {
+  return std::make_unique<VerifyAnalogNumericPass>();
+}
 
 class NormalizePipelinePass final
     : public PassWrapper<NormalizePipelinePass, OperationPass<mlir::ModuleOp>> {

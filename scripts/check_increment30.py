@@ -306,7 +306,8 @@ def check_repository(root: Path) -> list[Problem]:
             "combineAnalogDimensions", "NODAL-ANALOG-PROMOTION-001",
             "nodal.folded_provenance", "NODAL-ANALOG-DIVIDE-001"),
         "core/compiler/lib/Transforms/Passes.cpp": (
-            "nodal-fold-analog-constants", "nodal-verify-analog-numeric"),
+            "nodal-fold-analog-constants", "nodal-verify-analog-numeric",
+            "createFoldAnalogConstantsPass", "createVerifyAnalogNumericPass"),
         "core/compiler/lib/Backend/AnalogVerticalSlice.cpp": (
             "verifyAnalogQuantityErasure", "nodal.analog_select",
             "renderFoldedExpression"),

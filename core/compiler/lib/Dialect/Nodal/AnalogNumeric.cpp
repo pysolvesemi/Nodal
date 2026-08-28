@@ -212,10 +212,6 @@ EvaluationResult errorResult(Operation *operation, llvm::StringRef code,
   return result;
 }
 
-llvm::APInt signedExtend(const llvm::APInt &value, unsigned width) {
-  return value.sextOrTrunc(std::max(width, value.getBitWidth()));
-}
-
 std::pair<llvm::APInt, llvm::APInt> alignSigned(const llvm::APInt &lhs,
                                                 const llvm::APInt &rhs,
                                                 unsigned extraBits = 1) {

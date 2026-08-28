@@ -107,15 +107,6 @@ unsigned shapedRank(llvm::StringRef dimensions) {
   return rank;
 }
 
-Operation *enclosingSemanticModule(Operation *operation) {
-  for (Operation *current = operation; current; current = current->getParentOp()) {
-    if (llvm::isa<nodal::ModuleOp>(current))
-      return current;
-  }
-  return nullptr;
-}
-
-
 LogicalResult verifyLoop(Operation *operation) {
   if (failed(requireText(operation, "induction", "induction name")))
     return failure();

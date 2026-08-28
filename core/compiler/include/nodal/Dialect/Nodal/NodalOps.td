@@ -728,9 +728,9 @@ def Nodal_ParameterRefOp : Nodal_Op<"parameter_ref", [HasParent<"AnalogOp">]> {
   let hasVerifier = 1;
 }
 
-class Nodal_AnalogBinaryOp<string mnemonic, string description>
+class Nodal_AnalogBinaryOp<string mnemonic, string summaryText>
     : Nodal_Op<mnemonic, [HasParent<"AnalogOp">]> {
-  let summary = description;
+  let summary = summaryText;
   let arguments = (ins AnyType:$lhs, AnyType:$rhs, DictionaryAttr:$metadata);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;

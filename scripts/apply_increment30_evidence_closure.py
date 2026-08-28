@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Record accepted Increment 30 implementation evidence and close the roadmap item."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+ROADMAP = ROOT / "docs/roadmap/nodal-development-todo.md"
+MANIFEST = ROOT / "tests/compiler/fixtures/increment30/manifest.json"
+
+IMPLEMENTATION_HEAD = "6f62937796af25714c996f8733f1adb72cefe4ee"
+MERGE_COMMIT = "401f78b3836cc4e52d393ef343dc0915d60606e9"
+DEDICATED_RUN = 33192880165
+CORE_CI_RUN = 33192880254
+
+
+def replace_once(text: str, old: str, new: str, label: str) -> str:
+    count = text.count(old)
+    if count != 1:
+        raise RuntimeError(f"{label}: expected exactly one replacement anchor, found {count}")
+    return text.replace(old, new, 1)
+
+
+roadmap = ROADMAP.read_text(encoding="utf-8")
+roadmap = replace_once(
+    roadmap,
+    "**Revision:** 1.39",
+    "**Revision:** 1.40",
+    "roadmap revision",
+)
+roadmap = replace_once(
+    roadmap,
+    """- [ ] **Increment 30 — Analog numeric types and expression typing**
+  - Define promotion, physical compatibility, comparisons/logical results, conditionals, invalid operations, and folding boundaries.
+""",
+    """- [x] **Increment 30 — Analog numeric types and expression typing**
+  - Define promotion, physical compatibility, comparisons/logical results, conditionals, invalid operations, and folding boundaries.
+  - Evidence: implementation PR [#80](https://github.com/pysolvesemi/Nodal/pull/80), dedicated validation run [33192880165](https://github.com/pysolvesemi/Nodal/actions/runs/33192880165), merge commit [`401f78b3`](https://github.com/pysolvesemi/Nodal/commit/401f78b3836cc4e52d393ef343dc0915d60606e9), and Core CI run [33192880254](https://github.com/pysolvesemi/Nodal/actions/runs/33192880254).
+""",
+    "Increment 30 roadmap item",
+)
+if "- [ ] **Increment 31 — Potential and flow access functions**" not in roadmap:
+    raise RuntimeError("Increment 31 must remain unchecked")
+ROADMAP.write_text(roadmap, encoding="utf-8")
+
+manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+if manifest.get("increment") != 30:
+    raise RuntimeError("Increment 30 manifest identity mismatch")
+if manifest.get("status") != "implemented-awaiting-evidence":
+    raise RuntimeError("Increment 30 manifest is not awaiting evidence")
+
+manifest["status"] = "validated-analog-numeric-typing"
+manifest["evidence"] = {
+    "start_commit": "1c1ab49da71f0f52d2af3d93e40a92f4643be776",
+    "pull_request": 80,
+    "implementation_head": IMPLEMENTATION_HEAD,
+    "merge_commit": MERGE_COMMIT,
+    "dedicated_run": DEDICATED_RUN,
+    "core_ci_run": CORE_CI_RUN,
+    "inherited_runs": {
+        "increment13": 33192880304,
+        "increment14": 33192880239,
+        "increment15": 33192880282,
+        "increment16": 33192880278,
+        "increment17": 33192880273,
+        "increment18": 33192880300,
+        "increment19": 33192880296,
+        "increment20": 33192880334,
+        "increment21": 33192880255,
+        "increment22": 33192880280,
+        "increment23": 33192880345,
+        "increment24": 33192880207,
+        "increment25": 33192880196,
+        "increment26": 33192880175,
+        "increment27": 33192880267,
+        "increment28": 33192880203,
+        "increment29": 33192880204,
+    },
+}
+MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+print("Increment 30 evidence closure materialized")

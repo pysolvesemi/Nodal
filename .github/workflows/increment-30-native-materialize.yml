@@ -41,3 +41,6 @@ jobs:
           git add -A
           git commit -m "Increment 30 — implement analog numeric typing"
           git push origin HEAD:increment/30-analog-numeric-types
+
+# The second push intentionally activates this one-shot workflow after GitHub
+# has registered the workflow file from the preceding commit.

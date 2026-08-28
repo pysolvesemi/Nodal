@@ -16,9 +16,11 @@ concurrency:
 
 jobs:
   apply:
-    name: apply-and-clean
+    name: apply-and-publish-source
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
 
     steps:
       - name: Check out Increment 30 branch
@@ -88,7 +90,7 @@ jobs:
             scripts/apply_increment30_parameter_scale_fix.py \
             .github/workflows/increment-30-parameter-scale-fix.yml
 
-      - name: Format and validate the cleaned implementation
+      - name: Format and validate the complete cleaned state
         run: |
           set -euo pipefail
           ./nodal style bootstrap \
@@ -100,9 +102,13 @@ jobs:
           python3 tests/compiler/test_increment30.py
           git diff --check
 
-      - name: Publish the semantic correction and remove temporary helpers
+      - name: Publish source changes only
         run: |
           set -euo pipefail
+          git checkout -- \
+            .github/workflows/increment-30-analog-numeric-types.yml \
+            .github/workflows/increment-30-parameter-scale-fix.yml
+          rm -rf scripts/__pycache__ tests/compiler/__pycache__
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A

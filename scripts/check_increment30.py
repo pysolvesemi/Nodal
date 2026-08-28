@@ -1,0 +1,314 @@
+#!/usr/bin/env python3
+"""Validate the Increment 30 analog numeric typing implementation-start contract."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class Problem:
+    code: str
+    message: str
+
+    def __str__(self) -> str:
+        return f"{self.code}: {self.message}"
+
+
+EXPECTED_FILES = (
+    "docs/design-gates/NodalAnalogNumericTyping-DG-v1.0.md",
+    "docs/implementation/increment30-analog-numeric-types.md",
+    "tests/compiler/fixtures/increment30/manifest.json",
+    "tests/compiler/fixtures/increment30/analog-numeric-surface.json",
+    "scripts/check_increment30.py",
+    "tests/compiler/test_increment30.py",
+    ".github/workflows/increment-30-analog-numeric-types.yml",
+    "docs/roadmap/nodal-development-todo.md",
+    "tests/compiler/fixtures/increment29/manifest.json",
+)
+
+TEMPORARY_FILES = (
+    "scripts/materialize_increment30.py",
+    "scripts/finalize_increment30.py",
+    ".github/workflows/increment-30-materialize.yml",
+    ".github/workflows/increment-30-finalize.yml",
+)
+
+OPERATIONS = [
+    "nodal.real_literal",
+    "nodal.analog_integer_literal",
+    "nodal.parameter_ref",
+    "nodal.analog_add",
+    "nodal.analog_sub",
+    "nodal.analog_mul",
+    "nodal.analog_div",
+    "nodal.analog_neg",
+    "nodal.analog_compare",
+    "nodal.analog_logic",
+    "nodal.analog_select",
+    "nodal.analog_ddt",
+    "nodal.access",
+    "nodal.contribute",
+]
+
+PLANNED_DIAGNOSTICS = [
+    "NODAL-ANALOG-TYPE-001",
+    "NODAL-ANALOG-PROMOTION-001",
+    "NODAL-ANALOG-DIMENSION-001",
+    "NODAL-ANALOG-COMPARE-001",
+    "NODAL-ANALOG-LOGIC-001",
+    "NODAL-ANALOG-SELECT-001",
+    "NODAL-ANALOG-FOLD-001",
+    "NODAL-ANALOG-DIVIDE-001",
+    "NODAL-BACKEND-QUANTITY-001",
+]
+
+
+def read(path: Path, problems: list[Problem], code: str) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        problems.append(Problem(code, f"cannot read {path}: {exc}"))
+        return ""
+
+
+def require(
+    text: str,
+    fragments: tuple[str, ...],
+    problems: list[Problem],
+    code: str,
+    subject: str,
+) -> None:
+    for fragment in fragments:
+        if fragment not in text:
+            problems.append(Problem(code, f"{subject} lacks: {fragment}"))
+
+
+def revision(text: str) -> tuple[int, ...]:
+    values = re.findall(r"^\*\*Revision:\*\* ([0-9.]+)$", text, re.MULTILINE)
+    if len(values) != 1:
+        return ()
+    return tuple(int(part) for part in values[0].split("."))
+
+
+def load_json(path: Path, problems: list[Problem], code: str) -> dict:
+    try:
+        value = json.loads(read(path, problems, code))
+    except json.JSONDecodeError as exc:
+        problems.append(Problem(code, f"invalid JSON in {path}: {exc}"))
+        return {}
+    if not isinstance(value, dict):
+        problems.append(Problem(code, f"{path} must contain a JSON object"))
+        return {}
+    return value
+
+
+def check_repository(root: Path) -> list[Problem]:
+    root = root.resolve()
+    problems: list[Problem] = []
+
+    for relative in EXPECTED_FILES:
+        if not (root / relative).is_file():
+            problems.append(Problem("NODAL-INC30-001", f"missing file: {relative}"))
+    for relative in TEMPORARY_FILES:
+        if (root / relative).exists():
+            problems.append(Problem("NODAL-INC30-002", f"temporary file remains: {relative}"))
+
+    gate = read(
+        root / "docs/design-gates/NodalAnalogNumericTyping-DG-v1.0.md",
+        problems,
+        "NODAL-INC30-003",
+    )
+    implementation = read(
+        root / "docs/implementation/increment30-analog-numeric-types.md",
+        problems,
+        "NODAL-INC30-004",
+    )
+    workflow = read(
+        root / ".github/workflows/increment-30-analog-numeric-types.yml",
+        problems,
+        "NODAL-INC30-005",
+    )
+    roadmap = read(
+        root / "docs/roadmap/nodal-development-todo.md",
+        problems,
+        "NODAL-INC30-006",
+    )
+    manifest = load_json(
+        root / "tests/compiler/fixtures/increment30/manifest.json",
+        problems,
+        "NODAL-INC30-007",
+    )
+    surface = load_json(
+        root / "tests/compiler/fixtures/increment30/analog-numeric-surface.json",
+        problems,
+        "NODAL-INC30-008",
+    )
+    predecessor = load_json(
+        root / "tests/compiler/fixtures/increment29/manifest.json",
+        problems,
+        "NODAL-INC30-009",
+    )
+
+    require(
+        gate,
+        (
+            "**Status:** Approved",
+            "**Public API:** unchanged at 0.3",
+            "!nodal.quantity<integer|real, canonical-dimension>",
+            "The only implicit numeric promotion is `integer -> real`.",
+            "Boolean values are never quantities",
+            "Multiplication adds exponent vectors. Division subtracts them.",
+            "logical `and`, `or`, `xor`, and `not` accept only `i1`",
+            "A backend may erase `!nodal.quantity` only after",
+            "legacy `f64` analog value remains accepted",
+        ),
+        problems,
+        "NODAL-INC30-003",
+        "analog numeric design gate",
+    )
+    for code in PLANNED_DIAGNOSTICS:
+        if code not in gate and code not in json.dumps(manifest, sort_keys=True):
+            problems.append(Problem("NODAL-INC30-003", f"planned diagnostic is absent: {code}"))
+
+    require(
+        implementation,
+        (
+            "Increment 30 has started",
+            "fully validated Increment 29",
+            "deterministic integer-to-real promotion",
+            "canonical exponent algebra",
+            "Boolean-only logical operations",
+            "public API remains v0.3",
+            "Increment 30 stays unchecked",
+        ),
+        problems,
+        "NODAL-INC30-004",
+        "implementation start note",
+    )
+
+    require(
+        workflow,
+        (
+            "increment-30/analog-numeric-types",
+            "check_increment30.py",
+            "test_increment30.py",
+            "./nodal core native",
+            "permissions:\n  contents: read",
+            "implementation-started",
+            "analog-numeric-surface.json",
+        ),
+        problems,
+        "NODAL-INC30-005",
+        "Increment 30 workflow",
+    )
+    if "contents: write" in workflow or "materialize_increment30" in workflow:
+        problems.append(Problem("NODAL-INC30-005", "workflow must remain read-only"))
+
+    if manifest.get("increment") != 30 or manifest.get("public_api") != "0.3":
+        problems.append(Problem("NODAL-INC30-007", "manifest identity/public API mismatch"))
+    if manifest.get("status") not in {
+        "implementation-started",
+        "implemented-awaiting-evidence",
+        "validated-analog-numeric-typing",
+    }:
+        problems.append(Problem("NODAL-INC30-007", "unsupported Increment 30 status"))
+    if manifest.get("branch") != "increment/30-analog-numeric-types":
+        problems.append(Problem("NODAL-INC30-007", "manifest branch mismatch"))
+    if manifest.get("operations") != OPERATIONS:
+        problems.append(Problem("NODAL-INC30-007", "manifest operation inventory mismatch"))
+    if manifest.get("planned_diagnostics") != PLANNED_DIAGNOSTICS:
+        problems.append(Problem("NODAL-INC30-007", "manifest diagnostic inventory mismatch"))
+
+    quantity = manifest.get("quantity_type", {})
+    if quantity.get("spelling") != "!nodal.quantity<kind, dimension>":
+        problems.append(Problem("NODAL-INC30-007", "quantity type spelling mismatch"))
+    if quantity.get("numeric_kinds") != ["integer", "real"]:
+        problems.append(Problem("NODAL-INC30-007", "numeric kind inventory mismatch"))
+    if quantity.get("boolean_type") != "i1":
+        problems.append(Problem("NODAL-INC30-007", "Boolean result type must be i1"))
+    if quantity.get("legacy_f64") != "real-dimensionless":
+        problems.append(Problem("NODAL-INC30-007", "legacy f64 compatibility is missing"))
+
+    promotion = manifest.get("promotion", {})
+    if promotion.get("integer_real") != "real" or promotion.get("real_integer") != "real":
+        problems.append(Problem("NODAL-INC30-007", "integer-to-real promotion is incomplete"))
+    if promotion.get("real_to_integer") != "explicit-only":
+        problems.append(Problem("NODAL-INC30-007", "implicit real-to-integer narrowing is allowed"))
+    if promotion.get("boolean_numeric") != "forbidden":
+        problems.append(Problem("NODAL-INC30-007", "Boolean numeric promotion is allowed"))
+
+    dimensions = manifest.get("dimensions", {})
+    if dimensions.get("mul") != "add-exponents" or dimensions.get("div") != "subtract-exponents":
+        problems.append(Problem("NODAL-INC30-007", "canonical dimension algebra is incomplete"))
+    if manifest.get("logical_result") != "i1":
+        problems.append(Problem("NODAL-INC30-007", "logical/comparison result must be i1"))
+
+    folding = manifest.get("folding", {})
+    never = folding.get("never", [])
+    for required in ("dynamic-value", "access", "ddt-or-stateful-operator", "contribution-or-equation"):
+        if required not in never:
+            problems.append(Problem("NODAL-INC30-007", f"folding boundary lacks {required}"))
+
+    if surface.get("schema") != "nodal-analog-numeric-typing/v1":
+        problems.append(Problem("NODAL-INC30-008", "surface schema mismatch"))
+    if surface.get("quantityType") != "!nodal.quantity<kind, dimension>":
+        problems.append(Problem("NODAL-INC30-008", "surface quantity type mismatch"))
+    if surface.get("promotionMatrix", {}).get("integer,real") != "real":
+        problems.append(Problem("NODAL-INC30-008", "surface promotion matrix is incomplete"))
+    if surface.get("logical", {}).get("numericTruthiness") is not False:
+        problems.append(Problem("NODAL-INC30-008", "surface permits numeric truthiness"))
+    if surface.get("arithmetic", {}).get("mul", {}).get("dimensions") != "add-exponents":
+        problems.append(Problem("NODAL-INC30-008", "surface multiplication dimension rule mismatch"))
+    if surface.get("folding", {}).get("requiresPureConstantGraph") is not True:
+        problems.append(Problem("NODAL-INC30-008", "surface folding purity boundary is missing"))
+
+    if predecessor.get("status") != "validated-parameter-constant-unit":
+        problems.append(Problem("NODAL-INC30-009", "Increment 29 prerequisite is not validated"))
+
+    rev = revision(roadmap)
+    increment29_done = "- [x] **Increment 29 — Parameters, constants, ranges, and units**" in roadmap
+    increment30_open = "- [ ] **Increment 30 — Analog numeric types and expression typing**" in roadmap
+    increment30_done = "- [x] **Increment 30 — Analog numeric types and expression typing**" in roadmap
+    increment31_open = "- [ ] **Increment 31 — Potential and flow access functions**" in roadmap
+    status = manifest.get("status")
+    evidence = manifest.get("evidence", {})
+
+    if not increment29_done or rev < (1, 37):
+        problems.append(Problem("NODAL-INC30-006", "validated Increment 29 baseline is absent"))
+    if status in {"implementation-started", "implemented-awaiting-evidence"}:
+        if not increment30_open or increment30_done:
+            problems.append(Problem("NODAL-INC30-006", "pre-evidence state must leave Increment 30 unchecked"))
+    elif status == "validated-analog-numeric-typing":
+        if not increment30_done or rev < (1, 38):
+            problems.append(Problem("NODAL-INC30-006", "validated state must close Increment 30 at revision 1.38 or later"))
+        for field in ("pull_request", "dedicated_run", "core_ci_run"):
+            if not isinstance(evidence.get(field), int):
+                problems.append(Problem("NODAL-INC30-006", f"validated manifest lacks integer evidence field: {field}"))
+    if not increment31_open:
+        problems.append(Problem("NODAL-INC30-006", "Increment 31 must remain unchecked"))
+
+    return problems
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    args = parser.parse_args(argv)
+    problems = check_repository(args.root)
+    for problem in problems:
+        print(problem, file=sys.stderr)
+    if problems:
+        print(f"Increment 30 check failed with {len(problems)} problem(s)", file=sys.stderr)
+        return 1
+    print("Increment 30 analog numeric typing start contract passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

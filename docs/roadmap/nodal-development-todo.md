@@ -1,8 +1,8 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.35
+**Revision:** 1.36
 **Created:** 2026-08-20
-**Updated:** 2026-08-27
+**Updated:** 2026-08-28
 **Status:** Active roadmap
 **Primary language target:** Verilog-AMS 2023
 **Analog-only compatibility target:** Verilog-A
@@ -894,7 +894,7 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
 - [x] **Increment 27 — Natures and disciplines**
   - Implement units, access functions, tolerances, domains, potential/flow associations, declarations, imports, and compatibility.
 
-- [ ] **Increment 28 — Electrical nodes, nets, and branches**
+- [x] **Increment 28 — Electrical nodes, nets, and branches**
   - Implement scalar conservative terminals/nodes, ground/reference behavior, implicit/named branches, port directions, aliases, connection-set identity, branch orientation, ownership, and source hierarchy.
   - Generate compatible-potential equality and signed zero-sum flow-conservation equations from connection sets, retaining provenance for later residual construction and target lowering.
   - Define partial versus concrete physical-component connectivity ownership without treating conservative terminals as directional signal flow.

@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.37
+**Revision:** 1.38
 **Created:** 2026-08-20
 **Updated:** 2026-08-28
 **Status:** Active roadmap
@@ -53,6 +53,7 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Use lossless finite-width arithmetic by default. Narrowing, wrap, truncation, saturation, checked resize, and signedness conversion require explicit intent.
 - Preserve `Bits` as signless, `UInt` as unsigned, and `SInt` as two's-complement signed through ports, parameters, memories, expressions, optimization, and every Verilog-family backend; never let backend expression rules define Nodal signedness.
 - Distinguish ordinary Scala elaboration loops, symbolic structural `generate` loops, and bounded hardware-iteration loops. Dynamic or unbounded iteration must not acquire hidden latency or an inferred FSM.
+- Preserve ordinary Scala `for` syntax through typed staged ranges: `genRange(...)` constructs structural generation and `hwRange(...)` constructs bounded hardware iteration, while ordinary Scala ranges remain elaboration-only. Never infer loop staging by inspecting the loop body.
 - Use native Scala 3 enums as the preferred semantic declaration and derive typed hardware enum metadata; Scala ordinal never defines the HDL ABI.
 - Separate canonical enum interface encoding from local FSM storage encoding. Preserve one stable numeric mapping across portable Verilog localparams, Verilog-A/Verilog-AMS constants, and future SystemVerilog native enums.
 - Model control as typed FSM/statechart graphs with explicit reset, transition priority, illegal-state, hierarchy, parallel, timing, completion, recursion-bound, source-map, and proof contracts rather than mutable backend-style process objects.
@@ -100,7 +101,7 @@ The implementation is built from scratch with modern tooling. It carries no Scal
 - Emit enum members as non-overridable `localparam`s in portable Verilog and Verilog-AMS profiles; a future SystemVerilog profile emits native typed enums with the same explicit values and compile-order metadata.
 - Provide explicit lossy numeric conversions such as truncate, wrap, saturate, and checked resize; never narrow or reinterpret signedness silently.
 - Freeze exact `SInt` declaration/literal/parameter/memory/expression rules, numeric conversion versus bit reinterpretation, mixed-sign diagnostics, arithmetic/logical shifts, and portable Verilog/future SystemVerilog signed lowering in public API v0.3.
-- Keep ordinary Scala `for` for elaboration, reserve `generate(...)` for symbolic structural replication, and freeze a separate concise bounded hardware-loop operation plus collection `map`/`reduce` candidates. Reject runtime trip counts and unbounded `while` in the initial synthesizable contract.
+- Keep ordinary Scala `for` over Scala ranges for elaboration; add typed staged range candidates `genRange(...)` and `hwRange(...)` so the same Scala `for` syntax explicitly constructs symbolic structural generation or bounded hardware iteration without body-based inference. Retain `generate(...)` and `loop(...)` as canonical explicit forms; reject runtime trip counts and unbounded `while` in the initial synthesizable contract.
 - Freeze a parameterized multidimensional `Vec` shape/index/flatten/reshape contract, explicit `Vec` versus `Mem` storage semantics, and target layout policies for portable-Verilog flat carriers and future-SystemVerilog unpacked/packed ports.
 - Freeze emission configuration candidates for safe expression inlining, readable/debug/tool-friendly materialization, semantic naming, source-span maps, and Fast/Default/Release quality profiles with typed waivers that cannot suppress mandatory safety checks.
 - Treat `Valid[T]` and `Stream[T]` as general protocol types shared by ports, hierarchy, memories, simulation, and automatic pipelines.
@@ -328,6 +329,16 @@ Loops have three categories:
 1. ordinary Scala `for`/`foreach` executes during elaboration and accepts Scala values only;
 2. `generate(...)` preserves structural repetition and symbolic parameter bounds into target HDL `genvar`/generate loops;
 3. a distinct bounded hardware-loop candidate such as `loop(...)` describes repeated operations inside one combinational or clocked region and may lower deterministically to a procedural HDL `for` or verified unrolled operations.
+
+Typed staged ranges provide the same Scala `for` surface without introducing a fourth loop category:
+
+```scala
+for index <- 0 until copies do                     // Scala elaboration
+for index <- genRange(0, lanes) do                 // structural target generation
+for index <- hwRange(0, taps, maximum = 64) do     // bounded hardware iteration
+```
+
+`genRange` and `hwRange` are frontend wrappers over canonical `generate(...)` and `loop(...)` semantics. Their staged range type, never inspection of the loop body, selects the loop category.
 
 A bounded hardware loop has a finite static/symbolic-static trip count. It cannot create modules or ports, use a runtime signal as its trip count, hide multiple cycles, or contain unbounded/data-dependent termination. Multi-cycle iteration uses explicit FSM/statechart, pipeline, stream, memory, or iterative-operation contracts.
 
@@ -1510,9 +1521,18 @@ Detailed rationale and dependent-track plans are in [`dependent-productivity-and
   - Make the Increment 133 equation/component API checkpoint a prerequisite for Increment 32 and add the dependent analog-basic/electrothermal library pilot track without changing frozen public syntax or implementing compiler behavior.
   - Evidence: [roadmap PR #74](https://github.com/pysolvesemi/Nodal/pull/74), [materialization run 33090381745](https://github.com/pysolvesemi/Nodal/actions/runs/33090381745), [Core CI run 33090944261](https://github.com/pysolvesemi/Nodal/actions/runs/33090944261), and passing Increment 13-27 regression runs attached to PR #74.
 
+
+- [ ] **Foundation Increment 159 — Typed staged Scala `for` ranges for generate and hardware loops**
+  - Add public backend-neutral staged range types and concise constructors such as `genRange(lower, upper, step = 1)` and `hwRange(lower, upper, step = 1, maximum = ...)`; their `foreach` support preserves ordinary Scala 3 `for` syntax while selecting an explicit Nodal loop category.
+  - Keep `for index <- 0 until count` as Scala elaboration only. Lower `for index <- genRange(...)` exactly to existing structural `nodal.generate` semantics and `for index <- hwRange(...)` exactly to existing bounded `nodal.hardware_loop` semantics. Never inspect the loop body to infer or change staging.
+  - Accept elaboration-static and legal symbolic parameter/constant bounds for `genRange`; permit structural declarations, instances, connections, deterministic nested generation, and index-aware hierarchy naming. Accept only finite elaboration-static or symbolic-static bounds with a proven maximum envelope for `hwRange`; retain ordered effects and prohibit structural declarations, runtime trip counts, hidden multi-cycle behavior, data-dependent termination, and unbounded `while`.
+  - Make staged-range `for` forms and canonical `generate(...)`/`loop(...)` forms normalize to identical target-neutral IR, diagnostics, source maps, naming/provenance, optimization obligations, and Verilog-family lowering. Treat this as a frontend ergonomic layer, not a new loop kind or backend construct.
+  - Add positive and negative compile fixtures for concrete/symbolic bounds, ascending steps, empty/singleton ranges, nested and mixed loop categories, helper methods, separate compilation, generated names, invalid dynamic bounds, missing maximum envelopes, illegal bodies, and deterministic explicit-form-versus-range-form IR/HDL equivalence.
+  - Prerequisites: Increments 55 and 58 plus Foundation Increments 153-157. Integrate portable Verilog, open-source equivalence, and Verilog-AMS regression through Increments 65-67 and 72 without changing their target loop semantics.
+
 ## Foundation completion barrier
 
-> **Blocked:** no FPGA Productivity, Digital Verification, or Analog/Mixed-Signal Verification implementation increment may start until every Foundation increment is complete, including architecture-only Increments 150-152 recorded in companion plans, function-local semantic-naming Increments 153-157, and any later Foundation item added before the barrier is released.
+> **Blocked:** no FPGA Productivity, Digital Verification, or Analog/Mixed-Signal Verification implementation increment may start until every Foundation increment is complete, including architecture-only Increments 150-152 recorded in companion plans, function-local semantic-naming Increments 153-157, typed staged-loop range Increment 159, and any later Foundation item added before the barrier is released.
 
 Research and feasibility work may continue while blocked. Any newly discovered core architecture requirement belongs in Foundation.
 

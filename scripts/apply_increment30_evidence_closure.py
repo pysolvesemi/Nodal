@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ROADMAP = ROOT / "docs/roadmap/nodal-development-todo.md"
 MANIFEST = ROOT / "tests/compiler/fixtures/increment30/manifest.json"
+MUTATION_TESTS = ROOT / "tests/compiler/test_increment30.py"
 
 IMPLEMENTATION_HEAD = "6f62937796af25714c996f8733f1adb72cefe4ee"
 MERGE_COMMIT = "401f78b3836cc4e52d393ef343dc0915d60606e9"
@@ -80,5 +81,45 @@ manifest["evidence"] = {
     },
 }
 MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+mutation_tests = MUTATION_TESTS.read_text(encoding="utf-8")
+mutation_tests = replace_once(
+    mutation_tests,
+    '''    def test_rejects_premature_roadmap_closure(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "docs/roadmap/nodal-development-todo.md"
+        text = path.read_text(encoding="utf-8").replace(
+            "- [ ] **Increment 30 — Analog numeric types and expression typing**",
+            "- [x] **Increment 30 — Analog numeric types and expression typing**",
+            1,
+        )
+        path.write_text(text, encoding="utf-8")
+        self.assertIn("NODAL-INC30-006", self.codes(root))
+''',
+    '''    def test_rejects_premature_roadmap_closure(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+
+        manifest_path = root / "tests/compiler/fixtures/increment30/manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "implemented-awaiting-evidence"
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2) + "\\n",
+            encoding="utf-8",
+        )
+
+        roadmap_path = root / "docs/roadmap/nodal-development-todo.md"
+        text = roadmap_path.read_text(encoding="utf-8")
+        checked = "- [x] **Increment 30 — Analog numeric types and expression typing**"
+        unchecked = "- [ ] **Increment 30 — Analog numeric types and expression typing**"
+        if checked not in text:
+            text = text.replace(unchecked, checked, 1)
+        roadmap_path.write_text(text, encoding="utf-8")
+        self.assertIn("NODAL-INC30-006", self.codes(root))
+''',
+    "premature roadmap closure mutation test",
+)
+MUTATION_TESTS.write_text(mutation_tests, encoding="utf-8")
 
 print("Increment 30 evidence closure materialized")

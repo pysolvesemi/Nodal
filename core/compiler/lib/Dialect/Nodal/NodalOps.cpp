@@ -4,6 +4,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Support/LogicalResult.h"
+#include "nodal/Dialect/Nodal/NatureDiscipline.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
@@ -363,9 +364,19 @@ LogicalResult nodal::BranchOp::verify() {
   auto positive = llvm::cast<nodal::TerminalType>(getOperation()->getOperand(0).getType());
   auto negative = llvm::cast<nodal::TerminalType>(getOperation()->getOperand(1).getType());
   auto branch = llvm::cast<nodal::BranchType>(getOperation()->getResult(0).getType());
-  if (positive.getDiscipline() != negative.getDiscipline() ||
-      positive.getDiscipline() != branch.getDiscipline())
-    return emitOpError("branch terminals and result must share a discipline");
+  if (positive.getDiscipline() == negative.getDiscipline() &&
+      positive.getDiscipline() == branch.getDiscipline())
+    return success();
+
+  auto positiveRef = FlatSymbolRefAttr::get(getOperation()->getContext(), positive.getDiscipline());
+  auto negativeRef = FlatSymbolRefAttr::get(getOperation()->getContext(), negative.getDiscipline());
+  auto branchRef = FlatSymbolRefAttr::get(getOperation()->getContext(), branch.getDiscipline());
+  FailureOr<bool> endpoints =
+      nodal::areDisciplinesCompatible(getOperation(), positiveRef, negativeRef);
+  FailureOr<bool> result = nodal::areDisciplinesCompatible(getOperation(), positiveRef, branchRef);
+  if (failed(endpoints) || failed(result) || !*endpoints || !*result)
+    return emitOpError(
+        "NODAL-BRANCH-DISCIPLINE-001: branch terminals and result must use compatible disciplines");
   return success();
 }
 

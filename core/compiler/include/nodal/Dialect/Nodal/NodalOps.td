@@ -396,28 +396,158 @@ def Nodal_DisciplineImportOp : Nodal_Op<"discipline_import", [Symbol]> {
 // Conservative connectivity and explicit mixed-signal bridges
 //===----------------------------------------------------------------------===//
 
+def Nodal_ComponentContractOp : Nodal_Op<"component_contract",
+    [HasParent<"ModuleOp">]> {
+  let summary = "Partial or concrete physical-component connectivity contract";
+  let arguments = (ins
+    StrAttr:$kind,
+    StrAttr:$connectivity_ownership,
+    StrAttr:$source_path,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
 def Nodal_TerminalOp : Nodal_Op<"terminal", [HasParent<"ModuleOp">]> {
   let summary = "Boundary conservative terminal";
-  let arguments = (ins StrAttr:$name, DictionaryAttr:$metadata);
+  let description = [{
+    A boundary terminal retains Verilog-AMS-compatible input, output, or inout
+    direction as interface metadata. Direction never creates causal signal-flow
+    semantics. `flow_orientation` independently defines the sign used by local
+    conservative flow equations.
+  }];
+  let arguments = (ins
+    StrAttr:$name,
+    OptionalAttr<StrAttr>:$direction,
+    OptionalAttr<StrAttr>:$flow_orientation,
+    OptionalAttr<StrAttr>:$source_path,
+    DictionaryAttr:$metadata
+  );
   let results = (outs Nodal_TerminalType:$result);
   let hasVerifier = 1;
 }
 
 def Nodal_NodeOp : Nodal_Op<"node", [HasParent<"ModuleOp">]> {
   let summary = "Internal conservative node";
-  let arguments = (ins StrAttr:$name, DictionaryAttr:$metadata);
+  let arguments = (ins
+    StrAttr:$name,
+    OptionalAttr<StrAttr>:$source_path,
+    DictionaryAttr:$metadata
+  );
   let results = (outs Nodal_TerminalType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_ConnectOp : Nodal_Op<"connect", [HasParent<"ModuleOp">]> {
+  let summary = "Source-semantic conservative connection relation";
+  let arguments = (ins
+    Variadic<Nodal_TerminalType>:$members,
+    StrAttr:$connection_id,
+    StrAttr:$source_path,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
+def Nodal_AliasOp : Nodal_Op<"alias", [HasParent<"ModuleOp">]> {
+  let summary = "Exact conservative endpoint alias";
+  let arguments = (ins
+    Nodal_TerminalType:$lhs,
+    Nodal_TerminalType:$rhs,
+    StrAttr:$alias_id,
+    StrAttr:$source_path,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
+def Nodal_ReferenceOp : Nodal_Op<"reference", [HasParent<"ModuleOp">]> {
+  let summary = "Module or global conservative reference declaration";
+  let arguments = (ins
+    Nodal_TerminalType:$member,
+    StrAttr:$scope,
+    StrAttr:$source_path,
+    DictionaryAttr:$metadata
+  );
   let hasVerifier = 1;
 }
 
 def Nodal_BranchOp : Nodal_Op<"branch"> {
   let summary = "Directed conservative branch between compatible terminals";
+  let description = [{
+    Flow is positive from `positive` to `negative`. A named branch carries a
+    source name; an implicit branch is uniquely identified by its unordered
+    endpoint pair while retaining the authored orientation.
+  }];
   let arguments = (ins
     Nodal_TerminalType:$positive,
     Nodal_TerminalType:$negative,
+    OptionalAttr<StrAttr>:$name,
+    OptionalAttr<StrAttr>:$declaration_kind,
+    OptionalAttr<StrAttr>:$source_path,
     DictionaryAttr:$metadata
   );
   let results = (outs Nodal_BranchType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_ConnectionSetOp : Nodal_Op<"connection_set",
+    [HasParent<"ModuleOp">, Symbol]> {
+  let summary = "Compiler-owned normalized conservative connection set";
+  let arguments = (ins
+    Variadic<Nodal_TerminalType>:$members,
+    SymbolNameAttr:$sym_name,
+    FlatSymbolRefAttr:$discipline,
+    StrAttr:$ownership,
+    BoolAttr:$complete,
+    BoolAttr:$reference,
+    StrAttr:$reference_scope,
+    StrAttr:$reference_identity,
+    ArrayAttr:$member_paths,
+    ArrayAttr:$provenance,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
+def Nodal_PotentialEqualityOp : Nodal_Op<"potential_equality",
+    [HasParent<"ModuleOp">]> {
+  let summary = "Generated compatible-potential equality";
+  let arguments = (ins
+    Nodal_TerminalType:$lhs,
+    Nodal_TerminalType:$rhs,
+    FlatSymbolRefAttr:$connection_set,
+    ArrayAttr:$provenance,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
+def Nodal_ReferencePotentialOp : Nodal_Op<"reference_potential",
+    [HasParent<"ModuleOp">]> {
+  let summary = "Generated zero-potential reference identity";
+  let arguments = (ins
+    Nodal_TerminalType:$member,
+    FlatSymbolRefAttr:$connection_set,
+    StrAttr:$reference_identity,
+    ArrayAttr:$provenance,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
+def Nodal_FlowConservationOp : Nodal_Op<"flow_conservation",
+    [HasParent<"ModuleOp">]> {
+  let summary = "Generated signed zero-sum conservative flow equation";
+  let arguments = (ins
+    Variadic<AnyType>:$terms,
+    ArrayAttr:$signs,
+    FlatSymbolRefAttr:$connection_set,
+    StrAttr:$ownership,
+    BoolAttr:$complete,
+    ArrayAttr:$provenance,
+    DictionaryAttr:$metadata
+  );
   let hasVerifier = 1;
 }
 

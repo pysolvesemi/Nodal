@@ -1,8 +1,8 @@
 module attributes {
   nodal.backend.check_profile = "release",
-  nodal.backend.materialization = "readable",
+  nodal.backend.materialization = "safe-inline",
   nodal.backend.naming = "semantic",
-  nodal.backend.shaped_layout = "flat_packed",
+  nodal.backend.shaped_layout = "scalar-or-flat",
   nodal.target.profile = "analog"
 } {
   "nodal.module"() <{metadata = {}, sym_name = "QuantityBackend"}> ({

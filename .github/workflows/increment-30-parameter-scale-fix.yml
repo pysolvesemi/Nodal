@@ -69,11 +69,18 @@ jobs:
               raise SystemExit("parameter-scale script replacement temporary-file anchor is not unique")
           text = text.replace(output_anchor, preserved_output, 1)
 
-          quote_anchor = r'            "identity = \"parameter_scale\"",'
-          escaped_quote = r'            "identity = \\\"parameter_scale\\\"",'
-          if text.count(quote_anchor) != 1:
-              raise SystemExit("parameter-scale checker quote anchor is not unique")
-          path.write_text(text.replace(quote_anchor, escaped_quote, 1), encoding="utf-8")
+          replacements = {
+              r'            "identity = \"parameter_scale\"",':
+                  r'            "identity = \\\"parameter_scale\\\"",',
+              r'        path.write_text("temporary\n", encoding="utf-8")':
+                  r'        path.write_text("temporary\\n", encoding="utf-8")',
+          }
+          for needle, replacement in replacements.items():
+              if text.count(needle) != 1:
+                  raise SystemExit(f"parameter-scale escape anchor is not unique: {needle}")
+              text = text.replace(needle, replacement, 1)
+
+          path.write_text(text, encoding="utf-8")
           PY
 
           python3 scripts/apply_increment30_parameter_scale_fix.py

@@ -54,9 +54,10 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
-          for increment in $(seq 18 30); do
+          for increment in $(seq 18 29); do
             python3 "scripts/check_increment${increment}.py"
           done
+          python3 scripts/check_increment30.py
           python3 tests/compiler/test_increment30.py
           ./nodal check \
             --contracts-only \

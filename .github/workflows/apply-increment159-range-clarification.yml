@@ -1,0 +1,30 @@
+name: Apply Increment 159 range clarification
+
+on:
+  push:
+    branches:
+      - increment/159-static-symbolic-range-clarification
+
+permissions:
+  contents: write
+
+jobs:
+  update-roadmap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: increment/159-static-symbolic-range-clarification
+          fetch-depth: 0
+      - name: Apply roadmap clarification
+        run: python3 scripts/apply_increment159_range_clarification.py
+      - name: Remove temporary updater and commit
+        run: |
+          rm scripts/apply_increment159_range_clarification.py
+          rm .github/workflows/apply-increment159-range-clarification.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/roadmap/nodal-development-todo.md scripts/apply_increment159_range_clarification.py .github/workflows/apply-increment159-range-clarification.yml
+          git diff --cached --check
+          git commit -m "docs: clarify staged range bound and inference contracts"
+          git push origin HEAD:increment/159-static-symbolic-range-clarification

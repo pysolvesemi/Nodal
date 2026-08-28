@@ -86,6 +86,23 @@ jobs:
               )
           text = text.replace(escaped_old, escaped_new)
           path.write_text(text, encoding="utf-8")
+
+          # MLIR integer attributes are signless. Store 2^128-1 in i129 so its
+          # sign bit remains clear while integerFits still proves it fits uint<128>.
+          for source in (
+              Path("scripts/repair_increment29_review.py"),
+              Path("scripts/repair_increment29_complete.py"),
+          ):
+              source_text = source.read_text(encoding="utf-8")
+              if "340282366920938463463374607431768211455 : i128" not in source_text:
+                  raise SystemExit(f"wide integer fixture anchor missing from {source}")
+              source.write_text(
+                  source_text.replace(
+                      "340282366920938463463374607431768211455 : i128",
+                      "340282366920938463463374607431768211455 : i129",
+                  ),
+                  encoding="utf-8",
+              )
           PY
 
       - name: Apply all review repairs

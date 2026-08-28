@@ -31,16 +31,18 @@ jobs:
       - name: Materialize native analog numeric implementation
         run: python3 scripts/materialize_increment30_native.py
 
-      - name: Remove one-shot materializer and publish implementation
+      - name: Publish native implementation without workflow mutations
         run: |
           set -euo pipefail
-          git rm scripts/materialize_increment30_native.py \
+          git checkout -- \
+            .github/workflows/increment-30-analog-numeric-types.yml \
             .github/workflows/increment-30-native-materialize.yml
+          git rm scripts/materialize_increment30_native.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "Increment 30 — implement analog numeric typing"
           git push origin HEAD:increment/30-analog-numeric-types
 
-# The second push intentionally activates this one-shot workflow after GitHub
-# has registered the workflow file from the preceding commit.
+# Workflow cleanup and the permanent Increment 30 workflow update are applied
+# separately through the GitHub connector after this source-only push.

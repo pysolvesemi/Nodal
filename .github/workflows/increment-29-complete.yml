@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   complete:
+    if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, 'resolve all parameter review findings') }}
     name: increment-29/complete-review-repair
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -108,14 +109,13 @@ jobs:
       - name: Apply all review repairs
         run: python3 scripts/repair_increment29_complete.py
 
-      - name: Remove one-shot repair automation
+      - name: Remove one-shot repair scripts
         run: |
           rm -f scripts/repair_increment29_complete.py
-          rm -f .github/workflows/increment-29-complete.yml
           rm -f scripts/repair_increment29_review.py
-          rm -f .github/workflows/increment-29-review-repair.yml
           rm -f scripts/repair_increment29.py
-          rm -f .github/workflows/increment-29-repair.yml
+          find scripts tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          find scripts tests -type f -name '*.pyc' -delete
 
       - name: Apply deterministic formatting
         run: |
@@ -187,6 +187,10 @@ jobs:
 
       - name: Commit completed Increment 29 repairs
         run: |
+          git restore --source=HEAD --staged --worktree .github/workflows
+          find scripts tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          find scripts tests -type f -name '*.pyc' -delete
           git add -A
+          git diff --cached --check
           git commit -m "Increment 29 — resolve all parameter review findings"
           git push origin HEAD:increment/29-parameters-units

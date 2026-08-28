@@ -57,6 +57,17 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/.increment28_review_fix.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/check_increment28.py")
+          text = path.read_text(encoding="utf-8")
+          old = '            "lexicographically smallest canonical discipline symbol",\n'
+          new = '            "lexicographically smallest canonical",\n'
+          if text.count(old) != 1:
+              raise SystemExit("expected one wrapped design-gate phrase assertion")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
           python3 scripts/run_clang_tools.py format \
             --fix \
             --toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"

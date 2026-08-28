@@ -30,7 +30,6 @@ StringAttr stringAttribute(DictionaryAttr values, llvm::StringRef name) {
   return values ? values.getAs<StringAttr>(name) : StringAttr();
 }
 
-
 std::optional<bool> booleanAttribute(DictionaryAttr values, llvm::StringRef name) {
   if (!values)
     return std::nullopt;

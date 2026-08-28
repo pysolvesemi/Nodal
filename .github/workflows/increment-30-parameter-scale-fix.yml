@@ -30,6 +30,46 @@ jobs:
       - name: Apply reviewed fixed-parameter unit-scale correction
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/apply_increment30_parameter_scale_fix.py")
+          text = path.read_text(encoding="utf-8")
+
+          old_anchor = (
+              "    '''    \".github/workflows/increment-30-final-review-fixes.yml\",\n"
+              "    \"scripts/apply_increment30_final_review_fixes.py\",\n"
+              ")\n"
+              "''',\n"
+          )
+          current_anchor = (
+              "    '''    \".github/workflows/increment-30-final-review-fixes.yml\",\n"
+              "    \".github/workflows/increment-30-review-fixes.yml\",\n"
+              "    \".github/workflows/increment-30-temporary-artifact-guard.yml\",\n"
+              "    \"scripts/apply_increment30_final_review_fixes.py\",\n"
+              ")\n"
+              "''',\n"
+          )
+          if text.count(old_anchor) != 1:
+              raise SystemExit("parameter-scale script old temporary-file anchor is not unique")
+          text = text.replace(old_anchor, current_anchor, 1)
+
+          output_anchor = (
+              "    '''    \".github/workflows/increment-30-final-review-fixes.yml\",\n"
+              "    \".github/workflows/increment-30-review-fixes.yml\",\n"
+              "    \".github/workflows/increment-30-parameter-scale-fix.yml\",\n"
+          )
+          preserved_output = (
+              "    '''    \".github/workflows/increment-30-final-review-fixes.yml\",\n"
+              "    \".github/workflows/increment-30-review-fixes.yml\",\n"
+              "    \".github/workflows/increment-30-temporary-artifact-guard.yml\",\n"
+              "    \".github/workflows/increment-30-parameter-scale-fix.yml\",\n"
+          )
+          if text.count(output_anchor) != 1:
+              raise SystemExit("parameter-scale script replacement temporary-file anchor is not unique")
+          path.write_text(text.replace(output_anchor, preserved_output, 1), encoding="utf-8")
+          PY
+
           python3 scripts/apply_increment30_parameter_scale_fix.py
           rm -f \
             scripts/apply_increment30_parameter_scale_fix.py \

@@ -1,7 +1,9 @@
 name: Probe roadmap updater workflow
 
 on:
-  push:
+  pull_request:
+    branches:
+      - dev
 
 jobs:
   probe:

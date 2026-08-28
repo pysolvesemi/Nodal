@@ -1,0 +1,58 @@
+name: Increment 30 Evidence Closure Materialize
+
+on:
+  push:
+    branches:
+      - increment/30-evidence-closure
+    paths:
+      - .github/workflows/increment-30-evidence-closure-materialize.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-30-evidence-closure-materialize
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    name: materialize-and-publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+
+    steps:
+      - name: Check out evidence closure branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/30-evidence-closure
+          fetch-depth: 0
+
+      - name: Record accepted implementation evidence
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_increment30_evidence_closure.py
+          rm scripts/apply_increment30_evidence_closure.py
+
+      - name: Validate roadmap manifest and mutation contracts
+        run: |
+          set -euo pipefail
+          python3 scripts/check_increment30.py
+          python3 tests/compiler/test_increment30.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          git diff --check
+
+      - name: Publish closure source changes only
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            docs/roadmap/nodal-development-todo.md \
+            tests/compiler/fixtures/increment30/manifest.json
+          git add -u scripts/apply_increment30_evidence_closure.py
+          git commit -m "Increment 30 — record accepted evidence"
+          git push origin HEAD:increment/30-evidence-closure

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # Repair Increment 29 review findings and add regression coverage.
+# Retrigger marker: execute after the workflow definition is present on branch.
 
 from __future__ import annotations
 

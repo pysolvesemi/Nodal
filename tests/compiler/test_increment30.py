@@ -168,6 +168,20 @@ class Increment30CheckerTests(unittest.TestCase):
         )
         self.assertIn("NODAL-INC30-010", self.codes(root))
 
+    def test_rejects_unqualified_builtin_module_definition(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "verifyAnalogNumericModel(mlir::ModuleOp module)",
+                "verifyAnalogNumericModel(ModuleOp module)",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC30-010", self.codes(root))
+
     def test_rejects_missing_implemented_status(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)

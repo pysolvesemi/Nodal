@@ -911,7 +911,7 @@ LogicalResult verifyAnalogNumericOperation(Operation *operation) {
   return success();
 }
 
-LogicalResult verifyAnalogNumericModel(ModuleOp module) {
+LogicalResult verifyAnalogNumericModel(mlir::ModuleOp module) {
   LogicalResult result = success();
   module.walk([&](Operation *operation) {
     if (failed(result))
@@ -939,7 +939,7 @@ LogicalResult verifyAnalogNumericModel(ModuleOp module) {
   return result;
 }
 
-LogicalResult foldAnalogNumericConstants(ModuleOp module) {
+LogicalResult foldAnalogNumericConstants(mlir::ModuleOp module) {
   if (failed(verifyAnalogNumericModel(module)))
     return failure();
   LogicalResult result = success();
@@ -990,7 +990,7 @@ LogicalResult foldAnalogNumericConstants(ModuleOp module) {
   return result;
 }
 
-LogicalResult verifyAnalogQuantityErasure(ModuleOp module) {
+LogicalResult verifyAnalogQuantityErasure(mlir::ModuleOp module) {
   if (failed(verifyAnalogNumericModel(module)))
     return emitMappedFailure(module.getOperation(), "NODAL-BACKEND-QUANTITY-001",
                              "quantity erasure requires a verified analog numeric model");

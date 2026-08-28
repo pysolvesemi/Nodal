@@ -13,7 +13,6 @@
 #include "llvm/Support/Casting.h"
 
 #include <algorithm>
-#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
@@ -31,18 +30,6 @@ StringAttr stringAttribute(DictionaryAttr values, llvm::StringRef name) {
   return values ? values.getAs<StringAttr>(name) : StringAttr();
 }
 
-std::optional<int64_t> integerAttribute(DictionaryAttr values, llvm::StringRef name) {
-  if (!values)
-    return std::nullopt;
-  if (auto integer = values.getAs<IntegerAttr>(name))
-    return integer.getInt();
-  if (auto text = values.getAs<StringAttr>(name)) {
-    int64_t result = 0;
-    if (!text.getValue().getAsInteger(10, result))
-      return result;
-  }
-  return std::nullopt;
-}
 
 std::optional<bool> booleanAttribute(DictionaryAttr values, llvm::StringRef name) {
   if (!values)

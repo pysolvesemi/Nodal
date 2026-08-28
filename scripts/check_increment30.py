@@ -311,7 +311,10 @@ def check_repository(root: Path) -> list[Problem]:
             "foldAnalogNumericConstants", "verifyAnalogQuantityErasure"),
         "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp": (
             "combineAnalogDimensions", "NODAL-ANALOG-PROMOTION-001",
-            "nodal.folded_provenance", "NODAL-ANALOG-DIVIDE-001"),
+            "nodal.folded_provenance", "NODAL-ANALOG-DIVIDE-001",
+            "verifyAnalogNumericModel(mlir::ModuleOp module)",
+            "foldAnalogNumericConstants(mlir::ModuleOp module)",
+            "verifyAnalogQuantityErasure(mlir::ModuleOp module)"),
         "core/compiler/include/nodal/Diagnostics/DiagnosticSupport.h": (
             "DiagnosticContext", "emitMappedFailure", "emitMappedFailureForPath"),
         "core/compiler/lib/Support/DiagnosticSupport.cpp": (

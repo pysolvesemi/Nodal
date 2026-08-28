@@ -48,6 +48,7 @@ EXPECTED_FILES = (
     "tests/compiler/fixtures/increment29/manifest.json",
     "scripts/check_increment29.py",
     "tests/compiler/test_increment29.py",
+    "tests/compiler/fixtures/increment30/manifest.json",
 )
 
 TEMPORARY_FILES = (
@@ -530,6 +531,10 @@ def check_repository(root: Path) -> list[Problem]:
         "- [ ] **Increment 30 — Analog numeric types and expression typing**"
         in roadmap
     )
+    increment30_done = (
+        "- [x] **Increment 30 — Analog numeric types and expression typing**"
+        in roadmap
+    )
     successor_path = root / "tests/compiler/fixtures/increment29/manifest.json"
     try:
         successor = json.loads(read(successor_path, problems, "NODAL-INC28-019"))
@@ -551,8 +556,45 @@ def check_repository(root: Path) -> list[Problem]:
                 problems.append(Problem("NODAL-INC28-019", f"Increment 29 lacks evidence field: {field}"))
     else:
         problems.append(Problem("NODAL-INC28-019", f"unexpected Increment 29 status: {successor_status!r}"))
-    if not increment30_open:
-        problems.append(Problem("NODAL-INC28-019", "Increment 30 must remain unchecked"))
+    increment30_path = root / "tests/compiler/fixtures/increment30/manifest.json"
+    try:
+        increment30 = json.loads(read(increment30_path, problems, "NODAL-INC28-019"))
+    except json.JSONDecodeError as exc:
+        problems.append(
+            Problem("NODAL-INC28-019", f"invalid Increment 30 manifest: {exc}")
+        )
+        increment30 = {}
+    increment30_status = increment30.get("status")
+    increment30_evidence = increment30.get("evidence", {})
+    if increment30.get("increment") != 30 or increment30.get("public_api") != "0.3":
+        problems.append(
+            Problem("NODAL-INC28-019", "Increment 30 successor identity mismatch")
+        )
+    if increment30_open == increment30_done:
+        problems.append(
+            Problem("NODAL-INC28-019", "Increment 30 roadmap state is missing or ambiguous")
+        )
+    elif increment30_open:
+        if increment30_status not in {
+            "implementation-started",
+            "implemented-awaiting-evidence",
+        }:
+            problems.append(
+                Problem("NODAL-INC28-019", "Increment 30 pre-evidence state is inconsistent")
+            )
+    elif increment30_status != "validated-analog-numeric-typing" or rev < (1, 38):
+        problems.append(
+            Problem("NODAL-INC28-019", "validated Increment 30 state is inconsistent")
+        )
+    else:
+        for field in ("pull_request", "dedicated_run", "core_ci_run"):
+            if not isinstance(increment30_evidence.get(field), int):
+                problems.append(
+                    Problem(
+                        "NODAL-INC28-019",
+                        f"Increment 30 lacks evidence field: {field}",
+                    )
+                )
 
     return problems
 

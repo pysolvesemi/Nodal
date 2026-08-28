@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.39
+**Revision:** 1.40
 **Created:** 2026-08-20
 **Updated:** 2026-08-28
 **Status:** Active roadmap
@@ -917,8 +917,9 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Classify ordinary parameters, structural parameters, and dynamic values; require topology, component count, equation count, shape, or rank changes to be elaboration-time or static target generation, and diagnose unsupported parameter-envelope structural changes.
   - Evidence: implementation PR [#78](https://github.com/pysolvesemi/Nodal/pull/78), dedicated validation run [33154887196](https://github.com/pysolvesemi/Nodal/actions/runs/33154887196), merge commit [`09ffbf34`](https://github.com/pysolvesemi/Nodal/commit/09ffbf344a4bf2ee8f6b2fb16ba3272669f47f27), and Core CI run [33154887245](https://github.com/pysolvesemi/Nodal/actions/runs/33154887245).
 
-- [ ] **Increment 30 — Analog numeric types and expression typing**
+- [x] **Increment 30 — Analog numeric types and expression typing**
   - Define promotion, physical compatibility, comparisons/logical results, conditionals, invalid operations, and folding boundaries.
+  - Evidence: implementation PR [#80](https://github.com/pysolvesemi/Nodal/pull/80), dedicated validation run [33192880165](https://github.com/pysolvesemi/Nodal/actions/runs/33192880165), merge commit [`401f78b3`](https://github.com/pysolvesemi/Nodal/commit/401f78b3836cc4e52d393ef343dc0915d60606e9), and Core CI run [33192880254](https://github.com/pysolvesemi/Nodal/actions/runs/33192880254).
 
 - [ ] **Increment 31 — Potential and flow access functions**
   - Implement `V`, `I`, discipline-specific access, one/two-node forms, branches, probes, and validation.

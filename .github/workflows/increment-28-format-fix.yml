@@ -1,0 +1,100 @@
+name: Increment 28 Locked Native Format Fix
+
+on:
+  push:
+    branches:
+      - increment/28-electrical-connectivity
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-28-format-fix-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  format:
+    name: increment-28/locked-native-format-fix
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out exact feature branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/28-electrical-connectivity
+          fetch-depth: 0
+
+      - name: Verify implementation head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor 35a1bdac3041991da18a2022476eb0f3cfd094d6 HEAD
+          test -z "$(git status --short)"
+
+      - name: Install locked lint toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Apply locked clang-format with strict path allowlist
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/run_clang_tools.py format \
+            --fix \
+            --toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+          mapfile -t changed < <(git diff --name-only)
+          if [[ "${#changed[@]}" -eq 0 ]]; then
+            echo 'locked clang-format produced no change' >&2
+            exit 1
+          fi
+          for path in "${changed[@]}"; do
+            case "${path}" in
+              core/compiler/lib/Dialect/Nodal/ConservativeConnectivity.cpp|\
+              core/compiler/lib/Dialect/Nodal/NodalOps.cpp|\
+              core/compiler/lib/Transforms/Passes.cpp|\
+              core/compiler/test/Unit/ConservativeConnectivityTest.cpp)
+                ;;
+              *)
+                echo "unexpected formatted path: ${path}" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          python3 scripts/run_clang_tools.py format \
+            --check \
+            --toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Revalidate Increment 18 through 28 contracts
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for increment in $(seq 18 28); do
+            python3 "scripts/check_increment${increment}.py"
+          done
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+
+      - name: Remove one-shot workflow and create formatting commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/increment-28-format-fix.yml
+          git add \
+            core/compiler/lib/Dialect/Nodal/ConservativeConnectivity.cpp \
+            core/compiler/lib/Dialect/Nodal/NodalOps.cpp \
+            core/compiler/lib/Transforms/Passes.cpp \
+            core/compiler/test/Unit/ConservativeConnectivityTest.cpp
+          git commit -m 'Increment 28 — apply locked native formatting'
+          echo "FORMAT_COMMIT=$(git rev-parse HEAD)"
+          git push origin HEAD:increment/28-electrical-connectivity

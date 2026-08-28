@@ -14,6 +14,7 @@ add_mlir_dialect_library(NodalDialect
     MLIRNodalOpsIncGen
 
   LINK_LIBS PUBLIC
+    NodalSupport
     MLIRBytecodeOpInterface
     MLIRIR
     MLIRSupport

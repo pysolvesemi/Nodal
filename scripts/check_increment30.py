@@ -31,7 +31,14 @@ EXPECTED_FILES = (
     "docs/roadmap/nodal-development-todo.md",
     "tests/compiler/fixtures/increment29/manifest.json",
     "core/compiler/include/nodal/Dialect/Nodal/AnalogNumeric.h",
+    "core/compiler/include/nodal/Diagnostics/DiagnosticSupport.h",
+    "core/compiler/include/nodal/Diagnostics/DiagnosticMapping.h",
     "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp",
+    "core/compiler/lib/Dialect/Nodal/CMakeLists.txt",
+    "core/compiler/lib/Diagnostics/DiagnosticMapping.cpp",
+    "core/compiler/lib/Diagnostics/CMakeLists.txt",
+    "core/compiler/lib/Support/DiagnosticSupport.cpp",
+    "core/compiler/lib/Support/CMakeLists.txt",
     "core/compiler/include/nodal/Dialect/Nodal/NodalTypes.td",
     "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td",
     "core/compiler/lib/Dialect/Nodal/NodalTypes.cpp",
@@ -305,6 +312,15 @@ def check_repository(root: Path) -> list[Problem]:
         "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp": (
             "combineAnalogDimensions", "NODAL-ANALOG-PROMOTION-001",
             "nodal.folded_provenance", "NODAL-ANALOG-DIVIDE-001"),
+        "core/compiler/include/nodal/Diagnostics/DiagnosticSupport.h": (
+            "DiagnosticContext", "emitMappedFailure", "emitMappedFailureForPath"),
+        "core/compiler/lib/Support/DiagnosticSupport.cpp": (
+            "collectDiagnosticContext", "emitMappedFailure", "sourceMapContext"),
+        "core/compiler/lib/Support/CMakeLists.txt": (
+            "DiagnosticSupport.cpp", "MLIRIR"),
+        "core/compiler/lib/Dialect/Nodal/CMakeLists.txt": ("NodalSupport",),
+        "core/compiler/lib/Diagnostics/CMakeLists.txt": (
+            "NodalDialect", "NodalSupport"),
         "core/compiler/lib/Transforms/Passes.cpp": (
             "nodal-fold-analog-constants", "nodal-verify-analog-numeric",
             "createFoldAnalogConstantsPass", "createVerifyAnalogNumericPass"),

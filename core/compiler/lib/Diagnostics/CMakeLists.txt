@@ -6,6 +6,7 @@ add_mlir_library(NodalDiagnostics
 
   LINK_LIBS PUBLIC
     NodalDialect
+    NodalSupport
     MLIRIR
     MLIRPass
     MLIRSupport

@@ -156,6 +156,18 @@ class Increment30CheckerTests(unittest.TestCase):
         path.write_text(path.read_text(encoding="utf-8").replace("verifyAnalogQuantityErasure", "skipQuantityVerification", 1), encoding="utf-8")
         self.assertIn("NODAL-INC30-010", self.codes(root))
 
+    def test_rejects_missing_diagnostic_support_link(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Dialect/Nodal/CMakeLists.txt"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "NodalSupport", "MissingDiagnosticSupport", 1
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC30-010", self.codes(root))
+
     def test_rejects_missing_implemented_status(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)

@@ -99,6 +99,13 @@ jobs:
           grep -F 'nodal.folded_kind = "real"' /tmp/analog-numeric-select-promotion.mlir
           grep -E 'nodal[.]folded_value = 2([.]0+e[+]00)? : f64' /tmp/analog-numeric-select-promotion.mlir
 
+          "${compiler}" \
+            --pass-pipeline="${pipeline}" \
+            core/compiler/test/IR/analog-numeric-parameter-scale.mlir \
+            | tee /tmp/analog-numeric-parameter-scale.mlir
+          grep -F 'nodal.folded_dimension = "resistance"' /tmp/analog-numeric-parameter-scale.mlir
+          grep -E 'nodal[.]folded_value = (2([.]0+)?e[+]03|2000([.]0+)?) : f64' /tmp/analog-numeric-parameter-scale.mlir
+
           check_rejection() {
             fixture="$1"
             code="$2"

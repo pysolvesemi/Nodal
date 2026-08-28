@@ -1,0 +1,53 @@
+name: Increment 30 Post ABI Format Fix
+
+on:
+  push:
+    branches:
+      - increment/30-analog-numeric-types
+    paths:
+      - .github/workflows/increment-30-post-abi-format-fix.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-30-post-abi-format-fix
+  cancel-in-progress: true
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out Increment 30 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/30-analog-numeric-types
+          fetch-depth: 0
+
+      - name: Install pinned lint toolchain
+        run: |
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Apply repository-native formatter
+        run: |
+          python3 scripts/run_clang_tools.py \
+            format \
+            --fix \
+            --toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Publish native formatting
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "Native sources already formatted"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add core/compiler/include core/compiler/lib
+          git commit -m "Increment 30 — format post-ABI native changes"
+          git push origin HEAD:increment/30-analog-numeric-types

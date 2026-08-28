@@ -33,6 +33,7 @@ jobs:
           ./nodal style bootstrap \
             --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
           python3 scripts/run_clang_tools.py format \
+            --fix \
             --toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
           python3 scripts/check_increment30.py
           python3 tests/compiler/test_increment30.py

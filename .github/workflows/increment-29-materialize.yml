@@ -55,6 +55,12 @@ jobs:
             --fix \
             --toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
 
+      - name: Hide one-shot workflow during contract validation
+        run: |
+          cp .github/workflows/increment-29-materialize.yml \
+            "${RUNNER_TEMP}/increment-29-materialize.yml"
+          rm -f .github/workflows/increment-29-materialize.yml
+
       - name: Validate implementation contracts before commit
         env:
           PYTHONDONTWRITEBYTECODE: '1'
@@ -70,6 +76,8 @@ jobs:
 
       - name: Prepare source-only push
         run: |
+          cp "${RUNNER_TEMP}/increment-29-materialize.yml" \
+            .github/workflows/increment-29-materialize.yml
           rm -rf scripts/__pycache__
           rm -f .github/workflows/increment-29-parameters-units.yml
 

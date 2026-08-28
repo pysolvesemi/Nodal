@@ -54,7 +54,9 @@ jobs:
           git add \
             docs/roadmap/nodal-development-todo.md \
             tests/compiler/fixtures/increment30/manifest.json \
-            tests/compiler/test_increment30.py
+            tests/compiler/test_increment30.py \
+            scripts/check_increment28.py \
+            scripts/check_increment29.py
           git add -u scripts/apply_increment30_evidence_closure.py
           git commit -m "Increment 30 — record accepted evidence"
           git push origin HEAD:increment/30-evidence-closure

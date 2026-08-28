@@ -87,7 +87,7 @@ class Increment22CheckerTests(unittest.TestCase):
     def test_rejects_invented_inventory_hierarchy(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
-        path = root / "core/compiler/lib/Diagnostics/DiagnosticMapping.cpp"
+        path = root / "core/compiler/lib/Support/DiagnosticSupport.cpp"
         path.write_text(
             path.read_text(encoding="utf-8").replace(
                 "  context.semanticPath = path.str();\n  context.indexPath",
@@ -100,7 +100,7 @@ class Increment22CheckerTests(unittest.TestCase):
     def test_rejects_missing_ancestor_source_lookup(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
-        path = root / "core/compiler/lib/Diagnostics/DiagnosticMapping.cpp"
+        path = root / "core/compiler/lib/Support/DiagnosticSupport.cpp"
         path.write_text(
             path.read_text(encoding="utf-8").replace(
                 "current && !file",

@@ -1,0 +1,108 @@
+{
+  "increment": 30,
+  "title": "Analog numeric types and expression typing",
+  "public_api": "0.3",
+  "status": "implementation-started",
+  "prerequisite": {
+    "increment": 29,
+    "status": "validated-parameter-constant-unit",
+    "dev_commit": "1c1ab49da71f0f52d2af3d93e40a92f4643be776"
+  },
+  "branch": "increment/30-analog-numeric-types",
+  "quantity_type": {
+    "spelling": "!nodal.quantity<kind, dimension>",
+    "numeric_kinds": [
+      "integer",
+      "real"
+    ],
+    "boolean_type": "i1",
+    "dimensionless": "1",
+    "legacy_f64": "real-dimensionless"
+  },
+  "operations": [
+    "nodal.real_literal",
+    "nodal.analog_integer_literal",
+    "nodal.parameter_ref",
+    "nodal.analog_add",
+    "nodal.analog_sub",
+    "nodal.analog_mul",
+    "nodal.analog_div",
+    "nodal.analog_neg",
+    "nodal.analog_compare",
+    "nodal.analog_logic",
+    "nodal.analog_select",
+    "nodal.analog_ddt",
+    "nodal.access",
+    "nodal.contribute"
+  ],
+  "promotion": {
+    "integer_integer": "integer",
+    "integer_real": "real",
+    "real_integer": "real",
+    "real_real": "real",
+    "real_to_integer": "explicit-only",
+    "boolean_numeric": "forbidden"
+  },
+  "dimensions": {
+    "canonical_order": "lexical",
+    "dimensionless": "1",
+    "add_sub": "equal",
+    "mul": "add-exponents",
+    "div": "subtract-exponents",
+    "ddt": "subtract-time-exponent"
+  },
+  "logical_result": "i1",
+  "folding": {
+    "pure_sources": [
+      "literal",
+      "compile-time-parameter-constant"
+    ],
+    "supported": [
+      "add",
+      "sub",
+      "mul",
+      "div",
+      "neg",
+      "compare",
+      "logic",
+      "select"
+    ],
+    "never": [
+      "symbolic-parameter",
+      "dynamic-value",
+      "access",
+      "time-or-analysis-query",
+      "ddt-or-stateful-operator",
+      "event-or-noise",
+      "contribution-or-equation",
+      "bridge"
+    ]
+  },
+  "planned_diagnostics": [
+    "NODAL-ANALOG-TYPE-001",
+    "NODAL-ANALOG-PROMOTION-001",
+    "NODAL-ANALOG-DIMENSION-001",
+    "NODAL-ANALOG-COMPARE-001",
+    "NODAL-ANALOG-LOGIC-001",
+    "NODAL-ANALOG-SELECT-001",
+    "NODAL-ANALOG-FOLD-001",
+    "NODAL-ANALOG-DIVIDE-001",
+    "NODAL-BACKEND-QUANTITY-001"
+  ],
+  "deferred": [
+    "public Scala syntax",
+    "complex quantities",
+    "aggregate analog quantities",
+    "affine units",
+    "access-function resolution",
+    "first-class equations",
+    "procedural analog variables and control flow",
+    "continuous-time state semantics",
+    "mathematical and simulator functions",
+    "noise and analysis projection",
+    "solver lowering"
+  ],
+  "evidence": {
+    "start_commit": "1c1ab49da71f0f52d2af3d93e40a92f4643be776"
+  }
+}

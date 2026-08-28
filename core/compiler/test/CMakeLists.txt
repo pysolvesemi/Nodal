@@ -295,6 +295,58 @@ foreach(_fixture IN ITEMS discipline implicit connection reference component)
   )
 endforeach()
 
+
+add_test(
+  NAME nodal.native.parameters-units-roundtrip
+  COMMAND nodalc
+    "--pass-pipeline=builtin.module(nodal-verify-parameters)"
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/parameters-units.mlir"
+)
+set_tests_properties(
+  nodal.native.parameters-units-roundtrip
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal[.]parameter_envelope"
+)
+
+add_test(
+  NAME nodal.native.parameters-units-generic
+  COMMAND nodalc
+    --mlir-print-op-generic
+    "--pass-pipeline=builtin.module(nodal-verify-parameters)"
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/parameters-units.mlir"
+)
+set_tests_properties(
+  nodal.native.parameters-units-generic
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal[.]const_expr"
+)
+
+foreach(_fixture IN ITEMS unit constraint envelope dynamic override cycle)
+  add_test(
+    NAME nodal.native.parameters-units-rejects-${_fixture}
+    COMMAND nodalc
+      "--pass-pipeline=builtin.module(nodal-verify-parameters)"
+      "${CMAKE_CURRENT_SOURCE_DIR}/IR/parameters-units-invalid-${_fixture}.mlir"
+  )
+  set_tests_properties(
+    nodal.native.parameters-units-rejects-${_fixture}
+    PROPERTIES
+      WILL_FAIL TRUE
+  )
+endforeach()
+
+add_test(
+  NAME nodal.native.parameter-lossless-rendering
+  COMMAND nodal-translate
+    --nodal-to-verilog-a
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/parameter-rendering.mlir"
+)
+set_tests_properties(
+  nodal.native.parameter-lossless-rendering
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "parameter real R = 1k from \\[1:10k\\] exclude 5k; // unit: Ohm"
+)
+
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
   DEPENDS
@@ -308,6 +360,7 @@ add_custom_target(check-nodal-native
     nodal-analog-expression-unit-tests
     nodal-nature-discipline-unit-tests
     nodal-conservative-connectivity-unit-tests
+    nodal-parameter-model-unit-tests
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
   USES_TERMINAL
 )

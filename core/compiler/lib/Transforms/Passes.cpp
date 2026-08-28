@@ -11,6 +11,7 @@
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
+#include "nodal/Dialect/Nodal/ParameterModel.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -472,6 +473,9 @@ Operation *findDirectSymbol(Operation *container, llvm::StringRef operationName,
 LogicalResult verifyParameters(mlir::ModuleOp module) {
   if (failed(verifyGuard(module, "nodal.verify.parameters_complete", "NODAL-VERIFY-PARAMETER-001",
                          "parameter/generate/loop analysis")))
+    return failure();
+
+  if (failed(nodal::verifyParameterModel(module)))
     return failure();
 
   LogicalResult result = success();

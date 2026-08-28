@@ -2,6 +2,7 @@ add_mlir_dialect_library(NodalDialect
   NodalDialect.cpp
   ConservativeConnectivity.cpp
   NatureDiscipline.cpp
+  ParameterModel.cpp
   NodalOps.cpp
   NodalTypes.cpp
 

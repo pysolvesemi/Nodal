@@ -4,9 +4,13 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
+#include "nodal/Dialect/Nodal/NodalTypes.h"
+#include "nodal/Dialect/Nodal/ParameterModel.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
@@ -26,10 +30,28 @@ namespace nodal {
 namespace {
 
 constexpr llvm::StringLiteral kSupportedOperations[] = {
-    "nodal.module",     "nodal.parameter",  "nodal.terminal",     "nodal.node",
-    "nodal.branch",     "nodal.analog",     "nodal.real_literal", "nodal.parameter_ref",
-    "nodal.access",     "nodal.analog_add", "nodal.analog_sub",   "nodal.analog_mul",
-    "nodal.analog_div", "nodal.analog_ddt", "nodal.contribute",
+    "nodal.unit",
+    "nodal.module",
+    "nodal.parameter",
+    "nodal.const_literal",
+    "nodal.const_parameter_ref",
+    "nodal.const_expr",
+    "nodal.parameter_value",
+    "nodal.parameter_constraint",
+    "nodal.parameter_envelope",
+    "nodal.terminal",
+    "nodal.node",
+    "nodal.branch",
+    "nodal.analog",
+    "nodal.real_literal",
+    "nodal.parameter_ref",
+    "nodal.access",
+    "nodal.analog_add",
+    "nodal.analog_sub",
+    "nodal.analog_mul",
+    "nodal.analog_div",
+    "nodal.analog_ddt",
+    "nodal.contribute",
 };
 
 llvm::StringRef symbolName(Operation *operation) {
@@ -99,7 +121,13 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
   llvm::StringRef name = operation->getName().getStringRef();
   std::string rendered;
 
-  if (name == "nodal.real_literal") {
+  if (name == "nodal.const_literal" || name == "nodal.const_parameter_ref" ||
+      name == "nodal.const_expr") {
+    auto expression = nodal::renderParameterConstantExpression(value);
+    if (failed(expression))
+      return failure();
+    rendered = *expression;
+  } else if (name == "nodal.real_literal") {
     auto literal = operation->getAttrOfType<FloatAttr>("value");
     if (!literal || !std::isfinite(literal.getValueAsDouble()))
       return failure();
@@ -154,6 +182,96 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
   return rendered;
 }
 
+LogicalResult orderParametersByDependency(Operation *definition,
+                                          llvm::SmallVectorImpl<Operation *> &parameters) {
+  llvm::sort(parameters,
+             [](Operation *lhs, Operation *rhs) { return symbolName(lhs) < symbolName(rhs); });
+
+  llvm::StringMap<Operation *> parametersByName;
+  for (Operation *parameter : parameters) {
+    llvm::StringRef name = symbolName(parameter);
+    if (name.empty() || parametersByName.count(name) != 0)
+      return failure();
+    parametersByName[name] = parameter;
+  }
+
+  llvm::DenseMap<Operation *, llvm::SmallVector<Operation *, 4>> dependencies;
+  Region &region = definition->getRegion(0);
+  if (!llvm::hasSingleElement(region))
+    return failure();
+
+  for (Operation *parameter : parameters) {
+    Operation *parameterValue = nullptr;
+    for (Operation &operation : region.front()) {
+      if (operation.getName().getStringRef() != "nodal.parameter_value")
+        continue;
+      auto reference = operation.getAttrOfType<FlatSymbolRefAttr>("parameter");
+      if (!reference || reference.getValue() != symbolName(parameter))
+        continue;
+      if (parameterValue)
+        return failure();
+      parameterValue = &operation;
+    }
+    if (!parameterValue)
+      continue;
+
+    llvm::SmallVector<Value, 8> worklist;
+    worklist.push_back(parameterValue->getOperand(0));
+    llvm::DenseSet<Operation *> visitedExpressions;
+    while (!worklist.empty()) {
+      Value value = worklist.pop_back_val();
+      Operation *expression = value.getDefiningOp();
+      if (!expression || !visitedExpressions.insert(expression).second)
+        continue;
+      if (expression->getName().getStringRef() == "nodal.const_parameter_ref") {
+        auto reference = expression->getAttrOfType<FlatSymbolRefAttr>("parameter");
+        if (!reference)
+          return failure();
+        auto dependency = parametersByName.find(reference.getValue());
+        if (dependency == parametersByName.end())
+          return failure();
+        dependencies[parameter].push_back(dependency->second);
+        continue;
+      }
+      for (Value operand : expression->getOperands())
+        worklist.push_back(operand);
+    }
+  }
+
+  for (auto &entry : dependencies) {
+    auto &values = entry.second;
+    llvm::sort(values,
+               [](Operation *lhs, Operation *rhs) { return symbolName(lhs) < symbolName(rhs); });
+    values.erase(std::unique(values.begin(), values.end()), values.end());
+  }
+
+  llvm::DenseSet<Operation *> emitted;
+  llvm::SmallVector<Operation *, 8> ordered;
+  while (ordered.size() != parameters.size()) {
+    bool progressed = false;
+    for (Operation *parameter : parameters) {
+      if (emitted.count(parameter) != 0)
+        continue;
+      auto dependency = dependencies.find(parameter);
+      const bool ready = dependency == dependencies.end() ||
+                         llvm::all_of(dependency->second, [&](Operation *required) {
+                           return emitted.count(required) != 0;
+                         });
+      if (!ready)
+        continue;
+      emitted.insert(parameter);
+      ordered.push_back(parameter);
+      progressed = true;
+    }
+    if (!progressed)
+      return failure();
+  }
+
+  parameters.clear();
+  parameters.append(ordered.begin(), ordered.end());
+  return success();
+}
+
 LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state,
                                  llvm::SmallVectorImpl<Operation *> &parameters,
                                  llvm::SmallVectorImpl<Operation *> &ports,
@@ -195,8 +313,8 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
       analogs.push_back(&operation);
     }
   }
-  llvm::sort(parameters,
-             [](Operation *lhs, Operation *rhs) { return symbolName(lhs) < symbolName(rhs); });
+  if (failed(orderParametersByDependency(definition, parameters)))
+    return failure();
   llvm::sort(ports, [](Operation *lhs, Operation *rhs) {
     return lhs->getAttrOfType<StringAttr>("name").getValue() <
            rhs->getAttrOfType<StringAttr>("name").getValue();
@@ -206,6 +324,77 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
            rhs->getAttrOfType<StringAttr>("name").getValue();
   });
   return success();
+}
+
+Operation *findParameterValue(Operation *definition, llvm::StringRef parameter) {
+  Region &region = definition->getRegion(0);
+  if (!llvm::hasSingleElement(region))
+    return nullptr;
+  for (Operation &operation : region.front()) {
+    if (operation.getName().getStringRef() != "nodal.parameter_value")
+      continue;
+    auto reference = operation.getAttrOfType<FlatSymbolRefAttr>("parameter");
+    if (reference && reference.getValue() == parameter)
+      return &operation;
+  }
+  return nullptr;
+}
+
+llvm::SmallVector<Operation *, 4> findParameterConstraints(Operation *definition,
+                                                           llvm::StringRef parameter) {
+  llvm::SmallVector<Operation *, 4> constraints;
+  Region &region = definition->getRegion(0);
+  if (!llvm::hasSingleElement(region))
+    return constraints;
+  for (Operation &operation : region.front()) {
+    if (operation.getName().getStringRef() != "nodal.parameter_constraint")
+      continue;
+    auto reference = operation.getAttrOfType<FlatSymbolRefAttr>("parameter");
+    if (reference && reference.getValue() == parameter)
+      constraints.push_back(&operation);
+  }
+  return constraints;
+}
+
+bool parameterIntegerIsSigned(Operation *parameter) {
+  auto type = parameter->getAttrOfType<TypeAttr>("type");
+  if (!type)
+    return false;
+  if (llvm::isa<nodal::SIntType>(type.getValue()))
+    return true;
+  if (auto integer = llvm::dyn_cast<IntegerType>(type.getValue()))
+    return integer.isSigned();
+  return false;
+}
+
+FailureOr<std::string> renderIntegerAttribute(IntegerAttr integer, Operation *parameter) {
+  llvm::SmallString<64> rendered;
+  integer.getValue().toString(rendered, 10, parameterIntegerIsSigned(parameter));
+  return rendered.str().str();
+}
+
+FailureOr<std::string> legacyParameterInitializer(Operation *parameter) {
+  llvm::StringRef kind = nodal::getParameterKind(parameter);
+  Attribute value = parameter->getAttr("default_value");
+  if (kind == "real") {
+    auto real = llvm::dyn_cast<FloatAttr>(value);
+    if (!real || !std::isfinite(real.getValueAsDouble()))
+      return failure();
+    return formatReal(real.getValueAsDouble()) + nodal::getParameterUnitNativeSuffix(parameter);
+  }
+  if (kind == "integer") {
+    auto integer = llvm::dyn_cast<IntegerAttr>(value);
+    if (!integer)
+      return failure();
+    return renderIntegerAttribute(integer, parameter);
+  }
+  if (kind == "boolean") {
+    if (auto boolean = llvm::dyn_cast<BoolAttr>(value))
+      return boolean.getValue() ? std::string("1") : std::string("0");
+    if (auto integer = llvm::dyn_cast<IntegerAttr>(value))
+      return integer.getInt() != 0 ? std::string("1") : std::string("0");
+  }
+  return failure();
 }
 
 LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::raw_ostream &output) {
@@ -289,13 +478,58 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
   }
 
   for (Operation *parameter : parameters) {
-    auto type = parameter->getAttrOfType<TypeAttr>("type");
-    auto value = parameter->getAttrOfType<FloatAttr>("default_value");
-    if (!type || !type.getValue().isF64() || !value || !std::isfinite(value.getValueAsDouble()))
-      return emitMappedFailure(parameter, "NODAL-BACKEND-RC-004",
-                               "RC parameters must be finite real values");
-    output << "  parameter real " << symbolName(parameter) << " = "
-           << formatReal(value.getValueAsDouble()) << ";\n";
+    llvm::StringRef kind = nodal::getParameterKind(parameter);
+    llvm::StringRef nativeType = kind == "real"                           ? "real"
+                                 : kind == "integer" || kind == "boolean" ? "integer"
+                                                                          : "";
+    if (nativeType.empty())
+      return emitMappedFailure(parameter, "NODAL-BACKEND-PARAMETER-001",
+                               "unsupported native parameter kind");
+
+    FailureOr<std::string> initializer = failure();
+    if (Operation *value = findParameterValue(definition, symbolName(parameter)))
+      initializer = nodal::renderParameterConstantExpression(value->getOperand(0), parameter);
+    else
+      initializer = legacyParameterInitializer(parameter);
+    if (failed(initializer))
+      return emitMappedFailure(parameter, "NODAL-BACKEND-PARAMETER-001",
+                               "parameter initializer is not losslessly renderable");
+
+    auto variability = parameter->getAttrOfType<StringAttr>("variability");
+    llvm::StringRef declarationKeyword =
+        variability && variability.getValue() == "fixed" ? "localparam" : "parameter";
+    output << "  " << declarationKeyword << " " << nativeType << " " << symbolName(parameter)
+           << " = " << *initializer;
+    for (Operation *constraint : findParameterConstraints(definition, symbolName(parameter))) {
+      llvm::StringRef constraintKind =
+          constraint->getAttrOfType<StringAttr>("constraint_kind").getValue();
+      if (constraintKind == "range") {
+        auto lower = nodal::renderParameterConstantExpression(constraint->getOperand(0), parameter);
+        auto upper = nodal::renderParameterConstantExpression(constraint->getOperand(1), parameter);
+        auto lowerInclusive = constraint->getAttrOfType<BoolAttr>("lower_inclusive");
+        auto upperInclusive = constraint->getAttrOfType<BoolAttr>("upper_inclusive");
+        if (failed(lower) || failed(upper) || !lowerInclusive || !upperInclusive)
+          return emitMappedFailure(constraint, "NODAL-BACKEND-PARAMETER-002",
+                                   "range constraint is not losslessly renderable");
+        output << " from " << (lowerInclusive.getValue() ? "[" : "(") << *lower << ":" << *upper
+               << (upperInclusive.getValue() ? "]" : ")");
+      } else if (constraintKind == "exclude") {
+        auto excluded =
+            nodal::renderParameterConstantExpression(constraint->getOperand(0), parameter);
+        if (failed(excluded))
+          return emitMappedFailure(constraint, "NODAL-BACKEND-PARAMETER-002",
+                                   "exclusion constraint is not losslessly renderable");
+        output << " exclude " << *excluded;
+      } else {
+        return emitMappedFailure(constraint, "NODAL-BACKEND-PARAMETER-002",
+                                 "unsupported native parameter constraint");
+      }
+    }
+    output << ";";
+    std::string unit = nodal::getParameterUnitSymbol(parameter);
+    if (!unit.empty())
+      output << " // unit: " << unit;
+    output << "\n";
   }
 
   if ((!ports.empty() || !nodes.empty() || !parameters.empty()) && !analogs.empty())
@@ -306,6 +540,15 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
   }
   output << "endmodule\n";
   return success();
+}
+
+bool validCanonicalCommentText(llvm::StringRef value) {
+  if (value.empty() || value != value.trim())
+    return false;
+  return llvm::all_of(value, [](char character) {
+    const unsigned char byte = static_cast<unsigned char>(character);
+    return byte >= 0x20 && byte != 0x7f;
+  });
 }
 
 bool validIdentifierList(llvm::StringRef value) {
@@ -384,6 +627,72 @@ LogicalResult verifyBackendTarget(llvm::StringRef candidate,
 }
 
 LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfiguration &) {
+  auto validParameterDeclaration = [](llvm::StringRef line) {
+    llvm::StringRef code = line;
+    size_t comment = code.find("//");
+    if (comment != llvm::StringRef::npos) {
+      llvm::StringRef annotation = code.drop_front(comment + 2).trim();
+      constexpr llvm::StringLiteral unitPrefix = "unit: ";
+      if (!annotation.starts_with(unitPrefix))
+        return false;
+      llvm::StringRef unit = annotation.drop_front(unitPrefix.size()).trim();
+      if (!validCanonicalCommentText(unit))
+        return false;
+      code = code.take_front(comment).rtrim();
+    }
+
+    if (!code.ends_with(";"))
+      return false;
+    code = code.drop_back().trim();
+
+    if (!code.consume_front("parameter real ") && !code.consume_front("parameter integer ") &&
+        !code.consume_front("localparam real ") && !code.consume_front("localparam integer "))
+      return false;
+
+    size_t equals = code.find(" = ");
+    if (equals == llvm::StringRef::npos || !validIdentifierList(code.take_front(equals).trim()))
+      return false;
+
+    llvm::StringRef tail = code.drop_front(equals + 3).trim();
+    if (tail.empty())
+      return false;
+
+    size_t from = tail.find(" from ");
+    size_t exclude = tail.find(" exclude ");
+    if (from != llvm::StringRef::npos && exclude != llvm::StringRef::npos && exclude < from)
+      return false;
+
+    size_t initializerEnd = tail.size();
+    if (from != llvm::StringRef::npos)
+      initializerEnd = std::min(initializerEnd, from);
+    if (exclude != llvm::StringRef::npos)
+      initializerEnd = std::min(initializerEnd, exclude);
+    llvm::StringRef initializer = tail.take_front(initializerEnd).trim();
+    if (initializer.empty() || initializer.contains(';'))
+      return false;
+
+    if (from != llvm::StringRef::npos) {
+      size_t rangeStart = from + sizeof(" from ") - 1;
+      size_t rangeEnd = exclude == llvm::StringRef::npos ? tail.size() : exclude;
+      if (rangeStart >= rangeEnd)
+        return false;
+      llvm::StringRef range = tail.slice(rangeStart, rangeEnd).trim();
+      if (range.size() < 3 || (range.front() != '[' && range.front() != '(') ||
+          (range.back() != ']' && range.back() != ')'))
+        return false;
+      llvm::StringRef bounds = range.drop_front().drop_back();
+      size_t colon = bounds.find(':');
+      if (colon == llvm::StringRef::npos || bounds.drop_front(colon + 1).contains(':') ||
+          bounds.take_front(colon).trim().empty() || bounds.drop_front(colon + 1).trim().empty())
+        return false;
+    }
+
+    if (exclude != llvm::StringRef::npos &&
+        tail.drop_front(exclude + sizeof(" exclude ") - 1).trim().empty())
+      return false;
+    return true;
+  };
+
   llvm::SmallVector<llvm::StringRef, 64> lines;
   candidate.split(lines, '\n', -1, true);
   bool insideModule = false;
@@ -438,7 +747,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
          line.starts_with("electrical ")) &&
         line.ends_with(";") && validIdentifierList(line.drop_front(line.find(' ') + 1).drop_back()))
       continue;
-    if (line.starts_with("parameter real ") && line.ends_with(";") && line.contains(" = "))
+    if (validParameterDeclaration(line))
       continue;
     return failure();
   }

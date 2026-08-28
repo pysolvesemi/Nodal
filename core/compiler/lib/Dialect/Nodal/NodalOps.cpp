@@ -5,6 +5,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Support/LogicalResult.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
+#include "nodal/Dialect/Nodal/ParameterModel.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
@@ -173,14 +174,7 @@ LogicalResult nodal::PortOp::verify() {
 }
 
 LogicalResult nodal::ParameterOp::verify() {
-  const llvm::StringRef variability = textAttr(getOperation(), "variability");
-  if (!oneOf(variability, {"fixed", "symbolic"}))
-    return emitOpError() << "unsupported parameter variability '" << variability << "'";
-  auto type = getOperation()->getAttrOfType<TypeAttr>("type");
-  Attribute value = getOperation()->getAttr("default_value");
-  if (!type || !value || !attributeFits(value, type.getValue()))
-    return emitOpError("default_value is incompatible with parameter type");
-  return success();
+  return nodal::verifyParameterDeclaration(getOperation());
 }
 
 LogicalResult nodal::InstanceOp::verify() {

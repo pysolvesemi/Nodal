@@ -1,0 +1,120 @@
+name: Increment 29 Parameters Constants Ranges and Units
+
+on:
+  push:
+    branches:
+      - increment/29-parameters-units
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-29-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parameters-units:
+    name: increment-29/parameters-units
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore locked native and Scala caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/nodal/downloads
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-inc29-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', 'toolchains/lock.json', 'toolchains/checksums/*.sha256', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-inc29-${{ runner.os }}-
+            nodal-inc28-${{ runner.os }}-
+            nodal-inc27-${{ runner.os }}-
+            nodal-scala-${{ runner.os }}-
+
+      - name: Install locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate contracts and mutation tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          for increment in $(seq 18 29); do
+            python3 "scripts/check_increment${increment}.py"
+          done
+          python3 scripts/check_increment29.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          git diff --check
+
+      - name: Build lint and test native core
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Prove folding constraints envelopes overrides and native rendering
+        run: |
+          set -euo pipefail
+          compiler="${PWD}/out/native/release/bin/nodalc"
+          translator="${PWD}/out/native/release/bin/nodal-translate"
+          pipeline='builtin.module(nodal-verify-parameters)'
+
+          "${compiler}" \
+            --pass-pipeline="${pipeline}" \
+            core/compiler/test/IR/parameters-units.mlir \
+            | tee /tmp/parameters-units.mlir
+          grep -F 'nodal.const_expr' /tmp/parameters-units.mlir
+          grep -F 'nodal.parameter_constraint' /tmp/parameters-units.mlir
+          grep -F 'nodal.parameter_override' /tmp/parameters-units.mlir
+          grep -F 'nodal.parameter_envelope' /tmp/parameters-units.mlir
+          grep -F 'spelling = "1k"' /tmp/parameters-units.mlir
+
+          "${translator}" \
+            --nodal-to-verilog-a \
+            core/compiler/test/IR/parameter-rendering.mlir \
+            | tee /tmp/parameter-rendering.va
+          grep -F 'parameter integer ENABLE = 1;' /tmp/parameter-rendering.va
+          grep -F 'parameter real GAIN = (2.0 * 4.0);' /tmp/parameter-rendering.va
+          grep -F 'parameter real R = 1k from [1:10k] exclude 5k; // unit: Ohm' /tmp/parameter-rendering.va
+          grep -F 'parameter integer TAPS = 4 from [1:16];' /tmp/parameter-rendering.va
+
+          check_rejection() {
+            fixture="$1"
+            code="$2"
+            if "${compiler}" --pass-pipeline="${pipeline}" \
+                "core/compiler/test/IR/parameters-units-invalid-${fixture}.mlir" \
+                >"/tmp/${fixture}.out" 2>"/tmp/${fixture}.err"; then
+              echo "invalid ${fixture} parameter model was accepted" >&2
+              exit 1
+            fi
+            grep -F "${code}" "/tmp/${fixture}.err"
+          }
+
+          check_rejection unit NODAL-UNIT-SCALE-001
+          check_rejection constraint NODAL-PARAMETER-CONSTRAINT-001
+          check_rejection envelope NODAL-PARAMETER-ENVELOPE-001
+          check_rejection dynamic NODAL-DYNAMIC-VALUE-001
+          check_rejection override NODAL-PARAMETER-OVERRIDE-001
+          check_rejection cycle NODAL-CONSTANT-CYCLE-001

@@ -203,8 +203,8 @@ EvaluationResult constantResult(ConstantValue value) {
   return result;
 }
 
-EvaluationResult errorResult(Operation *operation, llvm::StringRef code,
-                             const llvm::Twine &message, bool reportErrors) {
+EvaluationResult errorResult(Operation *operation, llvm::StringRef code, const llvm::Twine &message,
+                             bool reportErrors) {
   if (reportErrors)
     (void)emitMappedFailure(operation, code, message);
   EvaluationResult result;
@@ -212,8 +212,7 @@ EvaluationResult errorResult(Operation *operation, llvm::StringRef code,
   return result;
 }
 
-std::pair<llvm::APInt, llvm::APInt> alignSigned(const llvm::APInt &lhs,
-                                                const llvm::APInt &rhs,
+std::pair<llvm::APInt, llvm::APInt> alignSigned(const llvm::APInt &lhs, const llvm::APInt &rhs,
                                                 unsigned extraBits = 1) {
   const unsigned width = std::max(lhs.getBitWidth(), rhs.getBitWidth()) + extraBits;
   return {lhs.sextOrTrunc(width), rhs.sextOrTrunc(width)};
@@ -306,8 +305,8 @@ EvaluationResult evaluateBinary(Operation *operation, bool reportErrors) {
   EvaluationResult lhs = evaluateValue(operation->getOperand(0), reportErrors);
   EvaluationResult rhs = evaluateValue(operation->getOperand(1), reportErrors);
   if (lhs.status == EvaluationStatus::Error || rhs.status == EvaluationStatus::Error)
-    return errorResult(operation, "NODAL-ANALOG-FOLD-001",
-                       "operand constant evaluation failed", reportErrors);
+    return errorResult(operation, "NODAL-ANALOG-FOLD-001", "operand constant evaluation failed",
+                       reportErrors);
   if (lhs.status != EvaluationStatus::Constant || rhs.status != EvaluationStatus::Constant)
     return dynamicResult();
 
@@ -326,8 +325,8 @@ EvaluationResult evaluateBinary(Operation *operation, bool reportErrors) {
                              rhs.value.integer->isZero();
     const bool zeroReal = rhs.value.kind == AnalogNumericKind::Real && rhs.value.real == 0.0;
     if (zeroInteger || zeroReal)
-      return errorResult(operation, "NODAL-ANALOG-DIVIDE-001",
-                         "statically known zero divisor", reportErrors);
+      return errorResult(operation, "NODAL-ANALOG-DIVIDE-001", "statically known zero divisor",
+                         reportErrors);
   }
 
   if (result.kind == AnalogNumericKind::Integer) {
@@ -341,8 +340,10 @@ EvaluationResult evaluateBinary(Operation *operation, bool reportErrors) {
       auto [left, right] = alignSigned(*lhs.value.integer, *rhs.value.integer);
       result.integer = left - right;
     } else if (name == "nodal.analog_mul") {
-      const unsigned width = lhs.value.integer->getBitWidth() + rhs.value.integer->getBitWidth() + 1;
-      result.integer = lhs.value.integer->sextOrTrunc(width) * rhs.value.integer->sextOrTrunc(width);
+      const unsigned width =
+          lhs.value.integer->getBitWidth() + rhs.value.integer->getBitWidth() + 1;
+      result.integer =
+          lhs.value.integer->sextOrTrunc(width) * rhs.value.integer->sextOrTrunc(width);
     } else if (name == "nodal.analog_div") {
       auto [left, right] = alignSigned(*lhs.value.integer, *rhs.value.integer);
       if (!left.srem(right).isZero())
@@ -380,14 +381,15 @@ EvaluationResult evaluateCompare(Operation *operation, bool reportErrors) {
   EvaluationResult lhs = evaluateValue(operation->getOperand(0), reportErrors);
   EvaluationResult rhs = evaluateValue(operation->getOperand(1), reportErrors);
   if (lhs.status == EvaluationStatus::Error || rhs.status == EvaluationStatus::Error)
-    return errorResult(operation, "NODAL-ANALOG-FOLD-001",
-                       "comparison operand evaluation failed", reportErrors);
+    return errorResult(operation, "NODAL-ANALOG-FOLD-001", "comparison operand evaluation failed",
+                       reportErrors);
   if (lhs.status != EvaluationStatus::Constant || rhs.status != EvaluationStatus::Constant)
     return dynamicResult();
 
   llvm::StringRef predicate = textAttr(operation, "predicate");
   bool value = false;
-  if (lhs.value.kind == AnalogNumericKind::Boolean && rhs.value.kind == AnalogNumericKind::Boolean) {
+  if (lhs.value.kind == AnalogNumericKind::Boolean &&
+      rhs.value.kind == AnalogNumericKind::Boolean) {
     if (predicate == "eq")
       value = lhs.value.boolean == rhs.value.boolean;
     else if (predicate == "ne")
@@ -396,7 +398,8 @@ EvaluationResult evaluateCompare(Operation *operation, bool reportErrors) {
       return errorResult(operation, "NODAL-ANALOG-FOLD-001",
                          "ordering comparison cannot fold Boolean operands", reportErrors);
   } else if (lhs.value.kind == AnalogNumericKind::Integer &&
-             rhs.value.kind == AnalogNumericKind::Integer && lhs.value.integer && rhs.value.integer) {
+             rhs.value.kind == AnalogNumericKind::Integer && lhs.value.integer &&
+             rhs.value.integer) {
     auto [left, right] = alignSigned(*lhs.value.integer, *rhs.value.integer);
     if (predicate == "eq")
       value = left == right;
@@ -446,8 +449,8 @@ EvaluationResult evaluateLogic(Operation *operation, bool reportErrors) {
   for (Value operand : operation->getOperands()) {
     operands.push_back(evaluateValue(operand, reportErrors));
     if (operands.back().status == EvaluationStatus::Error)
-      return errorResult(operation, "NODAL-ANALOG-FOLD-001",
-                         "logical operand evaluation failed", reportErrors);
+      return errorResult(operation, "NODAL-ANALOG-FOLD-001", "logical operand evaluation failed",
+                         reportErrors);
     if (operands.back().status != EvaluationStatus::Constant)
       return dynamicResult();
   }
@@ -478,8 +481,8 @@ EvaluationResult evaluateSelect(Operation *operation, bool reportErrors) {
   EvaluationResult falseValue = evaluateValue(operation->getOperand(2), reportErrors);
   if (condition.status == EvaluationStatus::Error || trueValue.status == EvaluationStatus::Error ||
       falseValue.status == EvaluationStatus::Error)
-    return errorResult(operation, "NODAL-ANALOG-FOLD-001",
-                       "conditional operand evaluation failed", reportErrors);
+    return errorResult(operation, "NODAL-ANALOG-FOLD-001", "conditional operand evaluation failed",
+                       reportErrors);
   if (condition.status != EvaluationStatus::Constant ||
       trueValue.status != EvaluationStatus::Constant ||
       falseValue.status != EvaluationStatus::Constant)
@@ -497,8 +500,8 @@ EvaluationResult evaluateValue(Value value, bool reportErrors) {
     auto literal = operation->getAttrOfType<FloatAttr>("value");
     auto information = getAnalogNumericTypeInfo(value.getType());
     if (!literal || failed(information) || !std::isfinite(literal.getValueAsDouble()))
-      return errorResult(operation, "NODAL-ANALOG-FOLD-001",
-                         "real literal cannot be evaluated", reportErrors);
+      return errorResult(operation, "NODAL-ANALOG-FOLD-001", "real literal cannot be evaluated",
+                         reportErrors);
     ConstantValue result;
     result.kind = AnalogNumericKind::Real;
     result.dimension = information->dimension;
@@ -509,8 +512,8 @@ EvaluationResult evaluateValue(Value value, bool reportErrors) {
     auto literal = operation->getAttrOfType<IntegerAttr>("value");
     auto information = getAnalogNumericTypeInfo(value.getType());
     if (!literal || failed(information))
-      return errorResult(operation, "NODAL-ANALOG-FOLD-001",
-                         "integer literal cannot be evaluated", reportErrors);
+      return errorResult(operation, "NODAL-ANALOG-FOLD-001", "integer literal cannot be evaluated",
+                         reportErrors);
     ConstantValue result;
     result.kind = AnalogNumericKind::Integer;
     result.dimension = information->dimension;
@@ -519,8 +522,8 @@ EvaluationResult evaluateValue(Value value, bool reportErrors) {
   }
   if (name == "nodal.parameter_ref")
     return evaluateParameterReference(operation, reportErrors);
-  if (name == "nodal.analog_add" || name == "nodal.analog_sub" ||
-      name == "nodal.analog_mul" || name == "nodal.analog_div")
+  if (name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
+      name == "nodal.analog_div")
     return evaluateBinary(operation, reportErrors);
   if (name == "nodal.analog_neg") {
     EvaluationResult input = evaluateValue(operation->getOperand(0), reportErrors);
@@ -553,17 +556,16 @@ EvaluationResult evaluateValue(Value value, bool reportErrors) {
 
 bool isFoldCandidate(Operation *operation) {
   llvm::StringRef name = operation->getName().getStringRef();
-  return name == "nodal.analog_add" || name == "nodal.analog_sub" ||
-         name == "nodal.analog_mul" || name == "nodal.analog_div" ||
-         name == "nodal.analog_neg" || name == "nodal.analog_compare" ||
-         name == "nodal.analog_logic" || name == "nodal.analog_select";
+  return name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
+         name == "nodal.analog_div" || name == "nodal.analog_neg" ||
+         name == "nodal.analog_compare" || name == "nodal.analog_logic" ||
+         name == "nodal.analog_select";
 }
 
 LogicalResult verifyRealLiteral(Operation *operation) {
   auto value = operation->getAttrOfType<FloatAttr>("value");
   if (!value || !std::isfinite(value.getValueAsDouble()))
-    return emitMappedFailure(operation, "NODAL-ANALOG-LITERAL-001",
-                             "real literal must be finite");
+    return emitMappedFailure(operation, "NODAL-ANALOG-LITERAL-001", "real literal must be finite");
   if (!semanticTypeMatches(operation->getResult(0).getType(), AnalogNumericKind::Real, "1"))
     return emitMappedFailure(operation, "NODAL-ANALOG-TYPE-001",
                              "real literal requires a real dimensionless result");
@@ -603,12 +605,13 @@ LogicalResult verifyParameterReference(Operation *operation) {
     return emitMappedFailure(operation, "NODAL-ANALOG-DIMENSION-001",
                              "parameter unit has no canonical dimension signature");
   AnalogNumericKind expectedKind = kind == "integer" ? AnalogNumericKind::Integer
-                                                       : kind == "real" ? AnalogNumericKind::Real
-                                                                        : AnalogNumericKind::Invalid;
+                                   : kind == "real"  ? AnalogNumericKind::Real
+                                                     : AnalogNumericKind::Invalid;
   if (expectedKind == AnalogNumericKind::Invalid ||
       !semanticTypeMatches(operation->getResult(0).getType(), expectedKind, *dimension))
-    return emitMappedFailure(operation, "NODAL-ANALOG-PARAMETER-002",
-                             "parameter reference result kind or dimension does not match declaration");
+    return emitMappedFailure(
+        operation, "NODAL-ANALOG-PARAMETER-002",
+        "parameter reference result kind or dimension does not match declaration");
   if (*dimension != "1" && operation->getResult(0).getType().isF64())
     return emitMappedFailure(operation, "NODAL-ANALOG-PARAMETER-002",
                              "dimensioned parameter reference cannot use legacy f64");
@@ -745,7 +748,8 @@ LogicalResult verifySelect(Operation *operation) {
   if (failed(trueType) || failed(falseType))
     return emitMappedFailure(operation, "NODAL-ANALOG-SELECT-001",
                              "conditional arms have unsupported types");
-  if (trueType->kind == AnalogNumericKind::Boolean || falseType->kind == AnalogNumericKind::Boolean) {
+  if (trueType->kind == AnalogNumericKind::Boolean ||
+      falseType->kind == AnalogNumericKind::Boolean) {
     if (trueType->kind != AnalogNumericKind::Boolean ||
         falseType->kind != AnalogNumericKind::Boolean ||
         !operation->getResult(0).getType().isInteger(1))
@@ -757,8 +761,8 @@ LogicalResult verifySelect(Operation *operation) {
     return emitMappedFailure(operation, "NODAL-ANALOG-SELECT-001",
                              "numeric conditional arms require equal physical dimensions");
   auto promoted = promoteNumericKinds(trueType->kind, falseType->kind);
-  if (failed(promoted) || !semanticTypeMatches(operation->getResult(0).getType(), *promoted,
-                                                trueType->dimension))
+  if (failed(promoted) ||
+      !semanticTypeMatches(operation->getResult(0).getType(), *promoted, trueType->dimension))
     return emitMappedFailure(operation, "NODAL-ANALOG-SELECT-001",
                              "conditional result does not match promoted arm type");
   return success();
@@ -785,22 +789,23 @@ LogicalResult verifyDdt(Operation *operation) {
 LogicalResult verifyAccess(Operation *operation) {
   llvm::StringRef kind = textAttr(operation, "kind");
   if (kind != "potential" && kind != "flow")
-    return emitMappedFailure(operation, "NODAL-ANALOG-ACCESS-001",
-                             "unsupported access kind");
+    return emitMappedFailure(operation, "NODAL-ANALOG-ACCESS-001", "unsupported access kind");
   if (operation->getNumResults() != 1)
     return emitMappedFailure(operation, "NODAL-ANALOG-ACCESS-002",
                              "potential and flow access require one result");
   auto result = getAnalogNumericTypeInfo(operation->getResult(0).getType());
   if (failed(result) || result->kind != AnalogNumericKind::Real)
-    return emitMappedFailure(operation, "NODAL-ANALOG-ACCESS-002",
-                             "potential and flow access must produce a real quantity or legacy f64");
+    return emitMappedFailure(
+        operation, "NODAL-ANALOG-ACCESS-002",
+        "potential and flow access must produce a real quantity or legacy f64");
   if (!result->legacyF64) {
     if (auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata")) {
       if (auto dimension = metadata.getAs<StringAttr>("dimension")) {
         if (!isCanonicalDimensionSignature(dimension.getValue()) ||
             result->dimension != dimension.getValue())
-          return emitMappedFailure(operation, "NODAL-ANALOG-DIMENSION-001",
-                                   "typed access result does not match declared dimension metadata");
+          return emitMappedFailure(
+              operation, "NODAL-ANALOG-DIMENSION-001",
+              "typed access result does not match declared dimension metadata");
       }
     }
   }
@@ -886,8 +891,8 @@ LogicalResult verifyAnalogNumericOperation(Operation *operation) {
     return verifyIntegerLiteral(operation);
   if (name == "nodal.parameter_ref")
     return verifyParameterReference(operation);
-  if (name == "nodal.analog_add" || name == "nodal.analog_sub" ||
-      name == "nodal.analog_mul" || name == "nodal.analog_div")
+  if (name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
+      name == "nodal.analog_div")
     return verifyBinary(operation);
   if (name == "nodal.analog_neg")
     return verifyNeg(operation);
@@ -946,9 +951,9 @@ LogicalResult foldAnalogNumericConstants(ModuleOp module) {
       result = failure();
       return;
     }
-    constexpr llvm::StringLiteral attributes[] = {
-        "nodal.folded", "nodal.folded_kind", "nodal.folded_dimension",
-        "nodal.folded_value", "nodal.folded_provenance"};
+    constexpr llvm::StringLiteral attributes[] = {"nodal.folded", "nodal.folded_kind",
+                                                  "nodal.folded_dimension", "nodal.folded_value",
+                                                  "nodal.folded_provenance"};
     if (evaluated.status != EvaluationStatus::Constant) {
       for (llvm::StringRef attribute : attributes)
         operation->removeAttr(attribute);
@@ -957,11 +962,10 @@ LogicalResult foldAnalogNumericConstants(ModuleOp module) {
 
     MLIRContext *context = operation->getContext();
     operation->setAttr("nodal.folded", BoolAttr::get(context, true));
-    llvm::StringRef kind = evaluated.value.kind == AnalogNumericKind::Integer
-                               ? llvm::StringRef("integer")
-                           : evaluated.value.kind == AnalogNumericKind::Real
-                               ? llvm::StringRef("real")
-                               : llvm::StringRef("boolean");
+    llvm::StringRef kind =
+        evaluated.value.kind == AnalogNumericKind::Integer ? llvm::StringRef("integer")
+        : evaluated.value.kind == AnalogNumericKind::Real  ? llvm::StringRef("real")
+                                                           : llvm::StringRef("boolean");
     operation->setAttr("nodal.folded_kind", StringAttr::get(context, kind));
     operation->setAttr("nodal.folded_dimension",
                        StringAttr::get(context, evaluated.value.dimension));

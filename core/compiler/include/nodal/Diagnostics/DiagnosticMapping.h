@@ -1,9 +1,8 @@
 #ifndef NODAL_DIAGNOSTICS_DIAGNOSTICMAPPING_H
 #define NODAL_DIAGNOSTICS_DIAGNOSTICMAPPING_H
 
-#include "nodal/Diagnostics/DiagnosticSupport.h"
-
 #include "mlir/Pass/Pass.h"
+#include "nodal/Diagnostics/DiagnosticSupport.h"
 
 #include <memory>
 

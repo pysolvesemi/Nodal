@@ -31,8 +31,7 @@ bool isCanonicalDimensionSignature(llvm::StringRef signature);
 
 /// Combine canonical dimensions by adding (`subtractRhs == false`) or
 /// subtracting (`subtractRhs == true`) the right-hand exponent vector.
-mlir::FailureOr<std::string> combineAnalogDimensions(llvm::StringRef lhs,
-                                                     llvm::StringRef rhs,
+mlir::FailureOr<std::string> combineAnalogDimensions(llvm::StringRef lhs, llvm::StringRef rhs,
                                                      bool subtractRhs);
 
 /// Classify a Nodal quantity, legacy dimensionless f64, or Boolean i1 value.

@@ -1,11 +1,10 @@
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 
-#include "nodal/Dialect/Nodal/AnalogNumeric.h"
-
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/Support/LogicalResult.h"
+#include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 
 #include "llvm/ADT/STLFunctionalExtras.h"
@@ -95,8 +94,7 @@ LogicalResult nodal::SIntType::verify(llvm::function_ref<InFlightDiagnostic()> e
 }
 
 LogicalResult nodal::QuantityType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
-                                          llvm::StringRef kind,
-                                          llvm::StringRef dimension) {
+                                          llvm::StringRef kind, llvm::StringRef dimension) {
   if (kind != "integer" && kind != "real")
     return emitError() << "NODAL-ANALOG-TYPE-001: quantity kind must be integer or real";
   if (!nodal::isCanonicalDimensionSignature(dimension))

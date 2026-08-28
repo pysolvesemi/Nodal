@@ -99,16 +99,16 @@ std::string indexFallback(llvm::StringRef path) {
   return path.drop_front(start).str();
 }
 
-std::string formatSourceRange(llvm::StringRef path, int64_t line, int64_t column,
-                    int64_t endLine, int64_t endColumn) {
+std::string formatSourceRange(llvm::StringRef path, int64_t line, int64_t column, int64_t endLine,
+                              int64_t endColumn) {
   if (path.empty() || line <= 0 || column <= 0)
     return {};
   if (endLine <= 0)
     endLine = line;
   if (endColumn <= 0)
     endColumn = column;
-  return (path + ":" + llvm::Twine(line) + ":" + llvm::Twine(column) + "-" +
-llvm::Twine(endLine) + ":" + llvm::Twine(endColumn))
+  return (path + ":" + llvm::Twine(line) + ":" + llvm::Twine(column) + "-" + llvm::Twine(endLine) +
+          ":" + llvm::Twine(endColumn))
       .str();
 }
 
@@ -124,8 +124,7 @@ void appendContext(InFlightDiagnostic &diagnostic, const DiagnosticContext &cont
 }
 
 LogicalResult emitWithContext(Operation *operation, llvm::StringRef code,
-                    const llvm::Twine &message,
-                    const DiagnosticContext &context) {
+                              const llvm::Twine &message, const DiagnosticContext &context) {
   InFlightDiagnostic diagnostic = operation->emitError();
   diagnostic << code << ": " << message.str();
   appendContext(diagnostic, context);
@@ -164,10 +163,9 @@ DiagnosticContext sourceMapContext(mlir::ModuleOp module, llvm::StringRef path) 
     auto endLine = entry.getAs<IntegerAttr>("source_end_line");
     auto endColumn = entry.getAs<IntegerAttr>("source_end_column");
     if (source && line && column) {
-      context.sourceRange = formatSourceRange(
-source.getValue(), line.getInt(), column.getInt(),
-endLine ? endLine.getInt() : line.getInt(),
-endColumn ? endColumn.getInt() : column.getInt());
+      context.sourceRange = formatSourceRange(source.getValue(), line.getInt(), column.getInt(),
+                                              endLine ? endLine.getInt() : line.getInt(),
+                                              endColumn ? endColumn.getInt() : column.getInt());
     }
     break;
   }
@@ -200,25 +198,23 @@ DiagnosticContext collectDiagnosticContext(Operation *operation) {
       if (values && (values.get("source_end_line") || values.get("source_end_column")))
         break;
     }
-    context.sourceRange = formatSourceRange(file.getFilename(), file.getLine(),
-                                  file.getColumn(), endLine, endColumn);
+    context.sourceRange =
+        formatSourceRange(file.getFilename(), file.getLine(), file.getColumn(), endLine, endColumn);
   }
   return context;
 }
 
 LogicalResult emitMappedFailure(Operation *operation, llvm::StringRef code,
-                      const llvm::Twine &message) {
+                                const llvm::Twine &message) {
   return emitWithContext(operation, code, message, collectDiagnosticContext(operation));
 }
 
-LogicalResult emitMappedFailureForPath(mlir::ModuleOp module,
-                             llvm::StringRef semanticPathValue,
-                             llvm::StringRef code,
-                             const llvm::Twine &message) {
+LogicalResult emitMappedFailureForPath(mlir::ModuleOp module, llvm::StringRef semanticPathValue,
+                                       llvm::StringRef code, const llvm::Twine &message) {
   if (Operation *operation = findOperationByPath(module, semanticPathValue))
     return emitMappedFailure(operation, code, message);
   return emitWithContext(module.getOperation(), code, message,
-               sourceMapContext(module, semanticPathValue));
+                         sourceMapContext(module, semanticPathValue));
 }
 
 } // namespace nodal

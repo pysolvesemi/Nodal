@@ -4,8 +4,8 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Support/LogicalResult.h"
-#include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
+#include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 
 #include "llvm/ADT/APInt.h"
@@ -366,10 +366,10 @@ LogicalResult nodal::AnalogOp::verify() {
     return emitOpError("NODAL-ANALOG-REGION-001: analog region requires one body block");
   for (Operation &operation : getOperation()->getRegion(0).front()) {
     if (!llvm::isa<nodal::RealLiteralOp, nodal::AnalogIntegerLiteralOp, nodal::ParameterRefOp,
-                   nodal::AnalogAddOp, nodal::AnalogSubOp, nodal::AnalogMulOp,
-                   nodal::AnalogDivOp, nodal::AnalogNegOp, nodal::AnalogCompareOp,
-                   nodal::AnalogLogicOp, nodal::AnalogSelectOp, nodal::AnalogDdtOp,
-                   nodal::AccessOp, nodal::ContributeOp>(operation))
+                   nodal::AnalogAddOp, nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp,
+                   nodal::AnalogNegOp, nodal::AnalogCompareOp, nodal::AnalogLogicOp,
+                   nodal::AnalogSelectOp, nodal::AnalogDdtOp, nodal::AccessOp, nodal::ContributeOp>(
+            operation))
       return operation.emitOpError(
           "NODAL-ANALOG-REGION-002: operation is not legal in the analog numeric region");
   }

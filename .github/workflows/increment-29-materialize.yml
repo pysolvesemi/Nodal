@@ -38,12 +38,11 @@ jobs:
           python3 -m py_compile scripts/materialize_increment29.py
           python3 scripts/materialize_increment29.py
 
-      - name: Remove one-shot payloads and workflow
+      - name: Remove one-shot payloads
         run: |
           rm -f scripts/materialize_increment29.py
           rm -f scripts/.increment29_core_*.b85
           rm -f scripts/.increment29_contract_*.b85
-          rm -f .github/workflows/increment-29-materialize.yml
 
       - name: Install locked lint toolchain
         run: |
@@ -68,6 +67,11 @@ jobs:
             tests.compiler.test_increment29
           python3 scripts/check_markdown.py
           git diff --check
+
+      - name: Prepare source-only push
+        run: |
+          rm -rf scripts/__pycache__
+          rm -f .github/workflows/increment-29-parameters-units.yml
 
       - name: Commit materialized Increment 29
         run: |

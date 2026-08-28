@@ -23,6 +23,7 @@ class Problem:
 EXPECTED_FILES = (
     "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td",
     "core/compiler/lib/Dialect/Nodal/NodalOps.cpp",
+    "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp",
     "core/compiler/lib/Transforms/Passes.cpp",
     "core/compiler/test/IR/analog-expression-rc.mlir",
     "core/compiler/test/IR/analog-expression-invalid-parameter.mlir",
@@ -103,6 +104,11 @@ def check_repository(root: Path) -> list[Problem]:
 
     td = read(root / "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td", problems, "NODAL-INC24-003")
     cpp = read(root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp", problems, "NODAL-INC24-004")
+    analog_numeric = read(
+        root / "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp",
+        problems,
+        "NODAL-INC24-004",
+    )
     passes = read(root / "core/compiler/lib/Transforms/Passes.cpp", problems, "NODAL-INC24-005")
     fixture = read(root / "core/compiler/test/IR/analog-expression-rc.mlir", problems, "NODAL-INC24-006")
     unit = read(root / "core/compiler/test/Unit/AnalogExpressionTest.cpp", problems, "NODAL-INC24-007")
@@ -118,7 +124,28 @@ def check_repository(root: Path) -> list[Problem]:
     require(cpp, tuple(f"LogicalResult nodal::{name}::verify()" for name in (
         "AnalogOp", "RealLiteralOp", "ParameterRefOp", "AnalogAddOp", "AnalogSubOp",
         "AnalogMulOp", "AnalogDivOp", "AnalogDdtOp", "ContributeOp"
-    )) + CODES, problems, "NODAL-INC24-004", "analog verifiers")
+    )), problems, "NODAL-INC24-004", "analog operation verifier entry points")
+    verifier_sources = cpp + "\n" + analog_numeric
+    require(
+        verifier_sources,
+        tuple(code for code in CODES if code != "NODAL-ANALOG-ARITHMETIC-001"),
+        problems,
+        "NODAL-INC24-004",
+        "analog verifier diagnostics",
+    )
+    require(
+        analog_numeric,
+        (
+            "verifyBinary",
+            "NODAL-ANALOG-TYPE-001",
+            "NODAL-ANALOG-PROMOTION-001",
+            "NODAL-ANALOG-DIMENSION-001",
+            "NODAL-ANALOG-DIVIDE-001",
+        ),
+        problems,
+        "NODAL-INC24-004",
+        "successor analog arithmetic diagnostics",
+    )
     require(passes, OPS, problems, "NODAL-INC24-005", "semantic pipeline analog classification")
     require(fixture, OPS + ("I = V/R + C*ddt(V)", 'nodal.target.profile = "analog"'), problems, "NODAL-INC24-006", "RC equation fixture")
     require(unit, ("typed analog region/contribution inventory is incorrect", "unknown analog parameter reference was accepted", "invalid analog contribution kind was accepted"), problems, "NODAL-INC24-007", "native analog unit test")

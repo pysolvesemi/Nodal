@@ -36,6 +36,21 @@ def Nodal_SIntType : Nodal_Type<"SInt", "sint"> {
   let genVerifyDecl = 1;
 }
 
+def Nodal_QuantityType : Nodal_Type<"Quantity", "quantity"> {
+  let summary = "Target-neutral scalar analog quantity";
+  let description = [{
+    A quantity owns a numeric kind (`integer` or `real`) and a canonical
+    physical-dimension signature. Boolean remains ordinary `i1`; target unit
+    spelling and scale remain separate from this semantic type.
+  }];
+  let parameters = (ins
+    StringRefParameter<"integer or real">:$kind,
+    StringRefParameter<"canonical physical dimension signature">:$dimension
+  );
+  let assemblyFormat = "`<` $kind `,` $dimension `>`";
+  let genVerifyDecl = 1;
+}
+
 def Nodal_ShapedType : Nodal_Type<"Shaped", "shaped"> {
   let summary = "Ranked structural value with symbolic-capable dimensions";
   let description = [{

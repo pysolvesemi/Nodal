@@ -1,4 +1,5 @@
 add_library(NodalSupport STATIC
+  DiagnosticSupport.cpp
   Version.cpp
 )
 
@@ -14,6 +15,7 @@ target_include_directories(NodalSupport
 
 target_link_libraries(NodalSupport
   PUBLIC
+    MLIRIR
     MLIRSupport
     LLVMSupport
 )

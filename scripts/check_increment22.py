@@ -24,7 +24,9 @@ EXPECTED_FILES = (
     "core/compiler/diagnostics-v0.1.json",
     "core/compiler/include/nodal/Diagnostics/CMakeLists.txt",
     "core/compiler/include/nodal/Diagnostics/DiagnosticMapping.h",
+    "core/compiler/include/nodal/Diagnostics/DiagnosticSupport.h",
     "core/compiler/lib/Diagnostics/CMakeLists.txt",
+    "core/compiler/lib/Support/DiagnosticSupport.cpp",
     "core/compiler/lib/Diagnostics/DiagnosticMapping.cpp",
     "core/compiler/test/IR/diagnostic-mapping-inventory-invalid.mlir",
     "core/compiler/test/IR/diagnostic-mapping-operation-invalid.mlir",
@@ -118,8 +120,18 @@ def check_repository(root: Path) -> list[Problem]:
         problems,
         "NODAL-INC22-003",
     )
+    support_header = read(
+        root / "core/compiler/include/nodal/Diagnostics/DiagnosticSupport.h",
+        problems,
+        "NODAL-INC22-003",
+    )
     native = read(
         root / "core/compiler/lib/Diagnostics/DiagnosticMapping.cpp",
+        problems,
+        "NODAL-INC22-004",
+    )
+    support_native = read(
+        root / "core/compiler/lib/Support/DiagnosticSupport.cpp",
         problems,
         "NODAL-INC22-004",
     )
@@ -160,7 +172,7 @@ def check_repository(root: Path) -> list[Problem]:
     )
 
     require(
-        header,
+        header + "\n" + support_header,
         (
             "struct DiagnosticContext",
             "collectDiagnosticContext",
@@ -173,7 +185,7 @@ def check_repository(root: Path) -> list[Problem]:
         "diagnostic mapping header",
     )
     require(
-        native,
+        native + "\n" + support_native,
         (
             "semantic_path",
             "hierarchy_path",
@@ -189,7 +201,7 @@ def check_repository(root: Path) -> list[Problem]:
         "NODAL-INC22-004",
         "native diagnostic mapper",
     )
-    if "context.hierarchyPath = path.str();" in native:
+    if "context.hierarchyPath = path.str();" in native + "\n" + support_native:
         problems.append(
             Problem(
                 "NODAL-INC22-004",

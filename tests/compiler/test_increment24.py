@@ -111,6 +111,19 @@ class Increment24CheckerTests(unittest.TestCase):
         roadmap.write_text(roadmap.read_text(encoding="utf-8").replace("**Revision:** 1.27", "**Revision:** 1.28", 1).replace("- [ ] **Increment 24 — Minimal analog expression and contribution IR**", "- [x] **Increment 24 — Minimal analog expression and contribution IR**", 1), encoding="utf-8")
         self.assertEqual(CHECKER.check_repository(root), [])
 
+    def test_rejects_missing_shared_numeric_verifier(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "NODAL-ANALOG-DIMENSION-001",
+                "NODAL-ANALOG-MISSING-DIMENSION",
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC24-004", self.codes(root))
+
 
 if __name__ == "__main__":
     unittest.main()

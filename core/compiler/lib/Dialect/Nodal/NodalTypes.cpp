@@ -4,6 +4,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/Support/LogicalResult.h"
+#include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 
 #include "llvm/ADT/STLFunctionalExtras.h"
@@ -90,6 +91,15 @@ LogicalResult nodal::UIntType::verify(llvm::function_ref<InFlightDiagnostic()> e
 LogicalResult nodal::SIntType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
                                       int64_t width) {
   return verifyWidth(emitError, width, "sint");
+}
+
+LogicalResult nodal::QuantityType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
+                                          llvm::StringRef kind, llvm::StringRef dimension) {
+  if (kind != "integer" && kind != "real")
+    return emitError() << "NODAL-ANALOG-TYPE-001: quantity kind must be integer or real";
+  if (!nodal::isCanonicalDimensionSignature(dimension))
+    return emitError() << "NODAL-ANALOG-DIMENSION-001: quantity dimension must be canonical";
+  return success();
 }
 
 LogicalResult nodal::ShapedType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,

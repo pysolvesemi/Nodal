@@ -707,36 +707,86 @@ def Nodal_AnalogOp : Nodal_Op<"analog", [HasParent<"ModuleOp">, NoTerminator]> {
 }
 
 def Nodal_RealLiteralOp : Nodal_Op<"real_literal", [HasParent<"AnalogOp">]> {
-  let summary = "Finite real literal in an analog expression";
+  let summary = "Finite real dimensionless literal in an analog expression";
   let arguments = (ins F64Attr:$value, DictionaryAttr:$metadata);
-  let results = (outs F64:$result);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogIntegerLiteralOp
+    : Nodal_Op<"analog_integer_literal", [HasParent<"AnalogOp">]> {
+  let summary = "Exact integer dimensionless literal in an analog expression";
+  let arguments = (ins APIntAttr:$value, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 
 def Nodal_ParameterRefOp : Nodal_Op<"parameter_ref", [HasParent<"AnalogOp">]> {
-  let summary = "Typed reference to an enclosing real parameter";
+  let summary = "Typed reference to an enclosing scalar parameter";
   let arguments = (ins FlatSymbolRefAttr:$parameter, DictionaryAttr:$metadata);
-  let results = (outs F64:$result);
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 
-class Nodal_AnalogBinaryOp<string mnemonic, string description>
+class Nodal_AnalogBinaryOp<string mnemonic, string summaryText>
     : Nodal_Op<mnemonic, [HasParent<"AnalogOp">]> {
-  let summary = description;
-  let arguments = (ins F64:$lhs, F64:$rhs, DictionaryAttr:$metadata);
-  let results = (outs F64:$result);
+  let summary = summaryText;
+  let arguments = (ins AnyType:$lhs, AnyType:$rhs, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 
-def Nodal_AnalogAddOp : Nodal_AnalogBinaryOp<"analog_add", "Analog real addition">;
-def Nodal_AnalogSubOp : Nodal_AnalogBinaryOp<"analog_sub", "Analog real subtraction">;
-def Nodal_AnalogMulOp : Nodal_AnalogBinaryOp<"analog_mul", "Analog real multiplication">;
-def Nodal_AnalogDivOp : Nodal_AnalogBinaryOp<"analog_div", "Analog real division">;
+def Nodal_AnalogAddOp : Nodal_AnalogBinaryOp<"analog_add", "Analog quantity addition">;
+def Nodal_AnalogSubOp : Nodal_AnalogBinaryOp<"analog_sub", "Analog quantity subtraction">;
+def Nodal_AnalogMulOp : Nodal_AnalogBinaryOp<"analog_mul", "Analog quantity multiplication">;
+def Nodal_AnalogDivOp : Nodal_AnalogBinaryOp<"analog_div", "Analog quantity division">;
+
+def Nodal_AnalogNegOp : Nodal_Op<"analog_neg", [HasParent<"AnalogOp">]> {
+  let summary = "Analog numeric negation";
+  let arguments = (ins AnyType:$input, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogCompareOp : Nodal_Op<"analog_compare", [HasParent<"AnalogOp">]> {
+  let summary = "Dimension-aware analog or Boolean comparison";
+  let arguments = (ins
+    AnyType:$lhs,
+    AnyType:$rhs,
+    StrAttr:$predicate,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogLogicOp : Nodal_Op<"analog_logic", [HasParent<"AnalogOp">]> {
+  let summary = "Boolean-only logical expression";
+  let arguments = (ins
+    Variadic<AnyType>:$operands,
+    StrAttr:$operator_name,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogSelectOp : Nodal_Op<"analog_select", [HasParent<"AnalogOp">]> {
+  let summary = "Typed conditional analog or Boolean expression";
+  let arguments = (ins
+    AnyType:$condition,
+    AnyType:$true_value,
+    AnyType:$false_value,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
 
 def Nodal_AnalogDdtOp : Nodal_Op<"analog_ddt", [HasParent<"AnalogOp">]> {
-  let summary = "Continuous-time derivative of a real analog expression";
-  let arguments = (ins F64:$input, DictionaryAttr:$metadata);
-  let results = (outs F64:$result);
+  let summary = "Continuous-time derivative of a typed analog expression";
+  let arguments = (ins AnyType:$input, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 
@@ -744,7 +794,7 @@ def Nodal_ContributeOp : Nodal_Op<"contribute", [HasParent<"AnalogOp">]> {
   let summary = "Potential or flow contribution to a conservative branch";
   let arguments = (ins
     Nodal_BranchType:$branch,
-    F64:$value,
+    AnyType:$value,
     StrAttr:$kind,
     DictionaryAttr:$metadata
   );

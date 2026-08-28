@@ -1,0 +1,99 @@
+{
+  "schema": "nodal-analog-numeric-typing/v1",
+  "numericKinds": [
+    "integer",
+    "real"
+  ],
+  "booleanType": "i1",
+  "quantityType": "!nodal.quantity<kind, dimension>",
+  "dimensionless": "1",
+  "legacy": {
+    "f64": {
+      "kind": "real",
+      "dimension": "1"
+    }
+  },
+  "promotionMatrix": {
+    "integer,integer": "integer",
+    "integer,real": "real",
+    "real,integer": "real",
+    "real,real": "real"
+  },
+  "arithmetic": {
+    "add": {
+      "dimensions": "equal",
+      "kind": "promote"
+    },
+    "sub": {
+      "dimensions": "equal",
+      "kind": "promote"
+    },
+    "mul": {
+      "dimensions": "add-exponents",
+      "kind": "promote"
+    },
+    "div": {
+      "dimensions": "subtract-exponents",
+      "kind": "real-unless-exact-constant-integer"
+    },
+    "neg": {
+      "dimensions": "preserve",
+      "kind": "preserve"
+    },
+    "ddt": {
+      "dimensions": "subtract-time-exponent",
+      "semanticsOwner": 35
+    }
+  },
+  "comparison": {
+    "ordering": {
+      "operands": "numeric-equal-dimension",
+      "result": "i1"
+    },
+    "equality": {
+      "operands": "numeric-equal-dimension-or-boolean-pair",
+      "result": "i1"
+    }
+  },
+  "logical": {
+    "operators": [
+      "and",
+      "or",
+      "xor",
+      "not"
+    ],
+    "operands": "i1-only",
+    "result": "i1",
+    "numericTruthiness": false
+  },
+  "select": {
+    "condition": "i1",
+    "numericArms": "equal-dimension-and-promotable",
+    "booleanArms": "i1-pair",
+    "result": "promoted-or-i1"
+  },
+  "invalid": [
+    "boolean-numeric-promotion",
+    "implicit-real-to-integer",
+    "add-or-sub-dimension-mismatch",
+    "ordering-dimension-mismatch",
+    "numeric-truthiness",
+    "quantity-bitwise-operation",
+    "implicit-dimension-changing-cast"
+  ],
+  "folding": {
+    "requiresPureConstantGraph": true,
+    "rejectKnownZeroDivisor": true,
+    "rejectNonFiniteResult": true,
+    "neverFold": [
+      "dynamic-value",
+      "access",
+      "time-or-analysis-query",
+      "stateful-continuous-time-operator",
+      "event-or-noise",
+      "contribution-or-equation",
+      "bridge"
+    ],
+    "parameterUnitScale": "canonicalize-before-fold"
+  }
+}

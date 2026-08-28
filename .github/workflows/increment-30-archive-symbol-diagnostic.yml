@@ -1,0 +1,50 @@
+name: Increment 30 Archive Symbol Diagnostic
+
+on:
+  push:
+    branches:
+      - increment/30-analog-numeric-types
+    paths:
+      - .github/workflows/increment-30-archive-symbol-diagnostic.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-30-archive-symbol-diagnostic
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out Increment 30 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/30-analog-numeric-types
+
+      - name: Install locked native toolchain
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+
+      - name: Configure and inspect NodalDialect archive
+        run: |
+          set -euo pipefail
+          export NODAL_NATIVE_TOOLCHAIN="${RUNNER_TEMP}/nodal-native-toolchain"
+          cmake --preset native-release
+          cmake --build --preset native-release --target NodalDialect
+          archive="out/native/release/lib/libNodalDialect.a"
+          echo '=== archive members ==='
+          ar t "${archive}"
+          echo '=== analog numeric symbols ==='
+          nm -C -g --defined-only "${archive}" \
+            | grep -E 'verifyAnalogNumericModel|foldAnalogNumericConstants|verifyAnalogQuantityErasure|verifyAnalogNumericOperation' \
+            || true
+          echo '=== AnalogNumeric object symbols ==='
+          nm -C "${archive}" \
+            | grep -E 'AnalogNumeric|verifyAnalog|foldAnalog' \
+            || true

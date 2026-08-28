@@ -68,7 +68,7 @@ class Increment29CheckerTests(unittest.TestCase):
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
         path = root / "core/compiler/lib/Backend/AnalogVerticalSlice.cpp"
-        path.write_text(path.read_text(encoding="utf-8").replace('output << " exclude "', 'output << " ignored "', 1), encoding="utf-8")
+        path.write_text(path.read_text(encoding="utf-8").replace('output << " exclude "', 'output << " ignored "'), encoding="utf-8")
         self.assertIn("NODAL-INC29-008", self.codes(root))
 
     def test_rejects_missing_diagnostic(self) -> None:

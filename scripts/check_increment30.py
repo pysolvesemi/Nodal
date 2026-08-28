@@ -67,6 +67,8 @@ TEMPORARY_FILES = (
     ".github/workflows/increment-30-materialize.yml",
     ".github/workflows/increment-30-finalize.yml",
     ".github/workflows/increment-30-final-review-fixes.yml",
+    ".github/workflows/increment-30-review-fixes.yml",
+    ".github/workflows/increment-30-temporary-artifact-guard.yml",
     "scripts/apply_increment30_final_review_fixes.py",
 )
 

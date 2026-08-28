@@ -80,11 +80,11 @@ jobs:
 
           escaped_old = r'"permissions:\n  contents: read"'
           escaped_new = r'"permissions:\\n  contents: read"'
-          if text.count(escaped_old) != 1:
+          if text.count(escaped_old) != 2:
               raise SystemExit(
                   f"completion workflow-token anchor count: {text.count(escaped_old)}"
               )
-          text = text.replace(escaped_old, escaped_new, 1)
+          text = text.replace(escaped_old, escaped_new)
           path.write_text(text, encoding="utf-8")
           PY
 

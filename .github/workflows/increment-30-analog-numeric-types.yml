@@ -92,6 +92,13 @@ jobs:
           grep -F '"nodal.analog_select"' /tmp/analog-numeric-typing.mlir
           grep -F 'nodal.folded_value = 6' /tmp/analog-numeric-typing.mlir
 
+          "${compiler}" \
+            --pass-pipeline="${pipeline}" \
+            core/compiler/test/IR/analog-numeric-select-promotion.mlir \
+            | tee /tmp/analog-numeric-select-promotion.mlir
+          grep -F 'nodal.folded_kind = "real"' /tmp/analog-numeric-select-promotion.mlir
+          grep -E 'nodal[.]folded_value = 2([.]0+e[+]00)? : f64' /tmp/analog-numeric-select-promotion.mlir
+
           check_rejection() {
             fixture="$1"
             code="$2"
@@ -108,6 +115,7 @@ jobs:
           check_rejection type NODAL-ANALOG-TYPE-001
           check_rejection promotion NODAL-ANALOG-PROMOTION-001
           check_rejection dimension NODAL-ANALOG-DIMENSION-001
+          check_rejection dimension-overflow NODAL-ANALOG-DIMENSION-001
           check_rejection compare NODAL-ANALOG-COMPARE-001
           check_rejection logic NODAL-ANALOG-LOGIC-001
           check_rejection select NODAL-ANALOG-SELECT-001
@@ -118,6 +126,16 @@ jobs:
             core/compiler/test/IR/analog-numeric-backend.mlir \
             | tee /tmp/analog-numeric-backend.va
           grep -F 'I(p, n) <+ 7;' /tmp/analog-numeric-backend.va
+
+          "${translator}" \
+            --nodal-to-verilog-a \
+            core/compiler/test/IR/analog-numeric-backend-fold-boundary.mlir \
+            | tee /tmp/analog-numeric-backend-fold-boundary.va
+          grep -F 'V(p, n) <+ V(p, n);' /tmp/analog-numeric-backend-fold-boundary.va
+          if grep -F '123' /tmp/analog-numeric-backend-fold-boundary.va; then
+            echo "non-foldable access accepted forged fold metadata" >&2
+            exit 1
+          fi
 
           python3 - <<'PY'
           import json

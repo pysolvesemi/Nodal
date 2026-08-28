@@ -146,7 +146,7 @@ class Increment30CheckerTests(unittest.TestCase):
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
         path = root / "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp"
-        path.write_text(path.read_text(encoding="utf-8").replace("nodal.folded_provenance", "lost.folded.provenance", 1), encoding="utf-8")
+        path.write_text(path.read_text(encoding="utf-8").replace("nodal.folded_provenance", "lost.folded.provenance"), encoding="utf-8")
         self.assertIn("NODAL-INC30-010", self.codes(root))
 
     def test_rejects_missing_backend_quantity_gate(self) -> None:

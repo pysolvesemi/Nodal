@@ -1,0 +1,115 @@
+name: Increment 30 Semantic Fixture Alignment
+
+on:
+  push:
+    branches:
+      - increment/30-analog-numeric-types
+    paths:
+      - .github/workflows/increment-30-semantic-fixture-fix.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-30-semantic-fixture-fix
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out Increment 30 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/30-analog-numeric-types
+          fetch-depth: 0
+
+      - name: Align comparison diagnostics and folded backend witness
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          compare = '''module {
+            "nodal.unit"() <{dimension = "voltage", metadata = {}, native_suffix = "", scale = 1.0 : f64, sym_name = "Volt", symbol = "V"}> : () -> ()
+            "nodal.unit"() <{dimension = "current", metadata = {}, native_suffix = "", scale = 1.0 : f64, sym_name = "Amp", symbol = "A"}> : () -> ()
+            "nodal.module"() <{metadata = {}, sym_name = "BadCompare"}> ({
+            ^bb0:
+              "nodal.parameter"() <{classification = "ordinary", default_value = 1.0 : f64, metadata = {}, parameter_kind = "real", sym_name = "V", type = f64, unit = @Volt, variability = "fixed"}> : () -> ()
+              "nodal.parameter"() <{classification = "ordinary", default_value = 1.0 : f64, metadata = {}, parameter_kind = "real", sym_name = "I", type = f64, unit = @Amp, variability = "fixed"}> : () -> ()
+              "nodal.analog"() <{metadata = {}}> ({
+              ^bb0:
+                %v = "nodal.parameter_ref"() <{metadata = {}, parameter = @V}> : () -> !nodal.quantity<"real", "voltage">
+                %i = "nodal.parameter_ref"() <{metadata = {}, parameter = @I}> : () -> !nodal.quantity<"real", "current">
+                %bad = "nodal.analog_compare"(%v, %i) <{metadata = {}, predicate = "lt"}> : (!nodal.quantity<"real", "voltage">, !nodal.quantity<"real", "current">) -> i1
+              }) : () -> ()
+            }) : () -> ()
+          }
+          '''
+          Path("core/compiler/test/IR/analog-numeric-invalid-compare.mlir").write_text(
+              compare, encoding="utf-8"
+          )
+
+          workflow_path = Path(".github/workflows/increment-30-analog-numeric-types.yml")
+          workflow = workflow_path.read_text(encoding="utf-8")
+          old_backend = """          grep -F 'I(p, n) <+ ((((2 * 3.5) > 0) ? (2 * 3.5) : 3.5));' \\
+                      /tmp/analog-numeric-backend.va
+          """
+          new_backend = """          grep -F 'I(p, n) <+ 7;' /tmp/analog-numeric-backend.va
+          """
+          if workflow.count(old_backend) != 1:
+              raise RuntimeError("folded backend witness anchor is not unique")
+          workflow = workflow.replace(old_backend, new_backend, 1)
+          provenance_anchor = """          grep -F 'nodal.folded_provenance = \"increment30\"' /tmp/analog-numeric-typing.mlir
+          """
+          if workflow.count(provenance_anchor) != 1:
+              raise RuntimeError("fold provenance anchor is not unique")
+          workflow = workflow.replace(
+              provenance_anchor,
+              provenance_anchor
+              + "          grep -F '\"nodal.analog_select\"' /tmp/analog-numeric-typing.mlir\n",
+              1,
+          )
+          workflow_path.write_text(workflow, encoding="utf-8")
+
+          checker_path = Path("scripts/check_increment30.py")
+          checker = checker_path.read_text(encoding="utf-8")
+          workflow_contract = """            \"analog-numeric-backend.mlir\",
+                  ),
+          """
+          workflow_contract_new = """            \"analog-numeric-backend.mlir\",
+                      \"I(p, n) <+ 7;\",
+                      \"nodal.analog_select\",
+                  ),
+          """
+          if checker.count(workflow_contract) != 1:
+              raise RuntimeError("workflow contract anchor is not unique")
+          checker = checker.replace(workflow_contract, workflow_contract_new, 1)
+          native_anchor = """        \"core/compiler/test/CMakeLists.txt\": (
+                      \"nodal.native.analog-numeric-typing\", \"analog-numeric-rejects\"),
+          """
+          native_new = """        \"core/compiler/test/CMakeLists.txt\": (
+                      \"nodal.native.analog-numeric-typing\", \"analog-numeric-rejects\"),
+                  \"core/compiler/test/IR/analog-numeric-invalid-compare.mlir\": (
+                      \"nodal.parameter_ref\", \"@Volt\", \"@Amp\", \"nodal.analog_compare\"),
+          """
+          if checker.count(native_anchor) != 1:
+              raise RuntimeError("native compare fixture contract anchor is not unique")
+          checker_path.write_text(checker.replace(native_anchor, native_new, 1), encoding="utf-8")
+          PY
+
+      - name: Publish semantic fixture alignment
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            core/compiler/test/IR/analog-numeric-invalid-compare.mlir \
+            .github/workflows/increment-30-analog-numeric-types.yml \
+            scripts/check_increment30.py
+          git commit -m "Increment 30 — align semantic diagnostics and folded backend witness"
+          git push origin HEAD:increment/30-analog-numeric-types
+
+# Removed through the GitHub connector after publishing the source-only fix.

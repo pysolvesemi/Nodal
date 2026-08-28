@@ -1,16 +1,15 @@
 name: Apply typed staged for-range roadmap update
 
-on:
+'on':
   push:
     branches:
-      - agent/typed-staged-for-range-roadmap
+      - 'agent/typed-staged-for-range-roadmap'
 
 permissions:
   contents: write
 
 jobs:
   update-roadmap:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Check out roadmap branch
@@ -35,11 +34,7 @@ jobs:
                   raise SystemExit(f"expected one {label} anchor, found {count}")
               text = text.replace(old, new, 1)
 
-          replace_once(
-              "**Revision:** 1.37",
-              "**Revision:** 1.38",
-              "roadmap revision",
-          )
+          replace_once("**Revision:** 1.37", "**Revision:** 1.38", "roadmap revision")
 
           fixed_anchor = (
               "- Distinguish ordinary Scala elaboration loops, symbolic structural `generate` loops, "
@@ -77,21 +72,19 @@ jobs:
               "operations inside one combinational or clocked region and may lower deterministically "
               "to a procedural HDL `for` or verified unrolled operations.\n\n"
           )
-          loop_arch_text = loop_arch_anchor + (
-              "Typed staged ranges provide the same Scala `for` surface without introducing a fourth "
-              "loop category:\n\n"
-              "```scala\n"
-              "for index <- 0 until copies do                     // Scala elaboration\n"
-              "for index <- genRange(0, lanes) do                 // structural target generation\n"
-              "for index <- hwRange(0, taps, maximum = 64) do     // bounded hardware iteration\n"
-              "```\n\n"
-              "`genRange` and `hwRange` are frontend wrappers over canonical `generate(...)` and "
-              "`loop(...)` semantics. Their staged range type, never inspection of the loop body, "
-              "selects the loop category.\n\n"
-          )
           replace_once(
               loop_arch_anchor,
-              loop_arch_text,
+              loop_arch_anchor
+              + "Typed staged ranges provide the same Scala `for` surface without introducing a fourth "
+              "loop category:\n\n"
+              + "```scala\n"
+              + "for index <- 0 until copies do                     // Scala elaboration\n"
+              + "for index <- genRange(0, lanes) do                 // structural target generation\n"
+              + "for index <- hwRange(0, taps, maximum = 64) do     // bounded hardware iteration\n"
+              + "```\n\n"
+              + "`genRange` and `hwRange` are frontend wrappers over canonical `generate(...)` and "
+              "`loop(...)` semantics. Their staged range type, never inspection of the loop body, "
+              "selects the loop category.\n\n",
               "signed loop architecture",
           )
 

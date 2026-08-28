@@ -1,0 +1,43 @@
+{
+  "schema": "nodal-potential-flow-access/v1",
+  "publicApi": "0.3",
+  "access": {
+    "semanticKinds": [
+      "potential",
+      "flow"
+    ],
+    "genericFunctions": [
+      "potential",
+      "flow"
+    ],
+    "disciplineSpecificFunction": "resolved canonical nature access",
+    "result": {
+      "kind": "real",
+      "dimension": "resolved canonical nature dimension"
+    }
+  },
+  "forms": {
+    "branch": "function(branch)",
+    "oneTerminal": "function(node)",
+    "twoTerminal": "function(positive, negative)",
+    "portFlow": "function(<port>)"
+  },
+  "normalization": {
+    "oneTerminalReference": "discipline-global-reference",
+    "twoTerminalOrientation": "operand-order",
+    "sourceSpellingPreserved": true,
+    "deterministic": true,
+    "idempotent": true
+  },
+  "probes": {
+    "potentialOnly": "zero-flow-intent",
+    "flowOnly": "zero-potential-intent",
+    "mixedSourceFreeAccess": "reject",
+    "portFlowCreatesBranchProbe": false,
+    "foldable": false
+  },
+  "compatibility": {
+    "legacyBranchAccessWithoutFunction": true,
+    "newProducerEmitsLegacyForm": false
+  }
+}

@@ -1,0 +1,95 @@
+{
+  "increment": 31,
+  "title": "Potential and flow access functions",
+  "public_api": "0.3",
+  "status": "implementation-started",
+  "prerequisite": {
+    "increment": 30,
+    "status": "validated-analog-numeric-typing",
+    "dev_commit": "f33bcff3285f17d228bab4c7577bafd35ab32a65"
+  },
+  "branch": "increment/31-potential-flow-access",
+  "operations": {
+    "canonical_branch_access": "nodal.access",
+    "terminal_access": "nodal.terminal_access",
+    "port_flow_access": "nodal.port_flow_access",
+    "probe_record": "nodal.probe"
+  },
+  "access_identity": {
+    "generic": [
+      "potential",
+      "flow"
+    ],
+    "discipline_specific": "canonical-nature-access",
+    "source_spelling": "preserved",
+    "semantic_kind": [
+      "potential",
+      "flow"
+    ]
+  },
+  "forms": [
+    {
+      "name": "branch",
+      "subject": "branch",
+      "arity": 1
+    },
+    {
+      "name": "one-terminal",
+      "subject": "terminal",
+      "arity": 1,
+      "reference": "discipline-global-reference"
+    },
+    {
+      "name": "two-terminal",
+      "subject": "terminal-pair",
+      "arity": 2,
+      "orientation": "operand-order"
+    },
+    {
+      "name": "port-flow",
+      "subject": "local-boundary-terminal",
+      "arity": 1,
+      "delimiter": "angle"
+    }
+  ],
+  "typing": {
+    "numeric_kind": "real",
+    "potential_dimension": "resolved-potential-nature-dimension",
+    "flow_dimension": "resolved-flow-nature-dimension",
+    "legacy_branch_access": "accepted-without-function",
+    "new_access_result": "!nodal.quantity<real, canonical-nature-dimension>"
+  },
+  "probe_rules": {
+    "potential_only": "potential-probe-zero-flow-intent",
+    "flow_only": "flow-probe-zero-potential-intent",
+    "mixed_on_source_free_branch": "forbidden",
+    "port_flow_access": "not-a-branch-probe",
+    "constant_folding": "forbidden"
+  },
+  "planned_diagnostics": [
+    "NODAL-ACCESS-FORM-001",
+    "NODAL-ACCESS-DISCIPLINE-001",
+    "NODAL-ACCESS-NATURE-001",
+    "NODAL-ACCESS-FUNCTION-001",
+    "NODAL-ACCESS-DIMENSION-001",
+    "NODAL-ACCESS-REFERENCE-001",
+    "NODAL-ACCESS-PORT-001",
+    "NODAL-PROBE-KIND-001",
+    "NODAL-PROBE-PROVENANCE-001"
+  ],
+  "deferred": [
+    "public Scala access syntax",
+    "general equation construction",
+    "contribution accumulation",
+    "procedural analog assignment",
+    "hierarchical cross-instance probes",
+    "vector branch access",
+    "analysis-dependent access",
+    "events and noise",
+    "continuous-time state",
+    "solver lowering"
+  ],
+  "evidence": {
+    "start_commit": "f33bcff3285f17d228bab4c7577bafd35ab32a65"
+  }
+}

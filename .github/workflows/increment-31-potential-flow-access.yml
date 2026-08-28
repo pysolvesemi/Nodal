@@ -1,0 +1,46 @@
+name: Increment 31 Potential and Flow Access
+
+on:
+  push:
+    branches:
+      - increment/31-potential-flow-access
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-31-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  potential-flow-access:
+    name: increment-31/potential-flow-access
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate Increment 31 starting contracts and mutations
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          for increment in $(seq 18 31); do
+            python3 "scripts/check_increment${increment}.py"
+          done
+          python3 scripts/check_increment31.py
+          python3 tests/compiler/test_increment31.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          python3 scripts/check_markdown.py
+          python3 scripts/check_package_visibility.py
+          python3 scripts/check_contribution_policy.py --base-ref origin/dev
+          git diff --check

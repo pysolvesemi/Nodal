@@ -1,0 +1,69 @@
+name: Increment 29 Materialize
+
+on:
+  push:
+    branches:
+      - increment/29-parameters-units
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-29-materialize-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    name: increment-29/materialize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/29-parameters-units
+          fetch-depth: 0
+
+      - name: Configure commit identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Install locked lint toolchain
+        run: |
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Materialize implementation
+        run: python3 scripts/materialize_increment29.py
+
+      - name: Remove one-shot materialization files
+        run: |
+          rm -f scripts/materialize_increment29.py
+          rm -f .github/workflows/increment-29-materialize.yml
+
+      - name: Apply deterministic formatting
+        run: |
+          ./nodal style fix \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate structural contracts before commit
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          for increment in $(seq 18 29); do
+            python3 "scripts/check_increment${increment}.py"
+          done
+          python3 -m unittest \
+            tests.compiler.test_increment28 \
+            tests.compiler.test_increment29
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Commit materialized Increment 29
+        run: |
+          git add -A
+          git commit -m "Increment 29 — implement parameters constants ranges and units"
+          git push origin HEAD:increment/29-parameters-units

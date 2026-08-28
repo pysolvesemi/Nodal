@@ -113,14 +113,13 @@ int main() {
       ++flows;
       auto complete = operation->getAttrOfType<mlir::BoolAttr>("complete");
       auto ownership = operation->getAttrOfType<mlir::StringAttr>("ownership");
-      if (complete && !complete.getValue() && ownership &&
-          ownership.getValue() == "extensible")
+      if (complete && !complete.getValue() && ownership && ownership.getValue() == "extensible")
         partialIncomplete = true;
       auto signs = operation->getAttrOfType<mlir::ArrayAttr>("signs");
       for (auto [operand, sign] : llvm::zip(operation->getOperands(), signs)) {
         mlir::Operation *definition = operand.getDefiningOp();
-        auto name = definition ? definition->getAttrOfType<mlir::StringAttr>("name")
-                               : mlir::StringAttr();
+        auto name =
+            definition ? definition->getAttrOfType<mlir::StringAttr>("name") : mlir::StringAttr();
         auto integer = llvm::dyn_cast<mlir::IntegerAttr>(sign);
         if (name && name.getValue() == "p" && integer && integer.getInt() == -1)
           outputDirectionKeptIndependent = true;
@@ -141,10 +140,8 @@ int main() {
       once != printModule(*valid))
     return fail("connectivity materialization is not deterministic and idempotent");
 
-  auto duplicate =
-      mlir::parseSourceString<mlir::ModuleOp>(kDuplicateImplicit, &context);
-  if (!duplicate ||
-      mlir::succeeded(nodal::materializeConservativeConnectivity(*duplicate)))
+  auto duplicate = mlir::parseSourceString<mlir::ModuleOp>(kDuplicateImplicit, &context);
+  if (!duplicate || mlir::succeeded(nodal::materializeConservativeConnectivity(*duplicate)))
     return fail("duplicate implicit branch was accepted");
 
   if (mlir::parseSourceString<mlir::ModuleOp>(kInvalidComponent, &context))

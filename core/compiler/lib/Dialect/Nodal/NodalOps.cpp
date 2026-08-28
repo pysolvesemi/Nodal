@@ -368,15 +368,12 @@ LogicalResult nodal::BranchOp::verify() {
       positive.getDiscipline() == branch.getDiscipline())
     return success();
 
-  auto positiveRef =
-      FlatSymbolRefAttr::get(getOperation()->getContext(), positive.getDiscipline());
-  auto negativeRef =
-      FlatSymbolRefAttr::get(getOperation()->getContext(), negative.getDiscipline());
+  auto positiveRef = FlatSymbolRefAttr::get(getOperation()->getContext(), positive.getDiscipline());
+  auto negativeRef = FlatSymbolRefAttr::get(getOperation()->getContext(), negative.getDiscipline());
   auto branchRef = FlatSymbolRefAttr::get(getOperation()->getContext(), branch.getDiscipline());
   FailureOr<bool> endpoints =
       nodal::areDisciplinesCompatible(getOperation(), positiveRef, negativeRef);
-  FailureOr<bool> result =
-      nodal::areDisciplinesCompatible(getOperation(), positiveRef, branchRef);
+  FailureOr<bool> result = nodal::areDisciplinesCompatible(getOperation(), positiveRef, branchRef);
   if (failed(endpoints) || failed(result) || !*endpoints || !*result)
     return emitOpError(
         "NODAL-BRANCH-DISCIPLINE-001: branch terminals and result must use compatible disciplines");

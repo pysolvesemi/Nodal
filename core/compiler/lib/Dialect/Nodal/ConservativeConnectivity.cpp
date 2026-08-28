@@ -93,8 +93,8 @@ bool generatedOperation(Operation *operation) {
 }
 
 llvm::StringRef metadataText(Operation *operation, llvm::StringRef name) {
-  auto metadata = operation ? operation->getAttrOfType<DictionaryAttr>("metadata")
-                            : DictionaryAttr();
+  auto metadata =
+      operation ? operation->getAttrOfType<DictionaryAttr>("metadata") : DictionaryAttr();
   auto value = metadata ? metadata.getAs<StringAttr>(name) : StringAttr();
   return value ? value.getValue() : llvm::StringRef();
 }
@@ -140,8 +140,7 @@ ArrayAttr signArray(Builder &builder, const std::vector<int> &values) {
   return builder.getArrayAttr(attributes);
 }
 
-FailureOr<Operation *> resolveConservativeDiscipline(Operation *scope,
-                                                      llvm::StringRef discipline) {
+FailureOr<Operation *> resolveConservativeDiscipline(Operation *scope, llvm::StringRef discipline) {
   if (!scope || discipline.trim().empty())
     return failure();
   auto reference = FlatSymbolRefAttr::get(scope->getContext(), discipline);
@@ -170,9 +169,8 @@ FailureOr<bool> compatibleConservativeDisciplines(Operation *scope, llvm::String
   if (failed(resolveConservativeDiscipline(scope, lhs)) ||
       failed(resolveConservativeDiscipline(scope, rhs)))
     return failure();
-  return nodal::areDisciplinesCompatible(
-      scope, FlatSymbolRefAttr::get(scope->getContext(), lhs),
-      FlatSymbolRefAttr::get(scope->getContext(), rhs));
+  return nodal::areDisciplinesCompatible(scope, FlatSymbolRefAttr::get(scope->getContext(), lhs),
+                                         FlatSymbolRefAttr::get(scope->getContext(), rhs));
 }
 
 Operation *lookupLocalSymbol(Operation *operation, FlatSymbolRefAttr reference) {
@@ -201,11 +199,10 @@ LogicalResult verifyConnectionSetReference(Operation *operation, FlatSymbolRefAt
   return success();
 }
 
-LogicalResult verifyTerminalOperands(Operation *operation, unsigned minimum,
-                                     llvm::StringRef code) {
+LogicalResult verifyTerminalOperands(Operation *operation, unsigned minimum, llvm::StringRef code) {
   if (operation->getNumOperands() < minimum)
-    return operation->emitOpError() << code << ": requires at least " << minimum
-                                    << " conservative endpoints";
+    return operation->emitOpError()
+           << code << ": requires at least " << minimum << " conservative endpoints";
   llvm::StringRef first;
   for (Value operand : operation->getOperands()) {
     auto terminal = llvm::dyn_cast<nodal::TerminalType>(operand.getType());
@@ -550,8 +547,7 @@ LogicalResult materializeModule(Operation *module) {
               "NODAL-BRANCH-IMPLICIT-001: only one implicit branch is permitted for an "
               "endpoint pair");
       }
-      branches.push_back(
-          BranchInfo{operation.getResult(0), *positive, *negative, path.str()});
+      branches.push_back(BranchInfo{operation.getResult(0), *positive, *negative, path.str()});
     }
   }
 
@@ -607,8 +603,8 @@ LogicalResult materializeModule(Operation *module) {
       }
       if (belongs) {
         llvm::StringRef path = textAttr(relation, "source_path");
-        info.provenance.push_back(relation->getName().getStringRef().drop_front(6).str() +
-                                  ":" + path.str());
+        info.provenance.push_back(relation->getName().getStringRef().drop_front(6).str() + ":" +
+                                  path.str());
       }
     }
 
@@ -623,8 +619,7 @@ LogicalResult materializeModule(Operation *module) {
             "scopes");
       info.reference = true;
       info.referenceScope = scope;
-      info.provenance.push_back("reference:" +
-                                textAttr(reference, "source_path").str());
+      info.provenance.push_back("reference:" + textAttr(reference, "source_path").str());
     }
     llvm::sort(info.provenance);
     info.provenance.erase(std::unique(info.provenance.begin(), info.provenance.end()),
@@ -649,9 +644,8 @@ LogicalResult materializeModule(Operation *module) {
     connectionSets.push_back(std::move(info));
   }
 
-  llvm::sort(connectionSets, [](const SetInfo &lhs, const SetInfo &rhs) {
-    return lhs.symbol < rhs.symbol;
-  });
+  llvm::sort(connectionSets,
+             [](const SetInfo &lhs, const SetInfo &rhs) { return lhs.symbol < rhs.symbol; });
   OpBuilder builder(module->getContext());
   builder.setInsertionPointToEnd(body);
   DictionaryAttr metadata = generatedMetadata(builder, componentKind);
@@ -661,16 +655,14 @@ LogicalResult materializeModule(Operation *module) {
     OperationState state(contract->getLoc(), nodal::ConnectionSetOp::getOperationName());
     state.addOperands(info.members);
     state.propertiesAttr = builder.getDictionaryAttr({
-        builder.getNamedAttr(SymbolTable::getSymbolAttrName(),
-                             builder.getStringAttr(info.symbol)),
-        builder.getNamedAttr(
-            "discipline", FlatSymbolRefAttr::get(module->getContext(), info.discipline)),
+        builder.getNamedAttr(SymbolTable::getSymbolAttrName(), builder.getStringAttr(info.symbol)),
+        builder.getNamedAttr("discipline",
+                             FlatSymbolRefAttr::get(module->getContext(), info.discipline)),
         builder.getNamedAttr("ownership", builder.getStringAttr(ownership)),
         builder.getNamedAttr("complete", builder.getBoolAttr(complete)),
         builder.getNamedAttr("reference", builder.getBoolAttr(info.reference)),
         builder.getNamedAttr("reference_scope", builder.getStringAttr(info.referenceScope)),
-        builder.getNamedAttr("reference_identity",
-                             builder.getStringAttr(info.referenceIdentity)),
+        builder.getNamedAttr("reference_identity", builder.getStringAttr(info.referenceIdentity)),
         builder.getNamedAttr("member_paths", stringArray(builder, info.memberPaths)),
         builder.getNamedAttr("provenance", stringArray(builder, info.provenance)),
         builder.getNamedAttr("metadata", metadata),
@@ -703,8 +695,7 @@ LogicalResult materializeModule(Operation *module) {
       state.addOperands({info.members.front()});
       state.propertiesAttr = builder.getDictionaryAttr({
           builder.getNamedAttr("connection_set", setReference(info)),
-          builder.getNamedAttr("reference_identity",
-                               builder.getStringAttr(info.referenceIdentity)),
+          builder.getNamedAttr("reference_identity", builder.getStringAttr(info.referenceIdentity)),
           builder.getNamedAttr("provenance", stringArray(builder, equationProvenance)),
           builder.getNamedAttr("metadata", metadata),
       });
@@ -717,19 +708,16 @@ LogicalResult materializeModule(Operation *module) {
       if (!endpoint.terminal)
         continue;
       const int sign = endpoint.flowOrientation == "into_component" ? -1 : 1;
-      flowTerms.push_back(
-          FlowTerm{endpoint.value, sign, "terminal:" + endpoint.path,
-                   "terminal-flow:" + endpoint.path});
+      flowTerms.push_back(FlowTerm{endpoint.value, sign, "terminal:" + endpoint.path,
+                                   "terminal-flow:" + endpoint.path});
     }
     for (const BranchInfo &branch : branches) {
       if (sets.find(branch.positive) == info.root)
-        flowTerms.push_back(
-            FlowTerm{branch.result, 1, "branch:+:" + branch.path,
-                     "branch-positive:" + branch.path});
+        flowTerms.push_back(FlowTerm{branch.result, 1, "branch:+:" + branch.path,
+                                     "branch-positive:" + branch.path});
       if (sets.find(branch.negative) == info.root)
-        flowTerms.push_back(
-            FlowTerm{branch.result, -1, "branch:-:" + branch.path,
-                     "branch-negative:" + branch.path});
+        flowTerms.push_back(FlowTerm{branch.result, -1, "branch:-:" + branch.path,
+                                     "branch-negative:" + branch.path});
     }
     llvm::sort(flowTerms, [](const FlowTerm &lhs, const FlowTerm &rhs) {
       if (lhs.key != rhs.key)
@@ -785,8 +773,7 @@ LogicalResult materializeInPlace(mlir::ModuleOp module) {
       return failure();
   }
   if (optedIn)
-    module->setAttr("nodal.connectivity.normalized",
-                    StringAttr::get(module.getContext(), "v1"));
+    module->setAttr("nodal.connectivity.normalized", StringAttr::get(module.getContext(), "v1"));
   return success();
 }
 
@@ -853,10 +840,8 @@ LogicalResult nodal::ConnectionSetOp::verify() {
     return failure();
   auto discipline = getOperation()->getAttrOfType<FlatSymbolRefAttr>("discipline");
   if (!discipline)
-    return emitOpError(
-        "NODAL-CONNECTION-SET-001: connection-set discipline is required");
-  FailureOr<std::string> canonical =
-      canonicalDiscipline(getOperation(), discipline.getValue());
+    return emitOpError("NODAL-CONNECTION-SET-001: connection-set discipline is required");
+  FailureOr<std::string> canonical = canonicalDiscipline(getOperation(), discipline.getValue());
   if (failed(canonical) || *canonical != discipline.getValue())
     return emitOpError(
         "NODAL-CONNECTION-SET-001: connection-set discipline must be canonical, continuous, "
@@ -879,10 +864,8 @@ LogicalResult nodal::ConnectionSetOp::verify() {
   std::string previousPath;
   for (auto [index, value] : llvm::enumerate(paths)) {
     auto path = llvm::dyn_cast<StringAttr>(value);
-    if (!path || !isCanonicalText(path.getValue()) ||
-        !retainedPaths.insert(path.getValue()).second)
-      return emitOpError(
-          "NODAL-CONNECTION-SET-001: member paths must be canonical and unique");
+    if (!path || !isCanonicalText(path.getValue()) || !retainedPaths.insert(path.getValue()).second)
+      return emitOpError("NODAL-CONNECTION-SET-001: member paths must be canonical and unique");
     if (!previousPath.empty() && path.getValue() < llvm::StringRef(previousPath))
       return emitOpError(
           "NODAL-CONNECTION-SET-001: member paths must retain deterministic sorted order");
@@ -903,8 +886,7 @@ LogicalResult nodal::ConnectionSetOp::verify() {
         "NODAL-CONNECTION-SET-001: normalized connection set requires a component contract");
   symbolIdentity.push_back(*canonical);
   symbolIdentity.push_back(textAttr(contract, "source_path").str());
-  const std::string expectedSymbol = "_connection_" +
-                                     sanitizeSymbol(symbolIdentity.front()) + "_" +
+  const std::string expectedSymbol = "_connection_" + sanitizeSymbol(symbolIdentity.front()) + "_" +
                                      hex64(stableHash(symbolIdentity));
   auto symbol = getOperation()->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
   if (!symbol || symbol.getValue() != expectedSymbol)
@@ -917,10 +899,9 @@ LogicalResult nodal::ConnectionSetOp::verify() {
       (!reference.getValue() && (scope != "none" || !referenceIdentity.empty())))
     return emitOpError("NODAL-CONNECTION-SET-001: invalid reference identity contract");
   if (reference.getValue()) {
-    std::string expectedIdentity = scope == "global"
-                                       ? "global::" + *canonical
-                                       : textAttr(contract, "source_path").str() +
-                                             "::reference::" + *canonical;
+    std::string expectedIdentity =
+        scope == "global" ? "global::" + *canonical
+                          : textAttr(contract, "source_path").str() + "::reference::" + *canonical;
     if (referenceIdentity != expectedIdentity)
       return emitOpError(
           "NODAL-CONNECTION-SET-001: reference identity does not match its scope and discipline");
@@ -936,8 +917,7 @@ LogicalResult nodal::ConnectionSetOp::verify() {
 
 LogicalResult nodal::PotentialEqualityOp::verify() {
   if (!hasCompilerOwnedMetadata(getOperation()))
-    return emitOpError(
-        "NODAL-CONNECTION-POTENTIAL-001: potential equality is compiler-owned");
+    return emitOpError("NODAL-CONNECTION-POTENTIAL-001: potential equality is compiler-owned");
   auto reference = getOperation()->getAttrOfType<FlatSymbolRefAttr>("connection_set");
   Operation *connectionSet = nullptr;
   if (failed(verifyConnectionSetReference(getOperation(), reference, connectionSet)))
@@ -960,8 +940,7 @@ LogicalResult nodal::PotentialEqualityOp::verify() {
 
 LogicalResult nodal::ReferencePotentialOp::verify() {
   if (!hasCompilerOwnedMetadata(getOperation()))
-    return emitOpError(
-        "NODAL-CONNECTION-POTENTIAL-001: reference potential is compiler-owned");
+    return emitOpError("NODAL-CONNECTION-POTENTIAL-001: reference potential is compiler-owned");
   auto reference = getOperation()->getAttrOfType<FlatSymbolRefAttr>("connection_set");
   Operation *connectionSet = nullptr;
   if (failed(verifyConnectionSetReference(getOperation(), reference, connectionSet)))
@@ -969,9 +948,8 @@ LogicalResult nodal::ReferencePotentialOp::verify() {
   auto setReference = connectionSet->getAttrOfType<BoolAttr>("reference");
   llvm::StringRef setIdentity = textAttr(connectionSet, "reference_identity");
   llvm::StringRef identity = textAttr(getOperation(), "reference_identity");
-  if (!connectionSetContains(connectionSet, getOperation()->getOperand(0)) ||
-      !setReference || !setReference.getValue() || identity.empty() ||
-      identity != setIdentity)
+  if (!connectionSetContains(connectionSet, getOperation()->getOperand(0)) || !setReference ||
+      !setReference.getValue() || identity.empty() || identity != setIdentity)
     return emitOpError(
         "NODAL-CONNECTION-POTENTIAL-001: reference potential must bind a member and stable "
         "reference identity");
@@ -988,8 +966,7 @@ LogicalResult nodal::ReferencePotentialOp::verify() {
 
 LogicalResult nodal::FlowConservationOp::verify() {
   if (!hasCompilerOwnedMetadata(getOperation()))
-    return emitOpError(
-        "NODAL-CONNECTION-FLOW-001: flow conservation is compiler-owned");
+    return emitOpError("NODAL-CONNECTION-FLOW-001: flow conservation is compiler-owned");
   auto reference = getOperation()->getAttrOfType<FlatSymbolRefAttr>("connection_set");
   Operation *connectionSet = nullptr;
   if (failed(verifyConnectionSetReference(getOperation(), reference, connectionSet)))
@@ -1013,8 +990,7 @@ LogicalResult nodal::FlowConservationOp::verify() {
   Operation *module = enclosingNodalModule(getOperation());
   Operation *contract = componentContract(module);
   if (!contract)
-    return emitOpError(
-        "NODAL-CONNECTION-FLOW-001: flow equation requires a component contract");
+    return emitOpError("NODAL-CONNECTION-FLOW-001: flow equation requires a component contract");
   for (auto [index, term] : llvm::enumerate(getOperation()->getOperands())) {
     const int64_t sign = llvm::cast<IntegerAttr>(signs[index]).getInt();
     auto retainedProvenance = llvm::cast<StringAttr>(provenance[index]);
@@ -1023,15 +999,13 @@ LogicalResult nodal::FlowConservationOp::verify() {
     if (auto terminal = llvm::dyn_cast<nodal::TerminalType>(term.getType())) {
       discipline = terminal.getDiscipline();
       Operation *definition = term.getDefiningOp();
-      if (!isNamed(definition, "nodal.terminal") ||
-          !connectionSetContains(connectionSet, term))
+      if (!isNamed(definition, "nodal.terminal") || !connectionSetContains(connectionSet, term))
         return emitOpError(
             "NODAL-CONNECTION-FLOW-001: terminal flow terms must be boundary members of the "
             "connection set");
       llvm::StringRef orientation = textAttr(definition, "flow_orientation");
       const int64_t expectedSign = orientation == "into_component" ? -1 : 1;
-      if (!oneOf(orientation, {"into_component", "out_of_component"}) ||
-          sign != expectedSign)
+      if (!oneOf(orientation, {"into_component", "out_of_component"}) || sign != expectedSign)
         return emitOpError(
             "NODAL-CONNECTION-FLOW-001: terminal flow sign disagrees with its explicit "
             "orientation");
@@ -1060,9 +1034,8 @@ LogicalResult nodal::FlowConservationOp::verify() {
     FailureOr<bool> compatible =
         compatibleConservativeDisciplines(getOperation(), discipline, setDiscipline.getValue());
     if (failed(compatible) || !*compatible)
-      return emitOpError(
-          "NODAL-CONNECTION-FLOW-001: flow term discipline is incompatible with its "
-          "connection set");
+      return emitOpError("NODAL-CONNECTION-FLOW-001: flow term discipline is incompatible with its "
+                         "connection set");
   }
   llvm::StringRef ownership = textAttr(getOperation(), "ownership");
   auto complete = getOperation()->getAttrOfType<BoolAttr>("complete");
@@ -1076,8 +1049,7 @@ LogicalResult nodal::FlowConservationOp::verify() {
         "NODAL-CONNECTION-FLOW-001: completeness must agree with its connection set ownership");
   if (metadataText(getOperation(), "component_kind") !=
       metadataText(connectionSet, "component_kind"))
-    return emitOpError(
-        "NODAL-CONNECTION-FLOW-001: flow component provenance is inconsistent");
+    return emitOpError("NODAL-CONNECTION-FLOW-001: flow component provenance is inconsistent");
   return success();
 }
 

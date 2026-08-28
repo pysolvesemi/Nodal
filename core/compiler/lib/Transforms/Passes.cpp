@@ -818,16 +818,14 @@ LogicalResult verifyAnalog(mlir::ModuleOp module) {
     const bool partial = isPartialPhysicalComponent(owner);
     owner->walk([&](Operation *operation) {
       llvm::StringRef name = operation->getName().getStringRef();
-      if (name == "nodal.component_contract" || name == "nodal.terminal" ||
-          name == "nodal.node" || name == "nodal.connect" || name == "nodal.alias" ||
-          name == "nodal.reference" || name == "nodal.branch" ||
-          name == "nodal.connection_set" || name == "nodal.potential_equality" ||
-          name == "nodal.reference_potential" || name == "nodal.flow_conservation" ||
-          name == "nodal.access" || name == "nodal.analog" ||
+      if (name == "nodal.component_contract" || name == "nodal.terminal" || name == "nodal.node" ||
+          name == "nodal.connect" || name == "nodal.alias" || name == "nodal.reference" ||
+          name == "nodal.branch" || name == "nodal.connection_set" ||
+          name == "nodal.potential_equality" || name == "nodal.reference_potential" ||
+          name == "nodal.flow_conservation" || name == "nodal.access" || name == "nodal.analog" ||
           name == "nodal.real_literal" || name == "nodal.parameter_ref" ||
-          name == "nodal.analog_add" || name == "nodal.analog_sub" ||
-          name == "nodal.analog_mul" || name == "nodal.analog_div" ||
-          name == "nodal.analog_ddt" || name == "nodal.contribute")
+          name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
+          name == "nodal.analog_div" || name == "nodal.analog_ddt" || name == "nodal.contribute")
         analog = true;
       if (name == "nodal.port" || name == "nodal.resolved_net" || name == "nodal.net_drive" ||
           name == "nodal.crossing")
@@ -864,16 +862,14 @@ LogicalResult verifyCapabilities(mlir::ModuleOp module) {
   module.walk([&](Operation *operation) {
     llvm::StringRef name = operation->getName().getStringRef();
     const bool analog =
-        name == "nodal.component_contract" || name == "nodal.terminal" ||
-        name == "nodal.node" || name == "nodal.connect" || name == "nodal.alias" ||
-        name == "nodal.reference" || name == "nodal.branch" ||
-        name == "nodal.connection_set" || name == "nodal.potential_equality" ||
-        name == "nodal.reference_potential" || name == "nodal.flow_conservation" ||
-        name == "nodal.access" || name == "nodal.bridge" || name == "nodal.analog" ||
-        name == "nodal.real_literal" || name == "nodal.parameter_ref" ||
-        name == "nodal.analog_add" || name == "nodal.analog_sub" ||
-        name == "nodal.analog_mul" || name == "nodal.analog_div" ||
-        name == "nodal.analog_ddt" || name == "nodal.contribute";
+        name == "nodal.component_contract" || name == "nodal.terminal" || name == "nodal.node" ||
+        name == "nodal.connect" || name == "nodal.alias" || name == "nodal.reference" ||
+        name == "nodal.branch" || name == "nodal.connection_set" ||
+        name == "nodal.potential_equality" || name == "nodal.reference_potential" ||
+        name == "nodal.flow_conservation" || name == "nodal.access" || name == "nodal.bridge" ||
+        name == "nodal.analog" || name == "nodal.real_literal" || name == "nodal.parameter_ref" ||
+        name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
+        name == "nodal.analog_div" || name == "nodal.analog_ddt" || name == "nodal.contribute";
     const bool digital = name == "nodal.resolved_net" || name == "nodal.net_driver" ||
                          name == "nodal.net_drive" || name == "nodal.crossing" ||
                          name == "nodal.fsm";
@@ -1000,8 +996,7 @@ void addVerifierPasses(OpPassManager &manager, GateProfile profile) {
 }
 
 class MaterializeConservativeConnectivityPass final
-    : public PassWrapper<MaterializeConservativeConnectivityPass,
-                         OperationPass<mlir::ModuleOp>> {
+    : public PassWrapper<MaterializeConservativeConnectivityPass, OperationPass<mlir::ModuleOp>> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MaterializeConservativeConnectivityPass)
 

@@ -2,7 +2,7 @@
   "increment": 30,
   "title": "Analog numeric types and expression typing",
   "public_api": "0.3",
-  "status": "implemented-awaiting-evidence",
+  "status": "validated-analog-numeric-typing",
   "prerequisite": {
     "increment": 29,
     "status": "validated-parameter-constant-unit",
@@ -104,7 +104,31 @@
     "solver lowering"
   ],
   "evidence": {
-    "start_commit": "1c1ab49da71f0f52d2af3d93e40a92f4643be776"
+    "start_commit": "1c1ab49da71f0f52d2af3d93e40a92f4643be776",
+    "pull_request": 80,
+    "implementation_head": "6f62937796af25714c996f8733f1adb72cefe4ee",
+    "merge_commit": "401f78b3836cc4e52d393ef343dc0915d60606e9",
+    "dedicated_run": 33192880165,
+    "core_ci_run": 33192880254,
+    "inherited_runs": {
+      "increment13": 33192880304,
+      "increment14": 33192880239,
+      "increment15": 33192880282,
+      "increment16": 33192880278,
+      "increment17": 33192880273,
+      "increment18": 33192880300,
+      "increment19": 33192880296,
+      "increment20": 33192880334,
+      "increment21": 33192880255,
+      "increment22": 33192880280,
+      "increment23": 33192880345,
+      "increment24": 33192880207,
+      "increment25": 33192880196,
+      "increment26": 33192880175,
+      "increment27": 33192880267,
+      "increment28": 33192880203,
+      "increment29": 33192880204
+    }
   },
   "implementation": {
     "quantity_type": "Nodal_QuantityType",

@@ -119,13 +119,22 @@ class Increment30CheckerTests(unittest.TestCase):
     def test_rejects_premature_roadmap_closure(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
-        path = root / "docs/roadmap/nodal-development-todo.md"
-        text = path.read_text(encoding="utf-8").replace(
-            "- [ ] **Increment 30 — Analog numeric types and expression typing**",
-            "- [x] **Increment 30 — Analog numeric types and expression typing**",
-            1,
+
+        manifest_path = root / "tests/compiler/fixtures/increment30/manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "implemented-awaiting-evidence"
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2) + "\n",
+            encoding="utf-8",
         )
-        path.write_text(text, encoding="utf-8")
+
+        roadmap_path = root / "docs/roadmap/nodal-development-todo.md"
+        text = roadmap_path.read_text(encoding="utf-8")
+        checked = "- [x] **Increment 30 — Analog numeric types and expression typing**"
+        unchecked = "- [ ] **Increment 30 — Analog numeric types and expression typing**"
+        if checked not in text:
+            text = text.replace(unchecked, checked, 1)
+        roadmap_path.write_text(text, encoding="utf-8")
         self.assertIn("NODAL-INC30-006", self.codes(root))
 
     def test_rejects_missing_native_quantity_type(self) -> None:

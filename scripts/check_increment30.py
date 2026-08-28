@@ -198,17 +198,17 @@ def check_repository(root: Path) -> list[Problem]:
     require(
         implementation,
         (
-            "Increment 30 has started",
+            "Increment 30 is implemented",
             "fully validated Increment 29",
-            "deterministic integer-to-real promotion",
-            "canonical exponent algebra",
+            "Deterministic integer-to-real promotion",
+            "Canonical exponent algebra",
             "Boolean-only logical operations",
             "public API remains v0.3",
-            "Increment 30 stays unchecked",
+            "roadmap item stays unchecked",
         ),
         problems,
         "NODAL-INC30-004",
-        "implementation start note",
+        "implementation note",
     )
 
     require(
@@ -219,8 +219,8 @@ def check_repository(root: Path) -> list[Problem]:
             "test_increment30.py",
             "./nodal core native",
             "permissions:\n  contents: read",
-            "implementation-started",
-            "analog-numeric-surface.json",
+            "implemented-awaiting-evidence",
+            "tests/compiler/fixtures/increment30/manifest.json",
             "nodal-verify-analog-numeric",
             "nodal-fold-analog-constants",
             "analog-numeric-typing.mlir",

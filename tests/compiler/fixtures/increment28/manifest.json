@@ -2,7 +2,7 @@
   "increment": 28,
   "title": "Electrical nodes, nets, and branches",
   "public_api": "0.3",
-  "status": "implemented-awaiting-evidence",
+  "status": "validated-electrical-connectivity",
   "component_contract": {
     "partial": "extensible",
     "concrete": "local"
@@ -65,5 +65,9 @@
     "residual DAE construction",
     "Verilog-A and Verilog-AMS lowering"
   ],
-  "evidence": {}
+  "evidence": {
+    "pull_request": 76,
+    "dedicated_run": 33139417848,
+    "core_ci_run": 33139417871
+  }
 }

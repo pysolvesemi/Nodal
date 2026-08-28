@@ -1,0 +1,99 @@
+name: Increment 30 Analog Numeric Types and Expression Typing
+
+on:
+  push:
+    branches:
+      - increment/30-analog-numeric-types
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-30-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analog-numeric-types:
+    name: increment-30/analog-numeric-types
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore locked native and Scala caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/nodal/downloads
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-inc30-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', 'toolchains/lock.json', 'toolchains/checksums/*.sha256', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-inc30-${{ runner.os }}-
+            nodal-inc29-${{ runner.os }}-
+            nodal-inc28-${{ runner.os }}-
+            nodal-scala-${{ runner.os }}-
+
+      - name: Install locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate Increment 30 start contract and mutation tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          for increment in $(seq 18 30); do
+            python3 "scripts/check_increment${increment}.py"
+          done
+          python3 tests/compiler/test_increment30.py
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          git diff --check
+
+      - name: Build lint and test unchanged native baseline
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Prove machine-readable typing surface remains open for implementation
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(
+              Path("tests/compiler/fixtures/increment30/manifest.json").read_text()
+          )
+          surface = json.loads(
+              Path(
+                  "tests/compiler/fixtures/increment30/analog-numeric-surface.json"
+              ).read_text()
+          )
+          roadmap = Path("docs/roadmap/nodal-development-todo.md").read_text()
+
+          assert manifest["status"] == "implementation-started"
+          assert manifest["prerequisite"]["status"] == "validated-parameter-constant-unit"
+          assert manifest["quantity_type"]["spelling"] == "!nodal.quantity<kind, dimension>"
+          assert manifest["promotion"]["integer_real"] == "real"
+          assert manifest["promotion"]["boolean_numeric"] == "forbidden"
+          assert surface["logical"]["numericTruthiness"] is False
+          assert surface["arithmetic"]["mul"]["dimensions"] == "add-exponents"
+          assert "- [x] **Increment 29 — Parameters, constants, ranges, and units**" in roadmap
+          assert "- [ ] **Increment 30 — Analog numeric types and expression typing**" in roadmap
+          PY

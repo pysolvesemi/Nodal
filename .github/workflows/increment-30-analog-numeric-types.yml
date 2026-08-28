@@ -89,6 +89,7 @@ jobs:
           grep -F '!nodal.quantity<"real", "current*voltage">' /tmp/analog-numeric-typing.mlir
           grep -F '!nodal.quantity<"real", "time^-1*voltage">' /tmp/analog-numeric-typing.mlir
           grep -F 'nodal.folded_provenance = "increment30"' /tmp/analog-numeric-typing.mlir
+          grep -F '"nodal.analog_select"' /tmp/analog-numeric-typing.mlir
           grep -F 'nodal.folded_value = 6' /tmp/analog-numeric-typing.mlir
 
           check_rejection() {
@@ -116,8 +117,7 @@ jobs:
             --nodal-to-verilog-a \
             core/compiler/test/IR/analog-numeric-backend.mlir \
             | tee /tmp/analog-numeric-backend.va
-          grep -F 'I(p, n) <+ ((((2 * 3.5) > 0) ? (2 * 3.5) : 3.5));' \
-            /tmp/analog-numeric-backend.va
+          grep -F 'I(p, n) <+ 7;' /tmp/analog-numeric-backend.va
 
           python3 - <<'PY'
           import json

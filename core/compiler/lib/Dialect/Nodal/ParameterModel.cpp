@@ -9,6 +9,7 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
@@ -35,6 +36,9 @@ enum class ConstantKind { Invalid, Integer, Real, Boolean };
 struct EvaluatedConstant {
   ConstantKind kind = ConstantKind::Invalid;
   int64_t integerValue = 0;
+  IntegerAttr exactInteger;
+  bool integerIsNarrow = true;
+  bool integerSigned = false;
   double realValue = 0.0;
   bool booleanValue = false;
   std::string dimension;
@@ -126,6 +130,14 @@ ConstantKind kindForType(Type type) {
   if (llvm::isa<nodal::UIntType, nodal::SIntType, nodal::EnumType>(type))
     return ConstantKind::Integer;
   return ConstantKind::Invalid;
+}
+
+bool integerTypeIsSigned(Type type) {
+  if (llvm::isa<nodal::SIntType>(type))
+    return true;
+  if (auto integer = llvm::dyn_cast<IntegerType>(type))
+    return integer.isSigned();
+  return false;
 }
 
 llvm::StringRef inferredKind(Type type) {
@@ -335,9 +347,16 @@ FailureOr<EvaluatedConstant> constantFromAttribute(Attribute value, Type type,
   }
   if (result.kind == ConstantKind::Integer) {
     auto integer = llvm::dyn_cast<IntegerAttr>(value);
-    if (!integer || !integer.getValue().isSignedIntN(64))
+    if (!integer)
       return failure();
-    result.integerValue = integer.getInt();
+    result.exactInteger = integer;
+    result.integerSigned = integerTypeIsSigned(type);
+    const llvm::APInt &bits = integer.getValue();
+    const bool narrow = result.integerSigned ? bits.isSignedIntN(64) : bits.getActiveBits() <= 63;
+    result.integerIsNarrow = narrow;
+    if (narrow)
+      result.integerValue =
+          result.integerSigned ? bits.getSExtValue() : static_cast<int64_t>(bits.getZExtValue());
     return result;
   }
   return failure();
@@ -416,6 +435,22 @@ Operation *findParameterEnvelope(Operation *module, llvm::StringRef parameter, b
 FailureOr<EvaluatedConstant> evaluateValue(Value value, Operation *scope,
                                            llvm::DenseSet<Operation *> &parameterStack);
 
+FailureOr<EvaluatedConstant> adoptParameterUnit(EvaluatedConstant value, Operation *parameter) {
+  Operation *unit = resolveUnit(parameter, parameter->getAttrOfType<FlatSymbolRefAttr>("unit"));
+  if (!unit || value.kind != ConstantKind::Real)
+    return value;
+  llvm::StringRef dimension = unitDimension(unit);
+  if (value.dimension.empty()) {
+    value.realValue *= unitScale(unit);
+    value.dimension = dimension.str();
+  } else if (value.dimension != dimension) {
+    return failure();
+  }
+  if (!std::isfinite(value.realValue))
+    return failure();
+  return value;
+}
+
 FailureOr<EvaluatedConstant> evaluateParameterDefault(Operation *parameter,
                                                       llvm::DenseSet<Operation *> &parameterStack) {
   if (!parameter || !parameterStack.insert(parameter).second)
@@ -432,6 +467,8 @@ FailureOr<EvaluatedConstant> evaluateParameterDefault(Operation *parameter,
     if (type && defaultValue)
       result = constantFromAttribute(defaultValue, type.getValue(), unit);
   }
+  if (succeeded(result))
+    result = adoptParameterUnit(*result, parameter);
   parameterStack.erase(parameter);
   return result;
 }
@@ -458,7 +495,7 @@ FailureOr<EvaluatedConstant> evaluateExpression(Operation *operation, Operation 
       return result;
     }
     if (result.kind == ConstantKind::Integer && lhs->kind == ConstantKind::Integer &&
-        checkedNegate(lhs->integerValue, result.integerValue))
+        lhs->integerIsNarrow && checkedNegate(lhs->integerValue, result.integerValue))
       return result;
     return failure();
   }
@@ -489,7 +526,7 @@ FailureOr<EvaluatedConstant> evaluateExpression(Operation *operation, Operation 
       return result;
     }
     if (result.kind == ConstantKind::Integer && lhs->kind == ConstantKind::Integer &&
-        rhs->kind == ConstantKind::Integer) {
+        rhs->kind == ConstantKind::Integer && lhs->integerIsNarrow && rhs->integerIsNarrow) {
       const bool valid =
           name == "add"
               ? checkedAdd(lhs->integerValue, rhs->integerValue, result.integerValue)
@@ -519,7 +556,7 @@ FailureOr<EvaluatedConstant> evaluateExpression(Operation *operation, Operation 
       return result;
     }
     if (result.kind == ConstantKind::Integer && lhs->kind == ConstantKind::Integer &&
-        rhs->kind == ConstantKind::Integer) {
+        rhs->kind == ConstantKind::Integer && lhs->integerIsNarrow && rhs->integerIsNarrow) {
       if (name == "mul") {
         if (checkedMultiply(lhs->integerValue, rhs->integerValue, result.integerValue))
           return result;
@@ -536,8 +573,8 @@ FailureOr<EvaluatedConstant> evaluateExpression(Operation *operation, Operation 
 
   if (name == "mod") {
     if (result.kind != ConstantKind::Integer || lhs->kind != ConstantKind::Integer ||
-        rhs->kind != ConstantKind::Integer || lhs->dimension != rhs->dimension ||
-        rhs->integerValue == 0 ||
+        rhs->kind != ConstantKind::Integer || !lhs->integerIsNarrow || !rhs->integerIsNarrow ||
+        lhs->dimension != rhs->dimension || rhs->integerValue == 0 ||
         (lhs->integerValue == std::numeric_limits<int64_t>::min() && rhs->integerValue == -1))
       return failure();
     result.dimension = lhs->dimension;
@@ -601,6 +638,9 @@ FailureOr<EvaluatedConstant> normalizeForParameter(const EvaluatedConstant &valu
       return failure();
     result.kind = ConstantKind::Integer;
     result.integerValue = value.integerValue;
+    result.exactInteger = value.exactInteger;
+    result.integerIsNarrow = value.integerIsNarrow;
+    result.integerSigned = value.integerSigned;
     return result;
   }
   if (kind == "boolean") {
@@ -626,7 +666,19 @@ bool attributeMatches(Attribute attribute, const EvaluatedConstant &value) {
   }
   if (value.kind == ConstantKind::Integer) {
     auto integer = llvm::dyn_cast<IntegerAttr>(attribute);
-    return integer && integer.getValue().isSignedIntN(64) && integer.getInt() == value.integerValue;
+    if (!integer)
+      return false;
+    if (value.exactInteger) {
+      const unsigned width =
+          std::max(integer.getValue().getBitWidth(), value.exactInteger.getValue().getBitWidth());
+      llvm::APInt lhs = value.integerSigned ? value.exactInteger.getValue().sextOrTrunc(width)
+                                            : value.exactInteger.getValue().zextOrTrunc(width);
+      llvm::APInt rhs = value.integerSigned ? integer.getValue().sextOrTrunc(width)
+                                            : integer.getValue().zextOrTrunc(width);
+      return lhs == rhs;
+    }
+    return value.integerIsNarrow && integer.getValue().isSignedIntN(64) &&
+           integer.getInt() == value.integerValue;
   }
   if (value.kind == ConstantKind::Boolean) {
     if (auto boolean = llvm::dyn_cast<BoolAttr>(attribute))
@@ -651,6 +703,23 @@ int compareConstants(const EvaluatedConstant &lhs, const EvaluatedConstant &rhs)
     const int left = lhs.kind == ConstantKind::Boolean ? lhs.booleanValue : lhs.integerValue != 0;
     const int right = rhs.kind == ConstantKind::Boolean ? rhs.booleanValue : rhs.integerValue != 0;
     return left == right ? 0 : (left < right ? -1 : 1);
+  }
+  if (lhs.exactInteger || rhs.exactInteger) {
+    const unsigned lhsWidth = lhs.exactInteger ? lhs.exactInteger.getValue().getBitWidth() : 64;
+    const unsigned rhsWidth = rhs.exactInteger ? rhs.exactInteger.getValue().getBitWidth() : 64;
+    const unsigned width = std::max(lhsWidth, rhsWidth);
+    const bool signedCompare = lhs.integerSigned || rhs.integerSigned;
+    llvm::APInt left = lhs.exactInteger
+                           ? (signedCompare ? lhs.exactInteger.getValue().sextOrTrunc(width)
+                                            : lhs.exactInteger.getValue().zextOrTrunc(width))
+                           : llvm::APInt(width, static_cast<uint64_t>(lhs.integerValue), true);
+    llvm::APInt right = rhs.exactInteger
+                            ? (signedCompare ? rhs.exactInteger.getValue().sextOrTrunc(width)
+                                             : rhs.exactInteger.getValue().zextOrTrunc(width))
+                            : llvm::APInt(width, static_cast<uint64_t>(rhs.integerValue), true);
+    if (left == right)
+      return 0;
+    return signedCompare ? (left.slt(right) ? -1 : 1) : (left.ult(right) ? -1 : 1);
   }
   if (lhs.integerValue == rhs.integerValue)
     return 0;
@@ -753,8 +822,10 @@ FailureOr<std::string> renderValue(Value value, llvm::DenseSet<Operation *> &vis
   if (name == "nodal.constant") {
     Attribute valueAttr = operation->getAttr("value");
     if (auto integer = llvm::dyn_cast<IntegerAttr>(valueAttr)) {
+      llvm::SmallString<64> rendered;
+      integer.getValue().toString(rendered, 10, integerTypeIsSigned(value.getType()));
       visited.erase(operation);
-      return std::to_string(integer.getInt());
+      return rendered.str().str();
     }
     if (auto boolean = llvm::dyn_cast<BoolAttr>(valueAttr)) {
       visited.erase(operation);
@@ -1092,6 +1163,9 @@ LogicalResult nodal::verifyParameterModel(mlir::ModuleOp module) {
             findDirectSymbol(target, binding.getName().getValue(), "nodal.parameter");
         if (!parameter)
           continue;
+        if (textAttr(parameter, "variability") == "fixed")
+          return operation.emitOpError(
+              "NODAL-PARAMETER-OVERRIDE-001: fixed parameter cannot be overridden");
         auto type = parameter->getAttrOfType<TypeAttr>("type");
         FailureOr<EvaluatedConstant> raw = failure();
         if (type)
@@ -1127,6 +1201,9 @@ LogicalResult nodal::verifyParameterModel(mlir::ModuleOp module) {
       if (!parameter)
         return operation.emitOpError(
             "NODAL-PARAMETER-OVERRIDE-001: override target does not resolve");
+      if (textAttr(parameter, "variability") == "fixed")
+        return operation.emitOpError(
+            "NODAL-PARAMETER-OVERRIDE-001: fixed parameter cannot be overridden");
       llvm::DenseSet<Operation *> stack;
       auto evaluated = evaluateValue(operation.getOperand(0), &operation, stack);
       FailureOr<EvaluatedConstant> normalized = failure();
@@ -1152,4 +1229,34 @@ LogicalResult nodal::verifyParameterModel(mlir::ModuleOp module) {
 FailureOr<std::string> nodal::renderParameterConstantExpression(Value value) {
   llvm::DenseSet<Operation *> visited;
   return renderValue(value, visited);
+}
+
+FailureOr<std::string> nodal::renderParameterConstantExpression(Value value,
+                                                                Operation *targetParameter) {
+  auto rendered = renderParameterConstantExpression(value);
+  if (failed(rendered) || !targetParameter)
+    return rendered;
+
+  Operation *unit =
+      resolveUnit(targetParameter, targetParameter->getAttrOfType<FlatSymbolRefAttr>("unit"));
+  if (!unit || getParameterKind(targetParameter) != "real")
+    return rendered;
+
+  llvm::DenseSet<Operation *> stack;
+  auto evaluated = evaluateValue(value, targetParameter, stack);
+  if (failed(evaluated))
+    return failure();
+  if (!evaluated->dimension.empty())
+    return rendered;
+
+  llvm::StringRef suffix = unitSuffix(unit);
+  if (suffix.empty())
+    return rendered;
+
+  Operation *definition = value.getDefiningOp();
+  if (definition && isNamed(definition, "nodal.const_literal") &&
+      !definition->getAttrOfType<FlatSymbolRefAttr>("unit"))
+    return *rendered + suffix.str();
+
+  return (llvm::Twine("(") + *rendered + " * 1" + suffix + ")").str();
 }

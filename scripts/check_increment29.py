@@ -159,12 +159,17 @@ def check_repository(root: Path) -> list[Problem]:
         "dynamic values cannot enter constant evaluation",
         "folded default does not match canonical default_value", "lossless override disagrees with canonical binding",
         "renderParameterConstantExpression", "allowedSuffix", "splitSpelling",
+        "exactInteger", "adoptParameterUnit",
+        "renderParameterConstantExpression(Value value,",
+        "fixed parameter cannot be overridden",
     ) + tuple(CODES[:-2]), problems, "NODAL-INC29-005", "parameter model implementation")
     require(ops, ("ParameterModel.h", "verifyParameterDeclaration"), problems, "NODAL-INC29-006", "operation integration")
     require(transforms, ("ParameterModel.h", "verifyParameterModel(module)"), problems, "NODAL-INC29-007", "semantic verifier integration")
     require(backend, (
         "renderParameterConstantExpression", "parameter real", 'kind == "integer"', "nativeType", " from ",
         " exclude ", "// unit: ", "NODAL-BACKEND-PARAMETER-001", "NODAL-BACKEND-PARAMETER-002",
+        "validCanonicalCommentText", "renderIntegerAttribute",
+        "orderParametersByDependency", "declarationKeyword", "localparam real",
     ), problems, "NODAL-INC29-008", "native parameter renderer")
     require(test_cmake, (
         "parameters-units-roundtrip", "parameters-units-rejects-${_fixture}",
@@ -175,17 +180,23 @@ def check_repository(root: Path) -> list[Problem]:
         "constant expression did not preserve native spelling", "range or exclusion constraint was not enforced",
         "structural envelope was not enforced", "dynamic value entered constant evaluation",
         "cyclic constant expression was accepted",
+        "bare parameter magnitude did not inherit target unit",
+        "fixed parameter dictionary binding was accepted",
+        "fixed parameter explicit override was accepted",
     ), problems, "NODAL-INC29-011", "native parameter tests")
     require(positive, tuple(operation for operation in OPERATIONS if operation != "nodal.const_parameter_ref") + (
         'parameter_kind = "real"', 'parameter_kind = "integer"', 'parameter_kind = "boolean"',
         'classification = "ordinary"', 'classification = "structural"',
-        'constraint_kind = "range"', 'constraint_kind = "exclude"',
+        'constraint_kind = "range"',
+        'constraint_kind = "exclude"',
         'policy = "static_generate"', 'spelling = "1k"', 'unit = @kOhm',
     ), problems, "NODAL-INC29-012", "positive parameter fixture")
     require(cycle, ("nodal.const_parameter_ref", "parameter = @A", "parameter = @B"), problems, "NODAL-INC29-012", "parameter-reference cycle fixture")
     require(rendering, (
         'nodal.backend.profile = "verilog-a"', 'spelling = "1k"', 'spelling = "10k"',
         'constraint_kind = "range"', 'constraint_kind = "exclude"',
+        'sym_name = "kOhmPretty"', 'symbol = "kΩ/V"',
+        'sym_name = "A_DEP"', 'sym_name = "Z_BASE"', 'sym_name = "WIDE"',
     ), problems, "NODAL-INC29-013", "rendering fixture")
     require(gate, (
         "**Status:** Approved", "**Scope:** compiler-ir and minimal native Verilog-A/Verilog-AMS rendering",
@@ -201,7 +212,8 @@ def check_repository(root: Path) -> list[Problem]:
         "parameter-rendering.mlir", "NODAL-UNIT-SCALE-001", "NODAL-PARAMETER-CONSTRAINT-001",
         "NODAL-PARAMETER-ENVELOPE-001", "NODAL-DYNAMIC-VALUE-001",
         "NODAL-PARAMETER-OVERRIDE-001", "NODAL-CONSTANT-CYCLE-001",
-        "permissions:\n  contents: read",
+        "permissions:\n  contents: read", "localparam integer WIDE",
+        "z_base_line", "a_dep_line",
     ), problems, "NODAL-INC29-016", "permanent workflow")
     if "contents: write" in workflow or "materialize_increment29" in workflow:
         problems.append(Problem("NODAL-INC29-016", "permanent workflow must be read-only"))

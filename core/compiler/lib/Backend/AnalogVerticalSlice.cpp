@@ -4,10 +4,13 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
+#include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
@@ -179,6 +182,96 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
   return rendered;
 }
 
+LogicalResult orderParametersByDependency(Operation *definition,
+                                          llvm::SmallVectorImpl<Operation *> &parameters) {
+  llvm::sort(parameters,
+             [](Operation *lhs, Operation *rhs) { return symbolName(lhs) < symbolName(rhs); });
+
+  llvm::StringMap<Operation *> parametersByName;
+  for (Operation *parameter : parameters) {
+    llvm::StringRef name = symbolName(parameter);
+    if (name.empty() || parametersByName.count(name) != 0)
+      return failure();
+    parametersByName[name] = parameter;
+  }
+
+  llvm::DenseMap<Operation *, llvm::SmallVector<Operation *, 4>> dependencies;
+  Region &region = definition->getRegion(0);
+  if (!llvm::hasSingleElement(region))
+    return failure();
+
+  for (Operation *parameter : parameters) {
+    Operation *parameterValue = nullptr;
+    for (Operation &operation : region.front()) {
+      if (operation.getName().getStringRef() != "nodal.parameter_value")
+        continue;
+      auto reference = operation.getAttrOfType<FlatSymbolRefAttr>("parameter");
+      if (!reference || reference.getValue() != symbolName(parameter))
+        continue;
+      if (parameterValue)
+        return failure();
+      parameterValue = &operation;
+    }
+    if (!parameterValue)
+      continue;
+
+    llvm::SmallVector<Value, 8> worklist;
+    worklist.push_back(parameterValue->getOperand(0));
+    llvm::DenseSet<Operation *> visitedExpressions;
+    while (!worklist.empty()) {
+      Value value = worklist.pop_back_val();
+      Operation *expression = value.getDefiningOp();
+      if (!expression || !visitedExpressions.insert(expression).second)
+        continue;
+      if (expression->getName().getStringRef() == "nodal.const_parameter_ref") {
+        auto reference = expression->getAttrOfType<FlatSymbolRefAttr>("parameter");
+        if (!reference)
+          return failure();
+        auto dependency = parametersByName.find(reference.getValue());
+        if (dependency == parametersByName.end())
+          return failure();
+        dependencies[parameter].push_back(dependency->second);
+        continue;
+      }
+      for (Value operand : expression->getOperands())
+        worklist.push_back(operand);
+    }
+  }
+
+  for (auto &entry : dependencies) {
+    auto &values = entry.second;
+    llvm::sort(values,
+               [](Operation *lhs, Operation *rhs) { return symbolName(lhs) < symbolName(rhs); });
+    values.erase(std::unique(values.begin(), values.end()), values.end());
+  }
+
+  llvm::DenseSet<Operation *> emitted;
+  llvm::SmallVector<Operation *, 8> ordered;
+  while (ordered.size() != parameters.size()) {
+    bool progressed = false;
+    for (Operation *parameter : parameters) {
+      if (emitted.count(parameter) != 0)
+        continue;
+      auto dependency = dependencies.find(parameter);
+      const bool ready = dependency == dependencies.end() ||
+                         llvm::all_of(dependency->second, [&](Operation *required) {
+                           return emitted.count(required) != 0;
+                         });
+      if (!ready)
+        continue;
+      emitted.insert(parameter);
+      ordered.push_back(parameter);
+      progressed = true;
+    }
+    if (!progressed)
+      return failure();
+  }
+
+  parameters.clear();
+  parameters.append(ordered.begin(), ordered.end());
+  return success();
+}
+
 LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state,
                                  llvm::SmallVectorImpl<Operation *> &parameters,
                                  llvm::SmallVectorImpl<Operation *> &ports,
@@ -220,8 +313,8 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
       analogs.push_back(&operation);
     }
   }
-  llvm::sort(parameters,
-             [](Operation *lhs, Operation *rhs) { return symbolName(lhs) < symbolName(rhs); });
+  if (failed(orderParametersByDependency(definition, parameters)))
+    return failure();
   llvm::sort(ports, [](Operation *lhs, Operation *rhs) {
     return lhs->getAttrOfType<StringAttr>("name").getValue() <
            rhs->getAttrOfType<StringAttr>("name").getValue();
@@ -263,6 +356,23 @@ llvm::SmallVector<Operation *, 4> findParameterConstraints(Operation *definition
   return constraints;
 }
 
+bool parameterIntegerIsSigned(Operation *parameter) {
+  auto type = parameter->getAttrOfType<TypeAttr>("type");
+  if (!type)
+    return false;
+  if (llvm::isa<nodal::SIntType>(type.getValue()))
+    return true;
+  if (auto integer = llvm::dyn_cast<IntegerType>(type.getValue()))
+    return integer.isSigned();
+  return false;
+}
+
+FailureOr<std::string> renderIntegerAttribute(IntegerAttr integer, Operation *parameter) {
+  llvm::SmallString<64> rendered;
+  integer.getValue().toString(rendered, 10, parameterIntegerIsSigned(parameter));
+  return rendered.str().str();
+}
+
 FailureOr<std::string> legacyParameterInitializer(Operation *parameter) {
   llvm::StringRef kind = nodal::getParameterKind(parameter);
   Attribute value = parameter->getAttr("default_value");
@@ -276,7 +386,7 @@ FailureOr<std::string> legacyParameterInitializer(Operation *parameter) {
     auto integer = llvm::dyn_cast<IntegerAttr>(value);
     if (!integer)
       return failure();
-    return std::to_string(integer.getInt());
+    return renderIntegerAttribute(integer, parameter);
   }
   if (kind == "boolean") {
     if (auto boolean = llvm::dyn_cast<BoolAttr>(value))
@@ -378,20 +488,24 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
 
     FailureOr<std::string> initializer = failure();
     if (Operation *value = findParameterValue(definition, symbolName(parameter)))
-      initializer = nodal::renderParameterConstantExpression(value->getOperand(0));
+      initializer = nodal::renderParameterConstantExpression(value->getOperand(0), parameter);
     else
       initializer = legacyParameterInitializer(parameter);
     if (failed(initializer))
       return emitMappedFailure(parameter, "NODAL-BACKEND-PARAMETER-001",
                                "parameter initializer is not losslessly renderable");
 
-    output << "  parameter " << nativeType << " " << symbolName(parameter) << " = " << *initializer;
+    auto variability = parameter->getAttrOfType<StringAttr>("variability");
+    llvm::StringRef declarationKeyword =
+        variability && variability.getValue() == "fixed" ? "localparam" : "parameter";
+    output << "  " << declarationKeyword << " " << nativeType << " " << symbolName(parameter)
+           << " = " << *initializer;
     for (Operation *constraint : findParameterConstraints(definition, symbolName(parameter))) {
       llvm::StringRef constraintKind =
           constraint->getAttrOfType<StringAttr>("constraint_kind").getValue();
       if (constraintKind == "range") {
-        auto lower = nodal::renderParameterConstantExpression(constraint->getOperand(0));
-        auto upper = nodal::renderParameterConstantExpression(constraint->getOperand(1));
+        auto lower = nodal::renderParameterConstantExpression(constraint->getOperand(0), parameter);
+        auto upper = nodal::renderParameterConstantExpression(constraint->getOperand(1), parameter);
         auto lowerInclusive = constraint->getAttrOfType<BoolAttr>("lower_inclusive");
         auto upperInclusive = constraint->getAttrOfType<BoolAttr>("upper_inclusive");
         if (failed(lower) || failed(upper) || !lowerInclusive || !upperInclusive)
@@ -400,7 +514,8 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
         output << " from " << (lowerInclusive.getValue() ? "[" : "(") << *lower << ":" << *upper
                << (upperInclusive.getValue() ? "]" : ")");
       } else if (constraintKind == "exclude") {
-        auto excluded = nodal::renderParameterConstantExpression(constraint->getOperand(0));
+        auto excluded =
+            nodal::renderParameterConstantExpression(constraint->getOperand(0), parameter);
         if (failed(excluded))
           return emitMappedFailure(constraint, "NODAL-BACKEND-PARAMETER-002",
                                    "exclusion constraint is not losslessly renderable");
@@ -425,6 +540,15 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
   }
   output << "endmodule\n";
   return success();
+}
+
+bool validCanonicalCommentText(llvm::StringRef value) {
+  if (value.empty() || value != value.trim())
+    return false;
+  return llvm::all_of(value, [](char character) {
+    const unsigned char byte = static_cast<unsigned char>(character);
+    return byte >= 0x20 && byte != 0x7f;
+  });
 }
 
 bool validIdentifierList(llvm::StringRef value) {
@@ -512,7 +636,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       if (!annotation.starts_with(unitPrefix))
         return false;
       llvm::StringRef unit = annotation.drop_front(unitPrefix.size()).trim();
-      if (!validIdentifierList(unit))
+      if (!validCanonicalCommentText(unit))
         return false;
       code = code.take_front(comment).rtrim();
     }
@@ -521,7 +645,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       return false;
     code = code.drop_back().trim();
 
-    if (!code.consume_front("parameter real ") && !code.consume_front("parameter integer "))
+    if (!code.consume_front("parameter real ") && !code.consume_front("parameter integer ") &&
+        !code.consume_front("localparam real ") && !code.consume_front("localparam integer "))
       return false;
 
     size_t equals = code.find(" = ");

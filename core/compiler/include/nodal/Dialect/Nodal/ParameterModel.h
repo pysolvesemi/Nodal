@@ -23,6 +23,12 @@ mlir::LogicalResult verifyParameterModel(mlir::ModuleOp module);
 /// Render a compile-time expression using retained literal spellings.
 mlir::FailureOr<std::string> renderParameterConstantExpression(mlir::Value value);
 
+/// Render an expression in one parameter's declared unit context. A
+/// dimensionless authored magnitude receives the target parameter's exact
+/// native scale suffix (or an explicit scale factor for compound expressions).
+mlir::FailureOr<std::string> renderParameterConstantExpression(mlir::Value value,
+                                                               mlir::Operation *targetParameter);
+
 /// Return the explicit or legacy-inferred parameter kind.
 llvm::StringRef getParameterKind(mlir::Operation *parameter);
 

@@ -25,8 +25,22 @@ module attributes {
 } {
   "nodal.unit"() <{dimension = "resistance", metadata = {}, native_suffix = "", scale = 1.0 : f64, sym_name = "Ohm", symbol = "Ohm"}> : () -> ()
   "nodal.unit"() <{dimension = "resistance", metadata = {}, native_suffix = "k", scale = 1.0e3 : f64, sym_name = "kOhm", symbol = "kOhm"}> : () -> ()
+  "nodal.unit"() <{dimension = "resistance", metadata = {}, native_suffix = "k", scale = 1.0e3 : f64, sym_name = "kOhmPretty", symbol = "kΩ/V"}> : () -> ()
   "nodal.module"() <{metadata = {root = true}, sym_name = "ParameterRendering"}> ({
   ^bb0:
+    "nodal.parameter"() <{classification = "ordinary", default_value = 1.0 : f64, metadata = {}, parameter_kind = "real", sym_name = "R_BARE", type = f64, unit = @kOhmPretty, variability = "symbolic"}> : () -> ()
+    %r_bare = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1.0 : f64}> : () -> f64
+    "nodal.parameter_value"(%r_bare) <{metadata = {}, parameter = @R_BARE}> : (f64) -> ()
+    %r_bare_low = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1.0 : f64}> : () -> f64
+    %r_bare_high = "nodal.const_literal"() <{metadata = {}, spelling = "2", value = 2.0 : f64}> : () -> f64
+    "nodal.parameter_constraint"(%r_bare_low, %r_bare_high) <{constraint_kind = "range", lower_inclusive = true, metadata = {}, parameter = @R_BARE, upper_inclusive = true}> : (f64, f64) -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = 340282366920938463463374607431768211455 : i129, metadata = {}, parameter_kind = "integer", sym_name = "WIDE", type = !nodal.uint<128>, variability = "fixed"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = 2 : i64, metadata = {}, parameter_kind = "integer", sym_name = "A_DEP", type = i64, variability = "symbolic"}> : () -> ()
+    %z_ref = "nodal.const_parameter_ref"() <{metadata = {}, parameter = @Z_BASE}> : () -> i64
+    "nodal.parameter_value"(%z_ref) <{metadata = {}, parameter = @A_DEP}> : (i64) -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = 2 : i64, metadata = {}, parameter_kind = "integer", sym_name = "Z_BASE", type = i64, variability = "symbolic"}> : () -> ()
+    %z_base = "nodal.const_literal"() <{metadata = {}, spelling = "2", value = 2 : i64}> : () -> i64
+    "nodal.parameter_value"(%z_base) <{metadata = {}, parameter = @Z_BASE}> : (i64) -> ()
     "nodal.parameter"() <{classification = "ordinary", default_value = true, metadata = {}, parameter_kind = "boolean", sym_name = "ENABLE", type = i1, variability = "symbolic"}> : () -> ()
     %enable = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = true}> : () -> i1
     "nodal.parameter_value"(%enable) <{metadata = {}, parameter = @ENABLE}> : (i1) -> ()

@@ -50,6 +50,77 @@ class Increment29CheckerTests(unittest.TestCase):
         path.write_text(path.read_text(encoding="utf-8").replace("renderParameterConstantExpression", "formatFoldedValue"), encoding="utf-8")
         self.assertIn("NODAL-INC29-008", self.codes(root))
 
+    def test_rejects_missing_parameter_unit_adoption(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Dialect/Nodal/ParameterModel.cpp"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "adoptParameterUnit", "discardParameterUnit"
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC29-005", self.codes(root))
+
+    def test_rejects_missing_wide_integer_retention(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Dialect/Nodal/ParameterModel.cpp"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace("exactInteger", "narrowIntegerOnly"),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC29-005", self.codes(root))
+
+    def test_rejects_missing_canonical_unit_comment_validation(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Backend/AnalogVerticalSlice.cpp"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "validCanonicalCommentText", "validIdentifierList"
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC29-008", self.codes(root))
+
+    def test_rejects_missing_fixed_override_guard(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Dialect/Nodal/ParameterModel.cpp"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "fixed parameter cannot be overridden",
+                "fixed parameter may be overridden",
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC29-005", self.codes(root))
+
+    def test_rejects_missing_dependency_ordering(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Backend/AnalogVerticalSlice.cpp"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "orderParametersByDependency", "alphabeticalParameterOrder"
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC29-008", self.codes(root))
+
+    def test_rejects_missing_fixed_localparam_rendering(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Backend/AnalogVerticalSlice.cpp"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "declarationKeyword", "parameterKeyword"
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC29-008", self.codes(root))
+
     def test_rejects_missing_dynamic_value_guard(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)

@@ -54,3 +54,47 @@ for fragment in required:
         raise RuntimeError(f"roadmap closure invariant is missing: {fragment}")
 
 roadmap_path.write_text(roadmap, encoding="utf-8")
+
+test_path = ROOT / "tests/compiler/test_increment28.py"
+test_text = test_path.read_text(encoding="utf-8")
+old_test = '''    def test_rejects_premature_roadmap_closure(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        roadmap = root / "docs/roadmap/nodal-development-todo.md"
+        roadmap.write_text(
+            roadmap.read_text(encoding="utf-8").replace(
+                "- [ ] **Increment 28 — Electrical nodes, nets, and branches**",
+                "- [x] **Increment 28 — Electrical nodes, nets, and branches**",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC28-019", self.codes(root))
+'''
+new_test = '''    def test_rejects_premature_roadmap_closure(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+
+        manifest_path = root / "tests/compiler/fixtures/increment28/manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "implemented-awaiting-evidence"
+        manifest["evidence"] = {}
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2) + "\\n",
+            encoding="utf-8",
+        )
+
+        roadmap = root / "docs/roadmap/nodal-development-todo.md"
+        text = roadmap.read_text(encoding="utf-8")
+        if "- [ ] **Increment 28 — Electrical nodes, nets, and branches**" in text:
+            text = text.replace(
+                "- [ ] **Increment 28 — Electrical nodes, nets, and branches**",
+                "- [x] **Increment 28 — Electrical nodes, nets, and branches**",
+                1,
+            )
+        roadmap.write_text(text, encoding="utf-8")
+        self.assertIn("NODAL-INC28-019", self.codes(root))
+'''
+if test_text.count(old_test) != 1:
+    raise RuntimeError("Increment 28 closure mutation-test anchor mismatch")
+test_path.write_text(test_text.replace(old_test, new_test, 1), encoding="utf-8")

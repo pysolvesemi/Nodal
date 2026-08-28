@@ -99,6 +99,13 @@ jobs:
           grep -F 'parameter real GAIN = (2.0 * 4.0);' /tmp/parameter-rendering.va
           grep -F 'parameter real R = 1k from [1:10k] exclude 5k; // unit: Ohm' /tmp/parameter-rendering.va
           grep -F 'parameter integer TAPS = 4 from [1:16];' /tmp/parameter-rendering.va
+          grep -F 'parameter real R_BARE = 1k from [1k:2k]; // unit: kΩ/V' /tmp/parameter-rendering.va
+          grep -F 'localparam integer WIDE = 340282366920938463463374607431768211455;' /tmp/parameter-rendering.va
+          grep -F 'parameter integer Z_BASE = 2;' /tmp/parameter-rendering.va
+          grep -F 'parameter integer A_DEP = Z_BASE;' /tmp/parameter-rendering.va
+          z_base_line=$(grep -nF 'parameter integer Z_BASE = 2;' /tmp/parameter-rendering.va | cut -d: -f1)
+          a_dep_line=$(grep -nF 'parameter integer A_DEP = Z_BASE;' /tmp/parameter-rendering.va | cut -d: -f1)
+          test "${z_base_line}" -lt "${a_dep_line}"
 
           check_rejection() {
             fixture="$1"

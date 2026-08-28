@@ -398,6 +398,18 @@ set_tests_properties(
 )
 
 add_test(
+  NAME nodal.native.analog-numeric-parameter-scale
+  COMMAND nodalc
+    "--pass-pipeline=builtin.module(nodal-fold-analog-constants,nodal-verify-analog-numeric)"
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-numeric-parameter-scale.mlir"
+)
+set_tests_properties(
+  nodal.native.analog-numeric-parameter-scale
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal[.]folded_value = 2[.]000000e[+]03"
+)
+
+add_test(
   NAME nodal.native.analog-numeric-rejects-dimension-overflow
   COMMAND nodalc
     "--pass-pipeline=builtin.module(nodal-verify-analog-numeric)"

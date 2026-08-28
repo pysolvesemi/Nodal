@@ -76,7 +76,8 @@
       "event-or-noise",
       "contribution-or-equation",
       "bridge"
-    ]
+    ],
+    "parameter_unit_scale": "canonicalize-before-fold"
   },
   "planned_diagnostics": [
     "NODAL-ANALOG-TYPE-001",
@@ -113,6 +114,7 @@
     "folding_form": "provenance-retaining-annotations",
     "backend_erasure": "verifyAnalogQuantityErasure",
     "positive_fixture": "core/compiler/test/IR/analog-numeric-typing.mlir",
-    "backend_fixture": "core/compiler/test/IR/analog-numeric-backend.mlir"
+    "backend_fixture": "core/compiler/test/IR/analog-numeric-backend.mlir",
+    "parameter_scale_fixture": "core/compiler/test/IR/analog-numeric-parameter-scale.mlir"
   }
 }

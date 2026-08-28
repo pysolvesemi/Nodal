@@ -19,6 +19,8 @@ review, merge, and evidence closure.
 - Static zero-divisor and non-finite-fold diagnostics.
 - Signed dimension-exponent overflow is rejected deterministically.
 - Conditional folding preserves promoted result kinds, including integer-to-real arms.
+- Fixed parameter folding applies the declared unit scale before materializing a
+  canonical dimension-only quantity value.
 - Fold annotations are recomputed and ignored outside the frozen pure-expression boundary.
 - Verified scalar erasure at the Verilog-A/Verilog-AMS backend boundary.
 - Positive, negative, folding, legacy-f64, and native-backend fixtures.

@@ -182,6 +182,28 @@ class Increment30CheckerTests(unittest.TestCase):
         )
         self.assertIn("NODAL-INC30-010", self.codes(root))
 
+    def test_rejects_missing_parameter_unit_scale_normalization(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "FailureOr<double> parameterScale(Operation *parameter)",
+                "FailureOr<double> ignoreParameterScale(Operation *parameter)",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC30-010", self.codes(root))
+
+    def test_rejects_temporary_parameter_scale_helper(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / ".github/workflows/increment-30-parameter-scale-fix.yml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("temporary\n", encoding="utf-8")
+        self.assertIn("NODAL-INC30-002", self.codes(root))
+
     def test_rejects_missing_implemented_status(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)

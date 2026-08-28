@@ -49,6 +49,7 @@ EXPECTED_FILES = (
     "core/compiler/test/CMakeLists.txt",
     "core/compiler/test/IR/analog-numeric-typing.mlir",
     "core/compiler/test/IR/analog-numeric-select-promotion.mlir",
+    "core/compiler/test/IR/analog-numeric-parameter-scale.mlir",
     "core/compiler/test/IR/analog-numeric-backend-fold-boundary.mlir",
     "core/compiler/test/IR/analog-numeric-invalid-dimension-overflow.mlir",
     "core/compiler/test/IR/analog-numeric-backend.mlir",
@@ -69,7 +70,9 @@ TEMPORARY_FILES = (
     ".github/workflows/increment-30-final-review-fixes.yml",
     ".github/workflows/increment-30-review-fixes.yml",
     ".github/workflows/increment-30-temporary-artifact-guard.yml",
+    ".github/workflows/increment-30-parameter-scale-fix.yml",
     "scripts/apply_increment30_final_review_fixes.py",
+    "scripts/apply_increment30_parameter_scale_fix.py",
 )
 
 OPERATIONS = [
@@ -238,6 +241,8 @@ def check_repository(root: Path) -> list[Problem]:
             "nodal-verify-analog-numeric",
             "nodal-fold-analog-constants",
             "analog-numeric-typing.mlir",
+            "analog-numeric-select-promotion.mlir",
+            "analog-numeric-parameter-scale.mlir",
             "analog-numeric-backend.mlir",
         ),
         problems,
@@ -306,6 +311,10 @@ def check_repository(root: Path) -> list[Problem]:
         problems.append(Problem("NODAL-INC30-008", "surface multiplication dimension rule mismatch"))
     if surface.get("folding", {}).get("requiresPureConstantGraph") is not True:
         problems.append(Problem("NODAL-INC30-008", "surface folding purity boundary is missing"))
+    if surface.get("folding", {}).get("parameterUnitScale") != "canonicalize-before-fold":
+        problems.append(Problem("NODAL-INC30-008", "surface parameter unit-scale rule is missing"))
+    if folding.get("parameter_unit_scale") != "canonicalize-before-fold":
+        problems.append(Problem("NODAL-INC30-007", "manifest parameter unit-scale rule is missing"))
 
     native_contracts = {
         "core/compiler/include/nodal/Dialect/Nodal/NodalTypes.td": (
@@ -348,6 +357,8 @@ def check_repository(root: Path) -> list[Problem]:
         "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp": (
             "__builtin_sub_overflow",
             "clearFoldAttributes",
+            "FailureOr<double> parameterScale(Operation *parameter)",
+            "fixed real parameter scale produced a non-finite result",
             "conditional fold does not match the promoted result kind",
         ),
         "core/compiler/lib/Backend/AnalogVerticalSlice.cpp": (
@@ -356,8 +367,14 @@ def check_repository(root: Path) -> list[Problem]:
         ),
         "core/compiler/test/CMakeLists.txt": (
             "analog-numeric-select-promotion",
+            "analog-numeric-parameter-scale",
             "analog-numeric-backend-fold-boundary",
             "analog-numeric-rejects-dimension-overflow",
+        ),
+        "core/compiler/test/IR/analog-numeric-parameter-scale.mlir": (
+            "unit = @kOhm",
+            "parameter = @R",
+            "identity = \"parameter_scale\"",
         ),
     }
     for relative, fragments in review_contracts.items():

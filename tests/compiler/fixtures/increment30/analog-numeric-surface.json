@@ -93,6 +93,7 @@
       "event-or-noise",
       "contribution-or-equation",
       "bridge"
-    ]
+    ],
+    "parameterUnitScale": "canonicalize-before-fold"
   }
 }

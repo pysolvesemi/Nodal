@@ -180,6 +180,17 @@ FailureOr<std::string> parameterDimension(Operation *parameter) {
   return dimension.str();
 }
 
+FailureOr<double> parameterScale(Operation *parameter) {
+  auto reference = parameter->getAttrOfType<FlatSymbolRefAttr>("unit");
+  if (!reference)
+    return 1.0;
+  Operation *unit = findTopLevelUnit(parameter, reference.getValue());
+  auto scale = unit ? unit->getAttrOfType<FloatAttr>("scale") : FloatAttr();
+  if (!scale || !std::isfinite(scale.getValueAsDouble()) || scale.getValueAsDouble() <= 0.0)
+    return failure();
+  return scale.getValueAsDouble();
+}
+
 bool semanticTypeMatches(Type type, AnalogNumericKind kind, llvm::StringRef dimension) {
   auto information = getAnalogNumericTypeInfo(type);
   return succeeded(information) && information->kind == kind && information->dimension == dimension;
@@ -270,10 +281,15 @@ EvaluationResult evaluateParameterReference(Operation *operation, bool reportErr
   Attribute valueAttribute = parameter->getAttr("default_value");
   if (result.kind == AnalogNumericKind::Real) {
     auto value = llvm::dyn_cast_or_null<FloatAttr>(valueAttribute);
-    if (!value || !std::isfinite(value.getValueAsDouble()))
+    auto scale = parameterScale(parameter);
+    if (!value || failed(scale) || !std::isfinite(value.getValueAsDouble()))
       return errorResult(operation, "NODAL-ANALOG-FOLD-001",
-                         "fixed real parameter has no finite canonical default", reportErrors);
-    result.real = value.getValueAsDouble();
+                         "fixed real parameter has no finite canonical default or unit scale",
+                         reportErrors);
+    result.real = value.getValueAsDouble() * *scale;
+    if (!std::isfinite(result.real))
+      return errorResult(operation, "NODAL-ANALOG-FOLD-001",
+                         "fixed real parameter scale produced a non-finite result", reportErrors);
     return constantResult(std::move(result));
   }
   if (result.kind == AnalogNumericKind::Integer) {

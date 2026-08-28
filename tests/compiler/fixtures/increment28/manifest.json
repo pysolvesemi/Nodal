@@ -1,0 +1,68 @@
+{
+  "increment": 28,
+  "title": "Electrical nodes, nets, and branches",
+  "public_api": "0.3",
+  "status": "implemented-awaiting-evidence",
+  "component_contract": {
+    "partial": "extensible",
+    "concrete": "local"
+  },
+  "source_operations": [
+    "nodal.component_contract",
+    "nodal.terminal",
+    "nodal.node",
+    "nodal.connect",
+    "nodal.alias",
+    "nodal.reference",
+    "nodal.branch"
+  ],
+  "generated_operations": [
+    "nodal.connection_set",
+    "nodal.potential_equality",
+    "nodal.reference_potential",
+    "nodal.flow_conservation"
+  ],
+  "normalization_pass": "nodal-materialize-conservative-connectivity",
+  "port_directions": [
+    "input",
+    "output",
+    "inout"
+  ],
+  "flow_orientations": [
+    "into_component",
+    "out_of_component"
+  ],
+  "branch_kinds": [
+    "named",
+    "implicit"
+  ],
+  "reference_scopes": [
+    "global",
+    "module"
+  ],
+  "diagnostics": [
+    "NODAL-COMPONENT-CONTRACT-001",
+    "NODAL-CONNECTIVITY-PROVENANCE-001",
+    "NODAL-TERMINAL-DISCIPLINE-001",
+    "NODAL-TERMINAL-DIRECTION-001",
+    "NODAL-TERMINAL-ORIENTATION-001",
+    "NODAL-CONNECTION-001",
+    "NODAL-CONNECTION-DISCIPLINE-001",
+    "NODAL-ALIAS-001",
+    "NODAL-REFERENCE-001",
+    "NODAL-REFERENCE-002",
+    "NODAL-BRANCH-DISCIPLINE-001",
+    "NODAL-BRANCH-ORIENTATION-001",
+    "NODAL-BRANCH-IMPLICIT-001",
+    "NODAL-CONNECTION-SET-001",
+    "NODAL-CONNECTION-POTENTIAL-001",
+    "NODAL-CONNECTION-FLOW-001"
+  ],
+  "deferred": [
+    "public Scala syntax",
+    "hierarchical topology flattening",
+    "residual DAE construction",
+    "Verilog-A and Verilog-AMS lowering"
+  ],
+  "evidence": {}
+}

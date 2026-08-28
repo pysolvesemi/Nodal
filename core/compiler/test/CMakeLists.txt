@@ -255,6 +255,46 @@ foreach(_fixture IN ITEMS tolerance association import-cycle)
   )
 endforeach()
 
+
+add_test(
+  NAME nodal.native.electrical-connectivity-roundtrip
+  COMMAND nodalc
+    "--pass-pipeline=builtin.module(nodal-materialize-conservative-connectivity)"
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/electrical-connectivity.mlir"
+)
+set_tests_properties(
+  nodal.native.electrical-connectivity-roundtrip
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal[.]flow_conservation"
+)
+
+add_test(
+  NAME nodal.native.electrical-connectivity-generic
+  COMMAND nodalc
+    --mlir-print-op-generic
+    "--pass-pipeline=builtin.module(nodal-materialize-conservative-connectivity)"
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/electrical-connectivity.mlir"
+)
+set_tests_properties(
+  nodal.native.electrical-connectivity-generic
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal[.]connection_set"
+)
+
+foreach(_fixture IN ITEMS discipline implicit connection reference component)
+  add_test(
+    NAME nodal.native.electrical-connectivity-rejects-${_fixture}
+    COMMAND nodalc
+      "--pass-pipeline=builtin.module(nodal-materialize-conservative-connectivity)"
+      "${CMAKE_CURRENT_SOURCE_DIR}/IR/electrical-connectivity-invalid-${_fixture}.mlir"
+  )
+  set_tests_properties(
+    nodal.native.electrical-connectivity-rejects-${_fixture}
+    PROPERTIES
+      WILL_FAIL TRUE
+  )
+endforeach()
+
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
   DEPENDS
@@ -267,6 +307,7 @@ add_custom_target(check-nodal-native
     nodal-semantic-pipeline-unit-tests
     nodal-analog-expression-unit-tests
     nodal-nature-discipline-unit-tests
+    nodal-conservative-connectivity-unit-tests
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
   USES_TERMINAL
 )

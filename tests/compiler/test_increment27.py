@@ -101,5 +101,30 @@ class Increment27CheckerTests(unittest.TestCase):
         self.assertEqual(CHECKER.check_repository(root), [])
 
 
+    def test_accepts_validated_increment28_successor(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        manifest_path = root / "tests/compiler/fixtures/increment28/manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "validated-electrical-connectivity"
+        manifest["evidence"] = {
+            "pull_request": 1,
+            "dedicated_run": 2,
+            "core_ci_run": 3,
+        }
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+        )
+        roadmap = root / "docs/roadmap/nodal-development-todo.md"
+        text = roadmap.read_text(encoding="utf-8")
+        text = text.replace("**Revision:** 1.35", "**Revision:** 1.36", 1)
+        text = text.replace(
+            "- [ ] **Increment 28 — Electrical nodes, nets, and branches**",
+            "- [x] **Increment 28 — Electrical nodes, nets, and branches**",
+            1,
+        )
+        roadmap.write_text(text, encoding="utf-8")
+        self.assertEqual(CHECKER.check_repository(root), [])
+
 if __name__ == "__main__":
     unittest.main()

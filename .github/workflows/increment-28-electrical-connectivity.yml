@@ -1,0 +1,118 @@
+name: Increment 28 Electrical Conservative Connectivity
+
+on:
+  push:
+    branches:
+      - increment/28-electrical-connectivity
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-28-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  electrical-connectivity:
+    name: increment-28/electrical-connectivity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore locked native and Scala caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/nodal/downloads
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-inc28-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', 'toolchains/lock.json', 'toolchains/checksums/*.sha256', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-inc28-${{ runner.os }}-
+            nodal-inc27-${{ runner.os }}-
+            nodal-inc26-${{ runner.os }}-
+            nodal-scala-${{ runner.os }}-
+
+      - name: Install locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate contracts and mutation tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          for increment in $(seq 18 28); do
+            python3 "scripts/check_increment${increment}.py"
+          done
+          python3 scripts/check_increment28.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
+          git diff --check
+
+      - name: Build lint and test native core
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Prove deterministic topology and stable rejections
+        run: |
+          set -euo pipefail
+          compiler="${PWD}/out/native/release/bin/nodalc"
+          pipeline='builtin.module(nodal-materialize-conservative-connectivity)'
+
+          "${compiler}" \
+            --pass-pipeline="${pipeline}" \
+            core/compiler/test/IR/electrical-connectivity.mlir \
+            | tee /tmp/electrical-connectivity.once.mlir
+          "${compiler}" \
+            --pass-pipeline="${pipeline}" \
+            /tmp/electrical-connectivity.once.mlir \
+            > /tmp/electrical-connectivity.twice.mlir
+          cmp /tmp/electrical-connectivity.once.mlir /tmp/electrical-connectivity.twice.mlir
+
+          grep -F 'nodal.connectivity.normalized = "v1"' /tmp/electrical-connectivity.once.mlir
+          grep -F 'nodal.connection_set' /tmp/electrical-connectivity.once.mlir
+          grep -F 'nodal.potential_equality' /tmp/electrical-connectivity.once.mlir
+          grep -F 'nodal.reference_potential' /tmp/electrical-connectivity.once.mlir
+          grep -F 'nodal.flow_conservation' /tmp/electrical-connectivity.once.mlir
+          grep -F 'complete = false' /tmp/electrical-connectivity.once.mlir
+          grep -F 'global::electrical' /tmp/electrical-connectivity.once.mlir
+          grep -F 'PartialProbe::reference::electrical' /tmp/electrical-connectivity.once.mlir
+
+          check_rejection() {
+            fixture="$1"
+            code="$2"
+            if "${compiler}" --pass-pipeline="${pipeline}" \
+                "core/compiler/test/IR/electrical-connectivity-invalid-${fixture}.mlir" \
+                >"/tmp/${fixture}.out" 2>"/tmp/${fixture}.err"; then
+              echo "invalid ${fixture} connectivity was accepted" >&2
+              exit 1
+            fi
+            grep -F "${code}" "/tmp/${fixture}.err"
+          }
+
+          check_rejection discipline NODAL-TERMINAL-DISCIPLINE-001
+          check_rejection implicit NODAL-BRANCH-IMPLICIT-001
+          check_rejection connection NODAL-CONNECTION-DISCIPLINE-001
+          check_rejection reference NODAL-REFERENCE-002
+          check_rejection component NODAL-COMPONENT-CONTRACT-001

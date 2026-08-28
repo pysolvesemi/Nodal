@@ -36,6 +36,7 @@ EXPECTED_FILES = (
     "docs/design-gates/NodalNatureDiscipline-DG-v1.0.md",
     "docs/implementation/increment27-natures-disciplines.md",
     "tests/compiler/fixtures/increment27/manifest.json",
+    "tests/compiler/fixtures/increment28/manifest.json",
     "tests/compiler/test_increment27.py",
     "scripts/check_increment26.py",
     "tests/compiler/test_increment26.py",
@@ -201,6 +202,7 @@ def check_repository(root: Path) -> list[Problem]:
     increment27_open = "- [ ] **Increment 27 — Natures and disciplines**" in roadmap
     increment27_done = "- [x] **Increment 27 — Natures and disciplines**" in roadmap
     increment28_open = "- [ ] **Increment 28 — Electrical nodes, nets, and branches**" in roadmap
+    increment28_done = "- [x] **Increment 28 — Electrical nodes, nets, and branches**" in roadmap
     status = manifest.get("status")
     evidence = manifest.get("evidence", {})
     if not increment26_done:
@@ -216,8 +218,61 @@ def check_repository(root: Path) -> list[Problem]:
                 problems.append(Problem("NODAL-INC27-016", f"validated manifest lacks integer evidence field: {field}"))
     else:
         problems.append(Problem("NODAL-INC27-016", f"unexpected manifest status: {status!r}"))
-    if not increment28_open:
-        problems.append(Problem("NODAL-INC27-016", "Increment 28 must remain unchecked"))
+    if increment28_open:
+        pass
+    elif increment28_done:
+        if not increment27_done:
+            problems.append(
+                Problem("NODAL-INC27-016", "Increment 28 cannot close before Increment 27")
+            )
+        successor_path = root / "tests/compiler/fixtures/increment28/manifest.json"
+        try:
+            successor = json.loads(read(successor_path, problems, "NODAL-INC27-016"))
+        except json.JSONDecodeError as exc:
+            problems.append(
+                Problem(
+                    "NODAL-INC27-016",
+                    f"invalid Increment 28 successor manifest: {exc}",
+                )
+            )
+            successor = {}
+        if successor.get("increment") != 28 or successor.get("public_api") != "0.3":
+            problems.append(
+                Problem(
+                    "NODAL-INC27-016",
+                    "Increment 28 successor identity/public API mismatch",
+                )
+            )
+        if successor.get("status") != "validated-electrical-connectivity":
+            problems.append(
+                Problem(
+                    "NODAL-INC27-016",
+                    "checked Increment 28 lacks validated successor evidence",
+                )
+            )
+        successor_evidence = successor.get("evidence", {})
+        for field in ("pull_request", "dedicated_run", "core_ci_run"):
+            if not isinstance(successor_evidence.get(field), int):
+                problems.append(
+                    Problem(
+                        "NODAL-INC27-016",
+                        f"Increment 28 successor lacks integer evidence field: {field}",
+                    )
+                )
+        if rev < (1, 36):
+            problems.append(
+                Problem(
+                    "NODAL-INC27-016",
+                    "checked Increment 28 requires roadmap revision 1.36 or later",
+                )
+            )
+    else:
+        problems.append(
+            Problem(
+                "NODAL-INC27-016",
+                "Increment 28 roadmap state is neither open nor validated",
+            )
+        )
     return problems
 
 

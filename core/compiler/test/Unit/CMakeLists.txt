@@ -140,3 +140,24 @@ add_test(
   NAME nodal.native.nature-discipline-unit
   COMMAND nodal-nature-discipline-unit-tests
 )
+
+
+add_executable(nodal-conservative-connectivity-unit-tests
+  ConservativeConnectivityTest.cpp
+)
+
+llvm_update_compile_flags(nodal-conservative-connectivity-unit-tests)
+
+target_link_libraries(nodal-conservative-connectivity-unit-tests
+  PRIVATE
+    NodalDialect
+    MLIRIR
+    MLIRParser
+    MLIRSupport
+    LLVMSupport
+)
+
+add_test(
+  NAME nodal.native.conservative-connectivity-unit
+  COMMAND nodal-conservative-connectivity-unit-tests
+)

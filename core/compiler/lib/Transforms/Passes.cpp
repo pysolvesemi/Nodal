@@ -8,6 +8,7 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Support/LogicalResult.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
+#include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 
@@ -814,12 +815,18 @@ LogicalResult verifyAnalog(mlir::ModuleOp module) {
     bool digital = false;
     bool analog = false;
     bool bridge = false;
+    const bool partial = isPartialPhysicalComponent(owner);
     owner->walk([&](Operation *operation) {
       llvm::StringRef name = operation->getName().getStringRef();
-      if (name == "nodal.terminal" || name == "nodal.node" || name == "nodal.branch" ||
-          name == "nodal.access" || name == "nodal.analog" || name == "nodal.real_literal" ||
-          name == "nodal.parameter_ref" || name == "nodal.analog_add" ||
-          name == "nodal.analog_sub" || name == "nodal.analog_mul" || name == "nodal.analog_div" ||
+      if (name == "nodal.component_contract" || name == "nodal.terminal" ||
+          name == "nodal.node" || name == "nodal.connect" || name == "nodal.alias" ||
+          name == "nodal.reference" || name == "nodal.branch" ||
+          name == "nodal.connection_set" || name == "nodal.potential_equality" ||
+          name == "nodal.reference_potential" || name == "nodal.flow_conservation" ||
+          name == "nodal.access" || name == "nodal.analog" ||
+          name == "nodal.real_literal" || name == "nodal.parameter_ref" ||
+          name == "nodal.analog_add" || name == "nodal.analog_sub" ||
+          name == "nodal.analog_mul" || name == "nodal.analog_div" ||
           name == "nodal.analog_ddt" || name == "nodal.contribute")
         analog = true;
       if (name == "nodal.port" || name == "nodal.resolved_net" || name == "nodal.net_drive" ||
@@ -828,7 +835,7 @@ LogicalResult verifyAnalog(mlir::ModuleOp module) {
       if (name == "nodal.bridge")
         bridge = true;
       if ((name == "nodal.terminal" || name == "nodal.node") && operation->getNumResults() == 1 &&
-          operation->getResult(0).use_empty() &&
+          operation->getResult(0).use_empty() && !partial &&
           booleanMetadata(operation, "allow_floating") != std::optional<bool>(true))
         result = emitFailure(operation, "NODAL-VERIFY-ANALOG-003",
                              "floating conservative terminal requires explicit approval");
@@ -857,11 +864,16 @@ LogicalResult verifyCapabilities(mlir::ModuleOp module) {
   module.walk([&](Operation *operation) {
     llvm::StringRef name = operation->getName().getStringRef();
     const bool analog =
-        name == "nodal.terminal" || name == "nodal.node" || name == "nodal.branch" ||
+        name == "nodal.component_contract" || name == "nodal.terminal" ||
+        name == "nodal.node" || name == "nodal.connect" || name == "nodal.alias" ||
+        name == "nodal.reference" || name == "nodal.branch" ||
+        name == "nodal.connection_set" || name == "nodal.potential_equality" ||
+        name == "nodal.reference_potential" || name == "nodal.flow_conservation" ||
         name == "nodal.access" || name == "nodal.bridge" || name == "nodal.analog" ||
         name == "nodal.real_literal" || name == "nodal.parameter_ref" ||
-        name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
-        name == "nodal.analog_div" || name == "nodal.analog_ddt" || name == "nodal.contribute";
+        name == "nodal.analog_add" || name == "nodal.analog_sub" ||
+        name == "nodal.analog_mul" || name == "nodal.analog_div" ||
+        name == "nodal.analog_ddt" || name == "nodal.contribute";
     const bool digital = name == "nodal.resolved_net" || name == "nodal.net_driver" ||
                          name == "nodal.net_drive" || name == "nodal.crossing" ||
                          name == "nodal.fsm";
@@ -987,6 +999,25 @@ void addVerifierPasses(OpPassManager &manager, GateProfile profile) {
   manager.addPass(std::make_unique<VerifyCapabilitiesPass>());
 }
 
+class MaterializeConservativeConnectivityPass final
+    : public PassWrapper<MaterializeConservativeConnectivityPass,
+                         OperationPass<mlir::ModuleOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MaterializeConservativeConnectivityPass)
+
+  llvm::StringRef getArgument() const final {
+    return "nodal-materialize-conservative-connectivity";
+  }
+  llvm::StringRef getDescription() const final {
+    return "Build deterministic conservative connection sets and conservation equations";
+  }
+
+  void runOnOperation() final {
+    if (failed(materializeConservativeConnectivity(getOperation())))
+      signalPassFailure();
+  }
+};
+
 class NormalizePipelinePass final
     : public PassWrapper<NormalizePipelinePass, OperationPass<mlir::ModuleOp>> {
 public:
@@ -1019,6 +1050,7 @@ private:
 LogicalResult runPipeline(mlir::ModuleOp module, GateProfile profile) {
   PassManager manager(module.getContext(), mlir::ModuleOp::getOperationName());
   manager.enableVerifier(true);
+  manager.addPass(std::make_unique<MaterializeConservativeConnectivityPass>());
   addVerifierPasses(manager, profile);
   manager.addPass(std::make_unique<NormalizePipelinePass>(profile));
   return manager.run(module);
@@ -1104,6 +1136,7 @@ LogicalResult runNodalPipelineTransaction(mlir::ModuleOp module, GateProfile pro
 }
 
 void registerNodalPasses() {
+  static PassRegistration<MaterializeConservativeConnectivityPass> connectivity;
   static PassRegistration<VerifyConstructionPass> construction;
   static PassRegistration<VerifyDriversPass> drivers;
   static PassRegistration<VerifyLatchesPass> latches;
@@ -1133,6 +1166,7 @@ void registerNodalPasses() {
         manager.addPass(std::make_unique<TransactionalGatePass>(GateProfile::Release));
       });
 
+  (void)connectivity;
   (void)construction;
   (void)drivers;
   (void)latches;

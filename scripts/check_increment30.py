@@ -48,6 +48,9 @@ EXPECTED_FILES = (
     "core/compiler/diagnostics-v0.1.json",
     "core/compiler/test/CMakeLists.txt",
     "core/compiler/test/IR/analog-numeric-typing.mlir",
+    "core/compiler/test/IR/analog-numeric-select-promotion.mlir",
+    "core/compiler/test/IR/analog-numeric-backend-fold-boundary.mlir",
+    "core/compiler/test/IR/analog-numeric-invalid-dimension-overflow.mlir",
     "core/compiler/test/IR/analog-numeric-backend.mlir",
     "core/compiler/test/IR/analog-numeric-invalid-type.mlir",
     "core/compiler/test/IR/analog-numeric-invalid-promotion.mlir",
@@ -63,6 +66,8 @@ TEMPORARY_FILES = (
     "scripts/finalize_increment30.py",
     ".github/workflows/increment-30-materialize.yml",
     ".github/workflows/increment-30-finalize.yml",
+    ".github/workflows/increment-30-final-review-fixes.yml",
+    "scripts/apply_increment30_final_review_fixes.py",
 )
 
 OPERATIONS = [
@@ -336,6 +341,31 @@ def check_repository(root: Path) -> list[Problem]:
     for relative, fragments in native_contracts.items():
         require(read(root / relative, problems, "NODAL-INC30-010"), fragments, problems,
                 "NODAL-INC30-010", relative)
+
+    review_contracts = {
+        "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp": (
+            "__builtin_sub_overflow",
+            "clearFoldAttributes",
+            "conditional fold does not match the promoted result kind",
+        ),
+        "core/compiler/lib/Backend/AnalogVerticalSlice.cpp": (
+            "isFoldedExpressionCandidate",
+            "nodal.folded_provenance",
+        ),
+        "core/compiler/test/CMakeLists.txt": (
+            "analog-numeric-select-promotion",
+            "analog-numeric-backend-fold-boundary",
+            "analog-numeric-rejects-dimension-overflow",
+        ),
+    }
+    for relative, fragments in review_contracts.items():
+        require(
+            read(root / relative, problems, "NODAL-INC30-010"),
+            fragments,
+            problems,
+            "NODAL-INC30-010",
+            relative,
+        )
 
     diagnostics = load_json(root / "core/compiler/diagnostics-v0.1.json", problems,
                             "NODAL-INC30-011")

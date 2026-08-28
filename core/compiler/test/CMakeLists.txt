@@ -385,6 +385,42 @@ set_tests_properties(
     PASS_REGULAR_EXPRESSION "I[(]p, n[)] <[+]"
 )
 
+add_test(
+  NAME nodal.native.analog-numeric-select-promotion
+  COMMAND nodalc
+    "--pass-pipeline=builtin.module(nodal-fold-analog-constants,nodal-verify-analog-numeric)"
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-numeric-select-promotion.mlir"
+)
+set_tests_properties(
+  nodal.native.analog-numeric-select-promotion
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal[.]folded_kind = .real."
+)
+
+add_test(
+  NAME nodal.native.analog-numeric-rejects-dimension-overflow
+  COMMAND nodalc
+    "--pass-pipeline=builtin.module(nodal-verify-analog-numeric)"
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-numeric-invalid-dimension-overflow.mlir"
+)
+set_tests_properties(
+  nodal.native.analog-numeric-rejects-dimension-overflow
+  PROPERTIES
+    WILL_FAIL TRUE
+)
+
+add_test(
+  NAME nodal.native.analog-numeric-backend-fold-boundary
+  COMMAND nodal-translate
+    --nodal-to-verilog-a
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-numeric-backend-fold-boundary.mlir"
+)
+set_tests_properties(
+  nodal.native.analog-numeric-backend-fold-boundary
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "V[(]p, n[)] <[+] V[(]p, n[)]"
+)
+
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
   DEPENDS

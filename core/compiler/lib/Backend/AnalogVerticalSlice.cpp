@@ -117,19 +117,53 @@ FailureOr<std::string> renderBranch(Value value, ModuleRenderState &state, llvm:
       .str();
 }
 
+bool isFoldedExpressionCandidate(Operation *operation) {
+  llvm::StringRef name = operation->getName().getStringRef();
+  return name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
+         name == "nodal.analog_div" || name == "nodal.analog_neg" ||
+         name == "nodal.analog_compare" || name == "nodal.analog_logic" ||
+         name == "nodal.analog_select";
+}
+
 std::optional<std::string> renderFoldedExpression(Operation *operation) {
-  auto folded = operation->getAttrOfType<BoolAttr>("nodal.folded");
-  if (!folded || !folded.getValue())
+  if (!isFoldedExpressionCandidate(operation) || operation->getNumResults() != 1)
     return std::nullopt;
+
+  auto folded = operation->getAttrOfType<BoolAttr>("nodal.folded");
+  auto kind = operation->getAttrOfType<StringAttr>("nodal.folded_kind");
+  auto dimension = operation->getAttrOfType<StringAttr>("nodal.folded_dimension");
+  auto provenance = operation->getAttrOfType<StringAttr>("nodal.folded_provenance");
+  if (!folded || !folded.getValue() || !kind || !dimension || !provenance ||
+      provenance.getValue() != "increment30")
+    return std::nullopt;
+
+  auto information = getAnalogNumericTypeInfo(operation->getResult(0).getType());
+  if (failed(information))
+    return std::nullopt;
+  llvm::StringRef expectedKind =
+      information->kind == AnalogNumericKind::Integer ? llvm::StringRef("integer")
+      : information->kind == AnalogNumericKind::Real  ? llvm::StringRef("real")
+                                                      : llvm::StringRef("boolean");
+  if (kind.getValue() != expectedKind ||
+      dimension.getValue() != llvm::StringRef(information->dimension))
+    return std::nullopt;
+
   Attribute value = operation->getAttr("nodal.folded_value");
-  if (auto boolean = llvm::dyn_cast_or_null<BoolAttr>(value))
-    return boolean.getValue() ? std::string("1") : std::string("0");
-  if (auto real = llvm::dyn_cast_or_null<FloatAttr>(value)) {
-    if (!std::isfinite(real.getValueAsDouble()))
+  if (information->kind == AnalogNumericKind::Boolean) {
+    if (auto boolean = llvm::dyn_cast_or_null<BoolAttr>(value))
+      return boolean.getValue() ? std::string("1") : std::string("0");
+    return std::nullopt;
+  }
+  if (information->kind == AnalogNumericKind::Real) {
+    auto real = llvm::dyn_cast_or_null<FloatAttr>(value);
+    if (!real || !std::isfinite(real.getValueAsDouble()))
       return std::nullopt;
     return formatReal(real.getValueAsDouble());
   }
-  if (auto integer = llvm::dyn_cast_or_null<IntegerAttr>(value)) {
+  if (information->kind == AnalogNumericKind::Integer) {
+    auto integer = llvm::dyn_cast_or_null<IntegerAttr>(value);
+    if (!integer)
+      return std::nullopt;
     llvm::SmallString<64> rendered;
     integer.getValue().toString(rendered, 10, true);
     return rendered.str().str();

@@ -487,7 +487,31 @@ EvaluationResult evaluateSelect(Operation *operation, bool reportErrors) {
       trueValue.status != EvaluationStatus::Constant ||
       falseValue.status != EvaluationStatus::Constant)
     return dynamicResult();
-  return condition.value.boolean ? trueValue : falseValue;
+
+  EvaluationResult selected = condition.value.boolean ? trueValue : falseValue;
+  auto resultInformation = getAnalogNumericTypeInfo(operation->getResult(0).getType());
+  if (failed(resultInformation))
+    return errorResult(operation, "NODAL-ANALOG-FOLD-001",
+                       "conditional result has no semantic type", reportErrors);
+  if (selected.value.dimension != resultInformation->dimension)
+    return errorResult(operation, "NODAL-ANALOG-FOLD-001",
+                       "conditional fold changed the result dimension", reportErrors);
+  if (selected.value.kind == resultInformation->kind)
+    return selected;
+  if (selected.value.kind == AnalogNumericKind::Integer &&
+      resultInformation->kind == AnalogNumericKind::Real && selected.value.integer) {
+    auto promoted = integerAsDouble(*selected.value.integer);
+    if (!promoted)
+      return errorResult(operation, "NODAL-ANALOG-FOLD-001",
+                         "selected integer arm cannot be represented as a finite real",
+                         reportErrors);
+    selected.value.kind = AnalogNumericKind::Real;
+    selected.value.integer.reset();
+    selected.value.real = *promoted;
+    return selected;
+  }
+  return errorResult(operation, "NODAL-ANALOG-FOLD-001",
+                     "conditional fold does not match the promoted result kind", reportErrors);
 }
 
 EvaluationResult evaluateValue(Value value, bool reportErrors) {
@@ -554,12 +578,22 @@ EvaluationResult evaluateValue(Value value, bool reportErrors) {
   return dynamicResult();
 }
 
+constexpr llvm::StringLiteral kFoldAttributes[] = {
+    "nodal.folded",       "nodal.folded_kind",       "nodal.folded_dimension",
+    "nodal.folded_value", "nodal.folded_provenance",
+};
+
 bool isFoldCandidate(Operation *operation) {
   llvm::StringRef name = operation->getName().getStringRef();
   return name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
          name == "nodal.analog_div" || name == "nodal.analog_neg" ||
          name == "nodal.analog_compare" || name == "nodal.analog_logic" ||
          name == "nodal.analog_select";
+}
+
+void clearFoldAttributes(Operation *operation) {
+  for (llvm::StringRef attribute : kFoldAttributes)
+    operation->removeAttr(attribute);
 }
 
 LogicalResult verifyRealLiteral(Operation *operation) {
@@ -844,9 +878,12 @@ FailureOr<std::string> combineAnalogDimensions(llvm::StringRef lhs, llvm::String
   for (const auto &[atom, exponent] : *right) {
     int64_t current = result.count(atom) != 0 ? result[atom] : 0;
     int64_t updated = 0;
-    const int64_t delta = subtractRhs ? -exponent : exponent;
-    if (__builtin_add_overflow(current, delta, &updated))
+    if (subtractRhs) {
+      if (__builtin_sub_overflow(current, exponent, &updated))
+        return failure();
+    } else if (__builtin_add_overflow(current, exponent, &updated)) {
       return failure();
+    }
     if (updated == 0)
       result.erase(atom);
     else
@@ -944,19 +981,20 @@ LogicalResult foldAnalogNumericConstants(mlir::ModuleOp module) {
     return failure();
   LogicalResult result = success();
   module.walk([&](Operation *operation) {
-    if (failed(result) || !isFoldCandidate(operation) || operation->getNumResults() != 1)
+    if (failed(result))
       return;
+    if (!isFoldCandidate(operation) || operation->getNumResults() != 1) {
+      clearFoldAttributes(operation);
+      return;
+    }
+
     EvaluationResult evaluated = evaluateValue(operation->getResult(0), true);
     if (evaluated.status == EvaluationStatus::Error) {
       result = failure();
       return;
     }
-    constexpr llvm::StringLiteral attributes[] = {"nodal.folded", "nodal.folded_kind",
-                                                  "nodal.folded_dimension", "nodal.folded_value",
-                                                  "nodal.folded_provenance"};
     if (evaluated.status != EvaluationStatus::Constant) {
-      for (llvm::StringRef attribute : attributes)
-        operation->removeAttr(attribute);
+      clearFoldAttributes(operation);
       return;
     }
 

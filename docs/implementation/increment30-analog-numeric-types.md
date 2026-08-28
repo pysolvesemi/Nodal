@@ -17,6 +17,9 @@ review, merge, and evidence closure.
   provenance-retaining annotations so authored source operations are not
   erased.
 - Static zero-divisor and non-finite-fold diagnostics.
+- Signed dimension-exponent overflow is rejected deterministically.
+- Conditional folding preserves promoted result kinds, including integer-to-real arms.
+- Fold annotations are recomputed and ignored outside the frozen pure-expression boundary.
 - Verified scalar erasure at the Verilog-A/Verilog-AMS backend boundary.
 - Positive, negative, folding, legacy-f64, and native-backend fixtures.
 

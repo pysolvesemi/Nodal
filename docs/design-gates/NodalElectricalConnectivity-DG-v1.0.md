@@ -59,7 +59,10 @@ produces byte-identical MLIR.
 
 - Conservative endpoints require a continuous discipline with distinct
   potential and flow natures.
-- Discipline aliases are accepted through canonical Increment 27 compatibility.
+- Discipline aliases and distinct declarations with compatible canonical domain,
+  potential nature, and flow nature are accepted through Increment 27 compatibility.
+- A mixed-compatible connection set uses the lexicographically smallest canonical
+  discipline symbol as its deterministic generated representative.
 - Connections and aliases reject incompatible disciplines.
 - A concrete component rejects unowned floating endpoints and connection sets
   without an owned flow term.

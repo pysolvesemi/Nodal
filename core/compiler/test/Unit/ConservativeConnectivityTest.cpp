@@ -26,14 +26,15 @@ module {
   "nodal.nature"() <{abstol = 1.0e-6 : f64, access = "V", metadata = {}, sym_name = "Voltage", units = "V"}> : () -> ()
   "nodal.nature"() <{abstol = 1.0e-12 : f64, access = "I", metadata = {}, sym_name = "Current", units = "A"}> : () -> ()
   "nodal.discipline"() <{domain = "continuous", flow = @Current, metadata = {}, potential = @Voltage, sym_name = "electrical"}> : () -> ()
+  "nodal.discipline"() <{domain = "continuous", flow = @Current, metadata = {}, potential = @Voltage, sym_name = "electrical_equivalent"}> : () -> ()
   "nodal.module"() <{metadata = {}, sym_name = "Fixture"}> ({
   ^bb0:
     "nodal.component_contract"() <{connectivity_ownership = "local", kind = "concrete", metadata = {}, source_path = "Fixture"}> : () -> ()
     %p = "nodal.terminal"() <{direction = "output", flow_orientation = "into_component", metadata = {}, name = "p", source_path = "Fixture.p"}> : () -> !nodal.terminal<"electrical">
-    %n = "nodal.terminal"() <{direction = "input", flow_orientation = "into_component", metadata = {}, name = "n", source_path = "Fixture.n"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{direction = "input", flow_orientation = "into_component", metadata = {}, name = "n", source_path = "Fixture.n"}> : () -> !nodal.terminal<"electrical_equivalent">
     %mid = "nodal.node"() <{metadata = {}, name = "mid", source_path = "Fixture.mid"}> : () -> !nodal.terminal<"electrical">
     %g = "nodal.node"() <{metadata = {}, name = "g", source_path = "Fixture.g"}> : () -> !nodal.terminal<"electrical">
-    "nodal.connect"(%n, %mid) <{connection_id = "n-mid", metadata = {}, source_path = "Fixture.connect.n-mid"}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> ()
+    "nodal.connect"(%n, %mid) <{connection_id = "n-mid", metadata = {}, source_path = "Fixture.connect.n-mid"}> : (!nodal.terminal<"electrical_equivalent">, !nodal.terminal<"electrical">) -> ()
     "nodal.reference"(%g) <{metadata = {}, scope = "global", source_path = "Fixture.reference.g"}> : (!nodal.terminal<"electrical">) -> ()
     %input = "nodal.branch"(%p, %mid) <{declaration_kind = "named", metadata = {}, name = "input", source_path = "Fixture.branch.input"}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
     %ground = "nodal.branch"(%mid, %g) <{declaration_kind = "implicit", metadata = {}, source_path = "Fixture.branch.ground"}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
@@ -100,8 +101,23 @@ int main() {
   bool partialIncomplete = false;
   bool outputDirectionKeptIndependent = false;
   bool moduleReferenceRetained = false;
+  bool compatibleRepresentativeDeterministic = false;
   valid->walk([&](mlir::Operation *operation) {
     sets += llvm::isa<nodal::ConnectionSetOp>(operation);
+    if (llvm::isa<nodal::ConnectionSetOp>(operation)) {
+      bool hasEquivalent = false;
+      bool hasMid = false;
+      for (mlir::Value operand : operation->getOperands()) {
+        mlir::Operation *definition = operand.getDefiningOp();
+        auto name =
+            definition ? definition->getAttrOfType<mlir::StringAttr>("name") : mlir::StringAttr();
+        hasEquivalent |= name && name.getValue() == "n";
+        hasMid |= name && name.getValue() == "mid";
+      }
+      auto discipline = operation->getAttrOfType<mlir::FlatSymbolRefAttr>("discipline");
+      if (hasEquivalent && hasMid && discipline && discipline.getValue() == "electrical")
+        compatibleRepresentativeDeterministic = true;
+    }
     equalities += llvm::isa<nodal::PotentialEqualityOp>(operation);
     references += llvm::isa<nodal::ReferencePotentialOp>(operation);
     if (llvm::isa<nodal::ReferencePotentialOp>(operation)) {
@@ -130,6 +146,8 @@ int main() {
     return fail("normalized topology/equation inventory is incorrect");
   if (!moduleReferenceRetained)
     return fail("module-local reference identity was not retained");
+  if (!compatibleRepresentativeDeterministic)
+    return fail("compatible discipline set did not select deterministic representative");
   if (!partialIncomplete)
     return fail("partial component did not retain incomplete extensible ownership");
   if (!outputDirectionKeptIndependent)

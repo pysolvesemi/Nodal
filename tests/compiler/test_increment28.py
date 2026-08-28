@@ -46,6 +46,20 @@ class Increment28CheckerTests(unittest.TestCase):
         )
         self.assertIn("NODAL-INC28-005", self.codes(root))
 
+    def test_rejects_missing_compatible_discipline_selection(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Dialect/Nodal/ConservativeConnectivity.cpp"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "endpoints[index].operation, info.discipline, endpoints[index].discipline",
+                "endpoints[index].operation, info.discipline, info.discipline",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("NODAL-INC28-005", self.codes(root))
+
     def test_rejects_discardable_generated_attributes(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)

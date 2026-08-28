@@ -584,12 +584,18 @@ LogicalResult materializeModule(Operation *module) {
     for (unsigned index : indices) {
       info.members.push_back(endpoints[index].value);
       info.memberPaths.push_back(endpoints[index].path);
-      if (info.discipline.empty())
+      if (info.discipline.empty()) {
         info.discipline = endpoints[index].discipline;
-      else if (info.discipline != endpoints[index].discipline)
-        return endpoints[index].operation->emitOpError(
-            "NODAL-CONNECTION-DISCIPLINE-001: normalized connection set contains "
-            "incompatible disciplines");
+      } else if (info.discipline != endpoints[index].discipline) {
+        FailureOr<bool> compatible = compatibleConservativeDisciplines(
+            endpoints[index].operation, info.discipline, endpoints[index].discipline);
+        if (failed(compatible) || !*compatible)
+          return endpoints[index].operation->emitOpError(
+              "NODAL-CONNECTION-DISCIPLINE-001: normalized connection set contains "
+              "incompatible disciplines");
+        if (endpoints[index].discipline < info.discipline)
+          info.discipline = endpoints[index].discipline;
+      }
     }
 
     for (Operation *relation : sourceRelations) {

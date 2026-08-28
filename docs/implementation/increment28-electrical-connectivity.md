@@ -23,8 +23,10 @@ contract opts into Increment 28.
 `materializeConservativeConnectivity` runs transactionally before the semantic
 verification gates. It removes old generated records, validates source topology,
 uses union-find to construct connection sets, sorts members by retained source
-path, derives deterministic hash-based symbols, and regenerates normalized
-potential and flow equations. Generated ODS inherent attributes are installed
+path, accepts distinct compatible discipline declarations, selects the
+lexicographically smallest canonical discipline symbol as each set's stable
+representative, derives deterministic hash-based symbols, and regenerates
+normalized potential and flow equations. Generated ODS inherent attributes are installed
 through MLIR operation properties rather than discardable attributes.
 User-authored normalized operations without compiler provenance are rejected;
 only records carrying the compiler-owned Increment 28 provenance contract may
@@ -40,7 +42,8 @@ incomplete/extensible.
 
 The native tests cover:
 
-- canonical discipline aliases;
+- canonical discipline aliases and distinct compatible discipline declarations;
+- deterministic compatible-discipline representative selection;
 - deterministic and idempotent set generation;
 - input/output/inout independence from flow orientation;
 - named and implicit branch orientation;

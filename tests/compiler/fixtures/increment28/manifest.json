@@ -23,6 +23,7 @@
     "nodal.flow_conservation"
   ],
   "normalization_pass": "nodal-materialize-conservative-connectivity",
+  "discipline_representative": "lexicographically-smallest-compatible-canonical-symbol",
   "port_directions": [
     "input",
     "output",

@@ -54,6 +54,8 @@ TEMPORARY_FILES = (
     ".github/workflows/increment-28-materialize.yml",
     ".github/workflows/increment-28-finalize.yml",
     ".github/workflows/increment-28-close.yml",
+    "scripts/.increment28_review_fix.py",
+    ".github/workflows/increment-28-review-fix.yml",
 )
 
 SOURCE_OPERATIONS = [
@@ -254,6 +256,8 @@ def check_repository(root: Path) -> list[Problem]:
             "componentKind == \"partial\"",
             "endpoint.flowOrientation == \"into_component\" ? -1 : 1",
             "sets.unite",
+            "endpoints[index].operation, info.discipline, endpoints[index].discipline",
+            "endpoints[index].discipline < info.discipline",
             "nodal::ConnectionSetOp::getOperationName",
             "nodal::PotentialEqualityOp::getOperationName",
             "nodal::ReferencePotentialOp::getOperationName",
@@ -342,6 +346,7 @@ def check_repository(root: Path) -> list[Problem]:
         (
             "normalized topology/equation inventory is incorrect",
             "module-local reference identity was not retained",
+            "compatible discipline set did not select deterministic representative",
             "port direction incorrectly changed conservative flow orientation",
             "connectivity materialization is not deterministic and idempotent",
             "duplicate implicit branch was accepted",
@@ -366,6 +371,8 @@ def check_repository(root: Path) -> list[Problem]:
             'scope = "module"',
             'declaration_kind = "named"',
             'declaration_kind = "implicit"',
+            'sym_name = "electrical_equivalent"',
+            '!nodal.terminal<"electrical_equivalent">',
         ),
         problems,
         "NODAL-INC28-012",
@@ -380,6 +387,7 @@ def check_repository(root: Path) -> list[Problem]:
             "Port direction never creates causal signal-flow assignment semantics",
             "spanning set of `nodal.potential_equality`",
             "signed `nodal.flow_conservation`",
+            "lexicographically smallest canonical",
             "Residual DAE construction",
         ),
         problems,
@@ -394,6 +402,7 @@ def check_repository(root: Path) -> list[Problem]:
             "Concrete records are complete/local",
             "incomplete/extensible",
             "public API v0.3 unchanged",
+            "distinct compatible discipline declarations",
             "fail-closed",
         ),
         problems,
@@ -462,6 +471,10 @@ def check_repository(root: Path) -> list[Problem]:
         )
     if manifest.get("normalization_pass") != "nodal-materialize-conservative-connectivity":
         problems.append(Problem("NODAL-INC28-019", "manifest pass identity mismatch"))
+    if manifest.get("discipline_representative") != "lexicographically-smallest-compatible-canonical-symbol":
+        problems.append(
+            Problem("NODAL-INC28-019", "manifest discipline representative mismatch")
+        )
     if manifest.get("component_contract") != {"partial": "extensible", "concrete": "local"}:
         problems.append(Problem("NODAL-INC28-019", "manifest component ownership mismatch"))
     if manifest.get("diagnostics") != CODES:

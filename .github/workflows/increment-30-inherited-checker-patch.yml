@@ -1,0 +1,44 @@
+name: Increment 30 Inherited Checker Patch
+
+on:
+  push:
+    branches:
+      - increment/30-analog-numeric-types
+    paths:
+      - scripts/patch_increment30_inherited_checker.py
+      - .github/workflows/increment-30-inherited-checker-patch.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-30-inherited-checker-patch
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out Increment 30 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/30-analog-numeric-types
+          fetch-depth: 0
+
+      - name: Patch inherited checker ownership
+        run: python3 scripts/patch_increment30_inherited_checker.py
+
+      - name: Publish checker compatibility fix
+        run: |
+          set -euo pipefail
+          git rm scripts/patch_increment30_inherited_checker.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Increment 30 — preserve inherited analog checker contracts"
+          git push origin HEAD:increment/30-analog-numeric-types
+
+# This workflow is removed through the GitHub connector after its source-only push.

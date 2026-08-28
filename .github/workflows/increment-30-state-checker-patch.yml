@@ -1,0 +1,67 @@
+name: Increment 30 Implemented State Checker Patch
+
+on:
+  push:
+    branches:
+      - increment/30-analog-numeric-types
+    paths:
+      - .github/workflows/increment-30-state-checker-patch.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-30-state-checker-patch
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out Increment 30 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/30-analog-numeric-types
+          fetch-depth: 0
+
+      - name: Align checker with implemented-awaiting-evidence state
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/check_increment30.py")
+          text = path.read_text(encoding="utf-8")
+          replacements = {
+              '            "Increment 30 has started",\n':
+                  '            "Increment 30 is implemented",\n',
+              '            "deterministic integer-to-real promotion",\n':
+                  '            "Deterministic integer-to-real promotion",\n',
+              '            "canonical exponent algebra",\n':
+                  '            "Canonical exponent algebra",\n',
+              '            "Increment 30 stays unchecked",\n':
+                  '            "roadmap item stays unchecked",\n',
+              '        "implementation start note",\n':
+                  '        "implementation note",\n',
+              '            "implementation-started",\n            "analog-numeric-surface.json",\n':
+                  '            "implemented-awaiting-evidence",\n            "tests/compiler/fixtures/increment30/manifest.json",\n',
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise RuntimeError(f"checker alignment anchor count is {text.count(old)} for {old!r}")
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Publish checker alignment
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/check_increment30.py
+          git commit -m "Increment 30 — align checker with implemented state"
+          git push origin HEAD:increment/30-analog-numeric-types
+
+# Removed through the GitHub connector after publishing the source-only fix.

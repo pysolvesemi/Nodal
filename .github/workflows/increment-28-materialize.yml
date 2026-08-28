@@ -1,0 +1,80 @@
+name: Increment 28 Materialize
+
+on:
+  push:
+    branches:
+      - increment/28-electrical-connectivity
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-28-materialize-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    name: increment-28/materialize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/28-electrical-connectivity
+          fetch-depth: 0
+
+      - name: Verify exact staging state
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=69b1ac509d6028adbc5fa36cc8ebbba64277080e
+          git merge-base --is-ancestor "${base}" HEAD
+          unexpected="$({ git diff --name-only "${base}"..HEAD || true; } | grep -Ev '^(scripts/[.]increment28[.]patch[.]gz[.]b64[.][0-9][0-9]|[.]github/workflows/increment-28-materialize[.]yml)$' || true)"
+          if [[ -n "${unexpected}" ]]; then
+            echo "unexpected pre-materialization changes:" >&2
+            printf '%s\n' "${unexpected}" >&2
+            exit 1
+          fi
+          count="$(git diff --name-only "${base}"..HEAD | wc -l | tr -d ' ')"
+          test "${count}" = "10"
+
+      - name: Reconstruct and verify patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat scripts/.increment28.patch.gz.b64.* > /tmp/increment28.patch.gz.b64
+          base64 --decode /tmp/increment28.patch.gz.b64 | gzip -dc > /tmp/increment28.patch
+          echo '72ceaa042b6aedf96a6df179458d98ab6a939b39bf560196d0fe833b639318d5  /tmp/increment28.patch' | sha256sum --check --strict
+          git apply --check /tmp/increment28.patch
+
+      - name: Materialize implementation and remove staging files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --index /tmp/increment28.patch
+          git rm scripts/.increment28.patch.gz.b64.*
+          git rm .github/workflows/increment-28-materialize.yml
+
+      - name: Validate structural contracts and mutation tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for increment in $(seq 18 28); do
+            python3 "scripts/check_increment${increment}.py"
+          done
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          git diff --cached --check
+
+      - name: Commit and publish Increment 28
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Increment 28 — implement electrical conservative connectivity'
+          git push origin HEAD:increment/28-electrical-connectivity

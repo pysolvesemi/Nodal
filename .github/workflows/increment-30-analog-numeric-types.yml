@@ -50,15 +50,18 @@ jobs:
           ./nodal style bootstrap \
             --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
 
-      - name: Validate Increment 30 start contract and mutation tests
+      - name: Validate Increment 30 implementation contracts and mutations
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
-          for increment in $(seq 18 29); do
+          for increment in $(seq 18 30); do
             python3 "scripts/check_increment${increment}.py"
           done
           python3 scripts/check_increment30.py
           python3 tests/compiler/test_increment30.py
+          python3 -m unittest discover \
+            -s tests/compiler \
+            -p 'test_*.py'
           ./nodal check \
             --contracts-only \
             --online-toolchain \
@@ -66,35 +69,64 @@ jobs:
             --base-ref origin/dev
           git diff --check
 
-      - name: Build lint and test unchanged native baseline
+      - name: Build lint and test native core
         run: |
           ./nodal core native \
             --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
             --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
 
-      - name: Prove machine-readable typing surface remains open for implementation
+      - name: Prove quantity inference folding diagnostics and backend erasure
         run: |
+          set -euo pipefail
+          compiler="${PWD}/out/native/release/bin/nodalc"
+          translator="${PWD}/out/native/release/bin/nodal-translate"
+          pipeline='builtin.module(nodal-fold-analog-constants,nodal-verify-analog-numeric)'
+
+          "${compiler}" \
+            --pass-pipeline="${pipeline}" \
+            core/compiler/test/IR/analog-numeric-typing.mlir \
+            | tee /tmp/analog-numeric-typing.mlir
+          grep -F '!nodal.quantity<"real", "current*voltage">' /tmp/analog-numeric-typing.mlir
+          grep -F '!nodal.quantity<"real", "time^-1*voltage">' /tmp/analog-numeric-typing.mlir
+          grep -F 'nodal.folded_provenance = "increment30"' /tmp/analog-numeric-typing.mlir
+          grep -F 'nodal.folded_value = 6' /tmp/analog-numeric-typing.mlir
+
+          check_rejection() {
+            fixture="$1"
+            code="$2"
+            if "${compiler}" \
+                --pass-pipeline='builtin.module(nodal-verify-analog-numeric)' \
+                "core/compiler/test/IR/analog-numeric-invalid-${fixture}.mlir" \
+                >"/tmp/${fixture}.out" 2>"/tmp/${fixture}.err"; then
+              echo "invalid ${fixture} analog numeric model was accepted" >&2
+              exit 1
+            fi
+            grep -F "${code}" "/tmp/${fixture}.err"
+          }
+
+          check_rejection type NODAL-ANALOG-TYPE-001
+          check_rejection promotion NODAL-ANALOG-PROMOTION-001
+          check_rejection dimension NODAL-ANALOG-DIMENSION-001
+          check_rejection compare NODAL-ANALOG-COMPARE-001
+          check_rejection logic NODAL-ANALOG-LOGIC-001
+          check_rejection select NODAL-ANALOG-SELECT-001
+          check_rejection divide NODAL-ANALOG-DIVIDE-001
+
+          "${translator}" \
+            --nodal-to-verilog-a \
+            core/compiler/test/IR/analog-numeric-backend.mlir \
+            | tee /tmp/analog-numeric-backend.va
+          grep -F 'I(p, n) <+ ((((2 * 3.5) > 0) ? (2 * 3.5) : 3.5));' \
+            /tmp/analog-numeric-backend.va
+
           python3 - <<'PY'
           import json
           from pathlib import Path
-
-          manifest = json.loads(
-              Path("tests/compiler/fixtures/increment30/manifest.json").read_text()
-          )
-          surface = json.loads(
-              Path(
-                  "tests/compiler/fixtures/increment30/analog-numeric-surface.json"
-              ).read_text()
-          )
+          manifest = json.loads(Path("tests/compiler/fixtures/increment30/manifest.json").read_text())
+          assert manifest["status"] == "implemented-awaiting-evidence"
+          assert manifest["implementation"]["verify_pass"] == "nodal-verify-analog-numeric"
+          assert manifest["implementation"]["fold_pass"] == "nodal-fold-analog-constants"
           roadmap = Path("docs/roadmap/nodal-development-todo.md").read_text()
-
-          assert manifest["status"] == "implementation-started"
-          assert manifest["prerequisite"]["status"] == "validated-parameter-constant-unit"
-          assert manifest["quantity_type"]["spelling"] == "!nodal.quantity<kind, dimension>"
-          assert manifest["promotion"]["integer_real"] == "real"
-          assert manifest["promotion"]["boolean_numeric"] == "forbidden"
-          assert surface["logical"]["numericTruthiness"] is False
-          assert surface["arithmetic"]["mul"]["dimensions"] == "add-exponents"
           assert "- [x] **Increment 29 — Parameters, constants, ranges, and units**" in roadmap
           assert "- [ ] **Increment 30 — Analog numeric types and expression typing**" in roadmap
           PY

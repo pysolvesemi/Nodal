@@ -113,3 +113,4 @@ jobs:
           git push origin HEAD:increment/30-analog-numeric-types
 
 # Removed through the GitHub connector after publishing the source-only fix.
+# Second registration commit intentionally activates this one-shot workflow.

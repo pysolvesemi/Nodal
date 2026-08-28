@@ -147,11 +147,31 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          manifest = json.loads(Path("tests/compiler/fixtures/increment30/manifest.json").read_text())
-          assert manifest["status"] == "implemented-awaiting-evidence"
+
+          manifest = json.loads(
+              Path("tests/compiler/fixtures/increment30/manifest.json").read_text()
+          )
+          status = manifest["status"]
+          assert status in {
+              "implemented-awaiting-evidence",
+              "validated-analog-numeric-typing",
+          }
           assert manifest["implementation"]["verify_pass"] == "nodal-verify-analog-numeric"
           assert manifest["implementation"]["fold_pass"] == "nodal-fold-analog-constants"
+
           roadmap = Path("docs/roadmap/nodal-development-todo.md").read_text()
+          increment30_open = (
+              "- [ ] **Increment 30 — Analog numeric types and expression typing**"
+          )
+          increment30_closed = (
+              "- [x] **Increment 30 — Analog numeric types and expression typing**"
+          )
           assert "- [x] **Increment 29 — Parameters, constants, ranges, and units**" in roadmap
-          assert "- [ ] **Increment 30 — Analog numeric types and expression typing**" in roadmap
+          assert (increment30_open in roadmap) != (increment30_closed in roadmap)
+
+          if status == "implemented-awaiting-evidence":
+              assert increment30_open in roadmap
+          else:
+              assert increment30_closed in roadmap
+              assert "- [ ] **Increment 31 — Potential and flow access functions**" in roadmap
           PY

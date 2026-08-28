@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.36
+**Revision:** 1.37
 **Created:** 2026-08-20
 **Updated:** 2026-08-28
 **Status:** Active roadmap
@@ -899,9 +899,10 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Generate compatible-potential equality and signed zero-sum flow-conservation equations from connection sets, retaining provenance for later residual construction and target lowering.
   - Define partial versus concrete physical-component connectivity ownership without treating conservative terminals as directional signal flow.
 
-- [ ] **Increment 29 — Parameters, constants, ranges, and units**
+- [x] **Increment 29 — Parameters, constants, ranges, and units**
   - Implement supported parameter kinds, constraints, constant expressions, overrides, unit-aware literals, and lossless native HDL rendering.
   - Classify ordinary parameters, structural parameters, and dynamic values; require topology, component count, equation count, shape, or rank changes to be elaboration-time or static target generation, and diagnose unsupported parameter-envelope structural changes.
+  - Evidence: implementation PR [#78](https://github.com/pysolvesemi/Nodal/pull/78), dedicated validation run [33154887196](https://github.com/pysolvesemi/Nodal/actions/runs/33154887196), merge commit [`09ffbf34`](https://github.com/pysolvesemi/Nodal/commit/09ffbf344a4bf2ee8f6b2fb16ba3272669f47f27), and Core CI run [33154887245](https://github.com/pysolvesemi/Nodal/actions/runs/33154887245).
 
 - [ ] **Increment 30 — Analog numeric types and expression typing**
   - Define promotion, physical compatibility, comparisons/logical results, conditionals, invalid operations, and folding boundaries.

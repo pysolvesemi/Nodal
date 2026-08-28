@@ -2,7 +2,7 @@
   "increment": 29,
   "title": "Parameters, constants, ranges, and units",
   "public_api": "0.3",
-  "status": "implemented-awaiting-evidence",
+  "status": "validated-parameter-constant-unit",
   "parameter_kinds": [
     "real",
     "integer",
@@ -71,5 +71,9 @@
     "general analog expression promotion",
     "hierarchical override emission"
   ],
-  "evidence": {}
+  "evidence": {
+    "pull_request": 78,
+    "dedicated_run": 33154887196,
+    "core_ci_run": 33154887245
+  }
 }

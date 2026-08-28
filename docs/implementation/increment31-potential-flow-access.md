@@ -44,4 +44,5 @@ The approved design gate is
 This starting scaffold intentionally makes no claim that the native access
 resolver, normalization pass, diagnostics, or backend changes are implemented.
 The manifest remains `implementation-started`; the roadmap item remains
-unchecked.
+unchecked. The roadmap item remains unchecked until the implementation and
+its accepted evidence are complete.

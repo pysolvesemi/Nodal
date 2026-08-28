@@ -1,0 +1,43 @@
+name: Increment 30 Native Materialize
+
+on:
+  push:
+    branches:
+      - increment/30-analog-numeric-types
+    paths:
+      - scripts/materialize_increment30_native.py
+      - .github/workflows/increment-30-native-materialize.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-30-native-materialize
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out Increment 30 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/30-analog-numeric-types
+          fetch-depth: 0
+
+      - name: Materialize native analog numeric implementation
+        run: python3 scripts/materialize_increment30_native.py
+
+      - name: Remove one-shot materializer and publish implementation
+        run: |
+          set -euo pipefail
+          git rm scripts/materialize_increment30_native.py \
+            .github/workflows/increment-30-native-materialize.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Increment 30 — implement analog numeric typing"
+          git push origin HEAD:increment/30-analog-numeric-types

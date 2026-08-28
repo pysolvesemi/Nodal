@@ -39,7 +39,7 @@ jobs:
           ./nodal style bootstrap \
             --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
 
-      - name: Make completion replacement context-specific
+      - name: Make completion replacements deterministic
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -75,8 +75,17 @@ jobs:
           )
           """
           if text.count(old) != 1:
-              raise SystemExit(f"completion anchor count: {text.count(old)}")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+              raise SystemExit(f"completion ordering anchor count: {text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          escaped_old = r'"permissions:\n  contents: read"'
+          escaped_new = r'"permissions:\\n  contents: read"'
+          if text.count(escaped_old) != 1:
+              raise SystemExit(
+                  f"completion workflow-token anchor count: {text.count(escaped_old)}"
+              )
+          text = text.replace(escaped_old, escaped_new, 1)
+          path.write_text(text, encoding="utf-8")
           PY
 
       - name: Apply all review repairs

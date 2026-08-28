@@ -503,6 +503,71 @@ LogicalResult verifyBackendTarget(llvm::StringRef candidate,
 }
 
 LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfiguration &) {
+  auto validParameterDeclaration = [](llvm::StringRef line) {
+    llvm::StringRef code = line;
+    size_t comment = code.find("//");
+    if (comment != llvm::StringRef::npos) {
+      llvm::StringRef annotation = code.drop_front(comment + 2).trim();
+      constexpr llvm::StringLiteral unitPrefix = "unit: ";
+      if (!annotation.starts_with(unitPrefix))
+        return false;
+      llvm::StringRef unit = annotation.drop_front(unitPrefix.size()).trim();
+      if (!validIdentifierList(unit))
+        return false;
+      code = code.take_front(comment).rtrim();
+    }
+
+    if (!code.ends_with(";"))
+      return false;
+    code = code.drop_back().trim();
+
+    if (!code.consume_front("parameter real ") && !code.consume_front("parameter integer "))
+      return false;
+
+    size_t equals = code.find(" = ");
+    if (equals == llvm::StringRef::npos || !validIdentifierList(code.take_front(equals).trim()))
+      return false;
+
+    llvm::StringRef tail = code.drop_front(equals + 3).trim();
+    if (tail.empty())
+      return false;
+
+    size_t from = tail.find(" from ");
+    size_t exclude = tail.find(" exclude ");
+    if (from != llvm::StringRef::npos && exclude != llvm::StringRef::npos && exclude < from)
+      return false;
+
+    size_t initializerEnd = tail.size();
+    if (from != llvm::StringRef::npos)
+      initializerEnd = std::min(initializerEnd, from);
+    if (exclude != llvm::StringRef::npos)
+      initializerEnd = std::min(initializerEnd, exclude);
+    llvm::StringRef initializer = tail.take_front(initializerEnd).trim();
+    if (initializer.empty() || initializer.contains(';'))
+      return false;
+
+    if (from != llvm::StringRef::npos) {
+      size_t rangeStart = from + sizeof(" from ") - 1;
+      size_t rangeEnd = exclude == llvm::StringRef::npos ? tail.size() : exclude;
+      if (rangeStart >= rangeEnd)
+        return false;
+      llvm::StringRef range = tail.slice(rangeStart, rangeEnd).trim();
+      if (range.size() < 3 || (range.front() != '[' && range.front() != '(') ||
+          (range.back() != ']' && range.back() != ')'))
+        return false;
+      llvm::StringRef bounds = range.drop_front().drop_back();
+      size_t colon = bounds.find(':');
+      if (colon == llvm::StringRef::npos || bounds.drop_front(colon + 1).contains(':') ||
+          bounds.take_front(colon).trim().empty() || bounds.drop_front(colon + 1).trim().empty())
+        return false;
+    }
+
+    if (exclude != llvm::StringRef::npos &&
+        tail.drop_front(exclude + sizeof(" exclude ") - 1).trim().empty())
+      return false;
+    return true;
+  };
+
   llvm::SmallVector<llvm::StringRef, 64> lines;
   candidate.split(lines, '\n', -1, true);
   bool insideModule = false;
@@ -557,7 +622,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
          line.starts_with("electrical ")) &&
         line.ends_with(";") && validIdentifierList(line.drop_front(line.find(' ') + 1).drop_back()))
       continue;
-    if (line.starts_with("parameter real ") && line.ends_with(";") && line.contains(" = "))
+    if (validParameterDeclaration(line))
       continue;
     return failure();
   }

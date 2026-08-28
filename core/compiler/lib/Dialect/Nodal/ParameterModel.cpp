@@ -220,7 +220,7 @@ std::optional<double> suffixScale(llvm::StringRef suffix) {
 bool allowedSuffix(llvm::StringRef suffix) { return suffixScale(suffix).has_value(); }
 
 bool splitSpelling(llvm::StringRef spelling, llvm::StringRef suffix, llvm::StringRef &numeric) {
-  if (!canonicalText(spelling))
+  if (!allowedSuffix(suffix) || !canonicalText(spelling))
     return false;
   if (!suffix.empty()) {
     if (!spelling.ends_with(suffix) || spelling.size() == suffix.size())

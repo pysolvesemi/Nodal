@@ -39,6 +39,46 @@ jobs:
           ./nodal style bootstrap \
             --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
 
+      - name: Make completion replacement context-specific
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/repair_increment29_complete.py")
+          text = path.read_text(encoding="utf-8")
+          old = """replace_once(
+              \"core/compiler/lib/Backend/AnalogVerticalSlice.cpp\",
+              '''  llvm::sort(parameters,
+                       [](Operation *lhs, Operation *rhs) { return symbolName(lhs) < symbolName(rhs); });
+          ''',
+              '''  if (failed(orderParametersByDependency(definition, parameters)))
+              return failure();
+          ''',
+          )
+          """
+          new = """replace_once(
+              \"core/compiler/lib/Backend/AnalogVerticalSlice.cpp\",
+              '''  llvm::sort(parameters,
+                       [](Operation *lhs, Operation *rhs) { return symbolName(lhs) < symbolName(rhs); });
+            llvm::sort(ports, [](Operation *lhs, Operation *rhs) {
+              return lhs->getAttrOfType<StringAttr>(\"name\").getValue() <
+                     rhs->getAttrOfType<StringAttr>(\"name\").getValue();
+            });
+          ''',
+              '''  if (failed(orderParametersByDependency(definition, parameters)))
+              return failure();
+            llvm::sort(ports, [](Operation *lhs, Operation *rhs) {
+              return lhs->getAttrOfType<StringAttr>(\"name\").getValue() <
+                     rhs->getAttrOfType<StringAttr>(\"name\").getValue();
+            });
+          ''',
+          )
+          """
+          if text.count(old) != 1:
+              raise SystemExit(f"completion anchor count: {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+
       - name: Apply all review repairs
         run: python3 scripts/repair_increment29_complete.py
 

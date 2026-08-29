@@ -3,8 +3,8 @@ package nodal
 /** Public continuous-time semantic surface frozen by Increment 133.
   *
   * These declarations are compile-time contracts only. Frontend construction, equation
-  * normalization, residual formation, solving, and target lowering remain inert until their
-  * owning implementation increments.
+  * normalization, residual formation, solving, and target lowering remain inert until their owning
+  * implementation increments.
   */
 enum AnalysisKind:
   case Initialization, Dc, OperatingPoint, Transient, Ac, Noise

@@ -66,7 +66,7 @@ def contributions(body: => Unit): Unit =
   CandidateRuntime.statement("candidate-contributions")
   body
 
-def contribute(
+def contribution(
     target: Expr[Real],
     value: Expr[Real],
     options: ContributionOptions = ContributionOptions()
@@ -115,12 +115,12 @@ final class Branch[D <: Discipline] private[nodal] (
   def contributePotential(
       value: Expr[Real],
       options: ContributionOptions = ContributionOptions()
-  ): Unit = contribute(potential, value, options)
+  ): Unit = contribution(potential, value, options)
 
   def contributeFlow(
       value: Expr[Real],
       options: ContributionOptions = ContributionOptions()
-  ): Unit = contribute(flow, value, options)
+  ): Unit = contribution(flow, value, options)
 
 def branch[D <: Discipline](
     positive: Terminal[D],

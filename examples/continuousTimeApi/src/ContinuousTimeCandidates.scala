@@ -53,7 +53,7 @@ final class ContinuousTimeCandidates extends Module:
 
     contributions:
       path.flow <+ path.potential / resistance
-      contribute(
+      contribution(
         path.potential,
         0.0.V,
         ContributionOptions(id = Some(ContributionId("candidate-reference-drive")))

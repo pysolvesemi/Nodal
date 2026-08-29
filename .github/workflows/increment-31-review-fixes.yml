@@ -19,7 +19,7 @@ jobs:
   repair:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 60
 
     steps:
       - name: Check out repository
@@ -27,8 +27,25 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply bytecode inventory repair
+      - name: Apply semantic review fixes
         run: python3 scripts/finalize_increment31.py
+
+      - name: Bootstrap locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format changed native sources
+        run: |
+          format="$(find "${RUNNER_TEMP}/nodal-lint-toolchain" -type f -name clang-format | head -1)"
+          test -n "${format}"
+          "${format}" -i \
+            core/compiler/include/nodal/Dialect/Nodal/PotentialFlowAccess.h \
+            core/compiler/lib/Dialect/Nodal/PotentialFlowAccess.cpp \
+            core/compiler/lib/Transforms/Passes.cpp
 
       - name: Validate repaired contracts and mutations
         run: |
@@ -52,10 +69,17 @@ jobs:
           cp "${backup}" "${workflow}"
           exit "${status}"
 
-      - name: Commit validated non-workflow repair
+      - name: Validate native compiler and lint
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Commit validated non-workflow review fixes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "fix(increment31): ignore runtime Python bytecode caches"
+          git commit -m "fix(increment31): enforce probe provenance and semantic normalization"
           git push origin HEAD:increment/31-potential-flow-access

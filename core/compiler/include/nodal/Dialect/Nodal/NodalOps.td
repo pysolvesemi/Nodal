@@ -465,6 +465,7 @@ def Nodal_NatureOp : Nodal_Op<"nature", [Symbol]> {
     StrAttr:$units,
     StrAttr:$access,
     F64Attr:$abstol,
+    OptionalAttr<StrAttr>:$dimension,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;
@@ -676,9 +677,52 @@ def Nodal_AccessOp : Nodal_Op<"access"> {
   let arguments = (ins
     Nodal_BranchType:$branch,
     StrAttr:$kind,
+    OptionalAttr<StrAttr>:$function,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_TerminalAccessOp
+    : Nodal_Op<"terminal_access", [HasParent<"AnalogOp">]> {
+  let summary = "One-terminal or oriented two-terminal nature access";
+  let arguments = (ins
+    Variadic<Nodal_TerminalType>:$terminals,
+    StrAttr:$kind,
+    StrAttr:$function,
+    OptionalAttr<StrAttr>:$reference_identity,
+    OptionalAttr<StrAttr>:$source_path,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_PortFlowAccessOp
+    : Nodal_Op<"port_flow_access", [HasParent<"AnalogOp">]> {
+  let summary = "Angle-delimited total-flow access on a local boundary terminal";
+  let arguments = (ins
+    Nodal_TerminalType:$port,
+    StrAttr:$kind,
+    StrAttr:$function,
+    OptionalAttr<StrAttr>:$source_path,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_ProbeOp : Nodal_Op<"probe", [HasParent<"ModuleOp">]> {
+  let summary = "Compiler-owned source-free potential or flow probe intent";
+  let arguments = (ins
+    Variadic<AnyType>:$subject,
+    StrAttr:$form,
+    StrAttr:$kind,
+    StrAttr:$constraint_intent,
+    ArrayAttr:$provenance,
+    DictionaryAttr:$metadata
+  );
   let hasVerifier = 1;
 }
 

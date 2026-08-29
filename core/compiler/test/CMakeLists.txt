@@ -433,6 +433,69 @@ set_tests_properties(
     PASS_REGULAR_EXPRESSION "V[(]p, n[)] <[+] V[(]p, n[)]"
 )
 
+
+add_test(
+  NAME nodal.native.potential-flow-access-normalize
+  COMMAND nodalc
+    "--pass-pipeline=builtin.module(nodal-normalize-potential-flow-access,nodal-normalize-potential-flow-access)"
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/potential-flow-access.mlir"
+)
+set_tests_properties(
+  nodal.native.potential-flow-access-normalize
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "form = .two-terminal."
+)
+
+add_test(
+  NAME nodal.native.potential-flow-access-reference
+  COMMAND nodalc
+    "--pass-pipeline=builtin.module(nodal-gate-release)"
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/potential-flow-access.mlir"
+)
+set_tests_properties(
+  nodal.native.potential-flow-access-reference
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "reference_identity = .global::customElectrical."
+)
+
+foreach(_fixture IN ITEMS form discipline nature function dimension reference port probe-kind probe-provenance)
+  add_test(
+    NAME nodal.native.potential-flow-access-rejects-${_fixture}
+    COMMAND nodalc
+      "--pass-pipeline=builtin.module(nodal-normalize-potential-flow-access)"
+      "${CMAKE_CURRENT_SOURCE_DIR}/IR/potential-flow-access-invalid-${_fixture}.mlir"
+  )
+  set_tests_properties(
+    nodal.native.potential-flow-access-rejects-${_fixture}
+    PROPERTIES
+      WILL_FAIL TRUE
+  )
+endforeach()
+
+foreach(_render IN ITEMS discipline generic port)
+  add_test(
+    NAME nodal.native.potential-flow-access-backend-${_render}
+    COMMAND nodal-translate
+      --nodal-to-verilog-a
+      "${CMAKE_CURRENT_SOURCE_DIR}/IR/potential-flow-access.mlir"
+  )
+endforeach()
+set_tests_properties(
+  nodal.native.potential-flow-access-backend-discipline
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "Across[(]named_parallel[)]"
+)
+set_tests_properties(
+  nodal.native.potential-flow-access-backend-generic
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "potential[(]p, n[)]"
+)
+set_tests_properties(
+  nodal.native.potential-flow-access-backend-port
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "Through[(]<p>[)]"
+)
+
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
   DEPENDS

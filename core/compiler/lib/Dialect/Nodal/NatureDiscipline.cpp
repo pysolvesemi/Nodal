@@ -3,6 +3,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
+#include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 
 #include "llvm/ADT/DenseSet.h"
@@ -173,6 +174,11 @@ LogicalResult nodal::NatureOp::verify() {
   auto units = getOperation()->getAttrOfType<StringAttr>("units");
   if (!units || !isCanonicalText(units.getValue()))
     return emitOpError("NODAL-NATURE-UNITS-001: units must be non-empty canonical text");
+
+  if (auto dimension = getOperation()->getAttrOfType<StringAttr>("dimension")) {
+    if (!nodal::isCanonicalDimensionSignature(dimension.getValue()))
+      return emitOpError("NODAL-ACCESS-DIMENSION-001: nature dimension must be canonical");
+  }
 
   auto access = getOperation()->getAttrOfType<StringAttr>("access");
   if (!access || !isIdentifier(access.getValue()))

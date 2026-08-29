@@ -1,0 +1,12 @@
+{
+  "schema": "nodal-increment31-validation-intent/v1",
+  "scope": "potential-flow-access",
+  "required": [
+    "repository-contracts",
+    "compiler-mutations",
+    "native-ctest",
+    "backend-rendering",
+    "exact-head-ci"
+  ],
+  "roadmap_state": "unchecked-until-evidence-closure"
+}

@@ -4,6 +4,7 @@ add_mlir_dialect_library(NodalDialect
   ConservativeConnectivity.cpp
   NatureDiscipline.cpp
   ParameterModel.cpp
+  PotentialFlowAccess.cpp
   NodalOps.cpp
   NodalTypes.cpp
 
@@ -17,5 +18,6 @@ add_mlir_dialect_library(NodalDialect
     NodalSupport
     MLIRBytecodeOpInterface
     MLIRIR
+    MLIRPass
     MLIRSupport
 )

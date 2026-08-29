@@ -1,0 +1,33 @@
+name: Increment 133 Analog Semantic API
+
+on:
+  push:
+    branches:
+      - increment/133-analog-semantic-api
+      - increment/133-evidence-closure
+  pull_request:
+    branches:
+      - dev
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: increment-133/analog-semantic-api
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate API gates, fixtures, and compile contracts
+        run: |
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          python3 scripts/check_increment133.py --compile-negative
+          python3 -m unittest discover -s tests/api -p 'test_increment133.py'
+          git diff --check

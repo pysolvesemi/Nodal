@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "increment": 133,
+  "cases": [
+    {"code":"NODAL-ANALOG-133-001","fixture":"equation-outside-equation-region"},
+    {"code":"NODAL-ANALOG-133-002","fixture":"equation-dimension-mismatch"},
+    {"code":"NODAL-ANALOG-133-003","fixture":"duplicate-equation-identity"},
+    {"code":"NODAL-ANALOG-133-004","fixture":"contribution-outside-contribution-region"},
+    {"code":"NODAL-ANALOG-133-005","fixture":"invalid-contribution-target"},
+    {"code":"NODAL-ANALOG-133-006","fixture":"duplicate-contribution-identity"},
+    {"code":"NODAL-ANALOG-133-007","fixture":"procedural-assignment-in-declarative-region"},
+    {"code":"NODAL-ANALOG-133-008","fixture":"declarative-operation-in-procedural-region"},
+    {"code":"NODAL-ANALOG-133-009","fixture":"initial-equation-analysis-mismatch"},
+    {"code":"NODAL-ANALOG-133-010","fixture":"incomplete-concrete-component-balance"},
+    {"code":"NODAL-ANALOG-133-011","fixture":"invalid-structural-parameter-envelope"},
+    {"code":"NODAL-ANALOG-133-012","fixture":"unsafe-equation-orientation"},
+    {"code":"NODAL-ANALOG-133-013","fixture":"division-by-possibly-zero-expression"},
+    {"code":"NODAL-ANALOG-133-014","fixture":"state-reinitialization-outside-event"},
+    {"code":"NODAL-ANALOG-133-015","fixture":"event-tolerance-dimension-mismatch"},
+    {"code":"NODAL-ANALOG-133-016","fixture":"duplicate-noise-identity"},
+    {"code":"NODAL-ANALOG-133-017","fixture":"invalid-noise-correlation"},
+    {"code":"NODAL-ANALOG-133-018","fixture":"model-validity-constraint-conflict"},
+    {"code":"NODAL-ANALOG-133-019","fixture":"solver-hint-changes-mathematics"},
+    {"code":"NODAL-ANALOG-133-020","fixture":"unsupported-target-continuous-time-capability"}
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "schema": 1,
+  "api_version": "continuous-time-v0.1",
+  "compatibility_base": "0.3",
+  "status": "approved-awaiting-evidence",
+  "default_import": "import nodal.*",
+  "source_file": "core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala",
+  "design_gates": [
+    "docs/design-gates/NodalEquationComponentApi-DG-v0.1.md",
+    "docs/design-gates/NodalContinuousTimeApi-DG-v0.1.md"
+  ],
+  "diagnostics": "core/scala/api/public-api-continuous-time-diagnostics-v0.1.json",
+  "fixture_manifest": "tests/api/fixtures/increment133/manifest.json",
+  "external_fixture": "examples/continuousTimeExternal/src/ReusablePhysicalComponents.scala",
+  "equation_component_checkpoint": {
+    "approved": true,
+    "unblocks_increment": 32,
+    "regions": [
+      "equations",
+      "initialEquations",
+      "contributions",
+      "analogProcedure"
+    ],
+    "equation_semantics": "unordered-equality-constraint",
+    "canonical_residual_intent": "left-minus-right-equals-zero-without-causal-orientation",
+    "contribution_semantics": "additive-source-order-independent",
+    "procedural_assignment_separate": true,
+    "conservative_connections_separate": true,
+    "partial_concrete_components": true,
+    "local_balance": true,
+    "structural_parameters": true,
+    "unsafe_orientation_or_division_prohibited": true,
+    "surface": "core/scala/api/equation-component-api-v0.1.json"
+  },
+  "analysis_kinds": [
+    "Initialization",
+    "Dc",
+    "OperatingPoint",
+    "Transient",
+    "Ac",
+    "Noise"
+  ],
+  "state_initialization": [
+    "Fixed",
+    "Guess",
+    "InitialEquation",
+    "SteadyState",
+    "OperatingPoint",
+    "SolverSelected"
+  ],
+  "events": [
+    "namedEvent",
+    "crossing",
+    "EventTolerance",
+    "DiscontinuityContract"
+  ],
+  "environment": [
+    "time",
+    "frequency",
+    "temperature",
+    "nominalTemperature",
+    "operatingCondition",
+    "corner",
+    "sweepCoordinate",
+    "randomSeed"
+  ],
+  "noise": [
+    "whiteNoise",
+    "flickerNoise",
+    "tableNoise",
+    "NoiseId",
+    "NoiseCorrelation"
+  ],
+  "validity": [
+    "ParameterRange",
+    "OperatingRange",
+    "TemperatureRange",
+    "SupportedAnalyses",
+    "CrossParameter",
+    "TopologyAssumption",
+    "LoadingAssumption"
+  ],
+  "solver_hints": [
+    "Nominal",
+    "AbsoluteTolerance",
+    "RelativeTolerance",
+    "MaximumStep",
+    "Convergence"
+  ],
+  "implementation_status": {
+    "compile_surface_present": true,
+    "frontend_behavior_inert": true,
+    "equation_normalization_inert": true,
+    "residual_dae_inert": true,
+    "solver_inert": true,
+    "backend_inert": true
+  }
+}

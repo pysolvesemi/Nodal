@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "increment": 133,
-  "status": "approved-awaiting-evidence",
+  "status": "validated-analog-semantic-api",
   "api_version": "continuous-time-v0.1",
   "compatibility_base": "0.3",
   "design_gates": [
@@ -15,10 +15,22 @@
     "examples.continuousTimeApi.compile"
   ],
   "scala_type_negative": [
-    {"path":"tests/api/fixtures/increment133/negative/non-real-equation.scala","code":"NODAL-ANALOG-133-TYPE-001"},
-    {"path":"tests/api/fixtures/increment133/negative/non-real-contribution.scala","code":"NODAL-ANALOG-133-TYPE-002"},
-    {"path":"tests/api/fixtures/increment133/negative/cross-discipline-branch.scala","code":"NODAL-ANALOG-133-TYPE-003"},
-    {"path":"tests/api/fixtures/increment133/negative/real-structural-parameter.scala","code":"NODAL-ANALOG-133-TYPE-004"}
+    {
+      "path": "tests/api/fixtures/increment133/negative/non-real-equation.scala",
+      "code": "NODAL-ANALOG-133-TYPE-001"
+    },
+    {
+      "path": "tests/api/fixtures/increment133/negative/non-real-contribution.scala",
+      "code": "NODAL-ANALOG-133-TYPE-002"
+    },
+    {
+      "path": "tests/api/fixtures/increment133/negative/cross-discipline-branch.scala",
+      "code": "NODAL-ANALOG-133-TYPE-003"
+    },
+    {
+      "path": "tests/api/fixtures/increment133/negative/real-structural-parameter.scala",
+      "code": "NODAL-ANALOG-133-TYPE-004"
+    }
   ],
   "semantic_contracts": "tests/api/fixtures/increment133/semantic-contracts.json",
   "equation_component_checkpoint": {
@@ -32,11 +44,12 @@
   "solver_behavior_inert": true,
   "backend_behavior_inert": true,
   "validation": {
-    "implementation_pull_request": null,
-    "accepted_head": null,
-    "dedicated_workflow_run": null,
-    "core_ci_run": null,
-    "merge_commit": null,
-    "post_merge_core_ci_run": null
+    "implementation_pull_request": 91,
+    "superseded_draft_pull_request": 90,
+    "accepted_head": "a9c236384b32140d1b0a213cfbdb5c5512baab24",
+    "dedicated_workflow_run": 33262841010,
+    "core_ci_run": 33262188693,
+    "merge_commit": "4ca5d230bc5d3e3f985b9b4ed24386c69f74b539",
+    "post_merge_core_ci_run": 33263135167
   }
 }

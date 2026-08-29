@@ -209,10 +209,11 @@ Analog target passes preserve or explicitly invalidate equation, topology, state
   - Record layered analog IR, `AnalogIsland`, topology/equation/state/event/analysis graphs, hybrid scheduling, solver capability negotiation, environment/PVT, validity envelopes, and evidence boundaries.
   - Synchronize the main roadmap and architecture index without freezing public syntax or implementing compiler/solver behavior.
 
-- [ ] **Increment 133 — Analog semantic API and analysis contract design gate**
+- [x] **Increment 133 — Analog semantic API and analysis contract design gate**
   - Compile and compare public candidates for equations/contributions, explicit analog state and initialization, event tolerance and discontinuity declarations, analysis context, environment/PVT access, noise identity/correlation, validity envelopes, and solver-hint metadata.
   - Publish `NodalContinuousTimeApi-DG-v0.1.md`, a machine-readable public surface, migration notes, stable diagnostics, positive/negative fixtures, and an external reusable-model fixture.
   - Keep frontend, equation normalization, solver, and backend behavior inert.
+  - Evidence: implementation PR #91; exact accepted head `a9c236384b32140d1b0a213cfbdb5c5512baab24`; dedicated run `33262841010`; merge commit `4ca5d230bc5d3e3f985b9b4ed24386c69f74b539`; post-merge Core CI run `33263135167`.
 
 - [ ] **Increment 134 — Source-semantic analog IR, `AnalogIsland`, and stable identities**
   - Implement source-semantic operations for contributions, equations, operators, events, analyses, noise, environment, connect constructs, and solver hints.

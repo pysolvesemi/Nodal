@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.41
+**Revision:** 1.42
 **Created:** 2026-08-20
 **Updated:** 2026-08-29
 **Status:** Active roadmap
@@ -1368,12 +1368,13 @@ This independently schedulable phase closes the cross-layer continuous-time arch
   - Keep exact public syntax, compiler implementation, solver behavior, and target lowering assigned to Increments 133-142 and the existing analog/AMS increments.
   - Evidence: [`0022-layered-continuous-time-hybrid-dae-architecture.md`](../architecture/0022-layered-continuous-time-hybrid-dae-architecture.md), [`continuous-time-ams-v0.1-plan.md`](continuous-time-ams-v0.1-plan.md), and [`continuous-time-ams-v0.1-surface.json`](continuous-time-ams-v0.1-surface.json).
 
-- [ ] **Increment 133 — Analog semantic API and analysis contract design gate**
+- [x] **Increment 133 — Analog semantic API and analysis contract design gate**
   - Schedule an equation/component API checkpoint ahead of Increment 32 while retaining the complete continuous-time API gate in this increment.
   - Compile and compare public candidates for unordered equations, contributions, procedural-assignment distinction, conservative terminals/branches/connections, partial/concrete component balance, structural parameters, initial equations, explicit analog state and reinitialization, event tolerance and discontinuity declarations, analysis context, environment/PVT access, noise identity/correlation, validity envelopes, and solver-hint metadata.
   - Publish `NodalEquationComponentApi-DG-v0.1.md`, a machine-readable checkpoint surface, migration notes, stable diagnostics, compile-positive/negative fixtures, and one external reusable physical-component fixture. Increment 32 may start only after this checkpoint is accepted.
   - Publish the complete `NodalContinuousTimeApi-DG-v0.1.md` and machine-readable public surface before closing Increment 133.
   - Keep frontend, equation normalization, solver, and backend behavior inert throughout the design gate.
+  - Evidence: approved `NodalEquationComponentApi-DG-v0.1` and `NodalContinuousTimeApi-DG-v0.1`; implementation PR #91 (superseding draft PR #90); exact accepted head `a9c236384b32140d1b0a213cfbdb5c5512baab24`; dedicated run `33262841010`; accepted Core CI run `33262188693`; squash merge `4ca5d230bc5d3e3f985b9b4ed24386c69f74b539`; post-merge Core CI run `33263135167`.
 
 - [ ] **Increment 134 — Source-semantic analog IR, `AnalogIsland`, and stable identities**
   - Implement distinct source-semantic operations for equations, contributions, procedural assignments, connections, operators, events, analyses, noise, environment, and solver hints.

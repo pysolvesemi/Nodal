@@ -174,6 +174,13 @@ backend behavior remain inert until their owning increments.
 Approved by the project owner through the standing increment approval and the
 explicit instruction on August 29, 2026 to finish and merge Increment 133.
 
+Accepted implementation and closure evidence is recorded by implementation PR
+#91, exact implementation head
+`a9c236384b32140d1b0a213cfbdb5c5512baab24`, dedicated validation run
+`33262841010`, squash merge
+`4ca5d230bc5d3e3f985b9b4ed24386c69f74b539`, post-merge Core CI run
+`33263135167`, and evidence-closure PR #94.
+
 ## Deferred implementation
 
 Source-semantic operation recording, AnalogIsland construction, residual/DAE

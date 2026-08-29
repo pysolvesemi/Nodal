@@ -32,6 +32,8 @@ class Increment133ContractTests(unittest.TestCase):
             manifest_path = clone / MODULE.MANIFEST
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest["status"] = "validated-analog-semantic-api"
+            validation = manifest.setdefault("validation", {})
+            validation["post_merge_core_ci_run"] = None
             manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
             problems = MODULE.validate_files(clone)
             self.assertIn("NODAL-INC133-037", [problem.code for problem in problems])

@@ -2,7 +2,7 @@
   "schema": 1,
   "api_version": "continuous-time-v0.1",
   "compatibility_base": "0.3",
-  "status": "approved-awaiting-evidence",
+  "status": "validated-analog-semantic-api",
   "default_import": "import nodal.*",
   "source_file": "core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala",
   "design_gates": [
@@ -100,5 +100,13 @@
     "residual_dae_inert": true,
     "solver_inert": true,
     "backend_inert": true
+  },
+  "validation": {
+    "implementation_pull_request": 91,
+    "accepted_head": "a9c236384b32140d1b0a213cfbdb5c5512baab24",
+    "dedicated_workflow_run": 33262841010,
+    "core_ci_run": 33262188693,
+    "merge_commit": "4ca5d230bc5d3e3f985b9b4ed24386c69f74b539",
+    "post_merge_core_ci_run": 33263135167
   }
 }

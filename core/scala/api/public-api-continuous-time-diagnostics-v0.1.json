@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "api_version": "continuous-time-v0.1",
+  "status": "frozen",
+  "diagnostics": [
+    {"code":"NODAL-ANALOG-133-001","name":"equation-outside-equation-region","phase":"source-semantic"},
+    {"code":"NODAL-ANALOG-133-002","name":"equation-dimension-mismatch","phase":"source-semantic"},
+    {"code":"NODAL-ANALOG-133-003","name":"duplicate-equation-identity","phase":"source-semantic"},
+    {"code":"NODAL-ANALOG-133-004","name":"contribution-outside-contribution-region","phase":"source-semantic"},
+    {"code":"NODAL-ANALOG-133-005","name":"invalid-contribution-target","phase":"source-semantic"},
+    {"code":"NODAL-ANALOG-133-006","name":"duplicate-contribution-identity","phase":"source-semantic"},
+    {"code":"NODAL-ANALOG-133-007","name":"procedural-assignment-in-declarative-region","phase":"source-semantic"},
+    {"code":"NODAL-ANALOG-133-008","name":"declarative-operation-in-procedural-region","phase":"source-semantic"},
+    {"code":"NODAL-ANALOG-133-009","name":"initial-equation-analysis-mismatch","phase":"source-semantic"},
+    {"code":"NODAL-ANALOG-133-010","name":"incomplete-concrete-component-balance","phase":"topology"},
+    {"code":"NODAL-ANALOG-133-011","name":"invalid-structural-parameter-envelope","phase":"elaboration"},
+    {"code":"NODAL-ANALOG-133-012","name":"unsafe-equation-orientation","phase":"legalization"},
+    {"code":"NODAL-ANALOG-133-013","name":"division-by-possibly-zero-expression","phase":"legalization"},
+    {"code":"NODAL-ANALOG-133-014","name":"state-reinitialization-outside-event","phase":"hybrid"},
+    {"code":"NODAL-ANALOG-133-015","name":"event-tolerance-dimension-mismatch","phase":"hybrid"},
+    {"code":"NODAL-ANALOG-133-016","name":"duplicate-noise-identity","phase":"analysis"},
+    {"code":"NODAL-ANALOG-133-017","name":"invalid-noise-correlation","phase":"analysis"},
+    {"code":"NODAL-ANALOG-133-018","name":"model-validity-constraint-conflict","phase":"validity"},
+    {"code":"NODAL-ANALOG-133-019","name":"solver-hint-changes-mathematics","phase":"solver-contract"},
+    {"code":"NODAL-ANALOG-133-020","name":"unsupported-target-continuous-time-capability","phase":"capability"},
+    {"code":"NODAL-ANALOG-133-TYPE-001","name":"non-real-equation-operand","phase":"scala-type"},
+    {"code":"NODAL-ANALOG-133-TYPE-002","name":"non-real-contribution-target","phase":"scala-type"},
+    {"code":"NODAL-ANALOG-133-TYPE-003","name":"cross-discipline-branch","phase":"scala-type"},
+    {"code":"NODAL-ANALOG-133-TYPE-004","name":"unsupported-structural-parameter-kind","phase":"scala-type"}
+  ]
+}

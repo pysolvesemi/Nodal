@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "api_version": "equation-component-v0.1",
+  "compatibility_base": "0.3",
+  "status": "approved",
+  "design_gate": "docs/design-gates/NodalEquationComponentApi-DG-v0.1.md",
+  "source_file": "core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala",
+  "unblocks_increment": 32,
+  "regions": {
+    "equations": "unordered-first-class-equations",
+    "initialEquations": "initialization-only-equations",
+    "contributions": "additive-potential-flow-contributions",
+    "analogProcedure": "ordered-procedural-assignments-deferred-to-increment-33"
+  },
+  "identity": [
+    "EquationId",
+    "ContributionId",
+    "BalanceId"
+  ],
+  "metadata": [
+    "physical-dimension",
+    "guard",
+    "analysis-applicability",
+    "continuity",
+    "source-provenance",
+    "hierarchy"
+  ],
+  "components": {
+    "completeness": [
+      "Partial",
+      "Concrete"
+    ],
+    "topology_ownership": [
+      "Extensible",
+      "Complete"
+    ],
+    "local_balance": [
+      "DeferredToConcrete",
+      "Required",
+      "Explicit"
+    ],
+    "replaceable_contract": true
+  },
+  "branches": {
+    "orientation": "positive-to-negative",
+    "potential": "positive-relative-to-negative",
+    "flow": "positive-terminal-into-branch",
+    "named_and_implicit": true
+  },
+  "structural_parameters": {
+    "finite_envelope_required": true,
+    "effects": [
+      "Topology",
+      "ComponentCount",
+      "EquationCount",
+      "Shape",
+      "Rank"
+    ],
+    "dynamic_values_prohibited": true
+  },
+  "prohibited": [
+    "assignment-as-equation",
+    "source-order-priority",
+    "last-writer-wins-contribution",
+    "unproved-causal-orientation",
+    "division-by-possibly-zero",
+    "directional-conservative-connection",
+    "silent-unsupported-target-drop"
+  ],
+  "implementation_inert": true
+}

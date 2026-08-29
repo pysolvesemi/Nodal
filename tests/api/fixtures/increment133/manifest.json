@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "increment": 133,
+  "status": "approved-awaiting-evidence",
+  "api_version": "continuous-time-v0.1",
+  "compatibility_base": "0.3",
+  "design_gates": [
+    "docs/design-gates/NodalEquationComponentApi-DG-v0.1.md",
+    "docs/design-gates/NodalContinuousTimeApi-DG-v0.1.md"
+  ],
+  "public_surface": "core/scala/api/public-api-continuous-time-v0.1.json",
+  "diagnostics": "core/scala/api/public-api-continuous-time-diagnostics-v0.1.json",
+  "positive_modules": [
+    "examples.continuousTimeExternal.compile",
+    "examples.continuousTimeApi.compile"
+  ],
+  "scala_type_negative": [
+    {"path":"tests/api/fixtures/increment133/negative/non-real-equation.scala","code":"NODAL-ANALOG-133-TYPE-001"},
+    {"path":"tests/api/fixtures/increment133/negative/non-real-contribution.scala","code":"NODAL-ANALOG-133-TYPE-002"},
+    {"path":"tests/api/fixtures/increment133/negative/cross-discipline-branch.scala","code":"NODAL-ANALOG-133-TYPE-003"},
+    {"path":"tests/api/fixtures/increment133/negative/real-structural-parameter.scala","code":"NODAL-ANALOG-133-TYPE-004"}
+  ],
+  "semantic_contracts": "tests/api/fixtures/increment133/semantic-contracts.json",
+  "equation_component_checkpoint": {
+    "approved": true,
+    "unblocks_increment": 32,
+    "surface": "core/scala/api/equation-component-api-v0.1.json"
+  },
+  "frontend_behavior_inert": true,
+  "equation_normalization_inert": true,
+  "residual_dae_inert": true,
+  "solver_behavior_inert": true,
+  "backend_behavior_inert": true,
+  "validation": {
+    "implementation_pull_request": null,
+    "accepted_head": null,
+    "dedicated_workflow_run": null,
+    "core_ci_run": null,
+    "merge_commit": null,
+    "post_merge_core_ci_run": null
+  }
+}

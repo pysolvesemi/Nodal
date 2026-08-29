@@ -1,8 +1,8 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.40
+**Revision:** 1.41
 **Created:** 2026-08-20
-**Updated:** 2026-08-28
+**Updated:** 2026-08-29
 **Status:** Active roadmap
 **Primary language target:** Verilog-AMS 2023
 **Analog-only compatibility target:** Verilog-A
@@ -921,8 +921,9 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Define promotion, physical compatibility, comparisons/logical results, conditionals, invalid operations, and folding boundaries.
   - Evidence: implementation PR [#80](https://github.com/pysolvesemi/Nodal/pull/80), dedicated validation run [33192880165](https://github.com/pysolvesemi/Nodal/actions/runs/33192880165), merge commit [`401f78b3`](https://github.com/pysolvesemi/Nodal/commit/401f78b3836cc4e52d393ef343dc0915d60606e9), and Core CI run [33192880254](https://github.com/pysolvesemi/Nodal/actions/runs/33192880254).
 
-- [ ] **Increment 31 — Potential and flow access functions**
+- [x] **Increment 31 — Potential and flow access functions**
   - Implement `V`, `I`, discipline-specific access, one/two-node forms, branches, probes, and validation.
+  - Evidence: implementation PR [#88](https://github.com/pysolvesemi/Nodal/pull/88), original draft PR [#87](https://github.com/pysolvesemi/Nodal/pull/87), dedicated validation run [33244625475](https://github.com/pysolvesemi/Nodal/actions/runs/33244625475), merge commit [`1662b79f`](https://github.com/pysolvesemi/Nodal/commit/1662b79f5f99686de4af2ed8a016fe8acf5c784e), and Core CI run [33244625490](https://github.com/pysolvesemi/Nodal/actions/runs/33244625490).
 
 - [ ] **Increment 32 — First-class analog equations, blocks, and contribution semantics**
   - Implement analog regions, unordered first-class equations, and `<+` potential/flow contributions as distinct source-semantic operations; keep both distinct from Increment 33 procedural assignment.

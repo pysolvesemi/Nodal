@@ -2,7 +2,7 @@
   "increment": 31,
   "title": "Potential and flow access functions",
   "public_api": "0.3",
-  "status": "implemented-awaiting-evidence",
+  "status": "validated-potential-flow-access",
   "prerequisite": {
     "increment": 30,
     "status": "validated-analog-numeric-typing",
@@ -108,6 +108,32 @@
     "solver lowering"
   ],
   "evidence": {
-    "start_commit": "f33bcff3285f17d228bab4c7577bafd35ab32a65"
+    "start_commit": "f33bcff3285f17d228bab4c7577bafd35ab32a65",
+    "pull_request": 88,
+    "original_draft_pull_request": 87,
+    "implementation_head": "647c79d1d78848c492b3128bd79502b6ef8664de",
+    "merge_commit": "1662b79f5f99686de4af2ed8a016fe8acf5c784e",
+    "dedicated_run": 33244625475,
+    "core_ci_run": 33244625490,
+    "inherited_runs": {
+      "increment13": 33244625449,
+      "increment14": 33244625477,
+      "increment15": 33244625595,
+      "increment16": 33244625435,
+      "increment17": 33244625495,
+      "increment18": 33244625546,
+      "increment19": 33244625497,
+      "increment20": 33244625473,
+      "increment21": 33244625547,
+      "increment22": 33244625471,
+      "increment23": 33244625602,
+      "increment24": 33244625557,
+      "increment25": 33244625500,
+      "increment26": 33244625488,
+      "increment27": 33244625446,
+      "increment28": 33244625504,
+      "increment29": 33244625508,
+      "increment30": 33244625441
+    }
   }
 }

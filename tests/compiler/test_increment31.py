@@ -38,13 +38,22 @@ class Increment31ContractTest(unittest.TestCase):
     def test_rejects_closed_roadmap_item_before_evidence(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
-        path = root / "docs/roadmap/nodal-development-todo.md"
-        text = path.read_text(encoding="utf-8").replace(
-            "- [ ] **Increment 31 — Potential and flow access functions**",
-            "- [x] **Increment 31 — Potential and flow access functions**",
-            1,
+
+        manifest_path = root / "tests/compiler/fixtures/increment31/manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "implemented-awaiting-evidence"
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2) + "\n",
+            encoding="utf-8",
         )
-        path.write_text(text, encoding="utf-8")
+
+        roadmap_path = root / "docs/roadmap/nodal-development-todo.md"
+        text = roadmap_path.read_text(encoding="utf-8")
+        unchecked = "- [ ] **Increment 31 — Potential and flow access functions**"
+        checked = "- [x] **Increment 31 — Potential and flow access functions**"
+        if checked not in text:
+            text = text.replace(unchecked, checked, 1)
+        roadmap_path.write_text(text, encoding="utf-8")
         self.assertIn("NODAL-INC31-006", self.codes(root))
 
     def test_rejects_scaffold_manifest_status(self) -> None:

@@ -30,6 +30,7 @@ EXPECTED_FILES = (
     ".github/workflows/increment-30-analog-numeric-types.yml",
     "docs/roadmap/nodal-development-todo.md",
     "tests/compiler/fixtures/increment29/manifest.json",
+    "tests/compiler/fixtures/increment31/manifest.json",
     "core/compiler/include/nodal/Dialect/Nodal/AnalogNumeric.h",
     "core/compiler/include/nodal/Diagnostics/DiagnosticSupport.h",
     "core/compiler/include/nodal/Diagnostics/DiagnosticMapping.h",
@@ -189,6 +190,11 @@ def check_repository(root: Path) -> list[Problem]:
         root / "tests/compiler/fixtures/increment29/manifest.json",
         problems,
         "NODAL-INC30-009",
+    )
+    successor = load_json(
+        root / "tests/compiler/fixtures/increment31/manifest.json",
+        problems,
+        "NODAL-INC30-006",
     )
 
     require(
@@ -401,8 +407,11 @@ def check_repository(root: Path) -> list[Problem]:
     increment30_open = "- [ ] **Increment 30 — Analog numeric types and expression typing**" in roadmap
     increment30_done = "- [x] **Increment 30 — Analog numeric types and expression typing**" in roadmap
     increment31_open = "- [ ] **Increment 31 — Potential and flow access functions**" in roadmap
+    increment31_done = "- [x] **Increment 31 — Potential and flow access functions**" in roadmap
     status = manifest.get("status")
     evidence = manifest.get("evidence", {})
+    successor_status = successor.get("status")
+    successor_evidence = successor.get("evidence", {})
 
     if not increment29_done or rev < (1, 37):
         problems.append(Problem("NODAL-INC30-006", "validated Increment 29 baseline is absent"))
@@ -415,8 +424,36 @@ def check_repository(root: Path) -> list[Problem]:
         for field in ("pull_request", "dedicated_run", "core_ci_run"):
             if not isinstance(evidence.get(field), int):
                 problems.append(Problem("NODAL-INC30-006", f"validated manifest lacks integer evidence field: {field}"))
-    if not increment31_open:
-        problems.append(Problem("NODAL-INC30-006", "Increment 31 must remain unchecked"))
+
+    if successor.get("increment") != 31 or successor.get("public_api") != "0.3":
+        problems.append(Problem("NODAL-INC30-006", "Increment 31 successor identity mismatch"))
+    if increment31_open == increment31_done:
+        problems.append(Problem("NODAL-INC30-006", "Increment 31 roadmap state is missing or ambiguous"))
+    elif successor_status in {"implementation-started", "implemented-awaiting-evidence"}:
+        if not increment31_open:
+            problems.append(Problem("NODAL-INC30-006", "Increment 31 pre-evidence state is inconsistent"))
+    elif successor_status == "validated-potential-flow-access":
+        if not increment31_done or rev < (1, 41):
+            problems.append(Problem("NODAL-INC30-006", "validated Increment 31 state is inconsistent"))
+        for field in ("pull_request", "dedicated_run", "core_ci_run"):
+            if not isinstance(successor_evidence.get(field), int):
+                problems.append(
+                    Problem(
+                        "NODAL-INC30-006",
+                        f"validated Increment 31 lacks integer evidence field: {field}",
+                    )
+                )
+        for field in ("implementation_head", "merge_commit"):
+            value = successor_evidence.get(field)
+            if not isinstance(value, str) or len(value) != 40:
+                problems.append(
+                    Problem(
+                        "NODAL-INC30-006",
+                        f"validated Increment 31 lacks commit evidence field: {field}",
+                    )
+                )
+    else:
+        problems.append(Problem("NODAL-INC30-006", "unsupported Increment 31 successor status"))
 
     return problems
 

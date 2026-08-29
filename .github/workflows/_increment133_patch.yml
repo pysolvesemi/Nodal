@@ -1,0 +1,48 @@
+name: Increment 133 One-Shot Patch
+
+on:
+  push:
+    branches:
+      - increment/133-analog-semantic-api
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Apply source-level naming repair and remove this workflow
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          api = Path("core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala")
+          text = api.read_text(encoding="utf-8")
+          old = "def contribute(\n    target: Expr[Real],"
+          new = "def contribution(\n    target: Expr[Real],"
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+          assert text.count("): Unit = contribute(potential, value, options)") == 1
+          assert text.count("): Unit = contribute(flow, value, options)") == 1
+          text = text.replace("): Unit = contribute(potential, value, options)", "): Unit = contribution(potential, value, options)", 1)
+          text = text.replace("): Unit = contribute(flow, value, options)", "): Unit = contribution(flow, value, options)", 1)
+          api.write_text(text, encoding="utf-8")
+
+          example = Path("examples/continuousTimeApi/src/ContinuousTimeCandidates.scala")
+          text = example.read_text(encoding="utf-8")
+          assert text.count("      contribute(\n") == 1
+          example.write_text(text.replace("      contribute(\n", "      contribution(\n", 1), encoding="utf-8")
+
+          Path(".github/workflows/_increment133_patch.yml").unlink()
+          PY
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Increment 133 — resolve contribution naming collision"
+          git push origin HEAD:increment/133-analog-semantic-api

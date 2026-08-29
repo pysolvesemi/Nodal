@@ -65,6 +65,15 @@ class Increment31ContractTest(unittest.TestCase):
         path.write_text(json.dumps(surface, indent=2) + "\n", encoding="utf-8")
         self.assertIn("NODAL-INC31-008", self.codes(root))
 
+    def test_rejects_missing_named_branch_isolation(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "tests/compiler/fixtures/increment31/access-surface.json"
+        surface = json.loads(path.read_text(encoding="utf-8"))
+        del surface["normalization"]["namedBranchIsolation"]
+        path.write_text(json.dumps(surface, indent=2) + "\n", encoding="utf-8")
+        self.assertIn("NODAL-INC31-008", self.codes(root))
+
     def test_rejects_writable_workflow(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)

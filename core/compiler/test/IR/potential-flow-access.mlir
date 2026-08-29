@@ -15,13 +15,17 @@ module attributes {
     %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"customElectrical">
     %probe_p = "nodal.node"() <{metadata = {}, name = "probe_p"}> : () -> !nodal.terminal<"customElectrical">
     %probe_n = "nodal.node"() <{metadata = {}, name = "probe_n"}> : () -> !nodal.terminal<"customElectrical">
+    %named_p = "nodal.node"() <{metadata = {}, name = "named_p"}> : () -> !nodal.terminal<"customElectrical">
+    %named_n = "nodal.node"() <{metadata = {}, name = "named_n"}> : () -> !nodal.terminal<"customElectrical">
     %branch = "nodal.branch"(%p, %n) <{metadata = {identity = "p_n"}}> : (!nodal.terminal<"customElectrical">, !nodal.terminal<"customElectrical">) -> !nodal.branch<"customElectrical">
     %probe_branch = "nodal.branch"(%probe_p, %probe_n) <{metadata = {identity = "probe_p_probe_n"}}> : (!nodal.terminal<"customElectrical">, !nodal.terminal<"customElectrical">) -> !nodal.branch<"customElectrical">
+    %named_parallel = "nodal.branch"(%named_p, %named_n) <{declaration_kind = "named", metadata = {}, name = "named_parallel", source_path = "PotentialFlowAccess.named_parallel"}> : (!nodal.terminal<"customElectrical">, !nodal.terminal<"customElectrical">) -> !nodal.branch<"customElectrical">
     "nodal.analog"() <{metadata = {}}> ({
     ^bb0:
       %branch_potential = "nodal.access"(%branch) <{function = "Across", kind = "potential", metadata = {source_path = "PotentialFlowAccess.branch_potential"}}> : (!nodal.branch<"customElectrical">) -> !nodal.quantity<"real", "voltage">
       %branch_flow = "nodal.access"(%branch) <{function = "Through", kind = "flow", metadata = {source_path = "PotentialFlowAccess.branch_flow"}}> : (!nodal.branch<"customElectrical">) -> !nodal.quantity<"real", "current">
       %generic_pair = "nodal.terminal_access"(%p, %n) <{function = "potential", kind = "potential", metadata = {}, source_path = "PotentialFlowAccess.generic_pair"}> : (!nodal.terminal<"customElectrical">, !nodal.terminal<"customElectrical">) -> !nodal.quantity<"real", "voltage">
+      %named_pair_probe = "nodal.terminal_access"(%named_p, %named_n) <{function = "potential", kind = "potential", metadata = {}, source_path = "PotentialFlowAccess.named_pair_probe"}> : (!nodal.terminal<"customElectrical">, !nodal.terminal<"customElectrical">) -> !nodal.quantity<"real", "voltage">
       %one_terminal = "nodal.terminal_access"(%p) <{function = "Across", kind = "potential", metadata = {}, source_path = "PotentialFlowAccess.one_terminal"}> : (!nodal.terminal<"customElectrical">) -> !nodal.quantity<"real", "voltage">
       %port_flow = "nodal.port_flow_access"(%p) <{function = "Through", kind = "flow", metadata = {}, source_path = "PotentialFlowAccess.port_flow"}> : (!nodal.terminal<"customElectrical">) -> !nodal.quantity<"real", "current">
       %probe_value = "nodal.access"(%probe_branch) <{function = "potential", kind = "potential", metadata = {source_path = "PotentialFlowAccess.probe"}}> : (!nodal.branch<"customElectrical">) -> !nodal.quantity<"real", "voltage">

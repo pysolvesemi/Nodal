@@ -443,7 +443,7 @@ add_test(
 set_tests_properties(
   nodal.native.potential-flow-access-normalize
   PROPERTIES
-    PASS_REGULAR_EXPRESSION "nodal[.]probe"
+    PASS_REGULAR_EXPRESSION "form = .two-terminal."
 )
 
 add_test(

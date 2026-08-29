@@ -27,7 +27,8 @@
     "twoTerminalOrientation": "operand-order",
     "sourceSpellingPreserved": true,
     "deterministic": true,
-    "idempotent": true
+    "idempotent": true,
+    "namedBranchIsolation": true
   },
   "probes": {
     "potentialOnly": "zero-flow-intent",

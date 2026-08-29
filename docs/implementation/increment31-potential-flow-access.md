@@ -17,6 +17,8 @@
 - `nodal.terminal_access` preserves one-terminal and oriented two-terminal
   source forms. One-terminal access deterministically records the canonical
   discipline-global reference.
+- Named branches remain distinct from endpoint-only two-terminal access during
+  probe grouping; only implicit branches may coalesce by endpoint pair.
 - `nodal.port_flow_access` represents local angle-delimited total-port flow and
   remains distinct from branch-probe construction.
 - `nodal.probe` records compiler-owned source-free potential or flow probe

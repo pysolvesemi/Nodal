@@ -253,6 +253,7 @@ def check_repository(root: Path) -> list[Problem]:
             "all 83 CTest cases",
             "public Scala API remains v0.3",
             "transactional Fast, Default, and Release semantic gates",
+            "Named branches remain distinct",
         ),
         problems,
         "NODAL-INC31-004",
@@ -330,6 +331,7 @@ def check_repository(root: Path) -> list[Problem]:
         "normalization_pass": "nodal-normalize-potential-flow-access",
         "backend_entry": "normalizePotentialFlowAccess-before-quantity-erasure",
         "semantic_pipeline": "normalize-before-verification",
+        "named_branch_isolation": "implicit-only-endpoint-coalescing",
         "positive_fixture": "core/compiler/test/IR/potential-flow-access.mlir",
         "negative_fixture_count": 9,
         "native_test_count": 83,
@@ -359,6 +361,14 @@ def check_repository(root: Path) -> list[Problem]:
         )
     if surface.get("forms", {}).get("portFlow") != "function(<port>)":
         problems.append(Problem("NODAL-INC31-008", "surface port-flow form mismatch"))
+    normalization = surface.get("normalization", {})
+    if normalization.get("namedBranchIsolation") is not True:
+        problems.append(
+            Problem(
+                "NODAL-INC31-008",
+                "named branches must remain isolated from endpoint-only access",
+            )
+        )
     probes = surface.get("probes", {})
     if probes.get("mixedSourceFreeAccess") != "reject":
         problems.append(
@@ -392,6 +402,8 @@ def check_repository(root: Path) -> list[Problem]:
             "normalizePotentialFlowAccess",
             "verifyPotentialFlowAccessModel",
             "probeProvenanceMatches",
+            "isImplicitBranchOperation",
+            "findImplicitBranchGroup",
             'return "nodal-normalize-potential-flow-access"',
             '"zero-flow"',
             '"zero-potential"',
@@ -427,6 +439,7 @@ def check_repository(root: Path) -> list[Problem]:
             "potential-flow-access-normalize",
             "potential-flow-access-reference",
             "builtin.module(nodal-gate-release)",
+            "form = .two-terminal.",
             "potential-flow-access-rejects-${_fixture}",
             "potential-flow-access-backend-discipline",
             "potential-flow-access-backend-generic",
@@ -491,6 +504,8 @@ def check_repository(root: Path) -> list[Problem]:
             'function = "potential"',
             'function = "Across"',
             'function = "Through"',
+            'declaration_kind = "named"',
+            'name = "named_parallel"',
         ),
         problems,
         "NODAL-INC31-011",

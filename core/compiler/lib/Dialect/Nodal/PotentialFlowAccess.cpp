@@ -122,10 +122,19 @@ struct AccessGroup {
   llvm::SmallVector<std::string, 4> provenance;
 };
 
-AccessGroup *findExplicitGroup(llvm::MutableArrayRef<AccessGroup> groups, Value positive,
-                               Value negative) {
+bool isImplicitBranchOperation(Operation *operation) {
+  if (!isNamed(operation, "nodal.branch"))
+    return false;
+  llvm::StringRef declarationKind = textAttr(operation, "declaration_kind");
+  llvm::StringRef name = textAttr(operation, "name");
+  return name.empty() && (declarationKind.empty() || declarationKind == "implicit");
+}
+
+AccessGroup *findImplicitBranchGroup(llvm::MutableArrayRef<AccessGroup> groups, Value positive,
+                                     Value negative) {
   for (AccessGroup &group : groups) {
-    if (!group.branchOperation || group.branchOperation->getNumOperands() != 2)
+    if (!isImplicitBranchOperation(group.branchOperation) ||
+        group.branchOperation->getNumOperands() != 2)
       continue;
     if (matchingTerminalPair(group.branchOperation->getOperand(0),
                              group.branchOperation->getOperand(1), positive, negative))
@@ -191,7 +200,7 @@ LogicalResult collectAccessGroups(Operation *module, llvm::SmallVectorImpl<Acces
 
     AccessGroup *group = nullptr;
     if (arity == 2)
-      group = findExplicitGroup(groups, operation->getOperand(0), operation->getOperand(1));
+      group = findImplicitBranchGroup(groups, operation->getOperand(0), operation->getOperand(1));
     if (!group) {
       llvm::StringRef form =
           arity == 1 ? llvm::StringRef("one-terminal") : llvm::StringRef("two-terminal");

@@ -1,9 +1,11 @@
 # Increment 31 — Potential and flow access functions
 
-**Status:** Implemented — awaiting evidence
+**Status:** Validated
 **Baseline:** fully validated Increment 30 closure at `f33bcff3285f17d228bab4c7577bafd35ab32a65`
+**Implementation PR:** [#88](https://github.com/pysolvesemi/Nodal/pull/88), replacing draft [#87](https://github.com/pysolvesemi/Nodal/pull/87) without changing the validated source head
+**Merge commit:** `1662b79f5f99686de4af2ed8a016fe8acf5c784e`
 **Public API:** unchanged at v0.3
-**Roadmap state:** Increment 31 remains unchecked until exact-head CI, review, merge, and separate evidence closure complete
+**Roadmap state:** Increment 31 is checked in roadmap revision 1.41
 
 ## Implemented
 
@@ -53,11 +55,23 @@ dialect and backend, passed all 83 CTest cases twice (direct CTest and the
 25 translation units. The materialized native implementation commit is
 `06365bc383064c1412db1f2580f876b21b621035`.
 
-The permanent Increment 31 workflow is read-only. It re-runs the repository and
-mutation contracts, the complete native compiler suite with the locked native
-and lint toolchains, Markdown/package/contribution checks, and artifact
-hygiene. The roadmap item remains unchecked while the implementation is
-`implemented-awaiting-evidence`.
+The accepted implementation head
+`647c79d1d78848c492b3128bd79502b6ef8664de` passed the corrected 20/20
+exact-head workflow matrix. Dedicated Increment 31 run `33244625475` passed
+repository contracts, mutation tests, the native compiler/backend suite,
+diagnostics, normalization, idempotence, and artifact hygiene. Core CI run
+`33244625490` passed contracts, Scala, native, and the aggregate required gate.
+
+PR [#88](https://github.com/pysolvesemi/Nodal/pull/88) merged the implementation
+into `dev` at `1662b79f5f99686de4af2ed8a016fe8acf5c784e`. Draft PR
+[#87](https://github.com/pysolvesemi/Nodal/pull/87) is retained as the original
+implementation discussion; #88 used the identical source head because the
+connector could not transition #87 out of draft state.
+
+The separate evidence closure records the accepted run set in the Increment 31
+manifest, checks the roadmap item, and keeps predecessor/successor state checks
+valid in both pre-evidence and validated repository states. Temporary closure
+scripts and writable workflows are absent from the permanent diff.
 
 ## Compatibility and remaining ownership
 

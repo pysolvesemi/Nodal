@@ -181,5 +181,18 @@ class Increment31ContractTest(unittest.TestCase):
         self.assertIn("NODAL-INC31-002", self.codes(root))
 
 
+    def test_rejects_stale_implementation_status_after_evidence(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "docs/implementation/increment31-potential-flow-access.md"
+        text = path.read_text(encoding="utf-8").replace(
+            "**Status:** Validated",
+            "**Status:** Implemented — awaiting evidence",
+            1,
+        )
+        path.write_text(text, encoding="utf-8")
+        self.assertIn("NODAL-INC31-004", self.codes(root))
+
+
 if __name__ == "__main__":
     unittest.main()

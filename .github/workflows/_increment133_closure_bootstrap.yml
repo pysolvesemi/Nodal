@@ -1,0 +1,343 @@
+name: Increment 133 Evidence Closure Bootstrap
+
+on:
+  push:
+    branches:
+      - increment/133-analog-semantic-api
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+jobs:
+  close-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Create permanent evidence-closure branch and pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
+          git checkout -B increment/133-evidence-closure origin/dev
+
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          root = Path.cwd()
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "User-Agent": "nodal-increment133-evidence-closure",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+
+          def api(path: str) -> object:
+              request = Request(f"https://api.github.com/repos/{repo}/{path}", headers=headers)
+              with urlopen(request, timeout=60) as response:
+                  return json.load(response)
+
+          pr = api("pulls/90")
+          merge_commit = str(pr["merge_commit_sha"])
+          merged_at = str(pr["merged_at"])
+
+          runs_payload = api("actions/runs?event=pull_request&per_page=100")
+          pr_runs = [
+              run
+              for run in runs_payload.get("workflow_runs", [])
+              if any(item.get("number") == 90 for item in run.get("pull_requests", []))
+              and run.get("conclusion") == "success"
+              and str(run.get("created_at")) <= merged_at
+          ]
+          core_runs = [run for run in pr_runs if run.get("name") == "Core CI"]
+          if not core_runs:
+              raise RuntimeError("no successful implementation Core CI run found for PR #90")
+          core = max(core_runs, key=lambda run: (str(run.get("created_at")), int(run["id"])))
+          implementation_head = str(core["head_sha"])
+          exact_runs = [run for run in pr_runs if str(run.get("head_sha")) == implementation_head]
+          dedicated_runs = [
+              run for run in exact_runs if run.get("name") == "Increment 133 Analog Semantic API"
+          ]
+          if not dedicated_runs:
+              raise RuntimeError("no successful dedicated Increment 133 run found on accepted head")
+          dedicated = max(dedicated_runs, key=lambda run: int(run["id"]))
+          inherited = {
+              str(run["name"]): int(run["id"])
+              for run in sorted(exact_runs, key=lambda item: str(item["name"]))
+          }
+          expected = {"Core CI", "Increment 133 Analog Semantic API"}
+          if not expected.issubset(inherited):
+              raise RuntimeError("accepted exact-head run inventory is incomplete")
+
+          post_payload = api(
+              f"actions/runs?head_sha={merge_commit}&event=push&per_page=100"
+          )
+          post_core = [
+              run
+              for run in post_payload.get("workflow_runs", [])
+              if run.get("name") == "Core CI" and run.get("conclusion") == "success"
+          ]
+          if not post_core:
+              raise RuntimeError("successful post-merge Core CI was not found")
+          post = max(post_core, key=lambda run: int(run["id"]))
+
+          manifest_path = root / "tests/api/fixtures/increment133/manifest.json"
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          manifest["status"] = "validated-analog-semantic-api"
+          manifest["validation"] = {
+              "pull_request": 90,
+              "implementation_head": implementation_head,
+              "dedicated_workflow_run": int(dedicated["id"]),
+              "core_ci_run": int(core["id"]),
+              "inherited_workflows": inherited,
+              "merge_commit": merge_commit,
+              "post_merge_core_ci_run": int(post["id"]),
+          }
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+          for relative in (
+              "docs/roadmap/equation-component-api-v0.1-surface.json",
+              "docs/roadmap/continuous-time-api-v0.1-surface.json",
+          ):
+              path = root / relative
+              surface = json.loads(path.read_text(encoding="utf-8"))
+              surface["status"] = "validated"
+              surface["validation"] = {
+                  "pull_request": 90,
+                  "implementation_head": implementation_head,
+                  "dedicated_workflow_run": int(dedicated["id"]),
+                  "core_ci_run": int(core["id"]),
+                  "merge_commit": merge_commit,
+                  "post_merge_core_ci_run": int(post["id"]),
+              }
+              path.write_text(json.dumps(surface, indent=2) + "\n", encoding="utf-8")
+
+          architecture_path = root / "docs/roadmap/continuous-time-ams-v0.1-surface.json"
+          architecture = json.loads(architecture_path.read_text(encoding="utf-8"))
+          architecture["status"] = "public-api-validated"
+          architecture["implementation_status"]["public_api_frozen"] = True
+          matched = 0
+          for item in architecture["roadmap"]:
+              if item.get("increment") == 133:
+                  item["status"] = "complete"
+                  matched += 1
+          if matched != 1:
+              raise RuntimeError("Increment 133 architecture-roadmap entry mismatch")
+          architecture_path.write_text(
+              json.dumps(architecture, indent=2) + "\n",
+              encoding="utf-8",
+          )
+
+          evidence_line = (
+              f"  - Evidence: implementation PR [#90](https://github.com/{repo}/pull/90), "
+              f"dedicated validation run [{dedicated['id']}](https://github.com/{repo}/actions/runs/{dedicated['id']}), "
+              f"accepted head [`{implementation_head[:8]}`](https://github.com/{repo}/commit/{implementation_head}), "
+              f"merge commit [`{merge_commit[:8]}`](https://github.com/{repo}/commit/{merge_commit}), "
+              f"Core CI run [{core['id']}](https://github.com/{repo}/actions/runs/{core['id']}), "
+              f"and post-merge Core CI run [{post['id']}](https://github.com/{repo}/actions/runs/{post['id']})."
+          )
+
+          plan_path = root / "docs/roadmap/continuous-time-ams-v0.1-plan.md"
+          plan = plan_path.read_text(encoding="utf-8")
+          unchecked = "- [ ] **Increment 133 — Analog semantic API and analysis contract design gate**"
+          checked = "- [x] **Increment 133 — Analog semantic API and analysis contract design gate**"
+          if unchecked in plan:
+              plan = plan.replace(unchecked, checked, 1)
+          elif checked not in plan:
+              raise RuntimeError("Increment 133 detailed-plan checkbox is missing")
+          next_marker = "- [ ] **Increment 134 — Source-semantic analog IR, `AnalogIsland`, and stable identities**"
+          if evidence_line not in plan:
+              index = plan.find(next_marker)
+              if index < 0:
+                  raise RuntimeError("Increment 134 detailed-plan marker is missing")
+              plan = plan[:index] + evidence_line + "\n\n" + plan[index:]
+          plan_path.write_text(plan, encoding="utf-8")
+
+          roadmap_path = root / "docs/roadmap/nodal-development-todo.md"
+          roadmap = roadmap_path.read_text(encoding="utf-8")
+          revision_match = re.search(r"\*\*Revision:\*\* ([0-9]+\.[0-9]+)", roadmap)
+          if not revision_match:
+              raise RuntimeError("main-roadmap revision marker is missing")
+          if revision_match.group(1) == "1.41":
+              roadmap = roadmap.replace("**Revision:** 1.41", "**Revision:** 1.42", 1)
+          elif revision_match.group(1) != "1.42":
+              raise RuntimeError(f"unexpected main-roadmap revision: {revision_match.group(1)}")
+          if unchecked in roadmap:
+              roadmap = roadmap.replace(unchecked, checked, 1)
+          elif checked not in roadmap:
+              raise RuntimeError("Increment 133 main-roadmap checkbox is missing")
+          main_next_marker = "- [ ] **Increment 134 — Source-semantic analog IR, `AnalogIsland`, and stable identities**"
+          if evidence_line not in roadmap:
+              index = roadmap.find(main_next_marker)
+              if index < 0:
+                  raise RuntimeError("Increment 134 main-roadmap marker is missing")
+              roadmap = roadmap[:index] + evidence_line + "\n\n" + roadmap[index:]
+          roadmap_path.write_text(roadmap, encoding="utf-8")
+
+          implementation_path = root / "docs/implementation/increment133-analog-semantic-api.md"
+          implementation = implementation_path.read_text(encoding="utf-8")
+          implementation = implementation.replace(
+              "Implemented awaiting exact-head evidence.",
+              "Validated and merged.",
+              1,
+          )
+          if "## Accepted evidence" not in implementation:
+              implementation += (
+                  "\n## Accepted evidence\n\n"
+                  f"- Implementation PR: #90\n"
+                  f"- Accepted implementation head: `{implementation_head}`\n"
+                  f"- Dedicated Increment 133 run: `{dedicated['id']}`\n"
+                  f"- Core CI run: `{core['id']}`\n"
+                  f"- Squash merge commit: `{merge_commit}`\n"
+                  f"- Post-merge Core CI run: `{post['id']}`\n"
+                  f"- Exact-head inherited workflow count: `{len(inherited)}`\n"
+              )
+          implementation_path.write_text(implementation, encoding="utf-8")
+
+          checker_path = root / "scripts/check_increment133.py"
+          checker = checker_path.read_text(encoding="utf-8")
+          old_checker = '''    require_fragments(
+              implementation,
+              ("Implemented awaiting exact-head evidence", "Increment 32 owns equations and contributions"),
+              problems,
+              "NODAL-INC133-044",
+          )
+          '''
+          new_checker = '''    if not any(
+              status in implementation
+              for status in ("Implemented awaiting exact-head evidence", "Validated and merged")
+          ):
+              problems.append(Problem("NODAL-INC133-044", "implementation status is invalid"))
+          require_fragments(
+              implementation,
+              ("Increment 32 owns equations and contributions",),
+              problems,
+              "NODAL-INC133-044",
+          )
+          '''
+          if old_checker in checker:
+              checker = checker.replace(old_checker, new_checker, 1)
+          elif new_checker not in checker:
+              raise RuntimeError("Increment 133 checker status anchor mismatch")
+          checker_path.write_text(checker, encoding="utf-8")
+
+          for gate_name in (
+              "docs/design-gates/NodalEquationComponentApi-DG-v0.1.md",
+              "docs/design-gates/NodalContinuousTimeApi-DG-v0.1.md",
+          ):
+              gate_path = root / gate_name
+              gate = gate_path.read_text(encoding="utf-8")
+              if "## Accepted implementation evidence" not in gate:
+                  gate += (
+                      "\n## Accepted implementation evidence\n\n"
+                      f"PR #90 passed the dedicated Increment 133 run `{dedicated['id']}`, "
+                      f"Core CI run `{core['id']}`, and all inherited workflows on exact head "
+                      f"`{implementation_head}` before squash merge `{merge_commit}`. "
+                      f"Post-merge Core CI run `{post['id']}` passed on that exact `dev` commit.\n"
+                  )
+              gate_path.write_text(gate, encoding="utf-8")
+
+          evidence = {
+              "implementation_head": implementation_head,
+              "merge_commit": merge_commit,
+              "dedicated_workflow_run": int(dedicated["id"]),
+              "core_ci_run": int(core["id"]),
+              "post_merge_core_ci_run": int(post["id"]),
+              "inherited_workflows": inherited,
+          }
+          (root / "tests/api/fixtures/increment133/accepted-evidence.json").write_text(
+              json.dumps(evidence, indent=2) + "\n",
+              encoding="utf-8",
+          )
+
+          subprocess.run(
+              ["./mill", "mill.scalalib.scalafmt/reformatAll"],
+              cwd=root,
+              check=True,
+          )
+          subprocess.run(["./mill", "scalafix.fix"], cwd=root, check=True)
+          subprocess.run(
+              ["python3", "scripts/check_increment133.py", "--compile-negative"],
+              cwd=root,
+              check=True,
+          )
+          subprocess.run(
+              [
+                  "python3",
+                  "-m",
+                  "unittest",
+                  "discover",
+                  "-s",
+                  "tests/api",
+                  "-p",
+                  "test_increment133.py",
+              ],
+              cwd=root,
+              check=True,
+          )
+          subprocess.run(["git", "diff", "--check"], cwd=root, check=True)
+
+          body = f'''## Summary
+
+Records accepted evidence and closes Increment 133 after implementation PR #90 passed its complete exact-head workflow matrix and post-merge Core CI.
+
+- validates the Increment 133 manifest and both machine-readable public surfaces;
+- marks Increment 133 complete in the detailed and main roadmaps;
+- advances the main roadmap to revision 1.42;
+- records the exact accepted implementation head, dedicated run, Core CI, inherited workflows, squash merge, and post-merge Core CI;
+- keeps Increment 32 unchecked but removes its architecture block;
+- keeps frontend recording, normalization, residual/DAE construction, solving, simulation, and backend lowering inert.
+
+## Accepted evidence
+
+- Implementation PR: #90
+- Accepted implementation head: `{implementation_head}`
+- Dedicated Increment 133 run: `{dedicated['id']}`
+- Core CI run: `{core['id']}`
+- Squash merge commit: `{merge_commit}`
+- Post-merge Core CI run: `{post['id']}`
+- Exact-head inherited workflow count: `{len(inherited)}`
+
+## Validation
+
+- [x] Implementation and post-merge evidence were discovered from GitHub using exact commit identity.
+- [x] Increment 133 checker and all three independent Scala type-negative fixtures pass.
+- [x] Scalafmt, Scalafix, repository tests, and whitespace checks pass.
+- [x] No temporary or writable workflow is included in this closure branch.
+- [x] Increment 32 remains unchecked and unimplemented.
+- [ ] Closure pull-request workflow matrix passes on the exact closure head.
+- [ ] Closure PR is squash-merged into `dev`.
+- [ ] Final post-merge Core CI passes.
+'''
+          (root / ".increment133-closure-pr-body.md").write_text(body, encoding="utf-8")
+          PY
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          body_file=.increment133-closure-pr-body.md
+          git add -A ':!.increment133-closure-pr-body.md'
+          git commit -m "Increment 133 — record accepted evidence"
+          git push --force-with-lease origin HEAD:increment/133-evidence-closure
+
+          if ! gh pr view --repo "${GITHUB_REPOSITORY}" increment/133-evidence-closure >/dev/null 2>&1; then
+            gh pr create \
+              --repo "${GITHUB_REPOSITORY}" \
+              --base dev \
+              --head increment/133-evidence-closure \
+              --title "Increment 133 — Record accepted evidence" \
+              --body-file "${body_file}"
+          fi

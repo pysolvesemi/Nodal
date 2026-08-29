@@ -8,14 +8,24 @@ import hashlib
 import json
 import lzma
 import shutil
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HERE = Path(__file__).resolve().parent
 PAYLOAD_SHA256 = "c5fdcae57d502735dc68c51ab2ce43955eeb0a07f48a289f340a3a92a390573b"
+PERMANENT_WORKFLOW = ROOT / ".github/workflows/increment-31-potential-flow-access.yml"
+FINALIZER_WORKFLOW = ROOT / ".github/workflows/_increment31_finalize.yml"
+
+
+def run_git(*arguments: str) -> None:
+    subprocess.run(["git", *arguments], cwd=ROOT, check=True)
 
 
 def main() -> None:
+    original_permanent_workflow = PERMANENT_WORKFLOW.read_text(encoding="utf-8")
+    original_finalizer_workflow = FINALIZER_WORKFLOW.read_text(encoding="utf-8")
+
     payload_paths = sorted(HERE.glob("_increment31_finalize_payload_*.txt"))
     if len(payload_paths) != 5:
         raise RuntimeError("Increment 31 finalization payload is incomplete")
@@ -38,6 +48,8 @@ def main() -> None:
         if content.endswith("\n"):
             normalized += "\n"
         path.write_text(normalized, encoding="utf-8")
+
+    finalized_permanent_workflow = PERMANENT_WORKFLOW.read_text(encoding="utf-8")
 
     gitignore = ROOT / ".gitignore"
     text = gitignore.read_text(encoding="utf-8")
@@ -66,8 +78,34 @@ def main() -> None:
 
     for path in payload_paths:
         path.unlink(missing_ok=True)
-    (ROOT / ".github/workflows/_increment31_finalize.yml").unlink(missing_ok=True)
+    FINALIZER_WORKFLOW.unlink(missing_ok=True)
     Path(__file__).unlink(missing_ok=True)
+
+    # GITHUB_TOKEN cannot push commits that modify workflow files. Commit and
+    # push the already-validated non-workflow finalization first, then restore
+    # the desired workflow-only working-tree delta for a privileged follow-up.
+    PERMANENT_WORKFLOW.write_text(original_permanent_workflow, encoding="utf-8")
+    FINALIZER_WORKFLOW.write_text(original_finalizer_workflow, encoding="utf-8")
+
+    run_git("config", "user.name", "github-actions[bot]")
+    run_git(
+        "config",
+        "user.email",
+        "41898282+github-actions[bot]@users.noreply.github.com",
+    )
+    run_git("add", "-A")
+    run_git(
+        "restore",
+        "--staged",
+        "--",
+        str(PERMANENT_WORKFLOW.relative_to(ROOT)),
+        str(FINALIZER_WORKFLOW.relative_to(ROOT)),
+    )
+    run_git("commit", "-m", "Increment 31 — finalize non-workflow implementation contract")
+    run_git("push", "origin", "HEAD:increment/31-potential-flow-access")
+
+    PERMANENT_WORKFLOW.write_text(finalized_permanent_workflow, encoding="utf-8")
+    FINALIZER_WORKFLOW.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

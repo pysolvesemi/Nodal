@@ -7,6 +7,7 @@
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
+#include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -33,6 +34,10 @@ namespace {
 constexpr llvm::StringLiteral kSupportedOperations[] = {
     "nodal.unit",
     "nodal.module",
+    "nodal.nature",
+    "nodal.nature_import",
+    "nodal.discipline",
+    "nodal.discipline_import",
     "nodal.parameter",
     "nodal.const_literal",
     "nodal.const_parameter_ref",
@@ -48,6 +53,9 @@ constexpr llvm::StringLiteral kSupportedOperations[] = {
     "nodal.analog_integer_literal",
     "nodal.parameter_ref",
     "nodal.access",
+    "nodal.terminal_access",
+    "nodal.port_flow_access",
+    "nodal.probe",
     "nodal.analog_add",
     "nodal.analog_sub",
     "nodal.analog_mul",
@@ -206,22 +214,51 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
     if (!parameter)
       return failure();
     rendered = parameter.getValue().str();
-  } else if (name == "nodal.access") {
+  } else if (name == "nodal.access" || name == "nodal.terminal_access" ||
+             name == "nodal.port_flow_access") {
     auto kind = operation->getAttrOfType<StringAttr>("kind");
-    if (!kind || operation->getNumOperands() != 1)
+    auto function = operation->getAttrOfType<StringAttr>("function");
+    if (!kind)
       return failure();
-    if (kind.getValue() == "potential") {
-      auto expression = renderBranch(operation->getOperand(0), state, "V");
-      if (failed(expression))
-        return failure();
-      rendered = *expression;
-    } else if (kind.getValue() == "flow") {
-      auto expression = renderBranch(operation->getOperand(0), state, "I");
-      if (failed(expression))
-        return failure();
-      rendered = *expression;
+    std::string access;
+    if (function) {
+      access = function.getValue().str();
+    } else if (name == "nodal.access" && kind.getValue() == "potential") {
+      access = "V";
+    } else if (name == "nodal.access" && kind.getValue() == "flow") {
+      access = "I";
     } else {
       return failure();
+    }
+
+    if (name == "nodal.access") {
+      if (operation->getNumOperands() != 1)
+        return failure();
+      auto expression = renderBranch(operation->getOperand(0), state, access);
+      if (failed(expression))
+        return failure();
+      rendered = *expression;
+    } else if (name == "nodal.terminal_access") {
+      if (operation->getNumOperands() != 1 && operation->getNumOperands() != 2)
+        return failure();
+      auto first = state.terminals.find(operation->getOperand(0));
+      if (first == state.terminals.end())
+        return failure();
+      rendered = (llvm::Twine(access) + "(" + first->second).str();
+      if (operation->getNumOperands() == 2) {
+        auto second = state.terminals.find(operation->getOperand(1));
+        if (second == state.terminals.end())
+          return failure();
+        rendered += (llvm::Twine(", ") + second->second).str();
+      }
+      rendered += ")";
+    } else {
+      if (operation->getNumOperands() != 1)
+        return failure();
+      auto port = state.terminals.find(operation->getOperand(0));
+      if (port == state.terminals.end())
+        return failure();
+      rendered = (llvm::Twine(access) + "(<" + port->second + ">)").str();
     }
   } else if (name == "nodal.analog_ddt") {
     if (operation->getNumOperands() != 1)
@@ -683,6 +720,8 @@ bool validIdentifierList(llvm::StringRef value) {
 } // namespace
 
 LogicalResult verifyBackendOperations(ModuleOp module, const BackendProfile &profile) {
+  if (failed(normalizePotentialFlowAccess(module)))
+    return failure();
   if (failed(verifyAnalogQuantityErasure(module)))
     return failure();
   LogicalResult result = success();

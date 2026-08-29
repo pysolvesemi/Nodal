@@ -7,6 +7,7 @@
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
+#include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
@@ -358,7 +359,19 @@ LogicalResult nodal::BranchOp::verify() {
 }
 
 LogicalResult nodal::AccessOp::verify() {
-  return nodal::verifyAnalogNumericOperation(getOperation());
+  return nodal::verifyPotentialFlowAccessOperation(getOperation());
+}
+
+LogicalResult nodal::TerminalAccessOp::verify() {
+  return nodal::verifyPotentialFlowAccessOperation(getOperation());
+}
+
+LogicalResult nodal::PortFlowAccessOp::verify() {
+  return nodal::verifyPotentialFlowAccessOperation(getOperation());
+}
+
+LogicalResult nodal::ProbeOp::verify() {
+  return nodal::verifyPotentialFlowAccessOperation(getOperation());
 }
 
 LogicalResult nodal::AnalogOp::verify() {
@@ -368,7 +381,8 @@ LogicalResult nodal::AnalogOp::verify() {
     if (!llvm::isa<nodal::RealLiteralOp, nodal::AnalogIntegerLiteralOp, nodal::ParameterRefOp,
                    nodal::AnalogAddOp, nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp,
                    nodal::AnalogNegOp, nodal::AnalogCompareOp, nodal::AnalogLogicOp,
-                   nodal::AnalogSelectOp, nodal::AnalogDdtOp, nodal::AccessOp, nodal::ContributeOp>(
+                   nodal::AnalogSelectOp, nodal::AnalogDdtOp, nodal::AccessOp,
+                   nodal::TerminalAccessOp, nodal::PortFlowAccessOp, nodal::ContributeOp>(
             operation))
       return operation.emitOpError(
           "NODAL-ANALOG-REGION-002: operation is not legal in the analog numeric region");

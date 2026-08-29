@@ -34,7 +34,10 @@ def main() -> None:
     for relative, content in files.items():
         path = ROOT / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        normalized = "\n".join(line.rstrip() for line in content.splitlines())
+        if content.endswith("\n"):
+            normalized += "\n"
+        path.write_text(normalized, encoding="utf-8")
 
     gitignore = ROOT / ".gitignore"
     text = gitignore.read_text(encoding="utf-8")

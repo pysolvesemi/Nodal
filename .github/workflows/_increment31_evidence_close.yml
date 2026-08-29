@@ -17,6 +17,7 @@ env:
 
 jobs:
   close-evidence:
+    if: github.event.head_commit.message == 'chore(increment31): execute evidence closure recovery'
     name: increment-31/evidence-closure-materialization
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -28,5 +29,5 @@ jobs:
           ref: increment/31-evidence-closure
           fetch-depth: 0
 
-      - name: Record evidence, validate closure, and remove updater
-        run: python3 scripts/_increment31_evidence_close.py
+      - name: Record evidence, validate closure, and retain workflow for connector cleanup
+        run: python3 scripts/_increment31_evidence_recover.py

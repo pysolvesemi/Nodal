@@ -223,5 +223,27 @@ class Increment30CheckerTests(unittest.TestCase):
         self.assertIn("NODAL-INC30-007", self.codes(root))
 
 
+    def test_rejects_inconsistent_increment31_successor_state(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+
+        manifest_path = root / "tests/compiler/fixtures/increment31/manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "implemented-awaiting-evidence"
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        roadmap_path = root / "docs/roadmap/nodal-development-todo.md"
+        text = roadmap_path.read_text(encoding="utf-8")
+        unchecked = "- [ ] **Increment 31 — Potential and flow access functions**"
+        checked = "- [x] **Increment 31 — Potential and flow access functions**"
+        if checked not in text:
+            text = text.replace(unchecked, checked, 1)
+        roadmap_path.write_text(text, encoding="utf-8")
+        self.assertIn("NODAL-INC30-006", self.codes(root))
+
+
 if __name__ == "__main__":
     unittest.main()

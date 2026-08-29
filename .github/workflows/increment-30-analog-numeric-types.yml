@@ -151,6 +151,9 @@ jobs:
           manifest = json.loads(
               Path("tests/compiler/fixtures/increment30/manifest.json").read_text()
           )
+          successor = json.loads(
+              Path("tests/compiler/fixtures/increment31/manifest.json").read_text()
+          )
           status = manifest["status"]
           assert status in {
               "implemented-awaiting-evidence",
@@ -166,12 +169,28 @@ jobs:
           increment30_closed = (
               "- [x] **Increment 30 — Analog numeric types and expression typing**"
           )
+          increment31_open = (
+              "- [ ] **Increment 31 — Potential and flow access functions**"
+          )
+          increment31_closed = (
+              "- [x] **Increment 31 — Potential and flow access functions**"
+          )
           assert "- [x] **Increment 29 — Parameters, constants, ranges, and units**" in roadmap
           assert (increment30_open in roadmap) != (increment30_closed in roadmap)
+          assert (increment31_open in roadmap) != (increment31_closed in roadmap)
 
           if status == "implemented-awaiting-evidence":
               assert increment30_open in roadmap
           else:
               assert increment30_closed in roadmap
-              assert "- [ ] **Increment 31 — Potential and flow access functions**" in roadmap
+
+          successor_status = successor["status"]
+          if successor_status in {
+              "implementation-started",
+              "implemented-awaiting-evidence",
+          }:
+              assert increment31_open in roadmap
+          else:
+              assert successor_status == "validated-potential-flow-access"
+              assert increment31_closed in roadmap
           PY

@@ -246,8 +246,6 @@ def check_repository(root: Path) -> list[Problem]:
     require(
         implementation,
         (
-            "**Status:** Implemented — awaiting evidence",
-            "Increment 31 remains unchecked",
             "resolvePotentialFlowAccessNature",
             "nodal-normalize-potential-flow-access",
             "all 83 CTest cases",
@@ -260,6 +258,32 @@ def check_repository(root: Path) -> list[Problem]:
         "NODAL-INC31-004",
         "Increment 31 implementation note",
     )
+    if manifest.get("status") == "implemented-awaiting-evidence":
+        require(
+            implementation,
+            (
+                "**Status:** Implemented — awaiting evidence",
+                "Increment 31 remains unchecked",
+            ),
+            problems,
+            "NODAL-INC31-004",
+            "pre-evidence Increment 31 implementation note",
+        )
+    elif manifest.get("status") == "validated-potential-flow-access":
+        require(
+            implementation,
+            (
+                "**Status:** Validated",
+                "Increment 31 is checked",
+                "PR [#88]",
+                "1662b79f5f99686de4af2ed8a016fe8acf5c784e",
+                "33244625475",
+                "33244625490",
+            ),
+            problems,
+            "NODAL-INC31-004",
+            "validated Increment 31 implementation note",
+        )
 
     require(
         workflow,

@@ -46,9 +46,8 @@ initialEquations:
   initialEquation(
     state,
     initialValue,
-    EquationOptions(
-      id = Some(EquationId("initial-state")),
-      analyses = AnalysisApplicability.only(AnalysisKind.Initialization)
+    InitialEquationOptions(
+      id = Some(EquationId("initial-state"))
     )
   )
 
@@ -92,7 +91,8 @@ initial-condition analysis.
 
 - Initialization equations remain distinct from runtime procedural
   initialization.
-- The analysis set must resolve to `Initialization`.
+- `InitialEquationOptions` deliberately has no analysis-applicability field, so
+  a caller cannot widen an initialization equation into runtime analyses.
 - Conflicting or duplicate initialization constraints are diagnosed.
 - Initial equations may constrain user-declared state, operator-created state,
   parameters where permitted, and algebraic unknowns.

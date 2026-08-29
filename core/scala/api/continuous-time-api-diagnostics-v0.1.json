@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "surface_version": "0.1",
+  "status": "frozen",
+  "increment": 133,
+  "diagnostics": [
+    {
+      "code": "NODAL-EQ-001",
+      "owner_increment": 32,
+      "summary": "equation used outside an analog equation region"
+    },
+    {
+      "code": "NODAL-EQ-002",
+      "owner_increment": 32,
+      "summary": "equation used in a procedural region"
+    },
+    {
+      "code": "NODAL-EQ-003",
+      "owner_increment": 32,
+      "summary": "equation operands have incompatible type or physical dimension"
+    },
+    {
+      "code": "NODAL-EQ-004",
+      "owner_increment": 32,
+      "summary": "duplicate explicit equation identity"
+    },
+    {
+      "code": "NODAL-EQ-005",
+      "owner_increment": 45,
+      "summary": "unsafe or unproved causal equation orientation"
+    },
+    {
+      "code": "NODAL-CONTRIB-001",
+      "owner_increment": 32,
+      "summary": "contribution used outside a legal analog contribution region"
+    },
+    {
+      "code": "NODAL-CONTRIB-002",
+      "owner_increment": 32,
+      "summary": "illegal contribution target"
+    },
+    {
+      "code": "NODAL-CONTRIB-003",
+      "owner_increment": 32,
+      "summary": "contribution value has incompatible physical dimension"
+    },
+    {
+      "code": "NODAL-CONTRIB-004",
+      "owner_increment": 32,
+      "summary": "duplicate explicit contribution identity"
+    },
+    {
+      "code": "NODAL-CONTRIB-005",
+      "owner_increment": 32,
+      "summary": "contribution used in a procedural region"
+    },
+    {
+      "code": "NODAL-PROC-001",
+      "owner_increment": 33,
+      "summary": "procedural assignment used in an equation or contribution region"
+    },
+    {
+      "code": "NODAL-INIT-001",
+      "owner_increment": 32,
+      "summary": "initial equation selects non-initial analysis applicability"
+    },
+    {
+      "code": "NODAL-COMP-001",
+      "owner_increment": 32,
+      "summary": "concrete physical component has incomplete local balance"
+    },
+    {
+      "code": "NODAL-STRUCT-001",
+      "owner_increment": 29,
+      "summary": "dynamic or unsupported parameter kind used structurally"
+    },
+    {
+      "code": "NODAL-TARGET-001",
+      "owner_increment": 47,
+      "summary": "selected target cannot preserve required equation semantics"
+    }
+  ]
+}

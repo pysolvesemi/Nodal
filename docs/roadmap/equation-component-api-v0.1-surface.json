@@ -1,0 +1,89 @@
+{
+  "schema": 1,
+  "surface_version": "0.1",
+  "status": "approved-awaiting-implementation-evidence",
+  "increment": 133,
+  "compatibility_base": "0.3",
+  "source_package": "nodal",
+  "design_gate": "docs/design-gates/NodalEquationComponentApi-DG-v0.1.md",
+  "checkpoint_unblocks_increment": 32,
+  "regions": [
+    "analog",
+    "equations",
+    "initial-equations",
+    "contributions",
+    "analog-procedure"
+  ],
+  "equation": {
+    "spellings": [
+      "left === right",
+      "equation(left,right,options)"
+    ],
+    "unordered": true,
+    "preserve_authored_sides": true,
+    "canonical_residual_intent": "left-right=0",
+    "premature_causal_orientation": false,
+    "unsafe_division_orientation": false,
+    "metadata": [
+      "stable-id",
+      "guard",
+      "analysis-applicability",
+      "continuity",
+      "physical-dimension",
+      "source-and-hierarchy-provenance"
+    ]
+  },
+  "initial_equation": {
+    "distinct_options_type": "InitialEquationOptions",
+    "non_initial_analysis_legal": false
+  },
+  "contribution": {
+    "spellings": [
+      "target <+ value",
+      "contribution(target,value,options)"
+    ],
+    "additive": true,
+    "source_order_independent": true,
+    "overwrite_semantics": false,
+    "preserve_identity_and_provenance": true
+  },
+  "procedural_assignment": {
+    "spelling": ":=",
+    "semantically_distinct": true,
+    "implementation_owner": 33
+  },
+  "connectivity": {
+    "conservative_connection_is_directional_assignment": false,
+    "potential_equality": true,
+    "signed_flow_conservation": true
+  },
+  "physical_component": {
+    "completeness": [
+      "Partial",
+      "Concrete"
+    ],
+    "topology_ownership": [
+      "Extensible",
+      "Complete"
+    ],
+    "local_balance": [
+      "DeferredToConcrete",
+      "Required",
+      "Explicit"
+    ]
+  },
+  "structural_parameter": {
+    "requires_envelope": true,
+    "requires_effect_inventory": true,
+    "dynamic_real_legal": false
+  },
+  "implementation_status": {
+    "compile_surface": true,
+    "frontend_recording": false,
+    "equation_normalization": false,
+    "topology_expansion": false,
+    "residual_dae_construction": false,
+    "solver": false,
+    "backend_lowering": false
+  }
+}

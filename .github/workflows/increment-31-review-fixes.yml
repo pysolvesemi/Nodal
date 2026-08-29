@@ -1,0 +1,82 @@
+name: Increment 31 Named Branch Backend Fix
+
+on:
+  push:
+    branches:
+      - increment/31-potential-flow-access
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-31-named-branch-backend
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Apply named-branch backend fix
+        run: python3 scripts/finalize_increment31.py
+
+      - name: Bootstrap locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format changed backend source
+        run: |
+          format="$(find "${RUNNER_TEMP}/nodal-lint-toolchain" -type f -name clang-format | head -1)"
+          test -n "${format}"
+          "${format}" -i core/compiler/lib/Backend/AnalogVerticalSlice.cpp
+
+      - name: Validate contracts and mutations
+        run: |
+          workflow=.github/workflows/increment-31-review-fixes.yml
+          backup="${RUNNER_TEMP}/increment-31-review-fixes.yml"
+          cp "${workflow}" "${backup}"
+          rm "${workflow}"
+          status=0
+          python3 scripts/check_increment31.py || status=$?
+          if [ "${status}" -eq 0 ]; then
+            python3 tests/compiler/test_increment31.py || status=$?
+          fi
+          if [ "${status}" -eq 0 ]; then
+            python3 -m unittest discover \
+              -s tests/compiler \
+              -p 'test_*.py' || status=$?
+          fi
+          if [ "${status}" -eq 0 ]; then
+            git diff --check || status=$?
+          fi
+          cp "${backup}" "${workflow}"
+          exit "${status}"
+
+      - name: Validate native compiler and lint
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Commit validated non-workflow fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(increment31): preserve named branch identity in backend"
+          git push origin HEAD:increment/31-potential-flow-access

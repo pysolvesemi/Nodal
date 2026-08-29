@@ -32,12 +32,25 @@ jobs:
 
       - name: Validate repaired contracts and mutations
         run: |
-          python3 scripts/check_increment31.py
-          python3 tests/compiler/test_increment31.py
-          python3 -m unittest discover \
-            -s tests/compiler \
-            -p 'test_*.py'
-          git diff --check
+          workflow=.github/workflows/increment-31-review-fixes.yml
+          backup="${RUNNER_TEMP}/increment-31-review-fixes.yml"
+          cp "${workflow}" "${backup}"
+          rm "${workflow}"
+          status=0
+          python3 scripts/check_increment31.py || status=$?
+          if [ "${status}" -eq 0 ]; then
+            python3 tests/compiler/test_increment31.py || status=$?
+          fi
+          if [ "${status}" -eq 0 ]; then
+            python3 -m unittest discover \
+              -s tests/compiler \
+              -p 'test_*.py' || status=$?
+          fi
+          if [ "${status}" -eq 0 ]; then
+            git diff --check || status=$?
+          fi
+          cp "${backup}" "${workflow}"
+          exit "${status}"
 
       - name: Commit validated non-workflow repair
         run: |

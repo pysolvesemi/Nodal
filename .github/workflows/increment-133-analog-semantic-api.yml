@@ -10,7 +10,7 @@ on:
       - dev
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   contracts:
@@ -31,32 +31,3 @@ jobs:
           python3 scripts/check_increment133.py --compile-negative
           python3 -m unittest discover -s tests/api -p 'test_increment133.py'
           git diff --check
-
-  close:
-    name: increment-133/evidence-closure
-    if: github.event_name == 'push' && github.ref == 'refs/heads/increment/133-evidence-closure'
-    needs: contracts
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-
-    steps:
-      - name: Check out closure branch
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Record accepted evidence
-        run: |
-          python3 scripts/close_increment133.py
-          python3 scripts/check_increment133.py
-          python3 -m unittest discover -s tests/api -p 'test_increment133.py'
-          git diff --check
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add docs/roadmap/nodal-development-todo.md
-          git add docs/roadmap/continuous-time-ams-v0.1-plan.md
-          git add docs/roadmap/continuous-time-ams-v0.1-surface.json
-          git add core/scala/api/public-api-continuous-time-v0.1.json
-          git add tests/api/fixtures/increment133/manifest.json
-          git commit -m "Increment 133 — record accepted evidence and close roadmap"
-          git push origin HEAD:increment/133-evidence-closure

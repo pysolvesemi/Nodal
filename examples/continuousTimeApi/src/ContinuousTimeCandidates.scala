@@ -69,7 +69,7 @@ final class ContinuousTimeCandidates extends Module:
     initialEquation(
       charge.read,
       0.0.real,
-      InitialEquationOptions(id = Some(EquationId("initial-charge")))
+      InitialInitialEquationOptions(id = Some(EquationId("initial-charge")))
     )
 
   val scratch: Variable[Real] = variable(Real, 0.0.real)

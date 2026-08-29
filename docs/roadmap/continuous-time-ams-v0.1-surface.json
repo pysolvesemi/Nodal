@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "surface_version": "0.1",
-  "status": "architecture-accepted-api-deferred",
+  "status": "public-api-frozen-awaiting-evidence",
   "binding_adr": "docs/architecture/0022-layered-continuous-time-hybrid-dae-architecture.md",
   "binding_rule": "preserve-source-analog-intent-partition-explicit-analog-islands-normalize-verified-topology-and-hybrid-equations-derive-analysis-specific-solver-forms-retain-capability-and-validity-evidence",
   "roadmap_increment": 132,
@@ -10,7 +10,7 @@
   "implementation_status": {
     "architecture_recorded": true,
     "roadmap_recorded": true,
-    "public_api_frozen": false,
+    "public_api_frozen": true,
     "source_semantic_analog_ir_implemented": false,
     "analog_island_implemented": false,
     "residual_dae_ir_implemented": false,
@@ -247,7 +247,7 @@
     {
       "increment": 133,
       "title": "Analog semantic API and analysis contract design gate",
-      "status": "planned"
+      "status": "approved-awaiting-evidence"
     },
     {
       "increment": 134,

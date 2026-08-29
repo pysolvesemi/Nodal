@@ -56,6 +56,9 @@ def equation(
     options: EquationOptions = EquationOptions()
 ): Unit = CandidateRuntime.statement("candidate-equation", left, right, options)
 
+extension (left: Expr[Real])
+  infix def ===(right: Expr[Real]): Unit = equation(left, right)
+
 def initialEquations(body: => Unit): Unit =
   CandidateRuntime.statement("candidate-initial-equations")
   body

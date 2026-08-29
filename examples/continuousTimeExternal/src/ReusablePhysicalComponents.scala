@@ -36,11 +36,7 @@ final class Resistor(defaultResistance: Expr[Real] = 1.0.kOhm)
     )
   ):
     equations:
-      equation(
-        path.potential,
-        resistance * path.flow,
-        EquationOptions(id = Some(EquationId("resistor-ohm-law")))
-      )
+      path.potential === resistance * path.flow
 
 final class Capacitor(defaultCapacitance: Expr[Real] = 1.0.pF)
     extends PartialTwoTerminal(Electrical):

@@ -210,9 +210,11 @@ Analog target passes preserve or explicitly invalidate equation, topology, state
   - Synchronize the main roadmap and architecture index without freezing public syntax or implementing compiler/solver behavior.
 
 - [ ] **Increment 133 — Analog semantic API and analysis contract design gate**
-  - Compile and compare public candidates for equations/contributions, explicit analog state and initialization, event tolerance and discontinuity declarations, analysis context, environment/PVT access, noise identity/correlation, validity envelopes, and solver-hint metadata.
-  - Publish `NodalContinuousTimeApi-DG-v0.1.md`, a machine-readable public surface, migration notes, stable diagnostics, positive/negative fixtures, and an external reusable-model fixture.
-  - Keep frontend, equation normalization, solver, and backend behavior inert.
+  - Freeze the equation/component checkpoint first: unordered equations, additive contributions, procedural-assignment separation, conservative connections, partial/concrete components, local balance, structural parameters, and initial equations.
+  - Publish `NodalEquationComponentApi-DG-v0.1.md` and its machine-readable checkpoint surface; Increment 32 may begin after this checkpoint is accepted even while the remaining full gate is still being validated.
+  - Freeze the complete continuous-time public surface covering analog state and reinitialization, event tolerances and discontinuities, analysis context, environment/PVT, noise identity/correlation, validity envelopes, and solver hints.
+  - Publish `NodalContinuousTimeApi-DG-v0.1.md`, a machine-readable public surface, migration notes, stable diagnostics, positive/negative fixtures, and an external reusable physical-component fixture.
+  - Keep frontend, equation normalization, residual formation, solver, and backend behavior inert.
 
 - [ ] **Increment 134 — Source-semantic analog IR, `AnalogIsland`, and stable identities**
   - Implement source-semantic operations for contributions, equations, operators, events, analyses, noise, environment, connect constructs, and solver hints.

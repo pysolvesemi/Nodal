@@ -21,6 +21,12 @@
       "contributions",
       "analogProcedure"
     ],
+    "options": [
+      "EquationOptions",
+      "InitialEquationOptions",
+      "ContributionOptions"
+    ],
+    "initial_equation_analysis": "initialization-only-by-api-shape",
     "equation_semantics": "unordered-equality-constraint",
     "canonical_residual_intent": "left-minus-right-equals-zero-without-causal-orientation",
     "contribution_semantics": "additive-source-order-independent",

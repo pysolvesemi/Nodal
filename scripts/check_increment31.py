@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -148,23 +149,39 @@ def check_repository(root: Path) -> list[Problem]:
             problems.append(
                 Problem("NODAL-INC31-002", f"temporary file remains: {relative}")
             )
-    for path in root.rglob("__pycache__"):
-        if ".git" not in path.parts and path.is_dir():
+    try:
+        inventory = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "-z",
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ).stdout.decode("utf-8")
+    except (OSError, subprocess.CalledProcessError, UnicodeDecodeError) as exc:
+        problems.append(
+            Problem(
+                "NODAL-INC31-002",
+                f"cannot inventory repository artifacts: {exc}",
+            )
+        )
+        inventory = ""
+    for relative in sorted(path for path in inventory.split("\0") if path):
+        path = Path(relative)
+        if "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}:
             problems.append(
                 Problem(
                     "NODAL-INC31-002",
-                    f"Python bytecode cache remains: {path.relative_to(root)}",
+                    f"Python bytecode artifact remains: {path.as_posix()}",
                 )
             )
-    for pattern in ("*.pyc", "*.pyo"):
-        for path in root.rglob(pattern):
-            if ".git" not in path.parts and path.is_file():
-                problems.append(
-                    Problem(
-                        "NODAL-INC31-002",
-                        f"Python bytecode artifact remains: {path.relative_to(root)}",
-                    )
-                )
 
     gate = read(
         root / "docs/design-gates/NodalPotentialFlowAccess-DG-v1.0.md",

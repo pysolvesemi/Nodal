@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -137,6 +138,19 @@ class Increment31ContractTest(unittest.TestCase):
         path = root / "scripts/__pycache__/increment31.cpython-312.pyc"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"not-bytecode")
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "add",
+                "-f",
+                path.relative_to(root).as_posix(),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
         self.assertIn("NODAL-INC31-002", self.codes(root))
 
 

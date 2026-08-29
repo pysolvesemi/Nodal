@@ -2,7 +2,7 @@
   "increment": 31,
   "title": "Potential and flow access functions",
   "public_api": "0.3",
-  "status": "implementation-started",
+  "status": "implemented-awaiting-evidence",
   "prerequisite": {
     "increment": 30,
     "status": "validated-analog-numeric-typing",
@@ -77,6 +77,21 @@
     "NODAL-PROBE-KIND-001",
     "NODAL-PROBE-PROVENANCE-001"
   ],
+  "implementation": {
+    "nature_dimension": "optional declaration attribute; required by typed access",
+    "resolver": "resolvePotentialFlowAccessNature",
+    "operation_verifier": "verifyPotentialFlowAccessOperation",
+    "model_verifier": "verifyPotentialFlowAccessModel",
+    "normalizer": "normalizePotentialFlowAccess",
+    "normalization_pass": "nodal-normalize-potential-flow-access",
+    "probe_owner": "increment31-potential-flow-access",
+    "backend_entry": "normalizePotentialFlowAccess-before-quantity-erasure",
+    "positive_fixture": "core/compiler/test/IR/potential-flow-access.mlir",
+    "negative_fixture_count": 9,
+    "native_test_count": 83,
+    "materialization_run": 33233642892,
+    "materialization_head": "06365bc383064c1412db1f2580f876b21b621035"
+  },
   "deferred": [
     "public Scala access syntax",
     "general equation construction",

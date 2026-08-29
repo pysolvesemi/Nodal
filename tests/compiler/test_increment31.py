@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation tests for the Increment 31 starting contract."""
+"""Mutation tests for the Increment 31 implementation contract."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ class Increment31ContractTest(unittest.TestCase):
     def test_current_repository_passes(self) -> None:
         self.assertEqual(CHECKER.check_repository(ROOT), [])
 
-    def test_rejects_closed_roadmap_item(self) -> None:
+    def test_rejects_closed_roadmap_item_before_evidence(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
         path = root / "docs/roadmap/nodal-development-todo.md"
@@ -46,12 +46,12 @@ class Increment31ContractTest(unittest.TestCase):
         path.write_text(text, encoding="utf-8")
         self.assertIn("NODAL-INC31-006", self.codes(root))
 
-    def test_rejects_invalid_manifest_status(self) -> None:
+    def test_rejects_scaffold_manifest_status(self) -> None:
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
         path = root / "tests/compiler/fixtures/increment31/manifest.json"
         manifest = json.loads(path.read_text(encoding="utf-8"))
-        manifest["status"] = "validated-potential-flow-access"
+        manifest["status"] = "implementation-started"
         path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         self.assertIn("NODAL-INC31-007", self.codes(root))
 
@@ -96,6 +96,48 @@ class Increment31ContractTest(unittest.TestCase):
         )
         path.write_text(text, encoding="utf-8")
         self.assertIn("NODAL-INC31-003", self.codes(root))
+
+    def test_rejects_missing_native_resolver(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Dialect/Nodal/PotentialFlowAccess.cpp"
+        text = path.read_text(encoding="utf-8").replace(
+            "resolvePotentialFlowAccessNature",
+            "resolveRemovedAccessNature",
+        )
+        path.write_text(text, encoding="utf-8")
+        self.assertIn("NODAL-INC31-010", self.codes(root))
+
+    def test_rejects_backend_without_normalization(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/lib/Backend/AnalogVerticalSlice.cpp"
+        text = path.read_text(encoding="utf-8").replace(
+            "normalizePotentialFlowAccess(module)",
+            "verifyPotentialFlowAccessModel(module)",
+            1,
+        )
+        path.write_text(text, encoding="utf-8")
+        self.assertIn("NODAL-INC31-010", self.codes(root))
+
+    def test_rejects_missing_diagnostic_catalog_entry(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "core/compiler/diagnostics-v0.1.json"
+        catalog = json.loads(path.read_text(encoding="utf-8"))
+        catalog["families"]["potential-flow-access"].remove(
+            "NODAL-ACCESS-PORT-001"
+        )
+        path.write_text(json.dumps(catalog, indent=2) + "\n", encoding="utf-8")
+        self.assertIn("NODAL-INC31-012", self.codes(root))
+
+    def test_rejects_python_bytecode_artifact(self) -> None:
+        temporary, root = self.temporary_repository()
+        self.addCleanup(temporary.cleanup)
+        path = root / "scripts/__pycache__/increment31.cpython-312.pyc"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"not-bytecode")
+        self.assertIn("NODAL-INC31-002", self.codes(root))
 
 
 if __name__ == "__main__":

@@ -45,171 +45,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Record accepted evidence and restore read-only workflow
+      - name: Record accepted evidence
         run: |
-          python3 - <<'PY'
-          import json
-          import re
-          from pathlib import Path
-
-          IMPLEMENTATION_PR = 91
-          SUPERSEDED_DRAFT_PR = 90
-          ACCEPTED_HEAD = "a9c236384b32140d1b0a213cfbdb5c5512baab24"
-          DEDICATED_RUN = 33262841010
-          CORE_CI_RUN = 33262188693
-          MERGE_COMMIT = "4ca5d230bc5d3e3f985b9b4ed24386c69f74b539"
-          POST_MERGE_CORE_CI_RUN = 33263135167
-
-          def close_markdown_increment(path: Path, title: str, evidence: str) -> None:
-              text = path.read_text(encoding="utf-8")
-              open_heading = f"- [ ] **{title}**"
-              closed_heading = f"- [x] **{title}**"
-              if text.count(open_heading) == 1:
-                  text = text.replace(open_heading, closed_heading, 1)
-              elif text.count(closed_heading) != 1:
-                  raise RuntimeError(f"cannot locate unique increment heading in {path}: {title}")
-              if evidence not in text:
-                  start = text.index(closed_heading)
-                  match = re.search(r"(?m)^- \[[ x]\] \*\*Increment \d+", text[start + len(closed_heading):])
-                  end = len(text) if match is None else start + len(closed_heading) + match.start()
-                  block = text[start:end].rstrip()
-                  text = text[:start] + block + "\n" + evidence + "\n\n" + text[end:].lstrip("\n")
-              path.write_text(text, encoding="utf-8")
-
-          roadmap_path = Path("docs/roadmap/nodal-development-todo.md")
-          roadmap = roadmap_path.read_text(encoding="utf-8")
-          if "**Revision:** 1.41" in roadmap:
-              roadmap = roadmap.replace("**Revision:** 1.41", "**Revision:** 1.42", 1)
-          elif "**Revision:** 1.42" not in roadmap:
-              raise RuntimeError("unexpected main-roadmap revision")
-          roadmap_path.write_text(roadmap, encoding="utf-8")
-          close_markdown_increment(
-              roadmap_path,
-              "Increment 133 — Analog semantic API and analysis contract design gate",
-              "  - Evidence: approved `NodalEquationComponentApi-DG-v0.1` and `NodalContinuousTimeApi-DG-v0.1`; implementation PR #91 (superseding draft PR #90); exact accepted head `a9c236384b32140d1b0a213cfbdb5c5512baab24`; dedicated run `33262841010`; accepted Core CI run `33262188693`; squash merge `4ca5d230bc5d3e3f985b9b4ed24386c69f74b539`; post-merge Core CI run `33263135167`.",
-          )
-          roadmap = roadmap_path.read_text(encoding="utf-8")
-          required_open = "- [ ] **Increment 32 — First-class analog equations, blocks, and contribution semantics**"
-          if required_open not in roadmap:
-              raise RuntimeError("Increment 32 must remain unchecked during Increment 133 closure")
-
-          plan_path = Path("docs/roadmap/continuous-time-ams-v0.1-plan.md")
-          close_markdown_increment(
-              plan_path,
-              "Increment 133 — Analog semantic API and analysis contract design gate",
-              "  - Evidence: implementation PR #91; exact accepted head `a9c236384b32140d1b0a213cfbdb5c5512baab24`; dedicated run `33262841010`; merge commit `4ca5d230bc5d3e3f985b9b4ed24386c69f74b539`; post-merge Core CI run `33263135167`.",
-          )
-
-          architecture_path = Path("docs/roadmap/continuous-time-ams-v0.1-surface.json")
-          architecture = json.loads(architecture_path.read_text(encoding="utf-8"))
-          architecture["status"] = "public-api-validated"
-          architecture.setdefault("implementation_status", {})["public_api_frozen"] = True
-          architecture["validation"] = {
-              "implementation_pull_request": IMPLEMENTATION_PR,
-              "superseded_draft_pull_request": SUPERSEDED_DRAFT_PR,
-              "accepted_head": ACCEPTED_HEAD,
-              "dedicated_workflow_run": DEDICATED_RUN,
-              "accepted_core_ci_run": CORE_CI_RUN,
-              "merge_commit": MERGE_COMMIT,
-              "post_merge_core_ci_run": POST_MERGE_CORE_CI_RUN,
-          }
-          matches = 0
-          for item in architecture.get("roadmap", []):
-              if item.get("increment") == 133:
-                  item["status"] = "complete"
-                  matches += 1
-          if matches != 1:
-              raise RuntimeError("continuous-time architecture must contain exactly one Increment 133 entry")
-          architecture_path.write_text(json.dumps(architecture, indent=2) + "\n", encoding="utf-8")
-
-          public_path = Path("core/scala/api/public-api-continuous-time-v0.1.json")
-          public = json.loads(public_path.read_text(encoding="utf-8"))
-          public["status"] = "validated-analog-semantic-api"
-          public["validation"] = {
-              "implementation_pull_request": IMPLEMENTATION_PR,
-              "accepted_head": ACCEPTED_HEAD,
-              "dedicated_workflow_run": DEDICATED_RUN,
-              "core_ci_run": CORE_CI_RUN,
-              "merge_commit": MERGE_COMMIT,
-              "post_merge_core_ci_run": POST_MERGE_CORE_CI_RUN,
-          }
-          public_path.write_text(json.dumps(public, indent=2) + "\n", encoding="utf-8")
-
-          manifest_path = Path("tests/api/fixtures/increment133/manifest.json")
-          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-          manifest["status"] = "validated-analog-semantic-api"
-          manifest["validation"] = {
-              "implementation_pull_request": IMPLEMENTATION_PR,
-              "superseded_draft_pull_request": SUPERSEDED_DRAFT_PR,
-              "accepted_head": ACCEPTED_HEAD,
-              "dedicated_workflow_run": DEDICATED_RUN,
-              "core_ci_run": CORE_CI_RUN,
-              "merge_commit": MERGE_COMMIT,
-              "post_merge_core_ci_run": POST_MERGE_CORE_CI_RUN,
-          }
-          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-
-          implementation_path = Path("docs/implementation/increment133-analog-semantic-api.md")
-          if implementation_path.exists():
-              implementation = implementation_path.read_text(encoding="utf-8")
-              implementation = re.sub(
-                  r"(?s)(## Status\n\n).*?(\n\n## )",
-                  r"\1Validated and closed.\2",
-                  implementation,
-                  count=1,
-              )
-              implementation_path.write_text(implementation, encoding="utf-8")
-
-          permanent_workflow = '''name: Increment 133 Analog Semantic API
-
-          on:
-            push:
-              branches:
-                - increment/133-analog-semantic-api
-                - increment/133-evidence-closure
-            pull_request:
-              branches:
-                - dev
-
-          permissions:
-            contents: read
-
-          jobs:
-            contracts:
-              name: increment-133/analog-semantic-api
-              runs-on: ubuntu-24.04
-              timeout-minutes: 30
-
-              steps:
-                - name: Check out repository
-                  uses: actions/checkout@v6
-                  with:
-                    fetch-depth: 0
-
-                - name: Validate API gates, fixtures, and compile contracts
-                  run: |
-                    ./mill mill.scalalib.scalafmt/checkFormatAll
-                    ./mill scalafix.check
-                    python3 scripts/check_increment133.py --compile-negative
-                    python3 -m unittest discover -s tests/api -p 'test_increment133.py'
-                    git diff --check
-          '''
-          permanent_workflow = "\n".join(
-              line[10:] if line.startswith("          ") else line
-              for line in permanent_workflow.splitlines()
-          ) + "\n"
-          Path(".github/workflows/increment-133-analog-semantic-api.yml").write_text(
-              permanent_workflow,
-              encoding="utf-8",
-          )
-          PY
-
+          python3 scripts/close_increment133.py
           python3 scripts/check_increment133.py
           python3 -m unittest discover -s tests/api -p 'test_increment133.py'
           git diff --check
-
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
+          git add docs/roadmap/nodal-development-todo.md
+          git add docs/roadmap/continuous-time-ams-v0.1-plan.md
+          git add docs/roadmap/continuous-time-ams-v0.1-surface.json
+          git add core/scala/api/public-api-continuous-time-v0.1.json
+          git add tests/api/fixtures/increment133/manifest.json
           git commit -m "Increment 133 — record accepted evidence and close roadmap"
           git push origin HEAD:increment/133-evidence-closure

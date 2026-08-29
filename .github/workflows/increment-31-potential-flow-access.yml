@@ -16,11 +16,14 @@ concurrency:
   group: increment-31-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
 jobs:
   potential-flow-access:
     name: increment-31/potential-flow-access
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: Check out repository
@@ -28,9 +31,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate Increment 31 starting contracts and mutations
-        env:
-          PYTHONDONTWRITEBYTECODE: '1'
+      - name: Validate Increment 31 implementation contracts
         run: |
           for increment in $(seq 18 31); do
             python3 "scripts/check_increment${increment}.py"
@@ -43,4 +44,20 @@ jobs:
           python3 scripts/check_markdown.py
           python3 scripts/check_package_visibility.py
           python3 scripts/check_contribution_policy.py --base-ref origin/dev
+          git diff --check
+
+      - name: Bootstrap locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate native compiler, diagnostics, normalization, and backend
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          python3 scripts/check_increment31.py
           git diff --check

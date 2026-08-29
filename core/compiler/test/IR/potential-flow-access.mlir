@@ -24,6 +24,7 @@ module attributes {
     ^bb0:
       %branch_potential = "nodal.access"(%branch) <{function = "Across", kind = "potential", metadata = {source_path = "PotentialFlowAccess.branch_potential"}}> : (!nodal.branch<"customElectrical">) -> !nodal.quantity<"real", "voltage">
       %branch_flow = "nodal.access"(%branch) <{function = "Through", kind = "flow", metadata = {source_path = "PotentialFlowAccess.branch_flow"}}> : (!nodal.branch<"customElectrical">) -> !nodal.quantity<"real", "current">
+      %named_branch_potential = "nodal.access"(%named_parallel) <{function = "Across", kind = "potential", metadata = {source_path = "PotentialFlowAccess.named_branch_potential"}}> : (!nodal.branch<"customElectrical">) -> !nodal.quantity<"real", "voltage">
       %generic_pair = "nodal.terminal_access"(%p, %n) <{function = "potential", kind = "potential", metadata = {}, source_path = "PotentialFlowAccess.generic_pair"}> : (!nodal.terminal<"customElectrical">, !nodal.terminal<"customElectrical">) -> !nodal.quantity<"real", "voltage">
       %named_pair_probe = "nodal.terminal_access"(%named_p, %named_n) <{function = "potential", kind = "potential", metadata = {}, source_path = "PotentialFlowAccess.named_pair_probe"}> : (!nodal.terminal<"customElectrical">, !nodal.terminal<"customElectrical">) -> !nodal.quantity<"real", "voltage">
       %one_terminal = "nodal.terminal_access"(%p) <{function = "Across", kind = "potential", metadata = {}, source_path = "PotentialFlowAccess.one_terminal"}> : (!nodal.terminal<"customElectrical">) -> !nodal.quantity<"real", "voltage">
@@ -31,6 +32,7 @@ module attributes {
       %probe_value = "nodal.access"(%probe_branch) <{function = "potential", kind = "potential", metadata = {source_path = "PotentialFlowAccess.probe"}}> : (!nodal.branch<"customElectrical">) -> !nodal.quantity<"real", "voltage">
       "nodal.contribute"(%branch, %branch_potential) <{kind = "potential", metadata = {}}> : (!nodal.branch<"customElectrical">, !nodal.quantity<"real", "voltage">) -> ()
       "nodal.contribute"(%branch, %branch_flow) <{kind = "flow", metadata = {}}> : (!nodal.branch<"customElectrical">, !nodal.quantity<"real", "current">) -> ()
+      "nodal.contribute"(%branch, %named_branch_potential) <{kind = "potential", metadata = {}}> : (!nodal.branch<"customElectrical">, !nodal.quantity<"real", "voltage">) -> ()
       "nodal.contribute"(%branch, %generic_pair) <{kind = "potential", metadata = {}}> : (!nodal.branch<"customElectrical">, !nodal.quantity<"real", "voltage">) -> ()
       "nodal.contribute"(%branch, %one_terminal) <{kind = "potential", metadata = {}}> : (!nodal.branch<"customElectrical">, !nodal.quantity<"real", "voltage">) -> ()
       "nodal.contribute"(%branch, %port_flow) <{kind = "flow", metadata = {}}> : (!nodal.branch<"customElectrical">, !nodal.quantity<"real", "current">) -> ()

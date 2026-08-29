@@ -113,6 +113,7 @@ std::string terminalDirection(Operation *operation) {
 struct ModuleRenderState {
   llvm::DenseMap<Value, std::string> terminals;
   llvm::DenseMap<Value, std::pair<std::string, std::string>> branches;
+  llvm::DenseMap<Value, std::string> branchNames;
   llvm::DenseMap<Value, std::string> expressions;
   llvm::StringMap<std::string> parameters;
 };
@@ -121,6 +122,8 @@ FailureOr<std::string> renderBranch(Value value, ModuleRenderState &state, llvm:
   auto iterator = state.branches.find(value);
   if (iterator == state.branches.end())
     return failure();
+  if (auto named = state.branchNames.find(value); named != state.branchNames.end())
+    return (llvm::Twine(access) + "(" + named->second + ")").str();
   return (llvm::Twine(access) + "(" + iterator->second.first + ", " + iterator->second.second + ")")
       .str();
 }
@@ -427,6 +430,7 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
                                  llvm::SmallVectorImpl<Operation *> &parameters,
                                  llvm::SmallVectorImpl<Operation *> &ports,
                                  llvm::SmallVectorImpl<Operation *> &nodes,
+                                 llvm::SmallVectorImpl<Operation *> &namedBranches,
                                  llvm::SmallVectorImpl<Operation *> &analogs) {
   Region &region = definition->getRegion(0);
   if (!llvm::hasSingleElement(region))
@@ -460,6 +464,12 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
         return failure();
       state.branches.try_emplace(operation.getResult(0),
                                  std::make_pair(positive->second, negative->second));
+      if (auto branchName = operation.getAttrOfType<StringAttr>("name")) {
+        if (!branchName.getValue().trim().empty()) {
+          namedBranches.push_back(&operation);
+          state.branchNames.try_emplace(operation.getResult(0), branchName.getValue().str());
+        }
+      }
     } else if (name == "nodal.analog") {
       analogs.push_back(&operation);
     }
@@ -471,6 +481,10 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
            rhs->getAttrOfType<StringAttr>("name").getValue();
   });
   llvm::sort(nodes, [](Operation *lhs, Operation *rhs) {
+    return lhs->getAttrOfType<StringAttr>("name").getValue() <
+           rhs->getAttrOfType<StringAttr>("name").getValue();
+  });
+  llvm::sort(namedBranches, [](Operation *lhs, Operation *rhs) {
     return lhs->getAttrOfType<StringAttr>("name").getValue() <
            rhs->getAttrOfType<StringAttr>("name").getValue();
   });
@@ -579,8 +593,10 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
   llvm::SmallVector<Operation *, 8> parameters;
   llvm::SmallVector<Operation *, 8> ports;
   llvm::SmallVector<Operation *, 8> nodes;
+  llvm::SmallVector<Operation *, 4> namedBranches;
   llvm::SmallVector<Operation *, 2> analogs;
-  if (failed(collectModuleState(definition, state, parameters, ports, nodes, analogs)))
+  if (failed(
+          collectModuleState(definition, state, parameters, ports, nodes, namedBranches, analogs)))
     return emitMappedFailure(definition, "NODAL-BACKEND-RC-001",
                              "could not collect RC module structure");
 
@@ -626,6 +642,16 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
     for (Operation *node : nodes)
       emitElectricalName(node);
     output << ";\n";
+  }
+
+  for (Operation *branch : namedBranches) {
+    auto endpoints = state.branches.find(branch->getResult(0));
+    auto name = branch->getAttrOfType<StringAttr>("name");
+    if (endpoints == state.branches.end() || !name || name.getValue().trim().empty())
+      return emitMappedFailure(branch, "NODAL-BACKEND-RC-004",
+                               "named branch is not losslessly renderable");
+    output << "  branch (" << endpoints->second.first << ", " << endpoints->second.second << ") "
+           << name.getValue() << ";\n";
   }
 
   for (Operation *parameter : parameters) {
@@ -683,7 +709,8 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
     output << "\n";
   }
 
-  if ((!ports.empty() || !nodes.empty() || !parameters.empty()) && !analogs.empty())
+  if ((!ports.empty() || !nodes.empty() || !namedBranches.empty() || !parameters.empty()) &&
+      !analogs.empty())
     output << "\n";
   for (Operation *analog : analogs) {
     if (failed(renderAnalog(analog, state, output)))
@@ -895,6 +922,14 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
     }
     if (insideAnalog) {
       if (!line.ends_with(";") || !line.contains("<+"))
+        return failure();
+      continue;
+    }
+    if (line.starts_with("branch (") && line.ends_with(";")) {
+      llvm::StringRef declaration = line.drop_front(sizeof("branch (") - 1).drop_back();
+      size_t close = declaration.find(") ");
+      if (close == llvm::StringRef::npos || !validIdentifierList(declaration.take_front(close)) ||
+          !validIdentifierList(declaration.drop_front(close + 2)))
         return failure();
       continue;
     }

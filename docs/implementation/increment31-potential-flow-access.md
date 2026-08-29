@@ -19,6 +19,9 @@
   discipline-global reference.
 - Named branches remain distinct from endpoint-only two-terminal access during
   probe grouping; only implicit branches may coalesce by endpoint pair.
+- Named branch access emits a deterministic Verilog-A/Verilog-AMS branch
+  declaration and renders `function(branch-name)`; implicit branch access keeps
+  the oriented endpoint form.
 - `nodal.port_flow_access` represents local angle-delimited total-port flow and
   remains distinct from branch-probe construction.
 - `nodal.probe` records compiler-owned source-free potential or flow probe

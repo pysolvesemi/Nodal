@@ -92,7 +92,8 @@
     "materialization_run": 33233642892,
     "materialization_head": "06365bc383064c1412db1f2580f876b21b621035",
     "semantic_pipeline": "normalize-before-verification",
-    "named_branch_isolation": "implicit-only-endpoint-coalescing"
+    "named_branch_isolation": "implicit-only-endpoint-coalescing",
+    "named_branch_rendering": "declaration-and-identity"
   },
   "deferred": [
     "public Scala access syntax",

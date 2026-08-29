@@ -483,7 +483,7 @@ endforeach()
 set_tests_properties(
   nodal.native.potential-flow-access-backend-discipline
   PROPERTIES
-    PASS_REGULAR_EXPRESSION "Across[(]p, n[)]"
+    PASS_REGULAR_EXPRESSION "Across[(]named_parallel[)]"
 )
 set_tests_properties(
   nodal.native.potential-flow-access-backend-generic

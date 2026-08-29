@@ -40,5 +40,9 @@
   "compatibility": {
     "legacyBranchAccessWithoutFunction": true,
     "newProducerEmitsLegacyForm": false
+  },
+  "backend": {
+    "namedBranchAccess": "function(branch-name)",
+    "implicitBranchAccess": "function(positive, negative)"
   }
 }

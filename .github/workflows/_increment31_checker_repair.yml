@@ -1,0 +1,174 @@
+name: Increment 31 Checker Repair
+
+on:
+  push:
+    branches:
+      - increment/31-potential-flow-access
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-31-checker-repair
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Replace obsolete V/I checker requirements
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          checker = Path("scripts/check_increment31.py")
+          text = checker.read_text(encoding="utf-8")
+          old_v = "            'renderBranch(operation->getOperand(0), state, \"V\")',\n"
+          old_i = "            'renderBranch(operation->getOperand(0), state, \"I\")',\n"
+          if old_v not in text or old_i not in text:
+              raise SystemExit("obsolete Increment 31 checker fragments were not found")
+          text = text.replace(
+              old_v,
+              "            'name == \"nodal.terminal_access\"',\n",
+              1,
+          )
+          text = text.replace(
+              old_i,
+              "            'name == \"nodal.port_flow_access\"',\n",
+              1,
+          )
+
+          needle = '''        require(
+              text,
+              fragments,
+              problems,
+              "NODAL-INC31-010",
+              f"Increment 31 baseline {relative}",
+          )
+
+              return problems
+          '''
+          replacement = '''        require(
+              text,
+              fragments,
+              problems,
+              "NODAL-INC31-010",
+              f"Increment 31 baseline {relative}",
+          )
+
+              backend = read(
+              root / "core/compiler/lib/Backend/AnalogVerticalSlice.cpp",
+              problems,
+              "NODAL-INC31-010",
+          )
+              for forbidden in (
+              'renderBranch(operation->getOperand(0), state, "V")',
+              'renderBranch(operation->getOperand(0), state, "I")',
+          ):
+              if forbidden in backend:
+                  problems.append(
+                      Problem(
+                          "NODAL-INC31-010",
+                          "backend retains obsolete hard-coded electrical access rendering",
+                      )
+                  )
+
+              return problems
+          '''
+          # The block above is represented without leading source indentation by
+          # dedenting the exact current text, so use the tested literal below.
+          needle = '''        require(
+              text,
+              fragments,
+              problems,
+              "NODAL-INC31-010",
+              f"Increment 31 baseline {relative}",
+          )
+
+              return problems
+          '''.replace("              return problems", "    return problems")
+          replacement = '''        require(
+              text,
+              fragments,
+              problems,
+              "NODAL-INC31-010",
+              f"Increment 31 baseline {relative}",
+          )
+
+              backend = read(
+              root / "core/compiler/lib/Backend/AnalogVerticalSlice.cpp",
+              problems,
+              "NODAL-INC31-010",
+          )
+              for forbidden in (
+              'renderBranch(operation->getOperand(0), state, "V")',
+              'renderBranch(operation->getOperand(0), state, "I")',
+          ):
+              if forbidden in backend:
+                  problems.append(
+                      Problem(
+                          "NODAL-INC31-010",
+                          "backend retains obsolete hard-coded electrical access rendering",
+                      )
+                  )
+
+              return problems
+          '''.replace("              backend", "    backend").replace("              root", "        root").replace("              problems", "        problems").replace("              \"NODAL", "        \"NODAL").replace("              for forbidden", "    for forbidden").replace("              'render", "        'render").replace("              if forbidden", "        if forbidden").replace("                  problems.append", "            problems.append").replace("                      Problem", "                Problem").replace("                          \"NODAL", "                    \"NODAL").replace("                          \"backend", "                    \"backend").replace("                      )", "                )").replace("                  )", "            )").replace("              return problems", "    return problems")
+          if needle not in text:
+              raise SystemExit("Increment 31 checker insertion point was not found")
+          checker.write_text(text.replace(needle, replacement, 1), encoding="utf-8")
+
+          tests = Path("tests/compiler/test_increment31.py")
+          test_text = tests.read_text(encoding="utf-8")
+          if "test_rejects_hard_coded_electrical_backend_access" not in test_text:
+              anchor = '\n\nif __name__ == "__main__":\n    unittest.main()\n'
+              addition = '''
+              def test_rejects_hard_coded_electrical_backend_access(self) -> None:
+                  temporary, root = self.temporary_repository()
+                  self.addCleanup(temporary.cleanup)
+                  path = root / "core/compiler/lib/Backend/AnalogVerticalSlice.cpp"
+                  backend = path.read_text(encoding="utf-8")
+                  backend += '\n// renderBranch(operation->getOperand(0), state, "V")\n'
+                  path.write_text(backend, encoding="utf-8")
+                  self.assertIn("NODAL-INC31-010", self.codes(root))
+          '''
+              addition = "\n".join(
+                  line[10:] if line.startswith("          ") else line
+                  for line in addition.splitlines()
+              )
+              if anchor not in test_text:
+                  raise SystemExit("Increment 31 mutation-test insertion point was not found")
+              tests.write_text(test_text.replace(anchor, addition + anchor, 1), encoding="utf-8")
+
+          Path(".github/workflows/_increment31_checker_repair.yml").unlink()
+          PY
+
+      - name: Validate repository contracts
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          for increment in $(seq 18 31); do
+            python3 "scripts/check_increment${increment}.py"
+          done
+          python3 tests/compiler/test_increment31.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          python3 scripts/check_markdown.py
+          python3 scripts/check_package_visibility.py
+          python3 scripts/check_contribution_policy.py --base-ref origin/dev
+          git diff --check
+
+      - name: Commit validated checker repair
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(increment31): align checker with nature-driven backend"
+          git push origin HEAD:increment/31-potential-flow-access

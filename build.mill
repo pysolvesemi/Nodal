@@ -126,3 +126,9 @@ object examples extends Module:
 
   object publicApiV03Migration extends NodalScalaModule:
     def moduleDeps = Seq(core.scala.api)
+
+  object continuousTimeExternal extends NodalScalaModule:
+    def moduleDeps = Seq(core.scala.api)
+
+  object continuousTimeApi extends NodalScalaModule:
+    def moduleDeps = Seq(core.scala.api, continuousTimeExternal)

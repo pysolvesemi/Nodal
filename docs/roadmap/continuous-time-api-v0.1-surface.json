@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "surface_version": "0.1",
+  "status": "approved-awaiting-implementation-evidence",
+  "increment": 133,
+  "compatibility_base": "0.3",
+  "source_package": "nodal",
+  "design_gate": "docs/design-gates/NodalContinuousTimeApi-DG-v0.1.md",
+  "equation_component_surface": "docs/roadmap/equation-component-api-v0.1-surface.json",
+  "analysis_kinds": [
+    "Initialization",
+    "Dc",
+    "OperatingPoint",
+    "Transient",
+    "Ac",
+    "Noise"
+  ],
+  "state_initialization": [
+    "Fixed",
+    "Guess",
+    "InitialEquation",
+    "SteadyState",
+    "OperatingPoint",
+    "SolverSelected"
+  ],
+  "event_contract": [
+    "named-event",
+    "crossing",
+    "edge",
+    "value-tolerance",
+    "time-tolerance",
+    "event-only-reinitialization",
+    "discontinuity-class"
+  ],
+  "environment": [
+    "temperature",
+    "nominal-temperature",
+    "operating-condition",
+    "corner",
+    "sweep-coordinate",
+    "deterministic-random-seed"
+  ],
+  "noise": [
+    "stable-id",
+    "white",
+    "flicker",
+    "table",
+    "analysis-applicability",
+    "independent-or-correlation-group"
+  ],
+  "model_validity": [
+    "parameter-range",
+    "operating-range",
+    "temperature-range",
+    "supported-analyses",
+    "cross-parameter",
+    "topology-assumption",
+    "loading-assumption",
+    "accuracy-class",
+    "violation-policy"
+  ],
+  "solver_hints": [
+    "nominal",
+    "absolute-tolerance",
+    "relative-tolerance",
+    "maximum-step",
+    "convergence-guidance"
+  ],
+  "solver_hints_separate_from_mathematics": true,
+  "environment_is_immutable_run_context": true,
+  "native_solver_required": false,
+  "implementation_status": {
+    "compile_surface": true,
+    "frontend_recording": false,
+    "hybrid_scheduler": false,
+    "analysis_projection": false,
+    "noise_lowering": false,
+    "validity_monitoring": false,
+    "solver_abi": false,
+    "backend_lowering": false
+  }
+}

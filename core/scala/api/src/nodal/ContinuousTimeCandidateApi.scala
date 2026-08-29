@@ -33,6 +33,12 @@ final case class EquationOptions(
     continuity: ContinuityClass = ContinuityClass.Unspecified
 )
 
+final case class InitialEquationOptions(
+    id: Option[EquationId] = None,
+    guard: Option[Expr[Bool]] = None,
+    continuity: ContinuityClass = ContinuityClass.Unspecified
+)
+
 final case class ContributionOptions(
     id: Option[ContributionId] = None,
     guard: Option[Expr[Bool]] = None,
@@ -57,9 +63,7 @@ def initialEquations(body: => Unit): Unit =
 def initialEquation(
     left: Expr[Real],
     right: Expr[Real],
-    options: EquationOptions = EquationOptions(
-      analyses = AnalysisApplicability.only(AnalysisKind.Initialization)
-    )
+    options: InitialEquationOptions = InitialEquationOptions()
 ): Unit = CandidateRuntime.statement("candidate-initial-equation", left, right, options)
 
 def contributions(body: => Unit): Unit =

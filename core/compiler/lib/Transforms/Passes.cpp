@@ -13,6 +13,7 @@
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
+#include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -827,13 +828,14 @@ LogicalResult verifyAnalog(mlir::ModuleOp module) {
           name == "nodal.connect" || name == "nodal.alias" || name == "nodal.reference" ||
           name == "nodal.branch" || name == "nodal.connection_set" ||
           name == "nodal.potential_equality" || name == "nodal.reference_potential" ||
-          name == "nodal.flow_conservation" || name == "nodal.access" || name == "nodal.analog" ||
-          name == "nodal.real_literal" || name == "nodal.analog_integer_literal" ||
-          name == "nodal.parameter_ref" || name == "nodal.analog_add" ||
-          name == "nodal.analog_sub" || name == "nodal.analog_mul" || name == "nodal.analog_div" ||
-          name == "nodal.analog_neg" || name == "nodal.analog_compare" ||
-          name == "nodal.analog_logic" || name == "nodal.analog_select" ||
-          name == "nodal.analog_ddt" || name == "nodal.contribute")
+          name == "nodal.flow_conservation" || name == "nodal.access" ||
+          name == "nodal.terminal_access" || name == "nodal.port_flow_access" ||
+          name == "nodal.probe" || name == "nodal.analog" || name == "nodal.real_literal" ||
+          name == "nodal.analog_integer_literal" || name == "nodal.parameter_ref" ||
+          name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
+          name == "nodal.analog_div" || name == "nodal.analog_neg" ||
+          name == "nodal.analog_compare" || name == "nodal.analog_logic" ||
+          name == "nodal.analog_select" || name == "nodal.analog_ddt" || name == "nodal.contribute")
         analog = true;
       if (name == "nodal.port" || name == "nodal.resolved_net" || name == "nodal.net_drive" ||
           name == "nodal.crossing")
@@ -874,11 +876,12 @@ LogicalResult verifyCapabilities(mlir::ModuleOp module) {
         name == "nodal.connect" || name == "nodal.alias" || name == "nodal.reference" ||
         name == "nodal.branch" || name == "nodal.connection_set" ||
         name == "nodal.potential_equality" || name == "nodal.reference_potential" ||
-        name == "nodal.flow_conservation" || name == "nodal.access" || name == "nodal.bridge" ||
-        name == "nodal.analog" || name == "nodal.real_literal" ||
-        name == "nodal.analog_integer_literal" || name == "nodal.parameter_ref" ||
-        name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
-        name == "nodal.analog_div" || name == "nodal.analog_neg" ||
+        name == "nodal.flow_conservation" || name == "nodal.access" ||
+        name == "nodal.terminal_access" || name == "nodal.port_flow_access" ||
+        name == "nodal.probe" || name == "nodal.bridge" || name == "nodal.analog" ||
+        name == "nodal.real_literal" || name == "nodal.analog_integer_literal" ||
+        name == "nodal.parameter_ref" || name == "nodal.analog_add" || name == "nodal.analog_sub" ||
+        name == "nodal.analog_mul" || name == "nodal.analog_div" || name == "nodal.analog_neg" ||
         name == "nodal.analog_compare" || name == "nodal.analog_logic" ||
         name == "nodal.analog_select" || name == "nodal.analog_ddt" || name == "nodal.contribute";
     const bool digital = name == "nodal.resolved_net" || name == "nodal.net_driver" ||
@@ -1106,6 +1109,7 @@ LogicalResult runPipeline(mlir::ModuleOp module, GateProfile profile) {
   PassManager manager(module.getContext(), mlir::ModuleOp::getOperationName());
   manager.enableVerifier(true);
   manager.addPass(std::make_unique<MaterializeConservativeConnectivityPass>());
+  manager.addPass(createNormalizePotentialFlowAccessPass());
   addVerifierPasses(manager, profile);
   manager.addPass(std::make_unique<NormalizePipelinePass>(profile));
   return manager.run(module);

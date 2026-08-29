@@ -25,6 +25,9 @@
 - `normalizePotentialFlowAccess` and
   `nodal-normalize-potential-flow-access` provide deterministic, idempotent
   reference and probe normalization.
+- The transactional Fast, Default, and Release semantic gates run access
+  normalization after conservative-connectivity materialization and before
+  mandatory verification.
 - The verifier rejects invalid forms, disciplines, natures, access-function
   identities, result dimensions, references, local-port use, mixed source-free
   probe kinds, and forged probe provenance with the nine stable Increment 31

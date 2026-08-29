@@ -3,10 +3,12 @@
 
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 
 #include "llvm/ADT/StringRef.h"
 
+#include <memory>
 #include <string>
 
 namespace nodal {
@@ -28,6 +30,10 @@ mlir::FailureOr<ResolvedAccessNature> resolvePotentialFlowAccessNature(mlir::Ope
 
 /// Verify one source-semantic access or compiler-owned probe operation.
 mlir::LogicalResult verifyPotentialFlowAccessOperation(mlir::Operation *operation);
+
+/// Construct the normalizer used by the transactional semantic gate and
+/// explicit pass pipelines.
+std::unique_ptr<mlir::Pass> createNormalizePotentialFlowAccessPass();
 
 /// Normalize one-terminal references and source-free probe records. The
 /// transformation is deterministic and idempotent.

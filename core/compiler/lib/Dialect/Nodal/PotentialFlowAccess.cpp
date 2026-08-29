@@ -17,6 +17,7 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Casting.h"
 
+#include <memory>
 #include <string>
 
 using namespace mlir;
@@ -219,8 +220,24 @@ bool probeSubjectMatches(Operation *probe, const AccessGroup &group) {
     return false;
   if (group.subject.size() == 1)
     return probe->getOperand(0) == group.subject[0];
-  return matchingTerminalPair(probe->getOperand(0), probe->getOperand(1), group.subject[0],
-                              group.subject[1]);
+  return probe->getOperand(0) == group.subject[0] && probe->getOperand(1) == group.subject[1];
+}
+
+bool probeProvenanceMatches(Operation *probe, const AccessGroup &group) {
+  auto provenance = probe->getAttrOfType<ArrayAttr>("provenance");
+  const size_t expectedSize = group.provenance.empty() ? 1 : group.provenance.size();
+  if (!provenance || provenance.size() != expectedSize)
+    return false;
+  if (group.provenance.empty()) {
+    auto value = llvm::dyn_cast<StringAttr>(provenance[0]);
+    return value && value.getValue() == group.form;
+  }
+  for (auto [index, expected] : llvm::enumerate(group.provenance)) {
+    auto value = llvm::dyn_cast<StringAttr>(provenance[index]);
+    if (!value || value.getValue() != expected)
+      return false;
+  }
+  return true;
 }
 
 LogicalResult verifyProbeOperation(Operation *operation) {
@@ -412,6 +429,8 @@ void createProbe(Operation *module, const AccessGroup &group, llvm::StringRef ki
   builder.create(state);
 }
 
+LogicalResult verifyNormalizedModule(Operation *module);
+
 LogicalResult normalizeModule(Operation *module) {
   LogicalResult result = success();
   module->walk([&](Operation *operation) {
@@ -458,6 +477,8 @@ LogicalResult normalizeModule(Operation *module) {
     if (failed(verifyProbeOperation(probe)))
       return failure();
   }
+  if (!existingProbes.empty() && failed(verifyNormalizedModule(module)))
+    return failure();
   for (Operation *probe : existingProbes)
     probe->erase();
 
@@ -520,6 +541,9 @@ LogicalResult verifyNormalizedModule(Operation *module) {
       if (textAttr(matching.front(), "kind") != expected)
         return fail(matching.front(), "NODAL-PROBE-KIND-001",
                     "probe record kind does not match its access group");
+      if (!probeProvenanceMatches(matching.front(), group))
+        return fail(matching.front(), "NODAL-PROBE-PROVENANCE-001",
+                    "probe provenance does not match its source-free access group");
     }
   }
 
@@ -552,6 +576,10 @@ public:
 static PassRegistration<NormalizePotentialFlowAccessPass> registerNormalizePotentialFlowAccessPass;
 
 } // namespace
+
+std::unique_ptr<Pass> createNormalizePotentialFlowAccessPass() {
+  return std::make_unique<NormalizePotentialFlowAccessPass>();
+}
 
 FailureOr<ResolvedAccessNature> resolvePotentialFlowAccessNature(Operation *scope,
                                                                  llvm::StringRef discipline,

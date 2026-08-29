@@ -449,7 +449,7 @@ set_tests_properties(
 add_test(
   NAME nodal.native.potential-flow-access-reference
   COMMAND nodalc
-    "--pass-pipeline=builtin.module(nodal-normalize-potential-flow-access)"
+    "--pass-pipeline=builtin.module(nodal-gate-release)"
     "${CMAKE_CURRENT_SOURCE_DIR}/IR/potential-flow-access.mlir"
 )
 set_tests_properties(

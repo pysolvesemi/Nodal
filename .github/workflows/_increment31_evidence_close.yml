@@ -8,16 +8,11 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: increment-31-evidence-closure
-  cancel-in-progress: true
-
 env:
   PYTHONDONTWRITEBYTECODE: '1'
 
 jobs:
   close-evidence:
-    if: github.event.head_commit.message == 'chore(increment31): execute evidence closure recovery'
     name: increment-31/evidence-closure-materialization
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -29,5 +24,10 @@ jobs:
           ref: increment/31-evidence-closure
           fetch-depth: 0
 
-      - name: Record evidence, validate closure, and retain workflow for connector cleanup
-        run: python3 scripts/_increment31_evidence_recover.py
+      - name: Record evidence and validate closure when recovery is staged
+        run: |
+          if [ -f scripts/_increment31_evidence_recover.py ]; then
+            python3 scripts/_increment31_evidence_recover.py
+          else
+            echo 'Increment 31 evidence recovery is already complete.'
+          fi

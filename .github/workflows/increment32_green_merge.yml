@@ -1,0 +1,78 @@
+name: Increment 32 Green Merge
+
+on:
+  push:
+    branches:
+      - automation/increment32-green-merge
+
+permissions:
+  actions: read
+  checks: read
+  contents: write
+  pull-requests: write
+  statuses: read
+
+jobs:
+  merge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      TARGET_BRANCH: increment/32-equation-contribution-semantics-review
+      EXPECTED_WORKFLOWS: "22"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Resolve open implementation pull request
+        id: pr
+        run: |
+          pr=$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&head=pysolvesemi:${TARGET_BRANCH}" --jq '.[0].number')
+          test -n "${pr}"
+          head=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" --jq '.head.sha')
+          echo "number=${pr}" >> "${GITHUB_OUTPUT}"
+          echo "head=${head}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check out exact implementation head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.pr.outputs.head }}
+          fetch-depth: 0
+
+      - name: Re-run local acceptance suite
+        run: |
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment32.py'
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          python3 scripts/check_contribution_policy.py --base-ref origin/dev
+          git diff --check
+
+      - name: Wait for complete exact-head matrix
+        run: |
+          head='${{ steps.pr.outputs.head }}'
+          for attempt in $(seq 1 300); do
+            payload=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${head}&event=pull_request&per_page=100")
+            count=$(jq '.workflow_runs | length' <<<"${payload}")
+            pending=$(jq '[.workflow_runs[] | select(.status != "completed")] | length' <<<"${payload}")
+            failed=$(jq '[.workflow_runs[] | select(.status == "completed" and .conclusion != "success")] | length' <<<"${payload}")
+            echo "attempt=${attempt} count=${count} pending=${pending} failed=${failed}"
+            if [ "${count}" -ge "${EXPECTED_WORKFLOWS}" ] && [ "${pending}" -eq 0 ]; then
+              if [ "${failed}" -ne 0 ]; then
+                jq -r '.workflow_runs[] | select(.conclusion != "success") | [.name, .conclusion, .html_url] | @tsv' <<<"${payload}"
+                exit 1
+              fi
+              exit 0
+            fi
+            sleep 20
+          done
+          exit 1
+
+      - name: Confirm exact head and squash merge
+        run: |
+          current=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ steps.pr.outputs.number }}" --jq '.head.sha')
+          test "${current}" = '${{ steps.pr.outputs.head }}'
+          gh pr ready '${{ steps.pr.outputs.number }}' || true
+          gh pr merge '${{ steps.pr.outputs.number }}' \
+            --squash \
+            --subject "Increment 32 — First-class analog equations and additive contributions (#${{ steps.pr.outputs.number }})" \
+            --body "Implement unordered equation and additive contribution source semantics with independent Scala/native witnesses and no premature procedural, DAE, solver, or backend behavior."

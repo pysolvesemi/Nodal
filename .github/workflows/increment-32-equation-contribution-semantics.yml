@@ -1,0 +1,35 @@
+name: Increment 32 Equation and Contribution Semantics
+
+on:
+  push:
+    branches:
+      - increment/32-equation-contribution-semantics-review
+      - increment/32-equation-contribution-semantics-evidence
+  pull_request:
+    branches:
+      - dev
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: increment-32/equation-contribution-semantics
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate semantic contracts and witnesses
+        run: |
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment32.py'
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          git diff --check

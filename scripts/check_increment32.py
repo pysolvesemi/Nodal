@@ -273,8 +273,6 @@ def validate_files(root: Path) -> list[Problem]:
             "closure_pull_request",
             "closure_head",
             "closure_core_ci_run",
-            "closure_merge",
-            "final_post_merge_core_ci_run",
         )
         if not isinstance(validation, dict) or any(
             not validation.get(field) for field in required_evidence

@@ -6,28 +6,56 @@ import nodal.AnalogEquationRuntime.*
 object Increment32RuntimeCheck:
   def main(arguments: Array[String]): Unit =
     val _ = arguments
+    try runChecks()
+    catch
+      case error: Throwable =>
+        error.printStackTrace(System.err)
+        System.err.flush()
+        throw error
+
+  private def runChecks(): Unit =
     val first = build(Vector("source-a", "source-b"))
     val second = build(Vector("source-b", "source-a"))
 
-    assert(first == second, "source order must not affect the canonical snapshot")
-    assert(first.equations.size == 2)
-    assert(first.equations.head.identity.value == "dc-law")
-    assert(first.equations.head.residual.authoredLeft.rendered == "V(p,n)")
-    assert(first.equations.head.residual.authoredRight.rendered == "R * I(p,n)")
-    assert(!first.equations.head.residual.causallyOriented)
-    assert(!first.equations.head.residual.divided)
-    assert(first.contributions.size == 1)
-    assert(first.contributions.head.terms.map(_.identity.value) == Vector("source-a", "source-b"))
+    check(first == second, s"source order must not affect the canonical snapshot: first=$first second=$second")
+    check(first.equations.size == 2, s"expected two equations, got ${first.equations}")
+    check(
+      first.equations.head.identity.value == "dc-law",
+      s"expected dc-law first, got ${first.equations.map(_.identity.value)}"
+    )
+    check(
+      first.equations.head.residual.authoredLeft.rendered == "V(p,n)",
+      s"authored left expression was not retained: ${first.equations.head.residual}"
+    )
+    check(
+      first.equations.head.residual.authoredRight.rendered == "R * I(p,n)",
+      s"authored right expression was not retained: ${first.equations.head.residual}"
+    )
+    check(
+      !first.equations.head.residual.causallyOriented,
+      s"equation was causally oriented: ${first.equations.head.residual}"
+    )
+    check(
+      !first.equations.head.residual.divided,
+      s"equation was divided: ${first.equations.head.residual}"
+    )
+    val initial = first.equations.find(_.identity.value == "initial-voltage")
+    check(initial.exists(_.initialOnly), s"initial equation classification was lost: $initial")
+    check(first.contributions.size == 1, s"expected one contribution bucket: ${first.contributions}")
+    check(
+      first.contributions.head.terms.map(_.identity.value) == Vector("source-a", "source-b"),
+      s"contribution terms are not canonically ordered: ${first.contributions.head.terms}"
+    )
 
     val duplicate = new Recorder
-    val duplicateError = duplicate.region(RegionKind.Equation) {
+    val duplicateResult = duplicate.region(RegionKind.Equation) {
       val recorded = duplicate.recordEquation(
         EquationIdentity("same"),
         real("left", "V"),
         real("right", "V"),
         metadata(20)
       )
-      assert(recorded.isRight)
+      check(recorded.isRight, s"first duplicate fixture equation failed unexpectedly: $recorded")
       duplicate.recordEquation(
         EquationIdentity("same"),
         real("again", "V"),
@@ -35,13 +63,17 @@ object Increment32RuntimeCheck:
         metadata(21)
       )
     }
-    assert(
-      duplicateError.exists(_.left.exists(_.code == "NODAL-ANALOG-032-004")),
-      "duplicate identities must fail with a stable diagnostic"
-    )
+    duplicateResult match
+      case Right(Left(error)) =>
+        check(
+          error.code == "NODAL-ANALOG-032-004",
+          s"duplicate identities must fail with NODAL-ANALOG-032-004, got $error"
+        )
+      case other =>
+        fail(s"duplicate identity fixture did not return the expected nested diagnostic: $other")
 
     val procedural = new Recorder
-    val proceduralError = procedural.region(RegionKind.Procedural) {
+    val proceduralResult = procedural.region(RegionKind.Procedural) {
       procedural.recordContribution(
         ContributionIdentity("illegal"),
         target,
@@ -49,16 +81,20 @@ object Increment32RuntimeCheck:
         metadata(30)
       )
     }
-    assert(
-      proceduralError.exists(_.left.exists(_.code == "NODAL-ANALOG-032-012")),
-      "procedural contribution misuse must fail closed"
-    )
+    proceduralResult match
+      case Right(Left(error)) =>
+        check(
+          error.code == "NODAL-ANALOG-032-012",
+          s"procedural contribution misuse must fail with NODAL-ANALOG-032-012, got $error"
+        )
+      case other =>
+        fail(s"procedural contribution fixture did not return the expected nested diagnostic: $other")
 
   private def build(order: Vector[String]): Snapshot =
     val recorder = new Recorder
-    assert(
+    check(
       recorder.region(RegionKind.Equation) {
-        assert(
+        check(
           recorder
             .recordEquation(
               EquationIdentity("dc-law"),
@@ -66,13 +102,15 @@ object Increment32RuntimeCheck:
               real("R * I(p,n)", "V"),
               metadata(10)
             )
-            .isRight
+            .isRight,
+          "dc-law equation must record successfully"
         )
-      }.isRight
+      }.isRight,
+      "ordinary equation region must complete successfully"
     )
-    assert(
+    check(
       recorder.region(RegionKind.InitialEquation) {
-        assert(
+        check(
           recorder
             .recordEquation(
               EquationIdentity("initial-voltage"),
@@ -80,15 +118,17 @@ object Increment32RuntimeCheck:
               real("0.0", "V"),
               metadata(11)
             )
-            .isRight
+            .isRight,
+          "initial-voltage equation must record successfully"
         )
-      }.isRight
+      }.isRight,
+      "initial equation region must complete successfully"
     )
-    assert(
+    check(
       recorder.region(RegionKind.Contribution) {
         order.foreach { identity =>
           val magnitude = if identity == "source-a" then "1.0" else "2.0"
-          assert(
+          check(
             recorder
               .recordContribution(
                 ContributionIdentity(identity),
@@ -96,10 +136,12 @@ object Increment32RuntimeCheck:
                 real(magnitude, "A"),
                 metadata(12)
               )
-              .isRight
+              .isRight,
+            s"contribution $identity must record successfully"
           )
         }
-      }.isRight
+      }.isRight,
+      "contribution region must complete successfully"
     )
     recorder.snapshot
 
@@ -117,3 +159,9 @@ object Increment32RuntimeCheck:
       continuity = "continuous",
       source = SourceSpan("Increment32RuntimeCheck.scala", line, 1)
     )
+
+  private def check(condition: Boolean, message: => String): Unit =
+    if !condition then fail(message)
+
+  private def fail(message: String): Nothing =
+    throw new IllegalStateException(message)

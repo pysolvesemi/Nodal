@@ -55,6 +55,11 @@ read-only workflow, compile/run witnesses, and temporary-artifact hygiene.
 The exact implementation head is accepted only after the dedicated workflow,
 Core CI, and every inherited pull-request workflow pass on that same commit.
 
+Review findings are closed only after production public-API construction,
+initialization-only analysis enforcement, and native non-empty identity checks
+all pass their direct integration and mutation witnesses on the same exact
+implementation head.
+
 ## Deliberately deferred
 
 Increment 33 owns local analog variables, initialization, lexical scopes,

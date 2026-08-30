@@ -1,0 +1,160 @@
+name: Increment 32 Validate and Merge v3
+
+on:
+  push:
+    branches:
+      - automation/increment32-validate-and-merge-v3
+
+permissions:
+  actions: read
+  checks: read
+  contents: write
+  pull-requests: write
+  statuses: read
+
+jobs:
+  validate-and-merge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      TARGET_BRANCH: increment/32-equation-contribution-semantics-review
+      EXPECTED_WORKFLOWS: "22"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Resolve implementation pull request
+        id: pr
+        run: |
+          pr_number=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/pulls?state=open&head=pysolvesemi:${TARGET_BRANCH}" \
+            --jq '.[0].number')
+          test -n "${pr_number}"
+          echo "number=${pr_number}" >> "${GITHUB_OUTPUT}"
+
+      - name: Apply idempotent semantic fixes and Scala formatting
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          header = Path('core/native/include/nodal/AnalogEquationRuntime.h')
+          text = header.read_text(encoding='utf-8')
+          old = 'return equations_.emplace(record.identity, std::move(record)).first->second;'
+          new = 'const std::string key = record.identity;\n    return equations_.emplace(key, std::move(record)).first->second;'
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit('equation emplace contract is neither original nor corrected')
+          old = '''return contributions_.emplace(record.identity, std::move(record))
+        .first->second;'''
+          new = '''const std::string key = record.identity;
+    return contributions_.emplace(key, std::move(record)).first->second;'''
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit('contribution emplace contract is neither original nor corrected')
+          header.write_text(text, encoding='utf-8')
+
+          witness = Path(
+              'examples/continuousTimeApi/src/nodal/increment32fixture/'
+              'Increment32RuntimeCheck.scala'
+          )
+          source = witness.read_text(encoding='utf-8')
+          old = '''    assert(
+      duplicateError.exists(_.left.exists(_.code == "NODAL-ANALOG-032-004")),
+      "duplicate identities must fail with a stable diagnostic"
+    )'''
+          new = '''    val duplicateCode = duplicateError match
+      case Right(Left(error)) => Some(error.code)
+      case _                  => None
+    assert(
+      duplicateCode.contains("NODAL-ANALOG-032-004"),
+      "duplicate identities must fail with a stable diagnostic"
+    )'''
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif 'val duplicateCode = duplicateError match' not in source:
+              raise SystemExit('duplicate witness contract is neither original nor corrected')
+          old = '''    assert(
+      proceduralError.exists(_.left.exists(_.code == "NODAL-ANALOG-032-012")),
+      "procedural contribution misuse must fail closed"
+    )'''
+          new = '''    val proceduralCode = proceduralError match
+      case Right(Left(error)) => Some(error.code)
+      case _                  => None
+    assert(
+      proceduralCode.contains("NODAL-ANALOG-032-012"),
+      "procedural contribution misuse must fail closed"
+    )'''
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif 'val proceduralCode = proceduralError match' not in source:
+              raise SystemExit('procedural witness contract is neither original nor corrected')
+          witness.write_text(source, encoding='utf-8')
+          PY
+          ./mill mill.scalalib.scalafmt/reformatAll
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add core/native/include/nodal/AnalogEquationRuntime.h
+          git add core/scala/api/src/nodal/AnalogEquationRuntime.scala
+          git add examples/continuousTimeApi/src/nodal/increment32fixture/Increment32RuntimeCheck.scala
+          if ! git diff --cached --quiet; then
+            git commit -m "fix(increment32): harden deterministic semantic witnesses"
+            git push origin "HEAD:${TARGET_BRANCH}"
+          fi
+
+      - name: Validate permanent Increment 32 implementation
+        run: |
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment32.py'
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          git diff --check
+
+      - name: Wait for complete exact-head pull-request matrix
+        id: matrix
+        run: |
+          head_sha=$(git rev-parse HEAD)
+          echo "head=${head_sha}" >> "${GITHUB_OUTPUT}"
+          echo "Waiting for ${EXPECTED_WORKFLOWS} workflows on ${head_sha}"
+          for attempt in $(seq 1 180); do
+            payload=$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${head_sha}&event=pull_request&per_page=100")
+            count=$(jq '.workflow_runs | length' <<<"${payload}")
+            pending=$(jq '[.workflow_runs[] | select(.status != "completed")] | length' <<<"${payload}")
+            failed=$(jq '[.workflow_runs[] | select(.status == "completed" and .conclusion != "success")] | length' <<<"${payload}")
+            echo "attempt=${attempt} count=${count} pending=${pending} failed=${failed}"
+            if [ "${count}" -ge "${EXPECTED_WORKFLOWS}" ] && [ "${pending}" -eq 0 ]; then
+              if [ "${failed}" -ne 0 ]; then
+                jq -r '.workflow_runs[] | select(.conclusion != "success") | [.name, .conclusion, .html_url] | @tsv' <<<"${payload}"
+                exit 1
+              fi
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Timed out waiting for the exact-head workflow matrix" >&2
+          exit 1
+
+      - name: Confirm validated head is still current
+        run: |
+          current=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/pulls/${{ steps.pr.outputs.number }}" \
+            --jq '.head.sha')
+          test "${current}" = "${{ steps.matrix.outputs.head }}"
+
+      - name: Mark implementation ready and squash merge
+        run: |
+          gh pr ready "${{ steps.pr.outputs.number }}"
+          gh pr merge "${{ steps.pr.outputs.number }}" \
+            --squash \
+            --subject "Increment 32 — First-class analog equations and additive contributions (#${{ steps.pr.outputs.number }})" \
+            --body "Implement backend-neutral unordered equation and additive contribution semantics with independent Scala/native witnesses, stable diagnostics, deterministic source-order-independent snapshots, and no premature procedural, DAE, solver, or backend behavior."

@@ -9,7 +9,7 @@ object Increment32RuntimeCheck:
     val first = build(Vector("source-a", "source-b"))
     val second = build(Vector("source-b", "source-a"))
 
-    assert(first == second, "contribution order must not affect the canonical snapshot")
+    assert(first == second, "source order must not affect the canonical snapshot")
     assert(first.equations.size == 2)
     assert(first.equations.head.identity.value == "dc-law")
     assert(first.equations.head.residual.authoredLeft.rendered == "V(p,n)")

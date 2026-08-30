@@ -1,0 +1,29 @@
+name: Increment 32 Live Source Bundle
+
+on:
+  push:
+    branches:
+      - automation/inc32-source-bundle-live
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source snapshot
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Package source snapshot
+        run: |
+          tar --exclude=.git --exclude=out --exclude=build -czf /tmp/nodal-inc32-live.tgz .
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodal-inc32-live-source
+          path: /tmp/nodal-inc32-live.tgz
+          if-no-files-found: error
+          retention-days: 1

@@ -1,4 +1,4 @@
-name: Increment 32 Public Wiring Review Fix
+name: Increment 32 API Manifest Diagnostic
 
 on:
   push:
@@ -6,57 +6,35 @@ on:
       - automation/inc32-public-wiring-review-fix
 
 permissions:
-  contents: write
+  contents: read
+  actions: read
 
 jobs:
-  repair:
+  collect:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 10
     steps:
-      - name: Check out exact Increment 32 review head
-        uses: actions/checkout@v6
+      - name: Download failing Increment 14 job log
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --location \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/pysolvesemi/Nodal/actions/jobs/99315063505/logs \
+            --output /tmp/increment14-job.log
+          grep -n -B 80 -A 120 \
+            -E 'check_api_candidate|Expected frozen API manifest|current candidate sources' \
+            /tmp/increment14-job.log \
+            > /tmp/increment14-api-manifest-context.log
+          test -s /tmp/increment14-api-manifest-context.log
+
+      - name: Upload diagnostic context
+        uses: actions/upload-artifact@v4
         with:
-          ref: increment/32-equation-contribution-semantics-review
-          fetch-depth: 0
-
-      - name: Move integration test into the owned package
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected=156a8e3188c9926ab45098d4881db3cdf9f897ca
-          test "$(git rev-parse HEAD)" = "$expected"
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('core/scala/testkit/test/src/nodal/AnalogEquationConstructionTests.scala')
-          text = path.read_text(encoding='utf-8')
-          if not text.startswith('package nodal\n'):
-              raise SystemExit('unexpected Increment 32 integration-test package')
-          text = text.replace('package nodal\n', 'package nodal.internal.testkit\n\nimport nodal.*\n', 1)
-          path.write_text(text, encoding='utf-8')
-          PY
-          git diff --check
-
-      - name: Validate ownership and public construction semantics
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 scripts/check_package_visibility.py
-          python3 scripts/check_increment31.py
-          python3 scripts/check_increment133.py
-          python3 scripts/check_increment32.py --compile
-          python3 -m unittest discover -s tests/compiler -p 'test_increment32.py'
-          ./mill core.scala.testkit.test
-          ./mill mill.scalalib.scalafmt/checkFormatAll
-          ./mill scalafix.check
-          git diff --check
-
-      - name: Commit and push the ownership fix
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'pysolvesemi'
-          git config user.email 'pysolvesemi@gmail.com'
-          git add core/scala/testkit/test/src/nodal/AnalogEquationConstructionTests.scala
-          git commit -m 'fix(increment32): use owned test package'
-          git push origin HEAD:increment/32-equation-contribution-semantics-review
+          name: increment14-api-manifest-context
+          path: /tmp/increment14-api-manifest-context.log
+          if-no-files-found: error
+          retention-days: 1

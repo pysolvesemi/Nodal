@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Download failing Increment 14 job log
+      - name: Decode failing Increment 14 job log
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -25,12 +25,32 @@ jobs:
             --header "X-GitHub-Api-Version: 2022-11-28" \
             https://api.github.com/repos/pysolvesemi/Nodal/actions/jobs/99315063505/logs \
             --output /tmp/increment14-job.log
-          test -s /tmp/increment14-job.log
-
-      - name: Upload raw diagnostic log
-        uses: actions/upload-artifact@v4
-        with:
-          name: increment14-job-log
-          path: /tmp/increment14-job.log
-          if-no-files-found: error
-          retention-days: 1
+          python3 - <<'PY'
+          from pathlib import Path
+          raw = Path('/tmp/increment14-job.log').read_bytes()
+          print('RAW_SIZE', len(raw))
+          print('RAW_PREFIX_HEX', raw[:32].hex())
+          text = raw.decode('utf-8-sig', errors='replace').replace('\x00', '')
+          lowered = text.lower()
+          needles = ('check_api_candidate', 'expected frozen api manifest', 'current candidate sources', 'manifest')
+          positions = []
+          for needle in needles:
+              start = 0
+              while True:
+                  index = lowered.find(needle, start)
+                  if index < 0:
+                      break
+                  positions.append((index, needle))
+                  start = index + 1
+          print('MATCHES', positions[:40])
+          for index, needle in sorted(set(positions))[:20]:
+              begin = max(0, index - 4000)
+              end = min(len(text), index + 8000)
+              print(f'CONTEXT_BEGIN {needle} {index}')
+              print(text[begin:end])
+              print('CONTEXT_END')
+          if not positions:
+              print('TAIL_BEGIN')
+              print(text[-30000:])
+              print('TAIL_END')
+          PY

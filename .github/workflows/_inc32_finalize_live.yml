@@ -1,0 +1,346 @@
+name: Increment 32 Finalize Live
+
+on:
+  push:
+    branches:
+      - automation/inc32-source-bundle-live
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_BRANCH: increment/32-equation-contribution-semantics-review
+    steps:
+      - name: Check out target branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Apply deterministic final repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > examples/continuousTimeApi/src/nodal/increment32fixture/Increment32RuntimeCheck.scala <<'SCALA'
+          package nodal.increment32fixture
+
+          import java.nio.charset.StandardCharsets
+          import java.nio.file.Files
+          import java.nio.file.Path
+
+          import scala.collection.mutable.ArrayBuffer
+
+          import nodal.AnalogEquationRuntime.*
+
+          /** Executable semantic witness for Increment 32. */
+          object Increment32RuntimeCheck:
+            private val Passed = "NODAL_INC32_SCALA_WITNESS_PASS"
+            private val Failed = "NODAL_INC32_SCALA_WITNESS_FAIL"
+
+            def main(arguments: Array[String]): Unit =
+              val failures = runChecks()
+              val report =
+                if failures.isEmpty then Passed + "\n"
+                else (Failed +: failures).mkString("\n") + "\n"
+
+              arguments.headOption.foreach: output =>
+                val _ = Files.writeString(Path.of(output), report, StandardCharsets.UTF_8)
+              println(report)
+
+            private def runChecks(): Vector[String] =
+              val failures = ArrayBuffer.empty[String]
+              val first = build(Vector("source-a", "source-b"), failures)
+              val second = build(Vector("source-b", "source-a"), failures)
+
+              check(
+                first.equations.map(_.identity.value) == second.equations.map(_.identity.value),
+                s"source order must not affect the canonical snapshot equation identities: first=${first.equations.map(_.identity.value)} second=${second.equations.map(_.identity.value)}",
+                failures
+              )
+              check(first.equations.size == 2, s"expected two equations, got ${first.equations}", failures)
+              first.equations.find(_.identity.value == "dc-law") match
+                case Some(equation) =>
+                  check(
+                    equation.residual.authoredLeft.rendered == "V(p,n)",
+                    s"authored left expression was not retained: ${equation.residual}",
+                    failures
+                  )
+                  check(
+                    equation.residual.authoredRight.rendered == "R * I(p,n)",
+                    s"authored right expression was not retained: ${equation.residual}",
+                    failures
+                  )
+                  check(
+                    !equation.residual.causallyOriented,
+                    s"equation was causally oriented: ${equation.residual}",
+                    failures
+                  )
+                  check(
+                    !equation.residual.divided,
+                    s"equation was divided: ${equation.residual}",
+                    failures
+                  )
+                case None => failures += s"dc-law equation is missing: ${first.equations}"
+
+              val initial = first.equations.find(_.identity.value == "initial-voltage")
+              check(initial.exists(_.initialOnly), s"initial equation classification was lost: $initial", failures)
+
+              val firstTerms = first.contributions.flatMap(_.terms.map(_.identity.value))
+              val secondTerms = second.contributions.flatMap(_.terms.map(_.identity.value))
+              check(first.contributions.size == 1, s"expected one contribution bucket: ${first.contributions}", failures)
+              check(second.contributions.size == 1, s"expected one contribution bucket: ${second.contributions}", failures)
+              check(
+                firstTerms == Vector("source-a", "source-b"),
+                s"first contribution terms are not canonically ordered: $firstTerms",
+                failures
+              )
+              check(
+                secondTerms == Vector("source-a", "source-b"),
+                s"source order must not affect the canonical snapshot contribution identities: $secondTerms",
+                failures
+              )
+
+              val duplicate = new Recorder
+              val duplicateResult = duplicate.region(RegionKind.Equation) {
+                val firstRecord = duplicate.recordEquation(
+                  EquationIdentity("same"),
+                  real("left", "V"),
+                  real("right", "V"),
+                  metadata(20)
+                )
+                check(firstRecord.isRight, s"first duplicate fixture equation failed: $firstRecord", failures)
+                duplicate.recordEquation(
+                  EquationIdentity("same"),
+                  real("again", "V"),
+                  real("again", "V"),
+                  metadata(21)
+                )
+              }
+              val duplicateCode = duplicateResult match
+                case Right(Left(error)) => Some(error.code)
+                case _                  => None
+              check(
+                duplicateCode.contains("NODAL-ANALOG-032-004"),
+                s"duplicate identities must fail with NODAL-ANALOG-032-004, got $duplicateResult",
+                failures
+              )
+
+              val procedural = new Recorder
+              val proceduralResult = procedural.region(RegionKind.Procedural) {
+                procedural.recordContribution(
+                  ContributionIdentity("illegal"),
+                  target,
+                  real("1.0", "A"),
+                  metadata(30)
+                )
+              }
+              val proceduralCode = proceduralResult match
+                case Right(Left(error)) => Some(error.code)
+                case _                  => None
+              check(
+                proceduralCode.contains("NODAL-ANALOG-032-012"),
+                s"procedural contribution misuse must fail with NODAL-ANALOG-032-012, got $proceduralResult",
+                failures
+              )
+
+              failures.toVector
+
+            private def build(order: Vector[String], failures: ArrayBuffer[String]): Snapshot =
+              val recorder = new Recorder
+              val ordinary = recorder.region(RegionKind.Equation) {
+                recorder.recordEquation(
+                  EquationIdentity("dc-law"),
+                  real("V(p,n)", "V"),
+                  real("R * I(p,n)", "V"),
+                  metadata(10)
+                )
+              }
+              check(
+                ordinary.exists(_.isRight),
+                s"ordinary equation region did not record dc-law: $ordinary",
+                failures
+              )
+
+              val initial = recorder.region(RegionKind.InitialEquation) {
+                recorder.recordEquation(
+                  EquationIdentity("initial-voltage"),
+                  real("V(p,n)", "V"),
+                  real("0.0", "V"),
+                  metadata(11)
+                )
+              }
+              check(
+                initial.exists(_.isRight),
+                s"initial equation region did not record initial-voltage: $initial",
+                failures
+              )
+
+              val contributed = recorder.region(RegionKind.Contribution) {
+                order.map: identity =>
+                  val magnitude = if identity == "source-a" then "1.0" else "2.0"
+                  recorder.recordContribution(
+                    ContributionIdentity(identity),
+                    target,
+                    real(magnitude, "A"),
+                    metadata(12)
+                  )
+              }
+              check(
+                contributed.exists(_.forall(_.isRight)),
+                s"contribution region failed: $contributed",
+                failures
+              )
+              recorder.snapshot
+
+            private def target: ContributionTarget =
+              ContributionTarget("branch:p->n", ContributionKind.Flow, "A", "p-to-n")
+
+            private def real(rendered: String, dimension: String): Expression =
+              Expression(rendered, dimension, ValueKind.Real)
+
+            private def metadata(line: Int): Metadata =
+              Metadata(
+                owner = "fixture.resistor",
+                guard = None,
+                analyses = Set("dc", "transient"),
+                continuity = "continuous",
+                source = SourceSpan("Increment32RuntimeCheck.scala", line, 1)
+              )
+
+            private def check(
+                condition: Boolean,
+                message: => String,
+                failures: ArrayBuffer[String]
+            ): Unit =
+              if !condition then failures += message
+          SCALA
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          gate = Path("docs/design-gates/NodalAnalogEquationContribution-DG-v1.0.md")
+          text = gate.read_text(encoding="utf-8")
+          text = text.replace("**Scope:** compiler-ir", "**Scope:** public-api")
+          text = text.replace(
+              "Increment 33 owns variables and ordered\nprocedural assignment",
+              "Increment 33 owns variables and ordered procedural assignment"
+          )
+          gate.write_text(text, encoding="utf-8")
+
+          checker = Path("scripts/check_increment32.py")
+          source = checker.read_text(encoding="utf-8")
+          source = source.replace('"**Scope:** compiler-ir",', '"**Scope:** public-api",')
+          start = source.index("def validate_compile(root: Path) -> list[Problem]:")
+          end = source.index("\ndef main(argv: list[str] | None = None) -> int:", start)
+          replacement = '''def validate_compile(root: Path) -> list[Problem]:
+              problems: list[Problem] = []
+              mill = root / ("mill.bat" if os.name == "nt" else "mill")
+              compiled = run([str(mill), "examples.continuousTimeApi.compile"], root)
+              if compiled.returncode != 0:
+                  problems.append(
+                      Problem(
+                          "NODAL-INC32-033",
+                          "Scala fixture did not compile:\\n" + compiled.stdout[-12000:],
+                      )
+                  )
+              else:
+                  with tempfile.TemporaryDirectory() as scala_temporary:
+                      report = Path(scala_temporary) / "increment32-scala-report.txt"
+                      executed = run(
+                          [
+                              str(mill),
+                              "examples.continuousTimeApi.runMain",
+                              "nodal.increment32fixture.Increment32RuntimeCheck",
+                              str(report),
+                          ],
+                          root,
+                      )
+                      report_text = report.read_text(encoding="utf-8") if report.is_file() else ""
+                      combined = executed.stdout + "\\n" + report_text
+                      if (
+                          executed.returncode != 0
+                          or "NODAL_INC32_SCALA_WITNESS_PASS" not in combined
+                          or "NODAL_INC32_SCALA_WITNESS_FAIL" in combined
+                      ):
+                          problems.append(
+                              Problem(
+                                  "NODAL-INC32-034",
+                                  "Scala witness failed:\\n" + combined[-12000:],
+                              )
+                          )
+
+              compiler = os.environ.get("CXX", "c++")
+              with tempfile.TemporaryDirectory() as temporary:
+                  executable = Path(temporary) / "increment32-native"
+                  native = run(
+                      [
+                          compiler,
+                          "-std=c++20",
+                          "-Wall",
+                          "-Wextra",
+                          "-Werror",
+                          "-pedantic",
+                          "-Icore/native/include",
+                          NATIVE_WITNESS.as_posix(),
+                          "-o",
+                          str(executable),
+                      ],
+                      root,
+                  )
+                  if native.returncode != 0:
+                      problems.append(
+                          Problem(
+                              "NODAL-INC32-035",
+                              "native witness did not compile:\\n" + native.stdout[-12000:],
+                          )
+                      )
+                  else:
+                      executed = run([str(executable)], root)
+                      if executed.returncode != 0:
+                          problems.append(
+                              Problem(
+                                  "NODAL-INC32-036",
+                                  "native witness failed:\\n" + executed.stdout[-12000:],
+                              )
+                          )
+              return problems
+          '''
+          replacement = "\n".join(line[12:] if line.startswith("            ") else line for line in replacement.splitlines()) + "\n"
+          checker.write_text(source[:start] + replacement + source[end:], encoding="utf-8")
+          PY
+
+          ./mill mill.scalalib.scalafmt/reformatAll
+          rm -rf scripts/__pycache__ tests/compiler/__pycache__
+          git diff --check
+
+      - name: Validate exact implementation payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment32.py'
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          python3 scripts/check_contribution_policy.py --base-ref origin/dev
+          git diff --check
+
+      - name: Publish repaired target branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/design-gates/NodalAnalogEquationContribution-DG-v1.0.md
+          git add scripts/check_increment32.py
+          git add examples/continuousTimeApi/src/nodal/increment32fixture/Increment32RuntimeCheck.scala
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix(increment32): complete executable semantic validation'
+            git push origin "HEAD:${TARGET_BRANCH}"
+          fi

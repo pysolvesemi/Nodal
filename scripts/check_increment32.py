@@ -271,7 +271,7 @@ def validate_files(root: Path) -> list[Problem]:
             "implementation_merge",
             "post_merge_core_ci_run",
             "closure_pull_request",
-            "closure_head",
+            "closure_validation_head",
             "closure_core_ci_run",
         )
         if not isinstance(validation, dict) or any(

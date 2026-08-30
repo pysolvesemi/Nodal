@@ -1,0 +1,37 @@
+name: Increment 32 Publish Public Wiring Review Fix
+
+on:
+  push:
+    branches:
+      - automation/inc32-public-wiring-review-fix
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Publish recovered atomic review-fix tree
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          BASE_SHA: 52799e2e18a3b55cccb0d635d0a83c091c330ecd
+          TREE_SHA: a94dbcd9293786cb270916245d3d6780e41ccd6d
+          TARGET_REF: heads/increment/32-equation-contribution-semantics-review
+        run: |
+          set -euo pipefail
+          current=$(gh api "repos/${REPOSITORY}/git/ref/${TARGET_REF}" --jq .object.sha)
+          test "$current" = "$BASE_SHA"
+          commit=$(gh api --method POST "repos/${REPOSITORY}/git/commits" \
+            -f message='fix(increment32): wire public analog semantics and close review gaps' \
+            -f tree="$TREE_SHA" \
+            -f 'parents[]'="$BASE_SHA" \
+            --jq .sha)
+          gh api --method PATCH "repos/${REPOSITORY}/git/refs/${TARGET_REF}" \
+            -f sha="$commit" \
+            -F force=false >/dev/null
+          updated=$(gh api "repos/${REPOSITORY}/git/ref/${TARGET_REF}" --jq .object.sha)
+          test "$updated" = "$commit"
+          echo "Published Increment 32 review fix at $commit"

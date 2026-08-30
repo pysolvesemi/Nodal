@@ -1,0 +1,67 @@
+name: Increment 32 Apply Review Fixes
+
+on:
+  push:
+    branches:
+      - automation/increment32-review-fixes
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out Increment 32 implementation
+        uses: actions/checkout@v6
+        with:
+          ref: increment/32-equation-contribution-semantics-review
+          fetch-depth: 0
+
+      - name: Reassemble and verify reviewed patch
+        run: |
+          git fetch origin automation/increment32-review-fixes
+          {
+            git show origin/automation/increment32-review-fixes:.github/automation/inc32-review-fixes.part00
+            git show origin/automation/increment32-review-fixes:.github/automation/inc32-review-fixes.part01
+            git show origin/automation/increment32-review-fixes:.github/automation/inc32-review-fixes.part02
+          } | tr -d '\n' | base64 -d | gzip -d > /tmp/inc32-review-fixes.patch
+          echo '339c7f1e4ea9099505e77f137ce221aefaec5467f93e5d97465bf19d6df45ee6  /tmp/inc32-review-fixes.patch' | sha256sum --check
+          git apply --check /tmp/inc32-review-fixes.patch
+          git apply /tmp/inc32-review-fixes.patch
+          git diff --check
+
+      - name: Run Increment 32 acceptance
+        run: |
+          python3 scripts/check_increment32.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment32.py'
+          ./mill core.scala.testkit.test
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+
+      - name: Publish one atomic review-fix commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            core/native/include/nodal/AnalogEquationRuntime.h \
+            core/scala/api/src/nodal/AnalogEquationRuntime.scala \
+            core/scala/api/src/nodal/CandidateApi.scala \
+            core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala \
+            core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+            core/scala/api/src/nodal/SemanticOriginKernel.scala \
+            core/scala/bridge/src/nodal/bridge/ReproducibilityContract.scala \
+            core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala \
+            core/scala/testkit/test/src/nodal/AnalogEquationConstructionTests.scala \
+            docs/design-gates/NodalAnalogEquationContribution-DG-v1.0.md \
+            docs/implementation/increment32-equation-contribution-semantics.md \
+            examples/continuousTimeApi/src/nodal/increment32fixture/Increment32RuntimeCheck.scala \
+            scripts/check_increment32.py \
+            tests/compiler/fixtures/increment32/README.md \
+            tests/compiler/fixtures/increment32/analog_equation_runtime_test.cpp \
+            tests/compiler/fixtures/increment32/manifest.json \
+            tests/compiler/test_increment32.py
+          git diff --cached --check
+          git commit -m 'fix(increment32): wire production equation semantics'
+          git push origin HEAD:increment/32-equation-contribution-semantics-review

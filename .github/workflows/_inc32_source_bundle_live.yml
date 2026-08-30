@@ -11,13 +11,48 @@ permissions:
 jobs:
   bundle:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Check out current Increment 32 branch
         uses: actions/checkout@v6
         with:
           ref: increment/32-equation-contribution-semantics-review
           fetch-depth: 0
+      - name: Diagnose Scala witness launch
+        run: |
+          ./mill examples.continuousTimeApi.compile
+          report=/tmp/inc32-mill-report.txt
+          set +e
+          ./mill examples.continuousTimeApi.runMain nodal.increment32fixture.Increment32RuntimeCheck "$report"
+          mill_rc=$?
+          set -e
+          echo "MILL_RUNMAIN_RC=$mill_rc"
+          test -f "$report" && { echo 'MILL_REPORT_BEGIN'; cat "$report"; echo 'MILL_REPORT_END'; } || true
+          ./mill show examples.continuousTimeApi.runClasspath > /tmp/inc32-run-classpath.json
+          python3 - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          raw = json.loads(Path('/tmp/inc32-run-classpath.json').read_text())
+          entries = raw if isinstance(raw, list) else raw.get('value', raw)
+          classpath = ':'.join(str(entry) for entry in entries)
+          report = '/tmp/inc32-direct-report.txt'
+          completed = subprocess.run(
+              ['java', '-cp', classpath, 'nodal.increment32fixture.Increment32RuntimeCheck', report],
+              text=True,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.STDOUT,
+          )
+          print(f'DIRECT_JAVA_RC={completed.returncode}')
+          print('DIRECT_OUTPUT_BEGIN')
+          print(completed.stdout)
+          print('DIRECT_OUTPUT_END')
+          path = Path(report)
+          if path.exists():
+              print('DIRECT_REPORT_BEGIN')
+              print(path.read_text())
+              print('DIRECT_REPORT_END')
+          PY
       - name: Package source snapshot
         run: |
           tar --exclude=.git --exclude=out --exclude=build -czf /tmp/nodal-inc32-live.tgz .

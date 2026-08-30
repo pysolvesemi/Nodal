@@ -54,8 +54,7 @@ Four source-semantic regions are distinguished:
 
 Equation construction is legal only in an equation or initial-equation region.
 Contribution construction is legal only in a contribution region. Nested or
-overlapping regions are rejected. Increment 33 owns variables and ordered
-procedural assignment; this gate only defines the fail-closed separation.
+overlapping regions are rejected. Increment 33 owns variables and ordered procedural assignment; this gate only defines the fail-closed separation.
 
 ## Determinism
 

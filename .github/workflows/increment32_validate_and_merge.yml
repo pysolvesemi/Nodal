@@ -1,0 +1,92 @@
+name: Increment 32 Validate and Merge
+
+on:
+  push:
+    branches:
+      - automation/increment32-validate-and-merge
+
+permissions:
+  actions: read
+  checks: read
+  contents: write
+  pull-requests: write
+  statuses: read
+
+jobs:
+  validate-and-merge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      TARGET_BRANCH: increment/32-equation-contribution-semantics-review
+      EXPECTED_WORKFLOWS: "22"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Resolve implementation pull request
+        id: pr
+        run: |
+          pr_number=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/pulls?state=open&head=pysolvesemi:${TARGET_BRANCH}" \
+            --jq '.[0].number')
+          test -n "${pr_number}"
+          echo "number=${pr_number}" >> "${GITHUB_OUTPUT}"
+
+      - name: Apply canonical Scala formatting
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add core/scala/api/src/nodal/AnalogEquationRuntime.scala
+          git add examples/continuousTimeApi/src/nodal/increment32fixture/Increment32RuntimeCheck.scala
+          if ! git diff --cached --quiet; then
+            git commit -m "style(increment32): apply canonical Scala formatting"
+            git push origin "HEAD:${TARGET_BRANCH}"
+          fi
+
+      - name: Validate permanent Increment 32 implementation
+        run: |
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment32.py'
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          git diff --check
+
+      - name: Wait for complete exact-head pull-request matrix
+        run: |
+          head_sha=$(git rev-parse HEAD)
+          echo "Waiting for ${EXPECTED_WORKFLOWS} workflows on ${head_sha}"
+          for attempt in $(seq 1 180); do
+            payload=$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${head_sha}&event=pull_request&per_page=100")
+            count=$(jq '.workflow_runs | length' <<<"${payload}")
+            pending=$(jq '[.workflow_runs[] | select(.status != "completed")] | length' <<<"${payload}")
+            failed=$(jq '[.workflow_runs[] | select(.status == "completed" and .conclusion != "success")] | length' <<<"${payload}")
+            echo "attempt=${attempt} count=${count} pending=${pending} failed=${failed}"
+            if [ "${count}" -ge "${EXPECTED_WORKFLOWS}" ] && [ "${pending}" -eq 0 ]; then
+              if [ "${failed}" -ne 0 ]; then
+                jq -r '.workflow_runs[] | select(.conclusion != "success") | [.name, .conclusion, .html_url] | @tsv' <<<"${payload}"
+                exit 1
+              fi
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Timed out waiting for the exact-head workflow matrix" >&2
+          exit 1
+
+      - name: Mark implementation ready and squash merge
+        run: |
+          gh pr ready "${{ steps.pr.outputs.number }}"
+          gh pr merge "${{ steps.pr.outputs.number }}" \
+            --squash \
+            --subject "Increment 32 — First-class analog equations and additive contributions (#${{ steps.pr.outputs.number }})" \
+            --body "Implement backend-neutral unordered equation and additive contribution semantics with independent Scala/native witnesses, stable diagnostics, deterministic source-order-independent snapshots, and no premature procedural, DAE, solver, or backend behavior."

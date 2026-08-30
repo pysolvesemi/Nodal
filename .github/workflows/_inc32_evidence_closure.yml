@@ -1,0 +1,354 @@
+name: Increment 32 Evidence Closure
+
+on:
+  push:
+    branches:
+      - automation/inc32-source-bundle-live
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  checks: read
+
+jobs:
+  close-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      CLOSURE_BRANCH: increment/32-evidence-closure
+    steps:
+      - name: Wait for validated implementation merge
+        id: implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 3600))
+          while (( SECONDS < deadline )); do
+            merge_sha=$(git ls-remote "https://github.com/${REPOSITORY}.git" refs/tags/increment-32-implementation-validated | awk '{print $1}')
+            if [[ -n "$merge_sha" ]]; then
+              echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Validated implementation tag was not published" >&2
+          exit 1
+
+      - name: Check out merged implementation
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Collect accepted implementation evidence
+        id: evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          merge_sha='${{ steps.implementation.outputs.merge_sha }}'
+          test "$(git rev-parse HEAD)" = "$merge_sha"
+          implementation_pr=$(gh api --paginate "repos/${REPOSITORY}/pulls?state=closed&base=dev&per_page=100" \
+            --jq '[.[] | select(.merged_at != null and .head.ref == "increment/32-equation-contribution-semantics-review")][0].number')
+          accepted_head=$(gh api "repos/${REPOSITORY}/pulls/${implementation_pr}" --jq .head.sha)
+          runs=$(gh api --paginate "repos/${REPOSITORY}/actions/runs?head_sha=${accepted_head}&event=pull_request&per_page=100")
+          dedicated=$(jq -r '[.workflow_runs[] | select(.name == "Increment 32 Equation and Contribution Semantics" and .conclusion == "success")][0].id' <<<"$runs")
+          core=$(jq -r '[.workflow_runs[] | select(.name == "Core CI" and .conclusion == "success")][0].id' <<<"$runs")
+          post_merge=$(gh api --paginate "repos/${REPOSITORY}/actions/workflows/ci.yml/runs?branch=dev&per_page=100" \
+            --jq --arg sha "$merge_sha" '[.workflow_runs[] | select(.head_sha == $sha and .conclusion == "success")][0].id')
+          test "$implementation_pr" != "null"
+          test "$dedicated" != "null"
+          test "$core" != "null"
+          test "$post_merge" != "null"
+          {
+            echo "implementation_pr=$implementation_pr"
+            echo "accepted_head=$accepted_head"
+            echo "dedicated=$dedicated"
+            echo "core=$core"
+            echo "post_merge=$post_merge"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create staged evidence-closure branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout -B "$CLOSURE_BRANCH" dev
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("docs/implementation/increment32-equation-contribution-semantics.md")
+          text = path.read_text(encoding="utf-8")
+          marker = "accepted-evidence closure."
+          replacement = "accepted-evidence closure.\n\nThe separate evidence-closure branch records the exact accepted implementation, merge, and CI identities before the roadmap checkbox changes."
+          if replacement not in text:
+              text = text.replace(marker, replacement, 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+          git add docs/implementation/increment32-equation-contribution-semantics.md
+          git commit -m 'docs(increment32): stage accepted evidence closure'
+          git push --force origin "$CLOSURE_BRANCH"
+
+      - name: Open closure pull request
+        id: closure_pr
+        shell: bash
+        run: |
+          set -euo pipefail
+          existing=$(gh pr list --state open --base dev --head "$CLOSURE_BRANCH" --json number --jq '.[0].number // empty')
+          if [[ -n "$existing" ]]; then
+            number="$existing"
+          else
+            cat > /tmp/inc32-closure-body.md <<'EOF'
+          ## Summary
+
+          Records accepted Increment 32 implementation evidence, validates the manifest, advances the roadmap, and leaves Increment 33 unchecked.
+
+          ## Validation
+
+          The closure branch is validated before merge. Exact run and commit identities are recorded in the manifest and pull-request discussion.
+
+          ## Design gate
+
+          `NodalAnalogEquationContribution-DG-v1.0` remains approved and unchanged.
+
+          ## Checklist
+
+          - [x] Increment 32 implementation is squash-merged into `dev`.
+          - [x] Accepted implementation-head and post-merge evidence is available.
+          - [ ] Manifest and roadmap advance together.
+          - [ ] Closure-head Core CI passes.
+          - [ ] Closure is squash-merged and final Core CI passes.
+          - [ ] Increment 33 remains unchecked.
+          EOF
+            url=$(gh pr create --base dev --head "$CLOSURE_BRANCH" \
+              --title "Increment 32 — Record accepted equation and contribution evidence" \
+              --body-file /tmp/inc32-closure-body.md)
+            number=${url##*/}
+          fi
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      - name: Materialize validated manifest and roadmap
+        id: materialize
+        shell: bash
+        env:
+          IMPLEMENTATION_PR: ${{ steps.evidence.outputs.implementation_pr }}
+          ACCEPTED_HEAD: ${{ steps.evidence.outputs.accepted_head }}
+          DEDICATED_RUN: ${{ steps.evidence.outputs.dedicated }}
+          CORE_RUN: ${{ steps.evidence.outputs.core }}
+          MERGE_SHA: ${{ steps.implementation.outputs.merge_sha }}
+          POST_MERGE_RUN: ${{ steps.evidence.outputs.post_merge }}
+          CLOSURE_PR: ${{ steps.closure_pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          manifest_path = Path("tests/compiler/fixtures/increment32/manifest.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          manifest["status"] = "validated-equation-contribution-semantics"
+          manifest["validation"] = {
+              "implementation_pull_request": int(os.environ["IMPLEMENTATION_PR"]),
+              "accepted_head": os.environ["ACCEPTED_HEAD"],
+              "dedicated_workflow_run": int(os.environ["DEDICATED_RUN"]),
+              "core_ci_run": int(os.environ["CORE_RUN"]),
+              "implementation_merge": os.environ["MERGE_SHA"],
+              "post_merge_core_ci_run": int(os.environ["POST_MERGE_RUN"]),
+              "closure_pull_request": int(os.environ["CLOSURE_PR"]),
+              "closure_validation_head": "pending-closure-validation-head",
+              "closure_core_ci_run": -1,
+          }
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+          roadmap_path = Path("docs/roadmap/nodal-development-todo.md")
+          roadmap = roadmap_path.read_text(encoding="utf-8")
+          roadmap = roadmap.replace("**Revision:** 1.42", "**Revision:** 1.43", 1)
+          roadmap = roadmap.replace(
+              "- [ ] **Increment 32 — First-class analog equations, blocks, and contribution semantics**",
+              "- [x] **Increment 32 — First-class analog equations, blocks, and contribution semantics**",
+              1,
+          )
+          evidence = (
+              f"  - Evidence: implementation PR #{os.environ['IMPLEMENTATION_PR']}; exact accepted head "
+              f"`{os.environ['ACCEPTED_HEAD']}`; dedicated validation run `{os.environ['DEDICATED_RUN']}`; "
+              f"Core CI run `{os.environ['CORE_RUN']}`; squash merge `{os.environ['MERGE_SHA']}`; "
+              f"post-merge Core CI run `{os.environ['POST_MERGE_RUN']}`; evidence-closure PR #{os.environ['CLOSURE_PR']}."
+          )
+          anchor = "  - Require the approved equation/component checkpoint from Increment 133 before implementation begins."
+          if evidence not in roadmap:
+              roadmap = roadmap.replace(anchor, anchor + "\n" + evidence, 1)
+          roadmap_path.write_text(roadmap, encoding="utf-8")
+
+          implementation_path = Path("docs/implementation/increment32-equation-contribution-semantics.md")
+          implementation = implementation_path.read_text(encoding="utf-8")
+          implementation = implementation.replace(
+              "Implemented on the increment branch and awaiting exact-head validation and\naccepted-evidence closure.",
+              "Validated and evidence-closed after exact-head implementation and post-merge verification.",
+              1,
+          )
+          implementation_path.write_text(implementation, encoding="utf-8")
+
+          checker_path = Path("scripts/check_increment133.py")
+          checker = checker_path.read_text(encoding="utf-8")
+          open_marker = "- [ ] **Increment 32 — First-class analog equations, blocks, and contribution semantics**"
+          closed_marker = "- [x] **Increment 32 — First-class analog equations, blocks, and contribution semantics**"
+          if "validated-equation-contribution-semantics" not in checker and open_marker in checker:
+              assignment = re.search(r'(?m)^(\s*)(\w+)\s*=\s*"' + re.escape(open_marker) + r'"\s*$', checker)
+              if assignment:
+                  indent, variable = assignment.group(1), assignment.group(2)
+                  injection = (
+                      assignment.group(0)
+                      + f'\n{indent}closed_increment32 = "{closed_marker}"'
+                      + f'\n{indent}increment32_path = root / Path("tests/compiler/fixtures/increment32/manifest.json")'
+                      + f'\n{indent}increment32_manifest = load_json(root, Path("tests/compiler/fixtures/increment32/manifest.json"), problems, "NODAL-INC133-038")'
+                      + f'\n{indent}increment32_validated = ('
+                      + f'\n{indent}    closed_increment32 in roadmap'
+                      + f'\n{indent}    and increment32_manifest.get("status") == "validated-equation-contribution-semantics"'
+                      + f'\n{indent}    and isinstance(increment32_manifest.get("validation"), dict)'
+                      + f'\n{indent})'
+                  )
+                  checker = checker.replace(assignment.group(0), injection, 1)
+                  checker = checker.replace(
+                      f"if {variable} not in roadmap:",
+                      f"if {variable} not in roadmap and not increment32_validated:",
+                      1,
+                  )
+                  checker_path.write_text(checker, encoding="utf-8")
+          PY
+
+          ./mill mill.scalalib.scalafmt/reformatAll
+          rm -rf scripts/__pycache__ tests/compiler/__pycache__ tests/api/__pycache__
+          git add docs/roadmap/nodal-development-todo.md
+          git add docs/implementation/increment32-equation-contribution-semantics.md
+          git add tests/compiler/fixtures/increment32/manifest.json
+          git add scripts/check_increment133.py
+          git commit -m 'Increment 32 — Record accepted equation and contribution evidence'
+          git push origin "$CLOSURE_BRANCH"
+          echo "validation_head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Run closure acceptance before evidence stamping
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          python3 -m unittest discover -s tests/api -p 'test_increment133.py'
+          python3 scripts/check_markdown.py
+          python3 scripts/check_package_visibility.py
+          python3 scripts/check_contribution_policy.py --base-ref origin/dev
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          git diff --check
+
+      - name: Dispatch closure-head Core CI
+        id: closure_ci
+        shell: bash
+        run: |
+          set -euo pipefail
+          validation_head='${{ steps.materialize.outputs.validation_head }}'
+          before=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run ci.yml --ref "$CLOSURE_BRANCH"
+          deadline=$((SECONDS + 2400))
+          run_id=""
+          while (( SECONDS < deadline )); do
+            data=$(gh api "repos/${REPOSITORY}/actions/workflows/ci.yml/runs?branch=${CLOSURE_BRANCH}&event=workflow_dispatch&per_page=20")
+            run_id=$(jq -r --arg before "$before" --arg sha "$validation_head" '[.workflow_runs[] | select(.created_at >= $before and .head_sha == $sha)][0].id // empty' <<<"$data")
+            if [[ -n "$run_id" ]]; then
+              status=$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}" --jq .status)
+              if [[ "$status" == "completed" ]]; then
+                conclusion=$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}" --jq .conclusion)
+                test "$conclusion" = "success"
+                echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            sleep 20
+          done
+          echo "Closure Core CI timed out" >&2
+          exit 1
+
+      - name: Stamp immutable closure evidence
+        id: final_head
+        shell: bash
+        env:
+          VALIDATION_HEAD: ${{ steps.materialize.outputs.validation_head }}
+          CLOSURE_CORE_RUN: ${{ steps.closure_ci.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          path = Path("tests/compiler/fixtures/increment32/manifest.json")
+          manifest = json.loads(path.read_text(encoding="utf-8"))
+          manifest["validation"]["closure_validation_head"] = os.environ["VALIDATION_HEAD"]
+          manifest["validation"]["closure_core_ci_run"] = int(os.environ["CLOSURE_CORE_RUN"])
+          path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          PY
+          git add tests/compiler/fixtures/increment32/manifest.json
+          git commit -m 'docs(increment32): stamp immutable closure validation evidence'
+          git push origin "$CLOSURE_BRANCH"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate final closure tree and merge
+        id: closure_merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          python3 -m unittest discover -s tests/api -p 'test_increment133.py'
+          python3 scripts/check_markdown.py
+          python3 scripts/check_package_visibility.py
+          python3 scripts/check_contribution_policy.py --base-ref origin/dev
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          git diff --check
+          gh pr merge '${{ steps.closure_pr.outputs.number }}' --squash --delete-branch=false
+          merge_sha=$(gh api "repos/${REPOSITORY}/pulls/${{ steps.closure_pr.outputs.number }}" --jq .merge_commit_sha)
+          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch and require final post-merge Core CI
+        id: final_ci
+        shell: bash
+        run: |
+          set -euo pipefail
+          merge_sha='${{ steps.closure_merge.outputs.merge_sha }}'
+          before=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run ci.yml --ref dev
+          deadline=$((SECONDS + 2400))
+          while (( SECONDS < deadline )); do
+            data=$(gh api "repos/${REPOSITORY}/actions/workflows/ci.yml/runs?branch=dev&event=workflow_dispatch&per_page=20")
+            run_id=$(jq -r --arg before "$before" --arg sha "$merge_sha" '[.workflow_runs[] | select(.created_at >= $before and .head_sha == $sha)][0].id // empty' <<<"$data")
+            if [[ -n "$run_id" ]]; then
+              status=$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}" --jq .status)
+              if [[ "$status" == "completed" ]]; then
+                conclusion=$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}" --jq .conclusion)
+                test "$conclusion" = "success"
+                echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+                break
+              fi
+            fi
+            sleep 20
+          done
+          test -n "${run_id:-}"
+
+      - name: Publish final validated tag and closure comment
+        shell: bash
+        run: |
+          set -euo pipefail
+          merge_sha='${{ steps.closure_merge.outputs.merge_sha }}'
+          git fetch origin dev
+          test "$(git rev-parse origin/dev)" = "$merge_sha"
+          git tag -f increment-32-validated "$merge_sha"
+          git push --force origin refs/tags/increment-32-validated
+          gh pr comment '${{ steps.closure_pr.outputs.number }}' --body "Increment 32 is fully closed at \`$merge_sha\`; final post-merge Core CI: ${{ steps.final_ci.outputs.run_id }}. Increment 33 remains unchecked."

@@ -30,6 +30,8 @@ jobs:
           echo '339c7f1e4ea9099505e77f137ce221aefaec5467f93e5d97465bf19d6df45ee6  /tmp/inc32-review-fixes.patch' | sha256sum --check
           git apply --check /tmp/inc32-review-fixes.patch
           git apply /tmp/inc32-review-fixes.patch
+          mkdir -p core/scala/testkit/test/src/nodal
+          git show origin/automation/increment32-review-fixes:.github/automation/AnalogEquationConstructionTests.scala > core/scala/testkit/test/src/nodal/AnalogEquationConstructionTests.scala
           git diff --check
 
       - name: Run Increment 32 acceptance

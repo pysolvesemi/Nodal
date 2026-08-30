@@ -190,7 +190,7 @@ private[nodal] object AnalogEquationRuntime:
         .groupBy(_.target)
         .toVector
         .sortBy { case (target, _) =>
-          (target.identity, target.kind.toString, target.orientation)
+          (target.identity, target.kind.toString, target.dimension, target.orientation)
         }
         .map { case (target, records) =>
           ContributionBucket(target, records.sortBy(_.identity.value))

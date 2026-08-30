@@ -13,9 +13,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Check out source snapshot
+      - name: Check out current Increment 32 branch
         uses: actions/checkout@v6
         with:
+          ref: increment/32-equation-contribution-semantics-review
           fetch-depth: 0
       - name: Package source snapshot
         run: |

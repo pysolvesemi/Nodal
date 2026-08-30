@@ -11,23 +11,42 @@ permissions:
 jobs:
   bundle:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - name: Check out current Increment 32 branch
         uses: actions/checkout@v6
         with:
           ref: increment/32-equation-contribution-semantics-review
           fetch-depth: 0
-      - name: Populate Mill launcher executable
-        run: ./mill --version
-      - name: Package Mill executable cache
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+            ~/.cache/mill/download
+          key: nodal-inc32-validation-deps-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', '.scalafix.conf', '.scalafmt.conf') }}
+          restore-keys: |
+            nodal-inc32-scala-cache-${{ runner.os }}-
+            nodal-scala-${{ runner.os }}-
+      - name: Populate complete Scala validation dependencies
         run: |
-          tar -C "$HOME" -czf /tmp/nodal-inc32-mill-cache.tgz .cache/mill/download
-      - name: Upload Mill executable cache
+          touch /tmp/inc32-cache-start
+          ./mill core.scala.testkit.test
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+      - name: Package newly fetched validation dependencies
+        run: |
+          cd "$HOME"
+          find .cache/coursier .cache/nodal/mill .cache/mill/download \
+            -type f -newer /tmp/inc32-cache-start -print0 \
+            | tar --null -T - -czf /tmp/nodal-inc32-validation-deps.tgz
+          test -s /tmp/nodal-inc32-validation-deps.tgz
+      - name: Upload validation dependency delta
         uses: actions/upload-artifact@v4
         with:
-          name: nodal-inc32-mill-cache
-          path: /tmp/nodal-inc32-mill-cache.tgz
+          name: nodal-inc32-validation-deps
+          path: /tmp/nodal-inc32-validation-deps.tgz
           if-no-files-found: error
           compression-level: 0
           retention-days: 1

@@ -1,12 +1,34 @@
 package nodal.increment32fixture
 
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+
+import scala.collection.mutable.ArrayBuffer
+import scala.util.control.NonFatal
+
 import nodal.AnalogEquationRuntime.*
 
 /** Executable semantic witness for Increment 32. */
 object Increment32RuntimeCheck:
+  private val Passed = "NODAL_INC32_SCALA_WITNESS_PASS"
+  private val Failed = "NODAL_INC32_SCALA_WITNESS_FAIL"
+  private val failures = ArrayBuffer.empty[String]
+
   def main(arguments: Array[String]): Unit =
-    val _ = arguments
-    runChecks()
+    try runChecks()
+    catch
+      case NonFatal(error) =>
+        failures += s"unexpected ${error.getClass.getName}: ${Option(error.getMessage).getOrElse("")}" 
+
+    val report =
+      if failures.isEmpty then Passed + "\n"
+      else (Failed +: failures.toVector).mkString("\n") + "\n"
+
+    arguments.headOption.foreach { output =>
+      val _ = Files.writeString(Path.of(output), report, StandardCharsets.UTF_8)
+    }
+    println(report)
 
   private def runChecks(): Unit =
     val first = build(Vector("source-a", "source-b"))
@@ -178,4 +200,4 @@ object Increment32RuntimeCheck:
     )
 
   private def check(condition: Boolean, message: => String): Unit =
-    assert(condition, message)
+    if !condition then failures += message

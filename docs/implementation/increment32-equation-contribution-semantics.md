@@ -45,6 +45,8 @@ The branch contains independent executable Scala and C++ witnesses. They check:
 The repository checker correlates the implementation files, design gate,
 manifest, Increment 31 closure, Increment 133 checkpoint, roadmap state,
 read-only workflow, compile/run witnesses, and temporary-artifact hygiene.
+The exact implementation head is accepted only after the dedicated workflow,
+Core CI, and every inherited pull-request workflow pass on that same commit.
 
 ## Deliberately deferred
 

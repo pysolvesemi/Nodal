@@ -1,0 +1,201 @@
+name: Increment 32 Merge After Review Audit
+
+on:
+  push:
+    branches:
+      - automation/inc32-public-wiring-review-fix
+
+permissions:
+  contents: write
+  actions: read
+  pull-requests: write
+
+jobs:
+  merge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Wait for matching review audit
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          AUTOMATION_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 150); do
+            row=$(gh api "repos/${REPOSITORY}/actions/workflows/_inc32_review_fix_audit.yml/runs?branch=automation%2Finc32-public-wiring-review-fix&per_page=20" \
+              --jq '.workflow_runs[] | select(.head_sha == env.AUTOMATION_SHA) | [.id,.status,(.conclusion // "")] | @tsv' \
+              | head -n1 || true)
+            if [ -n "$row" ]; then
+              IFS=$'\t' read -r run_id status conclusion <<< "$row"
+              if [ "$status" = completed ]; then
+                test "$conclusion" = success
+                echo "audit_run=$run_id" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            sleep 20
+          done
+          echo 'Timed out waiting for the matching review audit' >&2
+          exit 1
+
+      - name: Reconfirm PR head and exact-head matrix
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          BASE_SHA: 52799e2e18a3b55cccb0d635d0a83c091c330ecd
+        run: |
+          set -euo pipefail
+          state=$(gh api "repos/${REPOSITORY}/pulls/97")
+          test "$(jq -r .state <<< "$state")" = open
+          test "$(jq -r .draft <<< "$state")" = false
+          test "$(jq -r .base.ref <<< "$state")" = dev
+          head=$(jq -r .head.sha <<< "$state")
+          parent=$(gh api "repos/${REPOSITORY}/commits/${head}" --jq '.parents[0].sha')
+          test "$parent" = "$BASE_SHA"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+
+          cat > /tmp/expected.txt <<'EOF'
+          Core CI
+          Increment 13 Core Semantic Candidates
+          Increment 14 Pipeline and Interface Candidates
+          Increment 15 Unified Public API Freeze
+          Increment 16 Elaboration Construction Kernel
+          Increment 17 Source Origin Naming
+          Increment 18 MLIR Dialect Skeleton
+          Increment 19 Core MLIR Model
+          Increment 20 Scala-to-MLIR Bridge
+          Increment 21 Native Semantic Pipeline
+          Increment 22 Cross-Layer Diagnostics
+          Increment 23 Backend Framework
+          Increment 24 Minimal Analog IR
+          Increment 25 RC Filter Vertical Slice
+          Increment 26 Reproducibility Contract
+          Increment 27 Natures and Disciplines
+          Increment 28 Electrical Conservative Connectivity
+          Increment 29 Parameters Constants Ranges and Units
+          Increment 30 Analog Numeric Types and Expression Typing
+          Increment 31 Potential and Flow Access
+          Increment 32 Equation and Contribution Semantics
+          Increment 133 Analog Semantic API
+          EOF
+          gh api --paginate "repos/${REPOSITORY}/actions/runs?event=pull_request&head_sha=${head}&per_page=100" \
+            --jq '.workflow_runs[] | [.name,.status,(.conclusion // ""),(.id|tostring),.created_at] | @tsv' \
+            > /tmp/runs.tsv
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          expected = [x.strip() for x in Path('/tmp/expected.txt').read_text().splitlines() if x.strip()]
+          latest = {}
+          for line in Path('/tmp/runs.tsv').read_text().splitlines():
+              name, status, conclusion, run_id, created = line.split('\t')
+              if name not in latest or created > latest[name]['created']:
+                  latest[name] = {'status': status, 'conclusion': conclusion, 'id': int(run_id), 'created': created}
+          bad = {name: latest.get(name) for name in expected if name not in latest or latest[name]['status'] != 'completed' or latest[name]['conclusion'] != 'success'}
+          if bad:
+              raise SystemExit('exact-head matrix is not green: ' + json.dumps(bad, sort_keys=True))
+          evidence = {name: latest[name]['id'] for name in expected}
+          Path('/tmp/implementation-matrix.json').write_text(json.dumps(evidence, indent=2, sort_keys=True) + '\n')
+          PY
+          echo "core_run=$(jq -r '."Core CI"' /tmp/implementation-matrix.json)" >> "$GITHUB_OUTPUT"
+          echo "dedicated_run=$(jq -r '."Increment 32 Equation and Contribution Semantics"' /tmp/implementation-matrix.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Reply to and resolve accepted review findings
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.pr.outputs.head }}
+        run: |
+          set -euo pipefail
+          gh api --method POST "repos/${REPOSITORY}/pulls/97/comments/3890113783/replies" \
+            -f body="Fixed on ${HEAD_SHA}: the frozen public equation, initial-equation, contribution, and <+> construction paths now feed the active construction-session recorder; production-path tests verify captured records and fail-closed region behavior." >/dev/null || true
+          gh api --method POST "repos/${REPOSITORY}/pulls/97/comments/3890113789/replies" \
+            -f body="Fixed on ${HEAD_SHA}: initial equations now accept initialization applicability only; runtime DC/transient analyses are rejected, with positive and negative coverage." >/dev/null || true
+          gh api --method POST "repos/${REPOSITORY}/pulls/97/comments/3890113795/replies" \
+            -f body="Fixed on ${HEAD_SHA}: native equation and contribution recording rejects empty identities before duplicate lookup, with parity tests against the Scala contract." >/dev/null || true
+          for thread in \
+            PRRT_kwDOT-NgF86di96L \
+            PRRT_kwDOT-NgF86di96P \
+            PRRT_kwDOT-NgF86di96U
+          do
+            gh api graphql \
+              -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' \
+              -f id="$thread" \
+              --jq '.data.resolveReviewThread.thread.isResolved' \
+              | grep -qx true
+          done
+          unresolved=$(gh api graphql \
+            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}}}}}' \
+            -f owner=pysolvesemi -f name=Nodal -F number=97 \
+            --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length')
+          test "$unresolved" = 0
+
+      - name: Squash-merge implementation
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.pr.outputs.head }}
+        run: |
+          set -euo pipefail
+          response=$(gh api --method PUT "repos/${REPOSITORY}/pulls/97/merge" \
+            -f sha="$HEAD_SHA" \
+            -f merge_method=squash \
+            -f commit_title='Increment 32 — First-class analog equations and additive contributions (#97)' \
+            -f commit_message='Implement first-class unordered analog equations, initialization-only equations, and additive potential/flow contributions through the public construction path. Preserve authored sides and semantic metadata, enforce initialization applicability and stable identities, and keep procedural assignment and downstream DAE/solver/backend work deferred.')
+          test "$(jq -r .merged <<< "$response")" = true
+          merge_sha=$(jq -r .sha <<< "$response")
+          test -n "$merge_sha"
+          test "$(gh api "repos/${REPOSITORY}/git/ref/heads/dev" --jq .object.sha)" = "$merge_sha"
+          echo "sha=$merge_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for implementation post-merge Core CI
+        id: post
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          MERGE_SHA: ${{ steps.merge.outputs.sha }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 120); do
+            row=$(gh api "repos/${REPOSITORY}/actions/runs?event=push&head_sha=${MERGE_SHA}&per_page=100" \
+              --jq '.workflow_runs[] | select(.name == "Core CI") | [.id,.status,(.conclusion // ""),.created_at] | @tsv' \
+              | sort -t$'\t' -k4,4r | head -n1 || true)
+            if [ -n "$row" ]; then
+              IFS=$'\t' read -r run_id status conclusion created <<< "$row"
+              if [ "$status" = completed ]; then
+                test "$conclusion" = success
+                echo "core_run=$run_id" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            sleep 20
+          done
+          echo 'Timed out waiting for implementation post-merge Core CI' >&2
+          exit 1
+
+      - name: Publish immutable implementation evidence artifact
+        run: |
+          cat > /tmp/increment32-implementation-evidence.json <<EOF
+          {
+            "implementation_pull_request": 97,
+            "accepted_head": "${{ steps.pr.outputs.head }}",
+            "dedicated_workflow_run": ${{ steps.pr.outputs.dedicated_run }},
+            "core_ci_run": ${{ steps.pr.outputs.core_run }},
+            "implementation_merge": "${{ steps.merge.outputs.sha }}",
+            "post_merge_core_ci_run": ${{ steps.post.outputs.core_run }},
+            "review_audit_run": ${{ steps.state.outputs.audit_run }}
+          }
+          EOF
+
+      - name: Upload implementation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: increment-32-implementation-evidence
+          path: |
+            /tmp/increment32-implementation-evidence.json
+            /tmp/implementation-matrix.json
+          if-no-files-found: error
+          retention-days: 14

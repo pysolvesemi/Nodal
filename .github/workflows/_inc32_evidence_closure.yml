@@ -1,0 +1,401 @@
+name: Increment 32 Evidence Closure
+
+on:
+  push:
+    branches:
+      - automation/inc32-public-wiring-review-fix
+
+permissions:
+  contents: write
+  actions: read
+  pull-requests: write
+
+jobs:
+  close:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Wait for implementation merge and post-merge Core CI
+        id: implementation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 240); do
+            pr=$(gh api "repos/${REPOSITORY}/pulls/97")
+            if [ "$(jq -r .merged <<< "$pr")" = true ]; then
+              head=$(jq -r .head.sha <<< "$pr")
+              merge_sha=$(jq -r .merge_commit_sha <<< "$pr")
+              runs=$(gh api --paginate "repos/${REPOSITORY}/actions/runs?event=pull_request&head_sha=${head}&per_page=100")
+              core=$(jq -r '[.workflow_runs[] | select(.name == "Core CI" and .status == "completed" and .conclusion == "success")] | sort_by(.created_at) | last | .id // empty' <<< "$runs")
+              dedicated=$(jq -r '[.workflow_runs[] | select(.name == "Increment 32 Equation and Contribution Semantics" and .status == "completed" and .conclusion == "success")] | sort_by(.created_at) | last | .id // empty' <<< "$runs")
+              push_runs=$(gh api --paginate "repos/${REPOSITORY}/actions/runs?event=push&head_sha=${merge_sha}&per_page=100")
+              post_core=$(jq -r '[.workflow_runs[] | select(.name == "Core CI")] | sort_by(.created_at) | last | select(.status == "completed" and .conclusion == "success") | .id // empty' <<< "$push_runs")
+              if [ -n "$core" ] && [ -n "$dedicated" ] && [ -n "$post_core" ]; then
+                echo "head=$head" >> "$GITHUB_OUTPUT"
+                echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
+                echo "core_run=$core" >> "$GITHUB_OUTPUT"
+                echo "dedicated_run=$dedicated" >> "$GITHUB_OUTPUT"
+                echo "post_core_run=$post_core" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            sleep 20
+          done
+          echo 'Timed out waiting for implementation merge evidence' >&2
+          exit 1
+
+      - name: Check out merged implementation
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Create closure-validation branch and staging commit
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          MERGE_SHA: ${{ steps.implementation.outputs.merge_sha }}
+          CLOSURE_BRANCH: increment/32-evidence-closure
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$MERGE_SHA"
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          gh api --method DELETE "repos/${REPOSITORY}/git/refs/heads/increment/32-evidence-closure" >/dev/null 2>&1 || true
+          git switch -c "$CLOSURE_BRANCH"
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('docs/implementation/increment32-equation-contribution-semantics.md')
+          text = path.read_text()
+          marker = '## Evidence closure staging\n'
+          section = (
+              '\n## Evidence closure staging\n\n'
+              'Implementation PR #97 is merged. This commit establishes the immutable '
+              'closure-validation head while the roadmap and manifest deliberately remain '
+              'in the pre-evidence state. Closure fields are stamped only after this exact '
+              'head passes the complete pull-request workflow matrix.\n'
+          )
+          if marker not in text:
+              text = text.rstrip() + '\n' + section
+          path.write_text(text)
+          PY
+          git add docs/implementation/increment32-equation-contribution-semantics.md
+          git commit -m 'Increment 32 — stage immutable evidence-closure validation head'
+          staged=$(git rev-parse HEAD)
+          git push origin "$CLOSURE_BRANCH"
+          echo "head=$staged" >> "$GITHUB_OUTPUT"
+
+      - name: Open evidence-closure pull request
+        id: closure_pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CLOSURE_BRANCH: increment/32-evidence-closure
+        run: |
+          set -euo pipefail
+          number=$(gh api --method POST "repos/${REPOSITORY}/pulls" \
+            -f title='Increment 32 — Record accepted equation and contribution evidence' \
+            -f head="$CLOSURE_BRANCH" \
+            -f base=dev \
+            -F draft=false \
+            -f body='## Summary
+
+Records accepted Increment 32 evidence only after implementation PR #97 and its post-merge Core CI are green. The final closure commit advances the roadmap to revision 1.43, validates the Increment 32 manifest, leaves Increment 33 unchecked, and records exact implementation and closure evidence.
+
+## Safety
+
+The first commit is an immutable validation head with the roadmap and manifest still open. Evidence is stamped only after that exact head passes the full matrix. No solver, DAE, procedural-assignment, or backend behavior is enabled.' \
+            --jq .number)
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for staged closure-validation matrix
+        id: staged_matrix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.stage.outputs.head }}
+        run: |
+          set -euo pipefail
+          cat > /tmp/expected.txt <<'EOF'
+          Core CI
+          Increment 13 Core Semantic Candidates
+          Increment 14 Pipeline and Interface Candidates
+          Increment 15 Unified Public API Freeze
+          Increment 16 Elaboration Construction Kernel
+          Increment 17 Source Origin Naming
+          Increment 18 MLIR Dialect Skeleton
+          Increment 19 Core MLIR Model
+          Increment 20 Scala-to-MLIR Bridge
+          Increment 21 Native Semantic Pipeline
+          Increment 22 Cross-Layer Diagnostics
+          Increment 23 Backend Framework
+          Increment 24 Minimal Analog IR
+          Increment 25 RC Filter Vertical Slice
+          Increment 26 Reproducibility Contract
+          Increment 27 Natures and Disciplines
+          Increment 28 Electrical Conservative Connectivity
+          Increment 29 Parameters Constants Ranges and Units
+          Increment 30 Analog Numeric Types and Expression Typing
+          Increment 31 Potential and Flow Access
+          Increment 32 Equation and Contribution Semantics
+          Increment 133 Analog Semantic API
+          EOF
+          for attempt in $(seq 1 180); do
+            gh api --paginate "repos/${REPOSITORY}/actions/runs?event=pull_request&head_sha=${HEAD_SHA}&per_page=100" \
+              --jq '.workflow_runs[] | [.name,.status,(.conclusion // ""),(.id|tostring),.created_at] | @tsv' > /tmp/runs.tsv
+            set +e
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+          expected=[x.strip() for x in Path('/tmp/expected.txt').read_text().splitlines() if x.strip()]
+          latest={}
+          for row in Path('/tmp/runs.tsv').read_text().splitlines():
+              name,status,conclusion,run_id,created=row.split('\t')
+              if name not in latest or created>latest[name][3]: latest[name]=(status,conclusion,int(run_id),created)
+          failed={n:latest.get(n) for n in expected if n in latest and latest[n][0]=='completed' and latest[n][1]!='success'}
+          if failed: raise SystemExit(2)
+          if any(n not in latest or latest[n][0]!='completed' for n in expected): raise SystemExit(1)
+          Path('/tmp/staged-matrix.json').write_text(json.dumps({n:latest[n][2] for n in expected},indent=2,sort_keys=True)+'\n')
+          PY
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              echo "core_run=$(jq -r '."Core CI"' /tmp/staged-matrix.json)" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            test "$rc" -ne 2
+            sleep 20
+          done
+          echo 'Timed out waiting for staged closure matrix' >&2
+          exit 1
+
+      - name: Stamp validated manifest and roadmap
+        id: stamp
+        env:
+          IMPLEMENTATION_HEAD: ${{ steps.implementation.outputs.head }}
+          IMPLEMENTATION_CORE: ${{ steps.implementation.outputs.core_run }}
+          IMPLEMENTATION_DEDICATED: ${{ steps.implementation.outputs.dedicated_run }}
+          IMPLEMENTATION_MERGE: ${{ steps.implementation.outputs.merge_sha }}
+          IMPLEMENTATION_POST_CORE: ${{ steps.implementation.outputs.post_core_run }}
+          CLOSURE_PR: ${{ steps.closure_pr.outputs.number }}
+          CLOSURE_VALIDATION_HEAD: ${{ steps.stage.outputs.head }}
+          CLOSURE_CORE: ${{ steps.staged_matrix.outputs.core_run }}
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin increment/32-evidence-closure
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+
+          manifest_path=Path('tests/compiler/fixtures/increment32/manifest.json')
+          manifest=json.loads(manifest_path.read_text())
+          manifest['status']='validated-equation-contribution-semantics'
+          manifest['validation']={
+              'implementation_pull_request': 97,
+              'accepted_head': os.environ['IMPLEMENTATION_HEAD'],
+              'dedicated_workflow_run': int(os.environ['IMPLEMENTATION_DEDICATED']),
+              'core_ci_run': int(os.environ['IMPLEMENTATION_CORE']),
+              'implementation_merge': os.environ['IMPLEMENTATION_MERGE'],
+              'post_merge_core_ci_run': int(os.environ['IMPLEMENTATION_POST_CORE']),
+              'closure_pull_request': int(os.environ['CLOSURE_PR']),
+              'closure_validation_head': os.environ['CLOSURE_VALIDATION_HEAD'],
+              'closure_core_ci_run': int(os.environ['CLOSURE_CORE']),
+          }
+          manifest_path.write_text(json.dumps(manifest,indent=2,sort_keys=False)+'\n')
+
+          roadmap_path=Path('docs/roadmap/nodal-development-todo.md')
+          roadmap=roadmap_path.read_text()
+          roadmap, count = re.subn(r'(?m)^\*\*Revision:\*\* 1\.42$', '**Revision:** 1.43', roadmap, count=1)
+          if count != 1:
+              raise SystemExit('expected roadmap revision 1.42 exactly once')
+          open_line='- [ ] **Increment 32 — First-class analog equations, blocks, and contribution semantics**'
+          closed_line='- [x] **Increment 32 — First-class analog equations, blocks, and contribution semantics**'
+          if roadmap.count(open_line) != 1:
+              raise SystemExit('expected one open Increment 32 roadmap item')
+          roadmap=roadmap.replace(open_line,closed_line,1)
+          if '- [ ] **Increment 33 — Analog variables and procedural assignment**' not in roadmap:
+              raise SystemExit('Increment 33 must remain open')
+          roadmap_path.write_text(roadmap)
+
+          impl_path=Path('docs/implementation/increment32-equation-contribution-semantics.md')
+          impl=impl_path.read_text()
+          impl=impl.replace(
+              'Implemented on the increment branch and awaiting exact-head validation and\naccepted-evidence closure.',
+              'Implemented on the increment branch and validated through exact-head CI,\nimplementation merge, and accepted-evidence closure.'
+          )
+          impl += (
+              '\n## Accepted evidence\n\n'
+              f'- Implementation PR: #97\n'
+              f'- Accepted implementation head: `{os.environ["IMPLEMENTATION_HEAD"]}`\n'
+              f'- Dedicated workflow run: `{os.environ["IMPLEMENTATION_DEDICATED"]}`\n'
+              f'- Core CI run: `{os.environ["IMPLEMENTATION_CORE"]}`\n'
+              f'- Squash implementation merge: `{os.environ["IMPLEMENTATION_MERGE"]}`\n'
+              f'- Post-merge Core CI run: `{os.environ["IMPLEMENTATION_POST_CORE"]}`\n'
+              f'- Closure PR: `#{os.environ["CLOSURE_PR"]}`\n'
+              f'- Closure-validation head: `{os.environ["CLOSURE_VALIDATION_HEAD"]}`\n'
+              f'- Closure Core CI run: `{os.environ["CLOSURE_CORE"]}`\n'
+          )
+          impl_path.write_text(impl)
+          PY
+
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment32.py'
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          git diff --check
+
+          git add docs/roadmap/nodal-development-todo.md \
+            docs/implementation/increment32-equation-contribution-semantics.md \
+            tests/compiler/fixtures/increment32/manifest.json
+          git commit -m 'Increment 32 — record accepted evidence and close roadmap'
+          final_head=$(git rev-parse HEAD)
+          git push origin increment/32-evidence-closure
+          echo "head=$final_head" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for final closure matrix
+        id: final_matrix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.stamp.outputs.head }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 180); do
+            gh api --paginate "repos/${REPOSITORY}/actions/runs?event=pull_request&head_sha=${HEAD_SHA}&per_page=100" \
+              --jq '.workflow_runs[] | [.name,.status,(.conclusion // ""),(.id|tostring),.created_at] | @tsv' > /tmp/final-runs.tsv
+            set +e
+            python3 - <<'PY'
+          from pathlib import Path
+          expected=[x.strip() for x in Path('/tmp/expected.txt').read_text().splitlines() if x.strip()]
+          latest={}
+          for row in Path('/tmp/final-runs.tsv').read_text().splitlines():
+              name,status,conclusion,run_id,created=row.split('\t')
+              if name not in latest or created>latest[name][3]: latest[name]=(status,conclusion,int(run_id),created)
+          failed={n:latest.get(n) for n in expected if n in latest and latest[n][0]=='completed' and latest[n][1]!='success'}
+          if failed: raise SystemExit(2)
+          if any(n not in latest or latest[n][0]!='completed' for n in expected): raise SystemExit(1)
+          Path('/tmp/final-matrix.json').write_text(__import__('json').dumps({n:latest[n][2] for n in expected},indent=2,sort_keys=True)+'\n')
+          PY
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              echo "core_run=$(jq -r '."Core CI"' /tmp/final-matrix.json)" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            test "$rc" -ne 2
+            sleep 20
+          done
+          echo 'Timed out waiting for final closure matrix' >&2
+          exit 1
+
+      - name: Squash-merge evidence closure
+        id: closure_merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.closure_pr.outputs.number }}
+          HEAD_SHA: ${{ steps.stamp.outputs.head }}
+        run: |
+          set -euo pipefail
+          response=$(gh api --method PUT "repos/${REPOSITORY}/pulls/${PR_NUMBER}/merge" \
+            -f sha="$HEAD_SHA" \
+            -f merge_method=squash \
+            -f commit_title="Increment 32 — Record accepted equation and contribution evidence (#${PR_NUMBER})" \
+            -f commit_message='Validate Increment 32 evidence, advance the roadmap to revision 1.43, and leave Increment 33 open.')
+          test "$(jq -r .merged <<< "$response")" = true
+          sha=$(jq -r .sha <<< "$response")
+          test "$(gh api "repos/${REPOSITORY}/git/ref/heads/dev" --jq .object.sha)" = "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for final post-merge Core CI
+        id: final_post
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          MERGE_SHA: ${{ steps.closure_merge.outputs.sha }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 120); do
+            row=$(gh api "repos/${REPOSITORY}/actions/runs?event=push&head_sha=${MERGE_SHA}&per_page=100" \
+              --jq '.workflow_runs[] | select(.name == "Core CI") | [.id,.status,(.conclusion // ""),.created_at] | @tsv' \
+              | sort -t$'\t' -k4,4r | head -n1 || true)
+            if [ -n "$row" ]; then
+              IFS=$'\t' read -r run_id status conclusion created <<< "$row"
+              if [ "$status" = completed ]; then
+                test "$conclusion" = success
+                echo "run=$run_id" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            sleep 20
+          done
+          exit 1
+
+      - name: Independent final repository audit and immutable tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINAL_SHA: ${{ steps.closure_merge.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin dev
+          git switch --detach "$FINAL_SHA"
+          test "$(git rev-parse origin/dev)" = "$FINAL_SHA"
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment32.py'
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          git diff --check
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          manifest=json.loads(Path('tests/compiler/fixtures/increment32/manifest.json').read_text())
+          assert manifest['status']=='validated-equation-contribution-semantics'
+          roadmap=Path('docs/roadmap/nodal-development-todo.md').read_text()
+          assert '**Revision:** 1.43' in roadmap
+          assert '- [x] **Increment 32 — First-class analog equations, blocks, and contribution semantics**' in roadmap
+          assert '- [ ] **Increment 33 — Analog variables and procedural assignment**' in roadmap
+          PY
+          git tag -f increment-32-validated "$FINAL_SHA"
+          git tag -f increment-32-final-audit-green "$FINAL_SHA"
+          git push --force origin refs/tags/increment-32-validated refs/tags/increment-32-final-audit-green
+
+      - name: Publish final evidence
+        run: |
+          cat > /tmp/increment32-final-evidence.json <<EOF
+          {
+            "implementation_pull_request": 97,
+            "accepted_head": "${{ steps.implementation.outputs.head }}",
+            "dedicated_workflow_run": ${{ steps.implementation.outputs.dedicated_run }},
+            "implementation_core_ci_run": ${{ steps.implementation.outputs.core_run }},
+            "implementation_merge": "${{ steps.implementation.outputs.merge_sha }}",
+            "implementation_post_merge_core_ci_run": ${{ steps.implementation.outputs.post_core_run }},
+            "closure_pull_request": ${{ steps.closure_pr.outputs.number }},
+            "closure_validation_head": "${{ steps.stage.outputs.head }}",
+            "closure_validation_core_ci_run": ${{ steps.staged_matrix.outputs.core_run }},
+            "closure_final_head": "${{ steps.stamp.outputs.head }}",
+            "closure_final_core_ci_run": ${{ steps.final_matrix.outputs.core_run }},
+            "closure_merge": "${{ steps.closure_merge.outputs.sha }}",
+            "final_post_merge_core_ci_run": ${{ steps.final_post.outputs.run }},
+            "roadmap_revision": "1.43",
+            "manifest_status": "validated-equation-contribution-semantics",
+            "increment_33_started": false
+          }
+          EOF
+
+      - name: Upload final evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: increment-32-final-evidence
+          path: |
+            /tmp/increment32-final-evidence.json
+            /tmp/staged-matrix.json
+            /tmp/final-matrix.json
+          if-no-files-found: error
+          retention-days: 30

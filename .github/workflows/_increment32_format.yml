@@ -1,0 +1,53 @@
+name: Increment 32 Temporary Format
+
+on:
+  push:
+    branches:
+      - increment/32-equation-contribution-semantics-authoritative
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Reformat permanent Increment 32 sources
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('core/native/include/nodal/AnalogEquationRuntime.h')
+          text = path.read_text(encoding='utf-8')
+          if '#include <tuple>' not in text:
+              text = text.replace('#include <string>\n', '#include <string>\n#include <tuple>\n', 1)
+          path.write_text(text, encoding='utf-8')
+          witness = Path('tests/compiler/fixtures/increment32/analog_equation_runtime_test.cpp')
+          source = witness.read_text(encoding='utf-8')
+          source = source.replace('auto region = recorder.region(', '[[maybe_unused]] auto region = recorder.region(')
+          witness.write_text(source, encoding='utf-8')
+          scala = Path('examples/continuousTimeApi/src/nodal/increment32fixture/Increment32RuntimeCheck.scala')
+          source = scala.read_text(encoding='utf-8')
+          source = source.replace('def main(arguments: Array[String]): Unit =\n', 'def main(arguments: Array[String]): Unit =\n    val _ = arguments\n', 1)
+          scala.write_text(source, encoding='utf-8')
+          PY
+          if command -v clang-format >/dev/null 2>&1; then
+            clang-format -i core/native/include/nodal/AnalogEquationRuntime.h
+            clang-format -i tests/compiler/fixtures/increment32/analog_equation_runtime_test.cpp
+          fi
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add core/scala/api/src/nodal/AnalogEquationRuntime.scala
+          git add examples/continuousTimeApi/src/nodal/increment32fixture/Increment32RuntimeCheck.scala
+          git add core/native/include/nodal/AnalogEquationRuntime.h
+          git add tests/compiler/fixtures/increment32/analog_equation_runtime_test.cpp
+          if ! git diff --cached --quiet; then
+            git commit -m 'style(increment32): format semantic implementation'
+            git push origin HEAD:increment/32-equation-contribution-semantics-authoritative
+          fi

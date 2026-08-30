@@ -129,8 +129,15 @@ public:
       }
       fail("NODAL-ANALOG-032-003", "equation requires an equation region");
     }
+    if (identity.empty()) {
+      fail("NODAL-ANALOG-032-015", "equation identity must be non-empty");
+    }
     if (equations_.contains(identity)) {
       fail("NODAL-ANALOG-032-004", "duplicate equation identity: " + identity);
+    }
+    if (initialOnly && metadata.analyses != std::set<std::string>{"initialization"}) {
+      fail("NODAL-ANALOG-133-009",
+           "initial equations are applicable only to initialization analysis");
     }
     if (left.valueKind != ValueKind::Real ||
         right.valueKind != ValueKind::Real) {
@@ -159,6 +166,10 @@ public:
       }
       fail("NODAL-ANALOG-032-013",
            "contribution requires a contribution region");
+    }
+    if (identity.empty()) {
+      fail("NODAL-ANALOG-032-016",
+           "contribution identity must be non-empty");
     }
     if (contributions_.contains(identity)) {
       fail("NODAL-ANALOG-032-009",

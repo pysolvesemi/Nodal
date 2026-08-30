@@ -69,6 +69,10 @@ object Increment32RuntimeCheck:
       s"initial equation classification was lost: $initial"
     )
     check(
+      initial.exists(_.metadata.analyses == Set("initialization")),
+      s"initial equation analysis applicability was not restricted: $initial"
+    )
+    check(
       first.contributions.size == 1,
       s"expected one contribution bucket: ${first.contributions}"
     )
@@ -130,6 +134,27 @@ object Increment32RuntimeCheck:
           s"procedural contribution fixture did not return the expected nested diagnostic: $other"
         )
 
+    val invalidInitial = new Recorder
+    val invalidInitialResult = invalidInitial.region(RegionKind.InitialEquation) {
+      invalidInitial.recordEquation(
+        EquationIdentity("invalid-initial-analysis"),
+        real("V(p,n)", "V"),
+        real("0.0", "V"),
+        metadata(40)
+      )
+    }
+    invalidInitialResult match
+      case Right(Left(error)) =>
+        check(
+          error.code == "NODAL-ANALOG-133-009",
+          s"runtime analysis on an initial equation must fail with NODAL-ANALOG-133-009, got $error"
+        )
+      case other =>
+        check(
+          condition = false,
+          s"initial-equation analysis mismatch was not rejected: $other"
+        )
+
   private def build(order: Vector[String]): Snapshot =
     val recorder = new Recorder
     check(
@@ -156,7 +181,7 @@ object Increment32RuntimeCheck:
               EquationIdentity("initial-voltage"),
               real("V(p,n)", "V"),
               real("0.0", "V"),
-              metadata(11)
+              initialMetadata(11)
             )
             .isRight,
           "initial-voltage equation must record successfully"
@@ -199,6 +224,9 @@ object Increment32RuntimeCheck:
       continuity = "continuous",
       source = SourceSpan("Increment32RuntimeCheck.scala", line, 1)
     )
+
+  private def initialMetadata(line: Int): Metadata =
+    metadata(line).copy(analyses = Set("initialization"))
 
   private def check(condition: Boolean, message: => String): Unit =
     if !condition then failures += message

@@ -532,6 +532,7 @@ private[nodal] object ReproducibilityContract:
               "source" -> source(Some(entry.source))
             )
       ),
+      "analog_semantics" -> analogSemantics(snapshot),
       "analog_regions" -> array(
         snapshot.analogRegions.map: region =>
           obj(
@@ -560,6 +561,49 @@ private[nodal] object ReproducibilityContract:
       ),
       "waivers" -> waiverInventory(snapshot)
     )
+
+  private def analogSemantics(snapshot: ConstructionSnapshot): JsonValue =
+    val equations = snapshot.analogSemantics.equations.map: equation =>
+      obj(
+        "kind" -> string(if equation.initialOnly then "initial_equation" else "equation"),
+        "identity" -> string(equation.identity.value),
+        "authored_left" -> string(equation.residual.authoredLeft.rendered),
+        "authored_right" -> string(equation.residual.authoredRight.rendered),
+        "dimension" -> string(equation.residual.authoredLeft.dimension),
+        "analyses" -> array(equation.metadata.analyses.toVector.sorted.map(string)),
+        "continuity" -> string(equation.metadata.continuity),
+        "guard" -> optionalString(equation.metadata.guard.map(_.rendered)),
+        "owner" -> string(equation.metadata.owner),
+        "source" -> obj(
+          "path" -> string(equation.metadata.source.file),
+          "line" -> number(equation.metadata.source.line),
+          "column" -> number(equation.metadata.source.column)
+        ),
+        "residual_convention" -> string(equation.residual.canonicalConvention),
+        "causally_oriented" -> bool(equation.residual.causallyOriented),
+        "divided" -> bool(equation.residual.divided)
+      )
+    val contributions = snapshot.analogSemantics.contributions.flatMap: bucket =>
+      bucket.terms.map: contribution =>
+        obj(
+          "kind" -> string("contribution"),
+          "identity" -> string(contribution.identity.value),
+          "target_identity" -> string(bucket.target.identity),
+          "target_kind" -> string(bucket.target.kind.toString.toLowerCase),
+          "target_dimension" -> string(bucket.target.dimension),
+          "target_orientation" -> string(bucket.target.orientation),
+          "value" -> string(contribution.value.rendered),
+          "analyses" -> array(contribution.metadata.analyses.toVector.sorted.map(string)),
+          "continuity" -> string(contribution.metadata.continuity),
+          "guard" -> optionalString(contribution.metadata.guard.map(_.rendered)),
+          "owner" -> string(contribution.metadata.owner),
+          "source" -> obj(
+            "path" -> string(contribution.metadata.source.file),
+            "line" -> number(contribution.metadata.source.line),
+            "column" -> number(contribution.metadata.source.column)
+          )
+        )
+    array(equations ++ contributions)
 
   private def attributes(values: Vector[(String, String)]): JsonValue =
     JObject(values.sortBy(_._1).map((key, value) => key -> string(value)))

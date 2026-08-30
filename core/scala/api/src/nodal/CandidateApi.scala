@@ -663,7 +663,30 @@ private[nodal] object CandidateRuntime:
     ConstructionKernel.analogBlock(body)
 
   def analogContribution(target: Expr[Real], value: Expr[Real]): Unit =
-    ConstructionKernel.operation("analog-contribute", target, value)
+    ConstructionKernel.shortAnalogContribution(target, value)
+
+  def analogSemanticBlock(
+      kind: AnalogEquationRuntime.RegionKind,
+      body: => Unit
+  ): Unit = ConstructionKernel.analogSemanticBlock(kind)(body)
+
+  def analogEquation(
+      left: Expr[Real],
+      right: Expr[Real],
+      options: EquationOptions
+  ): Unit = ConstructionKernel.analogEquation(left, right, options)
+
+  def initialAnalogEquation(
+      left: Expr[Real],
+      right: Expr[Real],
+      options: InitialEquationOptions
+  ): Unit = ConstructionKernel.initialAnalogEquation(left, right, options)
+
+  def analogContribution(
+      target: Expr[Real],
+      value: Expr[Real],
+      options: ContributionOptions
+  ): Unit = ConstructionKernel.analogContribution(target, value, options)
 
   def statement(values: Any*): Unit = ConstructionKernel.operation("statement", values*)
 

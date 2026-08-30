@@ -80,6 +80,62 @@ class Increment32ContractTests(unittest.TestCase):
             codes = [problem.code for problem in MODULE.validate_files(clone)]
             self.assertIn("NODAL-INC32-032", codes)
 
+    def test_public_api_wiring_mutation_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            clone = Path(temporary) / "repo"
+            shutil.copytree(ROOT, clone, ignore=shutil.ignore_patterns("out", ".git"))
+            api = clone / MODULE.CONTINUOUS_API
+            text = api.read_text(encoding="utf-8").replace(
+                "CandidateRuntime.analogEquation(left, right, options)",
+                'CandidateRuntime.statement("mutated-equation", left, right, options)',
+                1,
+            )
+            api.write_text(text, encoding="utf-8")
+            codes = [problem.code for problem in MODULE.validate_files(clone)]
+            self.assertIn("NODAL-INC32-044", codes)
+
+    def test_initial_analysis_guard_mutation_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            clone = Path(temporary) / "repo"
+            shutil.copytree(ROOT, clone, ignore=shutil.ignore_patterns("out", ".git"))
+            runtime = clone / MODULE.SCALA_RUNTIME
+            text = runtime.read_text(encoding="utf-8").replace(
+                '"NODAL-ANALOG-133-009"',
+                '"NODAL-ANALOG-133-MISSING"',
+                1,
+            )
+            runtime.write_text(text, encoding="utf-8")
+            codes = [problem.code for problem in MODULE.validate_files(clone)]
+            self.assertIn("NODAL-INC32-022", codes)
+
+    def test_native_identity_guard_mutation_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            clone = Path(temporary) / "repo"
+            shutil.copytree(ROOT, clone, ignore=shutil.ignore_patterns("out", ".git"))
+            runtime = clone / MODULE.NATIVE_RUNTIME
+            text = runtime.read_text(encoding="utf-8").replace(
+                '"NODAL-ANALOG-032-015"',
+                '"NODAL-ANALOG-032-MISSING"',
+                1,
+            )
+            runtime.write_text(text, encoding="utf-8")
+            codes = [problem.code for problem in MODULE.validate_files(clone)]
+            self.assertIn("NODAL-INC32-023", codes)
+
+    def test_bridge_retention_mutation_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            clone = Path(temporary) / "repo"
+            shutil.copytree(ROOT, clone, ignore=shutil.ignore_patterns("out", ".git"))
+            bridge = clone / MODULE.SCALA_BRIDGE
+            text = bridge.read_text(encoding="utf-8").replace(
+                '"nodal.bridge.analog_semantics" -> analogSemanticInventory',
+                '"nodal.bridge.missing_semantics" -> analogSemanticInventory',
+                1,
+            )
+            bridge.write_text(text, encoding="utf-8")
+            codes = [problem.code for problem in MODULE.validate_files(clone)]
+            self.assertIn("NODAL-INC32-048", codes)
+
     def test_increment33_cannot_close_early(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             clone = Path(temporary) / "repo"

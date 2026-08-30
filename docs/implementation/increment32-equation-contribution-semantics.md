@@ -13,7 +13,9 @@ and its equation/component checkpoint explicitly unblocks Increment 32.
 
 ## Implemented boundary
 
-Increment 32 adds matching Scala and native source-semantic recorders for:
+Increment 32 wires the frozen public equation/contribution API into the
+production construction kernel and adds matching Scala and native
+source-semantic recorders for:
 
 - ordinary unordered equations;
 - initialization-only equations;
@@ -23,7 +25,9 @@ Increment 32 adds matching Scala and native source-semantic recorders for:
 - stable semantic identities and canonical deterministic snapshots;
 - authored expression sides, dimensions, guards, analysis applicability,
   continuity, ownership, source spans, target orientation, and residual intent;
-- stable fail-closed diagnostics.
+- stable fail-closed diagnostics;
+- deterministic retention in construction snapshots, Scala-to-MLIR source
+  documents, and reproducibility snapshots.
 
 The implementation stores residual intent as `lhs - rhs == 0` while retaining
 both authored sides. It never performs causal orientation or division. It
@@ -35,12 +39,15 @@ order does not create priority or last-writer-wins behavior.
 The branch contains independent executable Scala and C++ witnesses. They check:
 
 - authored-side retention;
-- ordinary versus initialization-only classification;
+- ordinary versus initialization-only classification and exact
+  initialization-analysis applicability;
 - absence of causal orientation and unsafe division;
 - additive grouping and deterministic source-order permutations;
 - duplicate identity rejection;
 - illegal procedural-region use;
-- stable diagnostic identities.
+- stable diagnostic identities;
+- real public API integration rather than witness-only recorder use;
+- native rejection of empty equation and contribution identities.
 
 The repository checker correlates the implementation files, design gate,
 manifest, Increment 31 closure, Increment 133 checkpoint, roadmap state,

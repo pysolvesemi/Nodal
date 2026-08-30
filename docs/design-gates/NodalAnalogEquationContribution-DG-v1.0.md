@@ -31,7 +31,9 @@ An ordinary equation is an unordered simultaneous constraint. Its record owns:
   divided.
 
 An initial equation uses the same representation but is marked
-initialization-only. It is not an ordinary transient equation and is not a
+initialization-only. Its analysis applicability is exactly `initialization`;
+DC, operating-point, transient, AC, or noise applicability is rejected with
+`NODAL-ANALOG-133-009`. It is not an ordinary transient equation and is not a
 procedural initializer.
 
 A contribution is a distinct additive term targeting one oriented potential or
@@ -55,7 +57,12 @@ Four source-semantic regions are distinguished:
 
 Equation construction is legal only in an equation or initial-equation region.
 Contribution construction is legal only in a contribution region. Nested or
-overlapping regions are rejected. Increment 33 owns variables and ordered procedural assignment; this gate only defines the fail-closed separation.
+overlapping regions are rejected. The frozen public `equations`,
+`initialEquations`, `contributions`, `equation`, `initialEquation`,
+`contribution`, and `<+` paths must invoke the production construction recorder;
+a witness-only recorder is not an implementation. Increment 33 owns variables
+and ordered procedural assignment; this gate only defines the fail-closed
+separation.
 
 ## Determinism
 
@@ -78,14 +85,21 @@ The stable diagnostic family is `NODAL-ANALOG-032-*` and covers:
 - non-real equation/contribution expressions;
 - physical-dimension mismatch;
 - non-Boolean or dimensioned guards;
-- incomplete owner, analysis, continuity, or source metadata.
+- incomplete owner, analysis, continuity, or source metadata;
+- runtime-analysis applicability on an initialization-only equation
+  (`NODAL-ANALOG-133-009`);
+- empty equation or contribution identities in both Scala and native recorders.
 
 ## Required implementation evidence
 
-- Scala and native recorders implement the same source-semantic contract.
+- The frozen public equation and contribution APIs feed the production Scala
+  construction recorder, and Scala and native recorders implement the same
+  source-semantic contract.
 - Independent executable witnesses prove authored-side retention, initial-only
   classification, no causal orientation/division, additive accumulation,
   source-order independence, and procedural-region rejection.
+- Construction snapshots, Scala-to-MLIR source documents, and reproducibility
+  snapshots retain a deterministic analog-semantic inventory.
 - Machine-readable manifest and repository checker keep the roadmap open until
   exact implementation and post-merge evidence is recorded.
 - The permanent workflow is read-only and rejects temporary materializers or

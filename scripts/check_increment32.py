@@ -17,6 +17,15 @@ DESIGN_GATE = Path("docs/design-gates/NodalAnalogEquationContribution-DG-v1.0.md
 IMPLEMENTATION = Path("docs/implementation/increment32-equation-contribution-semantics.md")
 SCALA_RUNTIME = Path("core/scala/api/src/nodal/AnalogEquationRuntime.scala")
 NATIVE_RUNTIME = Path("core/native/include/nodal/AnalogEquationRuntime.h")
+CONTINUOUS_API = Path("core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala")
+CANDIDATE_API = Path("core/scala/api/src/nodal/CandidateApi.scala")
+CONSTRUCTION_KERNEL = Path("core/scala/api/src/nodal/ElaborationConstructionKernel.scala")
+ORIGIN_KERNEL = Path("core/scala/api/src/nodal/SemanticOriginKernel.scala")
+SCALA_BRIDGE = Path("core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala")
+REPRODUCIBILITY = Path("core/scala/bridge/src/nodal/bridge/ReproducibilityContract.scala")
+INTEGRATION_TEST = Path(
+    "core/scala/testkit/test/src/nodal/AnalogEquationConstructionTests.scala"
+)
 SCALA_WITNESS = Path(
     "examples/continuousTimeApi/src/nodal/increment32fixture/Increment32RuntimeCheck.scala"
 )
@@ -86,6 +95,13 @@ def validate_files(root: Path) -> list[Problem]:
     implementation = read(root, IMPLEMENTATION, problems, "NODAL-INC32-003")
     scala_runtime = read(root, SCALA_RUNTIME, problems, "NODAL-INC32-004")
     native_runtime = read(root, NATIVE_RUNTIME, problems, "NODAL-INC32-005")
+    continuous_api = read(root, CONTINUOUS_API, problems, "NODAL-INC32-037")
+    candidate_api = read(root, CANDIDATE_API, problems, "NODAL-INC32-038")
+    construction_kernel = read(root, CONSTRUCTION_KERNEL, problems, "NODAL-INC32-039")
+    origin_kernel = read(root, ORIGIN_KERNEL, problems, "NODAL-INC32-040")
+    scala_bridge = read(root, SCALA_BRIDGE, problems, "NODAL-INC32-041")
+    reproducibility = read(root, REPRODUCIBILITY, problems, "NODAL-INC32-042")
+    integration_test = read(root, INTEGRATION_TEST, problems, "NODAL-INC32-043")
     scala_witness = read(root, SCALA_WITNESS, problems, "NODAL-INC32-006")
     native_witness = read(root, NATIVE_WITNESS, problems, "NODAL-INC32-007")
     workflow = read(root, WORKFLOW, problems, "NODAL-INC32-008")
@@ -107,14 +123,20 @@ def validate_files(root: Path) -> list[Problem]:
     semantics = manifest.get("semantics")
     required_true = (
         "analog_regions",
+        "public_api_recording",
         "unordered_equations",
         "initial_equations_distinct",
+        "initialization_analysis_restricted",
         "authored_sides_preserved",
         "stable_equation_identity",
+        "native_identity_validation",
         "physical_dimensions_preserved",
         "guards_preserved",
         "analysis_applicability_preserved",
         "continuity_preserved",
+        "construction_snapshot_retention",
+        "scala_to_mlir_retention",
+        "reproducibility_retention",
         "potential_flow_contributions",
         "additive_accumulation",
         "source_order_independent",
@@ -163,7 +185,10 @@ def validate_files(root: Path) -> list[Problem]:
             "initialization-only",
             "last-writer-wins",
             "NODAL-ANALOG-032-*",
-            "Increment 33 owns variables and ordered procedural assignment",
+            "NODAL-ANALOG-133-009",
+            "witness-only recorder is not an implementation",
+            "Scala-to-MLIR source documents",
+            "Increment 33 owns variables",
         ),
         problems,
         "NODAL-INC32-020",
@@ -173,8 +198,11 @@ def validate_files(root: Path) -> list[Problem]:
         implementation,
         (
             "Implemented on the increment branch",
+            "production construction kernel",
             "authored expression sides",
             "source-order permutations",
+            "Scala-to-MLIR source",
+            "real public API integration",
             "Increment 33 owns local analog variables",
         ),
         problems,
@@ -194,6 +222,8 @@ def validate_files(root: Path) -> list[Problem]:
             "def recordEquation(",
             "def recordContribution(",
             "NODAL-ANALOG-032-012",
+            "NODAL-ANALOG-133-009",
+            "initializationAnalyses",
             "sortBy(_.identity.value)",
         ),
         problems,
@@ -212,12 +242,104 @@ def validate_files(root: Path) -> list[Problem]:
             "recordEquation(",
             "recordContribution(",
             "NODAL-ANALOG-032-012",
+            "NODAL-ANALOG-032-015",
+            "NODAL-ANALOG-032-016",
+            "NODAL-ANALOG-133-009",
             "std::map<ContributionTarget",
         ),
         problems,
         "NODAL-INC32-023",
         "native runtime",
     )
+    require_tokens(
+        continuous_api,
+        (
+            "CandidateRuntime.analogSemanticBlock(AnalogEquationRuntime.RegionKind.Equation",
+            "CandidateRuntime.analogEquation(left, right, options)",
+            "CandidateRuntime.initialAnalogEquation(left, right, options)",
+            "CandidateRuntime.analogContribution(target, value, options)",
+        ),
+        problems,
+        "NODAL-INC32-044",
+        "continuous-time public API wiring",
+    )
+    require_tokens(
+        candidate_api,
+        (
+            "ConstructionKernel.analogSemanticBlock",
+            "ConstructionKernel.analogEquation",
+            "ConstructionKernel.initialAnalogEquation",
+            "ConstructionKernel.shortAnalogContribution",
+        ),
+        problems,
+        "NODAL-INC32-045",
+        "candidate runtime wiring",
+    )
+    require_tokens(
+        construction_kernel,
+        (
+            "analogSemantics: AnalogEquationRuntime.Snapshot",
+            "def withAnalogSemanticRegion",
+            "def recordAnalogEquation",
+            "def recordInitialAnalogEquation",
+            "def recordAnalogContribution",
+            "captureSemanticSource()",
+            "NODAL-ANALOG-133-007",
+            "NODAL-ANALOG-133-005",
+        ),
+        problems,
+        "NODAL-INC32-046",
+        "construction-kernel integration",
+    )
+    require_tokens(
+        origin_kernel,
+        (
+            "ContinuousTimeCandidateApi.scala",
+            "def captureSemanticSource(): Option[SourceSpan]",
+        ),
+        problems,
+        "NODAL-INC32-047",
+        "source-origin integration",
+    )
+    require_tokens(
+        scala_bridge,
+        (
+            '"nodal.bridge.analog_semantics" -> analogSemanticInventory',
+            "private def analogSemanticInventory",
+            '"residual_convention"',
+            '"target_orientation"',
+        ),
+        problems,
+        "NODAL-INC32-048",
+        "Scala-to-MLIR retention",
+    )
+    require_tokens(
+        reproducibility,
+        (
+            '"analog_semantics" -> analogSemantics(snapshot)',
+            "private def analogSemantics(snapshot: ConstructionSnapshot)",
+            '"causally_oriented"',
+            '"target_identity"',
+        ),
+        problems,
+        "NODAL-INC32-049",
+        "reproducibility retention",
+    )
+    require_tokens(
+        integration_test,
+        (
+            "PublicAnalogEquationTop",
+            "snapshot.analogSemantics",
+            "ScalaToMlirBridge.lower",
+            "ReproducibilityContract.canonicalSnapshot",
+            "NODAL-ANALOG-133-007",
+            "NODAL-ANALOG-133-005",
+        ),
+        problems,
+        "NODAL-INC32-050",
+        "public integration tests",
+    )
+
     require_tokens(
         scala_witness,
         (
@@ -227,6 +349,8 @@ def validate_files(root: Path) -> list[Problem]:
             "!first.equations.head.residual.causallyOriented",
             "NODAL-ANALOG-032-004",
             "NODAL-ANALOG-032-012",
+            "NODAL-ANALOG-133-009",
+            "Set(\"initialization\")",
             "NODAL_INC32_SCALA_WITNESS_PASS",
         ),
         problems,
@@ -241,6 +365,9 @@ def validate_files(root: Path) -> list[Problem]:
             "authoredLeft.rendered",
             "authoredRight.rendered",
             "NODAL-ANALOG-032-012",
+            "NODAL-ANALOG-032-015",
+            "NODAL-ANALOG-032-016",
+            "NODAL-ANALOG-133-009",
         ),
         problems,
         "NODAL-INC32-025",
@@ -338,6 +465,23 @@ def run(command: list[str], root: Path) -> subprocess.CompletedProcess[str]:
 def validate_compile(root: Path) -> list[Problem]:
     problems: list[Problem] = []
     mill = root / ("mill.bat" if os.name == "nt" else "mill")
+    integration = run(
+        [
+            str(mill),
+            "core.scala.testkit.test.testOnly",
+            "nodal.AnalogEquationConstructionTests",
+        ],
+        root,
+    )
+    if integration.returncode != 0:
+        problems.append(
+            Problem(
+                "NODAL-INC32-051",
+                "public construction integration tests failed:\n"
+                + integration.stdout[-12000:],
+            )
+        )
+
     compiled = run([str(mill), "examples.continuousTimeApi.compile"], root)
     if compiled.returncode != 0:
         problems.append(
@@ -347,44 +491,87 @@ def validate_compile(root: Path) -> list[Problem]:
             )
         )
     else:
-        with tempfile.TemporaryDirectory() as temporary:
-            report = Path(temporary) / "scala-witness-report.txt"
-            executed = run(
-                [
-                    str(mill),
-                    "examples.continuousTimeApi.runMain",
-                    "nodal.increment32fixture.Increment32RuntimeCheck",
-                    str(report),
-                ],
-                root,
+        classpath_result = run(
+            [str(mill), "show", "examples.continuousTimeApi.runClasspath"],
+            root,
+        )
+        if classpath_result.returncode != 0:
+            problems.append(
+                Problem(
+                    "NODAL-INC32-034",
+                    "Scala witness classpath was unavailable:\n"
+                    + classpath_result.stdout[-12000:],
+                )
             )
-            if executed.returncode != 0:
+        else:
+            try:
+                output_lines = classpath_result.stdout.splitlines()
+                first = next(
+                    index for index, line in enumerate(output_lines) if line.strip() == "["
+                )
+                last = next(
+                    index
+                    for index in range(first + 1, len(output_lines))
+                    if output_lines[index].strip() == "]"
+                )
+                entries = json.loads("\n".join(output_lines[first : last + 1]))
+                classpath = os.pathsep.join(
+                    entry.split(":", 3)[-1] for entry in entries
+                )
+            except (
+                StopIteration,
+                json.JSONDecodeError,
+                TypeError,
+                ValueError,
+            ) as error:
                 problems.append(
                     Problem(
                         "NODAL-INC32-034",
-                        "Scala witness failed:\n" + executed.stdout[-12000:],
+                        f"Scala witness classpath is invalid: {error}\n"
+                        + classpath_result.stdout[-12000:],
                     )
                 )
-            elif not report.is_file():
-                problems.append(
-                    Problem(
-                        "NODAL-INC32-034",
-                        "Scala witness did not publish its semantic report:\n"
-                        + executed.stdout[-12000:],
+                classpath = ""
+            if classpath:
+                with tempfile.TemporaryDirectory() as temporary:
+                    report = Path(temporary) / "scala-witness-report.txt"
+                    executed = run(
+                        [
+                            "java",
+                            "-cp",
+                            classpath,
+                            "nodal.increment32fixture.Increment32RuntimeCheck",
+                            str(report),
+                        ],
+                        root,
                     )
-                )
-            else:
-                result = report.read_text(encoding="utf-8").strip()
-                if result != "NODAL_INC32_SCALA_WITNESS_PASS":
-                    problems.append(
-                        Problem(
-                            "NODAL-INC32-034",
-                            "Scala witness reported semantic failures:\n"
-                            + result
-                            + "\n"
-                            + executed.stdout[-12000:],
+                    if executed.returncode != 0:
+                        problems.append(
+                            Problem(
+                                "NODAL-INC32-034",
+                                "Scala witness failed:\n" + executed.stdout[-12000:],
+                            )
                         )
-                    )
+                    elif not report.is_file():
+                        problems.append(
+                            Problem(
+                                "NODAL-INC32-034",
+                                "Scala witness did not publish its semantic report:\n"
+                                + executed.stdout[-12000:],
+                            )
+                        )
+                    else:
+                        result = report.read_text(encoding="utf-8").strip()
+                        if result != "NODAL_INC32_SCALA_WITNESS_PASS":
+                            problems.append(
+                                Problem(
+                                    "NODAL-INC32-034",
+                                    "Scala witness reported semantic failures:\n"
+                                    + result
+                                    + "\n"
+                                    + executed.stdout[-12000:],
+                                )
+                            )
 
     compiler = os.environ.get("CXX", "c++")
     with tempfile.TemporaryDirectory() as temporary:

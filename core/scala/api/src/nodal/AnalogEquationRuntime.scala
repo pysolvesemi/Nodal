@@ -99,6 +99,7 @@ private[nodal] object AnalogEquationRuntime:
   final case class SemanticError(code: String, message: String) extends Diagnostic
 
   final class Recorder:
+    private val initializationAnalyses = Set("initialization")
     private var activeRegion: Option[RegionKind] = None
     private val equationRecords = mutable.LinkedHashMap.empty[EquationIdentity, EquationRecord]
     private val contributionRecords =
@@ -209,6 +210,13 @@ private[nodal] object AnalogEquationRuntime:
           SemanticError(
             "NODAL-ANALOG-032-004",
             s"duplicate equation identity: ${identity.value}"
+          )
+        )
+      else if initialOnly && metadata.analyses != initializationAnalyses then
+        Left(
+          SemanticError(
+            "NODAL-ANALOG-133-009",
+            "initial equations are applicable only to initialization analysis"
           )
         )
       else if left.valueKind != ValueKind.Real || right.valueKind != ValueKind.Real then

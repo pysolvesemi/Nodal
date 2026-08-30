@@ -47,38 +47,34 @@ final case class ContributionOptions(
 )
 
 def equations(body: => Unit): Unit =
-  CandidateRuntime.statement("candidate-equations")
-  body
+  CandidateRuntime.analogSemanticBlock(AnalogEquationRuntime.RegionKind.Equation, body)
 
 def equation(
     left: Expr[Real],
     right: Expr[Real],
     options: EquationOptions = EquationOptions()
-): Unit = CandidateRuntime.statement("candidate-equation", left, right, options)
+): Unit = CandidateRuntime.analogEquation(left, right, options)
 
 def initialEquations(body: => Unit): Unit =
-  CandidateRuntime.statement("candidate-initial-equations")
-  body
+  CandidateRuntime.analogSemanticBlock(AnalogEquationRuntime.RegionKind.InitialEquation, body)
 
 def initialEquation(
     left: Expr[Real],
     right: Expr[Real],
     options: InitialEquationOptions = InitialEquationOptions()
-): Unit = CandidateRuntime.statement("candidate-initial-equation", left, right, options)
+): Unit = CandidateRuntime.initialAnalogEquation(left, right, options)
 
 def contributions(body: => Unit): Unit =
-  CandidateRuntime.statement("candidate-contributions")
-  body
+  CandidateRuntime.analogSemanticBlock(AnalogEquationRuntime.RegionKind.Contribution, body)
 
 def contribution(
     target: Expr[Real],
     value: Expr[Real],
     options: ContributionOptions = ContributionOptions()
-): Unit = CandidateRuntime.statement("candidate-contribution", target, value, options)
+): Unit = CandidateRuntime.analogContribution(target, value, options)
 
 def analogProcedure(body: => Unit): Unit =
-  CandidateRuntime.statement("candidate-analog-procedure")
-  body
+  CandidateRuntime.analogSemanticBlock(AnalogEquationRuntime.RegionKind.Procedural, body)
 
 enum ComponentCompleteness:
   case Partial, Concrete

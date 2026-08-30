@@ -5,6 +5,7 @@ import nodal.AnalogEquationRuntime.*
 /** Executable semantic witness for Increment 32. */
 object Increment32RuntimeCheck:
   def main(arguments: Array[String]): Unit =
+    val _ = arguments
     val first = build(Vector("source-a", "source-b"))
     val second = build(Vector("source-b", "source-a"))
 

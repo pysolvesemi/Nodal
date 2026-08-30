@@ -1,9 +1,8 @@
-#include <tuple>
-
 #include "nodal/AnalogEquationRuntime.h"
 
 #include <cassert>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -19,7 +18,9 @@ using nodal::analog::SourceSpan;
 using nodal::analog::ValueKind;
 
 Metadata metadata(int line) {
-  return Metadata{"fixture.device", std::nullopt, {"dc", "transient"},
+  return Metadata{"fixture.device",
+                  std::nullopt,
+                  {"dc", "transient"},
                   "continuous",
                   SourceSpan{"analog_equation_runtime_test.cpp", line, 1}};
 }
@@ -31,24 +32,19 @@ Expression real(std::string text, std::string dimension) {
 Recorder build(const std::vector<std::string> &order) {
   Recorder recorder;
   {
-    auto region = recorder.region(RegionKind::Equation);
-    recorder.recordEquation("ohms-law", real("V(p,n)", "V"),
-                            real("R * I(p,n)", "V"), metadata(20));
+    [[maybe_unused]] auto region = recorder.region(RegionKind::Equation);
+    recorder.recordEquation("ohms-law", real("V(p,n)", "V"), real("R * I(p,n)", "V"), metadata(20));
   }
   {
-    auto region = recorder.region(RegionKind::InitialEquation);
-    recorder.recordEquation("initial-voltage", real("V(p,n)", "V"),
-                            real("0.0", "V"), metadata(21));
+    [[maybe_unused]] auto region = recorder.region(RegionKind::InitialEquation);
+    recorder.recordEquation("initial-voltage", real("V(p,n)", "V"), real("0.0", "V"), metadata(21));
   }
   {
-    auto region = recorder.region(RegionKind::Contribution);
+    [[maybe_unused]] auto region = recorder.region(RegionKind::Contribution);
     for (const auto &identity : order) {
       recorder.recordContribution(
-          identity,
-          ContributionTarget{"branch:p->n", ContributionKind::Flow, "A",
-                             "p-to-n"},
-          real(identity == "source-a" ? "1.0" : "2.0", "A"),
-          metadata(22));
+          identity, ContributionTarget{"branch:p->n", ContributionKind::Flow, "A", "p-to-n"},
+          real(identity == "source-a" ? "1.0" : "2.0", "A"), metadata(22));
     }
   }
   return recorder;
@@ -63,8 +59,7 @@ int main() {
   assert(first.equations.size() == 2);
   assert(first.equations.at(1).identity == "ohms-law");
   assert(first.equations.at(1).residual.authoredLeft.rendered == "V(p,n)");
-  assert(first.equations.at(1).residual.authoredRight.rendered ==
-         "R * I(p,n)");
+  assert(first.equations.at(1).residual.authoredRight.rendered == "R * I(p,n)");
   assert(!first.equations.at(1).residual.causallyOriented);
   assert(!first.equations.at(1).residual.divided);
   assert(first.contributions.size() == 1);
@@ -77,11 +72,9 @@ int main() {
   bool rejected = false;
   try {
     Recorder recorder;
-    auto region = recorder.region(RegionKind::Procedural);
+    [[maybe_unused]] auto region = recorder.region(RegionKind::Procedural);
     recorder.recordContribution(
-        "illegal",
-        ContributionTarget{"branch:p->n", ContributionKind::Flow, "A",
-                           "p-to-n"},
+        "illegal", ContributionTarget{"branch:p->n", ContributionKind::Flow, "A", "p-to-n"},
         real("1.0", "A"), metadata(40));
   } catch (const SemanticError &error) {
     rejected = error.code() == "NODAL-ANALOG-032-012";

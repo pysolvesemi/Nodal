@@ -7,6 +7,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -42,12 +43,9 @@ struct ContributionTarget {
   std::string dimension;
   std::string orientation;
 
-  friend bool operator<(const ContributionTarget &left,
-                        const ContributionTarget &right) {
-    return std::tie(left.identity, left.kind, left.dimension,
-                    left.orientation) <
-           std::tie(right.identity, right.kind, right.dimension,
-                    right.orientation);
+  friend bool operator<(const ContributionTarget &left, const ContributionTarget &right) {
+    return std::tie(left.identity, left.kind, left.dimension, left.orientation) <
+           std::tie(right.identity, right.kind, right.dimension, right.orientation);
   }
 };
 
@@ -98,9 +96,7 @@ class Recorder final {
 public:
   class Region final {
   public:
-    Region(Recorder &owner, RegionKind kind) : owner_(&owner) {
-      owner_->enter(kind);
-    }
+    Region(Recorder &owner, RegionKind kind) : owner_(&owner) { owner_->enter(kind); }
     Region(const Region &) = delete;
     Region &operator=(const Region &) = delete;
     Region(Region &&other) noexcept : owner_(std::exchange(other.owner_, nullptr)) {}
@@ -117,8 +113,8 @@ public:
 
   [[nodiscard]] Region region(RegionKind kind) { return Region(*this, kind); }
 
-  const EquationRecord &recordEquation(std::string identity, Expression left,
-                                       Expression right, Metadata metadata) {
+  const EquationRecord &recordEquation(std::string identity, Expression left, Expression right,
+                                       Metadata metadata) {
     const bool initialOnly = active_ == RegionKind::InitialEquation;
     if (active_ != RegionKind::Equation && !initialOnly) {
       if (active_.has_value()) {
@@ -130,50 +126,39 @@ public:
     if (equations_.contains(identity)) {
       fail("NODAL-ANALOG-032-004", "duplicate equation identity: " + identity);
     }
-    if (left.valueKind != ValueKind::Real ||
-        right.valueKind != ValueKind::Real) {
-      fail("NODAL-ANALOG-032-005",
-           "equation operands must be real-valued expressions");
+    if (left.valueKind != ValueKind::Real || right.valueKind != ValueKind::Real) {
+      fail("NODAL-ANALOG-032-005", "equation operands must be real-valued expressions");
     }
     if (left.dimension != right.dimension) {
       fail("NODAL-ANALOG-032-006", "equation dimensions differ");
     }
     validateMetadata(metadata);
-    EquationRecord record{identity,
-                          initialOnly,
-                          std::move(metadata),
+    EquationRecord record{identity, initialOnly, std::move(metadata),
                           ResidualIntent{std::move(left), std::move(right)}};
     return equations_.emplace(record.identity, std::move(record)).first->second;
   }
 
-  const ContributionRecord &
-  recordContribution(std::string identity, ContributionTarget target,
-                     Expression value, Metadata metadata) {
+  const ContributionRecord &recordContribution(std::string identity, ContributionTarget target,
+                                               Expression value, Metadata metadata) {
     if (active_ != RegionKind::Contribution) {
       if (active_.has_value()) {
         fail("NODAL-ANALOG-032-012",
              "additive contributions are legal only in a contribution region");
       }
-      fail("NODAL-ANALOG-032-013",
-           "contribution requires a contribution region");
+      fail("NODAL-ANALOG-032-013", "contribution requires a contribution region");
     }
     if (contributions_.contains(identity)) {
-      fail("NODAL-ANALOG-032-009",
-           "duplicate contribution identity: " + identity);
+      fail("NODAL-ANALOG-032-009", "duplicate contribution identity: " + identity);
     }
     if (value.valueKind != ValueKind::Real) {
-      fail("NODAL-ANALOG-032-010",
-           "a potential/flow contribution must be real-valued");
+      fail("NODAL-ANALOG-032-010", "a potential/flow contribution must be real-valued");
     }
     if (value.dimension != target.dimension) {
-      fail("NODAL-ANALOG-032-011",
-           "contribution dimension does not match target dimension");
+      fail("NODAL-ANALOG-032-011", "contribution dimension does not match target dimension");
     }
     validateMetadata(metadata);
-    ContributionRecord record{identity, std::move(target), std::move(value),
-                              std::move(metadata)};
-    return contributions_.emplace(record.identity, std::move(record))
-        .first->second;
+    ContributionRecord record{identity, std::move(target), std::move(value), std::move(metadata)};
+    return contributions_.emplace(record.identity, std::move(record)).first->second;
   }
 
   [[nodiscard]] Snapshot snapshot() const {
@@ -191,12 +176,10 @@ public:
     }
     for (auto &[target, terms] : grouped) {
       std::sort(terms.begin(), terms.end(),
-                [](const ContributionRecord &left,
-                   const ContributionRecord &right) {
+                [](const ContributionRecord &left, const ContributionRecord &right) {
                   return left.identity < right.identity;
                 });
-      result.contributions.push_back(
-          ContributionBucket{std::move(target), std::move(terms)});
+      result.contributions.push_back(ContributionBucket{std::move(target), std::move(terms)});
     }
     return result;
   }
@@ -220,14 +203,12 @@ private:
   void leave() { active_.reset(); }
 
   static void validateMetadata(const Metadata &metadata) {
-    if (metadata.owner.empty() || metadata.analyses.empty() ||
-        metadata.continuity.empty() || metadata.source.file.empty() ||
-        metadata.source.line < 1 || metadata.source.column < 1) {
+    if (metadata.owner.empty() || metadata.analyses.empty() || metadata.continuity.empty() ||
+        metadata.source.file.empty() || metadata.source.line < 1 || metadata.source.column < 1) {
       fail("NODAL-ANALOG-032-014", "semantic metadata is incomplete");
     }
     if (metadata.guard.has_value() &&
-        (metadata.guard->valueKind != ValueKind::Boolean ||
-         metadata.guard->dimension != "1")) {
+        (metadata.guard->valueKind != ValueKind::Boolean || metadata.guard->dimension != "1")) {
       fail("NODAL-ANALOG-032-007",
            "an equation or contribution guard must be dimensionless Boolean");
     }

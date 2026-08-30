@@ -1,0 +1,146 @@
+name: Increment 32 Final Repair
+
+on:
+  push:
+    branches:
+      - automation/increment32-final-repair
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      TARGET_BRANCH: increment/32-equation-contribution-semantics-review
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Apply final semantic and policy corrections
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          gate = Path('docs/design-gates/NodalAnalogEquationContribution-DG-v1.0.md')
+          text = gate.read_text(encoding='utf-8')
+          text = text.replace('**Scope:** compiler-ir', '**Scope:** public-api')
+          text = text.replace(
+              'overlapping regions are rejected. Increment 33 owns variables and ordered\nprocedural assignment; this gate only defines the fail-closed separation.',
+              'overlapping regions are rejected. Increment 33 owns variables and ordered procedural assignment;\nthis gate only defines the fail-closed separation.',
+          )
+          if '## Accepted alternatives' not in text:
+              marker = '## Deferred behavior\n'
+              addition = '''## Accepted alternatives
+
+Internal data structures may differ between the Scala construction layer and
+native compiler as long as both preserve the same identities, authored sides,
+dimensions, source metadata, region legality, and deterministic accumulation.
+
+## Rejected alternatives
+
+Rejected alternatives include causal assignment inference, equation division,
+source-order contribution priority, last-writer-wins accumulation, anonymous
+identity, and using emitted HDL or a solver callback as the canonical semantic
+record.
+
+## Compatibility impact
+
+This is an additive, package-private implementation underneath the frozen Nodal
+public API v0.3. It does not change existing digital behavior or enable solver,
+simulator, or backend execution.
+
+## Required tests
+
+The Scala and native witnesses, repository checker, mutation tests, formatting,
+contribution policy, Core CI, and complete inherited workflow matrix must pass
+on one exact implementation head. Evidence closure must be separate and keep
+Increment 33 unchecked.
+
+'''
+              if marker not in text:
+                  raise SystemExit('missing deferred-behavior marker')
+              text = text.replace(marker, addition + marker, 1)
+          gate.write_text(text, encoding='utf-8')
+
+          checker = Path('scripts/check_increment32.py')
+          source = checker.read_text(encoding='utf-8')
+          source = source.replace('"**Scope:** compiler-ir",', '"**Scope:** public-api",')
+          checker.write_text(source, encoding='utf-8')
+
+          header = Path('core/native/include/nodal/AnalogEquationRuntime.h')
+          source = header.read_text(encoding='utf-8')
+          old = 'return equations_.emplace(record.identity, std::move(record)).first->second;'
+          new = 'const std::string key = record.identity;\n    return equations_.emplace(key, std::move(record)).first->second;'
+          if old in source:
+              source = source.replace(old, new, 1)
+          old = '''return contributions_.emplace(record.identity, std::move(record))
+        .first->second;'''
+          new = '''const std::string key = record.identity;
+    return contributions_.emplace(key, std::move(record)).first->second;'''
+          if old in source:
+              source = source.replace(old, new, 1)
+          header.write_text(source, encoding='utf-8')
+
+          witness = Path('examples/continuousTimeApi/src/nodal/increment32fixture/Increment32RuntimeCheck.scala')
+          source = witness.read_text(encoding='utf-8')
+          old = '''    assert(
+      duplicateError.exists(_.left.exists(_.code == "NODAL-ANALOG-032-004")),
+      "duplicate identities must fail with a stable diagnostic"
+    )'''
+          new = '''    val duplicateCode = duplicateError match
+      case Right(Left(error)) => Some(error.code)
+      case _                  => None
+    assert(
+      duplicateCode.contains("NODAL-ANALOG-032-004"),
+      "duplicate identities must fail with a stable diagnostic"
+    )'''
+          if old in source:
+              source = source.replace(old, new, 1)
+          old = '''    assert(
+      proceduralError.exists(_.left.exists(_.code == "NODAL-ANALOG-032-012")),
+      "procedural contribution misuse must fail closed"
+    )'''
+          new = '''    val proceduralCode = proceduralError match
+      case Right(Left(error)) => Some(error.code)
+      case _                  => None
+    assert(
+      proceduralCode.contains("NODAL-ANALOG-032-012"),
+      "procedural contribution misuse must fail closed"
+    )'''
+          if old in source:
+              source = source.replace(old, new, 1)
+          witness.write_text(source, encoding='utf-8')
+          PY
+
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 -m py_compile scripts/check_increment32.py tests/compiler/test_increment32.py
+          git diff --check
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/design-gates/NodalAnalogEquationContribution-DG-v1.0.md
+          git add scripts/check_increment32.py
+          git add core/native/include/nodal/AnalogEquationRuntime.h
+          git add core/scala/api/src/nodal/AnalogEquationRuntime.scala
+          git add examples/continuousTimeApi/src/nodal/increment32fixture/Increment32RuntimeCheck.scala
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix(increment32): align policy and semantic validation contracts'
+            git push origin "HEAD:${TARGET_BRANCH}"
+          fi
+
+      - name: Run local acceptance suite
+        run: |
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment32.py'
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          python3 scripts/check_contribution_policy.py --base-ref origin/dev
+          git diff --check

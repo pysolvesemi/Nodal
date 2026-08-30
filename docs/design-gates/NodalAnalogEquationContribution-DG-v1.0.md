@@ -3,6 +3,7 @@
 **Status:** Approved
 
 **Scope:** compiler-ir
+**Scope:** public-api
 
 **Increment:** 32
 

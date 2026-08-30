@@ -145,7 +145,8 @@ public:
                           initialOnly,
                           std::move(metadata),
                           ResidualIntent{std::move(left), std::move(right)}};
-    return equations_.emplace(record.identity, std::move(record)).first->second;
+    const std::string key = record.identity;
+    return equations_.emplace(key, std::move(record)).first->second;
   }
 
   const ContributionRecord &
@@ -174,8 +175,8 @@ public:
     validateMetadata(metadata);
     ContributionRecord record{identity, std::move(target), std::move(value),
                               std::move(metadata)};
-    return contributions_.emplace(record.identity, std::move(record))
-        .first->second;
+    const std::string key = record.identity;
+    return contributions_.emplace(key, std::move(record)).first->second;
   }
 
   [[nodiscard]] Snapshot snapshot() const {

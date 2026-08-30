@@ -60,9 +60,9 @@ overlapping regions are rejected. Increment 33 owns variables and ordered proced
 ## Determinism
 
 Snapshots sort equations by stable equation identity. Contributions are grouped
-by the complete oriented target identity and sorted by contribution identity.
-Changing declaration or traversal order therefore cannot change the canonical
-semantic snapshot.
+by the complete oriented target identity—identity, kind, physical dimension,
+and orientation—and sorted by contribution identity. Changing declaration or
+traversal order therefore cannot change the canonical semantic snapshot.
 
 This ordering is an evidence and serialization convention only. It does not
 introduce equation execution order or contribution priority.
@@ -90,6 +90,42 @@ The stable diagnostic family is `NODAL-ANALOG-032-*` and covers:
   exact implementation and post-merge evidence is recorded.
 - The permanent workflow is read-only and rejects temporary materializers or
   source-bundle workflows from an accepted tree.
+
+## Accepted alternatives
+
+The Scala construction layer and native compiler may use different internal
+containers and APIs when they preserve the same identities, authored sides,
+dimensions, metadata, region legality, and deterministic canonical snapshot.
+Later compiler stages may derive solver-neutral residuals from the recorded
+source semantics while continuing to retain the authored equation evidence.
+
+## Rejected alternatives
+
+The following are rejected:
+
+- inferring causal assignment direction from equation syntax;
+- dividing or rearranging an equation merely to make it executable;
+- applying source-order priority or last-writer-wins behavior to contributions;
+- conflating initial equations, ordinary equations, contributions, or
+  procedural assignment;
+- treating emitted HDL or a solver callback ABI as the canonical source model;
+- accepting anonymous, incomplete, dimensionally invalid, or illegally scoped
+  semantic records.
+
+## Compatibility impact
+
+The implementation is additive underneath the frozen public API v0.3 and the
+approved continuous-time v0.1 surface. Existing digital behavior is unchanged.
+No solver, simulator, topology expansion, target legalization, or backend
+execution is enabled by this increment.
+
+## Required tests
+
+The accepted implementation must pass the Scala and native executable
+witnesses, repository checker, mutation suite, formatting and static-analysis
+checks, contribution policy, Core CI, and every inherited increment workflow on
+one exact implementation head. Evidence closure must occur separately and must
+leave Increment 33 unchecked until the Increment 32 evidence record is complete.
 
 ## Deferred behavior
 

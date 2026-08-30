@@ -1,0 +1,119 @@
+name: Increment 32 PR97 Guard
+
+on:
+  push:
+    branches:
+      - automation/inc32-source-bundle-live
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  checks: read
+
+jobs:
+  merge-after-green:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      IMPLEMENTATION_PR: "97"
+    steps:
+      - name: Wait for complete green exact-head matrix
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          state=$(gh api "repos/${REPOSITORY}/pulls/${IMPLEMENTATION_PR}" --jq .state)
+          merged=$(gh api "repos/${REPOSITORY}/pulls/${IMPLEMENTATION_PR}" --jq .merged)
+          if [[ "$merged" == "true" ]]; then
+            merge_sha=$(gh api "repos/${REPOSITORY}/pulls/${IMPLEMENTATION_PR}" --jq .merge_commit_sha)
+            echo "already_merged=true" >> "$GITHUB_OUTPUT"
+            echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          test "$state" = "open"
+          head_sha=$(gh api "repos/${REPOSITORY}/pulls/${IMPLEMENTATION_PR}" --jq .head.sha)
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          deadline=$((SECONDS + 3000))
+          while (( SECONDS < deadline )); do
+            data=$(gh api "repos/${REPOSITORY}/actions/runs?head_sha=${head_sha}&event=pull_request&per_page=100")
+            count=$(jq '[.workflow_runs[] | select(.head_sha == $sha)] | length' --arg sha "$head_sha" <<<"$data")
+            active=$(jq '[.workflow_runs[] | select(.head_sha == $sha and .status != "completed")] | length' --arg sha "$head_sha" <<<"$data")
+            failed=$(jq '[.workflow_runs[] | select(.head_sha == $sha and .status == "completed" and .conclusion != "success")] | length' --arg sha "$head_sha" <<<"$data")
+            if (( count >= 22 && active == 0 )); then
+              jq -r '.workflow_runs[] | select(.head_sha == $sha) | [.name,.id,.conclusion] | @tsv' --arg sha "$head_sha" <<<"$data" | sort
+              test "$failed" -eq 0
+              echo "already_merged=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Timed out waiting for PR #${IMPLEMENTATION_PR} matrix" >&2
+          exit 1
+
+      - name: Squash merge exact validated head
+        if: steps.gate.outputs.already_merged == 'false'
+        id: merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr merge "$IMPLEMENTATION_PR" --squash --delete-branch=false
+          merge_sha=$(gh api "repos/${REPOSITORY}/pulls/${IMPLEMENTATION_PR}" --jq .merge_commit_sha)
+          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve implementation merge SHA
+        id: resolved
+        shell: bash
+        run: |
+          set -euo pipefail
+          merge_sha='${{ steps.merge.outputs.merge_sha }}'
+          if [[ -z "$merge_sha" ]]; then
+            merge_sha='${{ steps.gate.outputs.merge_sha }}'
+          fi
+          test -n "$merge_sha"
+          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch and require post-merge Core CI
+        id: core
+        shell: bash
+        run: |
+          set -euo pipefail
+          merge_sha='${{ steps.resolved.outputs.merge_sha }}'
+          existing=$(gh api "repos/${REPOSITORY}/actions/workflows/ci.yml/runs?branch=dev&per_page=100" | jq -r --arg sha "$merge_sha" '[.workflow_runs[] | select(.head_sha == $sha and .conclusion == "success")][0].id // empty')
+          if [[ -n "$existing" ]]; then
+            echo "run_id=$existing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          before=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run ci.yml --ref dev
+          deadline=$((SECONDS + 2400))
+          while (( SECONDS < deadline )); do
+            data=$(gh api "repos/${REPOSITORY}/actions/workflows/ci.yml/runs?branch=dev&event=workflow_dispatch&per_page=30")
+            run_id=$(jq -r --arg before "$before" --arg sha "$merge_sha" '[.workflow_runs[] | select(.created_at >= $before and .head_sha == $sha)][0].id // empty' <<<"$data")
+            if [[ -n "$run_id" ]]; then
+              status=$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}" --jq .status)
+              if [[ "$status" == "completed" ]]; then
+                conclusion=$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}" --jq .conclusion)
+                test "$conclusion" = "success"
+                echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            sleep 20
+          done
+          exit 1
+
+      - name: Publish implementation validated tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          merge_sha='${{ steps.resolved.outputs.merge_sha }}'
+          git init /tmp/inc32-tag
+          cd /tmp/inc32-tag
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git"
+          git fetch origin "$merge_sha"
+          git tag -f increment-32-implementation-validated "$merge_sha"
+          git push --force origin refs/tags/increment-32-implementation-validated
+          gh pr comment "$IMPLEMENTATION_PR" --body "Exact-head matrix passed; squash merge: \`$merge_sha\`; post-merge Core CI: ${{ steps.core.outputs.run_id }}."

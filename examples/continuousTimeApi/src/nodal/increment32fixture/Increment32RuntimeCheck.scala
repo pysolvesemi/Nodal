@@ -17,8 +17,14 @@ object Increment32RuntimeCheck:
     val first = build(Vector("source-a", "source-b"))
     val second = build(Vector("source-b", "source-a"))
 
-    check(first == second, s"source order must not affect the canonical snapshot: first=$first second=$second")
-    check(first.equations.size == 2, s"expected two equations, got ${first.equations}")
+    check(
+      first == second,
+      s"source order must not affect the canonical snapshot: first=$first second=$second"
+    )
+    check(
+      first.equations.size == 2,
+      s"expected two equations, got ${first.equations}"
+    )
     check(
       first.equations.head.identity.value == "dc-law",
       s"expected dc-law first, got ${first.equations.map(_.identity.value)}"
@@ -40,10 +46,17 @@ object Increment32RuntimeCheck:
       s"equation was divided: ${first.equations.head.residual}"
     )
     val initial = first.equations.find(_.identity.value == "initial-voltage")
-    check(initial.exists(_.initialOnly), s"initial equation classification was lost: $initial")
-    check(first.contributions.size == 1, s"expected one contribution bucket: ${first.contributions}")
     check(
-      first.contributions.head.terms.map(_.identity.value) == Vector("source-a", "source-b"),
+      initial.exists(_.initialOnly),
+      s"initial equation classification was lost: $initial"
+    )
+    check(
+      first.contributions.size == 1,
+      s"expected one contribution bucket: ${first.contributions}"
+    )
+    check(
+      first.contributions.head.terms.map(_.identity.value) ==
+        Vector("source-a", "source-b"),
       s"contribution terms are not canonically ordered: ${first.contributions.head.terms}"
     )
 
@@ -55,7 +68,10 @@ object Increment32RuntimeCheck:
         real("right", "V"),
         metadata(20)
       )
-      check(recorded.isRight, s"first duplicate fixture equation failed unexpectedly: $recorded")
+      check(
+        recorded.isRight,
+        s"first duplicate fixture equation failed unexpectedly: $recorded"
+      )
       duplicate.recordEquation(
         EquationIdentity("same"),
         real("again", "V"),
@@ -70,7 +86,9 @@ object Increment32RuntimeCheck:
           s"duplicate identities must fail with NODAL-ANALOG-032-004, got $error"
         )
       case other =>
-        fail(s"duplicate identity fixture did not return the expected nested diagnostic: $other")
+        fail(
+          s"duplicate identity fixture did not return the expected nested diagnostic: $other"
+        )
 
     val procedural = new Recorder
     val proceduralResult = procedural.region(RegionKind.Procedural) {
@@ -88,7 +106,9 @@ object Increment32RuntimeCheck:
           s"procedural contribution misuse must fail with NODAL-ANALOG-032-012, got $error"
         )
       case other =>
-        fail(s"procedural contribution fixture did not return the expected nested diagnostic: $other")
+        fail(
+          s"procedural contribution fixture did not return the expected nested diagnostic: $other"
+        )
 
   private def build(order: Vector[String]): Snapshot =
     val recorder = new Recorder

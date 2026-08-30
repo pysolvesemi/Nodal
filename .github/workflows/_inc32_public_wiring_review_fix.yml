@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Download failing Increment 14 job log
+      - name: Download and inspect failing Increment 14 job log
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -24,10 +24,12 @@ jobs:
             --header "Accept: application/vnd.github+json" \
             --header "X-GitHub-Api-Version: 2022-11-28" \
             https://api.github.com/repos/pysolvesemi/Nodal/actions/jobs/99315063505/logs \
-            --output /tmp/increment14-job.log
-          grep -n -B 80 -A 120 \
+            --output /tmp/increment14-job-logs.zip
+          mkdir -p /tmp/increment14-job-logs
+          unzip -q /tmp/increment14-job-logs.zip -d /tmp/increment14-job-logs
+          grep -RIn -B 100 -A 160 \
             -E 'check_api_candidate|Expected frozen API manifest|current candidate sources' \
-            /tmp/increment14-job.log \
+            /tmp/increment14-job-logs \
             > /tmp/increment14-api-manifest-context.log
           test -s /tmp/increment14-api-manifest-context.log
 

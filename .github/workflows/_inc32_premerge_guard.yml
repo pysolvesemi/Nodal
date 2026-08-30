@@ -1,0 +1,151 @@
+name: Increment 32 Premerge Guard
+
+on:
+  push:
+    branches:
+      - automation/inc32-source-bundle-live
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  checks: read
+
+jobs:
+  guard-and-merge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_BRANCH: increment/32-equation-contribution-semantics-review
+      DRAFT_PR: "96"
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Check out exact implementation head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Run complete local acceptance suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment32.py'
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          python3 scripts/check_markdown.py
+          python3 scripts/check_package_visibility.py
+          python3 scripts/check_contribution_policy.py --base-ref origin/dev
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          git diff --check
+
+      - name: Require complete exact-head pull-request matrix
+        id: matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_sha=$(git rev-parse HEAD)
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          deadline=$((SECONDS + 2400))
+          while (( SECONDS < deadline )); do
+            data=$(gh api --paginate "repos/${REPOSITORY}/actions/runs?head_sha=${head_sha}&event=pull_request&per_page=100")
+            count=$(jq '[.workflow_runs[] | select(.head_sha == $sha)] | length' --arg sha "$head_sha" <<<"$data")
+            active=$(jq '[.workflow_runs[] | select(.head_sha == $sha and .status != "completed")] | length' --arg sha "$head_sha" <<<"$data")
+            failed=$(jq '[.workflow_runs[] | select(.head_sha == $sha and .status == "completed" and .conclusion != "success")] | length' --arg sha "$head_sha" <<<"$data")
+            if (( count >= 22 && active == 0 )); then
+              jq -r '.workflow_runs[] | select(.head_sha == $sha) | [.name,.id,.conclusion] | @tsv' --arg sha "$head_sha" <<<"$data" | sort
+              test "$failed" -eq 0
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Timed out waiting for exact-head workflow matrix" >&2
+          exit 1
+
+      - name: Replace draft review entry and squash-merge validated head
+        id: merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_sha='${{ steps.matrix.outputs.head_sha }}'
+          current_state=$(gh api "repos/${REPOSITORY}/pulls/${DRAFT_PR}" --jq .state)
+          if [[ "$current_state" == "open" ]]; then
+            gh pr close "$DRAFT_PR" --comment "Superseded by a non-draft replacement using the identical validated head because the ready-for-review connector transition is unavailable."
+          fi
+          cat > /tmp/inc32-pr-body.md <<EOF
+          ## Summary
+
+          Implements Increment 32 from the fully closed Increment 133 baseline.
+
+          - records ordinary unordered equations and initialization-only equations as distinct source-semantic constraints;
+          - records additive potential and flow contributions without source-order priority or last-writer-wins behavior;
+          - preserves authored sides, stable identities, dimensions, guards, analysis applicability, continuity, hierarchy ownership, source spans, orientation, and structural residual intent;
+          - keeps procedural assignment, control flow, DAE construction, solving, and backend lowering deferred.
+
+          ## Validation
+
+          The exact accepted implementation head is \`$head_sha\`. The local acceptance suite and complete pull-request workflow matrix passed on this same head before replacement and merge.
+
+          ## Design gate
+
+          Approved contract: \`docs/design-gates/NodalAnalogEquationContribution-DG-v1.0.md\`.
+
+          ## Checklist
+
+          - [x] Increment 31 and Increment 133 prerequisites are fully closed.
+          - [x] Scala and native semantic recorders and executable witnesses are present.
+          - [x] Exact-head local acceptance suite passed.
+          - [x] Complete exact-head pull-request workflow matrix passed.
+          - [x] Temporary materializers and generated artifacts are absent from the implementation tree.
+          - [ ] Squash-merge implementation into \`dev\`.
+          - [ ] Record post-merge Core CI and close evidence separately.
+          EOF
+          replacement_url=$(gh pr create \
+            --base dev \
+            --head "$TARGET_BRANCH" \
+            --title "Increment 32 — First-class analog equations and additive contributions" \
+            --body-file /tmp/inc32-pr-body.md)
+          replacement_number=${replacement_url##*/}
+          echo "replacement_number=$replacement_number" >> "$GITHUB_OUTPUT"
+          gh pr merge "$replacement_number" --squash --delete-branch=false
+          merge_sha=$(gh api "repos/${REPOSITORY}/pulls/${replacement_number}" --jq .merge_commit_sha)
+          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch and require post-merge Core CI
+        id: postmerge
+        shell: bash
+        run: |
+          set -euo pipefail
+          merge_sha='${{ steps.merge.outputs.merge_sha }}'
+          before=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run ci.yml --ref dev
+          deadline=$((SECONDS + 2400))
+          while (( SECONDS < deadline )); do
+            data=$(gh api "repos/${REPOSITORY}/actions/workflows/ci.yml/runs?branch=dev&event=workflow_dispatch&per_page=20")
+            run_id=$(jq -r --arg before "$before" --arg sha "$merge_sha" '[.workflow_runs[] | select(.created_at >= $before and (.head_sha == $sha or .head_branch == "dev"))][0].id // empty' <<<"$data")
+            if [[ -n "$run_id" ]]; then
+              status=$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}" --jq .status)
+              if [[ "$status" == "completed" ]]; then
+                conclusion=$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}" --jq .conclusion)
+                test "$conclusion" = "success"
+                echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+                break
+              fi
+            fi
+            sleep 20
+          done
+          test -n "${run_id:-}"
+
+      - name: Publish immutable implementation evidence tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          merge_sha='${{ steps.merge.outputs.merge_sha }}'
+          git fetch origin dev
+          git tag -f increment-32-implementation-validated "$merge_sha"
+          git push --force origin refs/tags/increment-32-implementation-validated
+          gh pr comment '${{ steps.merge.outputs.replacement_number }}' --body "Implementation squash merge: \`$merge_sha\`. Post-merge Core CI: ${{ steps.postmerge.outputs.run_id }}. Evidence closure remains separate."

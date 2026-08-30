@@ -49,6 +49,10 @@ The branch contains independent executable Scala and C++ witnesses. They check:
 - real public API integration rather than witness-only recorder use;
 - native rejection of empty equation and contribution identities.
 
+The production-path integration suite is kept in the repository-owned
+`nodal.internal.testkit` package, so package-visibility policy is exercised by
+the same exact-head acceptance matrix as the semantic tests.
+
 The repository checker correlates the implementation files, design gate,
 manifest, Increment 31 closure, Increment 133 checkpoint, roadmap state,
 read-only workflow, compile/run witnesses, and temporary-artifact hygiene.

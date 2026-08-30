@@ -1,0 +1,188 @@
+name: Increment 32 Direct Java Repair
+
+on:
+  push:
+    branches:
+      - automation/inc32-source-bundle-live
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_BRANCH: increment/32-equation-contribution-semantics-review
+    steps:
+      - name: Check out target
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Replace Mill runMain wrapper with direct JVM witness execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/check_increment32.py")
+          source = path.read_text(encoding="utf-8")
+          if "import shutil\n" not in source:
+              source = source.replace("import os\n", "import os\nimport shutil\n", 1)
+          start = source.index("def validate_compile(root: Path) -> list[Problem]:")
+          end = source.index("\ndef main(argv: list[str] | None = None) -> int:", start)
+          replacement = r'''def _collect_classpath(value: object, paths: list[str]) -> None:
+              if isinstance(value, dict):
+                  candidate = value.get("path")
+                  if isinstance(candidate, str) and candidate:
+                      paths.append(candidate)
+                  for child in value.values():
+                      _collect_classpath(child, paths)
+              elif isinstance(value, list):
+                  for child in value:
+                      _collect_classpath(child, paths)
+              elif isinstance(value, str) and value:
+                  candidate = Path(value)
+                  if candidate.exists():
+                      paths.append(value)
+
+
+          def validate_compile(root: Path) -> list[Problem]:
+              problems: list[Problem] = []
+              mill = root / ("mill.bat" if os.name == "nt" else "mill")
+              compiled = run([str(mill), "examples.continuousTimeApi.compile"], root)
+              if compiled.returncode != 0:
+                  problems.append(
+                      Problem(
+                          "NODAL-INC32-033",
+                          "Scala fixture did not compile:\n" + compiled.stdout[-12000:],
+                      )
+                  )
+              else:
+                  classpath_result = run(
+                      [str(mill), "show", "examples.continuousTimeApi.runClasspath"],
+                      root,
+                  )
+                  classpath: list[str] = []
+                  if classpath_result.returncode == 0:
+                      try:
+                          _collect_classpath(json.loads(classpath_result.stdout), classpath)
+                      except json.JSONDecodeError:
+                          classpath = []
+                  classpath = list(dict.fromkeys(classpath))
+                  java_home = os.environ.get("JAVA_HOME")
+                  java = (
+                      str(Path(java_home) / "bin" / "java")
+                      if java_home
+                      else shutil.which("java")
+                  )
+                  if not java or not classpath:
+                      problems.append(
+                          Problem(
+                              "NODAL-INC32-034",
+                              "Scala witness classpath could not be resolved:\n"
+                              + classpath_result.stdout[-12000:],
+                          )
+                      )
+                  else:
+                      with tempfile.TemporaryDirectory() as scala_temporary:
+                          report = Path(scala_temporary) / "increment32-scala-report.txt"
+                          executed = run(
+                              [
+                                  java,
+                                  "-cp",
+                                  os.pathsep.join(classpath),
+                                  "nodal.increment32fixture.Increment32RuntimeCheck",
+                                  str(report),
+                              ],
+                              root,
+                          )
+                          report_text = (
+                              report.read_text(encoding="utf-8") if report.is_file() else ""
+                          )
+                          combined = executed.stdout + "\n" + report_text
+                          if (
+                              executed.returncode != 0
+                              or "NODAL_INC32_SCALA_WITNESS_PASS" not in combined
+                              or "NODAL_INC32_SCALA_WITNESS_FAIL" in combined
+                          ):
+                              problems.append(
+                                  Problem(
+                                      "NODAL-INC32-034",
+                                      "Scala witness failed:\n" + combined[-12000:],
+                                  )
+                              )
+
+              compiler = os.environ.get("CXX", "c++")
+              with tempfile.TemporaryDirectory() as temporary:
+                  executable = Path(temporary) / "increment32-native"
+                  native = run(
+                      [
+                          compiler,
+                          "-std=c++20",
+                          "-Wall",
+                          "-Wextra",
+                          "-Werror",
+                          "-pedantic",
+                          "-Icore/native/include",
+                          NATIVE_WITNESS.as_posix(),
+                          "-o",
+                          str(executable),
+                      ],
+                      root,
+                  )
+                  if native.returncode != 0:
+                      problems.append(
+                          Problem(
+                              "NODAL-INC32-035",
+                              "native witness did not compile:\n" + native.stdout[-12000:],
+                          )
+                      )
+                  else:
+                      executed = run([str(executable)], root)
+                      if executed.returncode != 0:
+                          problems.append(
+                              Problem(
+                                  "NODAL-INC32-036",
+                                  "native witness failed:\n" + executed.stdout[-12000:],
+                              )
+                          )
+              return problems
+          '''
+          replacement = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in replacement.splitlines()
+          ) + "\n"
+          path.write_text(source[:start] + replacement + source[end:], encoding="utf-8")
+          PY
+          rm -rf scripts/__pycache__ tests/compiler/__pycache__
+          git diff --check
+
+      - name: Run exact acceptance suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment32.py'
+          python3 scripts/check_contribution_policy.py --base-ref origin/dev
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          git diff --check
+
+      - name: Publish repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/check_increment32.py
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix(increment32): execute Scala witness on resolved JVM classpath'
+            git push origin "HEAD:${TARGET_BRANCH}"
+          fi

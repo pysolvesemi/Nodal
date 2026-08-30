@@ -227,6 +227,7 @@ def validate_files(root: Path) -> list[Problem]:
             "!first.equations.head.residual.causallyOriented",
             "NODAL-ANALOG-032-004",
             "NODAL-ANALOG-032-012",
+            "NODAL_INC32_SCALA_WITNESS_PASS",
         ),
         problems,
         "NODAL-INC32-024",
@@ -346,21 +347,44 @@ def validate_compile(root: Path) -> list[Problem]:
             )
         )
     else:
-        executed = run(
-            [
-                str(mill),
-                "examples.continuousTimeApi.runMain",
-                "nodal.increment32fixture.Increment32RuntimeCheck",
-            ],
-            root,
-        )
-        if executed.returncode != 0:
-            problems.append(
-                Problem(
-                    "NODAL-INC32-034",
-                    "Scala witness failed:\n" + executed.stdout[-12000:],
-                )
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary) / "scala-witness-report.txt"
+            executed = run(
+                [
+                    str(mill),
+                    "examples.continuousTimeApi.runMain",
+                    "nodal.increment32fixture.Increment32RuntimeCheck",
+                    str(report),
+                ],
+                root,
             )
+            if executed.returncode != 0:
+                problems.append(
+                    Problem(
+                        "NODAL-INC32-034",
+                        "Scala witness failed:\n" + executed.stdout[-12000:],
+                    )
+                )
+            elif not report.is_file():
+                problems.append(
+                    Problem(
+                        "NODAL-INC32-034",
+                        "Scala witness did not publish its semantic report:\n"
+                        + executed.stdout[-12000:],
+                    )
+                )
+            else:
+                result = report.read_text(encoding="utf-8").strip()
+                if result != "NODAL_INC32_SCALA_WITNESS_PASS":
+                    problems.append(
+                        Problem(
+                            "NODAL-INC32-034",
+                            "Scala witness reported semantic failures:\n"
+                            + result
+                            + "\n"
+                            + executed.stdout[-12000:],
+                        )
+                    )
 
     compiler = os.environ.get("CXX", "c++")
     with tempfile.TemporaryDirectory() as temporary:

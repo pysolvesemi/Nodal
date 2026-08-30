@@ -19,7 +19,8 @@ object Increment32RuntimeCheck:
     try runChecks()
     catch
       case NonFatal(error) =>
-        failures += s"unexpected ${error.getClass.getName}: ${Option(error.getMessage).getOrElse("")}" 
+        failures +=
+          s"unexpected ${error.getClass.getName}: ${Option(error.getMessage).getOrElse("")}"
 
     val report =
       if failures.isEmpty then Passed + "\n"

@@ -1,0 +1,42 @@
+name: Increment 32 Fix Closure Head Field
+
+on:
+  push:
+    branches:
+      - automation/increment32-fix-closure-head-field
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TARGET_BRANCH: increment/32-equation-contribution-semantics-review
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          token: ${{ github.token }}
+      - name: Name the exact pre-closure validation head explicitly
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/check_increment32.py')
+          text = path.read_text(encoding='utf-8')
+          old = '            "closure_head",\n'
+          new = '            "closure_validation_head",\n'
+          if old not in text:
+              raise SystemExit('missing closure_head field')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          python3 -m py_compile scripts/check_increment32.py
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/check_increment32.py
+          git commit -m "fix(increment32): name pre-closure validation head explicitly"
+          git push origin "HEAD:${TARGET_BRANCH}"

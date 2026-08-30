@@ -6,12 +6,7 @@ import nodal.AnalogEquationRuntime.*
 object Increment32RuntimeCheck:
   def main(arguments: Array[String]): Unit =
     val _ = arguments
-    try runChecks()
-    catch
-      case error: Throwable =>
-        error.printStackTrace(System.err)
-        System.err.flush()
-        throw error
+    runChecks()
 
   private def runChecks(): Unit =
     val first = build(Vector("source-a", "source-b"))
@@ -86,7 +81,8 @@ object Increment32RuntimeCheck:
           s"duplicate identities must fail with NODAL-ANALOG-032-004, got $error"
         )
       case other =>
-        fail(
+        check(
+          condition = false,
           s"duplicate identity fixture did not return the expected nested diagnostic: $other"
         )
 
@@ -106,7 +102,8 @@ object Increment32RuntimeCheck:
           s"procedural contribution misuse must fail with NODAL-ANALOG-032-012, got $error"
         )
       case other =>
-        fail(
+        check(
+          condition = false,
           s"procedural contribution fixture did not return the expected nested diagnostic: $other"
         )
 
@@ -181,7 +178,4 @@ object Increment32RuntimeCheck:
     )
 
   private def check(condition: Boolean, message: => String): Unit =
-    if !condition then fail(message)
-
-  private def fail(message: String): Nothing =
-    throw new IllegalStateException(message)
+    assert(condition, message)

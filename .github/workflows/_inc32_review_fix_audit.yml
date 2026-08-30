@@ -1,0 +1,153 @@
+name: Increment 32 Review Fix Audit
+
+on:
+  push:
+    branches:
+      - automation/inc32-public-wiring-review-fix
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Wait for atomic review-fix publication
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          BASE_SHA: 52799e2e18a3b55cccb0d635d0a83c091c330ecd
+          TARGET_REF: heads/increment/32-equation-contribution-semantics-review
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            head=$(gh api "repos/${REPOSITORY}/git/ref/${TARGET_REF}" --jq .object.sha)
+            if [ "$head" != "$BASE_SHA" ]; then
+              echo "sha=$head" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Timed out waiting for the review-fix commit' >&2
+          exit 1
+
+      - name: Check out exact repaired implementation head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.target.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Verify atomic ancestry and review-fix surface
+        env:
+          BASE_SHA: 52799e2e18a3b55cccb0d635d0a83c091c330ecd
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          git diff --check "$BASE_SHA"..HEAD
+          git diff --name-only "$BASE_SHA"..HEAD | sort > /tmp/review-fix-files.txt
+          grep -qx 'core/native/include/nodal/AnalogEquationRuntime.h' /tmp/review-fix-files.txt
+          grep -qx 'core/scala/api/src/nodal/AnalogEquationRuntime.scala' /tmp/review-fix-files.txt
+          grep -qx 'core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala' /tmp/review-fix-files.txt
+          grep -qx 'core/scala/api/src/nodal/ElaborationConstructionKernel.scala' /tmp/review-fix-files.txt
+          grep -qx 'examples/continuousTimeApi/src/nodal/increment32fixture/Increment32RuntimeCheck.scala' /tmp/review-fix-files.txt
+          grep -qx 'tests/compiler/fixtures/increment32/analog_equation_runtime_test.cpp' /tmp/review-fix-files.txt
+          grep -qx 'tests/compiler/test_increment32.py' /tmp/review-fix-files.txt
+          test "$(wc -l < /tmp/review-fix-files.txt)" -le 9
+
+      - name: Run Increment 32 production-path acceptance
+        run: |
+          set -euo pipefail
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment32.py'
+          python3 -m unittest discover -s tests/compiler
+          ./mill core.scala.testkit.test
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          git diff --check
+
+      - name: Require complete exact-head pull-request matrix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          cat > /tmp/expected.txt <<'EOF'
+          Core CI
+          Increment 13 Core Semantic Candidates
+          Increment 14 Pipeline and Interface Candidates
+          Increment 15 Unified Public API Freeze
+          Increment 16 Elaboration Construction Kernel
+          Increment 17 Source Origin Naming
+          Increment 18 MLIR Dialect Skeleton
+          Increment 19 Core MLIR Model
+          Increment 20 Scala-to-MLIR Bridge
+          Increment 21 Native Semantic Pipeline
+          Increment 22 Cross-Layer Diagnostics
+          Increment 23 Backend Framework
+          Increment 24 Minimal Analog IR
+          Increment 25 RC Filter Vertical Slice
+          Increment 26 Reproducibility Contract
+          Increment 27 Natures and Disciplines
+          Increment 28 Electrical Conservative Connectivity
+          Increment 29 Parameters Constants Ranges and Units
+          Increment 30 Analog Numeric Types and Expression Typing
+          Increment 31 Potential and Flow Access
+          Increment 32 Equation and Contribution Semantics
+          Increment 133 Analog Semantic API
+          EOF
+          for attempt in $(seq 1 90); do
+            gh api --paginate "repos/${REPOSITORY}/actions/runs?event=pull_request&head_sha=${HEAD_SHA}&per_page=100" \
+              --jq '.workflow_runs[] | [.name,.status,(.conclusion // ""),(.id|tostring),.created_at] | @tsv' \
+              > /tmp/runs.tsv
+            python3 - <<'PY'
+          from pathlib import Path
+          expected = [line.strip() for line in Path('/tmp/expected.txt').read_text().splitlines() if line.strip()]
+          latest = {}
+          for line in Path('/tmp/runs.tsv').read_text().splitlines():
+              name, status, conclusion, run_id, created = line.split('\t')
+              current = latest.get(name)
+              if current is None or created > current[3]:
+                  latest[name] = (status, conclusion, run_id, created)
+          missing = [name for name in expected if name not in latest]
+          pending = [name for name in expected if name in latest and latest[name][0] != 'completed']
+          failed = [name for name in expected if name in latest and latest[name][0] == 'completed' and latest[name][1] != 'success']
+          Path('/tmp/matrix-state.txt').write_text(
+              'missing=' + ','.join(missing) + '\n' +
+              'pending=' + ','.join(pending) + '\n' +
+              'failed=' + ','.join(failed) + '\n'
+          )
+          if failed:
+              raise SystemExit(2)
+          if missing or pending:
+              raise SystemExit(1)
+          Path('/tmp/matrix.json').write_text(__import__('json').dumps({name: latest[name] for name in expected}, indent=2))
+          PY
+            rc=$?
+            cat /tmp/matrix-state.txt
+            if [ "$rc" -eq 0 ]; then
+              exit 0
+            fi
+            if [ "$rc" -eq 2 ]; then
+              exit 1
+            fi
+            sleep 20
+          done
+          echo 'Timed out waiting for exact-head workflow matrix' >&2
+          exit 1
+
+      - name: Publish audit evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: increment-32-review-fix-audit
+          path: |
+            /tmp/review-fix-files.txt
+            /tmp/matrix.json
+          if-no-files-found: error
+          retention-days: 7

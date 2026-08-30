@@ -34,20 +34,18 @@ jobs:
           ./mill core.scala.testkit.test
           ./mill mill.scalalib.scalafmt/checkFormatAll
           ./mill scalafix.check
-      - name: Package complete validation dependency groups
+      - name: Package complete Maven validation cache
         run: |
           cd "$HOME"
-          tar -czf /tmp/nodal-inc32-validation-groups.tgz \
-            .cache/coursier/v1/https/repo1.maven.org/maven2/com/lihaoyi \
-            .cache/coursier/v1/https/repo1.maven.org/maven2/org/scalameta \
-            .cache/coursier/v1/https/repo1.maven.org/maven2/ch/epfl/scala \
+          tar -czf /tmp/nodal-inc32-maven-cache.tgz \
+            .cache/coursier/v1/https/repo1.maven.org/maven2 \
             .cache/nodal/mill \
             .cache/mill/download
-      - name: Upload validation dependency groups
+      - name: Upload Maven validation cache
         uses: actions/upload-artifact@v4
         with:
-          name: nodal-inc32-validation-groups
-          path: /tmp/nodal-inc32-validation-groups.tgz
+          name: nodal-inc32-maven-cache
+          path: /tmp/nodal-inc32-maven-cache.tgz
           if-no-files-found: error
           compression-level: 0
           retention-days: 1

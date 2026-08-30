@@ -11,68 +11,23 @@ permissions:
 jobs:
   bundle:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 10
     steps:
       - name: Check out current Increment 32 branch
         uses: actions/checkout@v6
         with:
           ref: increment/32-equation-contribution-semantics-review
           fetch-depth: 0
-      - name: Restore Scala dependency cache
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cache/coursier
-            ~/.cache/nodal/mill
-          key: nodal-inc32-scala-cache-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill') }}
-          restore-keys: |
-            nodal-scala-${{ runner.os }}-
-      - name: Populate Scala compiler and JDK cache
+      - name: Populate Mill launcher executable
+        run: ./mill --version
+      - name: Package Mill executable cache
         run: |
-          ./mill examples.continuousTimeApi.compile
-          ./mill core.scala.testkit.test.compile
-      - name: Package and split Scala cache
-        run: |
-          mkdir -p /tmp/nodal-inc32-cache-parts
-          tar -C "$HOME" -czf /tmp/nodal-inc32-scala-cache.tgz \
-            .cache/coursier \
-            .cache/nodal/mill
-          sha256sum /tmp/nodal-inc32-scala-cache.tgz > /tmp/nodal-inc32-cache-parts/sha256.txt
-          split -b 200M -d -a 2 \
-            /tmp/nodal-inc32-scala-cache.tgz \
-            /tmp/nodal-inc32-cache-parts/cache-part-
-          test -f /tmp/nodal-inc32-cache-parts/cache-part-00
-          test -f /tmp/nodal-inc32-cache-parts/cache-part-01
-          test -f /tmp/nodal-inc32-cache-parts/cache-part-02
-          test ! -f /tmp/nodal-inc32-cache-parts/cache-part-03
-      - name: Upload Scala cache part 00
+          tar -C "$HOME" -czf /tmp/nodal-inc32-mill-cache.tgz .cache/mill/download
+      - name: Upload Mill executable cache
         uses: actions/upload-artifact@v4
         with:
-          name: nodal-inc32-scala-cache-part-00
-          path: /tmp/nodal-inc32-cache-parts/cache-part-00
+          name: nodal-inc32-mill-cache
+          path: /tmp/nodal-inc32-mill-cache.tgz
           if-no-files-found: error
           compression-level: 0
-          retention-days: 1
-      - name: Upload Scala cache part 01
-        uses: actions/upload-artifact@v4
-        with:
-          name: nodal-inc32-scala-cache-part-01
-          path: /tmp/nodal-inc32-cache-parts/cache-part-01
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 1
-      - name: Upload Scala cache part 02
-        uses: actions/upload-artifact@v4
-        with:
-          name: nodal-inc32-scala-cache-part-02
-          path: /tmp/nodal-inc32-cache-parts/cache-part-02
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 1
-      - name: Upload Scala cache checksum
-        uses: actions/upload-artifact@v4
-        with:
-          name: nodal-inc32-scala-cache-sha256
-          path: /tmp/nodal-inc32-cache-parts/sha256.txt
-          if-no-files-found: error
           retention-days: 1

@@ -2,13 +2,12 @@ package nodal
 
 import scala.collection.mutable
 
-/** Backend-neutral source-semantic recording for unordered analog equations and
-  * additive potential/flow contributions.
+/** Backend-neutral source-semantic recording for unordered analog equations and additive
+  * potential/flow contributions.
   *
-  * This runtime deliberately records authored expressions without orienting,
-  * dividing, solving, or lowering them. Residual intent is structural:
-  * `lhs - rhs == 0`; the original left and right expressions remain canonical
-  * source evidence.
+  * This runtime deliberately records authored expressions without orienting, dividing, solving, or
+  * lowering them. Residual intent is structural: `lhs - rhs == 0`; the original left and right
+  * expressions remain canonical source evidence.
   */
 private[nodal] object AnalogEquationRuntime:
 

@@ -58,8 +58,8 @@
     "implementation_merge": "e9ea39e823d5a226a65b952e176d3bb90ecda0aa",
     "post_merge_core_ci_run": 33372029305,
     "closure_pull_request": 99,
-    "closure_validation_head": "e9ea39e823d5a226a65b952e176d3bb90ecda0aa",
-    "closure_core_ci_run": 33372560008,
+    "closure_validation_head": "7677058b665bb33a321a5f9f0309afd61f6e07c7",
+    "closure_core_ci_run": 33375392682,
     "inherited_workflow_runs": {
       "increment13": 33370821567,
       "increment14": 33370821570,

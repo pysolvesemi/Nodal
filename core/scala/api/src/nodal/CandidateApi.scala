@@ -113,7 +113,9 @@ final class Variable[A <: Data] private[nodal] (
   CandidateRuntime.declareAnalogVariable(this, dataType, initializer)
 
   def initialValue: Expr[A] = initializer.getOrElse(
-    throw new IllegalStateException("analog variable has no declaration initializer")
+    scala.util.Failure[Expr[A]](
+      new IllegalStateException("analog variable has no declaration initializer")
+    ).get
   )
 
   def initialValueOption: Option[Expr[A]] = initializer

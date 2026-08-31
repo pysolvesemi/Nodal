@@ -93,25 +93,25 @@ No target backend may reorder assignments during this increment.
 
 Increment 33 reserves `NODAL-ANALOG-033-*` for at least:
 
-- `001` empty variable identity;
-- `002` duplicate variable identity;
-- `003` declaration outside a procedural region;
-- `004` initializer type mismatch;
-- `005` initializer dimension mismatch;
-- `006` empty statement identity;
-- `007` duplicate statement identity;
-- `008` assignment outside a procedural region;
-- `009` cross-component variable access;
-- `010` out-of-scope variable access;
-- `011` read before initialization or earlier write;
-- `012` assignment type mismatch;
-- `013` assignment dimension mismatch;
-- `014` non-Boolean assignment guard;
-- `015` invalid analysis applicability;
-- `016` invalid lexical scope identity;
-- `017` unknown variable identity;
-- `018` nested procedural region;
-- `019` unsupported variable scalar kind.
+- `NODAL-ANALOG-033-001` empty variable identity;
+- `NODAL-ANALOG-033-002` duplicate variable identity;
+- `NODAL-ANALOG-033-003` procedural construction without an active component;
+- `NODAL-ANALOG-033-004` initializer type mismatch;
+- `NODAL-ANALOG-033-005` initializer dimension mismatch;
+- `NODAL-ANALOG-033-006` empty statement identity;
+- `NODAL-ANALOG-033-007` duplicate statement identity;
+- `NODAL-ANALOG-033-008` assignment outside a procedural region;
+- `NODAL-ANALOG-033-009` cross-component variable access;
+- `NODAL-ANALOG-033-010` out-of-scope variable access;
+- `NODAL-ANALOG-033-011` read before initialization or earlier write;
+- `NODAL-ANALOG-033-012` assignment type mismatch;
+- `NODAL-ANALOG-033-013` assignment dimension mismatch;
+- `NODAL-ANALOG-033-014` non-Boolean assignment guard;
+- `NODAL-ANALOG-033-015` invalid analysis applicability;
+- `NODAL-ANALOG-033-016` invalid lexical scope identity;
+- `NODAL-ANALOG-033-017` unknown variable identity;
+- `NODAL-ANALOG-033-018` nested procedural region;
+- `NODAL-ANALOG-033-019` unsupported variable scalar kind.
 
 Diagnostics include the relevant stable variable or statement path whenever one
 is available.

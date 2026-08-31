@@ -68,6 +68,9 @@ private[nodal] object AnalogProceduralRuntime:
   final class Failure(val diagnostic: Diagnostic)
       extends IllegalArgumentException(diagnostic.toString)
 
+  private[nodal] def reject(diagnostic: Diagnostic): Nothing =
+    scala.util.Failure[Nothing](new Failure(diagnostic)).get
+
   private final case class MutableVariable(record: VariableRecord, var initialized: Boolean)
 
   final class Recorder(val owner: String):
@@ -90,7 +93,7 @@ private[nodal] object AnalogProceduralRuntime:
     )
 
     private def fail(code: String, message: String, path: Option[String] = None): Nothing =
-      throw new Failure(Diagnostic(code, message, path))
+      reject(Diagnostic(code, message, path))
 
     private def requireProcedure(path: Option[String] = None): Unit =
       if !procedureActive then

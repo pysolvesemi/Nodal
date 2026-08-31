@@ -1,0 +1,23 @@
+name: Increment 33 structural probe
+
+on:
+  push:
+    branches:
+      - automation/inc33-staging-materializer-controller-20260831
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out staged Increment 33 tree
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc33-compiler-ir-staging-20260831
+          fetch-depth: 1
+
+      - name: Run structural checkpoint
+        run: python3 scripts/check_increment33.py

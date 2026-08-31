@@ -103,3 +103,8 @@ object AnalogProceduralConstructionTests extends TestSuite:
         scala.util.Try(ConstructionKernel.inspect(new PublicAnalogCrossOwner)).failed.get
           .asInstanceOf[AnalogProceduralRuntime.Failure]
       assert(failure.diagnostic.code == "NODAL-ANALOG-033-009")
+      assert(
+        failure.diagnostic.path.contains(
+          "PublicAnalogCrossOwner.PublicAnalogChild_0.variable_0"
+        )
+      )

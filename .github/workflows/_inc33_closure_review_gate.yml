@@ -1,0 +1,76 @@
+name: Increment 33 Closure Review Gate
+
+on:
+  push:
+    branches:
+      - automation/inc33-closure-review-gate-20260831
+
+permissions:
+  contents: write
+  pull-requests: read
+  issues: write
+
+jobs:
+  review-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out final closure head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-evidence-closure
+          fetch-depth: 0
+
+      - name: Require clean final closure review state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse HEAD)
+          pr=$(gh api '/repos/pysolvesemi/Nodal/pulls/101')
+          test "$(printf '%s' "$pr" | jq -r '.state')" = 'open'
+          test "$(printf '%s' "$pr" | jq -r '.draft')" = 'false'
+          test "$(printf '%s' "$pr" | jq -r '.head.sha')" = "$head"
+
+          gh api graphql \
+            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved isOutdated path line comments(first:20){nodes{author{login} body createdAt}}}} reviews(first:100){nodes{author{login} state submittedAt commit{oid} body}}}}}' \
+            -F owner=pysolvesemi -F name=Nodal -F number=101 > /tmp/review.json
+
+          python3 - "$head" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          head = sys.argv[1]
+          pull = json.loads(Path('/tmp/review.json').read_text())['data']['repository']['pullRequest']
+          unresolved = [
+              value for value in pull['reviewThreads']['nodes']
+              if not value['isResolved'] and not value['isOutdated']
+          ]
+          latest = {}
+          for review in pull['reviews']['nodes']:
+              author = (review.get('author') or {}).get('login')
+              if author:
+                  latest[author] = review
+          changes = [
+              value for value in latest.values()
+              if value.get('state') == 'CHANGES_REQUESTED'
+              and (value.get('commit') or {}).get('oid') == head
+          ]
+          report = {'head': head, 'unresolved': unresolved, 'changes_requested': changes}
+          Path('/tmp/inc33-closure-review.json').write_text(json.dumps(report, indent=2) + '\n')
+          if unresolved or changes:
+              print(json.dumps(report, indent=2))
+              raise SystemExit(1)
+          print(json.dumps(report, indent=2))
+          PY
+
+      - name: Publish closure review-clean checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head=$(git rev-parse HEAD)
+          git push --force origin "$head":refs/heads/checkpoint/increment-33-closure-review-clean
+          gh api --method POST \
+            -f body="Final Increment 33 closure review is clean on exact head \`$head\`: no unresolved current thread and no exact-head changes-requested review remains." \
+            '/repos/pysolvesemi/Nodal/issues/101/comments'

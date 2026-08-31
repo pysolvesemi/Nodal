@@ -511,6 +511,7 @@ add_test(
   NAME nodal.native.analog-procedural-source-map-roundtrip
   COMMAND nodalc
     --mlir-print-op-generic
+    --mlir-print-debuginfo
     "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-procedural.mlir"
 )
 set_tests_properties(
@@ -519,7 +520,7 @@ set_tests_properties(
     PASS_REGULAR_EXPRESSION "AnalogProcedural[.]scala"
 )
 
-foreach(_fixture IN ITEMS read order owner type dimension guard analysis nested variable-kind)
+foreach(_fixture IN ITEMS read order owner type dimension guard analysis nested)
   add_test(
     NAME nodal.native.analog-procedural-rejects-${_fixture}
     COMMAND nodalc
@@ -532,10 +533,13 @@ foreach(_fixture IN ITEMS read order owner type dimension guard analysis nested 
   )
 endforeach()
 
-set_tests_properties(
-  nodal.native.analog-procedural-rejects-variable-kind
-  PROPERTIES
-    PASS_REGULAR_EXPRESSION "NODAL-ANALOG-033-019"
+add_test(
+  NAME nodal.native.analog-procedural-rejects-variable-kind
+  COMMAND "${CMAKE_COMMAND}"
+    "-DNODALC=$<TARGET_FILE:nodalc>"
+    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-procedural-invalid-variable-kind.mlir"
+    "-DDIAGNOSTIC=NODAL-ANALOG-033-019"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
 )
 
 add_custom_target(check-nodal-native

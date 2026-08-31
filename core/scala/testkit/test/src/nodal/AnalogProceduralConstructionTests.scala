@@ -89,16 +89,13 @@ object AnalogProceduralConstructionTests extends TestSuite:
           .asInstanceOf[AnalogProceduralRuntime.Failure]
       assert(failure.diagnostic.code == "NODAL-ANALOG-033-008")
 
-    test("child procedural source capture uses its provisional instance path"):
+    test("child procedural snapshot resolves to its authored instance path"):
       val snapshot = ConstructionKernel.inspect(new PublicAnalogParentWithChild)
       val procedural = snapshot.analogProcedural.find(_.assignments.nonEmpty).get
-      assert(
-        procedural.owner ==
-          "PublicAnalogParentWithChild.PublicAnalogNestedChild_0"
-      )
+      assert(procedural.owner == "PublicAnalogParentWithChild.child")
       assert(
         procedural.assignments.head.identity ==
-          "PublicAnalogParentWithChild.PublicAnalogNestedChild_0.statement_0"
+          "PublicAnalogParentWithChild.child.statement_0"
       )
 
     test("public cross-component variable assignment is rejected"):

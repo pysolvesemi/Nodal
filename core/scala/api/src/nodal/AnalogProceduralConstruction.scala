@@ -174,6 +174,12 @@ private[nodal] object AnalogProceduralConstruction:
         )
         module.variables.put(pending.value, variable)
 
+  private def registeredIdentity(module: ModuleState, value: AnyRef): Option[String] =
+    Option(module.variables.get(value)).map(_.identity).orElse:
+      module.pending
+        .find(pending => pending.value eq value)
+        .map(pending => s"${module.owner}.variable_${pending.declarationOrder}")
+
   def procedure[A](body: => A): A =
     val module = activeModule
     module.procedureDepth += 1
@@ -208,16 +214,16 @@ private[nodal] object AnalogProceduralConstruction:
     val variable = Option(module.variables.get(target)).getOrElse:
       val foreign = state.modules.iterator
         .filterNot(_ eq module)
-        .flatMap(candidate => Option(candidate.variables.get(target)).map(_ -> candidate))
+        .flatMap(candidate => registeredIdentity(candidate, target).map(_ -> candidate))
         .toVector
         .headOption
       foreign match
-        case Some((value, owner)) =>
+        case Some((identity, owner)) =>
           AnalogProceduralRuntime.reject(
             AnalogProceduralRuntime.Diagnostic(
               "NODAL-ANALOG-033-009",
               s"procedural variable belongs to component '${owner.owner}', not '${module.owner}'",
-              Some(value.identity)
+              Some(identity)
             )
           )
         case None =>

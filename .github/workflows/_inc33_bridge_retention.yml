@@ -1,0 +1,328 @@
+name: Increment 33 Bridge and Reproducibility Retention
+
+on:
+  push:
+    branches:
+      - automation/inc33-bridge-retention-20260831
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  integrate-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - name: Check out active Increment 33 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Integrate procedural source semantics into normal evidence paths
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import re
+          import subprocess
+
+          root = Path('.')
+          bridge_path = root / 'core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala'
+          repro_path = root / 'core/scala/bridge/src/nodal/bridge/ReproducibilityContract.scala'
+          test_path = root / 'core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala'
+          checker_path = root / 'scripts/check_increment33.py'
+          manifest_path = root / 'tests/compiler/fixtures/increment33/manifest.json'
+          implementation_path = root / 'docs/implementation/increment33-analog-variables-procedural-assignment.md'
+          workflow_path = root / '.github/workflows/increment-33-analog-procedural-assignment.yml'
+
+          def run(*command: str) -> subprocess.CompletedProcess[str]:
+              return subprocess.run(command, text=True, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, check=False)
+
+          # ReproducibilityContract: wrap its existing canonicalSnapshot implementation so the
+          # original schema remains intact and one deterministic procedural field is appended.
+          repro = repro_path.read_text()
+          if 'canonicalSnapshotWithoutProcedural' not in repro:
+              pattern = re.compile(
+                  r'(?m)^(?P<indent>\s*)def canonicalSnapshot\('
+                  r'(?P<params>[^\n)]*)\):\s*String\s*=\s*'
+              )
+              match = pattern.search(repro)
+              if not match:
+                  raise SystemExit('unable to locate ReproducibilityContract.canonicalSnapshot')
+              params = match.group('params')
+              names = []
+              for part in params.split(','):
+                  name = part.strip().split(':', 1)[0].strip()
+                  if name:
+                      names.append(name)
+              if len(names) != 1:
+                  raise SystemExit(f'unexpected canonicalSnapshot parameters: {params!r}')
+              snapshot = names[0]
+              indent = match.group('indent')
+              wrapper = (
+                  f'{indent}def canonicalSnapshot({params}): String =\n'
+                  f'{indent}  val base = canonicalSnapshotWithoutProcedural({snapshot})\n'
+                  f'{indent}  val closing = base.lastIndexOf(\'}}\')\n'
+                  f'{indent}  if closing < 0 then base\n'
+                  f'{indent}  else\n'
+                  f'{indent}    val prefix = base.substring(0, closing).stripTrailing()\n'
+                  f'{indent}    val separator = if prefix.endsWith("{{") then "" else ","\n'
+                  f'{indent}    prefix + separator + "\\n  \\"analog_procedural\\": " +\n'
+                  f'{indent}      AnalogProceduralEvidence.canonicalJson({snapshot}.analogProcedural) + "\\n}}"\n\n'
+                  f'{indent}private def canonicalSnapshotWithoutProcedural({params}): String = '
+              )
+              repro = repro[:match.start()] + wrapper + repro[match.end():]
+              repro_path.write_text(repro)
+
+          # ScalaToMlirBridge: extend the same line sequence/string already used for Increment 32
+          # analog semantic evidence. Try only structurally safe replacements and compile the
+          # bridge after each candidate; no source is published unless one compiles.
+          original_bridge = bridge_path.read_text()
+          if 'AnalogProceduralEvidence.mlirLines' not in original_bridge and \
+             'AnalogProceduralEvidence.mlirText' not in original_bridge:
+              candidates: list[str] = []
+              call_pattern = re.compile(
+                  r'(?P<call>(?P<fn>[A-Za-z_][A-Za-z0-9_.]*)\(\s*'
+                  r'(?P<snapshot>[A-Za-z_][A-Za-z0-9_]*)\.analogSemantics\s*\))'
+              )
+              for match in call_pattern.finditer(original_bridge):
+                  call = match.group('call')
+                  snapshot = match.group('snapshot')
+                  candidates.append(
+                      original_bridge[:match.start()] +
+                      f'({call} ++ AnalogProceduralEvidence.mlirLines({snapshot}.analogProcedural))' +
+                      original_bridge[match.end():]
+                  )
+                  candidates.append(
+                      original_bridge[:match.start()] +
+                      f'({call} + AnalogProceduralEvidence.mlirText({snapshot}.analogProcedural))' +
+                      original_bridge[match.end():]
+                  )
+
+              # Common direct sequence form used by the bridge.
+              direct_patterns = [
+                  ('analogSemanticLines(snapshot.analogSemantics)',
+                   'analogSemanticLines(snapshot.analogSemantics) ++ '
+                   'AnalogProceduralEvidence.mlirLines(snapshot.analogProcedural)'),
+                  ('renderAnalogSemantics(snapshot.analogSemantics)',
+                   'renderAnalogSemantics(snapshot.analogSemantics) ++ '
+                   'AnalogProceduralEvidence.mlirLines(snapshot.analogProcedural)'),
+                  ('renderAnalogSemantics(snapshot.analogSemantics)',
+                   'renderAnalogSemantics(snapshot.analogSemantics) + '
+                   'AnalogProceduralEvidence.mlirText(snapshot.analogProcedural)'),
+              ]
+              for old, new in direct_patterns:
+                  if old in original_bridge:
+                      candidates.append(original_bridge.replace(old, new, 1))
+
+              # Builder form: append to the nearest String-line builder before it is finalized.
+              for occurrence in re.finditer(r'([A-Za-z_]\w*)\.analogSemantics', original_bridge):
+                  snapshot = occurrence.group(1)
+                  before = original_bridge[:occurrence.start()]
+                  method_start = max(before.rfind('\n  def '), before.rfind('\n  private def '))
+                  method_end_candidates = [
+                      value for value in (
+                          original_bridge.find('\n  def ', occurrence.end()),
+                          original_bridge.find('\n  private def ', occurrence.end()),
+                      ) if value >= 0
+                  ]
+                  method_end = min(method_end_candidates) if method_end_candidates else len(original_bridge)
+                  body = original_bridge[method_start:method_end]
+                  builders = re.findall(
+                      r'(?m)^\s*val\s+([A-Za-z_]\w*)\s*=\s*'
+                      r'(?:Vector\.newBuilder\[String\]|mutable\.ArrayBuffer(?:\.empty)?\[String\])',
+                      body,
+                  )
+                  for builder in builders:
+                      finalizers = list(re.finditer(
+                          rf'(?m)^\s*{re.escape(builder)}\.(?:result\(\)|toVector)\s*$', body
+                      ))
+                      if finalizers:
+                          insertion = method_start + finalizers[-1].start()
+                          line_indent = re.match(r'\s*', body[finalizers[-1].start():]).group(0)
+                          statement = (
+                              f'{line_indent}{builder} ++= '
+                              f'AnalogProceduralEvidence.mlirLines({snapshot}.analogProcedural)\n'
+                          )
+                          candidates.append(
+                              original_bridge[:insertion] + statement + original_bridge[insertion:]
+                          )
+
+              seen = set()
+              accepted = None
+              logs = []
+              for index, candidate in enumerate(candidates):
+                  if candidate in seen:
+                      continue
+                  seen.add(candidate)
+                  bridge_path.write_text(candidate)
+                  completed = run('./mill', 'core.scala.bridge.compile')
+                  logs.append(f'candidate {index}: rc={completed.returncode}\n{completed.stdout[-3000:]}')
+                  if completed.returncode == 0:
+                      accepted = candidate
+                      break
+              if accepted is None:
+                  bridge_path.write_text(original_bridge)
+                  Path('/tmp/inc33-bridge-candidates.log').write_text('\n\n'.join(logs))
+                  raise SystemExit('no safe ScalaToMlirBridge integration candidate compiled')
+              bridge_path.write_text(accepted)
+
+          tests = test_path.read_text()
+          if 'normal bridge and reproducibility evidence retain procedural order' not in tests:
+              tests = tests.replace(
+                  'import nodal.*\n',
+                  'import nodal.*\nimport nodal.internal.bridge.{ReproducibilityContract, ScalaToMlirBridge}\n',
+                  1,
+              )
+              insertion = '''
+                test("normal bridge and reproducibility evidence retain procedural order"):
+                  val snapshot = ConstructionKernel.inspect(new PublicAnalogProceduralTop)
+                  val mlir = ScalaToMlirBridge.lower(new PublicAnalogProceduralTop).text
+                  assert(mlir.contains("nodal.bridge.analog_procedural"))
+                  assert(mlir.contains("nodal.bridge.analog_variable"))
+                  assert(mlir.contains("nodal.bridge.procedural_assign"))
+                  assert(mlir.indexOf("PublicAnalogProceduralTop.statement_0") <
+                    mlir.indexOf("PublicAnalogProceduralTop.statement_1"))
+                  assert(mlir.indexOf("PublicAnalogProceduralTop.statement_1") <
+                    mlir.indexOf("PublicAnalogProceduralTop.statement_2"))
+                  assert(mlir.contains("authored_order = 0"))
+                  assert(mlir.contains("authored_order = 2"))
+
+                  val reproducible = ReproducibilityContract.canonicalSnapshot(snapshot)
+                  assert(reproducible.contains("\\\"analog_procedural\\\""))
+                  assert(reproducible.contains("\\\"identity\\\":\\\"PublicAnalogProceduralTop.statement_0\\\""))
+                  assert(reproducible.contains("\\\"authored_order\\\":0"))
+                  assert(reproducible.indexOf("PublicAnalogProceduralTop.statement_0") <
+                    reproducible.indexOf("PublicAnalogProceduralTop.statement_1"))
+                  assert(reproducible.indexOf("PublicAnalogProceduralTop.statement_1") <
+                    reproducible.indexOf("PublicAnalogProceduralTop.statement_2"))
+              '''.replace('              ', '')
+              tests = tests.rstrip() + '\n\n' + insertion + '\n'
+              test_path.write_text(tests)
+
+          manifest = json.loads(manifest_path.read_text())
+          manifest['semantics']['scala_to_mlir_retention'] = True
+          manifest['semantics']['reproducibility_retention'] = True
+          manifest['deferred'] = [
+              value for value in manifest['deferred']
+              if value not in {'scala-to-mlir-retention', 'reproducibility-retention'}
+          ]
+          manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
+
+          checker = checker_path.read_text()
+          checker = checker.replace(
+              '        "construction_snapshot_retention",\n',
+              '        "construction_snapshot_retention",\n'
+              '        "scala_to_mlir_retention",\n'
+              '        "reproducibility_retention",\n',
+              1,
+          )
+          checker = checker.replace(
+              '    construction_kernel = read_text(root, "core/scala/api/src/nodal/ElaborationConstructionKernel.scala")\n',
+              '    construction_kernel = read_text(root, "core/scala/api/src/nodal/ElaborationConstructionKernel.scala")\n'
+              '    procedural_evidence = read_text(root, "core/scala/bridge/src/nodal/bridge/AnalogProceduralEvidence.scala")\n'
+              '    scala_bridge = read_text(root, "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala")\n'
+              '    reproducibility = read_text(root, "core/scala/bridge/src/nodal/bridge/ReproducibilityContract.scala")\n',
+              1,
+          )
+          bridge_checks = '''
+            for token in (
+                "def canonicalJson",
+                "def mlirLines",
+                "authored_order",
+                "nodal.bridge.procedural_assign",
+            ):
+                require(token in procedural_evidence, f"NODAL-INC33-040: procedural evidence is missing {token!r}")
+            require(
+                "AnalogProceduralEvidence.mlir" in scala_bridge,
+                "NODAL-INC33-041: normal Scala-to-MLIR lowering does not retain procedural evidence",
+            )
+            require(
+                "canonicalSnapshotWithoutProcedural" in reproducibility
+                and "AnalogProceduralEvidence.canonicalJson" in reproducibility,
+                "NODAL-INC33-042: canonical reproducibility output does not retain procedural evidence",
+            )
+            require(
+                "normal bridge and reproducibility evidence retain procedural order" in production_tests,
+                "NODAL-INC33-043: production evidence-order test is missing",
+            )
+          '''.replace('          ', '')
+          marker = '    for code in range(1, 20):\n'
+          if bridge_checks.strip() not in checker:
+              checker = checker.replace(marker, bridge_checks + '\n' + marker, 1)
+          checker_path.write_text(checker)
+
+          implementation = implementation_path.read_text()
+          implementation = implementation.replace(
+              'ConstructionSnapshot. Bridge and reproducibility retention remain the next\ncheckpoint before implementation acceptance.',
+              'ConstructionSnapshot and the normal Scala-to-MLIR and canonical reproducibility\noutputs. Exact-head repository validation remains before implementation acceptance.',
+          )
+          implementation = implementation.replace(
+              'Scala-to-MLIR and canonical\nreproducibility retention remain the next checkpoint.',
+              'Scala-to-MLIR output now retains ordered procedural declarations and assignments,\nand canonical reproducibility JSON preserves the same identities and order.',
+          )
+          implementation_path.write_text(implementation)
+
+          workflow = workflow_path.read_text()
+          workflow = workflow.replace(
+              "      - 'core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala'\n",
+              "      - 'core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala'\n"
+              "      - 'core/scala/bridge/src/nodal/bridge/AnalogProceduralEvidence.scala'\n"
+              "      - 'core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala'\n"
+              "      - 'core/scala/bridge/src/nodal/bridge/ReproducibilityContract.scala'\n",
+              1,
+          )
+          workflow_path.write_text(workflow)
+          PY
+
+      - name: Format and validate complete evidence retention
+        run: |
+          ./mill mill.scalalib.scalafmt/formatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./mill core.scala.testkit.test.testOnly \
+            nodal.internal.testkit.AnalogProceduralConstructionTests
+          ./mill core.scala.testkit.test.testOnly \
+            nodal.internal.testkit.AnalogEquationConstructionTests
+          ./mill examples.continuousTimeApi.runMain \
+            nodal.increment33fixture.Increment33RuntimeCheck \
+            /tmp/increment33-scala-witness.txt
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Publish bridge-retention checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            .github/workflows/increment-33-analog-procedural-assignment.yml \
+            core/scala/bridge/src/nodal/bridge/AnalogProceduralEvidence.scala \
+            core/scala/bridge/src/nodal/bridge/ReproducibilityContract.scala \
+            core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala \
+            core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
+            docs/implementation/increment33-analog-variables-procedural-assignment.md \
+            scripts/check_increment33.py \
+            tests/compiler/fixtures/increment33/manifest.json
+          git commit -m 'feat(increment33): retain procedural semantics in bridge evidence'
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5
+          head=$(git rev-parse HEAD)
+          git push --force origin "$head":refs/heads/checkpoint/increment-33-bridge-retention-green
+          pr=$(gh api --method GET -f state=open \
+            -f head='pysolvesemi:increment/33-analog-variables-procedural-assignment-v5' \
+            '/repos/pysolvesemi/Nodal/pulls' --jq '.[0].number // empty')
+          if [ -n "$pr" ]; then
+            gh api --method POST \
+              -f body="Bridge/reproducibility retention passed on exact head \`$head\`: normal Scala-to-MLIR output and canonical reproducibility JSON preserve variable declarations, repeated writes, identities, dimensions, and authored assignment order." \
+              "/repos/pysolvesemi/Nodal/issues/$pr/comments"
+          fi

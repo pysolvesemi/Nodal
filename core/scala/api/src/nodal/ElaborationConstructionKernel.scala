@@ -1,6 +1,8 @@
 package nodal
 
 import java.lang.ScopedValue
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.IdentityHashMap
 
 import scala.collection.mutable
@@ -139,6 +141,8 @@ private[nodal] final case class ConstructionSnapshot(
     generatedNames: Vector[KernelGeneratedNameSnapshot] = Vector.empty,
     sourceMap: Vector[SourceMapEntry] = Vector.empty,
     analogRegions: Vector[KernelAnalogRegionSnapshot] = Vector.empty,
+    analogSemantics: AnalogEquationRuntime.Snapshot =
+      AnalogEquationRuntime.Snapshot(Vector.empty, Vector.empty),
     waivers: Vector[KernelWaiverSnapshot] = Vector.empty
 )
 
@@ -189,6 +193,85 @@ private final class AnalogRegionRecord(val module: Long, val ordinal: Int):
   val expressions: mutable.ArrayBuffer[ExpressionRef] = mutable.ArrayBuffer.empty
   val contributions: mutable.ArrayBuffer[(Any, Any)] = mutable.ArrayBuffer.empty
 
+private final case class AnalogSemanticContext(
+    module: Long,
+    kind: AnalogEquationRuntime.RegionKind
+)
+
+private final case class AnalogDimension(
+    powers: Map[String, Int],
+    isZero: Boolean = false,
+    isUnknown: Boolean = false
+):
+  private def normalized(values: Map[String, Int]): Map[String, Int] =
+    values.filter(_._2 != 0)
+
+  def multiply(other: AnalogDimension): AnalogDimension =
+    if isUnknown || other.isUnknown then AnalogDimension.Unknown
+    else
+      val keys = powers.keySet ++ other.powers.keySet
+      AnalogDimension(
+        normalized(
+          keys.iterator
+            .map(key => key -> (powers.getOrElse(key, 0) + other.powers.getOrElse(key, 0)))
+            .toMap
+        ),
+        isZero = isZero || other.isZero
+      )
+
+  def divide(other: AnalogDimension): AnalogDimension =
+    if isUnknown || other.isUnknown then AnalogDimension.Unknown
+    else
+      val keys = powers.keySet ++ other.powers.keySet
+      AnalogDimension(
+        normalized(
+          keys.iterator
+            .map(key => key -> (powers.getOrElse(key, 0) - other.powers.getOrElse(key, 0)))
+            .toMap
+        ),
+        isZero = isZero
+      )
+
+  def compatibleAdd(other: AnalogDimension): AnalogDimension =
+    if isZero && !other.isUnknown then other.copy(isZero = other.isZero || isZero)
+    else if other.isZero && !isUnknown then copy(isZero = isZero || other.isZero)
+    else if isUnknown then other
+    else if other.isUnknown then this
+    else if powers == other.powers then copy(isZero = isZero && other.isZero)
+    else AnalogDimension.Unknown
+
+  def canonical: String =
+    if isUnknown then "unknown"
+    else
+      powers match
+        case values if values.isEmpty => "dimensionless"
+        case values if values == Map("voltage" -> 1) => "voltage"
+        case values if values == Map("current" -> 1) => "current"
+        case values if values == Map("time" -> 1) => "time"
+        case values if values == Map("time" -> -1) => "frequency"
+        case values if values == Map("temperature" -> 1) => "temperature"
+        case values if values == Map("current" -> 1, "time" -> 1) => "charge"
+        case values if values == Map("voltage" -> 1, "current" -> 1) => "power"
+        case values if values == Map("voltage" -> 1, "current" -> -1) => "resistance"
+        case values
+            if values == Map("current" -> 1, "time" -> 1, "voltage" -> -1) =>
+          "capacitance"
+        case values =>
+          values.toVector
+            .sortBy(_._1)
+            .map: (name, exponent) =>
+              if exponent == 1 then name else s"$name^$exponent"
+            .mkString("*")
+
+private object AnalogDimension:
+  val Unknown: AnalogDimension = AnalogDimension(Map.empty, isUnknown = true)
+  val Dimensionless: AnalogDimension = AnalogDimension(Map.empty)
+  val Zero: AnalogDimension = AnalogDimension(Map.empty, isZero = true)
+  val Voltage: AnalogDimension = AnalogDimension(Map("voltage" -> 1))
+  val Current: AnalogDimension = AnalogDimension(Map("current" -> 1))
+  val Time: AnalogDimension = AnalogDimension(Map("time" -> 1))
+  val Temperature: AnalogDimension = AnalogDimension(Map("temperature" -> 1))
+
 /** One mutable transaction. JVM identity is used only for transient lookup; stable paths use
   * hierarchy, explicit names, and deterministic local ordinals.
   */
@@ -207,6 +290,8 @@ private final class ConstructionSession(val options: EmitOptions):
     mutable.LinkedHashMap.empty
   private val analogRegions: mutable.ArrayBuffer[AnalogRegionRecord] = mutable.ArrayBuffer.empty
   private val analogStack: mutable.ArrayBuffer[AnalogRegionRecord] = mutable.ArrayBuffer.empty
+  private val analogSemanticRecorder = new AnalogEquationRuntime.Recorder
+  private var analogSemanticContext: Option[AnalogSemanticContext] = None
   private val semanticOrigin = new SemanticOriginBuilder
   private var semanticResult: Option[SemanticOriginResult] = None
 
@@ -376,7 +461,431 @@ private final class ConstructionSession(val options: EmitOptions):
       val removed = analogStack.remove(analogStack.size - 1)
       if removed ne record then fail("NODAL-ANALOG-LIFECYCLE-001", "analog region stack is corrupt")
 
+  def withAnalogSemanticRegion[A](
+      kind: AnalogEquationRuntime.RegionKind
+  )(body: => A): A =
+    val module = currentModule
+    if analogSemanticContext.nonEmpty then
+      fail(
+        "NODAL-ANALOG-032-001",
+        "analog semantic regions cannot overlap",
+        Some(provisionalModulePath(module.handle))
+      )
+    analogSemanticContext = Some(AnalogSemanticContext(module.handle, kind))
+    try
+      analogSemanticRecorder.region(kind)(body) match
+        case Right(value) => value
+        case Left(error) =>
+          fail(error.code, error.message, Some(provisionalModulePath(module.handle)))
+    finally analogSemanticContext = None
+
+  def recordAnalogEquation(
+      left: Expr[Real],
+      right: Expr[Real],
+      options: EquationOptions
+  ): Unit =
+    val owner = provisionalModulePath(currentModule.handle)
+    val (leftDimension, rightDimension) = requireCompatibleDimensions(
+      left,
+      right,
+      "NODAL-ANALOG-032-006",
+      "equation operands"
+    )
+    val identity = equationIdentity(
+      owner,
+      options.id.map(_.value),
+      s"${renderAnalogValue(left)}===${renderAnalogValue(right)}"
+    )
+    val metadata = analogMetadata(
+      owner,
+      options.guard,
+      options.analyses.values.map(analysisName),
+      options.continuity
+    )
+    accept(
+      analogSemanticRecorder.recordEquation(
+        identity,
+        analogExpression(left, leftDimension),
+        analogExpression(right, rightDimension),
+        metadata
+      ),
+      owner
+    )
+
+  def recordInitialAnalogEquation(
+      left: Expr[Real],
+      right: Expr[Real],
+      options: InitialEquationOptions
+  ): Unit =
+    val owner = provisionalModulePath(currentModule.handle)
+    val (leftDimension, rightDimension) = requireCompatibleDimensions(
+      left,
+      right,
+      "NODAL-ANALOG-032-006",
+      "initial-equation operands"
+    )
+    val identity = equationIdentity(
+      owner,
+      options.id.map(_.value),
+      s"initial:${renderAnalogValue(left)}===${renderAnalogValue(right)}"
+    )
+    val metadata = analogMetadata(
+      owner,
+      options.guard,
+      Set("initialization"),
+      options.continuity
+    )
+    accept(
+      analogSemanticRecorder.recordEquation(
+        identity,
+        analogExpression(left, leftDimension),
+        analogExpression(right, rightDimension),
+        metadata
+      ),
+      owner
+    )
+
+  def recordAnalogContribution(
+      target: Expr[Real],
+      value: Expr[Real],
+      options: ContributionOptions
+  ): Unit =
+    val owner = provisionalModulePath(currentModule.handle)
+    val (targetDimension, valueDimension) = requireCompatibleDimensions(
+      target,
+      value,
+      "NODAL-ANALOG-032-011",
+      "contribution target and value"
+    )
+    val targetRecord = analogContributionTarget(target, owner).copy(dimension = targetDimension)
+    val explicitIdentity = options.id.map(_.value)
+    val identity = contributionIdentity(
+      owner,
+      explicitIdentity,
+      s"${targetRecord.identity}<+${renderAnalogValue(value)}"
+    )
+    val metadata = analogMetadata(
+      owner,
+      options.guard,
+      options.analyses.values.map(analysisName),
+      options.continuity
+    )
+    accept(
+      analogSemanticRecorder.recordContribution(
+        identity,
+        targetRecord,
+        analogExpression(value, valueDimension),
+        metadata
+      ),
+      owner
+    )
+
+  def recordShortAnalogContribution(target: Expr[Real], value: Expr[Real]): Unit =
+    analogSemanticContext match
+      case Some(_) => recordAnalogContribution(target, value, ContributionOptions())
+      case None => operation("analog-contribute", target, value)
+
+  private def accept[A](
+      result: Either[AnalogEquationRuntime.Diagnostic, A],
+      owner: String
+  ): Unit = result match
+    case Right(_) => ()
+    case Left(error) => fail(error.code, error.message, Some(owner))
+
+  private def equationIdentity(
+      owner: String,
+      explicit: Option[String],
+      fallbackSeed: String
+  ): AnalogEquationRuntime.EquationIdentity =
+    val local = semanticIdentity("equation", explicit, fallbackSeed)
+    AnalogEquationRuntime.EquationIdentity(s"$owner.$local")
+
+  private def contributionIdentity(
+      owner: String,
+      explicit: Option[String],
+      fallbackSeed: String
+  ): AnalogEquationRuntime.ContributionIdentity =
+    val local = semanticIdentity("contribution", explicit, fallbackSeed)
+    AnalogEquationRuntime.ContributionIdentity(s"$owner.$local")
+
+  private def semanticIdentity(
+      kind: String,
+      explicit: Option[String],
+      fallbackSeed: String
+  ): String = explicit match
+    case Some(value) if value.trim.isEmpty =>
+      val suffix = if kind == "equation" then "015" else "016"
+      fail(s"NODAL-ANALOG-032-$suffix", s"$kind identity must be non-empty")
+    case Some(value) => value.trim
+    case None => s"${kind}_${stableSemanticDigest(fallbackSeed).take(16)}"
+
+  private def stableSemanticDigest(value: String): String =
+    MessageDigest
+      .getInstance("SHA-256")
+      .digest(value.getBytes(StandardCharsets.UTF_8))
+      .map(byte => f"${byte & 0xff}%02x")
+      .mkString
+
+  private def analogMetadata(
+      owner: String,
+      guard: Option[Expr[Bool]],
+      analyses: Set[String],
+      continuity: ContinuityClass
+  ): AnalogEquationRuntime.Metadata =
+    val source = semanticOrigin
+      .captureSemanticSource()
+      .map(span => AnalogEquationRuntime.SourceSpan(span.path, span.line, span.column))
+      .getOrElse(AnalogEquationRuntime.SourceSpan("unknown.scala", 1, 1))
+    AnalogEquationRuntime.Metadata(
+      owner,
+      guard.map(value =>
+        AnalogEquationRuntime.Expression(
+          renderAnalogValue(value),
+          "1",
+          AnalogEquationRuntime.ValueKind.Boolean
+        )
+      ),
+      analyses,
+      continuityName(continuity),
+      source
+    )
+
+  private def analysisName(kind: AnalysisKind): String = kind match
+    case AnalysisKind.Initialization => "initialization"
+    case AnalysisKind.Dc => "dc"
+    case AnalysisKind.OperatingPoint => "operating-point"
+    case AnalysisKind.Transient => "transient"
+    case AnalysisKind.Ac => "ac"
+    case AnalysisKind.Noise => "noise"
+
+  private def continuityName(value: ContinuityClass): String = value match
+    case ContinuityClass.Unspecified => "unspecified"
+    case ContinuityClass.Discontinuous => "discontinuous"
+    case ContinuityClass.C0 => "c0"
+    case ContinuityClass.C1 => "c1"
+    case ContinuityClass.C2 => "c2"
+
+  private def analogExpression(
+      value: Expr[?],
+      dimension: String
+  ): AnalogEquationRuntime.Expression =
+    AnalogEquationRuntime.Expression(
+      renderAnalogValue(value),
+      dimension,
+      AnalogEquationRuntime.ValueKind.Real
+    )
+
+  private def requireCompatibleDimensions(
+      left: Expr[Real],
+      right: Expr[Real],
+      diagnostic: String,
+      label: String
+  ): (String, String) =
+    val leftDimension = inferAnalogDimension(left)
+    val rightDimension = inferAnalogDimension(right)
+    if leftDimension.isUnknown || rightDimension.isUnknown then
+      fail(
+        diagnostic,
+        s"$label require known physical dimensions",
+        pathOf(left).orElse(pathOf(right))
+      )
+    val leftCanonical = leftDimension.canonical
+    val rightCanonical = rightDimension.canonical
+    if leftCanonical != rightCanonical then
+      fail(
+        diagnostic,
+        s"$label have incompatible dimensions: $leftCanonical versus $rightCanonical",
+        pathOf(left).orElse(pathOf(right))
+      )
+    leftCanonical -> rightCanonical
+
+  private def inferAnalogDimension(value: Any): AnalogDimension = value match
+    case parameter: Param[?] => inferAnalogDimension(parameter.default)
+    case state: AnalogState => physicalDimension(state.dimension)
+    case expression: KernelExpr[?] =>
+      expression.literal match
+        case Some(literal) if literal.kind == "real" =>
+          val unit =
+            expression.operands.lift(1).collect { case value: String => value }.getOrElse("")
+          val zero = literal.value.toDoubleOption.contains(0.0)
+          unitDimension(unit, zero)
+        case _ =>
+          expression.operation match
+            case Some("analog_add") | Some("analog_sub") =>
+              expression.operands.map(inferAnalogDimension).reduceOption(_.compatibleAdd(_))
+                .getOrElse(AnalogDimension.Unknown)
+            case Some("analog_mul") =>
+              expression.operands.map(inferAnalogDimension).reduceOption(_.multiply(_))
+                .getOrElse(AnalogDimension.Unknown)
+            case Some("analog_div") =>
+              expression.operands match
+                case Vector(left, right) =>
+                  inferAnalogDimension(left).divide(inferAnalogDimension(right))
+                case _ => AnalogDimension.Unknown
+            case Some("analog_ddt") =>
+              expression.operands.headOption.map(inferAnalogDimension)
+                .map(_.divide(AnalogDimension.Time))
+                .getOrElse(AnalogDimension.Unknown)
+            case Some("potential_access") | Some("candidate-branch-potential") =>
+              accessDimension(expression.operands, potential = true)
+            case Some("flow_access") | Some("candidate-branch-flow") =>
+              accessDimension(expression.operands, potential = false)
+            case Some("candidate-analog-state") =>
+              expression.operands.collectFirst { case state: AnalogState =>
+                physicalDimension(state.dimension)
+              }.getOrElse(AnalogDimension.Unknown)
+            case Some("candidate-analysis-time") => AnalogDimension.Time
+            case Some("candidate-analysis-frequency") =>
+              AnalogDimension.Dimensionless.divide(AnalogDimension.Time)
+            case Some("candidate-environment-temperature") |
+                Some("candidate-environment-nominal-temperature") =>
+              AnalogDimension.Temperature
+            case Some("candidate-operating-condition") | Some("candidate-sweep-coordinate") =>
+              expression.operands.collectFirst { case dimension: PhysicalDimension =>
+                physicalDimension(dimension)
+              }.getOrElse(AnalogDimension.Unknown)
+            case _ =>
+              expression.operands.headOption.map(inferAnalogDimension)
+                .getOrElse(AnalogDimension.Unknown)
+    case dimension: PhysicalDimension => physicalDimension(dimension)
+    case _ => AnalogDimension.Unknown
+
+  private def accessDimension(values: Vector[Any], potential: Boolean): AnalogDimension =
+    val discipline = values.collectFirst:
+      case branch: Branch[?] => branch.positive.discipline
+      case node: Node[?] => node.discipline
+      case terminal: Terminal[?] => terminal.discipline
+      case view: TerminalView[?, ?] => view.terminal.discipline
+    discipline.map(disciplineDimension(_, potential)).getOrElse:
+      if potential then AnalogDimension.Voltage else AnalogDimension.Current
+
+  private def disciplineDimension(
+      discipline: Discipline,
+      potential: Boolean
+  ): AnalogDimension = discipline match
+    case Electrical => if potential then AnalogDimension.Voltage else AnalogDimension.Current
+    case named: NamedDiscipline =>
+      natureDimension(if potential then named.potential else named.flow)
+
+  private def natureDimension(nature: Nature): AnalogDimension =
+    nature.name.trim.toLowerCase match
+      case "voltage" | "potential" => AnalogDimension.Voltage
+      case "current" | "flow" => AnalogDimension.Current
+      case "temperature" => AnalogDimension.Temperature
+      case _ => AnalogDimension.Unknown
+
+  private def physicalDimension(value: PhysicalDimension): AnalogDimension =
+    value.name.trim.toLowerCase match
+      case "dimensionless" => AnalogDimension.Dimensionless
+      case "voltage" => AnalogDimension.Voltage
+      case "current" => AnalogDimension.Current
+      case "charge" => AnalogDimension.Current.multiply(AnalogDimension.Time)
+      case "temperature" => AnalogDimension.Temperature
+      case "time" => AnalogDimension.Time
+      case "frequency" => AnalogDimension.Dimensionless.divide(AnalogDimension.Time)
+      case "power" => AnalogDimension.Voltage.multiply(AnalogDimension.Current)
+      case _ => AnalogDimension.Unknown
+
+  private def unitDimension(unit: String, zero: Boolean): AnalogDimension =
+    val dimension = unit match
+      case "" => AnalogDimension.Dimensionless
+      case "V" => AnalogDimension.Voltage
+      case "A" => AnalogDimension.Current
+      case "Ohm" => AnalogDimension.Voltage.divide(AnalogDimension.Current)
+      case "F" =>
+        AnalogDimension.Current
+          .multiply(AnalogDimension.Time)
+          .divide(AnalogDimension.Voltage)
+      case "s" => AnalogDimension.Time
+      case _ => AnalogDimension.Unknown
+    if zero then dimension.copy(isZero = true) else dimension
+
+  private def analogContributionTarget(
+      target: Expr[Real],
+      owner: String
+  ): AnalogEquationRuntime.ContributionTarget = target match
+    case expression: KernelExpr[?] =>
+      val kind = expression.operation match
+        case Some("potential_access") | Some("candidate-branch-potential") =>
+          AnalogEquationRuntime.ContributionKind.Potential
+        case Some("flow_access") | Some("candidate-branch-flow") =>
+          AnalogEquationRuntime.ContributionKind.Flow
+        case _ =>
+          fail(
+            "NODAL-ANALOG-133-005",
+            "contribution target must be a potential or flow access",
+            pathOf(target)
+          )
+      val (identity, orientation) = contributionTargetIdentity(expression.operands, owner)
+      AnalogEquationRuntime.ContributionTarget(
+        identity,
+        kind,
+        inferAnalogDimension(target).canonical,
+        orientation
+      )
+    case _ =>
+      fail(
+        "NODAL-ANALOG-133-005",
+        "contribution target must be a potential or flow access",
+        pathOf(target)
+      )
+
+  private def contributionTargetIdentity(
+      values: Vector[Any],
+      owner: String
+  ): (String, String) =
+    val branchIdentity = values.collectFirst:
+      case branch: Branch[?] =>
+        val positive = renderAnalogValue(branch.positive)
+        val negative = renderAnalogValue(branch.negative)
+        val identity = branch.name
+          .filter(_.trim.nonEmpty)
+          .map(name => s"$owner.branch.${name.trim}")
+          .getOrElse(s"$owner.branch.$positive->$negative")
+        identity -> s"$positive->$negative"
+    branchIdentity
+      .orElse:
+        val endpoints = values.collect:
+          case node: Node[?] => renderAnalogValue(node)
+          case terminal: Terminal[?] => renderAnalogValue(terminal)
+          case view: TerminalView[?, ?] => renderAnalogValue(view.terminal)
+        endpoints match
+          case Vector(positive, negative, _*) =>
+            Some(s"$owner.branch.$positive->$negative" -> s"$positive->$negative")
+          case Vector(single) =>
+            Some(s"$owner.branch.$single->reference" -> s"$single->reference")
+          case _ => None
+      .getOrElse:
+        val rendered = values.map(renderAnalogValue).mkString("(", ",", ")")
+        s"$owner.branch.$rendered" -> rendered
+
+  private def renderAnalogValue(value: Any): String = value match
+    case expression: KernelExpr[?] if expression.literal.nonEmpty =>
+      val literal = expression.literal.map(_.value).getOrElse("")
+      val unit = expression.operands.lift(1).collect { case text: String => text }.getOrElse("")
+      if unit.isEmpty then literal else s"$literal $unit"
+    case expression: KernelExpr[?] =>
+      val operation = expression.operation.getOrElse("expression")
+      s"$operation${expression.operands.map(renderAnalogValue).mkString("(", ",", ")")}"
+    case branch: Branch[?] =>
+      branch.name.filter(_.trim.nonEmpty).getOrElse:
+        s"${renderAnalogValue(branch.positive)}->${renderAnalogValue(branch.negative)}"
+    case state: AnalogState => s"state:${state.name}"
+    case terminal: Terminal[?] => pathOf(terminal).getOrElse(s"terminal:${terminal.name}")
+    case node: Node[?] => pathOf(node).getOrElse("analog-node")
+    case parameter: Param[?] => pathOf(parameter).getOrElse("parameter")
+    case reference: AnyRef => pathOf(reference).getOrElse(stableClassName(reference))
+    case other => other.toString
+
   def operation(kind: String, values: Any*): Unit =
+    if kind == "assignment" then
+      analogSemanticContext.foreach: context =>
+        if context.kind != AnalogEquationRuntime.RegionKind.Procedural then
+          fail(
+            "NODAL-ANALOG-133-007",
+            "procedural assignment is illegal in a declarative analog region",
+            Some(provisionalModulePath(context.module))
+          )
     if kind == "analog-contribute" then
       val region = analogStack.lastOption.getOrElse(
         fail("NODAL-ANALOG-LIFECYCLE-002", "analog contribution is outside an analog region")
@@ -1125,6 +1634,7 @@ private final class ConstructionSession(val options: EmitOptions):
       semantic.generatedNames,
       semantic.sourceMap,
       analogSnapshots(),
+      analogSemanticRecorder.snapshot,
       waiverSnapshots(semantic.sourceMap)
     )
     val kind = classify(snapshot)
@@ -1206,6 +1716,33 @@ private[nodal] object ConstructionKernel:
   def analogBlock[A](body: => A): A = active match
     case Some(session) => session.withAnalogRegion(body)
     case None => body
+
+  def analogSemanticBlock[A](
+      kind: AnalogEquationRuntime.RegionKind
+  )(body: => A): A = active match
+    case Some(session) => session.withAnalogSemanticRegion(kind)(body)
+    case None => body
+
+  def analogEquation(
+      left: Expr[Real],
+      right: Expr[Real],
+      options: EquationOptions
+  ): Unit = active.foreach(_.recordAnalogEquation(left, right, options))
+
+  def initialAnalogEquation(
+      left: Expr[Real],
+      right: Expr[Real],
+      options: InitialEquationOptions
+  ): Unit = active.foreach(_.recordInitialAnalogEquation(left, right, options))
+
+  def analogContribution(
+      target: Expr[Real],
+      value: Expr[Real],
+      options: ContributionOptions
+  ): Unit = active.foreach(_.recordAnalogContribution(target, value, options))
+
+  def shortAnalogContribution(target: Expr[Real], value: Expr[Real]): Unit =
+    active.foreach(_.recordShortAnalogContribution(target, value))
 
   def currentDomain: Option[ClockDomain] = active.flatMap(_.currentDomain)
 

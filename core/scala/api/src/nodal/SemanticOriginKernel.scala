@@ -145,6 +145,7 @@ private[nodal] final class SemanticOriginBuilder:
   )
   private val apiSourceFiles = Set(
     "CandidateApi.scala",
+    "ContinuousTimeCandidateApi.scala",
     "CoreSemanticsCandidateApi.scala",
     "PipelineInterfaceCandidateApi.scala",
     "CompilerApi.scala"
@@ -227,6 +228,14 @@ private[nodal] final class SemanticOriginBuilder:
 
   def captureOperation(module: Long, kind: String, values: Vector[Any]): Unit =
     operations += OriginOperationCapture(module, kind, values, captureSite())
+
+  /** Capture the current user-facing Scala source span for a semantic operation.
+    *
+    * Increment 32 uses the same stack-walk policy as declarations and expressions so public
+    * equation/contribution records retain source provenance instead of manufacturing synthetic
+    * locations in their standalone witness.
+    */
+  def captureSemanticSource(): Option[SourceSpan] = captureSite().span
 
   private def captureSite(): KernelSourceSite =
     val frames = walker.walk[java.util.List[StackWalker.StackFrame]](stream =>

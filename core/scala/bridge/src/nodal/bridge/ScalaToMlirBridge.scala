@@ -140,6 +140,7 @@ private[nodal] object ScalaToMlirBridge:
         "nodal.bridge.generated_names" -> generatedNameInventory,
         "nodal.bridge.topology" -> topologyInventory,
         "nodal.bridge.source_map" -> sourceMapInventory,
+        "nodal.bridge.analog_semantics" -> analogSemanticInventory,
         "nodal.target.profile" -> quoted(targetProfile),
         "nodal.backend.profile" -> quoted(backendProfile),
         "nodal.backend.check_profile" -> quoted("default"),
@@ -177,7 +178,10 @@ ${indent(body, 2)}
         "memory",
         "digital-inout"
       )
-      val analog = snapshot.analogRegions.nonEmpty || declarationKinds.exists(analogKinds.contains)
+      val analog = snapshot.analogRegions.nonEmpty ||
+        snapshot.analogSemantics.equations.nonEmpty ||
+        snapshot.analogSemantics.contributions.nonEmpty ||
+        declarationKinds.exists(analogKinds.contains)
       val digital = declarationKinds.exists(digitalKinds.contains) ||
         snapshot.interfaceAbi.nonEmpty ||
         snapshot.resolvedNets.nonEmpty
@@ -186,6 +190,49 @@ ${indent(body, 2)}
         case (false, true) => "analog"
         case (true, false) => "digital"
         case _ => "target_neutral"
+
+    private def analogSemanticInventory: String =
+      val equations = snapshot.analogSemantics.equations.map: equation =>
+        dictionary(
+          Vector(
+            "kind" -> quoted(if equation.initialOnly then "initial_equation" else "equation"),
+            "identity" -> quoted(equation.identity.value),
+            "authored_left" -> quoted(equation.residual.authoredLeft.rendered),
+            "authored_right" -> quoted(equation.residual.authoredRight.rendered),
+            "dimension" -> quoted(equation.residual.authoredLeft.dimension),
+            "analyses" -> array(equation.metadata.analyses.toVector.sorted.map(quoted)),
+            "continuity" -> quoted(equation.metadata.continuity),
+            "guard" -> quoted(equation.metadata.guard.map(_.rendered).getOrElse("")),
+            "owner" -> quoted(equation.metadata.owner),
+            "source_file" -> quoted(equation.metadata.source.file),
+            "source_line" -> integer(equation.metadata.source.line),
+            "source_column" -> integer(equation.metadata.source.column),
+            "residual_convention" -> quoted(equation.residual.canonicalConvention),
+            "causally_oriented" -> boolean(equation.residual.causallyOriented),
+            "divided" -> boolean(equation.residual.divided)
+          )
+        )
+      val contributions = snapshot.analogSemantics.contributions.flatMap: bucket =>
+        bucket.terms.map: contribution =>
+          dictionary(
+            Vector(
+              "kind" -> quoted("contribution"),
+              "identity" -> quoted(contribution.identity.value),
+              "target_identity" -> quoted(bucket.target.identity),
+              "target_kind" -> quoted(bucket.target.kind.toString.toLowerCase),
+              "target_dimension" -> quoted(bucket.target.dimension),
+              "target_orientation" -> quoted(bucket.target.orientation),
+              "value" -> quoted(contribution.value.rendered),
+              "analyses" -> array(contribution.metadata.analyses.toVector.sorted.map(quoted)),
+              "continuity" -> quoted(contribution.metadata.continuity),
+              "guard" -> quoted(contribution.metadata.guard.map(_.rendered).getOrElse("")),
+              "owner" -> quoted(contribution.metadata.owner),
+              "source_file" -> quoted(contribution.metadata.source.file),
+              "source_line" -> integer(contribution.metadata.source.line),
+              "source_column" -> integer(contribution.metadata.source.column)
+            )
+          )
+      array(equations ++ contributions)
 
     private def backendProfile: String = backend match
       case Backend.VerilogA => "verilog-a"

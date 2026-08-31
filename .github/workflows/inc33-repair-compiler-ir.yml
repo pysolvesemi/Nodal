@@ -1,0 +1,294 @@
+name: Increment 33 repair compiler IR tranche
+
+on:
+  push:
+    branches:
+      - automation/inc33-staging-materializer-controller-20260831
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc33-staging-materializer-controller-20260831
+          fetch-depth: 0
+
+      - name: Check out repair branch
+        shell: bash
+        run: |
+          git checkout -B automation/inc33-compiler-ir-repair-20260831 origin/automation/inc33-compiler-ir-repair-20260831
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
+
+      - name: Apply lint-safe semantic repair
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement, found {count}")
+              file.write_text(text.replace(old, new), encoding="utf-8")
+
+          runtime = "core/scala/api/src/nodal/AnalogProceduralRuntime.scala"
+          replace_once(
+              runtime,
+              '''  final class Failure(val diagnostic: Diagnostic)
+              extends IllegalArgumentException(diagnostic.toString)
+
+  private final case class MutableVariable(record: VariableRecord, var initialized: Boolean)
+''',
+              '''  final class Failure(val diagnostic: Diagnostic)
+              extends IllegalArgumentException(diagnostic.toString)
+
+  private[nodal] def reject(diagnostic: Diagnostic): Nothing =
+    scala.util.Failure[Nothing](new Failure(diagnostic)).get
+
+  private final case class MutableVariable(record: VariableRecord, var initialized: Boolean)
+''',
+          )
+          replace_once(
+              runtime,
+              '''    private def fail(code: String, message: String, path: Option[String] = None): Nothing =
+      throw new Failure(Diagnostic(code, message, path))
+''',
+              '''    private def fail(code: String, message: String, path: Option[String] = None): Nothing =
+      reject(Diagnostic(code, message, path))
+''',
+          )
+
+          construction = "core/scala/api/src/nodal/AnalogProceduralConstruction.scala"
+          replace_once(
+              construction,
+              '''  private def state: State =
+    var value = current.get()
+    if value == null then
+      value = new State
+      current.set(value)
+    value
+''',
+              '''  private def state: State = Option(current.get()).getOrElse:
+    val value = new State
+    current.set(value)
+    value
+''',
+          )
+          replace_once(
+              construction,
+              '''  private def activeModule: ModuleState =
+    state.stack.lastOption.getOrElse(
+      throw new AnalogProceduralRuntime.Failure(
+        AnalogProceduralRuntime.Diagnostic(
+          "NODAL-ANALOG-033-003",
+          "procedural variable construction has no active component"
+        )
+      )
+    )
+''',
+              '''  private def activeModule: ModuleState =
+    state.stack.lastOption.getOrElse(
+      AnalogProceduralRuntime.reject(
+        AnalogProceduralRuntime.Diagnostic(
+          "NODAL-ANALOG-033-003",
+          "procedural variable construction has no active component"
+        )
+      )
+    )
+''',
+          )
+          replace_once(
+              construction,
+              '''    case other =>
+      throw new AnalogProceduralRuntime.Failure(
+        AnalogProceduralRuntime.Diagnostic(
+          "NODAL-ANALOG-033-019",
+          s"unsupported procedural variable scalar kind '$other'"
+        )
+      )
+''',
+              '''    case other =>
+      AnalogProceduralRuntime.reject(
+        AnalogProceduralRuntime.Diagnostic(
+          "NODAL-ANALOG-033-019",
+          s"unsupported procedural variable scalar kind '$other'"
+        )
+      )
+''',
+          )
+          replace_once(
+              construction,
+              "      if module.variables.get(pending.value) == null then\n",
+              "      if !module.variables.containsKey(pending.value) then\n",
+          )
+          replace_once(
+              construction,
+              '''    if module.procedureDepth == 0 then
+      throw new AnalogProceduralRuntime.Failure(
+        AnalogProceduralRuntime.Diagnostic(
+          "NODAL-ANALOG-033-008",
+          "analog variable assignment requires an active procedural region"
+        )
+      )
+''',
+              '''    if module.procedureDepth == 0 then
+      AnalogProceduralRuntime.reject(
+        AnalogProceduralRuntime.Diagnostic(
+          "NODAL-ANALOG-033-008",
+          "analog variable assignment requires an active procedural region"
+        )
+      )
+''',
+          )
+          replace_once(
+              construction,
+              '''        case Some((value, owner)) =>
+          throw new AnalogProceduralRuntime.Failure(
+            AnalogProceduralRuntime.Diagnostic(
+              "NODAL-ANALOG-033-009",
+              s"procedural variable belongs to component '${owner.owner}', not '${module.owner}'",
+              Some(value.identity)
+            )
+          )
+        case None =>
+          throw new AnalogProceduralRuntime.Failure(
+            AnalogProceduralRuntime.Diagnostic(
+              "NODAL-ANALOG-033-017",
+              "procedural assignment target is not registered in the active component"
+            )
+          )
+''',
+              '''        case Some((value, owner)) =>
+          AnalogProceduralRuntime.reject(
+            AnalogProceduralRuntime.Diagnostic(
+              "NODAL-ANALOG-033-009",
+              s"procedural variable belongs to component '${owner.owner}', not '${module.owner}'",
+              Some(value.identity)
+            )
+          )
+        case None =>
+          AnalogProceduralRuntime.reject(
+            AnalogProceduralRuntime.Diagnostic(
+              "NODAL-ANALOG-033-017",
+              "procedural assignment target is not registered in the active component"
+            )
+          )
+''',
+          )
+
+          replace_once(
+              "core/scala/api/src/nodal/CandidateApi.scala",
+              '''  def initialValue: Expr[A] = initializer.getOrElse(
+    throw new IllegalStateException("analog variable has no declaration initializer")
+  )
+''',
+              '''  def initialValue: Expr[A] = initializer.getOrElse(
+    scala.util.Failure[Expr[A]](
+      new IllegalStateException("analog variable has no declaration initializer")
+    ).get
+  )
+''',
+          )
+
+          replace_once(
+              "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",
+              '''  def currentModulePath: String = active
+    .map(_.currentModulePath)
+    .getOrElse(
+      throw new IllegalStateException(
+        "procedural module construction has no active transaction"
+      )
+    )
+''',
+              '''  def currentModulePath: String = active
+    .map(_.currentModulePath)
+    .getOrElse(
+      scala.util.Failure[String](
+        new IllegalStateException(
+          "procedural module construction has no active transaction"
+        )
+      ).get
+    )
+''',
+          )
+
+          gate = Path("docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md")
+          text = gate.read_text(encoding="utf-8")
+          for code in range(1, 20):
+              short = f"- `{code:03d}` "
+              full = f"- `NODAL-ANALOG-033-{code:03d}` "
+              if text.count(short) != 1:
+                  raise SystemExit(f"design gate: expected one diagnostic bullet {short!r}")
+              text = text.replace(short, full)
+          text = text.replace(
+              "`NODAL-ANALOG-033-003` declaration outside a procedural region;",
+              "`NODAL-ANALOG-033-003` procedural construction without an active component;",
+          )
+          gate.write_text(text.rstrip() + "\n", encoding="utf-8")
+          PY
+
+      - name: Install pinned toolchains
+        shell: bash
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format repair candidate
+        shell: bash
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          "${RUNNER_TEMP}/nodal-lint-toolchain/bin/clang-format" -i \
+            core/compiler/lib/Dialect/Nodal/NodalOps.cpp \
+            core/compiler/lib/Dialect/Nodal/NodalTypes.cpp
+          git diff --check
+
+      - name: Publish repair candidate
+        shell: bash
+        run: |
+          git config user.name "nodal-automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add \
+            core/scala/api/src/nodal/AnalogProceduralConstruction.scala \
+            core/scala/api/src/nodal/AnalogProceduralRuntime.scala \
+            core/scala/api/src/nodal/CandidateApi.scala \
+            core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+            docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md
+          git commit -m "fix(core): make analog procedural failures lint-safe"
+          git push origin HEAD:automation/inc33-compiler-ir-repair-20260831
+
+      - name: Validate repository style
+        run: |
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate Increment 33 checkpoint
+        run: python3 scripts/check_increment33.py --compile
+
+      - name: Validate Scala core
+        run: ./nodal core scala
+
+      - name: Validate native compiler
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate repository contracts
+        run: |
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev

@@ -19,8 +19,6 @@ private[nodal] object AnalogProceduralEvidence:
 
   private def quoted(value: String): String = s"\"${escaped(value)}\""
 
-  private def option(value: Option[String]): String = value.map(quoted).getOrElse("null")
-
   private def source(value: Option[AnalogProceduralRuntime.Source]): String = value match
     case Some(location) =>
       s"{\"file\":${quoted(location.file)},\"line\":${location.line},\"column\":${location.column}}"

@@ -182,7 +182,6 @@ private[nodal] object AnalogProceduralMlir:
         "metadata" -> metadata(procedurePath, procedureSource)
       ),
       regions = Vector(procedureBody),
-      semanticPath = procedurePath,
       source = procedureSource
     )
     val analogPath = s"${program.owner}.analogProcedural"
@@ -190,7 +189,6 @@ private[nodal] object AnalogProceduralMlir:
       "nodal.analog",
       attributes = Vector("metadata" -> metadata(analogPath, procedureSource)),
       regions = Vector(procedure),
-      semanticPath = analogPath,
       source = procedureSource
     )
 
@@ -291,7 +289,6 @@ private[nodal] object AnalogProceduralMlir:
                 variableTypes
               )
             ),
-            semanticPath = scopePath,
             source = scopeSource
           )
         )
@@ -326,7 +323,6 @@ private[nodal] object AnalogProceduralMlir:
         ),
         "metadata" -> metadata(record.variable.identity, record.source)
       ),
-      semanticPath = record.variable.identity,
       source = record.source
     )
 
@@ -355,7 +351,6 @@ private[nodal] object AnalogProceduralMlir:
           "owner" -> quoted(program.owner),
           "metadata" -> metadata(readPath, record.source)
         ),
-        semanticPath = readPath,
         source = record.source
       )
       readValues += result
@@ -393,7 +388,6 @@ private[nodal] object AnalogProceduralMlir:
           )
         )
       ),
-      semanticPath = record.identity,
       source = record.source
     )
     readLines.toVector :+ assignment
@@ -422,7 +416,6 @@ private[nodal] object AnalogProceduralMlir:
       regions: Vector[String] = Vector.empty,
       operandTypes: Vector[String] = Vector.empty,
       resultTypes: Vector[String] = Vector.empty,
-      semanticPath: String,
       source: Option[AnalogProceduralRuntime.Source]
   ): String =
     require(results.size == resultTypes.size, s"$name result arity")

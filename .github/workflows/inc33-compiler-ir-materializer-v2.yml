@@ -1,0 +1,70 @@
+name: Increment 33 compiler IR materializer v2
+
+on:
+  push:
+    branches:
+      - automation/inc33-compiler-ir-materializer-20260831
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out materializer source
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc33-compiler-ir-materializer-20260831
+          fetch-depth: 0
+
+      - name: Extract compiler-boundary tranche
+        shell: bash
+        run: |
+          awk '
+            /^          H4s/ { active = 1 }
+            active && /^          PAYLOAD$/ { exit }
+            active { sub(/^[[:space:]]+/, ""); print }
+          ' .github/workflows/inc33-compiler-ir-materializer.yml > /tmp/inc33-apply.b64
+          base64 --decode /tmp/inc33-apply.b64 | gzip --decompress > /tmp/inc33-apply.py
+          python3 -m py_compile /tmp/inc33-apply.py
+          sha256sum /tmp/inc33-apply.py
+
+      - name: Check out active Increment 33 branch
+        shell: bash
+        run: |
+          git checkout -B increment/33-analog-variables-procedural-assignment-v5 origin/increment/33-analog-variables-procedural-assignment-v5
+          python3 /tmp/inc33-apply.py
+          rm -f /tmp/inc33-apply.b64 /tmp/inc33-apply.py
+
+      - name: Format changed sources
+        shell: bash
+        run: |
+          ./mill mill.scalalib.scalafmt/formatAll
+          if command -v clang-format >/dev/null 2>&1; then
+            clang-format -i core/compiler/lib/Dialect/Nodal/NodalOps.cpp core/compiler/lib/Dialect/Nodal/NodalTypes.cpp
+          fi
+          git diff --check
+
+      - name: Validate Increment 33 checkpoint contract
+        run: python3 scripts/check_increment33.py --compile
+
+      - name: Validate Scala core
+        run: ./nodal core scala
+
+      - name: Validate native compiler
+        run: ./nodal core native
+
+      - name: Validate repository contracts
+        run: ./nodal check --contracts-only --online-toolchain
+
+      - name: Commit validated feature changes
+        shell: bash
+        run: |
+          git config user.name "nodal-automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add core/compiler core/scala docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md docs/implementation/increment33-analog-variables-procedural-assignment.md scripts/check_increment33.py tests/compiler/fixtures/increment33
+          git commit -m "feat(compiler): add first-class analog procedural IR"
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

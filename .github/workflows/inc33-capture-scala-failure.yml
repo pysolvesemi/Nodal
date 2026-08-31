@@ -1,0 +1,65 @@
+name: Increment 33 capture Scala failure
+
+on:
+  push:
+    branches:
+      - automation/inc33-scala-diagnostic-controller-20260831
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc33-scala-diagnostic-controller-20260831
+          fetch-depth: 0
+
+      - name: Check out implementation repair branch
+        run: |
+          git checkout -B automation/inc33-compiler-ir-repair-20260831 origin/automation/inc33-compiler-ir-repair-20260831
+
+      - name: Install pinned native toolchain
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+
+      - name: Run Scala matrix and capture complete output
+        id: scala
+        shell: bash
+        run: |
+          set +e
+          NODAL_NODALC="${RUNNER_TEMP}/nodal-native-toolchain/bin/nodalc" \
+            ./nodal core scala > /tmp/inc33-scala.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/inc33-scala.log
+          echo "status=${status}" >> "${GITHUB_OUTPUT}"
+
+      - name: Publish diagnostic log
+        if: always()
+        shell: bash
+        run: |
+          status="${{ steps.scala.outputs.status }}"
+          git config user.name "nodal-automation"
+          git config user.email "actions@users.noreply.github.com"
+          rm -rf /tmp/inc33-scala-diagnostics
+          git worktree add --detach /tmp/inc33-scala-diagnostics origin/automation/inc33-scala-diagnostic-controller-20260831
+          cd /tmp/inc33-scala-diagnostics
+          git checkout --orphan automation/inc33-scala-diagnostics-20260831
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p diagnostics
+          cp /tmp/inc33-scala.log diagnostics/core-scala.log
+          printf '%s\n' "implementation_head=d6b47bb0843ea0c1571c910abb863ed0cc2ec2a1" "exit_status=${status}" > diagnostics/metadata.txt
+          git add diagnostics
+          git commit -m "diagnostics: capture Increment 33 Scala failure"
+          git push --force origin HEAD:automation/inc33-scala-diagnostics-20260831
+
+      - name: Propagate Scala result
+        run: test "${{ steps.scala.outputs.status }}" = "0"

@@ -1,0 +1,277 @@
+diff --git a/core/scala/api/src/nodal/AnalogProceduralConstruction.scala b/core/scala/api/src/nodal/AnalogProceduralConstruction.scala
+index decfd94..1793c53 100644
+--- a/core/scala/api/src/nodal/AnalogProceduralConstruction.scala
++++ b/core/scala/api/src/nodal/AnalogProceduralConstruction.scala
+@@ -91,6 +91,7 @@ private[nodal] object AnalogProceduralConstruction:
+       initializer,
+       module.pending.size
+     )
++    if module.procedureDepth > 0 then materializeVariables(module)
+ 
+   private def scalarKind(
+       dataType: DataType[? <: Data]
+@@ -120,9 +121,19 @@ private[nodal] object AnalogProceduralConstruction:
+     def visit(candidate: Any): Unit = candidate match
+       case iterable: Iterable[?] => iterable.foreach(visit)
+       case reference: AnyRef =>
++        val currentModule = activeModule
+         state.modules.iterator
+-          .flatMap(module => Option(module.variables.get(reference)))
+-          .foreach(result += _)
++          .filter: module =>
++            module.variables.containsKey(reference) || module.pending.exists(_.value eq reference)
++          .foreach: module =>
++            if module ne currentModule then
++              throw new AnalogProceduralRuntime.Failure(
++                AnalogProceduralRuntime.Diagnostic(
++                  "NODAL-ANALOG-033-009",
++                  s"procedural variable read belongs to component '${module.owner}', not '${currentModule.owner}'"
++                )
++              )
++            Option(module.variables.get(reference)).foreach(result += _)
+         reference match
+           case expression: KernelExpr[?] => expression.operands.foreach(visit)
+           case _ => ()
+@@ -189,7 +200,9 @@ private[nodal] object AnalogProceduralConstruction:
+     try
+       module.recorder.procedure:
+         materializeVariables(module)
+-        body
++        val result = body
++        materializeVariables(module)
++        result
+     finally module.procedureDepth -= 1
+ 
+   def lexicalScope[A](body: => A): A =
+@@ -210,14 +223,27 @@ private[nodal] object AnalogProceduralConstruction:
+         )
+       )
+     materializeVariables(module)
+-    val variable = Option(module.variables.get(target)).getOrElse(
+-      throw new AnalogProceduralRuntime.Failure(
+-        AnalogProceduralRuntime.Diagnostic(
+-          "NODAL-ANALOG-033-017",
+-          "procedural assignment target is not registered in the active component"
+-        )
+-      )
+-    )
++    val variable = Option(module.variables.get(target)).getOrElse:
++      val foreignOwner = state.modules.iterator
++        .filterNot(_ eq module)
++        .find: candidate =>
++          candidate.variables.containsKey(target) || candidate.pending.exists(_.value eq target)
++        .map(_.owner)
++      foreignOwner match
++        case Some(owner) =>
++          throw new AnalogProceduralRuntime.Failure(
++            AnalogProceduralRuntime.Diagnostic(
++              "NODAL-ANALOG-033-009",
++              s"procedural assignment target belongs to component '$owner', not '${module.owner}'"
++            )
++          )
++        case None =>
++          throw new AnalogProceduralRuntime.Failure(
++            AnalogProceduralRuntime.Diagnostic(
++              "NODAL-ANALOG-033-017",
++              "procedural assignment target is not registered in the active component"
++            )
++          )
+     val statement = s"statement_${module.statementSerial}"
+     module.statementSerial += 1
+     module.recorder.assign(
+@@ -227,4 +253,6 @@ private[nodal] object AnalogProceduralConstruction:
+     )
+ 
+   def snapshots: Vector[AnalogProceduralRuntime.Snapshot] =
+-    Option(current.get()).toVector.flatMap(_.modules.map(_.recorder.snapshot))
++    Option(current.get()).toVector
++      .flatMap(_.modules.map(_.recorder.snapshot))
++      .filter(snapshot => snapshot.variables.nonEmpty || snapshot.assignments.nonEmpty)
+diff --git a/core/scala/api/src/nodal/CandidateApi.scala b/core/scala/api/src/nodal/CandidateApi.scala
+index 3f508ae..144ad4b 100644
+--- a/core/scala/api/src/nodal/CandidateApi.scala
++++ b/core/scala/api/src/nodal/CandidateApi.scala
+@@ -99,19 +99,14 @@ final class Signal[A <: Data] private[nodal] (
+ 
+   infix def :=(value: Expr[A]): Unit = CandidateRuntime.assign(this, value)
+ 
+-/** Candidate elaboration-time variable visible to behavioral blocks. */
++/** Candidate component-local variable visible to behavioral and analog procedural blocks. */
+ final class Variable[A <: Data] private[nodal] (
+     val dataType: DataType[A],
+-    val initialValue: Expr[A]
++    val initialValue: Option[Expr[A]]
+ ) extends Expr[A]:
+-  CandidateRuntime.declare(
+-    this,
+-    KernelSignalKind.Variable,
+-    dataType = Some(dataType),
+-    attributes = Vector("initial" -> initialValue)
+-  )
++  CandidateRuntime.declareVariable(this, dataType, initialValue)
+ 
+-  infix def :=(value: Expr[A]): Unit = CandidateRuntime.assign(this, value)
++  infix def :=(value: Expr[A]): Unit = CandidateRuntime.assignVariable(this, value)
+ 
+ /** Candidate analog node or port. */
+ final class Node[D <: Discipline] private[nodal] (
+@@ -289,7 +284,10 @@ abstract class Module:
+   protected final def variable[A <: Data](
+       dataType: DataType[A],
+       initialValue: Expr[A]
+-  ): Variable[A] = new Variable(dataType, initialValue)
++  ): Variable[A] = new Variable(dataType, Some(initialValue))
++
++  protected final def variable[A <: Data](dataType: DataType[A]): Variable[A] =
++    new Variable(dataType, None)
+ 
+   protected final def instance[M <: Module](module: M): Instance[M] =
+     new Instance(module)
+@@ -581,6 +579,19 @@ private[nodal] object CandidateRuntime:
+   ): Unit =
+     ConstructionKernel.declare(value, kind, dataType, explicitName, domain, attributes)
+ 
++  def declareVariable[A <: Data](
++      value: Variable[A],
++      dataType: DataType[A],
++      initialValue: Option[Expr[A]]
++  ): Unit =
++    declare(
++      value,
++      KernelSignalKind.Variable,
++      dataType = Some(dataType),
++      attributes = initialValue.toVector.map("initial" -> _)
++    )
++    ConstructionKernel.declareAnalogVariable(value, dataType, initialValue)
++
+   private def dataTypeFromDescriptor(
+       descriptor: KernelTypeDescriptor
+   ): DataType[? <: Data] = descriptor.kind match
+@@ -693,6 +704,10 @@ private[nodal] object CandidateRuntime:
+   def assign(left: AnyRef, right: Any): Unit =
+     ConstructionKernel.operation("assignment", left, right)
+ 
++  def assignVariable[A <: Data](left: Variable[A], right: Expr[A]): Unit =
++    ConstructionKernel.operation("assignment", left, right)
++    ConstructionKernel.assignAnalogVariable(left, right)
++
+   def connectValues(left: AnyRef, right: AnyRef): Unit =
+     ConstructionKernel.operation("value-connect", left, right)
+ 
+diff --git a/core/scala/api/src/nodal/ElaborationConstructionKernel.scala b/core/scala/api/src/nodal/ElaborationConstructionKernel.scala
+index aa30320..b7b3c1f 100644
+--- a/core/scala/api/src/nodal/ElaborationConstructionKernel.scala
++++ b/core/scala/api/src/nodal/ElaborationConstructionKernel.scala
+@@ -143,6 +143,7 @@ private[nodal] final case class ConstructionSnapshot(
+     analogRegions: Vector[KernelAnalogRegionSnapshot] = Vector.empty,
+     analogSemantics: AnalogEquationRuntime.Snapshot =
+       AnalogEquationRuntime.Snapshot(Vector.empty, Vector.empty),
++    analogProcedural: Vector[AnalogProceduralRuntime.Snapshot] = Vector.empty,
+     waivers: Vector[KernelWaiverSnapshot] = Vector.empty
+ )
+ 
+@@ -1635,6 +1636,7 @@ private final class ConstructionSession(val options: EmitOptions):
+       semantic.sourceMap,
+       analogSnapshots(),
+       analogSemanticRecorder.snapshot,
++      AnalogProceduralConstruction.snapshots,
+       waiverSnapshots(semantic.sourceMap)
+     )
+     val kind = classify(snapshot)
+@@ -1658,26 +1660,31 @@ private[nodal] object ConstructionKernel:
+     if Current.isBound then Some(Current.get) else None
+ 
+   private def elaborate(top: => Module, options: EmitOptions): (Emission, ConstructionSnapshot) =
+-    val session = new ConstructionSession(options)
+-    var result: Option[(Emission, ConstructionSnapshot)] = None
+-    ScopedValue.where(Current, session).run(
+-      new Runnable:
+-        override def run(): Unit =
+-          val root = top
+-          result = Some(session.finish(root))
+-    )
+-    result.getOrElse(
+-      scala.util.Failure[(Emission, ConstructionSnapshot)](
+-        new IllegalStateException("construction transaction did not publish a result")
+-      ).get
+-    )
++    AnalogProceduralConstruction.reset()
++    try
++      val session = new ConstructionSession(options)
++      var result: Option[(Emission, ConstructionSnapshot)] = None
++      ScopedValue.where(Current, session).run(
++        new Runnable:
++          override def run(): Unit =
++            val root = top
++            result = Some(session.finish(root))
++      )
++      result.getOrElse(
++        scala.util.Failure[(Emission, ConstructionSnapshot)](
++          new IllegalStateException("construction transaction did not publish a result")
++        ).get
++      )
++    finally AnalogProceduralConstruction.reset()
+ 
+   def emit(top: => Module, options: EmitOptions): Emission = elaborate(top, options)._1
+ 
+   def inspect(top: => Module, options: EmitOptions = EmitOptions()): ConstructionSnapshot =
+     elaborate(top, options)._2
+ 
+-  def beginModule(module: Module): Unit = active.foreach(_.beginModule(module))
++  def beginModule(module: Module): Unit = active.foreach: session =>
++    session.beginModule(module)
++    AnalogProceduralConstruction.beginModule(module)
+ 
+   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
+     active.foreach(_.registerDomain(domain, kind))
+@@ -1693,10 +1700,19 @@ private[nodal] object ConstructionKernel:
+     _.registerDeclaration(value, kind, dataType, explicitName, domain, attributes)
+   )
+ 
++  def declareAnalogVariable[A <: Data](
++      value: Variable[A],
++      dataType: DataType[A],
++      initialValue: Option[Expr[A]]
++  ): Unit = active.foreach: _ =>
++    AnalogProceduralConstruction.declareVariable(value, dataType, initialValue)
++
+   def expression(value: AnyRef): Unit = active.foreach(_.registerExpression(value))
+ 
+   def attachInstance(instance: Instance[? <: Module], child: Module): Unit =
+-    active.foreach(_.attachInstance(instance, child))
++    active.foreach: session =>
++      session.attachInstance(instance, child)
++      AnalogProceduralConstruction.attachInstance(child)
+ 
+   def bindDefault(instance: Instance[?], domain: ClockDomain): Unit =
+     active.foreach(_.bindDefault(instance, domain))
+@@ -1711,7 +1727,9 @@ private[nodal] object ConstructionKernel:
+     case Some(session) => session.withDomain(domain)(body)
+     case None => body
+ 
+-  def block[A](body: => A): A = body
++  def block[A](body: => A): A = active match
++    case Some(_) => AnalogProceduralConstruction.lexicalScope(body)
++    case None => body
+ 
+   def analogBlock[A](body: => A): A = active match
+     case Some(session) => session.withAnalogRegion(body)
+@@ -1720,6 +1738,8 @@ private[nodal] object ConstructionKernel:
+   def analogSemanticBlock[A](
+       kind: AnalogEquationRuntime.RegionKind
+   )(body: => A): A = active match
++    case Some(session) if kind == AnalogEquationRuntime.RegionKind.Procedural =>
++      session.withAnalogSemanticRegion(kind)(AnalogProceduralConstruction.procedure(body))
+     case Some(session) => session.withAnalogSemanticRegion(kind)(body)
+     case None => body
+ 
+@@ -1744,6 +1764,9 @@ private[nodal] object ConstructionKernel:
+   def shortAnalogContribution(target: Expr[Real], value: Expr[Real]): Unit =
+     active.foreach(_.recordShortAnalogContribution(target, value))
+ 
++  def assignAnalogVariable[A <: Data](target: Variable[A], value: Expr[A]): Unit =
++    active.foreach: _ => AnalogProceduralConstruction.assign(target, value)
++
+   def currentDomain: Option[ClockDomain] = active.flatMap(_.currentDomain)
+ 
+   def operation(kind: String, values: Any*): Unit = active.foreach(_.operation(kind, values*))

@@ -1,0 +1,109 @@
+diff --git a/core/native/include/nodal/AnalogProceduralRuntime.h b/core/native/include/nodal/AnalogProceduralRuntime.h
+index d7fcc8a..786e0a6 100644
+--- a/core/native/include/nodal/AnalogProceduralRuntime.h
++++ b/core/native/include/nodal/AnalogProceduralRuntime.h
+@@ -7,6 +7,7 @@
+ #include <set>
+ #include <stdexcept>
+ #include <string>
++#include <type_traits>
+ #include <unordered_map>
+ #include <unordered_set>
+ #include <utility>
+@@ -156,7 +157,10 @@ public:
+   Variable declareVariable(std::string identity, ValueType type,
+                            std::optional<Value> initializer = std::nullopt,
+                            std::optional<Source> source = std::nullopt) {
+-    requireProcedure(identity.empty() ? std::nullopt : std::optional<std::string>(identity));
++    if (!procedureActive_)
++      fail("NODAL-ANALOG-033-003",
++           "procedural variable declaration requires an active procedural region",
++           identity.empty() ? std::nullopt : std::optional<std::string>(identity));
+     identity = trim(identity);
+     if (identity.empty())
+       fail("NODAL-ANALOG-033-001", "procedural variable identity must be non-empty");
+diff --git a/core/scala/api/src/nodal/AnalogProceduralConstruction.scala b/core/scala/api/src/nodal/AnalogProceduralConstruction.scala
+index 1a37243..decfd94 100644
+--- a/core/scala/api/src/nodal/AnalogProceduralConstruction.scala
++++ b/core/scala/api/src/nodal/AnalogProceduralConstruction.scala
+@@ -118,6 +118,7 @@ private[nodal] object AnalogProceduralConstruction:
+   private def collectReads(value: Any): Vector[AnalogProceduralRuntime.Variable] =
+     val result = mutable.LinkedHashSet.empty[AnalogProceduralRuntime.Variable]
+     def visit(candidate: Any): Unit = candidate match
++      case iterable: Iterable[?] => iterable.foreach(visit)
+       case reference: AnyRef =>
+         state.modules.iterator
+           .flatMap(module => Option(module.variables.get(reference)))
+@@ -125,14 +126,13 @@ private[nodal] object AnalogProceduralConstruction:
+         reference match
+           case expression: KernelExpr[?] => expression.operands.foreach(visit)
+           case _ => ()
+-      case iterable: Iterable[?] => iterable.foreach(visit)
+       case _ => ()
+     visit(value)
+     result.toVector
+ 
+   private def valueType(
+       expression: Expr[? <: Data],
+-      fallback: Option[AnalogProceduralRuntime.ValueType] = None
++      fallback: Option[AnalogProceduralRuntime.ValueType]
+   ): AnalogProceduralRuntime.ValueType =
+     val reads = collectReads(expression)
+     val kind = CandidateRuntime
+diff --git a/core/scala/api/src/nodal/AnalogProceduralRuntime.scala b/core/scala/api/src/nodal/AnalogProceduralRuntime.scala
+index 3857f12..2789b9e 100644
+--- a/core/scala/api/src/nodal/AnalogProceduralRuntime.scala
++++ b/core/scala/api/src/nodal/AnalogProceduralRuntime.scala
+@@ -179,7 +179,12 @@ private[nodal] object AnalogProceduralRuntime:
+         initializer: Option[Value] = None,
+         source: Option[Source] = None
+     ): Variable =
+-      requireProcedure(Option(identity).filter(_.nonEmpty))
++      if !procedureActive then
++        fail(
++          "NODAL-ANALOG-033-003",
++          "procedural variable declaration requires an active procedural region",
++          Option(identity).filter(_.nonEmpty)
++        )
+       if identity.trim.isEmpty then
+         fail("NODAL-ANALOG-033-001", "procedural variable identity must be non-empty")
+       val canonical = s"$owner.${scopeStack.mkString(".")}.${identity.trim}"
+diff --git a/examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala b/examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala
+index c428b36..6012b3a 100644
+--- a/examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala
++++ b/examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala
+@@ -124,7 +124,7 @@ object Increment33RuntimeCheck:
+         )
+ 
+     val outside = new AnalogProceduralRuntime.Recorder("Outside")
+-    expect("NODAL-ANALOG-033-008"):
++    expect("NODAL-ANALOG-033-003"):
+       outside.declare("illegal", RealVoltage)
+ 
+     if arguments.nonEmpty then
+diff --git a/scripts/check_increment33.py b/scripts/check_increment33.py
+index 481bf7e..c8d1b24 100644
+--- a/scripts/check_increment33.py
++++ b/scripts/check_increment33.py
+@@ -188,7 +188,7 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
+         "NODAL-INC33-024: native witness does not prove exact assignment order",
+     )
+     for code in (
+-        "NODAL-ANALOG-033-008",
++        "NODAL-ANALOG-033-003",
+         "NODAL-ANALOG-033-009",
+         "NODAL-ANALOG-033-010",
+         "NODAL-ANALOG-033-011",
+diff --git a/tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp b/tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp
+index 5f6fd31..84acaba 100644
+--- a/tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp
++++ b/tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp
+@@ -106,7 +106,7 @@ int main() {
+   });
+ 
+   Recorder outside("Outside");
+-  expect("NODAL-ANALOG-033-008", [&] {
++  expect("NODAL-ANALOG-033-003", [&] {
+     (void)outside.declareVariable("illegal", RealVoltage);
+   });
+ 

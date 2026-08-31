@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+"""Validate the Increment 33 analog procedural-assignment checkpoint."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+class CheckFailure(RuntimeError):
+    pass
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise CheckFailure(message)
+
+
+def read_text(root: Path, relative: str) -> str:
+    path = root / relative
+    require(path.is_file(), f"NODAL-INC33-001: missing required file {relative}")
+    return path.read_text(encoding="utf-8")
+
+
+def read_json(root: Path, relative: str) -> dict[str, object]:
+    try:
+        return json.loads(read_text(root, relative))
+    except json.JSONDecodeError as error:
+        raise CheckFailure(
+            f"NODAL-INC33-002: invalid JSON in {relative}: {error}"
+        ) from error
+
+
+def run(root: Path, command: list[str], code: str) -> None:
+    completed = subprocess.run(
+        command,
+        cwd=root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise CheckFailure(f"{code}: command failed: {' '.join(command)}\n{completed.stdout}")
+
+
+def check_repository(root: Path, compile_witnesses: bool = False) -> None:
+    manifest_path = "tests/compiler/fixtures/increment33/manifest.json"
+    manifest = read_json(root, manifest_path)
+    require(manifest.get("schema") == 1, "NODAL-INC33-003: manifest schema must be 1")
+    require(manifest.get("increment") == 33, "NODAL-INC33-004: manifest increment must be 33")
+    require(
+        manifest.get("status") == "implementation-in-progress",
+        "NODAL-INC33-005: checkpoint manifest must remain implementation-in-progress",
+    )
+    require(manifest.get("validation") is None, "NODAL-INC33-006: validation must be null before evidence closure")
+
+    baseline = manifest.get("baseline")
+    require(isinstance(baseline, dict), "NODAL-INC33-007: manifest baseline must be an object")
+    require(
+        baseline.get("dev_commit") == "b1d927772c2a33a535f7d7fbe44a3891900c2fa2",
+        "NODAL-INC33-008: Increment 33 must use the validated Increment 32 closure baseline",
+    )
+    require(
+        baseline.get("increment_32_manifest") == "validated-equation-contribution-semantics",
+        "NODAL-INC33-009: Increment 32 predecessor status is not validated",
+    )
+
+    predecessor = read_json(root, "tests/compiler/fixtures/increment32/manifest.json")
+    require(
+        predecessor.get("status") == "validated-equation-contribution-semantics",
+        "NODAL-INC33-010: repository Increment 32 manifest is not validated",
+    )
+    require(
+        isinstance(predecessor.get("validation"), dict),
+        "NODAL-INC33-011: Increment 32 validation evidence is missing",
+    )
+
+    semantics = manifest.get("semantics")
+    require(isinstance(semantics, dict), "NODAL-INC33-012: semantics must be an object")
+    required_true = {
+        "component_local_variables",
+        "optional_initializers",
+        "ordered_assignment",
+        "repeated_writes_preserved",
+        "lexical_scopes",
+        "component_ownership",
+        "straight_line_read_before_write",
+        "physical_dimension_checking",
+        "boolean_guards",
+        "analysis_applicability",
+        "source_provenance",
+        "equation_assignment_separation",
+        "contribution_assignment_separation",
+        "connection_assignment_separation",
+        "deterministic_snapshots",
+    }
+    missing_semantics = sorted(name for name in required_true if semantics.get(name) is not True)
+    require(
+        not missing_semantics,
+        "NODAL-INC33-013: required semantic flags are not true: " + ", ".join(missing_semantics),
+    )
+    require(
+        semantics.get("last_writer_wins_source_model") is False,
+        "NODAL-INC33-014: source semantics must not be last-writer-wins",
+    )
+    require(
+        semantics.get("implicit_real_to_integer_narrowing") is False,
+        "NODAL-INC33-015: implicit real-to-integer narrowing must remain disabled",
+    )
+
+    deferred = manifest.get("deferred")
+    require(isinstance(deferred, list), "NODAL-INC33-016: deferred must be a list")
+    for item in (
+        "public-construction-kernel-integration",
+        "analog-control-flow",
+        "residual-dae-construction",
+        "solver-execution",
+        "target-legalization",
+        "verilog-a-lowering",
+        "verilog-ams-lowering",
+    ):
+        require(item in deferred, f"NODAL-INC33-017: missing deferred boundary {item}")
+
+    design_gate = read_text(root, "docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md")
+    implementation = read_text(root, "docs/implementation/increment33-analog-variables-procedural-assignment.md")
+    scala_runtime = read_text(root, "core/scala/api/src/nodal/AnalogProceduralRuntime.scala")
+    native_runtime = read_text(root, "core/native/include/nodal/AnalogProceduralRuntime.h")
+    scala_witness = read_text(
+        root,
+        "examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala",
+    )
+    native_witness = read_text(
+        root,
+        "tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp",
+    )
+
+    for token in ("===", "<+", ":=", "read-before-write", "lexical", "last-writer-wins"):
+        require(token in design_gate, f"NODAL-INC33-018: design gate is missing {token!r}")
+    require(
+        "Public construction-kernel and bridge retention remain" in implementation,
+        "NODAL-INC33-019: implementation note must state the remaining production integration",
+    )
+
+    scala_tokens = (
+        "final class Recorder",
+        "def procedure",
+        "def scope",
+        "def declare",
+        "def read",
+        "def assign",
+        "authoredOrder",
+        "NODAL-ANALOG-033-011",
+        "targetState.initialized = true",
+        "assignments.toVector",
+    )
+    for token in scala_tokens:
+        require(token in scala_runtime, f"NODAL-INC33-020: Scala runtime is missing {token!r}")
+
+    native_tokens = (
+        "class Recorder final",
+        "declareVariable",
+        "void assign",
+        "authoredOrder",
+        "NODAL-ANALOG-033-011",
+        "targetState.initialized = true",
+        "result.assignments = assignments_",
+    )
+    for token in native_tokens:
+        require(token in native_runtime, f"NODAL-INC33-021: native runtime is missing {token!r}")
+
+    for code in range(1, 20):
+        diagnostic = f"NODAL-ANALOG-033-{code:03d}"
+        require(
+            diagnostic in design_gate or diagnostic in scala_runtime or diagnostic in native_runtime,
+            f"NODAL-INC33-022: stable diagnostic {diagnostic} is not represented",
+        )
+
+    require(
+        "snapshot.assignments.map(_.authoredOrder) == Vector(0, 1, 2, 3, 4)" in scala_witness,
+        "NODAL-INC33-023: Scala witness does not prove exact assignment order",
+    )
+    require(
+        "snapshot.assignments[index].authoredOrder == index" in native_witness,
+        "NODAL-INC33-024: native witness does not prove exact assignment order",
+    )
+    for code in (
+        "NODAL-ANALOG-033-008",
+        "NODAL-ANALOG-033-009",
+        "NODAL-ANALOG-033-010",
+        "NODAL-ANALOG-033-011",
+        "NODAL-ANALOG-033-013",
+    ):
+        require(code in scala_witness, f"NODAL-INC33-025: Scala witness lacks {code}")
+        require(code in native_witness, f"NODAL-INC33-026: native witness lacks {code}")
+
+    roadmap = read_text(root, "docs/roadmap/nodal-development-todo.md")
+    require(
+        "**Revision:** 1.43" in roadmap,
+        "NODAL-INC33-027: roadmap revision must remain 1.43 during implementation",
+    )
+    require(
+        "- [x] **Increment 32 — First-class analog equations" in roadmap,
+        "NODAL-INC33-028: Increment 32 must be checked before Increment 33",
+    )
+    require(
+        "- [ ] **Increment 33 — Analog variables and procedural assignment**" in roadmap,
+        "NODAL-INC33-029: Increment 33 must remain unchecked before evidence closure",
+    )
+
+    workflow_path = root / ".github/workflows/increment-33-analog-procedural-assignment.yml"
+    if workflow_path.exists():
+        workflow = workflow_path.read_text(encoding="utf-8")
+        require("contents: read" in workflow, "NODAL-INC33-030: workflow must be read-only")
+        for forbidden in ("contents: write", "pull-requests: write", "git push", "gh pr merge"):
+            require(forbidden not in workflow, f"NODAL-INC33-031: workflow contains {forbidden!r}")
+
+    temporary = []
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        lowered = path.name.lower()
+        if (
+            lowered.startswith("_inc33")
+            or "increment33_payload" in lowered
+            or "increment33_materializer" in lowered
+            or "increment33_finalizer" in lowered
+            or lowered.endswith((".pyc", ".pyo"))
+        ):
+            temporary.append(str(path.relative_to(root)))
+    require(
+        not temporary,
+        "NODAL-INC33-032: temporary/generated files remain: " + ", ".join(sorted(temporary)),
+    )
+
+    if compile_witnesses:
+        run(
+            root,
+            ["./mill", "examples.continuousTimeApi.compile"],
+            "NODAL-INC33-033",
+        )
+        output = root / "out" / "increment33-native-witness"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        run(
+            root,
+            [
+                "c++",
+                "-std=c++20",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-Icore/native/include",
+                "tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp",
+                "-o",
+                str(output),
+            ],
+            "NODAL-INC33-034",
+        )
+        run(root, [str(output)], "NODAL-INC33-035")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--compile", action="store_true")
+    arguments = parser.parse_args()
+    try:
+        check_repository(arguments.root.resolve(), arguments.compile)
+    except CheckFailure as error:
+        print(error, file=sys.stderr)
+        return 1
+    print("Increment 33 analog procedural-assignment checkpoint passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

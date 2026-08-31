@@ -1,0 +1,178 @@
+name: Increment 33 Final Audit
+
+on:
+  push:
+    branches:
+      - automation/inc33-final-audit-20260831
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - name: Check out exact current dev
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Verify closure merge and wait for final push workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse HEAD)
+          pr=$(gh api '/repos/pysolvesemi/Nodal/pulls/101')
+          test "$(printf '%s' "$pr" | jq -r '.state')" = 'closed'
+          test "$(printf '%s' "$pr" | jq -r '.merged')" = 'true'
+          test "$(printf '%s' "$pr" | jq -r '.merge_commit_sha')" = "$head"
+
+          for attempt in $(seq 1 150); do
+            gh api "/repos/pysolvesemi/Nodal/actions/runs?head_sha=$head&event=push&per_page=100" > /tmp/runs.json
+            set +e
+            python3 - "$head" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          head = sys.argv[1]
+          required = ['Core CI', 'Increment 33 Analog Procedural Assignment']
+          runs = json.loads(Path('/tmp/runs.json').read_text()).get('workflow_runs', [])
+          latest = {}
+          for run in sorted(runs, key=lambda value: (value.get('run_number', 0), value.get('id', 0))):
+              if run.get('head_sha') == head:
+                  latest[run.get('name')] = run
+          missing = [name for name in required if name not in latest]
+          pending = [name for name in required if name in latest and latest[name].get('status') != 'completed']
+          failed = [
+              {'name': name, 'id': latest[name].get('id'), 'conclusion': latest[name].get('conclusion')}
+              for name in required
+              if name in latest and latest[name].get('status') == 'completed'
+              and latest[name].get('conclusion') != 'success'
+          ]
+          report = {
+              'dev_head': head,
+              'missing': missing,
+              'pending': pending,
+              'failed': failed,
+              'runs': {
+                  name: {
+                      'id': latest[name].get('id'),
+                      'status': latest[name].get('status'),
+                      'conclusion': latest[name].get('conclusion'),
+                  }
+                  for name in required if name in latest
+              },
+          }
+          Path('/tmp/inc33-final-push-runs.json').write_text(json.dumps(report, indent=2) + '\n')
+          if failed:
+              print(json.dumps(report, indent=2))
+              raise SystemExit(2)
+          if missing or pending:
+              raise SystemExit(1)
+          print(json.dumps(report, indent=2))
+          PY
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then break; fi
+            if [ "$rc" -eq 2 ]; then exit 1; fi
+            if [ "$attempt" -eq 150 ]; then cat /tmp/inc33-final-push-runs.json; exit 1; fi
+            sleep 20
+          done
+
+      - name: Run independent final repository acceptance
+        run: |
+          set -euo pipefail
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment32.py'
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./mill core.scala.testkit.test.testOnly \
+            nodal.internal.testkit.AnalogProceduralConstructionTests
+          ./mill core.scala.testkit.test.testOnly \
+            nodal.internal.testkit.AnalogEquationConstructionTests
+          ./mill examples.continuousTimeApi.runMain \
+            nodal.increment33fixture.Increment33RuntimeCheck \
+            /tmp/increment33-final-scala-witness.txt
+          test -s /tmp/increment33-final-scala-witness.txt
+          grep -F 'variables=4' /tmp/increment33-final-scala-witness.txt
+          grep -F 'assignments=5' /tmp/increment33-final-scala-witness.txt
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Verify final manifest, roadmap, and artifact hygiene
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('.')
+          manifest = json.loads(
+              (root / 'tests/compiler/fixtures/increment33/manifest.json').read_text()
+          )
+          if manifest.get('status') != 'validated-analog-procedural-assignment':
+              raise SystemExit('Increment 33 manifest is not validated')
+          validation = manifest.get('validation')
+          if not isinstance(validation, dict):
+              raise SystemExit('Increment 33 validation object is missing')
+          if not isinstance(validation.get('implementation'), dict):
+              raise SystemExit('Increment 33 implementation evidence is missing')
+          if not isinstance(validation.get('closure'), dict):
+              raise SystemExit('Increment 33 closure evidence is missing')
+
+          roadmap = (root / 'docs/roadmap/nodal-development-todo.md').read_text()
+          if '**Revision:** 1.44' not in roadmap:
+              raise SystemExit('roadmap revision is not 1.44')
+          if '- [x] **Increment 33 — Analog variables and procedural assignment**' not in roadmap:
+              raise SystemExit('Increment 33 is not checked in the roadmap')
+          if '- [ ] **Increment 34 — Analog control flow**' not in roadmap:
+              raise SystemExit('Increment 34 must remain unchecked')
+
+          temporary = []
+          for path in root.rglob('*'):
+              if not path.is_file():
+                  continue
+              name = path.name.lower()
+              relative = str(path.relative_to(root))
+              if (
+                  name.startswith('_inc33')
+                  or 'increment33_payload' in name
+                  or 'increment33_materializer' in name
+                  or 'increment33_finalizer' in name
+                  or name.endswith(('.pyc', '.pyo'))
+              ):
+                  temporary.append(relative)
+          if temporary:
+              raise SystemExit('temporary Increment 33 artifacts remain: ' + ', '.join(sorted(temporary)))
+
+          if (root / 'tests/compiler/fixtures/increment34').exists():
+              raise SystemExit('Increment 34 implementation material appeared prematurely')
+          PY
+
+      - name: Publish immutable validated refs and final evidence comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse HEAD)
+          git tag -f increment-33-validated "$head"
+          git tag -f increment-33-final-audit-green "$head"
+          git push --force origin refs/tags/increment-33-validated
+          git push --force origin refs/tags/increment-33-final-audit-green
+          git push --force origin "$head":refs/heads/checkpoint/increment-33-final-audit-green
+
+          core=$(jq -r '.runs["Core CI"].id' /tmp/inc33-final-push-runs.json)
+          dedicated=$(jq -r '.runs["Increment 33 Analog Procedural Assignment"].id' /tmp/inc33-final-push-runs.json)
+          gh api --method POST \
+            -f body="Increment 33 is fully closed on final dev head \`$head\`: closure PR #101 is merged, post-merge Core CI run \`$core\` passed, post-merge Increment 33 run \`$dedicated\` passed, independent Scala/native acceptance passed, roadmap revision 1.44 is checked, Increment 34 remains open, and no temporary Increment 33 artifact remains." \
+            '/repos/pysolvesemi/Nodal/issues/101/comments'

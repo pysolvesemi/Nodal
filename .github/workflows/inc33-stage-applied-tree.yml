@@ -1,9 +1,6 @@
 name: Increment 33 stage applied compiler tree
 
 on:
-  push:
-    branches:
-      - automation/inc33-staging-materializer-controller-20260831
   workflow_dispatch:
 
 permissions:

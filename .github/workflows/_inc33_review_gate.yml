@@ -1,0 +1,146 @@
+name: Increment 33 Review Gate
+
+on:
+  push:
+    branches:
+      - automation/inc33-review-gate-20260831
+
+permissions:
+  contents: write
+  pull-requests: read
+  issues: write
+
+jobs:
+  review-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact implementation head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Require a clean exact-head review state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse HEAD)
+          pr=$(gh api '/repos/pysolvesemi/Nodal/pulls/100')
+          test "$(printf '%s' "$pr" | jq -r '.state')" = 'open'
+          test "$(printf '%s' "$pr" | jq -r '.draft')" = 'false'
+          test "$(printf '%s' "$pr" | jq -r '.head.sha')" = "$head"
+
+          cat > /tmp/query.graphql <<'GRAPHQL'
+          query($owner: String!, $name: String!, $number: Int!) {
+            repository(owner: $owner, name: $name) {
+              pullRequest(number: $number) {
+                reviewThreads(first: 100) {
+                  nodes {
+                    isResolved
+                    isOutdated
+                    path
+                    line
+                    comments(first: 20) {
+                      nodes {
+                        author { login }
+                        body
+                        createdAt
+                      }
+                    }
+                  }
+                }
+                reviews(first: 100) {
+                  nodes {
+                    author { login }
+                    state
+                    submittedAt
+                    commit { oid }
+                    body
+                  }
+                }
+              }
+            }
+          }
+          GRAPHQL
+
+          for attempt in $(seq 1 24); do
+            gh api graphql \
+              -f query="$(cat /tmp/query.graphql)" \
+              -F owner=pysolvesemi \
+              -F name=Nodal \
+              -F number=100 > /tmp/review.json
+            python3 - "$head" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          head = sys.argv[1]
+          pull = json.loads(Path('/tmp/review.json').read_text())['data']['repository']['pullRequest']
+          threads = pull['reviewThreads']['nodes']
+          unresolved = [
+              thread for thread in threads
+              if not thread['isResolved'] and not thread['isOutdated']
+          ]
+          reviews = pull['reviews']['nodes']
+          latest_by_author = {}
+          for review in reviews:
+              author = (review.get('author') or {}).get('login')
+              if author:
+                  latest_by_author[author] = review
+          changes_requested = [
+              review for review in latest_by_author.values()
+              if review.get('state') == 'CHANGES_REQUESTED'
+              and (review.get('commit') or {}).get('oid') == head
+          ]
+          report = {
+              'head': head,
+              'unresolved': unresolved,
+              'changes_requested': changes_requested,
+              'reviews': reviews,
+          }
+          Path('/tmp/inc33-review-report.json').write_text(json.dumps(report, indent=2) + '\n')
+          if unresolved or changes_requested:
+              print(json.dumps(report, indent=2))
+              raise SystemExit(2)
+          # Absence of an automated submitted review does not weaken the independent
+          # exact-head matrix and semantic review performed by the implementation gate.
+          print(json.dumps(report, indent=2))
+          PY
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              break
+            fi
+            if [ "$rc" -eq 2 ]; then
+              summary=$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('/tmp/inc33-review-report.json').read_text())
+          parts = []
+          for thread in report['unresolved']:
+              comments = thread.get('comments', {}).get('nodes', [])
+              body = comments[-1].get('body', '') if comments else ''
+              parts.append(f"{thread.get('path')}:{thread.get('line')} — {body[:1200]}")
+          for review in report['changes_requested']:
+              parts.append(f"changes requested by {(review.get('author') or {}).get('login')}: {review.get('body', '')[:1200]}")
+          print('\n\n'.join(parts))
+          PY
+          )
+              gh api --method POST \
+                -f body="Increment 33 review gate is blocked on exact head \`$head\`:\n\n$summary" \
+                '/repos/pysolvesemi/Nodal/issues/100/comments'
+              exit 1
+            fi
+            sleep 20
+          done
+
+      - name: Publish review-clean checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head=$(git rev-parse HEAD)
+          git push --force origin "$head":refs/heads/checkpoint/increment-33-review-clean
+          gh api --method POST \
+            -f body="Increment 33 review gate is clean on exact head \`$head\`: no unresolved current review thread and no exact-head changes-requested review remains." \
+            '/repos/pysolvesemi/Nodal/issues/100/comments'

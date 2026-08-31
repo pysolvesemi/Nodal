@@ -118,7 +118,7 @@ object AnalogEquationConstructionTests extends TestSuite:
       assert(bucket.target.orientation.contains("negative"))
       assert(bucket.terms.size == 3)
       assert(bucket.terms.exists(_.identity.value.endsWith(".source-a")))
-      assert(bucket.terms.exists(_.identity.value.endsWith(".source-b"))))
+      assert(bucket.terms.exists(_.identity.value.endsWith(".source-b")))
 
       val mlir = ScalaToMlirBridge.lower(new PublicAnalogEquationTop)
       assert(mlir.text.contains("nodal.bridge.analog_semantics"))

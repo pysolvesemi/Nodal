@@ -19,7 +19,7 @@ jobs:
           ref: increment/33-analog-variables-procedural-assignment-v5
           fetch-depth: 0
 
-      - name: Repair declaration-region diagnostic parity
+      - name: Repair declaration diagnostics and Scala warning gates
         shell: bash
         run: |
           set -euo pipefail
@@ -28,22 +28,21 @@ jobs:
 
           scala_path = Path("core/scala/api/src/nodal/AnalogProceduralRuntime.scala")
           scala = scala_path.read_text(encoding="utf-8")
-          old = """    ): Variable =
-                requireProcedure(Option(identity).filter(_.nonEmpty))
-                if identity.trim.isEmpty then
-          """
-          new = """    ): Variable =
-                if !procedureActive then
-                  fail(
-                    "NODAL-ANALOG-033-003",
-                    "procedural variable declaration requires an active procedural region",
-                    Option(identity).filter(_.nonEmpty)
-                  )
-                if identity.trim.isEmpty then
-          """
-          # YAML block indentation contributes ten leading spaces to every embedded line.
-          old = "\n".join(line[10:] if line.startswith("          ") else line for line in old.splitlines()) + "\n"
-          new = "\n".join(line[10:] if line.startswith("          ") else line for line in new.splitlines()) + "\n"
+          old = (
+              "    ): Variable =\n"
+              "      requireProcedure(Option(identity).filter(_.nonEmpty))\n"
+              "      if identity.trim.isEmpty then\n"
+          )
+          new = (
+              "    ): Variable =\n"
+              "      if !procedureActive then\n"
+              "        fail(\n"
+              "          \"NODAL-ANALOG-033-003\",\n"
+              "          \"procedural variable declaration requires an active procedural region\",\n"
+              "          Option(identity).filter(_.nonEmpty)\n"
+              "        )\n"
+              "      if identity.trim.isEmpty then\n"
+          )
           if old not in scala:
               raise SystemExit("Scala declaration guard pattern was not found")
           scala_path.write_text(scala.replace(old, new, 1), encoding="utf-8")
@@ -92,6 +91,51 @@ jobs:
               if old_text not in text:
                   raise SystemExit(f"repair pattern was not found in {path}")
               path.write_text(text.replace(old_text, new_text, 1), encoding="utf-8")
+
+          adapter_path = Path("core/scala/api/src/nodal/AnalogProceduralConstruction.scala")
+          adapter = adapter_path.read_text(encoding="utf-8")
+          old_collect = (
+              "    def visit(candidate: Any): Unit = candidate match\n"
+              "      case reference: AnyRef =>\n"
+              "        state.modules.iterator\n"
+              "          .flatMap(module => Option(module.variables.get(reference)))\n"
+              "          .foreach(result += _)\n"
+              "        reference match\n"
+              "          case expression: KernelExpr[?] => expression.operands.foreach(visit)\n"
+              "          case _ => ()\n"
+              "      case iterable: Iterable[?] => iterable.foreach(visit)\n"
+              "      case _ => ()\n"
+          )
+          new_collect = (
+              "    def visit(candidate: Any): Unit = candidate match\n"
+              "      case iterable: Iterable[?] => iterable.foreach(visit)\n"
+              "      case reference: AnyRef =>\n"
+              "        state.modules.iterator\n"
+              "          .flatMap(module => Option(module.variables.get(reference)))\n"
+              "          .foreach(result += _)\n"
+              "        reference match\n"
+              "          case expression: KernelExpr[?] => expression.operands.foreach(visit)\n"
+              "          case _ => ()\n"
+              "      case _ => ()\n"
+          )
+          if old_collect not in adapter:
+              raise SystemExit("procedural read traversal pattern was not found")
+          adapter = adapter.replace(old_collect, new_collect, 1)
+          old_type = (
+              "  private def valueType(\n"
+              "      expression: Expr[? <: Data],\n"
+              "      fallback: Option[AnalogProceduralRuntime.ValueType] = None\n"
+              "  ): AnalogProceduralRuntime.ValueType =\n"
+          )
+          new_type = (
+              "  private def valueType(\n"
+              "      expression: Expr[? <: Data],\n"
+              "      fallback: Option[AnalogProceduralRuntime.ValueType]\n"
+              "  ): AnalogProceduralRuntime.ValueType =\n"
+          )
+          if old_type not in adapter:
+              raise SystemExit("procedural value-type fallback pattern was not found")
+          adapter_path.write_text(adapter.replace(old_type, new_type, 1), encoding="utf-8")
           PY
 
       - name: Validate repaired checkpoint
@@ -121,6 +165,7 @@ jobs:
           git config user.email pysolvesemi@gmail.com
           git add \
             core/native/include/nodal/AnalogProceduralRuntime.h \
+            core/scala/api/src/nodal/AnalogProceduralConstruction.scala \
             core/scala/api/src/nodal/AnalogProceduralRuntime.scala \
             examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala \
             scripts/check_increment33.py \

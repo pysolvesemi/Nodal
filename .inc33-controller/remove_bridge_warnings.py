@@ -22,16 +22,24 @@ replace_once(
 
 path = Path("core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala")
 text = path.read_text(encoding="utf-8")
-parameter = "      semanticPath: String,\n"
-if text.count(parameter) != 1:
+signature = """      operandTypes: Vector[String] = Vector.empty,
+      resultTypes: Vector[String] = Vector.empty,
+      semanticPath: String,
+      source: Option[AnalogProceduralRuntime.Source]
+"""
+replacement = """      operandTypes: Vector[String] = Vector.empty,
+      resultTypes: Vector[String] = Vector.empty,
+      source: Option[AnalogProceduralRuntime.Source]
+"""
+if text.count(signature) != 1:
     raise SystemExit(
-        f"AnalogProceduralMlir.scala: expected one semanticPath parameter, found {text.count(parameter)}"
+        f"AnalogProceduralMlir.scala: expected one operation signature, found {text.count(signature)}"
     )
-text = text.replace(parameter, "")
+text = text.replace(signature, replacement)
 pattern = re.compile(r"(?m)^\s+semanticPath = [^\n]+,\n")
 text, count = pattern.subn("", text)
 if count != 6:
     raise SystemExit(
-        f"AnalogProceduralMlir.scala: expected six semanticPath call arguments, found {count}"
+        f"AnalogProceduralMlir.scala: expected six operation semanticPath arguments, found {count}"
     )
 path.write_text(text, encoding="utf-8")

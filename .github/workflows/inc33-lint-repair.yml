@@ -39,9 +39,6 @@ jobs:
             --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
           git diff --check
 
-      - name: Validate structural checkpoint
-        run: python3 scripts/check_increment33.py
-
       - name: Publish repaired staging tree
         shell: bash
         run: |
@@ -50,6 +47,11 @@ jobs:
           git add -A
           git commit -m "fix(scala): use lint-safe procedural failure paths"
           git push origin HEAD:automation/inc33-compiler-ir-staging-20260831
+
+      - name: Validate structural checkpoint
+        shell: bash
+        run: |
+          python3 scripts/check_increment33.py
 
       - name: Validate Scala core
         run: ./nodal core scala

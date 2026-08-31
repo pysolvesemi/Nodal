@@ -64,7 +64,8 @@ The synchronize event carrying that head must also expose the canonical
 Review findings are closed only after production public-API construction,
 initialization-only analysis enforcement, and native non-empty identity checks
 all pass their direct integration and mutation witnesses on the same exact
-implementation head.
+implementation head. This owner-authored checkpoint reruns the complete
+acceptance matrix after those fixes without changing the semantic boundary.
 
 ## Deliberately deferred
 

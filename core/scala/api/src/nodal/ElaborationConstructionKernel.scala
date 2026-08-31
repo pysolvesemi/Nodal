@@ -1700,9 +1700,11 @@ private[nodal] object ConstructionKernel:
   def currentModulePath: String = active
     .map(_.currentModulePath)
     .getOrElse(
-      throw new IllegalStateException(
-        "procedural module construction has no active transaction"
-      )
+      scala.util.Failure[String](
+        new IllegalStateException(
+          "procedural module construction has no active transaction"
+        )
+      ).get
     )
 
   def captureAnalogProceduralSource: Option[AnalogProceduralRuntime.Source] =

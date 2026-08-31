@@ -36,15 +36,14 @@ private[nodal] object AnalogProceduralConstruction:
   private val current = new ThreadLocal[State]
 
   private def state: State =
-    var value = current.get()
-    if value == null then
-      value = new State
+    Option(current.get()).getOrElse:
+      val value = new State
       current.set(value)
-    value
+      value
 
   private def activeModule: ModuleState =
     state.stack.lastOption.getOrElse(
-      throw new AnalogProceduralRuntime.Failure(
+      AnalogProceduralRuntime.reject(
         AnalogProceduralRuntime.Diagnostic(
           "NODAL-ANALOG-033-003",
           "procedural variable construction has no active component"
@@ -91,7 +90,7 @@ private[nodal] object AnalogProceduralConstruction:
     case "Bool" => AnalogProceduralRuntime.ScalarKind.Boolean
     case "Real" => AnalogProceduralRuntime.ScalarKind.Real
     case other =>
-      throw new AnalogProceduralRuntime.Failure(
+      AnalogProceduralRuntime.reject(
         AnalogProceduralRuntime.Diagnostic(
           "NODAL-ANALOG-033-019",
           s"unsupported procedural variable scalar kind '$other'"
@@ -158,7 +157,7 @@ private[nodal] object AnalogProceduralConstruction:
 
   private def materializeVariables(module: ModuleState): Unit =
     module.pending.foreach: pending =>
-      if module.variables.get(pending.value) == null then
+      if !module.variables.containsKey(pending.value) then
         val initialValue = pending.initializer.map: initializer =>
           semanticValue(initializer, None)
         val inferredDimension = initialValue
@@ -200,7 +199,7 @@ private[nodal] object AnalogProceduralConstruction:
   ): Unit =
     val module = activeModule
     if module.procedureDepth == 0 then
-      throw new AnalogProceduralRuntime.Failure(
+      AnalogProceduralRuntime.reject(
         AnalogProceduralRuntime.Diagnostic(
           "NODAL-ANALOG-033-008",
           "analog variable assignment requires an active procedural region"
@@ -215,7 +214,7 @@ private[nodal] object AnalogProceduralConstruction:
         .headOption
       foreign match
         case Some((value, owner)) =>
-          throw new AnalogProceduralRuntime.Failure(
+          AnalogProceduralRuntime.reject(
             AnalogProceduralRuntime.Diagnostic(
               "NODAL-ANALOG-033-009",
               s"procedural variable belongs to component '${owner.owner}', not '${module.owner}'",
@@ -223,7 +222,7 @@ private[nodal] object AnalogProceduralConstruction:
             )
           )
         case None =>
-          throw new AnalogProceduralRuntime.Failure(
+          AnalogProceduralRuntime.reject(
             AnalogProceduralRuntime.Diagnostic(
               "NODAL-ANALOG-033-017",
               "procedural assignment target is not registered in the active component"

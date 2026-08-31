@@ -919,10 +919,17 @@ private final class ConstructionSession(val options: EmitOptions):
       case None => record.className
       case Some(parentHandle) =>
         val parent = records(parentHandle)
-        val instance = parent.instances.find(_.child == handle).getOrElse(
-          fail("NODAL-HIERARCHY-020", "child Module has no Instance record")
-        )
-        s"${provisionalModulePath(parentHandle)}.${record.className}_${instance.ordinal}"
+        val ordinal = parent.instances
+          .find(_.child == handle)
+          .map(_.ordinal)
+          .orElse:
+            if !record.attached && moduleStack.exists(_.handle == handle) then
+              Some(parent.instances.size)
+            else None
+          .getOrElse(
+            fail("NODAL-HIERARCHY-020", "child Module has no Instance record")
+          )
+        s"${provisionalModulePath(parentHandle)}.${record.className}_$ordinal"
 
   private def modulePath(handle: Long): String =
     semanticResult.flatMap(_.modulePaths.get(handle)).getOrElse(provisionalModulePath(handle))

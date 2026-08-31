@@ -40,6 +40,16 @@ final class PublicAnalogCrossOwner extends Module:
   analogProcedure:
     childModule.local := 1.0.V
 
+final class PublicAnalogNestedChild extends Module:
+  val local: Variable[Real] = variable(Real, 0.0.V)
+
+  analogProcedure:
+    local := 1.0.V
+
+final class PublicAnalogParentWithChild extends Module:
+  val childModule = new PublicAnalogNestedChild
+  val child = instance(childModule)
+
 object AnalogProceduralConstructionTests extends TestSuite:
   val tests: Tests = Tests:
     test("public variable and assignment APIs retain authored order"):
@@ -78,6 +88,18 @@ object AnalogProceduralConstructionTests extends TestSuite:
         ).failed.get
           .asInstanceOf[AnalogProceduralRuntime.Failure]
       assert(failure.diagnostic.code == "NODAL-ANALOG-033-008")
+
+    test("child procedural source capture uses its provisional instance path"):
+      val snapshot = ConstructionKernel.inspect(new PublicAnalogParentWithChild)
+      val procedural = snapshot.analogProcedural.find(_.assignments.nonEmpty).get
+      assert(
+        procedural.owner ==
+          "PublicAnalogParentWithChild.PublicAnalogNestedChild_0"
+      )
+      assert(
+        procedural.assignments.head.identity ==
+          "PublicAnalogParentWithChild.PublicAnalogNestedChild_0.statement_0"
+      )
 
     test("public cross-component variable assignment is rejected"):
       val failure =

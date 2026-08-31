@@ -1,0 +1,68 @@
+name: Increment 33 apply PR failure fixes
+
+on:
+  push:
+    branches:
+      - automation/inc33-pr-fix-controller-20260831
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out repair controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc33-pr-fix-controller-20260831
+          fetch-depth: 0
+
+      - name: Capture deterministic repair
+        run: cp .inc33-controller/fix_pr_failures.py /tmp/inc33-fix-pr-failures.py
+
+      - name: Check out Increment 33 implementation branch
+        shell: bash
+        run: |
+          git fetch origin increment/33-analog-variables-procedural-assignment-v5
+          git checkout -B increment/33-analog-variables-procedural-assignment-v5 \
+            origin/increment/33-analog-variables-procedural-assignment-v5
+          python3 /tmp/inc33-fix-pr-failures.py
+          rm -f /tmp/inc33-fix-pr-failures.py
+
+      - name: Format and validate structural contract
+        shell: bash
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          git diff --check
+          python3 scripts/check_increment33.py --compile
+
+      - name: Validate focused Scala behavior
+        run: |
+          ./mill core.scala.testkit.test.testOnly \
+            nodal.internal.testkit.AnalogProceduralConstructionTests
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate native compiler and CTest behavior
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Publish repaired implementation head
+        shell: bash
+        run: |
+          git config user.name "nodal-automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(analog): close Increment 33 Scala and native regressions"
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

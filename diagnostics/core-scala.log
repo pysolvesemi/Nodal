@@ -1,0 +1,1131 @@
++ /home/runner/work/Nodal/Nodal/mill __.compile
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100  6647  100  6647    0     0  96885      0 --:--:-- --:--:-- --:--:-- 97750
+Downloading mill 1.1.7 from https://repo1.maven.org/maven2/com/lihaoyi/mill-dist-native-linux-amd64/1.1.7/mill-dist-native-linux-amd64-1.1.7.exe ...
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0 14 59.6M   14 8896k    0     0  24.1M      0  0:00:02 --:--:--  0:00:02 24.1M100 59.6M  100 59.6M    0     0  44.2M      0  0:00:01  0:00:01 --:--:-- 44.3M
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-daemon_3/1.1.7/mill-runner-daemon_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-daemon_3/1.1.7/mill-runner-daemon_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-init_3/1.1.7/mill-libs-init_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/org/scala-lang/scala3-compiler_3/3.8.2/scala3-compiler_3-3.8.2.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mainargs_3/0.7.8/mainargs_3-0.7.8.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-launcher_3/1.1.7/mill-runner-launcher_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/sourcecode_3/0.4.4/sourcecode_3-0.4.4.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-eclipse_3/1.1.7/mill-runner-eclipse_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-init_3/1.1.7/mill-libs-init_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/os-lib_3/0.11.8/os-lib_3-0.11.8.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-eclipse_3/1.1.7/mill-runner-eclipse_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/pprint_3/0.9.6/pprint_3-0.9.6.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/sourcecode_3/0.4.4/sourcecode_3-0.4.4.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-bsp_3/1.1.7/mill-runner-bsp_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/scala3-compiler_3/3.8.2/scala3-compiler_3-3.8.2.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-eval_3/1.1.7/mill-core-eval_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-launcher_3/1.1.7/mill-runner-launcher_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/upickle_3/4.4.3/upickle_3-4.4.3.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/os-lib_3/0.11.8/os-lib_3-0.11.8.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-moduledefs_3/0.13.1/mill-moduledefs_3-0.13.1.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/pprint_3/0.9.6/pprint_3-0.9.6.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-meta_3/1.1.7/mill-runner-meta_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-bsp_3/1.1.7/mill-runner-bsp_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/fansi_3/0.5.1/fansi_3-0.5.1.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-eval_3/1.1.7/mill-core-eval_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-script_3/1.1.7/mill-libs-script_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mainargs_3/0.7.8/mainargs_3-0.7.8.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-tabcomplete_3/1.1.7/mill-libs-tabcomplete_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/upickle_3/4.4.3/upickle_3-4.4.3.pom
+Downloading https://repo1.maven.org/maven2/org/scala-sbt/compiler-interface/2.0.0-M14/compiler-interface-2.0.0-M14.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-moduledefs_3/0.13.1/mill-moduledefs_3-0.13.1.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/os-lib-watch_3/0.11.8/os-lib-watch_3-0.11.8.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-meta_3/1.1.7/mill-runner-meta_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/unroll-annotation_3/0.2.0/unroll-annotation_3-0.2.0.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-script_3/1.1.7/mill-libs-script_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-server_3/1.1.7/mill-runner-server_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/fansi_3/0.5.1/fansi_3-0.5.1.pom
+Downloading https://repo1.maven.org/maven2/org/scala-lang/scala-library/3.8.2/scala-library-3.8.2.pom
+Downloaded https://repo1.maven.org/maven2/org/scala-sbt/compiler-interface/2.0.0-M14/compiler-interface-2.0.0-M14.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-tabcomplete_3/1.1.7/mill-libs-tabcomplete_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-server_3/1.1.7/mill-runner-server_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/unroll-annotation_3/0.2.0/unroll-annotation_3-0.2.0.pom
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/scala-library/3.8.2/scala-library-3.8.2.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/os-lib-watch_3/0.11.8/os-lib-watch_3-0.11.8.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/upickle-implicits_3/4.4.3/upickle-implicits_3-4.4.3.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/upack_3/4.4.3/upack_3-4.4.3.pom
+Downloading https://repo1.maven.org/maven2/org/scala-lang/scala3-interfaces/3.8.2/scala3-interfaces-3.8.2.pom
+Downloading https://repo1.maven.org/maven2/org/scala-lang/modules/scala-asm/9.9.0-scala-1/scala-asm-9.9.0-scala-1.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/geny_3/1.1.1/geny_3-1.1.1.pom
+Downloading https://repo1.maven.org/maven2/org/scala-sbt/util-interface/2.0.0-RC8/util-interface-2.0.0-RC8.pom
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/scala3-interfaces/3.8.2/scala3-interfaces-3.8.2.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-daemon-server_3/1.1.7/mill-libs-daemon-server_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/modules/scala-asm/9.9.0-scala-1/scala-asm-9.9.0-scala-1.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-scalalib_3/1.1.7/mill-libs-scalalib_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/upack_3/4.4.3/upack_3-4.4.3.pom
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-jvm_2.13/2.1.25-M26/coursier-jvm_2.13-2.1.25-M26.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/upickle-implicits_3/4.4.3/upickle-implicits_3-4.4.3.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-exec_3/1.1.7/mill-core-exec_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/geny_3/1.1.1/geny_3-1.1.1.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-rpc_3/1.1.7/mill-libs-rpc_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-daemon-server_3/1.1.7/mill-libs-daemon-server_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/org/scala-lang/tasty-core_3/3.8.2/tasty-core_3-3.8.2.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-scalalib_3/1.1.7/mill-libs-scalalib_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/ujson_3/4.4.3/ujson_3-4.4.3.pom
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-jvm_2.13/2.1.25-M26/coursier-jvm_2.13-2.1.25-M26.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-api_3/1.1.7/mill-core-api_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/org/scala-sbt/util-interface/2.0.0-RC8/util-interface-2.0.0-RC8.pom
+Downloading https://repo1.maven.org/maven2/org/scala-lang/modules/scala-xml_3/2.4.0/scala-xml_3-2.4.0.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-exec_3/1.1.7/mill-core-exec_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-kotlinlib_3/1.1.7/mill-libs-kotlinlib_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-rpc_3/1.1.7/mill-libs-rpc_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-groovylib_3/1.1.7/mill-libs-groovylib_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/tasty-core_3/3.8.2/tasty-core_3-3.8.2.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-util_3/1.1.7/mill-libs-util_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/ujson_3/4.4.3/ujson_3-4.4.3.pom
+Downloading https://repo1.maven.org/maven2/net/java/dev/jna/jna/5.15.0/jna-5.15.0.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-api_3/1.1.7/mill-core-api_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/org/scala-lang/scala3-library_3/3.8.2/scala3-library_3-3.8.2.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-util_3/1.1.7/mill-libs-util_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/os-zip/0.11.8/os-zip-0.11.8.pom
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/modules/scala-xml_3/2.4.0/scala-xml_3-2.4.0.pom
+Downloading https://repo1.maven.org/maven2/io/github/alexarchambault/native-terminal/native-terminal-no-ffm/0.0.9.1/native-terminal-no-ffm-0.0.9.1.pom
+Downloaded https://repo1.maven.org/maven2/net/java/dev/jna/jna/5.15.0/jna-5.15.0.pom
+Downloading https://repo1.maven.org/maven2/ch/qos/logback/logback-classic/1.5.33/logback-classic-1.5.33.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-kotlinlib_3/1.1.7/mill-libs-kotlinlib_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-internal_3/1.1.7/mill-core-internal_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/scala3-library_3/3.8.2/scala3-library_3-3.8.2.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-api-daemon_3/1.1.7/mill-core-api-daemon_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-groovylib_3/1.1.7/mill-libs-groovylib_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/org/scala-lang/modules/scala-collection-compat_3/2.12.0/scala-collection-compat_3-2.12.0.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/os-zip/0.11.8/os-zip-0.11.8.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-resolve_3/1.1.7/mill-core-resolve_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/ch/qos/logback/logback-classic/1.5.33/logback-classic-1.5.33.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-codesig_3/1.1.7/mill-runner-codesig_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-internal_3/1.1.7/mill-core-internal_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/modules/scala-collection-compat_3/2.12.0/scala-collection-compat_3-2.12.0.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-resolve_3/1.1.7/mill-core-resolve_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-api-daemon_3/1.1.7/mill-core-api-daemon_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-codesig_3/1.1.7/mill-runner-codesig_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/io/github/alexarchambault/native-terminal/native-terminal-no-ffm/0.0.9.1/native-terminal-no-ffm-0.0.9.1.pom
+Downloading https://repo1.maven.org/maven2/ch/qos/logback/logback-parent/1.5.33/logback-parent-1.5.33.pom
+Downloaded https://repo1.maven.org/maven2/ch/qos/logback/logback-parent/1.5.33/logback-parent-1.5.33.pom
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-util_2.13/2.1.25-M26/coursier-util_2.13-2.1.25-M26.pom
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-core_2.13/2.1.25-M26/coursier-core_2.13-2.1.25-M26.pom
+Downloading https://repo1.maven.org/maven2/org/scala-lang/scala-reflect/2.13.18/scala-reflect-2.13.18.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-groovylib-api_3/1.1.7/mill-libs-groovylib-api_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/ch/qos/logback/logback-core/1.5.33/logback-core-1.5.33.pom
+Downloading https://repo1.maven.org/maven2/org/scala-sbt/test-interface/1.0/test-interface-1.0.pom
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-util_2.13/2.1.25-M26/coursier-util_2.13-2.1.25-M26.pom
+Downloading https://repo1.maven.org/maven2/org/snakeyaml/snakeyaml-engine/3.0.1/snakeyaml-engine-3.0.1.pom
+Downloaded https://repo1.maven.org/maven2/ch/qos/logback/logback-core/1.5.33/logback-core-1.5.33.pom
+Downloading https://repo1.maven.org/maven2/org/ow2/asm/asm-tree/9.10.1/asm-tree-9.10.1.pom
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/scala-reflect/2.13.18/scala-reflect-2.13.18.pom
+Downloading https://repo1.maven.org/maven2/com/lumidion/sonatype-central-client-requests_3/0.6.0/sonatype-central-client-requests_3-0.6.0.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-groovylib-api_3/1.1.7/mill-libs-groovylib-api_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-exec/2.1.25-M26/coursier-exec-2.1.25-M26.pom
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-core_2.13/2.1.25-M26/coursier-core_2.13-2.1.25-M26.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-kotlinlib-api_3/1.1.7/mill-libs-kotlinlib-api_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/org/scala-sbt/test-interface/1.0/test-interface-1.0.pom
+Downloading https://repo1.maven.org/maven2/org/slf4j/slf4j-api/2.0.17/slf4j-api-2.0.17.pom
+Downloaded https://repo1.maven.org/maven2/org/snakeyaml/snakeyaml-engine/3.0.1/snakeyaml-engine-3.0.1.pom
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier_2.13/2.1.25-M26/coursier_2.13-2.1.25-M26.pom
+Downloaded https://repo1.maven.org/maven2/org/ow2/asm/asm-tree/9.10.1/asm-tree-9.10.1.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-daemon-client_3/1.1.7/mill-libs-daemon-client_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/org/slf4j/slf4j-api/2.0.17/slf4j-api-2.0.17.pom
+Downloading https://repo1.maven.org/maven2/io/get-coursier/versions_2.13/0.5.1/versions_2.13-0.5.1.pom
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-exec/2.1.25-M26/coursier-exec-2.1.25-M26.pom
+Downloading https://repo1.maven.org/maven2/org/jline/jline-native/3.29.0/jline-native-3.29.0.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-kotlinlib-api_3/1.1.7/mill-libs-kotlinlib-api_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-constants/1.1.7/mill-core-constants-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier_2.13/2.1.25-M26/coursier_2.13-2.1.25-M26.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/upickle-implicits-named-tuples_3/4.4.3/upickle-implicits-named-tuples_3-4.4.3.pom
+Downloaded https://repo1.maven.org/maven2/com/lumidion/sonatype-central-client-requests_3/0.6.0/sonatype-central-client-requests_3-0.6.0.pom
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-archive-cache_2.13/2.1.25-M26/coursier-archive-cache_2.13-2.1.25-M26.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-daemon-client_3/1.1.7/mill-libs-daemon-client_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/requests_3/0.9.3/requests_3-0.9.3.pom
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/versions_2.13/0.5.1/versions_2.13-0.5.1.pom
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-paths/2.1.25-M26/coursier-paths-2.1.25-M26.pom
+Downloaded https://repo1.maven.org/maven2/org/jline/jline-native/3.29.0/jline-native-3.29.0.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-kotlinlib-ksp2-api_3/1.1.7/mill-libs-kotlinlib-ksp2-api_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/upickle-implicits-named-tuples_3/4.4.3/upickle-implicits-named-tuples_3-4.4.3.pom
+Downloading https://repo1.maven.org/maven2/org/ow2/asm/asm-analysis/9.10.1/asm-analysis-9.10.1.pom
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-archive-cache_2.13/2.1.25-M26/coursier-archive-cache_2.13-2.1.25-M26.pom
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-cache_2.13/2.1.25-M26/coursier-cache_2.13-2.1.25-M26.pom
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-paths/2.1.25-M26/coursier-paths-2.1.25-M26.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-api-java11_3/1.1.7/mill-core-api-java11_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/requests_3/0.9.3/requests_3-0.9.3.pom
+Downloading https://repo1.maven.org/maven2/com/github/plokhotnyuk/jsoniter-scala/jsoniter-scala-core_2.13/2.13.5/jsoniter-scala-core_2.13-2.13.5.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-constants/1.1.7/mill-core-constants-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-javalib-testrunner_3/1.1.7/mill-libs-javalib-testrunner_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/org/ow2/asm/asm-analysis/9.10.1/asm-analysis-9.10.1.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/upickle-core_3/4.4.3/upickle-core_3-4.4.3.pom
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-cache_2.13/2.1.25-M26/coursier-cache_2.13-2.1.25-M26.pom
+Downloading https://repo1.maven.org/maven2/io/github/alexarchambault/is-terminal/0.1.2/is-terminal-0.1.2.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-kotlinlib-ksp2-api_3/1.1.7/mill-libs-kotlinlib-ksp2-api_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/fastparse_3/3.1.1/fastparse_3-3.1.1.pom
+Downloaded https://repo1.maven.org/maven2/com/github/plokhotnyuk/jsoniter-scala/jsoniter-scala-core_2.13/2.13.5/jsoniter-scala-core_2.13-2.13.5.pom
+Downloading https://repo1.maven.org/maven2/org/jline/jline/3.30.13/jline-3.30.13.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-api-java11_3/1.1.7/mill-core-api-java11_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-internal-cli_3/1.1.7/mill-core-internal-cli_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/io/github/alexarchambault/is-terminal/0.1.2/is-terminal-0.1.2.pom
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-env_2.13/2.1.25-M26/coursier-env_2.13-2.1.25-M26.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-javalib-testrunner_3/1.1.7/mill-libs-javalib-testrunner_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-javalib_3/1.1.7/mill-libs-javalib_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/fastparse_3/3.1.1/fastparse_3-3.1.1.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/upickle-core_3/4.4.3/upickle-core_3-4.4.3.pom
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-env_2.13/2.1.25-M26/coursier-env_2.13-2.1.25-M26.pom
+Downloaded https://repo1.maven.org/maven2/org/jline/jline/3.30.13/jline-3.30.13.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-javalib_3/1.1.7/mill-libs-javalib_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-internal-cli_3/1.1.7/mill-core-internal-cli_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/org/slf4j/slf4j-parent/2.0.17/slf4j-parent-2.0.17.pom
+Downloading https://repo1.maven.org/maven2/org/jline/jline-parent/3.29.0/jline-parent-3.29.0.pom
+Downloading https://repo1.maven.org/maven2/org/ow2/ow2/1.5.1/ow2-1.5.1.pom
+Downloaded https://repo1.maven.org/maven2/org/ow2/ow2/1.5.1/ow2-1.5.1.pom
+Downloaded https://repo1.maven.org/maven2/org/jline/jline-parent/3.29.0/jline-parent-3.29.0.pom
+Downloaded https://repo1.maven.org/maven2/org/slf4j/slf4j-parent/2.0.17/slf4j-parent-2.0.17.pom
+Downloading https://repo1.maven.org/maven2/org/slf4j/slf4j-bom/2.0.17/slf4j-bom-2.0.17.pom
+Downloaded https://repo1.maven.org/maven2/org/slf4j/slf4j-bom/2.0.17/slf4j-bom-2.0.17.pom
+Downloading https://repo1.maven.org/maven2/org/apache/tika/tika-core/3.3.1/tika-core-3.3.1.pom
+Downloading https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-archiver/4.12.0/plexus-archiver-4.12.0.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-util-java11_3/1.1.7/mill-libs-util-java11_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-proxy-setup/2.1.25-M26/coursier-proxy-setup-2.1.25-M26.pom
+Downloading https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-container-default/2.1.1/plexus-container-default-2.1.1.pom
+Downloading https://repo1.maven.org/maven2/com/github/luben/zstd-jni/1.5.7-11/zstd-jni-1.5.7-11.pom
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-proxy-setup/2.1.25-M26/coursier-proxy-setup-2.1.25-M26.pom
+Downloading https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-utils/4.0.3/plexus-utils-4.0.3.pom
+Downloaded https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-container-default/2.1.1/plexus-container-default-2.1.1.pom
+Downloading https://repo1.maven.org/maven2/org/ow2/asm/asm/9.10.1/asm-9.10.1.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-util-java11_3/1.1.7/mill-libs-util-java11_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-javalib-api_3/1.1.7/mill-libs-javalib-api_3-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/tika/tika-core/3.3.1/tika-core-3.3.1.pom
+Downloading https://repo1.maven.org/maven2/net/java/dev/jna/jna/5.19.1/jna-5.19.1.pom
+Downloaded https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-utils/4.0.3/plexus-utils-4.0.3.pom
+Downloading https://repo1.maven.org/maven2/io/get-coursier/dependency_2.13/0.3.2/dependency_2.13-0.3.2.pom
+Downloaded https://repo1.maven.org/maven2/org/ow2/asm/asm/9.10.1/asm-9.10.1.pom
+Downloading https://repo1.maven.org/maven2/com/lumidion/sonatype-central-client-core_3/0.6.0/sonatype-central-client-core_3-0.6.0.pom
+Downloaded https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-archiver/4.12.0/plexus-archiver-4.12.0.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-javalib-testrunner-entrypoint/1.1.7/mill-libs-javalib-testrunner-entrypoint-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-javalib-api_3/1.1.7/mill-libs-javalib-api_3-1.1.7.pom
+Downloading https://repo1.maven.org/maven2/org/scala-lang/modules/scala-collection-compat_2.13/2.13.0/scala-collection-compat_2.13-2.13.0.pom
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/dependency_2.13/0.3.2/dependency_2.13-0.3.2.pom
+Downloading https://repo1.maven.org/maven2/io/get-coursier/jniutils/windows-jni-utils/0.3.4/windows-jni-utils-0.3.4.pom
+Downloaded https://repo1.maven.org/maven2/com/github/luben/zstd-jni/1.5.7-11/zstd-jni-1.5.7-11.pom
+Downloading https://repo1.maven.org/maven2/com/lumidion/sonatype-central-client-upickle_3/0.6.0/sonatype-central-client-upickle_3-0.6.0.pom
+Downloaded https://repo1.maven.org/maven2/com/lumidion/sonatype-central-client-core_3/0.6.0/sonatype-central-client-core_3-0.6.0.pom
+Downloaded https://repo1.maven.org/maven2/net/java/dev/jna/jna/5.19.1/jna-5.19.1.pom
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/modules/scala-collection-compat_2.13/2.13.0/scala-collection-compat_2.13-2.13.0.pom
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-javalib-testrunner-entrypoint/1.1.7/mill-libs-javalib-testrunner-entrypoint-1.1.7.pom
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/jniutils/windows-jni-utils/0.3.4/windows-jni-utils-0.3.4.pom
+Downloaded https://repo1.maven.org/maven2/com/lumidion/sonatype-central-client-upickle_3/0.6.0/sonatype-central-client-upickle_3-0.6.0.pom
+Downloading https://repo1.maven.org/maven2/org/codehaus/plexus/plexus/25/plexus-25.pom
+Downloading https://repo1.maven.org/maven2/org/apache/tika/tika-parent/3.3.1/tika-parent-3.3.1.pom
+Downloading https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-containers/2.1.1/plexus-containers-2.1.1.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/tika/tika-parent/3.3.1/tika-parent-3.3.1.pom
+Downloaded https://repo1.maven.org/maven2/org/codehaus/plexus/plexus/25/plexus-25.pom
+Downloaded https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-containers/2.1.1/plexus-containers-2.1.1.pom
+Downloading https://repo1.maven.org/maven2/org/apache/apache/38/apache-38.pom
+Downloading https://repo1.maven.org/maven2/org/codehaus/plexus/plexus/6.5/plexus-6.5.pom
+Downloading https://repo1.maven.org/maven2/org/junit/junit-bom/5.14.1/junit-bom-5.14.1.pom
+Downloaded https://repo1.maven.org/maven2/org/junit/junit-bom/5.14.1/junit-bom-5.14.1.pom
+Downloaded https://repo1.maven.org/maven2/org/codehaus/plexus/plexus/6.5/plexus-6.5.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/apache/38/apache-38.pom
+Downloading https://repo1.maven.org/maven2/org/junit/junit-bom/5.14.3/junit-bom-5.14.3.pom
+Downloading https://repo1.maven.org/maven2/org/apache/cxf/cxf-bom/4.0.11/cxf-bom-4.0.11.pom
+Downloading https://repo1.maven.org/maven2/org/slf4j/slf4j-bom/2.0.18/slf4j-bom-2.0.18.pom
+Downloading https://repo1.maven.org/maven2/com/fasterxml/jackson/jackson-bom/2.21.3/jackson-bom-2.21.3.pom
+Downloading https://repo1.maven.org/maven2/org/testcontainers/testcontainers-bom/2.0.5/testcontainers-bom-2.0.5.pom
+Downloading https://repo1.maven.org/maven2/software/amazon/awssdk/bom/2.44.9/bom-2.44.9.pom
+Downloaded https://repo1.maven.org/maven2/org/slf4j/slf4j-bom/2.0.18/slf4j-bom-2.0.18.pom
+Downloading https://repo1.maven.org/maven2/io/netty/netty-bom/4.2.13.Final/netty-bom-4.2.13.Final.pom
+Downloaded https://repo1.maven.org/maven2/com/fasterxml/jackson/jackson-bom/2.21.3/jackson-bom-2.21.3.pom
+Downloading https://repo1.maven.org/maven2/io/grpc/grpc-bom/1.81.0/grpc-bom-1.81.0.pom
+Downloaded https://repo1.maven.org/maven2/org/junit/junit-bom/5.14.3/junit-bom-5.14.3.pom
+Downloading https://repo1.maven.org/maven2/com/azure/azure-sdk-bom/1.3.7/azure-sdk-bom-1.3.7.pom
+Downloaded https://repo1.maven.org/maven2/org/testcontainers/testcontainers-bom/2.0.5/testcontainers-bom-2.0.5.pom
+Downloading https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-bom/2.26.0/log4j-bom-2.26.0.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/cxf/cxf-bom/4.0.11/cxf-bom-4.0.11.pom
+Downloading https://repo1.maven.org/maven2/org/eclipse/jetty/jetty-bom/11.0.26/jetty-bom-11.0.26.pom
+Downloaded https://repo1.maven.org/maven2/io/netty/netty-bom/4.2.13.Final/netty-bom-4.2.13.Final.pom
+Downloaded https://repo1.maven.org/maven2/io/grpc/grpc-bom/1.81.0/grpc-bom-1.81.0.pom
+Downloaded https://repo1.maven.org/maven2/com/azure/azure-sdk-bom/1.3.7/azure-sdk-bom-1.3.7.pom
+Downloaded https://repo1.maven.org/maven2/software/amazon/awssdk/bom/2.44.9/bom-2.44.9.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-bom/2.26.0/log4j-bom-2.26.0.pom
+Downloaded https://repo1.maven.org/maven2/org/eclipse/jetty/jetty-bom/11.0.26/jetty-bom-11.0.26.pom
+Downloading https://repo1.maven.org/maven2/com/fasterxml/jackson/jackson-parent/2.21/jackson-parent-2.21.pom
+Downloading https://repo1.maven.org/maven2/org/apache/cxf/cxf/4.0.11/cxf-4.0.11.pom
+Downloading https://repo1.maven.org/maven2/org/sonatype/oss/oss-parent/7/oss-parent-7.pom
+Downloading https://repo1.maven.org/maven2/software/amazon/awssdk/aws-sdk-java-pom/2.44.9/aws-sdk-java-pom-2.44.9.pom
+Downloaded https://repo1.maven.org/maven2/org/sonatype/oss/oss-parent/7/oss-parent-7.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/cxf/cxf/4.0.11/cxf-4.0.11.pom
+Downloaded https://repo1.maven.org/maven2/software/amazon/awssdk/aws-sdk-java-pom/2.44.9/aws-sdk-java-pom-2.44.9.pom
+Downloaded https://repo1.maven.org/maven2/com/fasterxml/jackson/jackson-parent/2.21/jackson-parent-2.21.pom
+Downloading https://repo1.maven.org/maven2/com/fasterxml/oss-parent/75/oss-parent-75.pom
+Downloaded https://repo1.maven.org/maven2/com/fasterxml/oss-parent/75/oss-parent-75.pom
+Downloading https://repo1.maven.org/maven2/javax/inject/javax.inject/1/javax.inject-1.pom
+Downloading https://repo1.maven.org/maven2/io/github/alexarchambault/concurrent-reference-hash-map/1.1.0/concurrent-reference-hash-map-1.1.0.pom
+Downloading https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-classworlds/2.6.0/plexus-classworlds-2.6.0.pom
+Downloading https://repo1.maven.org/maven2/org/apache/xbean/xbean-reflect/3.7/xbean-reflect-3.7.pom
+Downloading https://repo1.maven.org/maven2/org/apache/commons/commons-compress/1.28.0/commons-compress-1.28.0.pom
+Downloading https://repo1.maven.org/maven2/org/scala-lang/modules/scala-xml_2.13/2.4.0/scala-xml_2.13-2.4.0.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/commons/commons-compress/1.28.0/commons-compress-1.28.0.pom
+Downloading https://repo1.maven.org/maven2/org/slf4j/slf4j-api/2.0.18/slf4j-api-2.0.18.pom
+Downloaded https://repo1.maven.org/maven2/javax/inject/javax.inject/1/javax.inject-1.pom
+Downloading https://repo1.maven.org/maven2/commons-io/commons-io/2.22.0/commons-io-2.22.0.pom
+Downloaded https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-classworlds/2.6.0/plexus-classworlds-2.6.0.pom
+Downloading https://repo1.maven.org/maven2/io/get-coursier/cache-util/2.1.25-M26/cache-util-2.1.25-M26.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/xbean/xbean-reflect/3.7/xbean-reflect-3.7.pom
+Downloading https://repo1.maven.org/maven2/org/virtuslab/scala-cli/config_3/1.14.0/config_3-1.14.0.pom
+Downloaded https://repo1.maven.org/maven2/io/github/alexarchambault/concurrent-reference-hash-map/1.1.0/concurrent-reference-hash-map-1.1.0.pom
+Downloading https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-io/3.6.0/plexus-io-3.6.0.pom
+Downloaded https://repo1.maven.org/maven2/org/slf4j/slf4j-api/2.0.18/slf4j-api-2.0.18.pom
+Downloading https://repo1.maven.org/maven2/io/github/alexarchambault/windows-ansi/windows-ansi/0.0.6/windows-ansi-0.0.6.pom
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/modules/scala-xml_2.13/2.4.0/scala-xml_2.13-2.4.0.pom
+Downloading https://repo1.maven.org/maven2/org/tukaani/xz/1.12/xz-1.12.pom
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/cache-util/2.1.25-M26/cache-util-2.1.25-M26.pom
+Downloading https://repo1.maven.org/maven2/io/get-coursier/versions_2.13/0.5.3/versions_2.13-0.5.3.pom
+Downloaded https://repo1.maven.org/maven2/commons-io/commons-io/2.22.0/commons-io-2.22.0.pom
+Downloaded https://repo1.maven.org/maven2/org/virtuslab/scala-cli/config_3/1.14.0/config_3-1.14.0.pom
+Downloaded https://repo1.maven.org/maven2/io/github/alexarchambault/windows-ansi/windows-ansi/0.0.6/windows-ansi-0.0.6.pom
+Downloaded https://repo1.maven.org/maven2/org/tukaani/xz/1.12/xz-1.12.pom
+Downloaded https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-io/3.6.0/plexus-io-3.6.0.pom
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/versions_2.13/0.5.3/versions_2.13-0.5.3.pom
+Downloading https://repo1.maven.org/maven2/org/codehaus/plexus/plexus/24/plexus-24.pom
+Downloading https://repo1.maven.org/maven2/org/slf4j/slf4j-parent/2.0.18/slf4j-parent-2.0.18.pom
+Downloading https://repo1.maven.org/maven2/org/apache/commons/commons-parent/98/commons-parent-98.pom
+Downloading https://repo1.maven.org/maven2/org/apache/xbean/xbean/3.7/xbean-3.7.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/commons/commons-parent/98/commons-parent-98.pom
+Downloaded https://repo1.maven.org/maven2/org/codehaus/plexus/plexus/24/plexus-24.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/xbean/xbean/3.7/xbean-3.7.pom
+Downloaded https://repo1.maven.org/maven2/org/slf4j/slf4j-parent/2.0.18/slf4j-parent-2.0.18.pom
+Downloading https://repo1.maven.org/maven2/org/apache/commons/commons-parent/85/commons-parent-85.pom
+Downloading https://repo1.maven.org/maven2/org/codehaus/plexus/plexus/5.1/plexus-5.1.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/commons/commons-parent/85/commons-parent-85.pom
+Downloaded https://repo1.maven.org/maven2/org/codehaus/plexus/plexus/5.1/plexus-5.1.pom
+Downloading https://repo1.maven.org/maven2/org/junit/junit-bom/5.13.4/junit-bom-5.13.4.pom
+Downloading https://repo1.maven.org/maven2/org/apache/apache/37/apache-37.pom
+Downloading https://repo1.maven.org/maven2/org/apache/geronimo/genesis/genesis-java5-flava/2.0/genesis-java5-flava-2.0.pom
+Downloaded https://repo1.maven.org/maven2/org/junit/junit-bom/5.13.4/junit-bom-5.13.4.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/apache/37/apache-37.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/geronimo/genesis/genesis-java5-flava/2.0/genesis-java5-flava-2.0.pom
+Downloading https://repo1.maven.org/maven2/org/apache/apache/35/apache-35.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/apache/35/apache-35.pom
+Downloading https://repo1.maven.org/maven2/org/apache/geronimo/genesis/genesis-default-flava/2.0/genesis-default-flava-2.0.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/geronimo/genesis/genesis-default-flava/2.0/genesis-default-flava-2.0.pom
+Downloading https://repo1.maven.org/maven2/org/apache/geronimo/genesis/genesis/2.0/genesis-2.0.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/geronimo/genesis/genesis/2.0/genesis-2.0.pom
+Downloading https://repo1.maven.org/maven2/org/apache/apache/6/apache-6.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/apache/6/apache-6.pom
+Downloading https://repo1.maven.org/maven2/org/junit/junit-bom/5.14.2/junit-bom-5.14.2.pom
+Downloaded https://repo1.maven.org/maven2/org/junit/junit-bom/5.14.2/junit-bom-5.14.2.pom
+Downloading https://repo1.maven.org/maven2/org/junit/junit-bom/5.13.1/junit-bom-5.13.1.pom
+Downloaded https://repo1.maven.org/maven2/org/junit/junit-bom/5.13.1/junit-bom-5.13.1.pom
+Downloading https://repo1.maven.org/maven2/org/fusesource/jansi/jansi/2.4.1/jansi-2.4.1.pom
+Downloading https://repo1.maven.org/maven2/org/virtuslab/scala-cli/specification-level_3/1.14.0/specification-level_3-1.14.0.pom
+Downloading https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.18.0/commons-lang3-3.18.0.pom
+Downloading https://repo1.maven.org/maven2/commons-codec/commons-codec/1.19.0/commons-codec-1.19.0.pom
+Downloaded https://repo1.maven.org/maven2/commons-codec/commons-codec/1.19.0/commons-codec-1.19.0.pom
+Downloaded https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.18.0/commons-lang3-3.18.0.pom
+Downloaded https://repo1.maven.org/maven2/org/fusesource/jansi/jansi/2.4.1/jansi-2.4.1.pom
+Downloaded https://repo1.maven.org/maven2/org/virtuslab/scala-cli/specification-level_3/1.14.0/specification-level_3-1.14.0.pom
+Downloading https://repo1.maven.org/maven2/org/fusesource/fusesource-pom/1.12/fusesource-pom-1.12.pom
+Downloaded https://repo1.maven.org/maven2/org/fusesource/fusesource-pom/1.12/fusesource-pom-1.12.pom
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/upack_3/4.4.3/upack_3-4.4.3.jar
+Downloading https://repo1.maven.org/maven2/commons-io/commons-io/2.22.0/commons-io-2.22.0.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-api_3/1.1.7/mill-core-api_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-kotlinlib_3/1.1.7/mill-libs-kotlinlib_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/upickle-implicits_3/4.4.3/upickle-implicits_3-4.4.3.jar
+Downloading https://repo1.maven.org/maven2/org/scala-lang/scala-library/3.8.2/scala-library-3.8.2.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-kotlinlib_3/1.1.7/mill-libs-kotlinlib_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/io/github/alexarchambault/native-terminal/native-terminal-no-ffm/0.0.9.1/native-terminal-no-ffm-0.0.9.1.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/upack_3/4.4.3/upack_3-4.4.3.jar
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-env_2.13/2.1.25-M26/coursier-env_2.13-2.1.25-M26.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/upickle-implicits_3/4.4.3/upickle-implicits_3-4.4.3.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/fansi_3/0.5.1/fansi_3-0.5.1.jar
+Downloaded https://repo1.maven.org/maven2/commons-io/commons-io/2.22.0/commons-io-2.22.0.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-daemon_3/1.1.7/mill-runner-daemon_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-api_3/1.1.7/mill-core-api_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-daemon-server_3/1.1.7/mill-libs-daemon-server_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/io/github/alexarchambault/native-terminal/native-terminal-no-ffm/0.0.9.1/native-terminal-no-ffm-0.0.9.1.jar
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-exec/2.1.25-M26/coursier-exec-2.1.25-M26.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-daemon-server_3/1.1.7/mill-libs-daemon-server_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-exec_3/1.1.7/mill-core-exec_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/fansi_3/0.5.1/fansi_3-0.5.1.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-api-java11_3/1.1.7/mill-core-api-java11_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-exec/2.1.25-M26/coursier-exec-2.1.25-M26.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-rpc_3/1.1.7/mill-libs-rpc_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-env_2.13/2.1.25-M26/coursier-env_2.13-2.1.25-M26.jar
+Downloading https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-io/3.6.0/plexus-io-3.6.0.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-exec_3/1.1.7/mill-core-exec_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-launcher_3/1.1.7/mill-runner-launcher_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-api-java11_3/1.1.7/mill-core-api-java11_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-resolve_3/1.1.7/mill-core-resolve_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-daemon_3/1.1.7/mill-runner-daemon_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/org/scala-lang/scala3-interfaces/3.8.2/scala3-interfaces-3.8.2.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-launcher_3/1.1.7/mill-runner-launcher_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/upickle-implicits-named-tuples_3/4.4.3/upickle-implicits-named-tuples_3-4.4.3.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-rpc_3/1.1.7/mill-libs-rpc_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/org/ow2/asm/asm-tree/9.10.1/asm-tree-9.10.1.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-resolve_3/1.1.7/mill-core-resolve_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/org/virtuslab/scala-cli/specification-level_3/1.14.0/specification-level_3-1.14.0.jar
+Downloaded https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-io/3.6.0/plexus-io-3.6.0.jar
+Downloading https://repo1.maven.org/maven2/com/github/luben/zstd-jni/1.5.7-11/zstd-jni-1.5.7-11.jar
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/scala3-interfaces/3.8.2/scala3-interfaces-3.8.2.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-kotlinlib-ksp2-api_3/1.1.7/mill-libs-kotlinlib-ksp2-api_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/upickle-implicits-named-tuples_3/4.4.3/upickle-implicits-named-tuples_3-4.4.3.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/geny_3/1.1.1/geny_3-1.1.1.jar
+Downloaded https://repo1.maven.org/maven2/org/ow2/asm/asm-tree/9.10.1/asm-tree-9.10.1.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-kotlinlib-api_3/1.1.7/mill-libs-kotlinlib-api_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/org/virtuslab/scala-cli/specification-level_3/1.14.0/specification-level_3-1.14.0.jar
+Downloading https://repo1.maven.org/maven2/org/jline/jline/3.30.13/jline-3.30.13.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/geny_3/1.1.1/geny_3-1.1.1.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-groovylib-api_3/1.1.7/mill-libs-groovylib-api_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-kotlinlib-ksp2-api_3/1.1.7/mill-libs-kotlinlib-ksp2-api_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-scalalib_3/1.1.7/mill-libs-scalalib_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-groovylib-api_3/1.1.7/mill-libs-groovylib-api_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-constants/1.1.7/mill-core-constants-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-kotlinlib-api_3/1.1.7/mill-libs-kotlinlib-api_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/io/get-coursier/dependency_2.13/0.3.2/dependency_2.13-0.3.2.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-scalalib_3/1.1.7/mill-libs-scalalib_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lumidion/sonatype-central-client-upickle_3/0.6.0/sonatype-central-client-upickle_3-0.6.0.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-constants/1.1.7/mill-core-constants-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/org/scala-sbt/util-interface/2.0.0-RC8/util-interface-2.0.0-RC8.jar
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/dependency_2.13/0.3.2/dependency_2.13-0.3.2.jar
+Downloading https://repo1.maven.org/maven2/javax/inject/javax.inject/1/javax.inject-1.jar
+Downloaded https://repo1.maven.org/maven2/org/jline/jline/3.30.13/jline-3.30.13.jar
+Downloading https://repo1.maven.org/maven2/org/ow2/asm/asm/9.10.1/asm-9.10.1.jar
+Downloaded https://repo1.maven.org/maven2/org/scala-sbt/util-interface/2.0.0-RC8/util-interface-2.0.0-RC8.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-script_3/1.1.7/mill-libs-script_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/com/lumidion/sonatype-central-client-upickle_3/0.6.0/sonatype-central-client-upickle_3-0.6.0.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-api-daemon_3/1.1.7/mill-core-api-daemon_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/javax/inject/javax.inject/1/javax.inject-1.jar
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier_2.13/2.1.25-M26/coursier_2.13-2.1.25-M26.jar
+Downloaded https://repo1.maven.org/maven2/org/ow2/asm/asm/9.10.1/asm-9.10.1.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-groovylib_3/1.1.7/mill-libs-groovylib_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-script_3/1.1.7/mill-libs-script_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-eval_3/1.1.7/mill-core-eval_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-groovylib_3/1.1.7/mill-libs-groovylib_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/os-zip/0.11.8/os-zip-0.11.8.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-api-daemon_3/1.1.7/mill-core-api-daemon_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/org/scala-lang/scala3-compiler_3/3.8.2/scala3-compiler_3-3.8.2.jar
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier_2.13/2.1.25-M26/coursier_2.13-2.1.25-M26.jar
+Downloading https://repo1.maven.org/maven2/ch/qos/logback/logback-core/1.5.33/logback-core-1.5.33.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-eval_3/1.1.7/mill-core-eval_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/org/tukaani/xz/1.12/xz-1.12.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/os-zip/0.11.8/os-zip-0.11.8.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-server_3/1.1.7/mill-runner-server_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/scala-library/3.8.2/scala-library-3.8.2.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/ujson_3/4.4.3/ujson_3-4.4.3.jar
+Downloaded https://repo1.maven.org/maven2/org/tukaani/xz/1.12/xz-1.12.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-util-java11_3/1.1.7/mill-libs-util-java11_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-server_3/1.1.7/mill-runner-server_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-moduledefs_3/0.13.1/mill-moduledefs_3-0.13.1.jar
+Downloaded https://repo1.maven.org/maven2/ch/qos/logback/logback-core/1.5.33/logback-core-1.5.33.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-init_3/1.1.7/mill-libs-init_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/com/github/luben/zstd-jni/1.5.7-11/zstd-jni-1.5.7-11.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/os-lib-watch_3/0.11.8/os-lib-watch_3-0.11.8.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-util-java11_3/1.1.7/mill-libs-util-java11_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-tabcomplete_3/1.1.7/mill-libs-tabcomplete_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-moduledefs_3/0.13.1/mill-moduledefs_3-0.13.1.jar
+Downloading https://repo1.maven.org/maven2/org/ow2/asm/asm-analysis/9.10.1/asm-analysis-9.10.1.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/ujson_3/4.4.3/ujson_3-4.4.3.jar
+Downloading https://repo1.maven.org/maven2/io/github/alexarchambault/is-terminal/0.1.2/is-terminal-0.1.2.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-init_3/1.1.7/mill-libs-init_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/org/fusesource/jansi/jansi/2.4.1/jansi-2.4.1.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-tabcomplete_3/1.1.7/mill-libs-tabcomplete_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-javalib-testrunner-entrypoint/1.1.7/mill-libs-javalib-testrunner-entrypoint-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/org/ow2/asm/asm-analysis/9.10.1/asm-analysis-9.10.1.jar
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-cache_2.13/2.1.25-M26/coursier-cache_2.13-2.1.25-M26.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/os-lib-watch_3/0.11.8/os-lib-watch_3-0.11.8.jar
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-jvm_2.13/2.1.25-M26/coursier-jvm_2.13-2.1.25-M26.jar
+Downloaded https://repo1.maven.org/maven2/io/github/alexarchambault/is-terminal/0.1.2/is-terminal-0.1.2.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/unroll-annotation_3/0.2.0/unroll-annotation_3-0.2.0.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-javalib-testrunner-entrypoint/1.1.7/mill-libs-javalib-testrunner-entrypoint-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-javalib-api_3/1.1.7/mill-libs-javalib-api_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/org/fusesource/jansi/jansi/2.4.1/jansi-2.4.1.jar
+Downloading https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-container-default/2.1.1/plexus-container-default-2.1.1.jar
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-cache_2.13/2.1.25-M26/coursier-cache_2.13-2.1.25-M26.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-internal-cli_3/1.1.7/mill-core-internal-cli_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-container-default/2.1.1/plexus-container-default-2.1.1.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-eclipse_3/1.1.7/mill-runner-eclipse_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-jvm_2.13/2.1.25-M26/coursier-jvm_2.13-2.1.25-M26.jar
+Downloading https://repo1.maven.org/maven2/org/slf4j/slf4j-api/2.0.18/slf4j-api-2.0.18.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-javalib-api_3/1.1.7/mill-libs-javalib-api_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/org/snakeyaml/snakeyaml-engine/3.0.1/snakeyaml-engine-3.0.1.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/unroll-annotation_3/0.2.0/unroll-annotation_3-0.2.0.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-daemon-client_3/1.1.7/mill-libs-daemon-client_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-internal-cli_3/1.1.7/mill-core-internal-cli_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/ch/qos/logback/logback-classic/1.5.33/logback-classic-1.5.33.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-eclipse_3/1.1.7/mill-runner-eclipse_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.18.0/commons-lang3-3.18.0.jar
+Downloaded https://repo1.maven.org/maven2/org/snakeyaml/snakeyaml-engine/3.0.1/snakeyaml-engine-3.0.1.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/fastparse_3/3.1.1/fastparse_3-3.1.1.jar
+Downloaded https://repo1.maven.org/maven2/ch/qos/logback/logback-classic/1.5.33/logback-classic-1.5.33.jar
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-paths/2.1.25-M26/coursier-paths-2.1.25-M26.jar
+Downloaded https://repo1.maven.org/maven2/org/slf4j/slf4j-api/2.0.18/slf4j-api-2.0.18.jar
+Downloading https://repo1.maven.org/maven2/org/scala-lang/scala-reflect/2.13.18/scala-reflect-2.13.18.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-daemon-client_3/1.1.7/mill-libs-daemon-client_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/org/scala-lang/modules/scala-asm/9.9.0-scala-1/scala-asm-9.9.0-scala-1.jar
+Downloaded https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.18.0/commons-lang3-3.18.0.jar
+Downloading https://repo1.maven.org/maven2/commons-codec/commons-codec/1.19.0/commons-codec-1.19.0.jar
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-paths/2.1.25-M26/coursier-paths-2.1.25-M26.jar
+Downloading https://repo1.maven.org/maven2/org/scala-lang/modules/scala-xml_3/2.4.0/scala-xml_3-2.4.0.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/fastparse_3/3.1.1/fastparse_3-3.1.1.jar
+Downloading https://repo1.maven.org/maven2/org/scala-lang/modules/scala-collection-compat_2.13/2.13.0/scala-collection-compat_2.13-2.13.0.jar
+Downloaded https://repo1.maven.org/maven2/commons-codec/commons-codec/1.19.0/commons-codec-1.19.0.jar
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-proxy-setup/2.1.25-M26/coursier-proxy-setup-2.1.25-M26.jar
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/modules/scala-collection-compat_2.13/2.13.0/scala-collection-compat_2.13-2.13.0.jar
+Downloading https://repo1.maven.org/maven2/org/scala-sbt/test-interface/1.0/test-interface-1.0.jar
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/modules/scala-asm/9.9.0-scala-1/scala-asm-9.9.0-scala-1.jar
+Downloading https://repo1.maven.org/maven2/org/scala-lang/modules/scala-xml_2.13/2.4.0/scala-xml_2.13-2.4.0.jar
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-proxy-setup/2.1.25-M26/coursier-proxy-setup-2.1.25-M26.jar
+Downloading https://repo1.maven.org/maven2/io/get-coursier/cache-util/2.1.25-M26/cache-util-2.1.25-M26.jar
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/modules/scala-xml_3/2.4.0/scala-xml_3-2.4.0.jar
+Downloading https://repo1.maven.org/maven2/com/lumidion/sonatype-central-client-core_3/0.6.0/sonatype-central-client-core_3-0.6.0.jar
+Downloaded https://repo1.maven.org/maven2/org/scala-sbt/test-interface/1.0/test-interface-1.0.jar
+Downloading https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-classworlds/2.6.0/plexus-classworlds-2.6.0.jar
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/cache-util/2.1.25-M26/cache-util-2.1.25-M26.jar
+Downloading https://repo1.maven.org/maven2/io/github/alexarchambault/concurrent-reference-hash-map/1.1.0/concurrent-reference-hash-map-1.1.0.jar
+Downloaded https://repo1.maven.org/maven2/com/lumidion/sonatype-central-client-core_3/0.6.0/sonatype-central-client-core_3-0.6.0.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/upickle-core_3/4.4.3/upickle-core_3-4.4.3.jar
+Downloaded https://repo1.maven.org/maven2/io/github/alexarchambault/concurrent-reference-hash-map/1.1.0/concurrent-reference-hash-map-1.1.0.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-core-internal_3/1.1.7/mill-core-internal_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-classworlds/2.6.0/plexus-classworlds-2.6.0.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/os-lib_3/0.11.8/os-lib_3-0.11.8.jar
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/modules/scala-xml_2.13/2.4.0/scala-xml_2.13-2.4.0.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/pprint_3/0.9.6/pprint_3-0.9.6.jar
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/scala-reflect/2.13.18/scala-reflect-2.13.18.jar
+Downloading https://repo1.maven.org/maven2/org/apache/tika/tika-core/3.3.1/tika-core-3.3.1.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/upickle-core_3/4.4.3/upickle-core_3-4.4.3.jar
+Downloading https://repo1.maven.org/maven2/org/apache/xbean/xbean-reflect/3.7/xbean-reflect-3.7.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-core-internal_3/1.1.7/mill-core-internal_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mainargs_3/0.7.8/mainargs_3-0.7.8.jar
+Downloaded https://repo1.maven.org/maven2/org/apache/xbean/xbean-reflect/3.7/xbean-reflect-3.7.jar
+Downloading https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-utils/4.0.3/plexus-utils-4.0.3.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/pprint_3/0.9.6/pprint_3-0.9.6.jar
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-util_2.13/2.1.25-M26/coursier-util_2.13-2.1.25-M26.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/os-lib_3/0.11.8/os-lib_3-0.11.8.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-util_3/1.1.7/mill-libs-util_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mainargs_3/0.7.8/mainargs_3-0.7.8.jar
+Downloading https://repo1.maven.org/maven2/net/java/dev/jna/jna/5.19.1/jna-5.19.1.jar
+Downloaded https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-utils/4.0.3/plexus-utils-4.0.3.jar
+Downloading https://repo1.maven.org/maven2/org/scala-sbt/compiler-interface/2.0.0-M14/compiler-interface-2.0.0-M14.jar
+Downloaded https://repo1.maven.org/maven2/org/apache/tika/tika-core/3.3.1/tika-core-3.3.1.jar
+Downloading https://repo1.maven.org/maven2/org/scala-lang/tasty-core_3/3.8.2/tasty-core_3-3.8.2.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-util_3/1.1.7/mill-libs-util_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/requests_3/0.9.3/requests_3-0.9.3.jar
+Downloaded https://repo1.maven.org/maven2/org/scala-sbt/compiler-interface/2.0.0-M14/compiler-interface-2.0.0-M14.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-codesig_3/1.1.7/mill-runner-codesig_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-util_2.13/2.1.25-M26/coursier-util_2.13-2.1.25-M26.jar
+Downloading https://repo1.maven.org/maven2/io/get-coursier/jniutils/windows-jni-utils/0.3.4/windows-jni-utils-0.3.4.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/requests_3/0.9.3/requests_3-0.9.3.jar
+Downloading https://repo1.maven.org/maven2/io/get-coursier/versions_2.13/0.5.3/versions_2.13-0.5.3.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-codesig_3/1.1.7/mill-runner-codesig_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/org/scala-lang/modules/scala-collection-compat_3/2.12.0/scala-collection-compat_3-2.12.0.jar
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/tasty-core_3/3.8.2/tasty-core_3-3.8.2.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-javalib_3/1.1.7/mill-libs-javalib_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/jniutils/windows-jni-utils/0.3.4/windows-jni-utils-0.3.4.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/upickle_3/4.4.3/upickle_3-4.4.3.jar
+Downloaded https://repo1.maven.org/maven2/net/java/dev/jna/jna/5.19.1/jna-5.19.1.jar
+Downloading https://repo1.maven.org/maven2/org/scala-lang/scala3-library_3/3.8.2/scala3-library_3-3.8.2.jar
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/modules/scala-collection-compat_3/2.12.0/scala-collection-compat_3-2.12.0.jar
+Downloading https://repo1.maven.org/maven2/io/github/alexarchambault/windows-ansi/windows-ansi/0.0.6/windows-ansi-0.0.6.jar
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/versions_2.13/0.5.3/versions_2.13-0.5.3.jar
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-archive-cache_2.13/2.1.25-M26/coursier-archive-cache_2.13-2.1.25-M26.jar
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/scala3-library_3/3.8.2/scala3-library_3-3.8.2.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-javalib-testrunner_3/1.1.7/mill-libs-javalib-testrunner_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/io/github/alexarchambault/windows-ansi/windows-ansi/0.0.6/windows-ansi-0.0.6.jar
+Downloading https://repo1.maven.org/maven2/io/get-coursier/coursier-core_2.13/2.1.25-M26/coursier-core_2.13-2.1.25-M26.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/upickle_3/4.4.3/upickle_3-4.4.3.jar
+Downloading https://repo1.maven.org/maven2/org/apache/commons/commons-compress/1.28.0/commons-compress-1.28.0.jar
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-archive-cache_2.13/2.1.25-M26/coursier-archive-cache_2.13-2.1.25-M26.jar
+Downloading https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-archiver/4.12.0/plexus-archiver-4.12.0.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-javalib-testrunner_3/1.1.7/mill-libs-javalib-testrunner_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-meta_3/1.1.7/mill-runner-meta_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/org/scala-lang/scala3-compiler_3/3.8.2/scala3-compiler_3-3.8.2.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-bsp_3/1.1.7/mill-runner-bsp_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-meta_3/1.1.7/mill-runner-meta_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/org/virtuslab/scala-cli/config_3/1.14.0/config_3-1.14.0.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-libs-javalib_3/1.1.7/mill-libs-javalib_3-1.1.7.jar
+Downloading https://repo1.maven.org/maven2/com/lihaoyi/sourcecode_3/0.4.4/sourcecode_3-0.4.4.jar
+Downloaded https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-archiver/4.12.0/plexus-archiver-4.12.0.jar
+Downloading https://repo1.maven.org/maven2/com/lumidion/sonatype-central-client-requests_3/0.6.0/sonatype-central-client-requests_3-0.6.0.jar
+Downloaded https://repo1.maven.org/maven2/org/apache/commons/commons-compress/1.28.0/commons-compress-1.28.0.jar
+Downloading https://repo1.maven.org/maven2/org/jline/jline-native/3.29.0/jline-native-3.29.0.jar
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/coursier-core_2.13/2.1.25-M26/coursier-core_2.13-2.1.25-M26.jar
+Downloading https://repo1.maven.org/maven2/com/github/plokhotnyuk/jsoniter-scala/jsoniter-scala-core_2.13/2.13.5/jsoniter-scala-core_2.13-2.13.5.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/mill-runner-bsp_3/1.1.7/mill-runner-bsp_3-1.1.7.jar
+Downloaded https://repo1.maven.org/maven2/org/virtuslab/scala-cli/config_3/1.14.0/config_3-1.14.0.jar
+Downloaded https://repo1.maven.org/maven2/org/jline/jline-native/3.29.0/jline-native-3.29.0.jar
+Downloaded https://repo1.maven.org/maven2/com/lihaoyi/sourcecode_3/0.4.4/sourcecode_3-0.4.4.jar
+Downloaded https://repo1.maven.org/maven2/com/lumidion/sonatype-central-client-requests_3/0.6.0/sonatype-central-client-requests_3-0.6.0.jar
+Downloaded https://repo1.maven.org/maven2/com/github/plokhotnyuk/jsoniter-scala/jsoniter-scala-core_2.13/2.13.5/jsoniter-scala-core_2.13-2.13.5.jar
+Downloading https://repo1.maven.org/maven2/io/get-coursier/jvm/indices/index-linux-amd64/0.0.4-162-4be9be/index-linux-amd64-0.0.4-162-4be9be.pom
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/jvm/indices/index-linux-amd64/0.0.4-162-4be9be/index-linux-amd64-0.0.4-162-4be9be.pom
+Downloading https://repo1.maven.org/maven2/io/get-coursier/jvm/indices/index-linux-amd64/0.0.4-162-4be9be/index-linux-amd64-0.0.4-162-4be9be.jar
+Downloaded https://repo1.maven.org/maven2/io/get-coursier/jvm/indices/index-linux-amd64/0.0.4-162-4be9be/index-linux-amd64-0.0.4-162-4be9be.jar
+Downloading https://cdn.azul.com/zulu/bin/zulu25.32.17-ca-jdk25.0.2-linux_x64.tar.gz
+Downloaded https://cdn.azul.com/zulu/bin/zulu25.32.17-ca-jdk25.0.2-linux_x64.tar.gz
+/home/runner/.cache/nodal/mill/mill-1.1.7.sh __.compile
+build.mill-68] compile compiling 1 Scala source to out/mill-build/compile.dest/classes ...
+build.mill-68] done compiling
+918] core.integrations.compile
+918] compiling 1 Scala source to out/core/integrations/compile.dest/classes ...
+920] core.scala.api.compile
+920] compiling 11 Scala sources to out/core/scala/api/compile.dest/classes ...
+918] done compiling
+920] done compiling
+947] examples.interfacePipelineExternal.compile
+947] compiling 1 Scala source to out/examples/interfacePipelineExternal/compile.dest/classes ...
+949] examples.externalLibrary.compile
+949] compiling 2 Scala sources to out/examples/externalLibrary/compile.dest/classes ...
+948] examples.continuousTimeExternal.compile
+948] compiling 1 Scala source to out/examples/continuousTimeExternal/compile.dest/classes ...
+946] examples.publicApiV03Migration.compile
+946] compiling 1 Scala source to out/examples/publicApiV03Migration/compile.dest/classes ...
+949] done compiling
+954] core.scala.frontend.compile
+954] compiling 1 Scala source to out/core/scala/frontend/compile.dest/classes ...
+946] done compiling
+947] done compiling
+955] examples.coreSemanticsExternal.compile
+955] compiling 1 Scala source to out/examples/coreSemanticsExternal/compile.dest/classes ...
+956] examples.publicApiV03External.compile
+956] compiling 1 Scala source to out/examples/publicApiV03External/compile.dest/classes ...
+948] done compiling
+961] examples.clockResetApi.compile
+961] compiling 4 Scala sources to out/examples/clockResetApi/compile.dest/classes ...
+954] done compiling
+962] examples.publicApiCandidates.compile
+962] compiling 3 Scala sources to out/examples/publicApiCandidates/compile.dest/classes ...
+956] done compiling
+967] examples.interfacePipelineApi.compile
+967] compiling 1 Scala source to out/examples/interfacePipelineApi/compile.dest/classes ...
+955] done compiling
+962] done compiling
+968] examples.continuousTimeApi.compile
+968] compiling 3 Scala sources to out/examples/continuousTimeApi/compile.dest/classes ...
+971] core.scala.bridge.compile
+971] compiling 7 Scala sources to out/core/scala/bridge/compile.dest/classes ...
+961] done compiling
+972] examples.publicApiV03.compile
+972] compiling 1 Scala source to out/examples/publicApiV03/compile.dest/classes ...
+967] done compiling
+973] examples.coreSemanticsApi.compile
+973] compiling 1 Scala source to out/examples/coreSemanticsApi/compile.dest/classes ...
+968] done compiling
+972] done compiling
+973] done compiling
+971] done compiling
+976] core.scala.sim.compile
+976] compiling 1 Scala source to out/core/scala/sim/compile.dest/classes ...
+976] done compiling
+979] core.scala.cli.compile
+979] compiling 1 Scala source to out/core/scala/cli/compile.dest/classes ...
+979] done compiling
+982] core.scala.testkit.compile
+982] compiling 1 Scala source to out/core/scala/testkit/compile.dest/classes ...
+982] done compiling
+985] core.scala.testkit.test.compile
+985] compiling 11 Scala sources to out/core/scala/testkit/test/compile.dest/classes ...
+985] done compiling
+985/985, SUCCESS] /home/runner/.cache/nodal/mill/mill-1.1.7.sh __.compile 37s
++ /home/runner/work/Nodal/Nodal/mill core.scala.testkit.test
+/home/runner/.cache/nodal/mill/mill-1.1.7.sh core.scala.testkit.test
+441-3] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+441-3] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by scala.runtime.LazyVals$ (file:/home/runner/.cache/coursier/v1/https/repo1.maven.org/maven2/org/scala-lang/scala3-library_3/3.7.4/scala3-library_3-3.7.4.jar)
+441-3] WARNING: Please consider reporting this to the maintainers of class scala.runtime.LazyVals$
+441-3] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+441-2] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+441-2] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by scala.runtime.LazyVals$ (file:/home/runner/.cache/coursier/v1/https/repo1.maven.org/maven2/org/scala-lang/scala3-library_3/3.7.4/scala3-library_3-3.7.4.jar)
+441-2] WARNING: Please consider reporting this to the maintainers of class scala.runtime.LazyVals$
+441-2] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+441-0] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+441-0] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by scala.runtime.LazyVals$ (file:/home/runner/.cache/coursier/v1/https/repo1.maven.org/maven2/org/scala-lang/scala3-library_3/3.7.4/scala3-library_3-3.7.4.jar)
+441-0] WARNING: Please consider reporting this to the maintainers of class scala.runtime.LazyVals$
+441-0] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+441-1] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+441-1] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by scala.runtime.LazyVals$ (file:/home/runner/.cache/coursier/v1/https/repo1.maven.org/maven2/org/scala-lang/scala3-library_3/3.7.4/scala3-library_3-3.7.4.jar)
+441-1] WARNING: Please consider reporting this to the maintainers of class scala.runtime.LazyVals$
+441-1] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+441-2] Running Test Class nodal.internal.testkit.ReproducibilityContractTests
+441-3] Running Test Class nodal.internal.testkit.SemanticOriginTests
+441-2] -------------------------------- Running Tests --------------------------------
+441-3] -------------------------------- Running Tests --------------------------------
+441-0] Running Test Class nodal.internal.testkit.AnalogEquationConstructionTests
+441-0] -------------------------------- Running Tests --------------------------------
+441-1] Running Test Class nodal.internal.testkit.AnalogProceduralConstructionTests
+441-1] -------------------------------- Running Tests --------------------------------
+441-2] [32m+[39m nodal.internal.testkit.ReproducibilityContractTests.construction failures use declared result channel [2m919ms[0m  
+441-3] [31mX[39m nodal.internal.testkit.SemanticOriginTests.semantic names replace traversal-counter-only names [2m944ms[0m 
+441-3]   [91m[4mnodal.ConstructionException[39m[24m: NODAL-HIERARCHY-020: child Module has no Instance record
+441-3]     [31mnodal.ConstructionSession.[91mfail[39m([91mElaborationConstructionKernel.scala[39m:[91m301[39m)
+441-3]     [31mnodal.ConstructionSession.[91m$anonfun$22[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mscala.Option.[91mgetOrElse[39m([91mOption.scala[39m:[91m203[39m)
+441-3]     [31mnodal.ConstructionSession.[91mprovisionalModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mnodal.ConstructionSession.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m452[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath$$anonfun$1[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mscala.Option.[91mmap[39m([91mOption.scala[39m:[91m244[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mbeginModule[39m([91mCandidateApi.scala[39m:[91m586[39m)
+441-3]     [31mnodal.Module.[91m<init>[39m([91mCandidateApi.scala[39m:[91m274[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginLeaf.[91m<init>[39m([91mSemanticOriginTests.scala[39m:[91m14[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTop.[91m$init$$$anonfun$3[39m([91mSemanticOriginTests.scala[39m:[91m48[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTop.[91m$init$$$anonfun$adapted$2[39m([91mSemanticOriginTests.scala[39m:[91m49[39m)
+441-3]     [31mnodal.ConstructionSession.[91mwithDomain[39m([91mElaborationConstructionKernel.scala[39m:[91m447[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mdomainBlock[39m([91mElaborationConstructionKernel.scala[39m:[91m1742[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mdomainBlock[39m([91mCandidateApi.scala[39m:[91m768[39m)
+441-3]     [31mnodal.ClockDomain.[91mapply[39m([91mCandidateApi.scala[39m:[91m192[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTop.[91m<init>[39m([91mSemanticOriginTests.scala[39m:[91m49[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTests$.[91m$anonfun$1[39m([91mSemanticOriginTests.scala[39m:[91m57[39m)
+441-3]     [31mnodal.ConstructionKernel$$anon$38.[91mrun[39m([91mElaborationConstructionKernel.scala[39m:[91m1684[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrunWithoutScope[39m([91mScopedValueContainer.java[39m:[91m112[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrun[39m([91mScopedValueContainer.java[39m:[91m98[39m)
+441-3]     [31mjava.lang.ScopedValue$Carrier.[91mrun[39m([91mScopedValue.java[39m:[91m466[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91melaborate[39m([91mElaborationConstructionKernel.scala[39m:[91m1682[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91minspect[39m([91mElaborationConstructionKernel.scala[39m:[91m1696[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTests$.[91m$init$$$anonfun$4$$anonfun$1[39m([91mSemanticOriginTests.scala[39m:[91m57[39m)
+441-3] [31mX[39m nodal.internal.testkit.SemanticOriginTests.expression source maps survive inlined origins [2m531ms[0m 
+441-3]   [91m[4mnodal.ConstructionException[39m[24m: NODAL-HIERARCHY-020: child Module has no Instance record
+441-3]     [31mnodal.ConstructionSession.[91mfail[39m([91mElaborationConstructionKernel.scala[39m:[91m301[39m)
+441-3]     [31mnodal.ConstructionSession.[91m$anonfun$22[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mscala.Option.[91mgetOrElse[39m([91mOption.scala[39m:[91m203[39m)
+441-3]     [31mnodal.ConstructionSession.[91mprovisionalModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mnodal.ConstructionSession.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m452[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath$$anonfun$1[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mscala.Option.[91mmap[39m([91mOption.scala[39m:[91m244[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mbeginModule[39m([91mCandidateApi.scala[39m:[91m586[39m)
+441-3]     [31mnodal.Module.[91m<init>[39m([91mCandidateApi.scala[39m:[91m274[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginLeaf.[91m<init>[39m([91mSemanticOriginTests.scala[39m:[91m14[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTop.[91m$init$$$anonfun$3[39m([91mSemanticOriginTests.scala[39m:[91m48[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTop.[91m$init$$$anonfun$adapted$2[39m([91mSemanticOriginTests.scala[39m:[91m49[39m)
+441-3]     [31mnodal.ConstructionSession.[91mwithDomain[39m([91mElaborationConstructionKernel.scala[39m:[91m447[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mdomainBlock[39m([91mElaborationConstructionKernel.scala[39m:[91m1742[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mdomainBlock[39m([91mCandidateApi.scala[39m:[91m768[39m)
+441-3]     [31mnodal.ClockDomain.[91mapply[39m([91mCandidateApi.scala[39m:[91m192[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTop.[91m<init>[39m([91mSemanticOriginTests.scala[39m:[91m49[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTests$.[91m$anonfun$3[39m([91mSemanticOriginTests.scala[39m:[91m76[39m)
+441-3]     [31mnodal.ConstructionKernel$$anon$38.[91mrun[39m([91mElaborationConstructionKernel.scala[39m:[91m1684[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrunWithoutScope[39m([91mScopedValueContainer.java[39m:[91m112[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrun[39m([91mScopedValueContainer.java[39m:[91m98[39m)
+441-3]     [31mjava.lang.ScopedValue$Carrier.[91mrun[39m([91mScopedValue.java[39m:[91m466[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91melaborate[39m([91mElaborationConstructionKernel.scala[39m:[91m1682[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91minspect[39m([91mElaborationConstructionKernel.scala[39m:[91m1696[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTests$.[91m$init$$$anonfun$4$$anonfun$2[39m([91mSemanticOriginTests.scala[39m:[91m76[39m)
+441-1] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.public variable and assignment APIs retain authored order [2m1580ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.public uninitialized variable read is rejected [2m238ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.AnalogEquationConstructionTests.public APIs populate the construction-session recorder [2m2103ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.public assignment dimension mismatch is rejected [2m193ms[0m  
+441-3] [31mX[39m nodal.internal.testkit.SemanticOriginTests.generated infrastructure names cover required categories [2m500ms[0m 
+441-3]   [91m[4mnodal.ConstructionException[39m[24m: NODAL-HIERARCHY-020: child Module has no Instance record
+441-3]     [31mnodal.ConstructionSession.[91mfail[39m([91mElaborationConstructionKernel.scala[39m:[91m301[39m)
+441-3]     [31mnodal.ConstructionSession.[91m$anonfun$22[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mscala.Option.[91mgetOrElse[39m([91mOption.scala[39m:[91m203[39m)
+441-3]     [31mnodal.ConstructionSession.[91mprovisionalModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mnodal.ConstructionSession.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m452[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath$$anonfun$1[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mscala.Option.[91mmap[39m([91mOption.scala[39m:[91m244[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mbeginModule[39m([91mCandidateApi.scala[39m:[91m586[39m)
+441-3]     [31mnodal.Module.[91m<init>[39m([91mCandidateApi.scala[39m:[91m274[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginLeaf.[91m<init>[39m([91mSemanticOriginTests.scala[39m:[91m14[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTop.[91m$init$$$anonfun$3[39m([91mSemanticOriginTests.scala[39m:[91m48[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTop.[91m$init$$$anonfun$adapted$2[39m([91mSemanticOriginTests.scala[39m:[91m49[39m)
+441-3]     [31mnodal.ConstructionSession.[91mwithDomain[39m([91mElaborationConstructionKernel.scala[39m:[91m447[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mdomainBlock[39m([91mElaborationConstructionKernel.scala[39m:[91m1742[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mdomainBlock[39m([91mCandidateApi.scala[39m:[91m768[39m)
+441-3]     [31mnodal.ClockDomain.[91mapply[39m([91mCandidateApi.scala[39m:[91m192[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTop.[91m<init>[39m([91mSemanticOriginTests.scala[39m:[91m49[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTests$.[91m$anonfun$7[39m([91mSemanticOriginTests.scala[39m:[91m95[39m)
+441-3]     [31mnodal.ConstructionKernel$$anon$38.[91mrun[39m([91mElaborationConstructionKernel.scala[39m:[91m1684[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrunWithoutScope[39m([91mScopedValueContainer.java[39m:[91m112[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrun[39m([91mScopedValueContainer.java[39m:[91m98[39m)
+441-3]     [31mjava.lang.ScopedValue$Carrier.[91mrun[39m([91mScopedValue.java[39m:[91m466[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91melaborate[39m([91mElaborationConstructionKernel.scala[39m:[91m1682[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91minspect[39m([91mElaborationConstructionKernel.scala[39m:[91m1696[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTests$.[91m$init$$$anonfun$4$$anonfun$3[39m([91mSemanticOriginTests.scala[39m:[91m95[39m)
+441-1] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.public assignment outside analogProcedure is rejected [2m187ms[0m  
+441-2] [32m+[39m nodal.internal.testkit.ReproducibilityContractTests.canonical artifacts survive repeated construction and valid traversal orders [2m1663ms[0m  
+441-1] [31mX[39m nodal.internal.testkit.AnalogProceduralConstructionTests.public cross-component variable assignment is rejected [2m71ms[0m 
+441-1]   [91m[4mjava.lang.ClassCastException[39m[24m: class nodal.ConstructionException cannot be cast to class nodal.AnalogProceduralRuntime$Failure (nodal.ConstructionException and nodal.AnalogProceduralRuntime$Failure are in unnamed module of loader 'app')
+441-1]     [31mnodal.internal.testkit.AnalogProceduralConstructionTests$.[91m$init$$$anonfun$5$$anonfun$5[39m([91mAnalogProceduralConstructionTests.scala[39m:[91m84[39m)
+441-1] -------------------------------- Running Tests --------------------------------
+441-1] Running Test Class nodal.bootstrap.testkit.BootstrapSmokeTests
+441-1] [32m+[39m nodal.bootstrap.testkit.BootstrapSmokeTests.module graph [2m11ms[0m  
+441-1] [32m+[39m nodal.bootstrap.testkit.BootstrapSmokeTests.deterministic textual boundary [2m6ms[0m  
+441-1] [32m+[39m nodal.bootstrap.testkit.BootstrapSmokeTests.managed JDK [2m0ms[0m  
+441-1] -------------------------------- Running Tests --------------------------------
+441-1] Running Test Class nodal.internal.testkit.ConstructionKernelTests
+441-3] [31mX[39m nodal.internal.testkit.SemanticOriginTests.origin graph records parents and sink affinity [2m404ms[0m 
+441-3]   [91m[4mnodal.ConstructionException[39m[24m: NODAL-HIERARCHY-020: child Module has no Instance record
+441-3]     [31mnodal.ConstructionSession.[91mfail[39m([91mElaborationConstructionKernel.scala[39m:[91m301[39m)
+441-3]     [31mnodal.ConstructionSession.[91m$anonfun$22[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mscala.Option.[91mgetOrElse[39m([91mOption.scala[39m:[91m203[39m)
+441-3]     [31mnodal.ConstructionSession.[91mprovisionalModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mnodal.ConstructionSession.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m452[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath$$anonfun$1[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mscala.Option.[91mmap[39m([91mOption.scala[39m:[91m244[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mbeginModule[39m([91mCandidateApi.scala[39m:[91m586[39m)
+441-3]     [31mnodal.Module.[91m<init>[39m([91mCandidateApi.scala[39m:[91m274[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginLeaf.[91m<init>[39m([91mSemanticOriginTests.scala[39m:[91m14[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTop.[91m$init$$$anonfun$3[39m([91mSemanticOriginTests.scala[39m:[91m48[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTop.[91m$init$$$anonfun$adapted$2[39m([91mSemanticOriginTests.scala[39m:[91m49[39m)
+441-3]     [31mnodal.ConstructionSession.[91mwithDomain[39m([91mElaborationConstructionKernel.scala[39m:[91m447[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mdomainBlock[39m([91mElaborationConstructionKernel.scala[39m:[91m1742[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mdomainBlock[39m([91mCandidateApi.scala[39m:[91m768[39m)
+441-3]     [31mnodal.ClockDomain.[91mapply[39m([91mCandidateApi.scala[39m:[91m192[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTop.[91m<init>[39m([91mSemanticOriginTests.scala[39m:[91m49[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTests$.[91m$anonfun$9[39m([91mSemanticOriginTests.scala[39m:[91m116[39m)
+441-3]     [31mnodal.ConstructionKernel$$anon$38.[91mrun[39m([91mElaborationConstructionKernel.scala[39m:[91m1684[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrunWithoutScope[39m([91mScopedValueContainer.java[39m:[91m112[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrun[39m([91mScopedValueContainer.java[39m:[91m98[39m)
+441-3]     [31mjava.lang.ScopedValue$Carrier.[91mrun[39m([91mScopedValue.java[39m:[91m466[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91melaborate[39m([91mElaborationConstructionKernel.scala[39m:[91m1682[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91minspect[39m([91mElaborationConstructionKernel.scala[39m:[91m1696[39m)
+441-3]     [31mnodal.internal.testkit.SemanticOriginTests$.[91m$init$$$anonfun$4$$anonfun$4[39m([91mSemanticOriginTests.scala[39m:[91m116[39m)
+441-2] [32m+[39m nodal.internal.testkit.ReproducibilityContractTests.manifest retains deterministic inventories and empty-or-explicit reports [2m359ms[0m  
+441-2] [32m+[39m nodal.internal.testkit.ReproducibilityContractTests.verified MLIR HDL and manifest are byte-identical across work directories [2m13ms[0m  
+441-2] Running Test Class nodal.internal.testkit.CrossLayerDiagnosticTests
+441-2] -------------------------------- Running Tests --------------------------------
+441-2] [32m+[39m nodal.internal.testkit.CrossLayerDiagnosticTests.native stable code and mapped context survive process normalization [2m17ms[0m  
+441-2] [32m+[39m nodal.internal.testkit.CrossLayerDiagnosticTests.parser and pass failures receive distinct fallback families [2m6ms[0m  
+441-1] [31mX[39m nodal.internal.testkit.ConstructionKernelTests.deterministic hierarchy, domains, shapes, interfaces and topology [2m336ms[0m 
+441-1]   [91m[4mnodal.ConstructionException[39m[24m: NODAL-HIERARCHY-020: child Module has no Instance record
+441-1]     [31mnodal.ConstructionSession.[91mfail[39m([91mElaborationConstructionKernel.scala[39m:[91m301[39m)
+441-1]     [31mnodal.ConstructionSession.[91m$anonfun$22[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-1]     [31mscala.Option.[91mgetOrElse[39m([91mOption.scala[39m:[91m203[39m)
+441-1]     [31mnodal.ConstructionSession.[91mprovisionalModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-1]     [31mnodal.ConstructionSession.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m452[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath$$anonfun$1[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-1]     [31mscala.Option.[91mmap[39m([91mOption.scala[39m:[91m244[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-1]     [31mnodal.CandidateRuntime$.[91mbeginModule[39m([91mCandidateApi.scala[39m:[91m586[39m)
+441-1]     [31mnodal.Module.[91m<init>[39m([91mCandidateApi.scala[39m:[91m274[39m)
+441-1]     [31mnodal.internal.testkit.KernelLeaf.[91m<init>[39m([91mConstructionKernelTests.scala[39m:[91m61[39m)
+441-1]     [31mnodal.internal.testkit.KernelTop.[91m$init$$$anonfun$2[39m([91mConstructionKernelTests.scala[39m:[91m114[39m)
+441-1]     [31mnodal.internal.testkit.KernelTop.[91m$init$$$anonfun$adapted$2[39m([91mConstructionKernelTests.scala[39m:[91m115[39m)
+441-1]     [31mnodal.ConstructionSession.[91mwithDomain[39m([91mElaborationConstructionKernel.scala[39m:[91m447[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91mdomainBlock[39m([91mElaborationConstructionKernel.scala[39m:[91m1742[39m)
+441-1]     [31mnodal.CandidateRuntime$.[91mdomainBlock[39m([91mCandidateApi.scala[39m:[91m768[39m)
+441-1]     [31mnodal.ClockDomain.[91mapply[39m([91mCandidateApi.scala[39m:[91m192[39m)
+441-1]     [31mnodal.internal.testkit.KernelTop.[91m<init>[39m([91mConstructionKernelTests.scala[39m:[91m115[39m)
+441-1]     [31mnodal.internal.testkit.ConstructionKernelTests$.[91m$anonfun$1[39m([91mConstructionKernelTests.scala[39m:[91m157[39m)
+441-1]     [31mnodal.ConstructionKernel$$anon$38.[91mrun[39m([91mElaborationConstructionKernel.scala[39m:[91m1684[39m)
+441-1]     [31mjdk.internal.vm.ScopedValueContainer.[91mrunWithoutScope[39m([91mScopedValueContainer.java[39m:[91m112[39m)
+441-1]     [31mjdk.internal.vm.ScopedValueContainer.[91mrun[39m([91mScopedValueContainer.java[39m:[91m98[39m)
+441-1]     [31mjava.lang.ScopedValue$Carrier.[91mrun[39m([91mScopedValue.java[39m:[91m466[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91melaborate[39m([91mElaborationConstructionKernel.scala[39m:[91m1682[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91minspect[39m([91mElaborationConstructionKernel.scala[39m:[91m1696[39m)
+441-1]     [31mnodal.internal.testkit.ConstructionKernelTests$.[91m$init$$$anonfun$4$$anonfun$1[39m([91mConstructionKernelTests.scala[39m:[91m157[39m)
+441-2] [32m+[39m nodal.internal.testkit.CrossLayerDiagnosticTests.native compiler client preserves mapped native diagnostics [2m80ms[0m  
+441-2] [32m+[39m nodal.internal.testkit.CrossLayerDiagnosticTests.unclassified external failure retains Increment 20 process contract [2m14ms[0m  
+441-2] Running Test Class nodal.internal.testkit.RcVerticalSliceTests
+441-2] -------------------------------- Running Tests --------------------------------
+441-3] [32m+[39m nodal.internal.testkit.SemanticOriginTests.same-basename source files use owner context [2m375ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.AnalogEquationConstructionTests.contribution grouping is independent of public source order [2m1033ms[0m  
+441-3] Running Test Class nodal.internal.testkit.ScalaToMlirBridgeTests
+441-3] -------------------------------- Running Tests --------------------------------
+441-0] [32m+[39m nodal.internal.testkit.AnalogEquationConstructionTests.equation outside a region is rejected [2m58ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.AnalogEquationConstructionTests.overlapping public semantic regions are rejected [2m32ms[0m  
+441-1] [31mX[39m nodal.internal.testkit.ConstructionKernelTests.public emit publishes construction classification and logical ABI [2m276ms[0m 
+441-1]   [91m[4mnodal.ConstructionException[39m[24m: NODAL-HIERARCHY-020: child Module has no Instance record
+441-1]     [31mnodal.ConstructionSession.[91mfail[39m([91mElaborationConstructionKernel.scala[39m:[91m301[39m)
+441-1]     [31mnodal.ConstructionSession.[91m$anonfun$22[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-1]     [31mscala.Option.[91mgetOrElse[39m([91mOption.scala[39m:[91m203[39m)
+441-1]     [31mnodal.ConstructionSession.[91mprovisionalModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-1]     [31mnodal.ConstructionSession.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m452[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath$$anonfun$1[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-1]     [31mscala.Option.[91mmap[39m([91mOption.scala[39m:[91m244[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-1]     [31mnodal.CandidateRuntime$.[91mbeginModule[39m([91mCandidateApi.scala[39m:[91m586[39m)
+441-1]     [31mnodal.Module.[91m<init>[39m([91mCandidateApi.scala[39m:[91m274[39m)
+441-1]     [31mnodal.internal.testkit.KernelLeaf.[91m<init>[39m([91mConstructionKernelTests.scala[39m:[91m61[39m)
+441-1]     [31mnodal.internal.testkit.KernelTop.[91m$init$$$anonfun$2[39m([91mConstructionKernelTests.scala[39m:[91m114[39m)
+441-1]     [31mnodal.internal.testkit.KernelTop.[91m$init$$$anonfun$adapted$2[39m([91mConstructionKernelTests.scala[39m:[91m115[39m)
+441-1]     [31mnodal.ConstructionSession.[91mwithDomain[39m([91mElaborationConstructionKernel.scala[39m:[91m447[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91mdomainBlock[39m([91mElaborationConstructionKernel.scala[39m:[91m1742[39m)
+441-1]     [31mnodal.CandidateRuntime$.[91mdomainBlock[39m([91mCandidateApi.scala[39m:[91m768[39m)
+441-1]     [31mnodal.ClockDomain.[91mapply[39m([91mCandidateApi.scala[39m:[91m192[39m)
+441-1]     [31mnodal.internal.testkit.KernelTop.[91m<init>[39m([91mConstructionKernelTests.scala[39m:[91m115[39m)
+441-1]     [31mnodal.internal.testkit.ConstructionKernelTests$.[91m$anonfun$6[39m([91mConstructionKernelTests.scala[39m:[91m193[39m)
+441-1]     [31mnodal.ConstructionKernel$$anon$38.[91mrun[39m([91mElaborationConstructionKernel.scala[39m:[91m1684[39m)
+441-1]     [31mjdk.internal.vm.ScopedValueContainer.[91mrunWithoutScope[39m([91mScopedValueContainer.java[39m:[91m112[39m)
+441-1]     [31mjdk.internal.vm.ScopedValueContainer.[91mrun[39m([91mScopedValueContainer.java[39m:[91m98[39m)
+441-1]     [31mjava.lang.ScopedValue$Carrier.[91mrun[39m([91mScopedValue.java[39m:[91m466[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91melaborate[39m([91mElaborationConstructionKernel.scala[39m:[91m1682[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91memit[39m([91mElaborationConstructionKernel.scala[39m:[91m1693[39m)
+441-1]     [31mnodal.Nodal$.[91memit[39m([91mCompilerApi.scala[39m:[91m71[39m)
+441-1]     [31mnodal.internal.testkit.ConstructionKernelTests$.[91m$init$$$anonfun$4$$anonfun$2[39m([91mConstructionKernelTests.scala[39m:[91m193[39m)
+441-0] [32m+[39m nodal.internal.testkit.AnalogEquationConstructionTests.public equation dimensions are validated [2m59ms[0m  
+441-3] [31mX[39m nodal.internal.testkit.ScalaToMlirBridgeTests.deterministic source-correlated textual MLIR [2m175ms[0m 
+441-3]   [91m[4mnodal.ConstructionException[39m[24m: NODAL-HIERARCHY-020: child Module has no Instance record
+441-3]     [31mnodal.ConstructionSession.[91mfail[39m([91mElaborationConstructionKernel.scala[39m:[91m301[39m)
+441-3]     [31mnodal.ConstructionSession.[91m$anonfun$22[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mscala.Option.[91mgetOrElse[39m([91mOption.scala[39m:[91m203[39m)
+441-3]     [31mnodal.ConstructionSession.[91mprovisionalModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mnodal.ConstructionSession.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m452[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath$$anonfun$1[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mscala.Option.[91mmap[39m([91mOption.scala[39m:[91m244[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mbeginModule[39m([91mCandidateApi.scala[39m:[91m586[39m)
+441-3]     [31mnodal.Module.[91m<init>[39m([91mCandidateApi.scala[39m:[91m274[39m)
+441-3]     [31mnodal.internal.testkit.BridgeLeaf.[91m<init>[39m([91mScalaToMlirBridgeTests.scala[39m:[91m12[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m$init$$$anonfun$2[39m([91mScalaToMlirBridgeTests.scala[39m:[91m56[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m$init$$$anonfun$adapted$2[39m([91mScalaToMlirBridgeTests.scala[39m:[91m59[39m)
+441-3]     [31mnodal.ConstructionSession.[91mwithDomain[39m([91mElaborationConstructionKernel.scala[39m:[91m447[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mdomainBlock[39m([91mElaborationConstructionKernel.scala[39m:[91m1742[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mdomainBlock[39m([91mCandidateApi.scala[39m:[91m768[39m)
+441-3]     [31mnodal.ClockDomain.[91mapply[39m([91mCandidateApi.scala[39m:[91m192[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m<init>[39m([91mScalaToMlirBridgeTests.scala[39m:[91m59[39m)
+441-3]     [31mnodal.internal.testkit.ScalaToMlirBridgeTests$.[91m$anonfun$1[39m([91mScalaToMlirBridgeTests.scala[39m:[91m89[39m)
+441-3]     [31mnodal.ConstructionKernel$$anon$38.[91mrun[39m([91mElaborationConstructionKernel.scala[39m:[91m1684[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrunWithoutScope[39m([91mScopedValueContainer.java[39m:[91m112[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrun[39m([91mScopedValueContainer.java[39m:[91m98[39m)
+441-3]     [31mjava.lang.ScopedValue$Carrier.[91mrun[39m([91mScopedValue.java[39m:[91m466[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91melaborate[39m([91mElaborationConstructionKernel.scala[39m:[91m1682[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91minspect[39m([91mElaborationConstructionKernel.scala[39m:[91m1696[39m)
+441-3]     [31mnodal.internal.bridge.ScalaToMlirBridge$.[91mlower[39m([91mScalaToMlirBridge.scala[39m:[91m53[39m)
+441-3]     [31mnodal.internal.testkit.ScalaToMlirBridgeTests$.[91m$init$$$anonfun$4$$anonfun$1[39m([91mScalaToMlirBridgeTests.scala[39m:[91m89[39m)
+441-0] [32m+[39m nodal.internal.testkit.AnalogEquationConstructionTests.procedural assignment is rejected in a declarative region [2m99ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.AnalogEquationConstructionTests.non-access contribution target is rejected [2m98ms[0m  
+441-2] [32m+[39m nodal.internal.testkit.RcVerticalSliceTests.Scala RC lowers deterministically to typed analog MLIR [2m510ms[0m  
+441-2] [32m+[39m nodal.internal.testkit.RcVerticalSliceTests.Scala RC compiles through nodalc to exact Verilog-A [2m4ms[0m  
+441-0] Tests: 7, Passed: 7, Failed: 0
+441-2] [32m+[39m nodal.internal.testkit.RcVerticalSliceTests.unsupported analog operator fails before native launch [2m144ms[0m  
+441-1] [31mX[39m nodal.internal.testkit.ConstructionKernelTests.unbound root requirement is rejected transactionally [2m493ms[0m 
+441-1]   [91m[4mnodal.ConstructionException[39m[24m: NODAL-HIERARCHY-020: child Module has no Instance record
+441-1]     [31mnodal.ConstructionSession.[91mfail[39m([91mElaborationConstructionKernel.scala[39m:[91m301[39m)
+441-1]     [31mnodal.ConstructionSession.[91m$anonfun$22[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-1]     [31mscala.Option.[91mgetOrElse[39m([91mOption.scala[39m:[91m203[39m)
+441-1]     [31mnodal.ConstructionSession.[91mprovisionalModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-1]     [31mnodal.ConstructionSession.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m452[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath$$anonfun$1[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-1]     [31mscala.Option.[91mmap[39m([91mOption.scala[39m:[91m244[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-1]     [31mnodal.CandidateRuntime$.[91mbeginModule[39m([91mCandidateApi.scala[39m:[91m586[39m)
+441-1]     [31mnodal.Module.[91m<init>[39m([91mCandidateApi.scala[39m:[91m274[39m)
+441-1]     [31mnodal.internal.testkit.KernelLeaf.[91m<init>[39m([91mConstructionKernelTests.scala[39m:[91m61[39m)
+441-1]     [31mnodal.internal.testkit.KernelTop.[91m$init$$$anonfun$2[39m([91mConstructionKernelTests.scala[39m:[91m114[39m)
+441-1]     [31mnodal.internal.testkit.KernelTop.[91m$init$$$anonfun$adapted$2[39m([91mConstructionKernelTests.scala[39m:[91m115[39m)
+441-1]     [31mnodal.ConstructionSession.[91mwithDomain[39m([91mElaborationConstructionKernel.scala[39m:[91m447[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91mdomainBlock[39m([91mElaborationConstructionKernel.scala[39m:[91m1742[39m)
+441-1]     [31mnodal.CandidateRuntime$.[91mdomainBlock[39m([91mCandidateApi.scala[39m:[91m768[39m)
+441-1]     [31mnodal.ClockDomain.[91mapply[39m([91mCandidateApi.scala[39m:[91m192[39m)
+441-1]     [31mnodal.internal.testkit.KernelTop.[91m<init>[39m([91mConstructionKernelTests.scala[39m:[91m115[39m)
+441-1]     [31mnodal.internal.testkit.ConstructionKernelTests$.[91m$anonfun$8[39m([91mConstructionKernelTests.scala[39m:[91m209[39m)
+441-1]     [31mnodal.ConstructionKernel$$anon$38.[91mrun[39m([91mElaborationConstructionKernel.scala[39m:[91m1684[39m)
+441-1]     [31mjdk.internal.vm.ScopedValueContainer.[91mrunWithoutScope[39m([91mScopedValueContainer.java[39m:[91m112[39m)
+441-1]     [31mjdk.internal.vm.ScopedValueContainer.[91mrun[39m([91mScopedValueContainer.java[39m:[91m98[39m)
+441-1]     [31mjava.lang.ScopedValue$Carrier.[91mrun[39m([91mScopedValue.java[39m:[91m466[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91melaborate[39m([91mElaborationConstructionKernel.scala[39m:[91m1682[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91minspect[39m([91mElaborationConstructionKernel.scala[39m:[91m1696[39m)
+441-1]     [31mnodal.internal.testkit.ConstructionKernelTests$.[91m$init$$$anonfun$4$$anonfun$3[39m([91mConstructionKernelTests.scala[39m:[91m209[39m)
+441-2] [32m+[39m nodal.internal.testkit.RcVerticalSliceTests.single-ended RC branch is rejected explicitly [2m111ms[0m  
+441-2] Tests: 12, Passed: 12, Failed: 0
+441-1] [32m+[39m nodal.internal.testkit.ConstructionKernelTests.unqualified multi-domain state is rejected [2m168ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.ConstructionKernelTests.exported interface roles must be complete [2m68ms[0m  
+441-1] [31mX[39m nodal.internal.testkit.ConstructionKernelTests.parallel elaborations do not share mutable construction state [2m202ms[0m 
+441-1]   [91m[4mnodal.ConstructionException[39m[24m: NODAL-HIERARCHY-020: child Module has no Instance record
+441-1]     [31mnodal.ConstructionSession.[91mfail[39m([91mElaborationConstructionKernel.scala[39m:[91m301[39m)
+441-1]     [31mnodal.ConstructionSession.[91m$anonfun$22[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-1]     [31mscala.Option.[91mgetOrElse[39m([91mOption.scala[39m:[91m203[39m)
+441-1]     [31mnodal.ConstructionSession.[91mprovisionalModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-1]     [31mnodal.ConstructionSession.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m452[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath$$anonfun$1[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-1]     [31mscala.Option.[91mmap[39m([91mOption.scala[39m:[91m244[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-1]     [31mnodal.CandidateRuntime$.[91mbeginModule[39m([91mCandidateApi.scala[39m:[91m586[39m)
+441-1]     [31mnodal.Module.[91m<init>[39m([91mCandidateApi.scala[39m:[91m274[39m)
+441-1]     [31mnodal.internal.testkit.KernelLeaf.[91m<init>[39m([91mConstructionKernelTests.scala[39m:[91m61[39m)
+441-1]     [31mnodal.internal.testkit.KernelTop.[91m$init$$$anonfun$2[39m([91mConstructionKernelTests.scala[39m:[91m114[39m)
+441-1]     [31mnodal.internal.testkit.KernelTop.[91m$init$$$anonfun$adapted$2[39m([91mConstructionKernelTests.scala[39m:[91m115[39m)
+441-1]     [31mnodal.ConstructionSession.[91mwithDomain[39m([91mElaborationConstructionKernel.scala[39m:[91m447[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91mdomainBlock[39m([91mElaborationConstructionKernel.scala[39m:[91m1742[39m)
+441-1]     [31mnodal.CandidateRuntime$.[91mdomainBlock[39m([91mCandidateApi.scala[39m:[91m768[39m)
+441-1]     [31mnodal.ClockDomain.[91mapply[39m([91mCandidateApi.scala[39m:[91m192[39m)
+441-1]     [31mnodal.internal.testkit.KernelTop.[91m<init>[39m([91mConstructionKernelTests.scala[39m:[91m115[39m)
+441-1]     [31mnodal.internal.testkit.ConstructionKernelTests$.[91m$anonfun$11$$anonfun$1$$anonfun$1[39m([91mConstructionKernelTests.scala[39m:[91m231[39m)
+441-1]     [31mnodal.ConstructionKernel$$anon$38.[91mrun[39m([91mElaborationConstructionKernel.scala[39m:[91m1684[39m)
+441-1]     [31mjdk.internal.vm.ScopedValueContainer.[91mrunWithoutScope[39m([91mScopedValueContainer.java[39m:[91m112[39m)
+441-1]     [31mjdk.internal.vm.ScopedValueContainer.[91mrun[39m([91mScopedValueContainer.java[39m:[91m98[39m)
+441-1]     [31mjava.lang.ScopedValue$Carrier.[91mrun[39m([91mScopedValue.java[39m:[91m466[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91melaborate[39m([91mElaborationConstructionKernel.scala[39m:[91m1682[39m)
+441-1]     [31mnodal.ConstructionKernel$.[91minspect[39m([91mElaborationConstructionKernel.scala[39m:[91m1696[39m)
+441-1]     [31mnodal.internal.testkit.ConstructionKernelTests$.[91m$anonfun$11$$anonfun$1[39m([91mConstructionKernelTests.scala[39m:[91m231[39m)
+441-1]     [31mscala.concurrent.Future$.[91mapply$$anonfun$1[39m([91mFuture.scala[39m:[91m688[39m)
+441-1]     [31mscala.concurrent.impl.Promise$Transformation.[91mrun[39m([91mPromise.scala[39m:[91m486[39m)
+441-1]     [31mjava.util.concurrent.ForkJoinTask$RunnableExecuteAction.[91mcompute[39m([91mForkJoinTask.java[39m:[91m1750[39m)
+441-1]     [31mjava.util.concurrent.ForkJoinTask$RunnableExecuteAction.[91mcompute[39m([91mForkJoinTask.java[39m:[91m1742[39m)
+441-1]     [31mjava.util.concurrent.ForkJoinTask$InterruptibleTask.[91mexec[39m([91mForkJoinTask.java[39m:[91m1659[39m)
+441-1]     [31mjava.util.concurrent.ForkJoinTask.[91mdoExec[39m([91mForkJoinTask.java[39m:[91m511[39m)
+441-1]     [31mjava.util.concurrent.ForkJoinPool$WorkQueue.[91mtopLevelExec[39m([91mForkJoinPool.java[39m:[91m1450[39m)
+441-1]     [31mjava.util.concurrent.ForkJoinPool.[91mrunWorker[39m([91mForkJoinPool.java[39m:[91m2019[39m)
+441-1]     [31mjava.util.concurrent.ForkJoinWorkerThread.[91mrun[39m([91mForkJoinWorkerThread.java[39m:[91m187[39m)
+441-1] Tests: 14, Passed: 9, Failed: 5
+441-3] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.analog procedural IR retains order, source locations, and serialization [2m1001ms[0m  
+441-3] [31mX[39m nodal.internal.testkit.ScalaToMlirBridgeTests.snapshot insertion order does not affect the bridge [2m100ms[0m 
+441-3]   [91m[4mnodal.ConstructionException[39m[24m: NODAL-HIERARCHY-020: child Module has no Instance record
+441-3]     [31mnodal.ConstructionSession.[91mfail[39m([91mElaborationConstructionKernel.scala[39m:[91m301[39m)
+441-3]     [31mnodal.ConstructionSession.[91m$anonfun$22[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mscala.Option.[91mgetOrElse[39m([91mOption.scala[39m:[91m203[39m)
+441-3]     [31mnodal.ConstructionSession.[91mprovisionalModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mnodal.ConstructionSession.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m452[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath$$anonfun$1[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mscala.Option.[91mmap[39m([91mOption.scala[39m:[91m244[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mbeginModule[39m([91mCandidateApi.scala[39m:[91m586[39m)
+441-3]     [31mnodal.Module.[91m<init>[39m([91mCandidateApi.scala[39m:[91m274[39m)
+441-3]     [31mnodal.internal.testkit.BridgeLeaf.[91m<init>[39m([91mScalaToMlirBridgeTests.scala[39m:[91m12[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m$init$$$anonfun$2[39m([91mScalaToMlirBridgeTests.scala[39m:[91m56[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m$init$$$anonfun$adapted$2[39m([91mScalaToMlirBridgeTests.scala[39m:[91m59[39m)
+441-3]     [31mnodal.ConstructionSession.[91mwithDomain[39m([91mElaborationConstructionKernel.scala[39m:[91m447[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mdomainBlock[39m([91mElaborationConstructionKernel.scala[39m:[91m1742[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mdomainBlock[39m([91mCandidateApi.scala[39m:[91m768[39m)
+441-3]     [31mnodal.ClockDomain.[91mapply[39m([91mCandidateApi.scala[39m:[91m192[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m<init>[39m([91mScalaToMlirBridgeTests.scala[39m:[91m59[39m)
+441-3]     [31mnodal.internal.testkit.ScalaToMlirBridgeTests$.[91m$anonfun$12[39m([91mScalaToMlirBridgeTests.scala[39m:[91m162[39m)
+441-3]     [31mnodal.ConstructionKernel$$anon$38.[91mrun[39m([91mElaborationConstructionKernel.scala[39m:[91m1684[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrunWithoutScope[39m([91mScopedValueContainer.java[39m:[91m112[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrun[39m([91mScopedValueContainer.java[39m:[91m98[39m)
+441-3]     [31mjava.lang.ScopedValue$Carrier.[91mrun[39m([91mScopedValue.java[39m:[91m466[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91melaborate[39m([91mElaborationConstructionKernel.scala[39m:[91m1682[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91minspect[39m([91mElaborationConstructionKernel.scala[39m:[91m1696[39m)
+441-3]     [31mnodal.internal.testkit.ScalaToMlirBridgeTests$.[91m$init$$$anonfun$4$$anonfun$3[39m([91mScalaToMlirBridgeTests.scala[39m:[91m162[39m)
+441-3] [31mX[39m nodal.internal.testkit.ScalaToMlirBridgeTests.unsupported exact type fails before process launch [2m80ms[0m 
+441-3]   [91m[4mnodal.ConstructionException[39m[24m: NODAL-HIERARCHY-020: child Module has no Instance record
+441-3]     [31mnodal.ConstructionSession.[91mfail[39m([91mElaborationConstructionKernel.scala[39m:[91m301[39m)
+441-3]     [31mnodal.ConstructionSession.[91m$anonfun$22[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mscala.Option.[91mgetOrElse[39m([91mOption.scala[39m:[91m203[39m)
+441-3]     [31mnodal.ConstructionSession.[91mprovisionalModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mnodal.ConstructionSession.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m452[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath$$anonfun$1[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mscala.Option.[91mmap[39m([91mOption.scala[39m:[91m244[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mbeginModule[39m([91mCandidateApi.scala[39m:[91m586[39m)
+441-3]     [31mnodal.Module.[91m<init>[39m([91mCandidateApi.scala[39m:[91m274[39m)
+441-3]     [31mnodal.internal.testkit.BridgeLeaf.[91m<init>[39m([91mScalaToMlirBridgeTests.scala[39m:[91m12[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m$init$$$anonfun$2[39m([91mScalaToMlirBridgeTests.scala[39m:[91m56[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m$init$$$anonfun$adapted$2[39m([91mScalaToMlirBridgeTests.scala[39m:[91m59[39m)
+441-3]     [31mnodal.ConstructionSession.[91mwithDomain[39m([91mElaborationConstructionKernel.scala[39m:[91m447[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mdomainBlock[39m([91mElaborationConstructionKernel.scala[39m:[91m1742[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mdomainBlock[39m([91mCandidateApi.scala[39m:[91m768[39m)
+441-3]     [31mnodal.ClockDomain.[91mapply[39m([91mCandidateApi.scala[39m:[91m192[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m<init>[39m([91mScalaToMlirBridgeTests.scala[39m:[91m59[39m)
+441-3]     [31mnodal.internal.testkit.ScalaToMlirBridgeTests$.[91m$anonfun$14[39m([91mScalaToMlirBridgeTests.scala[39m:[91m186[39m)
+441-3]     [31mnodal.ConstructionKernel$$anon$38.[91mrun[39m([91mElaborationConstructionKernel.scala[39m:[91m1684[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrunWithoutScope[39m([91mScopedValueContainer.java[39m:[91m112[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrun[39m([91mScopedValueContainer.java[39m:[91m98[39m)
+441-3]     [31mjava.lang.ScopedValue$Carrier.[91mrun[39m([91mScopedValue.java[39m:[91m466[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91melaborate[39m([91mElaborationConstructionKernel.scala[39m:[91m1682[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91minspect[39m([91mElaborationConstructionKernel.scala[39m:[91m1696[39m)
+441-3]     [31mnodal.internal.testkit.ScalaToMlirBridgeTests$.[91m$init$$$anonfun$4$$anonfun$4[39m([91mScalaToMlirBridgeTests.scala[39m:[91m186[39m)
+441-3] [31mX[39m nodal.internal.testkit.ScalaToMlirBridgeTests.argv-safe process success, cleanup, and recovery [2m75ms[0m 
+441-3]   [91m[4mnodal.ConstructionException[39m[24m: NODAL-HIERARCHY-020: child Module has no Instance record
+441-3]     [31mnodal.ConstructionSession.[91mfail[39m([91mElaborationConstructionKernel.scala[39m:[91m301[39m)
+441-3]     [31mnodal.ConstructionSession.[91m$anonfun$22[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mscala.Option.[91mgetOrElse[39m([91mOption.scala[39m:[91m203[39m)
+441-3]     [31mnodal.ConstructionSession.[91mprovisionalModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mnodal.ConstructionSession.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m452[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath$$anonfun$1[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mscala.Option.[91mmap[39m([91mOption.scala[39m:[91m244[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mbeginModule[39m([91mCandidateApi.scala[39m:[91m586[39m)
+441-3]     [31mnodal.Module.[91m<init>[39m([91mCandidateApi.scala[39m:[91m274[39m)
+441-3]     [31mnodal.internal.testkit.BridgeLeaf.[91m<init>[39m([91mScalaToMlirBridgeTests.scala[39m:[91m12[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m$init$$$anonfun$2[39m([91mScalaToMlirBridgeTests.scala[39m:[91m56[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m$init$$$anonfun$adapted$2[39m([91mScalaToMlirBridgeTests.scala[39m:[91m59[39m)
+441-3]     [31mnodal.ConstructionSession.[91mwithDomain[39m([91mElaborationConstructionKernel.scala[39m:[91m447[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mdomainBlock[39m([91mElaborationConstructionKernel.scala[39m:[91m1742[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mdomainBlock[39m([91mCandidateApi.scala[39m:[91m768[39m)
+441-3]     [31mnodal.ClockDomain.[91mapply[39m([91mCandidateApi.scala[39m:[91m192[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m<init>[39m([91mScalaToMlirBridgeTests.scala[39m:[91m59[39m)
+441-3]     [31mnodal.internal.testkit.ScalaToMlirBridgeTests$.[91m$anonfun$18[39m([91mScalaToMlirBridgeTests.scala[39m:[91m205[39m)
+441-3]     [31mnodal.ConstructionKernel$$anon$38.[91mrun[39m([91mElaborationConstructionKernel.scala[39m:[91m1684[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrunWithoutScope[39m([91mScopedValueContainer.java[39m:[91m112[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrun[39m([91mScopedValueContainer.java[39m:[91m98[39m)
+441-3]     [31mjava.lang.ScopedValue$Carrier.[91mrun[39m([91mScopedValue.java[39m:[91m466[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91melaborate[39m([91mElaborationConstructionKernel.scala[39m:[91m1682[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91minspect[39m([91mElaborationConstructionKernel.scala[39m:[91m1696[39m)
+441-3]     [31mnodal.internal.bridge.ScalaToMlirBridge$.[91mlower[39m([91mScalaToMlirBridge.scala[39m:[91m53[39m)
+441-3]     [31mnodal.internal.testkit.ScalaToMlirBridgeTests$.[91m$init$$$anonfun$4$$anonfun$5[39m([91mScalaToMlirBridgeTests.scala[39m:[91m205[39m)
+441-3] [31mX[39m nodal.internal.testkit.ScalaToMlirBridgeTests.timeout is distinct and leaves no partial accepted output [2m74ms[0m 
+441-3]   [91m[4mnodal.ConstructionException[39m[24m: NODAL-HIERARCHY-020: child Module has no Instance record
+441-3]     [31mnodal.ConstructionSession.[91mfail[39m([91mElaborationConstructionKernel.scala[39m:[91m301[39m)
+441-3]     [31mnodal.ConstructionSession.[91m$anonfun$22[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mscala.Option.[91mgetOrElse[39m([91mOption.scala[39m:[91m203[39m)
+441-3]     [31mnodal.ConstructionSession.[91mprovisionalModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mnodal.ConstructionSession.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m452[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath$$anonfun$1[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mscala.Option.[91mmap[39m([91mOption.scala[39m:[91m244[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mbeginModule[39m([91mCandidateApi.scala[39m:[91m586[39m)
+441-3]     [31mnodal.Module.[91m<init>[39m([91mCandidateApi.scala[39m:[91m274[39m)
+441-3]     [31mnodal.internal.testkit.BridgeLeaf.[91m<init>[39m([91mScalaToMlirBridgeTests.scala[39m:[91m12[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m$init$$$anonfun$2[39m([91mScalaToMlirBridgeTests.scala[39m:[91m56[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m$init$$$anonfun$adapted$2[39m([91mScalaToMlirBridgeTests.scala[39m:[91m59[39m)
+441-3]     [31mnodal.ConstructionSession.[91mwithDomain[39m([91mElaborationConstructionKernel.scala[39m:[91m447[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mdomainBlock[39m([91mElaborationConstructionKernel.scala[39m:[91m1742[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mdomainBlock[39m([91mCandidateApi.scala[39m:[91m768[39m)
+441-3]     [31mnodal.ClockDomain.[91mapply[39m([91mCandidateApi.scala[39m:[91m192[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m<init>[39m([91mScalaToMlirBridgeTests.scala[39m:[91m59[39m)
+441-3]     [31mnodal.internal.testkit.ScalaToMlirBridgeTests$.[91m$anonfun$19[39m([91mScalaToMlirBridgeTests.scala[39m:[91m246[39m)
+441-3]     [31mnodal.ConstructionKernel$$anon$38.[91mrun[39m([91mElaborationConstructionKernel.scala[39m:[91m1684[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrunWithoutScope[39m([91mScopedValueContainer.java[39m:[91m112[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrun[39m([91mScopedValueContainer.java[39m:[91m98[39m)
+441-3]     [31mjava.lang.ScopedValue$Carrier.[91mrun[39m([91mScopedValue.java[39m:[91m466[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91melaborate[39m([91mElaborationConstructionKernel.scala[39m:[91m1682[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91minspect[39m([91mElaborationConstructionKernel.scala[39m:[91m1696[39m)
+441-3]     [31mnodal.internal.bridge.ScalaToMlirBridge$.[91mlower[39m([91mScalaToMlirBridge.scala[39m:[91m53[39m)
+441-3]     [31mnodal.internal.testkit.ScalaToMlirBridgeTests$.[91m$init$$$anonfun$4$$anonfun$6[39m([91mScalaToMlirBridgeTests.scala[39m:[91m246[39m)
+441-3] [31mX[39m nodal.internal.testkit.ScalaToMlirBridgeTests.locked nodalc parses procedural bridge MLIR when configured [2m107ms[0m 
+441-3]   [91m[4mjava.lang.ClassCastException[39m[24m: class nodal.internal.bridge.NativeCompilerFailure cannot be cast to class nodal.internal.bridge.NativeCompilerSuccess (nodal.internal.bridge.NativeCompilerFailure and nodal.internal.bridge.NativeCompilerSuccess are in unnamed module of loader 'app')
+441-3]     [31mnodal.internal.testkit.ScalaToMlirBridgeTests$.[91m$init$$$anonfun$4$$anonfun$7[39m([91mScalaToMlirBridgeTests.scala[39m:[91m281[39m)
+441-3] [31mX[39m nodal.internal.testkit.ScalaToMlirBridgeTests.locked nodalc parses and normalizes bridge MLIR when configured [2m73ms[0m 
+441-3]   [91m[4mnodal.ConstructionException[39m[24m: NODAL-HIERARCHY-020: child Module has no Instance record
+441-3]     [31mnodal.ConstructionSession.[91mfail[39m([91mElaborationConstructionKernel.scala[39m:[91m301[39m)
+441-3]     [31mnodal.ConstructionSession.[91m$anonfun$22[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mscala.Option.[91mgetOrElse[39m([91mOption.scala[39m:[91m203[39m)
+441-3]     [31mnodal.ConstructionSession.[91mprovisionalModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m923[39m)
+441-3]     [31mnodal.ConstructionSession.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m452[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath$$anonfun$1[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mscala.Option.[91mmap[39m([91mOption.scala[39m:[91m244[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mcurrentModulePath[39m([91mElaborationConstructionKernel.scala[39m:[91m1701[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mbeginModule[39m([91mCandidateApi.scala[39m:[91m586[39m)
+441-3]     [31mnodal.Module.[91m<init>[39m([91mCandidateApi.scala[39m:[91m274[39m)
+441-3]     [31mnodal.internal.testkit.BridgeLeaf.[91m<init>[39m([91mScalaToMlirBridgeTests.scala[39m:[91m12[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m$init$$$anonfun$2[39m([91mScalaToMlirBridgeTests.scala[39m:[91m56[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m$init$$$anonfun$adapted$2[39m([91mScalaToMlirBridgeTests.scala[39m:[91m59[39m)
+441-3]     [31mnodal.ConstructionSession.[91mwithDomain[39m([91mElaborationConstructionKernel.scala[39m:[91m447[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91mdomainBlock[39m([91mElaborationConstructionKernel.scala[39m:[91m1742[39m)
+441-3]     [31mnodal.CandidateRuntime$.[91mdomainBlock[39m([91mCandidateApi.scala[39m:[91m768[39m)
+441-3]     [31mnodal.ClockDomain.[91mapply[39m([91mCandidateApi.scala[39m:[91m192[39m)
+441-3]     [31mnodal.internal.testkit.BridgeTop.[91m<init>[39m([91mScalaToMlirBridgeTests.scala[39m:[91m59[39m)
+441-3]     [31mnodal.internal.testkit.ScalaToMlirBridgeTests$.[91m$anonfun$21[39m([91mScalaToMlirBridgeTests.scala[39m:[91m299[39m)
+441-3]     [31mnodal.ConstructionKernel$$anon$38.[91mrun[39m([91mElaborationConstructionKernel.scala[39m:[91m1684[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrunWithoutScope[39m([91mScopedValueContainer.java[39m:[91m112[39m)
+441-3]     [31mjdk.internal.vm.ScopedValueContainer.[91mrun[39m([91mScopedValueContainer.java[39m:[91m98[39m)
+441-3]     [31mjava.lang.ScopedValue$Carrier.[91mrun[39m([91mScopedValue.java[39m:[91m466[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91melaborate[39m([91mElaborationConstructionKernel.scala[39m:[91m1682[39m)
+441-3]     [31mnodal.ConstructionKernel$.[91minspect[39m([91mElaborationConstructionKernel.scala[39m:[91m1696[39m)
+441-3]     [31mnodal.internal.bridge.ScalaToMlirBridge$.[91mlower[39m([91mScalaToMlirBridge.scala[39m:[91m53[39m)
+441-3]     [31mnodal.internal.testkit.ScalaToMlirBridgeTests$.[91m$init$$$anonfun$4$$anonfun$8[39m([91mScalaToMlirBridgeTests.scala[39m:[91m299[39m)
+441-3] Tests: 13, Passed: 2, Failed: 11
+441/441, 1 FAILED] /home/runner/.cache/nodal/mill/mill-1.1.7.sh core.scala.testkit.test 7s
+441] [error] core.scala.testkit.test.testForked 16 tests failed: 
+  nodal.internal.testkit.AnalogProceduralConstructionTests nodal.internal.testkit.AnalogProceduralConstructionTests.public cross-component variable assignment is rejected
+  nodal.internal.testkit.ConstructionKernelTests nodal.internal.testkit.ConstructionKernelTests.deterministic hierarchy, domains, shapes, interfaces and topology
+  nodal.internal.testkit.ConstructionKernelTests nodal.internal.testkit.ConstructionKernelTests.public emit publishes construction classification and logical ABI
+  nodal.internal.testkit.ConstructionKernelTests nodal.internal.testkit.ConstructionKernelTests.unbound root requirement is rejected transactionally
+  nodal.internal.testkit.ConstructionKernelTests nodal.internal.testkit.ConstructionKernelTests.parallel elaborations do not share mutable construction state
+  nodal.internal.testkit.SemanticOriginTests nodal.internal.testkit.SemanticOriginTests.semantic names replace traversal-counter-only names
+  nodal.internal.testkit.SemanticOriginTests nodal.internal.testkit.SemanticOriginTests.expression source maps survive inlined origins
+  nodal.internal.testkit.SemanticOriginTests nodal.internal.testkit.SemanticOriginTests.generated infrastructure names cover required categories
+  nodal.internal.testkit.SemanticOriginTests nodal.internal.testkit.SemanticOriginTests.origin graph records parents and sink affinity
+  nodal.internal.testkit.ScalaToMlirBridgeTests nodal.internal.testkit.ScalaToMlirBridgeTests.deterministic source-correlated textual MLIR
+  nodal.internal.testkit.ScalaToMlirBridgeTests nodal.internal.testkit.ScalaToMlirBridgeTests.snapshot insertion order does not affect the bridge
+  nodal.internal.testkit.ScalaToMlirBridgeTests nodal.internal.testkit.ScalaToMlirBridgeTests.unsupported exact type fails before process launch
+  nodal.internal.testkit.ScalaToMlirBridgeTests nodal.internal.testkit.ScalaToMlirBridgeTests.argv-safe process success, cleanup, and recovery
+  nodal.internal.testkit.ScalaToMlirBridgeTests nodal.internal.testkit.ScalaToMlirBridgeTests.timeout is distinct and leaves no partial accepted output
+  nodal.internal.testkit.ScalaToMlirBridgeTests nodal.internal.testkit.ScalaToMlirBridgeTests.locked nodalc parses procedural bridge MLIR when configured
+  nodal.internal.testkit.ScalaToMlirBridgeTests nodal.internal.testkit.ScalaToMlirBridgeTests.locked nodalc parses and normalizes bridge MLIR when configured
+NODAL-DEV-005: command failed with exit code 1

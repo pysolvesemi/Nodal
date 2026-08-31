@@ -12,146 +12,48 @@ jobs:
   repair:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
+      - name: Check out repair controls
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc33-diagnostic-repair-v3
+          path: controls
+          fetch-depth: 1
+
       - name: Check out active Increment 33 branch
         uses: actions/checkout@v6
         with:
           ref: increment/33-analog-variables-procedural-assignment-v5
+          path: target
           fetch-depth: 0
 
-      - name: Repair declaration diagnostics and Scala warning gates
+      - name: Apply exact reviewed repair
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          scala_path = Path("core/scala/api/src/nodal/AnalogProceduralRuntime.scala")
-          scala = scala_path.read_text(encoding="utf-8")
-          old = (
-              "    ): Variable =\n"
-              "      requireProcedure(Option(identity).filter(_.nonEmpty))\n"
-              "      if identity.trim.isEmpty then\n"
-          )
-          new = (
-              "    ): Variable =\n"
-              "      if !procedureActive then\n"
-              "        fail(\n"
-              "          \"NODAL-ANALOG-033-003\",\n"
-              "          \"procedural variable declaration requires an active procedural region\",\n"
-              "          Option(identity).filter(_.nonEmpty)\n"
-              "        )\n"
-              "      if identity.trim.isEmpty then\n"
-          )
-          if old not in scala:
-              raise SystemExit("Scala declaration guard pattern was not found")
-          scala_path.write_text(scala.replace(old, new, 1), encoding="utf-8")
-
-          native_path = Path("core/native/include/nodal/AnalogProceduralRuntime.h")
-          native = native_path.read_text(encoding="utf-8")
-          if "#include <type_traits>\n" not in native:
-              native = native.replace(
-                  "#include <string>\n",
-                  "#include <string>\n#include <type_traits>\n",
-                  1,
-              )
-          old_native = (
-              "    requireProcedure(identity.empty() ? std::nullopt : "
-              "std::optional<std::string>(identity));\n"
-              "    identity = trim(identity);\n"
-          )
-          new_native = (
-              "    if (!procedureActive_)\n"
-              "      fail(\"NODAL-ANALOG-033-003\",\n"
-              "           \"procedural variable declaration requires an active procedural region\",\n"
-              "           identity.empty() ? std::nullopt : "
-              "std::optional<std::string>(identity));\n"
-              "    identity = trim(identity);\n"
-          )
-          if old_native not in native:
-              raise SystemExit("native declaration guard pattern was not found")
-          native_path.write_text(native.replace(old_native, new_native, 1), encoding="utf-8")
-
-          replacements = {
-              Path("examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala"): (
-                  'expect("NODAL-ANALOG-033-008"):\n      outside.declare("illegal", RealVoltage)',
-                  'expect("NODAL-ANALOG-033-003"):\n      outside.declare("illegal", RealVoltage)',
-              ),
-              Path("tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp"): (
-                  'expect("NODAL-ANALOG-033-008", [&] {\n    (void)outside.declareVariable("illegal", RealVoltage);',
-                  'expect("NODAL-ANALOG-033-003", [&] {\n    (void)outside.declareVariable("illegal", RealVoltage);',
-              ),
-              Path("scripts/check_increment33.py"): (
-                  '        "NODAL-ANALOG-033-008",\n        "NODAL-ANALOG-033-009",',
-                  '        "NODAL-ANALOG-033-003",\n        "NODAL-ANALOG-033-009",',
-              ),
-          }
-          for path, (old_text, new_text) in replacements.items():
-              text = path.read_text(encoding="utf-8")
-              if old_text not in text:
-                  raise SystemExit(f"repair pattern was not found in {path}")
-              path.write_text(text.replace(old_text, new_text, 1), encoding="utf-8")
-
-          adapter_path = Path("core/scala/api/src/nodal/AnalogProceduralConstruction.scala")
-          adapter = adapter_path.read_text(encoding="utf-8")
-          old_collect = (
-              "    def visit(candidate: Any): Unit = candidate match\n"
-              "      case reference: AnyRef =>\n"
-              "        state.modules.iterator\n"
-              "          .flatMap(module => Option(module.variables.get(reference)))\n"
-              "          .foreach(result += _)\n"
-              "        reference match\n"
-              "          case expression: KernelExpr[?] => expression.operands.foreach(visit)\n"
-              "          case _ => ()\n"
-              "      case iterable: Iterable[?] => iterable.foreach(visit)\n"
-              "      case _ => ()\n"
-          )
-          new_collect = (
-              "    def visit(candidate: Any): Unit = candidate match\n"
-              "      case iterable: Iterable[?] => iterable.foreach(visit)\n"
-              "      case reference: AnyRef =>\n"
-              "        state.modules.iterator\n"
-              "          .flatMap(module => Option(module.variables.get(reference)))\n"
-              "          .foreach(result += _)\n"
-              "        reference match\n"
-              "          case expression: KernelExpr[?] => expression.operands.foreach(visit)\n"
-              "          case _ => ()\n"
-              "      case _ => ()\n"
-          )
-          if old_collect not in adapter:
-              raise SystemExit("procedural read traversal pattern was not found")
-          adapter = adapter.replace(old_collect, new_collect, 1)
-          old_type = (
-              "  private def valueType(\n"
-              "      expression: Expr[? <: Data],\n"
-              "      fallback: Option[AnalogProceduralRuntime.ValueType] = None\n"
-              "  ): AnalogProceduralRuntime.ValueType =\n"
-          )
-          new_type = (
-              "  private def valueType(\n"
-              "      expression: Expr[? <: Data],\n"
-              "      fallback: Option[AnalogProceduralRuntime.ValueType]\n"
-              "  ): AnalogProceduralRuntime.ValueType =\n"
-          )
-          if old_type not in adapter:
-              raise SystemExit("procedural value-type fallback pattern was not found")
-          adapter_path.write_text(adapter.replace(old_type, new_type, 1), encoding="utf-8")
-          PY
+          cd target
+          git apply --check ../controls/.automation/inc33-diagnostic-repair.patch
+          git apply ../controls/.automation/inc33-diagnostic-repair.patch
+          git diff --check
 
       - name: Validate repaired checkpoint
         shell: bash
         run: |
           set -euo pipefail
+          cd target
           python3 scripts/check_increment31.py
           python3 scripts/check_increment133.py
           python3 scripts/check_increment32.py
           python3 scripts/check_increment33.py --compile
           python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          report=/tmp/increment33-scala-witness.txt
           ./mill examples.continuousTimeApi.runMain \
             nodal.increment33fixture.Increment33RuntimeCheck \
-            /tmp/increment33-scala-witness.txt
-          grep -F 'variables=4' /tmp/increment33-scala-witness.txt
-          grep -F 'assignments=5' /tmp/increment33-scala-witness.txt
+            "$report"
+          grep -F 'variables=4' "$report"
+          grep -F 'assignments=5' "$report"
           ./mill mill.scalalib.scalafmt/checkFormatAll
           ./mill scalafix.check
           python3 scripts/check_markdown.py
@@ -161,6 +63,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cd target
           git config user.name pysolvesemi
           git config user.email pysolvesemi@gmail.com
           git add \

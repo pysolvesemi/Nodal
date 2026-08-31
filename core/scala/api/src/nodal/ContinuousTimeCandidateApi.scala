@@ -74,7 +74,7 @@ def contribution(
 ): Unit = CandidateRuntime.analogContribution(target, value, options)
 
 def analogProcedure(body: => Unit): Unit =
-  CandidateRuntime.analogSemanticBlock(AnalogEquationRuntime.RegionKind.Procedural, body)
+  CandidateRuntime.analogProcedure(body)
 
 enum ComponentCompleteness:
   case Partial, Concrete

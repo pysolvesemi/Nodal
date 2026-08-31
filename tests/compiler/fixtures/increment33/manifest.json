@@ -30,13 +30,17 @@
     "equation_assignment_separation": true,
     "contribution_assignment_separation": true,
     "connection_assignment_separation": true,
-    "deterministic_snapshots": true
+    "deterministic_snapshots": true,
+    "public_construction_kernel_integration": true,
+    "construction_snapshot_retention": true,
+    "first_class_compiler_ir": true,
+    "native_ir_verification": true,
+    "compiler_boundary_diagnostics": true,
+    "source_map_roundtrip": true,
+    "authoritative_serialization": true
   },
   "stable_diagnostic_prefix": "NODAL-ANALOG-033-",
   "deferred": [
-    "public-construction-kernel-integration",
-    "scala-to-mlir-retention",
-    "reproducibility-retention",
     "analog-control-flow",
     "branch-sensitive-definite-assignment",
     "topology-expansion",

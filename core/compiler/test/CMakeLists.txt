@@ -496,6 +496,42 @@ set_tests_properties(
     PASS_REGULAR_EXPRESSION "Through[(]<p>[)]"
 )
 
+add_test(
+  NAME nodal.native.analog-procedural-roundtrip
+  COMMAND nodalc
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-procedural.mlir"
+)
+set_tests_properties(
+  nodal.native.analog-procedural-roundtrip
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal[.]analog_assign"
+)
+
+add_test(
+  NAME nodal.native.analog-procedural-source-map-roundtrip
+  COMMAND nodalc
+    --mlir-print-op-generic
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-procedural.mlir"
+)
+set_tests_properties(
+  nodal.native.analog-procedural-source-map-roundtrip
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "AnalogProcedural[.]scala"
+)
+
+foreach(_fixture IN ITEMS read order owner type dimension guard analysis nested)
+  add_test(
+    NAME nodal.native.analog-procedural-rejects-${_fixture}
+    COMMAND nodalc
+      "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-procedural-invalid-${_fixture}.mlir"
+  )
+  set_tests_properties(
+    nodal.native.analog-procedural-rejects-${_fixture}
+    PROPERTIES
+      WILL_FAIL TRUE
+  )
+endforeach()
+
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
   DEPENDS

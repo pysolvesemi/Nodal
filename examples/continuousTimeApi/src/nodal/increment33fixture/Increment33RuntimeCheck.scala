@@ -69,7 +69,11 @@ object Increment33RuntimeCheck:
         recorder.assign("inner-write", scratch, recorder.read(local))
 
       expect("NODAL-ANALOG-033-010"):
-        recorder.assign("scope-escape", escaped.get, AnalogProceduralRuntime.Value("1.0V", RealVoltage))
+        recorder.assign(
+          "scope-escape",
+          escaped.get,
+          AnalogProceduralRuntime.Value("1.0V", RealVoltage)
+        )
 
     val snapshot = recorder.snapshot
     assert(snapshot.variables.map(_.declarationOrder) == Vector(0, 1, 2, 3))

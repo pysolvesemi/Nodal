@@ -13,7 +13,8 @@ private[nodal] object AnalogProceduralConstruction:
       value: AnyRef,
       dataType: DataType[? <: Data],
       initializer: Option[Expr[? <: Data]],
-      declarationOrder: Int
+      declarationOrder: Int,
+      source: Option[AnalogProceduralRuntime.Source]
   )
 
   private final class ModuleState(
@@ -41,10 +42,6 @@ private[nodal] object AnalogProceduralConstruction:
       current.set(value)
     value
 
-  private def moduleName(module: Module): String =
-    val value = module.getClass.getSimpleName.stripSuffix("$")
-    if value.isEmpty then "AnonymousModule" else value
-
   private def activeModule: ModuleState =
     state.stack.lastOption.getOrElse(
       throw new AnalogProceduralRuntime.Failure(
@@ -57,15 +54,7 @@ private[nodal] object AnalogProceduralConstruction:
 
   def reset(): Unit = current.remove()
 
-  def beginModule(module: Module): Unit =
-    val parent = state.stack.lastOption
-    val localName = moduleName(module)
-    val owner = parent match
-      case Some(value) =>
-        val serial = value.childSerial
-        value.childSerial += 1
-        s"${value.owner}.$localName#$serial"
-      case None => localName
+  def beginModule(module: Module, owner: String): Unit =
     val moduleState = new ModuleState(
       module,
       owner,
@@ -82,15 +71,18 @@ private[nodal] object AnalogProceduralConstruction:
   def declareVariable[A <: Data](
       value: Variable[A],
       dataType: DataType[A],
-      initializer: Option[Expr[A]]
+      initializer: Option[Expr[A]],
+      source: Option[AnalogProceduralRuntime.Source]
   ): Unit =
     val module = activeModule
     module.pending += PendingVariable(
       value,
       dataType,
       initializer,
-      module.pending.size
+      module.pending.size,
+      source
     )
+    if module.procedureDepth > 0 then materializeVariables(module)
 
   private def scalarKind(
       dataType: DataType[? <: Data]
@@ -118,6 +110,7 @@ private[nodal] object AnalogProceduralConstruction:
   private def collectReads(value: Any): Vector[AnalogProceduralRuntime.Variable] =
     val result = mutable.LinkedHashSet.empty[AnalogProceduralRuntime.Variable]
     def visit(candidate: Any): Unit = candidate match
+      case iterable: Iterable[?] => iterable.foreach(visit)
       case reference: AnyRef =>
         state.modules.iterator
           .flatMap(module => Option(module.variables.get(reference)))
@@ -125,14 +118,13 @@ private[nodal] object AnalogProceduralConstruction:
         reference match
           case expression: KernelExpr[?] => expression.operands.foreach(visit)
           case _ => ()
-      case iterable: Iterable[?] => iterable.foreach(visit)
       case _ => ()
     visit(value)
     result.toVector
 
   private def valueType(
       expression: Expr[? <: Data],
-      fallback: Option[AnalogProceduralRuntime.ValueType] = None
+      fallback: Option[AnalogProceduralRuntime.ValueType]
   ): AnalogProceduralRuntime.ValueType =
     val reads = collectReads(expression)
     val kind = CandidateRuntime
@@ -157,7 +149,7 @@ private[nodal] object AnalogProceduralConstruction:
 
   private def semanticValue(
       expression: Expr[? <: Data],
-      fallback: Option[AnalogProceduralRuntime.ValueType] = None
+      fallback: Option[AnalogProceduralRuntime.ValueType]
   ): AnalogProceduralRuntime.Value = AnalogProceduralRuntime.Value(
     rendered(expression),
     valueType(expression, fallback),
@@ -168,7 +160,7 @@ private[nodal] object AnalogProceduralConstruction:
     module.pending.foreach: pending =>
       if module.variables.get(pending.value) == null then
         val initialValue = pending.initializer.map: initializer =>
-          semanticValue(initializer)
+          semanticValue(initializer, None)
         val inferredDimension = initialValue
           .map(_.valueType.dimension)
           .getOrElse("dimensionless")
@@ -179,7 +171,8 @@ private[nodal] object AnalogProceduralConstruction:
         val variable = module.recorder.declare(
           s"variable_${pending.declarationOrder}",
           valueType,
-          initialValue
+          initialValue,
+          pending.source
         )
         module.variables.put(pending.value, variable)
 
@@ -200,7 +193,11 @@ private[nodal] object AnalogProceduralConstruction:
       module.scopeSerial += 1
       module.recorder.scope(identity)(body)
 
-  def assign[A <: Data](target: Variable[A], expression: Expr[A]): Unit =
+  def assign[A <: Data](
+      target: Variable[A],
+      expression: Expr[A],
+      source: Option[AnalogProceduralRuntime.Source]
+  ): Unit =
     val module = activeModule
     if module.procedureDepth == 0 then
       throw new AnalogProceduralRuntime.Failure(
@@ -210,21 +207,92 @@ private[nodal] object AnalogProceduralConstruction:
         )
       )
     materializeVariables(module)
-    val variable = Option(module.variables.get(target)).getOrElse(
-      throw new AnalogProceduralRuntime.Failure(
-        AnalogProceduralRuntime.Diagnostic(
-          "NODAL-ANALOG-033-017",
-          "procedural assignment target is not registered in the active component"
-        )
-      )
-    )
+    val variable = Option(module.variables.get(target)).getOrElse:
+      val foreign = state.modules.iterator
+        .filterNot(_ eq module)
+        .flatMap(candidate => Option(candidate.variables.get(target)).map(_ -> candidate))
+        .toVector
+        .headOption
+      foreign match
+        case Some((value, owner)) =>
+          throw new AnalogProceduralRuntime.Failure(
+            AnalogProceduralRuntime.Diagnostic(
+              "NODAL-ANALOG-033-009",
+              s"procedural variable belongs to component '${owner.owner}', not '${module.owner}'",
+              Some(value.identity)
+            )
+          )
+        case None =>
+          throw new AnalogProceduralRuntime.Failure(
+            AnalogProceduralRuntime.Diagnostic(
+              "NODAL-ANALOG-033-017",
+              "procedural assignment target is not registered in the active component"
+            )
+          )
     val statement = s"statement_${module.statementSerial}"
     module.statementSerial += 1
     module.recorder.assign(
       statement,
       variable,
-      semanticValue(expression, Some(variable.valueType))
+      semanticValue(expression, Some(variable.valueType)),
+      source = source
     )
 
-  def snapshots: Vector[AnalogProceduralRuntime.Snapshot] =
-    Option(current.get()).toVector.flatMap(_.modules.map(_.recorder.snapshot))
+  private def remapSnapshot(
+      snapshot: AnalogProceduralRuntime.Snapshot,
+      owner: String
+  ): AnalogProceduralRuntime.Snapshot =
+    val oldOwner = snapshot.owner
+
+    def remapIdentity(identity: String): String =
+      if identity == oldOwner then owner
+      else if identity.startsWith(s"$oldOwner.") then
+        s"$owner${identity.drop(oldOwner.length)}"
+      else identity
+
+    val variablesByIdentity =
+      snapshot.variables
+        .map: record =>
+          val value = record.variable.copy(
+            identity = remapIdentity(record.variable.identity),
+            owner = owner
+          )
+          record.variable.identity -> value
+        .toMap
+
+    def remapVariable(
+        value: AnalogProceduralRuntime.Variable
+    ): AnalogProceduralRuntime.Variable =
+      variablesByIdentity.getOrElse(
+        value.identity,
+        value.copy(identity = remapIdentity(value.identity), owner = owner)
+      )
+
+    def remapValue(
+        value: AnalogProceduralRuntime.Value
+    ): AnalogProceduralRuntime.Value =
+      value.copy(reads = value.reads.map(remapVariable))
+
+    snapshot.copy(
+      owner = owner,
+      variables = snapshot.variables.map: record =>
+        record.copy(
+          variable = remapVariable(record.variable),
+          initializer = record.initializer.map(remapValue)
+        ),
+      assignments = snapshot.assignments.map: assignment =>
+        assignment.copy(
+          identity = remapIdentity(assignment.identity),
+          target = remapVariable(assignment.target),
+          value = remapValue(assignment.value),
+          guard = assignment.guard.map(remapValue)
+        )
+    )
+
+  def snapshots(
+      resolveOwner: Module => String
+  ): Vector[AnalogProceduralRuntime.Snapshot] =
+    Option(current.get()).toVector.flatMap: value =>
+      value.modules.map(module =>
+        remapSnapshot(module.recorder.snapshot, resolveOwner(module.module))
+      )

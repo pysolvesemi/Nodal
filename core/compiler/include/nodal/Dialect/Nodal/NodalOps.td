@@ -750,6 +750,75 @@ def Nodal_AnalogOp : Nodal_Op<"analog", [HasParent<"ModuleOp">, NoTerminator]> {
   let hasVerifier = 1;
 }
 
+def Nodal_AnalogProcedureOp
+    : Nodal_Op<"analog_procedure", [HasParent<"AnalogOp">, NoTerminator]> {
+  let summary = "Ordered component-local analog procedural region";
+  let arguments = (ins StrAttr:$owner, DictionaryAttr:$metadata);
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogScopeOp : Nodal_Op<"analog_scope", [NoTerminator]> {
+  let summary = "Lexical scope nested inside an analog procedural region";
+  let arguments = (ins
+    StrAttr:$scope_id,
+    StrAttr:$owner,
+    DictionaryAttr:$metadata
+  );
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogVariableOp : Nodal_Op<"analog_variable"> {
+  let summary = "Declaration of one typed analog procedural variable";
+  let arguments = (ins
+    StrAttr:$identity,
+    StrAttr:$owner,
+    I64Attr:$declaration_order,
+    BoolAttr:$initialized,
+    StrAttr:$initializer_value,
+    StrAttr:$initializer_kind,
+    StrAttr:$initializer_dimension,
+    ArrayAttr:$initializer_reads,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs Nodal_VariableType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogVariableReadOp : Nodal_Op<"analog_variable_read"> {
+  let summary = "Read the current value of one analog procedural variable";
+  let arguments = (ins
+    Nodal_VariableType:$variable,
+    StrAttr:$read_id,
+    StrAttr:$owner,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogAssignOp : Nodal_Op<"analog_assign"> {
+  let summary = "Authored ordered assignment to one analog procedural variable";
+  let arguments = (ins
+    Nodal_VariableType:$variable,
+    Variadic<AnyType>:$values,
+    StrAttr:$statement_id,
+    I64Attr:$authored_order,
+    StrAttr:$owner,
+    StrAttr:$value_kind,
+    StrAttr:$value_dimension,
+    ArrayAttr:$analyses,
+    BoolAttr:$guard_present,
+    StrAttr:$guard_value,
+    StrAttr:$guard_kind,
+    StrAttr:$guard_dimension,
+    ArrayAttr:$guard_reads,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
 def Nodal_RealLiteralOp : Nodal_Op<"real_literal", [HasParent<"AnalogOp">]> {
   let summary = "Finite real dimensionless literal in an analog expression";
   let arguments = (ins F64Attr:$value, DictionaryAttr:$metadata);

@@ -99,19 +99,27 @@ final class Signal[A <: Data] private[nodal] (
 
   infix def :=(value: Expr[A]): Unit = CandidateRuntime.assign(this, value)
 
-/** Candidate elaboration-time variable visible to behavioral blocks. */
+/** Component-local variable visible to analog procedural blocks. */
 final class Variable[A <: Data] private[nodal] (
     val dataType: DataType[A],
-    val initialValue: Expr[A]
+    private[nodal] val initializer: Option[Expr[A]]
 ) extends Expr[A]:
   CandidateRuntime.declare(
     this,
     KernelSignalKind.Variable,
     dataType = Some(dataType),
-    attributes = Vector("initial" -> initialValue)
+    attributes = initializer.toVector.map(value => "initial" -> value)
+  )
+  CandidateRuntime.declareAnalogVariable(this, dataType, initializer)
+
+  def initialValue: Expr[A] = initializer.getOrElse(
+    throw new IllegalStateException("analog variable has no declaration initializer")
   )
 
-  infix def :=(value: Expr[A]): Unit = CandidateRuntime.assign(this, value)
+  def initialValueOption: Option[Expr[A]] = initializer
+
+  infix def :=(value: Expr[A]): Unit =
+    CandidateRuntime.assignAnalogVariable(this, value)
 
 /** Candidate analog node or port. */
 final class Node[D <: Discipline] private[nodal] (
@@ -289,7 +297,10 @@ abstract class Module:
   protected final def variable[A <: Data](
       dataType: DataType[A],
       initialValue: Expr[A]
-  ): Variable[A] = new Variable(dataType, initialValue)
+  ): Variable[A] = new Variable(dataType, Some(initialValue))
+
+  protected final def variable[A <: Data](dataType: DataType[A]): Variable[A] =
+    new Variable(dataType, None)
 
   protected final def instance[M <: Module](module: M): Instance[M] =
     new Instance(module)
@@ -566,7 +577,12 @@ private[nodal] object CandidateRuntime:
     case Clock => KernelTypeDescriptor("Clock")
     case Reset => KernelTypeDescriptor("Reset")
 
-  def beginModule(module: Module): Unit = ConstructionKernel.beginModule(module)
+  def beginModule(module: Module): Unit =
+    ConstructionKernel.beginModule(module)
+    AnalogProceduralConstruction.beginModule(
+      module,
+      ConstructionKernel.currentModulePath
+    )
 
   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
     ConstructionKernel.registerDomain(domain, kind)
@@ -593,6 +609,18 @@ private[nodal] object CandidateRuntime:
     case expression: KernelExpr[?] =>
       expression.resultType.map(dataTypeFromDescriptor)
     case _ => None
+
+  def declareAnalogVariable[A <: Data](
+      value: Variable[A],
+      dataType: DataType[A],
+      initializer: Option[Expr[A]]
+  ): Unit =
+    AnalogProceduralConstruction.declareVariable(
+      value,
+      dataType,
+      initializer,
+      ConstructionKernel.captureAnalogProceduralSource
+    )
 
   def expressionUnit(value: Expr[?]): Option[String] = value match
     case expression: KernelExpr[?] if expression.literal.exists(_.kind == "real") =>
@@ -670,6 +698,12 @@ private[nodal] object CandidateRuntime:
       body: => Unit
   ): Unit = ConstructionKernel.analogSemanticBlock(kind)(body)
 
+  def analogProcedure(body: => Unit): Unit =
+    AnalogProceduralConstruction.procedure:
+      ConstructionKernel.analogSemanticBlock(
+        AnalogEquationRuntime.RegionKind.Procedural
+      )(body)
+
   def analogEquation(
       left: Expr[Real],
       right: Expr[Real],
@@ -690,6 +724,17 @@ private[nodal] object CandidateRuntime:
 
   def statement(values: Any*): Unit = ConstructionKernel.operation("statement", values*)
 
+  def assignAnalogVariable[A <: Data](
+      left: Variable[A],
+      right: Expr[A]
+  ): Unit =
+    ConstructionKernel.operation("assignment", left, right)
+    AnalogProceduralConstruction.assign(
+      left,
+      right,
+      ConstructionKernel.captureAnalogProceduralSource
+    )
+
   def assign(left: AnyRef, right: Any): Unit =
     ConstructionKernel.operation("assignment", left, right)
 
@@ -701,6 +746,7 @@ private[nodal] object CandidateRuntime:
 
   def attachInstance(instance: Instance[? <: Module], module: Module): Unit =
     ConstructionKernel.attachInstance(instance, module)
+    AnalogProceduralConstruction.attachInstance(module)
 
   def bindDefaultDomain(instance: Instance[?], domain: ClockDomain): Unit =
     ConstructionKernel.bindDefault(instance, domain)
@@ -721,11 +767,13 @@ private[nodal] object CandidateRuntime:
 
   def block(body: => Unit): Unit =
     ConstructionKernel.operation("block")
-    ConstructionKernel.block(body)
+    AnalogProceduralConstruction.lexicalScope:
+      ConstructionKernel.block(body)
 
   def block(event: Event, body: => Unit): Unit =
     ConstructionKernel.operation("event-block", event)
-    ConstructionKernel.block(body)
+    AnalogProceduralConstruction.lexicalScope:
+      ConstructionKernel.block(body)
 
   def event(values: Any*): Event =
     ConstructionKernel.operation("event", values*)

@@ -73,7 +73,9 @@ object AnalogProceduralConstructionTests extends TestSuite:
 
     test("public assignment outside analogProcedure is rejected"):
       val failure =
-        scala.util.Try(ConstructionKernel.inspect(new PublicAnalogAssignmentOutsideProcedure)).failed.get
+        scala.util.Try(
+          ConstructionKernel.inspect(new PublicAnalogAssignmentOutsideProcedure)
+        ).failed.get
           .asInstanceOf[AnalogProceduralRuntime.Failure]
       assert(failure.diagnostic.code == "NODAL-ANALOG-033-008")
 

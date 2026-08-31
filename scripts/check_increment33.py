@@ -97,6 +97,13 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         "contribution_assignment_separation",
         "connection_assignment_separation",
         "deterministic_snapshots",
+        "public_construction_kernel_integration",
+        "construction_snapshot_retention",
+        "first_class_compiler_ir",
+        "native_ir_verification",
+        "compiler_boundary_diagnostics",
+        "source_map_roundtrip",
+        "authoritative_serialization",
     }
     missing_semantics = sorted(name for name in required_true if semantics.get(name) is not True)
     require(
@@ -115,7 +122,6 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
     deferred = manifest.get("deferred")
     require(isinstance(deferred, list), "NODAL-INC33-016: deferred must be a list")
     for item in (
-        "public-construction-kernel-integration",
         "analog-control-flow",
         "residual-dae-construction",
         "solver-execution",
@@ -141,8 +147,8 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
     for token in ("===", "<+", ":=", "read-before-write", "lexical", "last-writer-wins"):
         require(token in design_gate, f"NODAL-INC33-018: design gate is missing {token!r}")
     require(
-        "Public construction-kernel and bridge retention remain" in implementation,
-        "NODAL-INC33-019: implementation note must state the remaining production integration",
+        "## Final implementation matrix" in implementation,
+        "NODAL-INC33-019: implementation note must contain the final implementation matrix",
     )
 
     scala_tokens = (
@@ -196,6 +202,48 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
     ):
         require(code in scala_witness, f"NODAL-INC33-025: Scala witness lacks {code}")
         require(code in native_witness, f"NODAL-INC33-026: native witness lacks {code}")
+
+    types = read_text(root, "core/compiler/include/nodal/Dialect/Nodal/NodalTypes.td")
+    operations = read_text(root, "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td")
+    operation_verifiers = read_text(root, "core/compiler/lib/Dialect/Nodal/NodalOps.cpp")
+    bridge = read_text(root, "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala")
+    procedural_bridge = read_text(
+        root, "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala"
+    )
+    diagnostics = read_text(root, "core/compiler/diagnostics-v0.1.json")
+    for token in ("Nodal_VariableType", "NODAL-ANALOG-033-019"):
+        require(token in types, f"NODAL-INC33-036: compiler type model is missing {token!r}")
+    for token in (
+        "Nodal_AnalogProcedureOp",
+        "Nodal_AnalogScopeOp",
+        "Nodal_AnalogVariableOp",
+        "Nodal_AnalogVariableReadOp",
+        "Nodal_AnalogAssignOp",
+    ):
+        require(token in operations, f"NODAL-INC33-037: compiler IR is missing {token!r}")
+    for token in (
+        "verifyAnalogProcedure",
+        "NODAL-ANALOG-033-011",
+        "NODAL-ANALOG-033-012",
+        "NODAL-ANALOG-033-013",
+        "NODAL-ANALOG-033-014",
+        "NODAL-ANALOG-033-015",
+    ):
+        require(token in operation_verifiers, f"NODAL-INC33-038: native verifier is missing {token!r}")
+    require(
+        "AnalogProceduralMlir.renderModule" in bridge,
+        "NODAL-INC33-039: authoritative bridge does not serialize procedural IR",
+    )
+    require(
+        "nodal.analog_variable_read" in procedural_bridge
+        and "nodal.analog_assign" in procedural_bridge,
+        "NODAL-INC33-040: procedural bridge operations are incomplete",
+    )
+    for code in range(1, 20):
+        require(
+            f"NODAL-ANALOG-033-{code:03d}" in diagnostics,
+            f"NODAL-INC33-041: compiler diagnostic inventory is missing code {code:03d}",
+        )
 
     roadmap = read_text(root, "docs/roadmap/nodal-development-todo.md")
     require(

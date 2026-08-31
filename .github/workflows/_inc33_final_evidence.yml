@@ -1,0 +1,405 @@
+name: Increment 33 Final Evidence Stamp
+
+on:
+  push:
+    branches:
+      - automation/inc33-final-evidence-20260831
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  stamp:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - name: Check out staged closure
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-evidence-closure
+          fetch-depth: 0
+
+      - name: Collect staged closure matrix evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          required = [
+              'Core CI',
+              'Increment 13 Core Semantic Candidates',
+              'Increment 14 Pipeline and Interface Candidates',
+              'Increment 15 Unified Public API Freeze',
+              'Increment 16 Elaboration Construction Kernel',
+              'Increment 17 Source Origin Naming',
+              'Increment 18 MLIR Dialect Skeleton',
+              'Increment 19 Core MLIR Model',
+              'Increment 20 Scala-to-MLIR Bridge',
+              'Increment 21 Native Semantic Pipeline',
+              'Increment 22 Cross-Layer Diagnostics',
+              'Increment 23 Backend Framework',
+              'Increment 24 Minimal Analog IR',
+              'Increment 25 RC Filter Vertical Slice',
+              'Increment 26 Reproducibility Contract',
+              'Increment 27 Natures and Disciplines',
+              'Increment 28 Electrical Conservative Connectivity',
+              'Increment 29 Parameters Constants Ranges and Units',
+              'Increment 30 Analog Numeric Types and Expression Typing',
+              'Increment 31 Potential and Flow Access',
+              'Increment 32 Equation and Contribution Semantics',
+              'Increment 133 Analog Semantic API',
+              'Increment 33 Analog Procedural Assignment',
+          ]
+
+          def gh(path: str):
+              return json.loads(subprocess.check_output(['gh', 'api', path], text=True))
+
+          pr = gh('/repos/pysolvesemi/Nodal/pulls/101')
+          if pr.get('state') != 'open' or pr.get('base', {}).get('ref') != 'dev':
+              raise SystemExit('closure PR #101 is not an open dev-targeting pull request')
+          head = pr['head']['sha']
+          current = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          if current != head:
+              raise SystemExit(f'checked out closure head {current} differs from PR head {head}')
+          runs = gh(
+              f'/repos/pysolvesemi/Nodal/actions/runs?head_sha={head}&event=pull_request&per_page=100'
+          )['workflow_runs']
+          latest = {}
+          for run in sorted(runs, key=lambda value: (value.get('run_number', 0), value.get('id', 0))):
+              if run.get('head_sha') == head:
+                  latest[run.get('name')] = run
+          missing = [name for name in required if name not in latest]
+          failed = [
+              name for name in required
+              if name in latest and (
+                  latest[name].get('status') != 'completed'
+                  or latest[name].get('conclusion') != 'success'
+              )
+          ]
+          if missing or failed:
+              raise SystemExit(f'staged closure matrix is incomplete: missing={missing}, failed={failed}')
+          evidence = {
+              'pull_request': 101,
+              'accepted_head': head,
+              'exact_head_workflows': {name: latest[name]['id'] for name in required},
+              'dedicated_workflow': latest['Increment 33 Analog Procedural Assignment']['id'],
+              'core_ci': latest['Core CI']['id'],
+          }
+          Path('/tmp/inc33-closure-evidence.json').write_text(
+              json.dumps(evidence, indent=2) + '\n'
+          )
+          print(json.dumps(evidence, indent=2))
+          PY
+
+      - name: Stamp validated manifest and roadmap
+        run: |
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          closure = json.loads(Path('/tmp/inc33-closure-evidence.json').read_text())
+          manifest_path = Path('tests/compiler/fixtures/increment33/manifest.json')
+          manifest = json.loads(manifest_path.read_text())
+          if manifest.get('status') != 'closure-validation-pending':
+              raise SystemExit('Increment 33 manifest is not in staged closure state')
+          validation = manifest.get('validation')
+          if not isinstance(validation, dict) or not isinstance(validation.get('implementation'), dict):
+              raise SystemExit('Increment 33 implementation evidence is missing')
+          manifest['status'] = 'validated-analog-procedural-assignment'
+          validation['closure'] = closure
+          manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
+
+          checker_path = Path('scripts/check_increment33.py')
+          checker = checker_path.read_text()
+          old = '''                else:
+                    require(
+                        isinstance(closure_evidence, dict),
+                        "NODAL-INC33-055: validated state requires closure evidence",
+                    )
+                    require(
+                        positive_integer(closure_evidence.get("pull_request")),
+                        "NODAL-INC33-056: closure pull request evidence is invalid",
+                    )
+                    for field in ("accepted_head", "merge_commit"):
+                        require(
+                            commit(closure_evidence.get(field)),
+                            f"NODAL-INC33-057: closure evidence field {field} is not a commit",
+                        )
+                    for field in (
+                        "dedicated_workflow",
+                        "core_ci",
+                        "post_merge_core_ci",
+                    ):
+                        require(
+                            positive_integer(closure_evidence.get(field)),
+                            f"NODAL-INC33-058: closure evidence field {field} is invalid",
+                        )
+                    closure_workflows = closure_evidence.get("exact_head_workflows")
+                    require(
+                        isinstance(closure_workflows, dict) and len(closure_workflows) == 23,
+                        "NODAL-INC33-059: closure exact-head workflow matrix must contain 23 runs",
+                    )
+          '''.replace('          ', '    ')
+          new = '''                else:
+                    require(
+                        isinstance(closure_evidence, dict),
+                        "NODAL-INC33-055: validated state requires closure evidence",
+                    )
+                    require(
+                        closure_evidence.get("pull_request") == 101,
+                        "NODAL-INC33-056: closure pull request must be #101",
+                    )
+                    require(
+                        commit(closure_evidence.get("accepted_head")),
+                        "NODAL-INC33-057: closure accepted head is not a commit",
+                    )
+                    for field in ("dedicated_workflow", "core_ci"):
+                        require(
+                            positive_integer(closure_evidence.get(field)),
+                            f"NODAL-INC33-058: closure evidence field {field} is invalid",
+                        )
+                    closure_workflows = closure_evidence.get("exact_head_workflows")
+                    require(
+                        isinstance(closure_workflows, dict) and len(closure_workflows) == 23,
+                        "NODAL-INC33-059: closure exact-head workflow matrix must contain 23 runs",
+                    )
+                    require(
+                        all(
+                            isinstance(name, str) and positive_integer(run)
+                            for name, run in closure_workflows.items()
+                        ),
+                        "NODAL-INC33-060: closure workflow evidence is malformed",
+                    )
+          '''.replace('          ', '    ')
+          if old not in checker:
+              raise SystemExit('unable to locate staged Increment 33 closure validation block')
+          checker_path.write_text(checker.replace(old, new, 1))
+
+          roadmap_path = Path('docs/roadmap/nodal-development-todo.md')
+          roadmap = roadmap_path.read_text()
+          if '**Revision:** 1.43' not in roadmap:
+              raise SystemExit('roadmap is not at revision 1.43')
+          roadmap = roadmap.replace('**Revision:** 1.43', '**Revision:** 1.44', 1)
+          unchecked = '- [ ] **Increment 33 — Analog variables and procedural assignment**'
+          checked = '- [x] **Increment 33 — Analog variables and procedural assignment**'
+          if unchecked not in roadmap:
+              raise SystemExit('Increment 33 roadmap item is not open')
+          roadmap = roadmap.replace(unchecked, checked, 1)
+          evidence_line = (
+              '  - Evidence: [`NodalAnalogProceduralAssignment-DG-v0.1.md`]'
+              '(../design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md), '
+              'implementation PR [#100](https://github.com/pysolvesemi/Nodal/pull/100), '
+              f'accepted implementation head [`{manifest["validation"]["implementation"]["accepted_head"][:8]}`]'
+              f'(https://github.com/pysolvesemi/Nodal/commit/{manifest["validation"]["implementation"]["accepted_head"]}), '
+              f'implementation merge [`{manifest["validation"]["implementation"]["merge_commit"][:8]}`]'
+              f'(https://github.com/pysolvesemi/Nodal/commit/{manifest["validation"]["implementation"]["merge_commit"]}), '
+              f'dedicated run [{manifest["validation"]["implementation"]["dedicated_workflow"]}]'
+              f'(https://github.com/pysolvesemi/Nodal/actions/runs/{manifest["validation"]["implementation"]["dedicated_workflow"]}), '
+              f'post-merge Core CI [{manifest["validation"]["implementation"]["post_merge_core_ci"]}]'
+              f'(https://github.com/pysolvesemi/Nodal/actions/runs/{manifest["validation"]["implementation"]["post_merge_core_ci"]}), '
+              'and closure PR [#101](https://github.com/pysolvesemi/Nodal/pull/101).'
+          )
+          item_start = roadmap.index(checked)
+          next_item = roadmap.find('\n- [', item_start + len(checked))
+          if next_item < 0:
+              next_item = len(roadmap)
+          item_text = roadmap[item_start:next_item]
+          if 'implementation PR [#100]' not in item_text:
+              insertion = item_start + len(item_text.rstrip())
+              roadmap = roadmap[:insertion] + '\n' + evidence_line + roadmap[insertion:]
+          roadmap_path.write_text(roadmap)
+
+          test_path = Path('tests/compiler/test_increment33.py')
+          tests = test_path.read_text()
+          old_test = '''    def test_premature_roadmap_closure_is_rejected(self) -> None:
+                temporary, root = self.fixture()
+                with temporary:
+                    path = root / "docs/roadmap/nodal-development-todo.md"
+                    path.write_text(
+                        path.read_text(encoding="utf-8").replace(
+                            "- [ ] **Increment 33 — Analog variables and procedural assignment**",
+                            "- [x] **Increment 33 — Analog variables and procedural assignment**",
+                        ),
+                        encoding="utf-8",
+                    )
+                    self.assert_rejected(root, "must remain unchecked")
+          '''.replace('          ', '    ')
+          new_test = '''    def test_roadmap_manifest_disagreement_is_rejected(self) -> None:
+                temporary, root = self.fixture()
+                with temporary:
+                    path = root / "docs/roadmap/nodal-development-todo.md"
+                    text = path.read_text(encoding="utf-8")
+                    checked = "- [x] **Increment 33 — Analog variables and procedural assignment**"
+                    unchecked = "- [ ] **Increment 33 — Analog variables and procedural assignment**"
+                    if checked in text:
+                        text = text.replace(checked, unchecked, 1)
+                    else:
+                        text = text.replace(unchecked, checked, 1)
+                    path.write_text(text, encoding="utf-8")
+                    self.assert_rejected(root, "Increment 33")
+          '''.replace('          ', '    ')
+          if old_test not in tests:
+              raise SystemExit('unable to locate Increment 33 roadmap mutation test')
+          tests = tests.replace(old_test, new_test, 1)
+          if 'test_missing_closure_workflow_evidence_is_rejected' not in tests:
+              marker = '\n\nif __name__ == "__main__":\n'
+              addition = '''
+                def test_missing_closure_workflow_evidence_is_rejected(self) -> None:
+                    temporary, root = self.fixture()
+                    with temporary:
+                        path = root / "tests/compiler/fixtures/increment33/manifest.json"
+                        payload = __import__("json").loads(path.read_text(encoding="utf-8"))
+                        payload["validation"]["closure"]["exact_head_workflows"].pop("Core CI")
+                        path.write_text(__import__("json").dumps(payload, indent=2) + "\\n", encoding="utf-8")
+                        self.assert_rejected(root, "closure exact-head workflow matrix")
+              '''.replace('              ', '    ')
+              if marker not in tests:
+                  raise SystemExit('unable to locate Increment 33 test footer')
+              tests = tests.replace(marker, '\n' + addition + marker, 1)
+          test_path.write_text(tests)
+
+          predecessor_path = Path('scripts/check_increment32.py')
+          predecessor = predecessor_path.read_text()
+          if 'successor_increment33 = read_json' not in predecessor:
+              roadmap_read = re.search(
+                  r'(?m)^(\s*)roadmap\s*=\s*read_text\(root,\s*"docs/roadmap/nodal-development-todo\.md"\)\s*$',
+                  predecessor,
+              )
+              if not roadmap_read:
+                  raise SystemExit('unable to locate Increment 32 roadmap load')
+              indent = roadmap_read.group(1)
+              insertion = (
+                  roadmap_read.group(0)
+                  + '\n'
+                  + indent
+                  + 'successor_increment33 = read_json(root, "tests/compiler/fixtures/increment33/manifest.json")'
+              )
+              predecessor = predecessor[:roadmap_read.start()] + insertion + predecessor[roadmap_read.end():]
+          pattern = re.compile(
+              r'"- \[ \] \*\*Increment 33 — Analog variables and procedural assignment\*\*"\s+in\s+roadmap'
+          )
+          replacement = '''(
+              (
+                successor_increment33.get("status") != "validated-analog-procedural-assignment"
+                and "- [ ] **Increment 33 — Analog variables and procedural assignment**" in roadmap
+              )
+              or (
+                successor_increment33.get("status") == "validated-analog-procedural-assignment"
+                and "- [x] **Increment 33 — Analog variables and procedural assignment**" in roadmap
+                and isinstance(successor_increment33.get("validation"), dict)
+              )
+            )'''.replace('          ', '')
+          predecessor, count = pattern.subn(replacement, predecessor, count=1)
+          if count != 1 and 'validated-analog-procedural-assignment' not in predecessor:
+              raise SystemExit('unable to update Increment 32 successor-state check')
+          predecessor_path.write_text(predecessor)
+
+          gate_path = Path('docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md')
+          gate = gate_path.read_text().replace(
+              '**Status:** Implementation accepted; evidence closure pending',
+              '**Status:** Validated',
+              1,
+          )
+          if '## Accepted evidence' not in gate:
+              implementation = manifest['validation']['implementation']
+              gate += f'''\n\n## Accepted evidence\n\n- Implementation pull request: #100.\n- Accepted implementation head: `{implementation['accepted_head']}`.\n- Squash implementation merge: `{implementation['merge_commit']}`.\n- Dedicated implementation workflow: `{implementation['dedicated_workflow']}`.\n- Implementation Core CI: `{implementation['core_ci']}`.\n- Post-merge implementation Core CI: `{implementation['post_merge_core_ci']}`.\n- Evidence-closure pull request: #101.\n- Accepted staged closure head: `{closure['accepted_head']}`.\n- Staged closure dedicated workflow: `{closure['dedicated_workflow']}`.\n- Staged closure Core CI: `{closure['core_ci']}`.\n'''
+          gate_path.write_text(gate)
+
+          implementation_path = Path(
+              'docs/implementation/increment33-analog-variables-procedural-assignment.md'
+          )
+          implementation_doc = implementation_path.read_text()
+          implementation_doc = re.sub(
+              r'## Status\n\n.*?\n\n## Baseline',
+              '## Status\n\nValidated implementation and evidence-closure state. Increment 33 is checked in roadmap revision 1.44 after the implementation and staged closure heads passed their complete exact-head matrices. Final closure merge and post-merge Core CI are confirmed in PR #101.\n\n## Baseline',
+              implementation_doc,
+              count=1,
+              flags=re.S,
+          )
+          implementation_path.write_text(implementation_doc)
+          PY
+
+      - name: Validate final stamped closure state
+        run: |
+          ./mill mill.scalalib.scalafmt/formatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment32.py'
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./mill core.scala.testkit.test.testOnly \
+            nodal.internal.testkit.AnalogProceduralConstructionTests
+          ./mill core.scala.testkit.test.testOnly \
+            nodal.internal.testkit.AnalogEquationConstructionTests
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Publish final evidence-stamped closure head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md \
+            docs/implementation/increment33-analog-variables-procedural-assignment.md \
+            docs/roadmap/nodal-development-todo.md \
+            scripts/check_increment32.py \
+            scripts/check_increment33.py \
+            tests/compiler/fixtures/increment33/manifest.json \
+            tests/compiler/test_increment33.py
+          git commit -m 'chore(increment33): validate evidence and close roadmap'
+          git push origin HEAD:increment/33-evidence-closure
+          head=$(git rev-parse HEAD)
+          git push --force origin "$head":refs/heads/checkpoint/increment-33-final-evidence-stamped
+          gh api --method PATCH \
+            -f body="$(cat <<'EOF'
+          ## Summary
+
+          Records the accepted Increment 33 implementation and closure evidence, advances the roadmap to revision 1.44, and validates the analog procedural-assignment manifest without changing compiler semantics.
+
+          - Implementation PR #100 is squash-merged and post-merge Core CI passed.
+          - Component-local variables and ordered `:=` assignment remain distinct from equations, contributions, and conservative connections.
+          - The manifest records the complete 23-workflow implementation matrix and the accepted staged closure matrix.
+          - The Increment 32 successor checker is state-aware and accepts Increment 33 only when its validated manifest and roadmap checkbox agree.
+          - Increment 34 remains unchecked and no control-flow, DAE, solver, legalization, or HDL-lowering behavior is enabled.
+
+          ## Validation
+
+          The implementation exact head, implementation merge, implementation post-merge Core CI, staged closure head, staged closure Core CI, dedicated workflows, and all inherited workflow run IDs are recorded in the manifest and design gate. This final evidence-stamped head must pass the complete 23-workflow matrix again before squash merge.
+
+          ## Design gate
+
+          `NodalAnalogProceduralAssignment-DG-v0.1` is validated. This closure changes evidence, roadmap, checker compatibility, mutation coverage, and read-only workflow scope only; it does not alter the accepted procedural semantics or begin Increment 34.
+
+          ## Checklist
+
+          - [x] Implementation PR #100 is squash-merged.
+          - [x] Implementation exact-head matrix and post-merge Core CI are recorded.
+          - [x] Staged closure exact-head matrix is recorded.
+          - [x] Manifest status is `validated-analog-procedural-assignment`.
+          - [x] Roadmap revision 1.44 marks Increment 33 complete.
+          - [x] Increment 34 remains unchecked.
+          - [x] Increment 32 successor validation is state-aware.
+          - [x] Closure mutation tests remain fail-closed.
+          - [ ] Final evidence-stamped 23-workflow matrix passes.
+          - [ ] Closure PR is squash-merged.
+          - [ ] Final post-merge Core CI passes on `dev`.
+          EOF
+          )" \
+            '/repos/pysolvesemi/Nodal/pulls/101'
+          gh api --method POST \
+            -f body="Final Increment 33 evidence is stamped on exact head \`$head\`. Roadmap revision 1.44 and the validated manifest now await their final exact-head matrix." \
+            '/repos/pysolvesemi/Nodal/issues/101/comments'

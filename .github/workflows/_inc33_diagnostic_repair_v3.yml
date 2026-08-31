@@ -28,19 +28,22 @@ jobs:
 
           scala_path = Path("core/scala/api/src/nodal/AnalogProceduralRuntime.scala")
           scala = scala_path.read_text(encoding="utf-8")
-          old = '''    ): Variable =
-            requireProcedure(Option(identity).filter(_.nonEmpty))
-            if identity.trim.isEmpty then
-          '''.replace("            ", "      ")
-          new = '''    ): Variable =
-            if !procedureActive then
-              fail(
-                "NODAL-ANALOG-033-003",
-                "procedural variable declaration requires an active procedural region",
-                Option(identity).filter(_.nonEmpty)
-              )
-            if identity.trim.isEmpty then
-          '''.replace("            ", "      ")
+          old = """    ): Variable =
+                requireProcedure(Option(identity).filter(_.nonEmpty))
+                if identity.trim.isEmpty then
+          """
+          new = """    ): Variable =
+                if !procedureActive then
+                  fail(
+                    "NODAL-ANALOG-033-003",
+                    "procedural variable declaration requires an active procedural region",
+                    Option(identity).filter(_.nonEmpty)
+                  )
+                if identity.trim.isEmpty then
+          """
+          # YAML block indentation contributes ten leading spaces to every embedded line.
+          old = "\n".join(line[10:] if line.startswith("          ") else line for line in old.splitlines()) + "\n"
+          new = "\n".join(line[10:] if line.startswith("          ") else line for line in new.splitlines()) + "\n"
           if old not in scala:
               raise SystemExit("Scala declaration guard pattern was not found")
           scala_path.write_text(scala.replace(old, new, 1), encoding="utf-8")

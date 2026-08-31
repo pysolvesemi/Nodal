@@ -29,7 +29,7 @@ final class PublicAnalogEquationTop(reverseContributions: Boolean = false) exten
   initialEquations:
     initialEquation(
       path.potential,
-      0.0.real,
+      0.0.V,
       InitialEquationOptions(id = Some(EquationId("initial-charge")))
     )
 

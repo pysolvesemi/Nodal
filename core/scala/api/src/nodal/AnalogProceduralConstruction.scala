@@ -297,6 +297,9 @@ private[nodal] object AnalogProceduralConstruction:
       resolveOwner: Module => String
   ): Vector[AnalogProceduralRuntime.Snapshot] =
     Option(current.get()).toVector.flatMap: value =>
-      value.modules.map(module =>
-        remapSnapshot(module.recorder.snapshot, resolveOwner(module.module))
-      )
+      value.modules.flatMap: module =>
+        val snapshot = remapSnapshot(
+          module.recorder.snapshot,
+          resolveOwner(module.module)
+        )
+        Option.when(snapshot.variables.nonEmpty || snapshot.assignments.nonEmpty)(snapshot)

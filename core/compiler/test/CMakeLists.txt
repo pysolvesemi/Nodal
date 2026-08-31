@@ -519,7 +519,7 @@ set_tests_properties(
     PASS_REGULAR_EXPRESSION "AnalogProcedural[.]scala"
 )
 
-foreach(_fixture IN ITEMS read order owner type dimension guard analysis nested)
+foreach(_fixture IN ITEMS read order owner type dimension guard analysis nested variable-kind)
   add_test(
     NAME nodal.native.analog-procedural-rejects-${_fixture}
     COMMAND nodalc
@@ -531,6 +531,12 @@ foreach(_fixture IN ITEMS read order owner type dimension guard analysis nested)
       WILL_FAIL TRUE
   )
 endforeach()
+
+set_tests_properties(
+  nodal.native.analog-procedural-rejects-variable-kind
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "NODAL-ANALOG-033-019"
+)
 
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"

@@ -17,8 +17,16 @@ SPEC.loader.exec_module(CHECKER)
 
 REQUIRED = (
     ".github/workflows/increment-33-analog-procedural-assignment.yml",
+    "core/compiler/diagnostics-v0.1.json",
+    "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td",
+    "core/compiler/include/nodal/Dialect/Nodal/NodalTypes.td",
+    "core/compiler/lib/Dialect/Nodal/NodalOps.cpp",
+    "core/compiler/test/CMakeLists.txt",
+    "core/compiler/test/IR/analog-procedural-invalid-variable-kind.mlir",
     "core/native/include/nodal/AnalogProceduralRuntime.h",
     "core/scala/api/src/nodal/AnalogProceduralRuntime.scala",
+    "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala",
+    "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala",
     "docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md",
     "docs/implementation/increment33-analog-variables-procedural-assignment.md",
     "docs/roadmap/nodal-development-todo.md",
@@ -111,6 +119,20 @@ class Increment33ContractTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assert_rejected(root, "must not be last-writer-wins")
+
+
+    def test_variable_type_diagnostic_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/compiler/include/nodal/Dialect/Nodal/NodalTypes.td"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "NODAL-ANALOG-033-019",
+                    "NODAL-ANALOG-033-999",
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "compiler type model is missing")
 
 
 if __name__ == "__main__":

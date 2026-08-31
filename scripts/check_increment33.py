@@ -211,8 +211,21 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         root, "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala"
     )
     diagnostics = read_text(root, "core/compiler/diagnostics-v0.1.json")
+    compiler_tests = read_text(root, "core/compiler/test/CMakeLists.txt")
+    invalid_variable_kind = read_text(
+        root, "core/compiler/test/IR/analog-procedural-invalid-variable-kind.mlir"
+    )
     for token in ("Nodal_VariableType", "NODAL-ANALOG-033-019"):
         require(token in types, f"NODAL-INC33-036: compiler type model is missing {token!r}")
+    require(
+        '!nodal.variable<"string", "1">' in invalid_variable_kind,
+        "NODAL-INC33-042: invalid variable-kind fixture does not cross the type parser boundary",
+    )
+    require(
+        "nodal.native.analog-procedural-rejects-variable-kind" in compiler_tests
+        and "NODAL-ANALOG-033-019" in compiler_tests,
+        "NODAL-INC33-043: native type-boundary test does not require diagnostic 019",
+    )
     for token in (
         "Nodal_AnalogProcedureOp",
         "Nodal_AnalogScopeOp",

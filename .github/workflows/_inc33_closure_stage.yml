@@ -1,0 +1,400 @@
+name: Increment 33 Evidence Closure Stage
+
+on:
+  push:
+    branches:
+      - automation/inc33-closure-stage-20260831
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  stage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out closure branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-evidence-closure
+          fetch-depth: 0
+
+      - name: Collect and validate immutable implementation evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          required = [
+              'Core CI',
+              'Increment 13 Core Semantic Candidates',
+              'Increment 14 Pipeline and Interface Candidates',
+              'Increment 15 Unified Public API Freeze',
+              'Increment 16 Elaboration Construction Kernel',
+              'Increment 17 Source Origin Naming',
+              'Increment 18 MLIR Dialect Skeleton',
+              'Increment 19 Core MLIR Model',
+              'Increment 20 Scala-to-MLIR Bridge',
+              'Increment 21 Native Semantic Pipeline',
+              'Increment 22 Cross-Layer Diagnostics',
+              'Increment 23 Backend Framework',
+              'Increment 24 Minimal Analog IR',
+              'Increment 25 RC Filter Vertical Slice',
+              'Increment 26 Reproducibility Contract',
+              'Increment 27 Natures and Disciplines',
+              'Increment 28 Electrical Conservative Connectivity',
+              'Increment 29 Parameters Constants Ranges and Units',
+              'Increment 30 Analog Numeric Types and Expression Typing',
+              'Increment 31 Potential and Flow Access',
+              'Increment 32 Equation and Contribution Semantics',
+              'Increment 133 Analog Semantic API',
+              'Increment 33 Analog Procedural Assignment',
+          ]
+
+          def gh(path: str):
+              completed = subprocess.run(
+                  ['gh', 'api', path], text=True, stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE, check=True
+              )
+              return json.loads(completed.stdout)
+
+          pr = gh('/repos/pysolvesemi/Nodal/pulls/100')
+          if not pr.get('merged'):
+              raise SystemExit('implementation PR #100 is not merged')
+          accepted = pr['head']['sha']
+          merge = pr['merge_commit_sha']
+          dev = gh('/repos/pysolvesemi/Nodal/branches/dev')['commit']['sha']
+          if dev != merge:
+              raise SystemExit(f'dev {dev} does not match implementation merge {merge}')
+
+          matrix_runs = gh(
+              f'/repos/pysolvesemi/Nodal/actions/runs?head_sha={accepted}&event=pull_request&per_page=100'
+          )['workflow_runs']
+          latest = {}
+          for run in sorted(matrix_runs, key=lambda value: (value.get('run_number', 0), value.get('id', 0))):
+              if run.get('head_sha') == accepted:
+                  latest[run.get('name')] = run
+          missing = [name for name in required if name not in latest]
+          failed = [
+              name for name in required
+              if name in latest and (
+                  latest[name].get('status') != 'completed'
+                  or latest[name].get('conclusion') != 'success'
+              )
+          ]
+          if missing or failed:
+              raise SystemExit(f'invalid implementation matrix: missing={missing}, failed={failed}')
+
+          push_runs = gh(
+              f'/repos/pysolvesemi/Nodal/actions/runs?head_sha={merge}&event=push&per_page=100'
+          )['workflow_runs']
+          core = [
+              run for run in push_runs
+              if run.get('name') == 'Core CI' and run.get('head_sha') == merge
+              and run.get('status') == 'completed' and run.get('conclusion') == 'success'
+          ]
+          if not core:
+              raise SystemExit('no successful post-merge Core CI exists for implementation merge')
+          core.sort(key=lambda value: (value.get('run_number', 0), value.get('id', 0)))
+
+          evidence = {
+              'pull_request': 100,
+              'accepted_head': accepted,
+              'merge_commit': merge,
+              'exact_head_workflows': {name: latest[name]['id'] for name in required},
+              'dedicated_workflow': latest['Increment 33 Analog Procedural Assignment']['id'],
+              'core_ci': latest['Core CI']['id'],
+              'post_merge_core_ci': core[-1]['id'],
+          }
+          Path('/tmp/inc33-implementation-evidence.json').write_text(
+              json.dumps(evidence, indent=2) + '\n'
+          )
+          print(json.dumps(evidence, indent=2))
+          PY
+
+      - name: Stage closure-state contracts
+        run: |
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          evidence = json.loads(Path('/tmp/inc33-implementation-evidence.json').read_text())
+          manifest_path = Path('tests/compiler/fixtures/increment33/manifest.json')
+          manifest = json.loads(manifest_path.read_text())
+          manifest['status'] = 'closure-validation-pending'
+          manifest['validation'] = {
+              'implementation': evidence,
+              'closure': None,
+          }
+          manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
+
+          checker_path = Path('scripts/check_increment33.py')
+          checker = checker_path.read_text()
+          old_state = re.compile(
+              r'    require\(\n'
+              r'        manifest\.get\("status"\) == "implementation-in-progress",\n'
+              r'        "NODAL-INC33-005:[^\n]*",\n'
+              r'    \)\n'
+              r'    require\(manifest\.get\("validation"\) is None, "NODAL-INC33-006:[^\n]*"\)\n'
+          )
+          replacement = '''    status = manifest.get("status")
+            require(
+                status in {
+                    "implementation-in-progress",
+                    "closure-validation-pending",
+                    "validated-analog-procedural-assignment",
+                },
+                "NODAL-INC33-005: unsupported Increment 33 manifest status",
+            )
+            validation = manifest.get("validation")
+            if status == "implementation-in-progress":
+                require(
+                    validation is None,
+                    "NODAL-INC33-006: implementation state must not contain accepted evidence",
+                )
+            else:
+                require(
+                    isinstance(validation, dict),
+                    "NODAL-INC33-006: closure state requires a validation object",
+                )
+
+                def positive_integer(value: object) -> bool:
+                    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+                def commit(value: object) -> bool:
+                    return isinstance(value, str) and len(value) == 40 and all(
+                        character in "0123456789abcdef" for character in value
+                    )
+
+                implementation_evidence = validation.get("implementation")
+                require(
+                    isinstance(implementation_evidence, dict),
+                    "NODAL-INC33-048: implementation evidence must be an object",
+                )
+                require(
+                    implementation_evidence.get("pull_request") == 100,
+                    "NODAL-INC33-049: implementation pull request must be #100",
+                )
+                for field in ("accepted_head", "merge_commit"):
+                    require(
+                        commit(implementation_evidence.get(field)),
+                        f"NODAL-INC33-050: implementation evidence field {field} is not a commit",
+                    )
+                for field in (
+                    "dedicated_workflow",
+                    "core_ci",
+                    "post_merge_core_ci",
+                ):
+                    require(
+                        positive_integer(implementation_evidence.get(field)),
+                        f"NODAL-INC33-051: implementation evidence field {field} is invalid",
+                    )
+                workflows = implementation_evidence.get("exact_head_workflows")
+                require(
+                    isinstance(workflows, dict) and len(workflows) == 23,
+                    "NODAL-INC33-052: implementation exact-head workflow matrix must contain 23 runs",
+                )
+                require(
+                    all(isinstance(name, str) and positive_integer(run) for name, run in workflows.items()),
+                    "NODAL-INC33-053: implementation workflow evidence is malformed",
+                )
+                closure_evidence = validation.get("closure")
+                if status == "closure-validation-pending":
+                    require(
+                        closure_evidence is None,
+                        "NODAL-INC33-054: staged closure must not claim closure evidence",
+                    )
+                else:
+                    require(
+                        isinstance(closure_evidence, dict),
+                        "NODAL-INC33-055: validated state requires closure evidence",
+                    )
+                    require(
+                        positive_integer(closure_evidence.get("pull_request")),
+                        "NODAL-INC33-056: closure pull request evidence is invalid",
+                    )
+                    for field in ("accepted_head", "merge_commit"):
+                        require(
+                            commit(closure_evidence.get(field)),
+                            f"NODAL-INC33-057: closure evidence field {field} is not a commit",
+                        )
+                    for field in (
+                        "dedicated_workflow",
+                        "core_ci",
+                        "post_merge_core_ci",
+                    ):
+                        require(
+                            positive_integer(closure_evidence.get(field)),
+                            f"NODAL-INC33-058: closure evidence field {field} is invalid",
+                        )
+                    closure_workflows = closure_evidence.get("exact_head_workflows")
+                    require(
+                        isinstance(closure_workflows, dict) and len(closure_workflows) == 23,
+                        "NODAL-INC33-059: closure exact-head workflow matrix must contain 23 runs",
+                    )
+
+          '''.replace('          ', '    ')
+          checker, count = old_state.subn(replacement, checker, count=1)
+          if count != 1:
+              raise SystemExit('failed to update Increment 33 checker state machine')
+
+          old_roadmap = '''    require(
+              "**Revision:** 1.43" in roadmap,
+              "NODAL-INC33-027: roadmap revision must remain 1.43 during implementation",
+            )
+            require(
+              "- [x] **Increment 32 — First-class analog equations" in roadmap,
+              "NODAL-INC33-028: Increment 32 must be checked before Increment 33",
+            )
+            require(
+              "- [ ] **Increment 33 — Analog variables and procedural assignment**" in roadmap,
+              "NODAL-INC33-029: Increment 33 must remain unchecked before evidence closure",
+            )
+          '''.replace('          ', '    ')
+          new_roadmap = '''    require(
+              "- [x] **Increment 32 — First-class analog equations" in roadmap,
+              "NODAL-INC33-028: Increment 32 must be checked before Increment 33",
+            )
+            if status == "validated-analog-procedural-assignment":
+              require(
+                "**Revision:** 1.44" in roadmap,
+                "NODAL-INC33-027: validated Increment 33 requires roadmap revision 1.44",
+              )
+              require(
+                "- [x] **Increment 33 — Analog variables and procedural assignment**" in roadmap,
+                "NODAL-INC33-029: validated Increment 33 must be checked in the roadmap",
+              )
+            else:
+              require(
+                "**Revision:** 1.43" in roadmap,
+                "NODAL-INC33-027: open Increment 33 requires roadmap revision 1.43",
+              )
+              require(
+                "- [ ] **Increment 33 — Analog variables and procedural assignment**" in roadmap,
+                "NODAL-INC33-029: Increment 33 must remain unchecked before validated closure",
+              )
+          '''.replace('          ', '    ')
+          if old_roadmap not in checker:
+              raise SystemExit('failed to locate Increment 33 roadmap-state checks')
+          checker = checker.replace(old_roadmap, new_roadmap, 1)
+          checker_path.write_text(checker)
+
+          implementation_path = Path(
+              'docs/implementation/increment33-analog-variables-procedural-assignment.md'
+          )
+          implementation = implementation_path.read_text()
+          implementation = re.sub(
+              r'## Status\n\n.*?\n\n## Baseline',
+              '## Status\n\nImplementation PR #100 is squash-merged and its exact-head 23-workflow matrix and post-merge Core CI are accepted. The repository is now staging a separate evidence closure; Increment 33 remains unchecked until the closure head passes its own complete matrix.\n\n## Baseline',
+              implementation,
+              count=1,
+              flags=re.S,
+          )
+          implementation_path.write_text(implementation)
+
+          gate_path = Path('docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md')
+          gate = gate_path.read_text().replace(
+              '**Status:** Implementation contract',
+              '**Status:** Implementation accepted; evidence closure pending',
+              1,
+          )
+          gate_path.write_text(gate)
+
+          workflow_path = Path('.github/workflows/increment-33-analog-procedural-assignment.yml')
+          workflow = workflow_path.read_text()
+          if '      - dev\n      - increment/33-analog-variables-procedural-assignment-v5' not in workflow:
+              workflow = workflow.replace(
+                  '  push:\n    branches:\n      - increment/33-analog-variables-procedural-assignment-v5\n',
+                  '  push:\n    branches:\n      - dev\n      - increment/33-analog-variables-procedural-assignment-v5\n      - increment/33-evidence-closure\n',
+                  1,
+              )
+          workflow_path.write_text(workflow)
+          PY
+
+      - name: Validate staged closure state
+        run: |
+          ./mill mill.scalalib.scalafmt/formatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./mill core.scala.testkit.test.testOnly \
+            nodal.internal.testkit.AnalogProceduralConstructionTests
+          ./mill core.scala.testkit.test.testOnly \
+            nodal.internal.testkit.AnalogEquationConstructionTests
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Publish staged closure and open pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            .github/workflows/increment-33-analog-procedural-assignment.yml \
+            docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md \
+            docs/implementation/increment33-analog-variables-procedural-assignment.md \
+            scripts/check_increment33.py \
+            tests/compiler/fixtures/increment33/manifest.json
+          git commit -m 'chore(increment33): stage accepted evidence closure'
+          git push origin HEAD:increment/33-evidence-closure
+          head=$(git rev-parse HEAD)
+          git push --force origin "$head":refs/heads/checkpoint/increment-33-closure-stage-green
+
+          existing=$(gh api "/repos/pysolvesemi/Nodal/pulls?state=open&head=pysolvesemi:increment/33-evidence-closure" --jq '.[0].number // empty')
+          if [ -z "$existing" ]; then
+            body=$(cat <<'EOF'
+          ## Summary
+
+          Stages the separate accepted-evidence closure for Increment 33 after implementation PR #100 passed its complete exact-head workflow matrix, review gate, squash merge, and post-merge Core CI.
+
+          This first closure head records immutable implementation evidence while retaining roadmap revision 1.43 and leaving Increment 33 unchecked. The final evidence commit will advance the roadmap and validated manifest only after this staged head passes all 23 required workflows.
+
+          ## Validation
+
+          - Implementation PR #100 is merged.
+          - Its accepted head passed Core CI, Increments 13–32, Increment 133, and Increment 33 on one exact commit.
+          - Its review gate is clean.
+          - Post-merge Core CI passed on the implementation merge commit.
+          - This closure PR must pass the same complete exact-head matrix before final evidence is stamped.
+
+          ## Design gate
+
+          `NodalAnalogProceduralAssignment-DG-v0.1` remains the binding contract. This PR changes evidence state, documentation, checker state handling, and read-only workflow coverage only; it does not change variable or assignment semantics or begin Increment 34.
+
+          ## Checklist
+
+          - [x] Implementation PR #100 is squash-merged.
+          - [x] Accepted implementation evidence is recorded without placeholders.
+          - [x] Staged closure remains fail-closed and leaves Increment 33 unchecked.
+          - [ ] Staged closure exact-head 23-workflow matrix passes.
+          - [ ] Final evidence commit validates the manifest and advances roadmap revision 1.44.
+          - [ ] Final closure exact-head matrix passes.
+          - [ ] Closure PR is squash-merged and post-merge Core CI passes.
+          EOF
+          )
+            body=$(printf '%s\n' "$body" | sed 's/^          //')
+            gh api --method POST \
+              -f title='Increment 33 — Record accepted evidence and close roadmap' \
+              -f head='increment/33-evidence-closure' \
+              -f base='dev' \
+              -f body="$body" \
+              '/repos/pysolvesemi/Nodal/pulls' > /tmp/closure-pr.json
+            existing=$(jq -r '.number' /tmp/closure-pr.json)
+          fi
+          gh api --method POST \
+            -f body="Increment 33 staged closure is green on exact head \`$head\`. Implementation evidence is recorded; roadmap closure remains blocked pending this PR head's full matrix." \
+            "/repos/pysolvesemi/Nodal/issues/$existing/comments"

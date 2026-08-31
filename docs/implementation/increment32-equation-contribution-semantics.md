@@ -58,6 +58,8 @@ manifest, Increment 31 closure, Increment 133 checkpoint, roadmap state,
 read-only workflow, compile/run witnesses, and temporary-artifact hygiene.
 The exact implementation head is accepted only after the dedicated workflow,
 Core CI, and every inherited pull-request workflow pass on that same commit.
+The synchronize event carrying that head must also expose the canonical
+`## Design gate` pull-request section required by contribution policy.
 
 Review findings are closed only after production public-API construction,
 initialization-only analysis enforcement, and native non-empty identity checks

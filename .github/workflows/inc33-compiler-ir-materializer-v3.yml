@@ -63,7 +63,33 @@ jobs:
           git diff --check
 
       - name: Validate Increment 33 checkpoint contract
-        run: python3 scripts/check_increment33.py --compile
+        id: checkpoint
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          python3 scripts/check_increment33.py --compile 2>&1 | tee /tmp/inc33-checkpoint.log
+          status=${PIPESTATUS[0]}
+          echo "status=${status}" >> "${GITHUB_OUTPUT}"
+          exit 0
+
+      - name: Persist checkpoint diagnostics
+        if: steps.checkpoint.outputs.status != '0'
+        shell: bash
+        run: |
+          git config user.name "nodal-automation"
+          git config user.email "actions@users.noreply.github.com"
+          rm -rf /tmp/inc33-diagnostics
+          git worktree add -B automation/inc33-compiler-ir-diagnostics-20260831 \
+            /tmp/inc33-diagnostics \
+            origin/automation/inc33-compiler-ir-materializer-20260831
+          mkdir -p /tmp/inc33-diagnostics/.inc33-diagnostics
+          cp /tmp/inc33-checkpoint.log /tmp/inc33-diagnostics/.inc33-diagnostics/checkpoint.log
+          cd /tmp/inc33-diagnostics
+          git add .inc33-diagnostics/checkpoint.log
+          git commit -m "ci: record Increment 33 checkpoint failure" || true
+          git push --force origin HEAD:automation/inc33-compiler-ir-diagnostics-20260831
+          exit 1
 
       - name: Validate Scala core
         run: ./nodal core scala

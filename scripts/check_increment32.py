@@ -328,6 +328,7 @@ def validate_files(root: Path) -> list[Problem]:
     require_tokens(
         integration_test,
         (
+            "package nodal.internal.testkit",
             "PublicAnalogEquationTop",
             "snapshot.analogSemantics",
             "ScalaToMlirBridge.lower",
@@ -469,7 +470,7 @@ def validate_compile(root: Path) -> list[Problem]:
         [
             str(mill),
             "core.scala.testkit.test.testOnly",
-            "nodal.AnalogEquationConstructionTests",
+            "nodal.internal.testkit.AnalogEquationConstructionTests",
         ],
         root,
     )

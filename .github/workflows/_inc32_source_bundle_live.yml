@@ -13,10 +13,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Check out exact current Increment 32 head
+      - name: Check out post-merge dev
         uses: actions/checkout@v6
         with:
-          ref: increment/32-equation-contribution-semantics-review
+          ref: dev
           fetch-depth: 0
       - name: Record source identity
         run: git rev-parse HEAD > /tmp/nodal-inc32-head.txt

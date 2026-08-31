@@ -23,7 +23,7 @@ jobs:
       - name: Check out current repair branch
         shell: bash
         run: |
-          cp .inc33-controller/repair_type_contract.py /tmp/inc33-repair-type.py
+          cp .inc33-controller/repair_type_contract_code_only.py /tmp/inc33-repair-type.py
           git checkout -B automation/inc33-compiler-ir-repair-20260831 origin/automation/inc33-compiler-ir-repair-20260831
           git fetch --no-tags origin dev:refs/remotes/origin/dev
 

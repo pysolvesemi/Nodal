@@ -47,6 +47,28 @@ def run(root: Path, command: list[str], code: str) -> None:
         raise CheckFailure(f"{code}: command failed: {' '.join(command)}\n{completed.stdout}")
 
 
+def repository_files(root: Path) -> tuple[Path, ...]:
+    completed = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if completed.returncode == 0:
+        return tuple(
+            root / relative
+            for relative in completed.stdout.split(chr(0))
+            if relative
+        )
+    return tuple(
+        path
+        for path in root.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    )
+
+
 def check_repository(root: Path, compile_witnesses: bool = False) -> None:
     manifest_path = "tests/compiler/fixtures/increment33/manifest.json"
     manifest = read_json(root, manifest_path)
@@ -280,7 +302,7 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
             require(forbidden not in workflow, f"NODAL-INC33-031: workflow contains {forbidden!r}")
 
     temporary = []
-    for path in root.rglob("*"):
+    for path in repository_files(root):
         if not path.is_file():
             continue
         lowered = path.name.lower()

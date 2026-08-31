@@ -121,6 +121,14 @@ class Increment33ContractTests(unittest.TestCase):
             self.assert_rejected(root, "must not be last-writer-wins")
 
 
+    def test_untracked_python_cache_is_ignored(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "scripts/__pycache__/probe.cpython-312.pyc"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"runtime cache")
+            CHECKER.check_repository(root)
+
     def test_variable_type_diagnostic_mutation_is_rejected(self) -> None:
         temporary, root = self.fixture()
         with temporary:

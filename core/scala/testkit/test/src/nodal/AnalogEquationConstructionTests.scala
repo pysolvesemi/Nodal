@@ -134,9 +134,9 @@ object AnalogEquationConstructionTests extends TestSuite:
     test("contribution grouping is independent of public source order"):
       val forward = ConstructionKernel.inspect(new PublicAnalogEquationTop()).analogSemantics
       val reverse =
-        ConstructionKernel.inspect(new PublicAnalogEquationTop(reverseContributions =
-          true
-      )).analogSemantics
+        ConstructionKernel
+          .inspect(new PublicAnalogEquationTop(reverseContributions = true))
+          .analogSemantics
 
       def identities(snapshot: AnalogEquationRuntime.Snapshot): Vector[String] =
         snapshot.contributions.flatMap(_.terms.map(_.identity.value))

@@ -1,0 +1,30 @@
+name: Increment 33 Source Bundle
+
+on:
+  push:
+    branches:
+      - automation/inc33-source-bundle-20260831
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out validated Increment 32 baseline
+        uses: actions/checkout@v6
+        with:
+          ref: b1d927772c2a33a535f7d7fbe44a3891900c2fa2
+          fetch-depth: 0
+      - name: Package source snapshot
+        run: |
+          tar --exclude=.git --exclude=out --exclude=build -czf /tmp/nodal-inc33-baseline.tgz .
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodal-inc33-baseline-source
+          path: /tmp/nodal-inc33-baseline.tgz
+          if-no-files-found: error
+          retention-days: 1

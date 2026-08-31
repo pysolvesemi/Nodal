@@ -24,7 +24,7 @@ jobs:
         shell: bash
         run: |
           git fetch origin automation/inc33-compiler-ir-payload-20260831
-          rm -f /tmp/inc33-apply.b64 /tmp/inc33-apply.gz /tmp/inc33-apply.py
+          rm -f /tmp/inc33-apply.b64 /tmp/inc33-apply.gz /tmp/inc33-apply.py /tmp/inc33-repair-01.py
           for part in 00 01 02 03 04 05; do
             git show "origin/automation/inc33-compiler-ir-payload-20260831:.inc33-payload/part-${part}.b64" >> /tmp/inc33-apply.b64
           done
@@ -33,6 +33,9 @@ jobs:
           echo "0c0f250d75452733450dc027b414bb1aad500e28a62a1e2f4c522098eb9611fb  /tmp/inc33-apply.gz" | sha256sum --check
           gzip --decompress --stdout /tmp/inc33-apply.gz > /tmp/inc33-apply.py
           echo "83ea42e67642dc287bc676445b0d2f9c59e48467b585baf7508eae594a0bce11  /tmp/inc33-apply.py" | sha256sum --check
+          git show "origin/automation/inc33-compiler-ir-payload-20260831:.inc33-payload/repair-01.py" > /tmp/inc33-repair-01.py
+          python3 /tmp/inc33-repair-01.py
+          echo "7ee94fcaf4f1fc267ffa32ed8bc4a14bae41569e30d63ddba75ad1b160680a68  /tmp/inc33-apply.py" | sha256sum --check
           python3 -m py_compile /tmp/inc33-apply.py
 
       - name: Apply tranche to active Increment 33 branch
@@ -40,7 +43,7 @@ jobs:
         run: |
           git checkout -B increment/33-analog-variables-procedural-assignment-v5 origin/increment/33-analog-variables-procedural-assignment-v5
           python3 /tmp/inc33-apply.py
-          rm -f /tmp/inc33-apply.b64 /tmp/inc33-apply.gz /tmp/inc33-apply.py
+          rm -f /tmp/inc33-apply.b64 /tmp/inc33-apply.gz /tmp/inc33-apply.py /tmp/inc33-repair-01.py
 
       - name: Format changed sources
         shell: bash

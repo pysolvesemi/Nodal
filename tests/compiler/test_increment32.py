@@ -29,6 +29,13 @@ class Increment32ContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             clone = Path(temporary) / "repo"
             shutil.copytree(ROOT, clone, ignore=shutil.ignore_patterns("out", ".git"))
+            manifest_path = clone / MODULE.MANIFEST
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["status"] = "implemented-awaiting-evidence"
+            manifest["validation"] = None
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+            )
             roadmap = clone / MODULE.ROADMAP
             text = roadmap.read_text(encoding="utf-8")
             text = text.replace(

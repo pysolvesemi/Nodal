@@ -2,8 +2,8 @@
 
 ## Status
 
-Implemented on the increment branch and awaiting exact-head validation and
-accepted-evidence closure.
+Implemented on the increment branch and validated through implementation
+PR #97 and the separate evidence-closure PR #99.
 
 ## Baseline
 
@@ -75,7 +75,7 @@ lowering. Later increments own control flow, differential/state semantics,
 topology/DAE construction, solver execution, analysis scheduling, target
 legalization, and Verilog-A/Verilog-AMS emission.
 
-The Increment 32 roadmap item remains unchecked until the implementation is
-merged, post-merge validation passes, and a separate evidence-closure change
-records immutable evidence. Increment 33 remains unchecked throughout this
-implementation PR.
+The Increment 32 roadmap item is checked in roadmap revision 1.43 after
+implementation merge `e9ea39e823d5a226a65b952e176d3bb90ecda0aa` and
+post-merge Core CI run `33372029305`. Increment 33 remains unchecked until its
+own implementation and evidence closure complete.

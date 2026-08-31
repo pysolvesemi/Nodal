@@ -1,8 +1,8 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.42
+**Revision:** 1.43
 **Created:** 2026-08-20
-**Updated:** 2026-08-29
+**Updated:** 2026-08-31
 **Status:** Active roadmap
 **Primary language target:** Verilog-AMS 2023
 **Analog-only compatibility target:** Verilog-A
@@ -925,11 +925,12 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Implement `V`, `I`, discipline-specific access, one/two-node forms, branches, probes, and validation.
   - Evidence: implementation PR [#88](https://github.com/pysolvesemi/Nodal/pull/88), original draft PR [#87](https://github.com/pysolvesemi/Nodal/pull/87), dedicated validation run [33244625475](https://github.com/pysolvesemi/Nodal/actions/runs/33244625475), merge commit [`1662b79f`](https://github.com/pysolvesemi/Nodal/commit/1662b79f5f99686de4af2ed8a016fe8acf5c784e), and Core CI run [33244625490](https://github.com/pysolvesemi/Nodal/actions/runs/33244625490).
 
-- [ ] **Increment 32 — First-class analog equations, blocks, and contribution semantics**
+- [x] **Increment 32 — First-class analog equations, blocks, and contribution semantics**
   - Implement analog regions, unordered first-class equations, and `<+` potential/flow contributions as distinct source-semantic operations; keep both distinct from Increment 33 procedural assignment.
   - Preserve authored equation sides, stable equation identity, physical dimensions, guards, analysis applicability, and canonical residual intent without premature causal orientation or unsafe algebraic division.
   - Define additive contribution accumulation, source-order independence, equation/contribution interaction, illegal procedural use, and stable diagnostics.
   - Require the approved equation/component checkpoint from Increment 133 before implementation begins.
+  - Evidence: implementation PR [#97](https://github.com/pysolvesemi/Nodal/pull/97), accepted head [`6a76516a`](https://github.com/pysolvesemi/Nodal/commit/6a76516aba541ead97205e937118bb0f689fcd98), dedicated validation run [33370821599](https://github.com/pysolvesemi/Nodal/actions/runs/33370821599), merge commit [`e9ea39e8`](https://github.com/pysolvesemi/Nodal/commit/e9ea39e823d5a226a65b952e176d3bb90ecda0aa), and post-merge Core CI run [33372029305](https://github.com/pysolvesemi/Nodal/actions/runs/33372029305).
 
 - [ ] **Increment 33 — Analog variables and procedural assignment**
   - Implement local variables, initialization, procedural assignment, scopes, read-before-write diagnostics, and lowering.

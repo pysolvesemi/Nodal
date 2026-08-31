@@ -23,6 +23,7 @@ DIAGNOSTICS = Path("core/scala/api/public-api-continuous-time-diagnostics-v0.1.j
 MIGRATION = Path("docs/migrations/public-api-v0.3-to-continuous-time-v0.1.md")
 MANIFEST = Path("tests/api/fixtures/increment133/manifest.json")
 SEMANTIC = Path("tests/api/fixtures/increment133/semantic-contracts.json")
+INCREMENT32 = Path("tests/compiler/fixtures/increment32/manifest.json")
 ROADMAP = Path("docs/roadmap/nodal-development-todo.md")
 
 EXPECTED_DIAGNOSTICS = {
@@ -80,6 +81,9 @@ def validate_files(root: Path) -> list[Problem]:
     surface = load_json(root / SURFACE, problems, "NODAL-INC133-010")
     diagnostics = load_json(root / DIAGNOSTICS, problems, "NODAL-INC133-011")
     semantic = load_json(root / SEMANTIC, problems, "NODAL-INC133-012")
+    increment32_manifest = load_json(
+        root / INCREMENT32, problems, "NODAL-INC133-043"
+    )
     if problems:
         return problems
 
@@ -145,9 +149,67 @@ def validate_files(root: Path) -> list[Problem]:
         if path.exists():
             problems.append(Problem("NODAL-INC133-033", f"temporary writable workflow remains in accepted tree: {path}"))
 
-    increment32 = "- [ ] **Increment 32 — First-class analog equations, blocks, and contribution semantics**"
-    if increment32 not in roadmap:
-        problems.append(Problem("NODAL-INC133-034", "Increment 32 must remain unchecked until Increment 133 evidence closure merges"))
+    increment32_open = "- [ ] **Increment 32 — First-class analog equations, blocks, and contribution semantics**"
+    increment32_closed = "- [x] **Increment 32 — First-class analog equations, blocks, and contribution semantics**"
+    successor_status = (
+        increment32_manifest.get("status")
+        if isinstance(increment32_manifest, dict)
+        else None
+    )
+    if (increment32_open in roadmap) == (increment32_closed in roadmap):
+        problems.append(
+            Problem(
+                "NODAL-INC133-034",
+                "Increment 32 roadmap state is missing or ambiguous",
+            )
+        )
+    elif successor_status in {
+        "implementation-started",
+        "implemented-awaiting-evidence",
+    }:
+        if increment32_open not in roadmap:
+            problems.append(
+                Problem(
+                    "NODAL-INC133-034",
+                    "pre-evidence Increment 32 must remain unchecked",
+                )
+            )
+    elif successor_status == "validated-equation-contribution-semantics":
+        validation = increment32_manifest.get("validation")
+        required_successor_evidence = (
+            "implementation_pull_request",
+            "accepted_head",
+            "dedicated_workflow_run",
+            "core_ci_run",
+            "implementation_merge",
+            "post_merge_core_ci_run",
+            "closure_pull_request",
+            "closure_validation_head",
+            "closure_core_ci_run",
+        )
+        if increment32_closed not in roadmap:
+            problems.append(
+                Problem(
+                    "NODAL-INC133-034",
+                    "validated Increment 32 must be checked in the roadmap",
+                )
+            )
+        if not isinstance(validation, dict) or any(
+            not validation.get(field) for field in required_successor_evidence
+        ):
+            problems.append(
+                Problem(
+                    "NODAL-INC133-034",
+                    "validated Increment 32 lacks complete evidence",
+                )
+            )
+    else:
+        problems.append(
+            Problem(
+                "NODAL-INC133-034",
+                f"unsupported Increment 32 successor status: {successor_status}",
+            )
+        )
     increment133_open = "- [ ] **Increment 133 — Analog semantic API and analysis contract design gate**"
     increment133_closed = "- [x] **Increment 133 — Analog semantic API and analysis contract design gate**"
     if status == "approved-awaiting-evidence" and increment133_open not in roadmap:

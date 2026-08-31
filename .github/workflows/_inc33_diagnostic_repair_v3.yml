@@ -36,6 +36,7 @@ jobs:
           cd target
           git apply --check ../controls/.automation/inc33-diagnostic-repair.patch
           git apply ../controls/.automation/inc33-diagnostic-repair.patch
+          ./mill mill.scalalib.scalafmt/reformatAll
           git diff --check
 
       - name: Validate repaired checkpoint
@@ -58,6 +59,32 @@ jobs:
           ./mill scalafix.check
           python3 scripts/check_markdown.py
           git diff --check
+          python3 - <<'PY'
+          import subprocess
+          expected = {
+              "core/native/include/nodal/AnalogProceduralRuntime.h",
+              "core/scala/api/src/nodal/AnalogProceduralConstruction.scala",
+              "core/scala/api/src/nodal/AnalogProceduralRuntime.scala",
+              "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala",
+              "examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala",
+              "scripts/check_increment33.py",
+              "tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp",
+          }
+          actual = {
+              line[3:]
+              for line in subprocess.check_output(
+                  ["git", "status", "--short"], text=True
+              ).splitlines()
+              if line.strip()
+          }
+          if actual != expected:
+              raise SystemExit(
+                  "unexpected repaired file set:\n"
+                  + "\n".join(sorted(actual))
+                  + "\nexpected:\n"
+                  + "\n".join(sorted(expected))
+              )
+          PY
 
       - name: Publish repaired checkpoint
         shell: bash
@@ -70,6 +97,7 @@ jobs:
             core/native/include/nodal/AnalogProceduralRuntime.h \
             core/scala/api/src/nodal/AnalogProceduralConstruction.scala \
             core/scala/api/src/nodal/AnalogProceduralRuntime.scala \
+            core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
             examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala \
             scripts/check_increment33.py \
             tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp

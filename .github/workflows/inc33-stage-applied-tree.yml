@@ -53,6 +53,12 @@ jobs:
           "${RUNNER_TEMP}/nodal-lint-toolchain/bin/clang-format" -i \
             core/compiler/lib/Dialect/Nodal/NodalOps.cpp \
             core/compiler/lib/Dialect/Nodal/NodalTypes.cpp
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("docs/implementation/increment33-analog-variables-procedural-assignment.md")
+          path.write_text(path.read_text(encoding="utf-8").rstrip() + "\n", encoding="utf-8")
+          PY
           git diff --check
 
       - name: Check structural contract

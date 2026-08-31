@@ -48,6 +48,19 @@ class Increment133ContractTests(unittest.TestCase):
             problems = MODULE.validate_files(clone)
             self.assertIn("NODAL-INC133-033", [problem.code for problem in problems])
 
+    def test_validated_increment32_requires_complete_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            clone = Path(temporary) / "repo"
+            shutil.copytree(ROOT, clone, ignore=shutil.ignore_patterns("out", ".git"))
+            manifest_path = clone / MODULE.INCREMENT32
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["validation"]["closure_core_ci_run"] = None
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+            )
+            problems = MODULE.validate_files(clone)
+            self.assertIn("NODAL-INC133-034", [problem.code for problem in problems])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,6 @@
 # Increment 32 — Accepted-evidence closure
 
-**Status:** Closure staged
+**Status:** Validated closure candidate
 **Implementation PR:** #97
 **Accepted implementation head:** `6a76516aba541ead97205e937118bb0f689fcd98`
 **Implementation merge:** `e9ea39e823d5a226a65b952e176d3bb90ecda0aa`
@@ -17,3 +17,7 @@ The final closure must retain the permanent read-only Increment 32 workflow,
 pass the Increment 31, Increment 133, and Increment 32 repository contracts,
 and contain no temporary materializer, payload, source-bundle, or finalizer
 workflow.
+
+**Closure PR:** #99
+**Pre-stamp closure validation baseline:** `e9ea39e823d5a226a65b952e176d3bb90ecda0aa`
+**Pre-stamp closure Core CI:** `33372560008`

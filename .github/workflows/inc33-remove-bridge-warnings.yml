@@ -1,0 +1,83 @@
+name: Increment 33 remove bridge warnings
+
+on:
+  push:
+    branches:
+      - automation/inc33-warning-repair-controller-20260831
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc33-warning-repair-controller-20260831
+          fetch-depth: 0
+
+      - name: Check out implementation branch
+        shell: bash
+        run: |
+          cp .inc33-controller/remove_bridge_warnings.py /tmp/inc33-remove-warnings.py
+          git checkout -B automation/inc33-compiler-ir-repair-20260831 origin/automation/inc33-compiler-ir-repair-20260831
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
+
+      - name: Remove bridge-only warnings
+        run: python3 /tmp/inc33-remove-warnings.py
+
+      - name: Install pinned toolchains
+        shell: bash
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format and publish cleanup
+        shell: bash
+        run: |
+          ./nodal style fix \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+          git config user.name "nodal-automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add \
+            core/scala/bridge/src/nodal/bridge/AnalogProceduralEvidence.scala \
+            core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala
+          git commit -m "fix(bridge): remove procedural serializer warnings"
+          git push origin HEAD:automation/inc33-compiler-ir-repair-20260831
+
+      - name: Validate checkpoint and mutation suite
+        run: |
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+
+      - name: Validate repository style
+        run: |
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate Scala API, bridge, and locked nodalc round trip
+        run: |
+          NODAL_NODALC="${RUNNER_TEMP}/nodal-native-toolchain/bin/nodalc" \
+            ./nodal core scala
+
+      - name: Validate native compiler and verifiers
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate repository contracts
+        run: |
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev

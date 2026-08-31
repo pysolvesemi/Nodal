@@ -1,0 +1,387 @@
+name: Increment 33 Public Construction Integration
+
+on:
+  push:
+    branches:
+      - automation/inc33-source-bundle-20260831
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - name: Check out semantic-core checkpoint
+        uses: actions/checkout@v6
+        with:
+          ref: checkpoint/increment-33-semantic-core-green
+          fetch-depth: 0
+
+      - name: Move to active Increment 33 branch
+        run: |
+          git fetch origin increment/33-analog-variables-procedural-assignment-v5
+          git checkout -B increment/33-analog-variables-procedural-assignment-v5 \
+            origin/increment/33-analog-variables-procedural-assignment-v5
+
+      - name: Wire public construction and snapshot retention
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import re
+
+          candidate_path = Path('core/scala/api/src/nodal/CandidateApi.scala')
+          candidate = candidate_path.read_text()
+
+          variable_pattern = re.compile(
+              r'/\*\* Candidate elaboration-time variable visible to behavioral blocks\. \*/\n'
+              r'final class Variable\[A <: Data\] private\[nodal\] \(.*?\n'
+              r'\s*infix def :=\(value: Expr\[A\]\): Unit = CandidateRuntime\.assign\(this, value\)\n',
+              re.S,
+          )
+          variable_replacement = '''/** Candidate component-local variable visible to analog procedural blocks. */
+          final class Variable[A <: Data] private[nodal] (
+              val dataType: DataType[A],
+              private[nodal] val initializer: Option[Expr[A]]
+          ) extends Expr[A]:
+            CandidateRuntime.declare(
+              this,
+              KernelSignalKind.Variable,
+              dataType = Some(dataType),
+              attributes = initializer.toVector.map(value => "initial" -> value)
+            )
+            CandidateRuntime.declareAnalogVariable(this, dataType, initializer)
+
+            def initialValue: Expr[A] = initializer.getOrElse(
+              throw new IllegalStateException("analog variable has no declaration initializer")
+            )
+
+            def initialValueOption: Option[Expr[A]] = initializer
+
+            infix def :=(value: Expr[A]): Unit =
+              CandidateRuntime.assignAnalogVariable(this, value)
+          '''.replace('          ', '')
+          candidate, count = variable_pattern.subn(variable_replacement, candidate, count=1)
+          if count != 1:
+              raise SystemExit('failed to replace Variable definition')
+
+          old_variable_factory = '''  protected final def variable[A <: Data](
+              dataType: DataType[A],
+              initialValue: Expr[A]
+          ): Variable[A] = new Variable(dataType, initialValue)
+          '''.replace('          ', '')
+          new_variable_factory = '''  protected final def variable[A <: Data](
+              dataType: DataType[A],
+              initialValue: Expr[A]
+          ): Variable[A] = new Variable(dataType, Some(initialValue))
+
+            protected final def variable[A <: Data](dataType: DataType[A]): Variable[A] =
+              new Variable(dataType, None)
+          '''.replace('          ', '')
+          if old_variable_factory not in candidate:
+              raise SystemExit('failed to find Module.variable factory')
+          candidate = candidate.replace(old_variable_factory, new_variable_factory, 1)
+
+          old_begin = '  def beginModule(module: Module): Unit = ConstructionKernel.beginModule(module)\n'
+          new_begin = '''  def beginModule(module: Module): Unit =
+            ConstructionKernel.beginModule(module)
+            AnalogProceduralConstruction.beginModule(module)
+          '''.replace('          ', '')
+          if old_begin not in candidate:
+              raise SystemExit('failed to find CandidateRuntime.beginModule')
+          candidate = candidate.replace(old_begin, new_begin, 1)
+
+          declaration_anchor = '''  def expressionUnit(value: Expr[?]): Option[String] = value match
+          '''.replace('          ', '')
+          declaration_method = '''  def declareAnalogVariable[A <: Data](
+              value: Variable[A],
+              dataType: DataType[A],
+              initializer: Option[Expr[A]]
+          ): Unit = AnalogProceduralConstruction.declareVariable(value, dataType, initializer)
+
+          '''.replace('          ', '')
+          if declaration_method.strip() not in candidate:
+              if declaration_anchor not in candidate:
+                  raise SystemExit('failed to find CandidateRuntime declaration anchor')
+              candidate = candidate.replace(declaration_anchor, declaration_method + declaration_anchor, 1)
+
+          old_semantic_block = '''  def analogSemanticBlock(
+              kind: AnalogEquationRuntime.RegionKind,
+              body: => Unit
+          ): Unit = ConstructionKernel.analogSemanticBlock(kind)(body)
+          '''.replace('          ', '')
+          new_semantic_block = '''  def analogSemanticBlock(
+              kind: AnalogEquationRuntime.RegionKind,
+              body: => Unit
+          ): Unit =
+            if kind == AnalogEquationRuntime.RegionKind.Procedural then
+              AnalogProceduralConstruction.procedure:
+                ConstructionKernel.analogSemanticBlock(kind)(body)
+            else ConstructionKernel.analogSemanticBlock(kind)(body)
+          '''.replace('          ', '')
+          if old_semantic_block not in candidate:
+              raise SystemExit('failed to find analogSemanticBlock')
+          candidate = candidate.replace(old_semantic_block, new_semantic_block, 1)
+
+          old_assign = '''  def assign(left: AnyRef, right: Any): Unit =
+            ConstructionKernel.operation("assignment", left, right)
+          '''.replace('          ', '')
+          new_assign = '''  def assignAnalogVariable[A <: Data](left: Variable[A], right: Expr[A]): Unit =
+            ConstructionKernel.operation("assignment", left, right)
+            AnalogProceduralConstruction.assign(left, right)
+
+            def assign(left: AnyRef, right: Any): Unit =
+              ConstructionKernel.operation("assignment", left, right)
+          '''.replace('          ', '')
+          if old_assign not in candidate:
+              raise SystemExit('failed to find generic assignment method')
+          candidate = candidate.replace(old_assign, new_assign, 1)
+
+          old_attach = '''  def attachInstance(instance: Instance[? <: Module], module: Module): Unit =
+            ConstructionKernel.attachInstance(instance, module)
+          '''.replace('          ', '')
+          new_attach = '''  def attachInstance(instance: Instance[? <: Module], module: Module): Unit =
+            ConstructionKernel.attachInstance(instance, module)
+            AnalogProceduralConstruction.attachInstance(module)
+          '''.replace('          ', '')
+          if old_attach not in candidate:
+              raise SystemExit('failed to find attachInstance')
+          candidate = candidate.replace(old_attach, new_attach, 1)
+
+          old_block = '''  def block(body: => Unit): Unit =
+            ConstructionKernel.operation("block")
+            ConstructionKernel.block(body)
+          '''.replace('          ', '')
+          new_block = '''  def block(body: => Unit): Unit =
+            ConstructionKernel.operation("block")
+            AnalogProceduralConstruction.lexicalScope:
+              ConstructionKernel.block(body)
+          '''.replace('          ', '')
+          if old_block not in candidate:
+              raise SystemExit('failed to find CandidateRuntime.block')
+          candidate = candidate.replace(old_block, new_block, 1)
+          candidate_path.write_text(candidate)
+
+          adapter_path = Path('core/scala/api/src/nodal/AnalogProceduralConstruction.scala')
+          adapter = adapter_path.read_text()
+          old_unknown = '''    val variable = Option(module.variables.get(target)).getOrElse(
+              throw new AnalogProceduralRuntime.Failure(
+                AnalogProceduralRuntime.Diagnostic(
+                  "NODAL-ANALOG-033-017",
+                  "procedural assignment target is not registered in the active component"
+                )
+              )
+            )
+          '''.replace('          ', '')
+          new_unknown = '''    val variable = Option(module.variables.get(target)).getOrElse:
+              val foreign = state.modules.iterator
+                .filterNot(_ eq module)
+                .flatMap(candidate => Option(candidate.variables.get(target)).map(_ -> candidate))
+                .toVector
+                .headOption
+              foreign match
+                case Some((value, owner)) =>
+                  throw new AnalogProceduralRuntime.Failure(
+                    AnalogProceduralRuntime.Diagnostic(
+                      "NODAL-ANALOG-033-009",
+                      s"procedural variable belongs to component '${owner.owner}', not '${module.owner}'",
+                      Some(value.identity)
+                    )
+                  )
+                case None =>
+                  throw new AnalogProceduralRuntime.Failure(
+                    AnalogProceduralRuntime.Diagnostic(
+                      "NODAL-ANALOG-033-017",
+                      "procedural assignment target is not registered in the active component"
+                    )
+                  )
+            '''.replace('          ', '')
+          if old_unknown not in adapter:
+              raise SystemExit('failed to find adapter unknown-target block')
+          adapter_path.write_text(adapter.replace(old_unknown, new_unknown, 1))
+
+          kernel_path = Path('core/scala/api/src/nodal/ElaborationConstructionKernel.scala')
+          kernel = kernel_path.read_text()
+          field_anchor = '''    analogSemantics: AnalogEquationRuntime.Snapshot =
+              AnalogEquationRuntime.Snapshot(Vector.empty, Vector.empty),
+            waivers: Vector[KernelWaiverSnapshot] = Vector.empty
+          '''.replace('          ', '')
+          field_replacement = '''    analogSemantics: AnalogEquationRuntime.Snapshot =
+              AnalogEquationRuntime.Snapshot(Vector.empty, Vector.empty),
+            analogProcedural: Vector[AnalogProceduralRuntime.Snapshot] = Vector.empty,
+            waivers: Vector[KernelWaiverSnapshot] = Vector.empty
+          '''.replace('          ', '')
+          if field_anchor not in kernel:
+              raise SystemExit('failed to find ConstructionSnapshot analog field anchor')
+          kernel = kernel.replace(field_anchor, field_replacement, 1)
+
+          snapshot_anchor = '      analogSemantics = analogSemanticRecorder.snapshot,\n'
+          if snapshot_anchor not in kernel:
+              raise SystemExit('failed to find ConstructionSnapshot creation anchor')
+          kernel = kernel.replace(
+              snapshot_anchor,
+              snapshot_anchor + '      analogProcedural = AnalogProceduralConstruction.snapshots,\n',
+              1,
+          )
+
+          session_anchor = '    val session = new ConstructionSession(options)\n'
+          if session_anchor not in kernel:
+              raise SystemExit('failed to find construction-session creation')
+          kernel = kernel.replace(
+              session_anchor,
+              '    AnalogProceduralConstruction.reset()\n' + session_anchor,
+              1,
+          )
+          kernel_path.write_text(kernel)
+
+          manifest_path = Path('tests/compiler/fixtures/increment33/manifest.json')
+          manifest = json.loads(manifest_path.read_text())
+          manifest['semantics']['public_construction_kernel_integration'] = True
+          manifest['semantics']['construction_snapshot_retention'] = True
+          manifest['deferred'] = [
+              value for value in manifest['deferred']
+              if value != 'public-construction-kernel-integration'
+          ]
+          manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
+
+          checker_path = Path('scripts/check_increment33.py')
+          checker = checker_path.read_text()
+          checker = checker.replace(
+              '        "deterministic_snapshots",\n',
+              '        "deterministic_snapshots",\n'
+              '        "public_construction_kernel_integration",\n'
+              '        "construction_snapshot_retention",\n',
+              1,
+          )
+          checker = checker.replace(
+              '        "public-construction-kernel-integration",\n',
+              '',
+              1,
+          )
+          checker = checker.replace(
+              '    scala_runtime = read_text(root, "core/scala/api/src/nodal/AnalogProceduralRuntime.scala")\n',
+              '    scala_runtime = read_text(root, "core/scala/api/src/nodal/AnalogProceduralRuntime.scala")\n'
+              '    construction_adapter = read_text(root, "core/scala/api/src/nodal/AnalogProceduralConstruction.scala")\n'
+              '    candidate_api = read_text(root, "core/scala/api/src/nodal/CandidateApi.scala")\n'
+              '    construction_kernel = read_text(root, "core/scala/api/src/nodal/ElaborationConstructionKernel.scala")\n'
+              '    production_tests = read_text(root, "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala")\n',
+              1,
+          )
+          integration_checks = '''
+            for token in (
+                "def declareVariable",
+                "def procedure",
+                "def assign",
+                "def snapshots",
+                "NODAL-ANALOG-033-009",
+            ):
+                require(token in construction_adapter, f"NODAL-INC33-036: construction adapter is missing {token!r}")
+            for token in (
+                "CandidateRuntime.declareAnalogVariable",
+                "CandidateRuntime.assignAnalogVariable",
+                "new Variable(dataType, None)",
+                "AnalogProceduralConstruction.procedure",
+            ):
+                require(token in candidate_api, f"NODAL-INC33-037: public API integration is missing {token!r}")
+            require(
+                "analogProcedural: Vector[AnalogProceduralRuntime.Snapshot]" in construction_kernel
+                and "analogProcedural = AnalogProceduralConstruction.snapshots" in construction_kernel,
+                "NODAL-INC33-038: construction snapshot does not retain procedural semantics",
+            )
+            for token in (
+                "public variable and assignment APIs retain authored order",
+                "public uninitialized variable read is rejected",
+                "public cross-component variable assignment is rejected",
+            ):
+                require(token in production_tests, f"NODAL-INC33-039: production tests are missing {token!r}")
+          '''.replace('          ', '')
+          insertion = '    for code in range(1, 20):\n'
+          if insertion not in checker:
+              raise SystemExit('failed to find checker integration insertion')
+          checker = checker.replace(insertion, integration_checks + '\n' + insertion, 1)
+          checker_path.write_text(checker)
+
+          implementation_path = Path('docs/implementation/increment33-analog-variables-procedural-assignment.md')
+          implementation = implementation_path.read_text()
+          implementation = implementation.replace(
+              'Implementation checkpoint in progress. The source-semantic Scala and native\nrecorders, deterministic ordered snapshots, stable diagnostics, and independent\nwitnesses are present. Public construction-kernel and bridge retention remain\nthe next checkpoint before implementation acceptance.',
+              'Implementation checkpoint in progress. The source-semantic Scala and native\nrecorders are now connected to the public construction path and retained in\nConstructionSnapshot. Bridge and reproducibility retention remain the next\ncheckpoint before implementation acceptance.',
+          )
+          implementation = implementation.replace(
+              '## Next implementation checkpoint\n\nThe next checkpoint wires this semantic runtime into the existing public\n`variable`, `analogProcedure`, and `:=` construction paths. It will retain the\nresult in `ConstructionSnapshot`, Scala-to-MLIR source documents, and canonical\nreproducibility evidence, with production-path tests and mutations proving the\nintegration.',
+              '## Public construction integration\n\nThe existing public `variable`, `analogProcedure`, block-scope, instance, and\n`:=` paths now feed the compiler-owned procedural recorder. ConstructionSnapshot\nretains module-owned variables and exact assignment order. Production tests cover\ninitialized and uninitialized variables, repeated writes, dimensions, region\nlegality, and cross-component ownership. Scala-to-MLIR and canonical\nreproducibility retention remain the next checkpoint.',
+          )
+          implementation_path.write_text(implementation)
+
+          workflow_path = Path('.github/workflows/increment-33-analog-procedural-assignment.yml')
+          workflow = workflow_path.read_text()
+          workflow = workflow.replace(
+              "      - 'core/scala/api/src/nodal/AnalogProceduralRuntime.scala'\n",
+              "      - 'core/scala/api/src/nodal/AnalogProceduralRuntime.scala'\n"
+              "      - 'core/scala/api/src/nodal/AnalogProceduralConstruction.scala'\n"
+              "      - 'core/scala/api/src/nodal/CandidateApi.scala'\n"
+              "      - 'core/scala/api/src/nodal/ElaborationConstructionKernel.scala'\n"
+              "      - 'core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala'\n",
+              1,
+          )
+          workflow = workflow.replace(
+              '          python3 -m unittest discover -s tests/compiler -p \'test_increment33.py\'\n',
+              '          python3 -m unittest discover -s tests/compiler -p \'test_increment33.py\'\n'
+              '          ./mill core.scala.testkit.test.testOnly \\\n'
+              '            nodal.internal.testkit.AnalogProceduralConstructionTests\n',
+              1,
+          )
+          workflow_path.write_text(workflow)
+          PY
+
+      - name: Format and test public integration
+        run: |
+          ./mill mill.scalalib.scalafmt/formatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./mill core.scala.testkit.test.testOnly \
+            nodal.internal.testkit.AnalogProceduralConstructionTests
+          ./mill core.scala.testkit.test.testOnly \
+            nodal.internal.testkit.AnalogEquationConstructionTests
+          ./mill examples.continuousTimeApi.runMain \
+            nodal.increment33fixture.Increment33RuntimeCheck \
+            /tmp/increment33-scala-witness.txt
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Publish public integration checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            .github/workflows/increment-33-analog-procedural-assignment.yml \
+            core/scala/api/src/nodal/AnalogProceduralConstruction.scala \
+            core/scala/api/src/nodal/CandidateApi.scala \
+            core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+            core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
+            docs/implementation/increment33-analog-variables-procedural-assignment.md \
+            scripts/check_increment33.py \
+            tests/compiler/fixtures/increment33/manifest.json
+          git commit -m 'feat(increment33): wire public procedural construction and snapshots'
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5
+          head=$(git rev-parse HEAD)
+          git push --force origin "$head":refs/heads/checkpoint/increment-33-public-integration-green
+          pr=$(gh api --method GET -f state=open \
+            -f head='pysolvesemi:increment/33-analog-variables-procedural-assignment-v5' \
+            '/repos/pysolvesemi/Nodal/pulls' --jq '.[0].number // empty')
+          if [ -n "$pr" ]; then
+            gh api --method POST \
+              -f body="Public construction integration passed on exact head \`$head\`: `variable`, `analogProcedure`, `:=`, instance ownership, read-before-write, dimensions, and ConstructionSnapshot retention are covered. Bridge and reproducibility retention remain next." \
+              "/repos/pysolvesemi/Nodal/issues/$pr/comments"
+          fi

@@ -1,0 +1,83 @@
+name: Increment 33 repair type contract
+
+on:
+  push:
+    branches:
+      - automation/inc33-type-repair-controller-20260831
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc33-type-repair-controller-20260831
+          fetch-depth: 0
+
+      - name: Check out current repair branch
+        shell: bash
+        run: |
+          cp .inc33-controller/repair_type_contract.py /tmp/inc33-repair-type.py
+          git checkout -B automation/inc33-compiler-ir-repair-20260831 origin/automation/inc33-compiler-ir-repair-20260831
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
+
+      - name: Complete type-boundary coverage
+        run: python3 /tmp/inc33-repair-type.py
+
+      - name: Install pinned toolchains
+        shell: bash
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format and publish repaired tree
+        shell: bash
+        run: |
+          ./nodal style fix \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+          git config user.name "nodal-automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add \
+            .github/workflows/increment-33-analog-procedural-assignment.yml \
+            core/compiler/test/CMakeLists.txt \
+            scripts/check_increment33.py \
+            tests/compiler/test_increment33.py
+          git commit -m "test(compiler): enforce procedural variable type diagnostics"
+          git push origin HEAD:automation/inc33-compiler-ir-repair-20260831
+
+      - name: Validate repository style
+        run: |
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate Increment 33 checkpoint
+        run: |
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+
+      - name: Validate Scala API and bridge
+        run: ./nodal core scala
+
+      - name: Validate native compiler and verifiers
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate repository contracts
+        run: |
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev

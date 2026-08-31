@@ -72,6 +72,9 @@ object ScalaToMlirBridgeTests extends TestSuite:
   private def workDirectory(): Path =
     Files.createTempDirectory("nodal-bridge-test-")
 
+  private def occurrences(text: String, token: String): Int =
+    text.sliding(token.length).count(_ == token)
+
   private def delete(path: Path): Unit =
     if Files.isDirectory(path) then
       val stream = Files.list(path)
@@ -118,6 +121,42 @@ object ScalaToMlirBridgeTests extends TestSuite:
       assert(first.text.contains("ScalaToMlirBridgeTests.scala"))
       assert(first.text.contains("loc(\""))
       assert(first.sha256 == second.sha256)
+
+      val snapshot = ConstructionKernel.inspect(new BridgeProceduralTop)
+      val program = snapshot.analogProcedural.head
+      assert(program.variables.forall(_.source.nonEmpty))
+      assert(program.assignments.forall(_.source.nonEmpty))
+      val wrapperPaths = Vector(
+        s"${program.owner}.analogProcedural",
+        s"${program.owner}.analogProcedure"
+      )
+      val variablePaths = program.variables.map(_.variable.identity)
+      val assignmentPaths = program.assignments.map(_.identity)
+      val readPaths = program.assignments.flatMap: record =>
+        record.value.reads.indices.map(index => s"${record.identity}.read_$index")
+      val authoredScopes =
+        program.variables.map(_.variable.declarationScope) ++ program.assignments.map(_.scope)
+      val scopePaths = authoredScopes
+        .flatMap: scope =>
+          val canonical =
+            if scope.headOption.contains("procedure") then scope
+            else Vector("procedure") ++ scope
+          (2 to canonical.size).map(size =>
+            s"${program.owner}.${canonical.take(size).mkString(".")}"
+          )
+        .distinct
+      val expectedSourcePaths =
+        (wrapperPaths ++ scopePaths ++ variablePaths ++ assignmentPaths ++
+          readPaths).distinct.sorted
+
+      assert(readPaths.nonEmpty)
+      assert(scopePaths.nonEmpty)
+      assert(first.text.contains("nodal.bridge.source_map"))
+      assert(
+        expectedSourcePaths.forall(path =>
+          occurrences(first.text, s"semantic_path = \"$path\"") >= 2
+        )
+      )
 
     test("snapshot insertion order does not affect the bridge"):
       val snapshot = ConstructionKernel.inspect(new BridgeTop)
@@ -224,6 +263,32 @@ object ScalaToMlirBridgeTests extends TestSuite:
         try assert(!entries.iterator().hasNext)
         finally entries.close()
       finally delete(directory)
+
+    test("locked nodalc parses procedural bridge MLIR when configured"):
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          val directory = workDirectory()
+          try
+            val document = ScalaToMlirBridge.lower(new BridgeProceduralTop)
+            val success = NativeCompilerClient
+              .run(
+                document,
+                NativeCompilerRequest(
+                  executable = Path.of(executable).toAbsolutePath,
+                  arguments = Vector("--mlir-print-op-generic"),
+                  workingDirectory = directory,
+                  timeout = Duration.ofSeconds(30)
+                )
+              )
+              .asInstanceOf[NativeCompilerSuccess]
+            assert(success.normalizedMlir.contains("\"nodal.analog_variable\""))
+            assert(success.normalizedMlir.contains("\"nodal.analog_variable_read\""))
+            assert(success.normalizedMlir.contains("\"nodal.analog_assign\""))
+            assert(success.normalizedMlir.contains("nodal.bridge.source_map"))
+            assert(success.normalizedMlir.contains(".read_0"))
+            assert(success.normalizedMlir.contains("authored_order"))
+          finally delete(directory)
 
     test("locked nodalc parses and normalizes bridge MLIR when configured"):
       sys.env.get("NODAL_NODALC") match

@@ -232,6 +232,10 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
     procedural_bridge = read_text(
         root, "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala"
     )
+    bridge_tests = read_text(
+        root,
+        "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala",
+    )
     diagnostics = read_text(root, "core/compiler/diagnostics-v0.1.json")
     compiler_tests = read_text(root, "core/compiler/test/CMakeLists.txt")
     invalid_variable_kind = read_text(
@@ -274,6 +278,26 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         and "nodal.analog_assign" in procedural_bridge,
         "NODAL-INC33-040: procedural bridge operations are incomplete",
     )
+    for token in (
+        's"${program.owner}.analogProcedural"',
+        's"${program.owner}.analogProcedure"',
+        'scopePaths',
+        's"${record.identity}.read_$index"',
+    ):
+        require(
+            token in procedural_bridge,
+            f"NODAL-INC33-044: procedural source-map coverage is incomplete: {token!r}",
+        )
+    for token in (
+        "expectedSourcePaths",
+        "occurrences(first.text",
+        "locked nodalc parses procedural bridge MLIR when configured",
+        "nodal.bridge.source_map",
+    ):
+        require(
+            token in bridge_tests,
+            f"NODAL-INC33-045: procedural bridge/source-map test is missing {token!r}",
+        )
     for code in range(1, 20):
         require(
             f"NODAL-ANALOG-033-{code:03d}" in diagnostics,

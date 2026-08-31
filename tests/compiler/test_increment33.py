@@ -27,6 +27,7 @@ REQUIRED = (
     "core/scala/api/src/nodal/AnalogProceduralRuntime.scala",
     "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala",
     "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala",
+    "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala",
     "docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md",
     "docs/implementation/increment33-analog-variables-procedural-assignment.md",
     "docs/roadmap/nodal-development-todo.md",
@@ -128,6 +129,19 @@ class Increment33ContractTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"runtime cache")
             CHECKER.check_repository(root)
+
+    def test_procedural_source_map_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    's"${record.identity}.read_$index"',
+                    's"${record.identity}.read"',
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "source-map coverage is incomplete")
 
     def test_variable_type_diagnostic_mutation_is_rejected(self) -> None:
         temporary, root = self.fixture()

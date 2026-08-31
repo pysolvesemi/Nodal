@@ -79,13 +79,48 @@ private[nodal] object AnalogProceduralMlir:
     snapshot.analogProcedural
       .sortBy(_.owner)
       .flatMap: program =>
+        def canonicalScope(scope: Vector[String]): Vector[String] =
+          if scope.headOption.contains("procedure") then scope
+          else Vector("procedure") ++ scope
+
+        val allSources =
+          (program.variables.flatMap(_.source) ++ program.assignments.flatMap(_.source))
+            .sortBy(source => (source.file, source.line, source.column))
+        val wrappers = allSources.headOption.toVector.flatMap: source =>
+          Vector(
+            sourceMapEntry(s"${program.owner}.analogProcedural", source),
+            sourceMapEntry(s"${program.owner}.analogProcedure", source)
+          )
+        val scopePaths =
+          (program.variables.map(record => canonicalScope(record.variable.declarationScope)) ++
+            program.assignments.map(record => canonicalScope(record.scope)))
+            .flatMap(scope => (2 to scope.size).map(scope.take).toVector)
+            .distinct
+            .sortBy(_.mkString("."))
+        val scopes = scopePaths.flatMap: scope =>
+          val sources =
+            (program.variables
+              .filter(record => canonicalScope(record.variable.declarationScope).startsWith(scope))
+              .flatMap(_.source) ++
+              program.assignments
+                .filter(record => canonicalScope(record.scope).startsWith(scope))
+                .flatMap(_.source))
+              .sortBy(source => (source.file, source.line, source.column))
+          sources.headOption.map(source =>
+            sourceMapEntry(s"${program.owner}.${scope.mkString(".")}", source)
+          )
         val variables = program.variables.flatMap(record =>
           record.source.map(sourceMapEntry(record.variable.identity, _))
         )
         val assignments = program.assignments.flatMap(record =>
           record.source.map(sourceMapEntry(record.identity, _))
         )
-        variables ++ assignments
+        val reads = program.assignments.flatMap: record =>
+          record.source.toVector.flatMap: source =>
+            record.value.reads.indices.map: index =>
+              sourceMapEntry(s"${record.identity}.read_$index", source)
+        wrappers ++ scopes ++ variables ++ assignments ++ reads
+      .distinct
       .sortBy(identity)
 
   private def sourceMapEntry(

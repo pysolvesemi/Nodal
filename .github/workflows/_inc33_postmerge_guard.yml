@@ -1,0 +1,93 @@
+name: Increment 33 Implementation Post-Merge Guard
+
+on:
+  push:
+    branches:
+      - automation/inc33-postmerge-guard-20260831
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: read
+  issues: write
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out current dev
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Verify implementation merge and wait for Core CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          merge=$(git rev-parse HEAD)
+          pr=$(gh api '/repos/pysolvesemi/Nodal/pulls/100')
+          test "$(printf '%s' "$pr" | jq -r '.state')" = 'closed'
+          test "$(printf '%s' "$pr" | jq -r '.merged')" = 'true'
+          test "$(printf '%s' "$pr" | jq -r '.base.ref')" = 'dev'
+          accepted=$(printf '%s' "$pr" | jq -r '.head.sha')
+
+          for attempt in $(seq 1 120); do
+            gh api "/repos/pysolvesemi/Nodal/actions/runs?head_sha=$merge&event=push&per_page=100" > /tmp/runs.json
+            set +e
+            python3 - "$merge" "$accepted" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          merge, accepted = sys.argv[1:]
+          runs = json.loads(Path('/tmp/runs.json').read_text()).get('workflow_runs', [])
+          core = [run for run in runs if run.get('name') == 'Core CI' and run.get('head_sha') == merge]
+          core.sort(key=lambda run: (run.get('run_number', 0), run.get('id', 0)))
+          latest = core[-1] if core else None
+          status = {
+              'implementation_pr': 100,
+              'accepted_head': accepted,
+              'merge_commit': merge,
+              'core_ci': None if latest is None else {
+                  'id': latest.get('id'),
+                  'status': latest.get('status'),
+                  'conclusion': latest.get('conclusion'),
+              },
+          }
+          Path('/tmp/inc33-postmerge.json').write_text(json.dumps(status, indent=2) + '\n')
+          if latest is None or latest.get('status') != 'completed':
+              raise SystemExit(1)
+          if latest.get('conclusion') != 'success':
+              print(json.dumps(status, indent=2))
+              raise SystemExit(2)
+          print(json.dumps(status, indent=2))
+          PY
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              break
+            fi
+            if [ "$rc" -eq 2 ]; then
+              exit 1
+            fi
+            if [ "$attempt" -eq 120 ]; then
+              cat /tmp/inc33-postmerge.json
+              exit 1
+            fi
+            sleep 20
+          done
+
+      - name: Publish immutable post-merge checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          merge=$(git rev-parse HEAD)
+          git push --force origin "$merge":refs/heads/checkpoint/increment-33-implementation-postmerge-green
+          core=$(jq -r '.core_ci.id' /tmp/inc33-postmerge.json)
+          accepted=$(jq -r '.accepted_head' /tmp/inc33-postmerge.json)
+          gh api --method POST \
+            -f body="Increment 33 implementation merge is validated: accepted head \`$accepted\`, squash merge \`$merge\`, post-merge Core CI run \`$core\` passed." \
+            '/repos/pysolvesemi/Nodal/issues/100/comments'

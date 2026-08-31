@@ -1,0 +1,301 @@
+name: Increment 33 Semantic Hardening
+
+on:
+  push:
+    branches:
+      - automation/inc33-semantic-hardening-20260831
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  harden-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out active Increment 33 implementation
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Apply definite-assignment and declaration-retention hardening
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          scala_runtime = Path('core/scala/api/src/nodal/AnalogProceduralRuntime.scala')
+          text = scala_runtime.read_text()
+          old = '''      procedureActive = true
+                scopeStack = Vector("procedure")
+          '''.replace('                ', '      ')
+          new = '''      procedureActive = true
+                variables.valuesIterator.foreach: state =>
+                  state.initialized = state.record.initializer.nonEmpty
+                scopeStack = Vector("procedure")
+          '''.replace('                ', '      ')
+          if old in text and 'state.record.initializer.nonEmpty' not in text:
+              text = text.replace(old, new, 1)
+          text = text.replace(
+              '      targetState.initialized = true\n',
+              '      if guard.isEmpty then targetState.initialized = true\n',
+              1,
+          )
+          scala_runtime.write_text(text)
+
+          native_runtime = Path('core/native/include/nodal/AnalogProceduralRuntime.h')
+          text = native_runtime.read_text()
+          old = '''    procedureActive_ = true;
+              scopeStack_ = {"procedure"};
+          '''.replace('              ', '    ')
+          new = '''    procedureActive_ = true;
+              for (auto &[identity, variable] : variables_) {
+                (void)identity;
+                variable.initialized = variable.record.initializer.has_value();
+              }
+              scopeStack_ = {"procedure"};
+          '''.replace('              ', '    ')
+          if old in text and 'variable.record.initializer.has_value()' not in text:
+              text = text.replace(old, new, 1)
+          text = text.replace(
+              '    targetState.initialized = true;\n',
+              '    if (!guard)\n      targetState.initialized = true;\n',
+              1,
+          )
+          native_runtime.write_text(text)
+
+          adapter_path = Path('core/scala/api/src/nodal/AnalogProceduralConstruction.scala')
+          adapter = adapter_path.read_text()
+          old_foreign = '''      val foreign = state.modules.iterator
+                        .filterNot(_ eq module)
+                        .flatMap(candidate => Option(candidate.variables.get(target)).map(_ -> candidate))
+                        .toVector
+                        .headOption
+          '''.replace('                        ', '        ')
+          new_foreign = '''      val foreign = state.modules.iterator
+                        .filterNot(_ eq module)
+                        .find: candidate =>
+                          Option(candidate.variables.get(target)).nonEmpty ||
+                            candidate.pending.exists(_.value eq target)
+          '''.replace('                        ', '        ')
+          if old_foreign in adapter:
+              adapter = adapter.replace(old_foreign, new_foreign, 1)
+              adapter = adapter.replace(
+                  '          case Some((value, owner)) =>\n',
+                  '          case Some(owner) =>\n',
+                  1,
+              ).replace(
+                  '              Some(value.identity)\n',
+                  '              Option(owner.variables.get(target)).map(_.identity)\n',
+                  1,
+              )
+          old_snapshots = '''  def snapshots: Vector[AnalogProceduralRuntime.Snapshot] =
+              Option(current.get()).toVector.flatMap(_.modules.map(_.recorder.snapshot))
+          '''.replace('              ', '  ')
+          new_snapshots = '''  def snapshots: Vector[AnalogProceduralRuntime.Snapshot] =
+              Option(current.get()).toVector.flatMap: value =>
+                value.modules.foreach: module =>
+                  if module.pending.exists(pending => module.variables.get(pending.value) == null) then
+                    module.recorder.procedure:
+                      materializeVariables(module)
+                value.modules.map(_.recorder.snapshot)
+          '''.replace('              ', '  ')
+          if old_snapshots in adapter:
+              adapter = adapter.replace(old_snapshots, new_snapshots, 1)
+          adapter_path.write_text(adapter)
+
+          evidence_path = Path('core/scala/bridge/src/nodal/bridge/AnalogProceduralEvidence.scala')
+          if evidence_path.exists():
+              evidence = evidence_path.read_text()
+              start = evidence.find('  private def option(')
+              if start >= 0:
+                  end = evidence.find('\n\n', start)
+                  if end >= 0:
+                      evidence = evidence[:start] + evidence[end + 2:]
+              evidence_path.write_text(evidence)
+
+          scala_witness_path = Path(
+              'examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala'
+          )
+          witness = scala_witness_path.read_text()
+          if 'GuardedInitialization' not in witness:
+              marker = '''    val dimensionMismatch = new AnalogProceduralRuntime.Recorder("DimensionMismatch")
+              '''.replace('              ', '    ')
+              addition = '''    val guardedInitialization =
+                  new AnalogProceduralRuntime.Recorder("GuardedInitialization")
+                expect("NODAL-ANALOG-033-011"):
+                  guardedInitialization.procedure:
+                    val guarded = guardedInitialization.declare("guarded", RealVoltage)
+                    guardedInitialization.assign(
+                      "conditional-write",
+                      guarded,
+                      AnalogProceduralRuntime.Value("1.0V", RealVoltage),
+                      guard = Some(AnalogProceduralRuntime.Value("enabled", BoolDimensionless))
+                    )
+                    guardedInitialization.read(guarded)
+
+              '''.replace('              ', '    ')
+              if marker not in witness:
+                  raise SystemExit('Scala witness insertion marker missing')
+              witness = witness.replace(marker, addition + marker, 1)
+          scala_witness_path.write_text(witness)
+
+          native_witness_path = Path(
+              'tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp'
+          )
+          witness = native_witness_path.read_text()
+          if 'GuardedInitialization' not in witness:
+              marker = '  Recorder dimensionMismatch("DimensionMismatch");\n'
+              addition = '''  Recorder guardedInitialization("GuardedInitialization");
+                expect("NODAL-ANALOG-033-011", [&] {
+                  guardedInitialization.procedure([&] {
+                    const Variable guarded =
+                        guardedInitialization.declareVariable("guarded", RealVoltage);
+                    guardedInitialization.assign(
+                        "conditional-write", guarded, Value{"1.0V", RealVoltage, {}},
+                        Value{"enabled", BoolDimensionless, {}});
+                    (void)guardedInitialization.read(guarded);
+                  });
+                });
+
+              '''.replace('              ', '  ')
+              if marker not in witness:
+                  raise SystemExit('native witness insertion marker missing')
+              witness = witness.replace(marker, addition + marker, 1)
+          native_witness_path.write_text(witness)
+
+          production_path = Path(
+              'core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala'
+          )
+          production = production_path.read_text()
+          if 'PublicAnalogUnusedVariable' not in production:
+              marker = 'object AnalogProceduralConstructionTests extends TestSuite:\n'
+              classes = '''final class PublicAnalogUnusedVariable extends Module:
+                val retained: Variable[Real] = variable(Real, 0.0.V)
+
+              final class PublicAnalogMultipleProcedures extends Module:
+                val value: Variable[Real] = variable(Real)
+                val sink: Variable[Real] = variable(Real, 0.0.real)
+
+                analogProcedure:
+                  value := 1.0.real
+
+                analogProcedure:
+                  sink := value
+
+              '''.replace('              ', '')
+              if marker not in production:
+                  raise SystemExit('production test class marker missing')
+              production = production.replace(marker, classes + marker, 1)
+          if 'unused public variables remain in ConstructionSnapshot' not in production:
+              tests_marker = '    test("public uninitialized variable read is rejected"):\n'
+              tests = '''    test("unused public variables remain in ConstructionSnapshot"):
+                  val snapshot = ConstructionKernel.inspect(new PublicAnalogUnusedVariable)
+                  assert(snapshot.analogProcedural.size == 1)
+                  assert(snapshot.analogProcedural.head.variables.size == 1)
+                  assert(snapshot.analogProcedural.head.assignments.isEmpty)
+
+                test("definite assignment does not leak between procedural regions"):
+                  val failure =
+                    scala.util.Try(ConstructionKernel.inspect(new PublicAnalogMultipleProcedures)).failed.get
+                      .asInstanceOf[AnalogProceduralRuntime.Failure]
+                  assert(failure.diagnostic.code == "NODAL-ANALOG-033-011")
+
+              '''.replace('              ', '    ')
+              if tests_marker not in production:
+                  raise SystemExit('production test insertion marker missing')
+              production = production.replace(tests_marker, tests + tests_marker, 1)
+          production_path.write_text(production)
+
+          test_path = Path('tests/compiler/test_increment33.py')
+          tests = test_path.read_text()
+          additions = [
+              '    "core/scala/api/src/nodal/AnalogProceduralConstruction.scala",\n',
+              '    "core/scala/api/src/nodal/CandidateApi.scala",\n',
+              '    "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",\n',
+              '    "core/scala/bridge/src/nodal/bridge/AnalogProceduralEvidence.scala",\n',
+              '    "core/scala/bridge/src/nodal/bridge/ReproducibilityContract.scala",\n',
+              '    "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala",\n',
+              '    "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala",\n',
+          ]
+          anchor = '    "core/scala/api/src/nodal/AnalogProceduralRuntime.scala",\n'
+          for addition in reversed(additions):
+              if addition.strip() not in tests:
+                  tests = tests.replace(anchor, anchor + addition, 1)
+          test_path.write_text(tests)
+
+          checker_path = Path('scripts/check_increment33.py')
+          checker = checker_path.read_text()
+          if 'guarded writes do not establish definite initialization' not in checker:
+              marker = '    require(\n        "snapshot.assignments.map(_.authoredOrder) == Vector(0, 1, 2, 3, 4)" in scala_witness,\n'
+              hardening = '''    require(
+                  "GuardedInitialization" in scala_witness
+                  and "conditional-write" in scala_witness,
+                  "NODAL-INC33-044: Scala witness must prove guarded writes do not establish definite initialization",
+                )
+                require(
+                  "GuardedInitialization" in native_witness
+                  and "conditional-write" in native_witness,
+                  "NODAL-INC33-045: native witness must prove guarded writes do not establish definite initialization",
+                )
+                require(
+                  "unused public variables remain in ConstructionSnapshot" in production_tests,
+                  "NODAL-INC33-046: unused public variable retention test is missing",
+                )
+                require(
+                  "definite assignment does not leak between procedural regions" in production_tests,
+                  "NODAL-INC33-047: multi-procedure definite-assignment test is missing",
+                )
+
+              '''.replace('              ', '    ')
+              if marker not in checker:
+                  raise SystemExit('checker hardening insertion marker missing')
+              checker = checker.replace(marker, hardening + marker, 1)
+          checker_path.write_text(checker)
+          PY
+
+      - name: Format and validate hardened implementation
+        run: |
+          ./mill mill.scalalib.scalafmt/formatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./mill core.scala.testkit.test.testOnly \
+            nodal.internal.testkit.AnalogProceduralConstructionTests
+          ./mill core.scala.testkit.test.testOnly \
+            nodal.internal.testkit.AnalogEquationConstructionTests
+          ./mill examples.continuousTimeApi.runMain \
+            nodal.increment33fixture.Increment33RuntimeCheck \
+            /tmp/increment33-scala-witness.txt
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Publish hardened implementation checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            core/native/include/nodal/AnalogProceduralRuntime.h \
+            core/scala/api/src/nodal/AnalogProceduralConstruction.scala \
+            core/scala/api/src/nodal/AnalogProceduralRuntime.scala \
+            core/scala/bridge/src/nodal/bridge/AnalogProceduralEvidence.scala \
+            core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
+            examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala \
+            scripts/check_increment33.py \
+            tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp \
+            tests/compiler/test_increment33.py
+          git commit -m 'fix(increment33): harden definite assignment and declaration retention'
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5
+          head=$(git rev-parse HEAD)
+          git push --force origin "$head":refs/heads/checkpoint/increment-33-semantic-hardening-green
+          gh api --method POST \
+            -f body="Semantic hardening passed on exact head \`$head\`: guarded writes do not establish definite initialization, procedure-local state resets between regions, unused variables remain retained, cross-component pending declarations are recognized, and mutation fixtures include every production integration file." \
+            "/repos/pysolvesemi/Nodal/issues/100/comments"

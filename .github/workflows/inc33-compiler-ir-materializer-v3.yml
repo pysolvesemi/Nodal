@@ -44,14 +44,22 @@ jobs:
           git checkout -B increment/33-analog-variables-procedural-assignment-v5 origin/increment/33-analog-variables-procedural-assignment-v5
           python3 /tmp/inc33-apply.py
           rm -f /tmp/inc33-apply.b64 /tmp/inc33-apply.gz /tmp/inc33-apply.py /tmp/inc33-repair-01.py
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
 
-      - name: Format changed sources
+      - name: Install pinned toolchains
         shell: bash
         run: |
-          ./mill mill.scalalib.scalafmt/formatAll
-          if command -v clang-format >/dev/null 2>&1; then
-            clang-format -i core/compiler/lib/Dialect/Nodal/NodalOps.cpp core/compiler/lib/Dialect/Nodal/NodalTypes.cpp
-          fi
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Apply repository formatting
+        shell: bash
+        run: |
+          ./nodal style fix \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
           git diff --check
 
       - name: Validate Increment 33 checkpoint contract
@@ -61,10 +69,18 @@ jobs:
         run: ./nodal core scala
 
       - name: Validate native compiler
-        run: ./nodal core native
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
 
       - name: Validate repository contracts
-        run: ./nodal check --contracts-only --online-toolchain
+        run: |
+          ./nodal check \
+            --contracts-only \
+            --online-toolchain \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref origin/dev
 
       - name: Commit validated feature changes
         shell: bash

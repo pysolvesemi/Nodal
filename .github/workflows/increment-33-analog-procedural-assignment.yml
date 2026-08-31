@@ -1,0 +1,63 @@
+name: Increment 33 Analog Procedural Assignment
+
+on:
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - '.github/workflows/increment-33-analog-procedural-assignment.yml'
+      - 'core/native/include/nodal/AnalogProceduralRuntime.h'
+      - 'core/scala/api/src/nodal/AnalogProceduralRuntime.scala'
+      - 'docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md'
+      - 'docs/implementation/increment33-analog-variables-procedural-assignment.md'
+      - 'examples/continuousTimeApi/src/nodal/increment33fixture/**'
+      - 'scripts/check_increment33.py'
+      - 'tests/compiler/fixtures/increment33/**'
+      - 'tests/compiler/test_increment33.py'
+      - 'tests/compiler/fixtures/increment32/manifest.json'
+      - 'docs/roadmap/nodal-development-todo.md'
+  push:
+    branches:
+      - increment/33-analog-variables-procedural-assignment-v5
+
+permissions:
+  contents: read
+
+jobs:
+  increment-33-analog-procedural-assignment:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate predecessor and Increment 33 contracts
+        run: |
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+
+      - name: Execute Scala source-semantic witness
+        run: |
+          report=/tmp/increment33-scala-witness.txt
+          ./mill examples.continuousTimeApi.runMain \
+            nodal.increment33fixture.Increment33RuntimeCheck \
+            "$report"
+          test -s "$report"
+          grep -F 'variables=4' "$report"
+          grep -F 'assignments=5' "$report"
+          grep -F 'ProceduralTop.capture,ProceduralTop.update,ProceduralTop.repeat-update' "$report"
+
+      - name: Check Scala formatting and semantic rewrites
+        run: |
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+
+      - name: Check repository documentation and whitespace
+        run: |
+          python3 scripts/check_markdown.py
+          git diff --check

@@ -4,18 +4,23 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Support/LogicalResult.h"
+#include "nodal/Diagnostics/DiagnosticSupport.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 
 #include <initializer_list>
 #include <optional>
+#include <string>
 
 using namespace mlir;
 
@@ -130,6 +135,371 @@ LogicalResult verifyRelation(Operation *operation, llvm::StringRef label,
   if (source == destination && kind != "alias")
     return operation->emitOpError() << label << " endpoints may match only for alias";
   return success();
+}
+
+struct ProceduralValueInfo {
+  std::string kind;
+  std::string dimension;
+};
+
+FailureOr<ProceduralValueInfo> getProceduralValueInfo(Type type) {
+  if (type.isInteger(1))
+    return ProceduralValueInfo{"boolean", "1"};
+  if (type.isF64())
+    return ProceduralValueInfo{"real", "1"};
+  if (auto quantity = llvm::dyn_cast<nodal::QuantityType>(type))
+    return ProceduralValueInfo{quantity.getKind().str(), quantity.getDimension().str()};
+  return failure();
+}
+
+bool proceduralKindsCompatible(llvm::StringRef source, llvm::StringRef destination) {
+  return source == destination || (source == "integer" && destination == "real");
+}
+
+bool isProceduralAncestor(Operation *operation) {
+  return operation && static_cast<bool>(operation->getParentOfType<nodal::AnalogProcedureOp>());
+}
+
+LogicalResult requireProceduralAncestor(Operation *operation, llvm::StringRef code,
+                                        llvm::StringRef label) {
+  if (!isProceduralAncestor(operation))
+    return nodal::emitMappedFailure(
+        operation, code, llvm::Twine(label) + " requires an active analog procedural region");
+  return success();
+}
+
+bool isVisibleFrom(Block *useBlock, Block *declarationBlock) {
+  for (Block *current = useBlock; current;) {
+    if (current == declarationBlock)
+      return true;
+    Operation *parent = current->getParentOp();
+    current = parent ? parent->getBlock() : nullptr;
+  }
+  return false;
+}
+
+LogicalResult verifyStringArray(Operation *operation, llvm::StringRef attributeName,
+                                llvm::StringRef code, llvm::StringRef label) {
+  auto values = operation->getAttrOfType<ArrayAttr>(attributeName);
+  if (!values)
+    return nodal::emitMappedFailure(operation, code, llvm::Twine(label) + " array is required");
+  for (Attribute value : values) {
+    auto text = llvm::dyn_cast<StringAttr>(value);
+    if (!text || text.getValue().trim().empty())
+      return nodal::emitMappedFailure(operation, code,
+                                      llvm::Twine(label) + " entries must be non-empty strings");
+  }
+  return success();
+}
+
+LogicalResult verifyAnalysisApplicability(Operation *operation) {
+  if (failed(verifyStringArray(operation, "analyses", "NODAL-ANALOG-033-015",
+                               "analysis applicability")))
+    return failure();
+  auto analyses = operation->getAttrOfType<ArrayAttr>("analyses");
+  if (analyses.empty())
+    return nodal::emitMappedFailure(
+        operation, "NODAL-ANALOG-033-015",
+        "procedural assignment requires at least one analysis applicability");
+  llvm::StringSet<> seen;
+  for (Attribute value : analyses) {
+    llvm::StringRef analysis = llvm::cast<StringAttr>(value).getValue();
+    if (!oneOf(analysis, {"initialization", "operating-point", "dc", "transient", "ac", "noise"}) ||
+        !seen.insert(analysis).second)
+      return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-015",
+                                      llvm::Twine("invalid or duplicate procedural analysis '") +
+                                          analysis + "'");
+  }
+  return success();
+}
+
+LogicalResult verifyVariableInitializerShape(Operation *operation,
+                                             nodal::VariableType variableType) {
+  auto initialized = operation->getAttrOfType<BoolAttr>("initialized");
+  if (!initialized)
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-004",
+                                    "procedural variable requires initialized metadata");
+
+  llvm::StringRef value = textAttr(operation, "initializer_value");
+  llvm::StringRef kind = textAttr(operation, "initializer_kind");
+  llvm::StringRef dimension = textAttr(operation, "initializer_dimension");
+  auto reads = operation->getAttrOfType<ArrayAttr>("initializer_reads");
+  if (!reads)
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-004",
+                                    "procedural initializer read inventory is required");
+
+  if (!initialized.getValue()) {
+    if (!value.empty() || !kind.empty() || !dimension.empty() || !reads.empty())
+      return nodal::emitMappedFailure(
+          operation, "NODAL-ANALOG-033-004",
+          "uninitialized procedural variable must not carry initializer metadata");
+    return success();
+  }
+
+  if (value.empty() || kind.empty() || dimension.empty())
+    return nodal::emitMappedFailure(
+        operation, "NODAL-ANALOG-033-004",
+        "initialized procedural variable requires value, kind, and dimension metadata");
+  if (!oneOf(kind, {"integer", "real", "boolean"}) ||
+      !proceduralKindsCompatible(kind, variableType.getKind()))
+    return nodal::emitMappedFailure(
+        operation, "NODAL-ANALOG-033-004",
+        "procedural initializer kind is incompatible with the declared variable kind");
+  if (!nodal::isCanonicalDimensionSignature(dimension) || dimension != variableType.getDimension())
+    return nodal::emitMappedFailure(
+        operation, "NODAL-ANALOG-033-005",
+        "procedural initializer dimension does not match the declared variable dimension");
+  return verifyStringArray(operation, "initializer_reads", "NODAL-ANALOG-033-017",
+                           "initializer read");
+}
+
+LogicalResult verifyGuardShape(Operation *operation) {
+  auto present = operation->getAttrOfType<BoolAttr>("guard_present");
+  if (!present)
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-014",
+                                    "procedural assignment requires guard metadata");
+  llvm::StringRef value = textAttr(operation, "guard_value");
+  llvm::StringRef kind = textAttr(operation, "guard_kind");
+  llvm::StringRef dimension = textAttr(operation, "guard_dimension");
+  auto reads = operation->getAttrOfType<ArrayAttr>("guard_reads");
+  if (!reads)
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-014",
+                                    "procedural guard read inventory is required");
+  if (!present.getValue()) {
+    if (!value.empty() || !kind.empty() || !dimension.empty() || !reads.empty())
+      return nodal::emitMappedFailure(
+          operation, "NODAL-ANALOG-033-014",
+          "unguarded procedural assignment must not carry guard metadata");
+    return success();
+  }
+  if (value.empty() || kind != "boolean" || dimension != "1")
+    return nodal::emitMappedFailure(
+        operation, "NODAL-ANALOG-033-014",
+        "procedural assignment guard must be a dimensionless Boolean value");
+  return verifyStringArray(operation, "guard_reads", "NODAL-ANALOG-033-017", "guard read");
+}
+
+struct ProceduralVariableState {
+  Operation *declaration = nullptr;
+  Block *declarationBlock = nullptr;
+  nodal::VariableType type;
+  bool initialized = false;
+};
+
+struct ProceduralVerificationState {
+  llvm::StringRef owner;
+  llvm::DenseMap<Value, ProceduralVariableState> variables;
+  llvm::StringMap<Value> variablesByIdentity;
+  llvm::StringSet<> statements;
+  int64_t nextDeclarationOrder = 0;
+  int64_t nextAssignmentOrder = 0;
+};
+
+LogicalResult resolveProceduralVariable(Operation *operation, Value value,
+                                        ProceduralVerificationState &state,
+                                        ProceduralVariableState *&resolved) {
+  auto found = state.variables.find(value);
+  if (found == state.variables.end())
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-017",
+                                    "procedural operation references an unknown variable handle");
+  resolved = &found->second;
+  if (textAttr(operation, "owner") != state.owner)
+    return nodal::emitMappedFailure(
+        operation, "NODAL-ANALOG-033-009",
+        "procedural operation owner does not match the enclosing component");
+  if (!isVisibleFrom(operation->getBlock(), resolved->declarationBlock))
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-010",
+                                    "procedural variable is outside its lexical declaration scope");
+  return success();
+}
+
+LogicalResult verifyReadInventory(Operation *operation, ArrayAttr reads,
+                                  ProceduralVerificationState &state) {
+  for (Attribute attribute : reads) {
+    auto identity = llvm::dyn_cast<StringAttr>(attribute);
+    if (!identity || identity.getValue().trim().empty())
+      return nodal::emitMappedFailure(
+          operation, "NODAL-ANALOG-033-017",
+          "procedural read inventory entries must be non-empty variable identities");
+    auto value = state.variablesByIdentity.find(identity.getValue());
+    if (value == state.variablesByIdentity.end())
+      return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-017",
+                                      llvm::Twine("unknown procedural variable '") +
+                                          identity.getValue() + "'");
+    ProceduralVariableState *variable = nullptr;
+    if (failed(resolveProceduralVariable(operation, value->second, state, variable)))
+      return failure();
+    if (!variable->initialized)
+      return nodal::emitMappedFailure(
+          operation, "NODAL-ANALOG-033-011",
+          llvm::Twine("procedural variable '") + identity.getValue() +
+              "' is read before initialization or an earlier assignment");
+  }
+  return success();
+}
+
+LogicalResult verifyProceduralBlock(Block &block, ProceduralVerificationState &state);
+
+LogicalResult verifyProceduralScope(Operation *operation, ProceduralVerificationState &state) {
+  if (failed(requireSingleBlock(operation)))
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-016",
+                                    "procedural lexical scope requires one body block");
+  if (textAttr(operation, "scope_id").trim().empty())
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-016",
+                                    "procedural lexical scope identity must be non-empty");
+  if (textAttr(operation, "owner") != state.owner)
+    return nodal::emitMappedFailure(
+        operation, "NODAL-ANALOG-033-009",
+        "procedural lexical scope owner does not match the enclosing component");
+  return verifyProceduralBlock(operation->getRegion(0).front(), state);
+}
+
+LogicalResult verifyProceduralDeclaration(Operation *operation,
+                                          ProceduralVerificationState &state) {
+  llvm::StringRef identity = textAttr(operation, "identity");
+  if (identity.trim().empty())
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-001",
+                                    "procedural variable identity must be non-empty");
+  if (textAttr(operation, "owner") != state.owner)
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-009",
+                                    "procedural variable belongs to a different component");
+  auto order = operation->getAttrOfType<IntegerAttr>("declaration_order");
+  if (!order || order.getInt() != state.nextDeclarationOrder)
+    return nodal::emitMappedFailure(
+        operation, "NODAL-ANALOG-033-002",
+        "procedural variable declaration order must be contiguous and authored");
+  if (state.variablesByIdentity.count(identity) != 0)
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-002",
+                                    llvm::Twine("duplicate procedural variable identity '") +
+                                        identity + "'");
+
+  auto variableType = llvm::dyn_cast<nodal::VariableType>(operation->getResult(0).getType());
+  if (!variableType)
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-019",
+                                    "procedural declaration result must use !nodal.variable");
+  if (failed(verifyVariableInitializerShape(operation, variableType)))
+    return failure();
+
+  auto initializerReads = operation->getAttrOfType<ArrayAttr>("initializer_reads");
+  if (failed(verifyReadInventory(operation, initializerReads, state)))
+    return failure();
+
+  auto initialized = operation->getAttrOfType<BoolAttr>("initialized");
+  state.variables.try_emplace(operation->getResult(0),
+                              ProceduralVariableState{operation, operation->getBlock(),
+                                                      variableType, initialized.getValue()});
+  state.variablesByIdentity[identity] = operation->getResult(0);
+  ++state.nextDeclarationOrder;
+  return success();
+}
+
+LogicalResult verifyProceduralRead(Operation *operation, ProceduralVerificationState &state) {
+  ProceduralVariableState *variable = nullptr;
+  if (failed(resolveProceduralVariable(operation, operation->getOperand(0), state, variable)))
+    return failure();
+  if (!variable->initialized)
+    return nodal::emitMappedFailure(
+        operation, "NODAL-ANALOG-033-011",
+        "procedural variable is read before initialization or an earlier assignment");
+  auto result = getProceduralValueInfo(operation->getResult(0).getType());
+  if (failed(result) || result->kind != variable->type.getKind() ||
+      result->dimension != variable->type.getDimension())
+    return nodal::emitMappedFailure(
+        operation, "NODAL-ANALOG-033-012",
+        "procedural read result kind or dimension does not match its variable");
+  return success();
+}
+
+LogicalResult verifyProceduralAssignment(Operation *operation, ProceduralVerificationState &state) {
+  llvm::StringRef statement = textAttr(operation, "statement_id");
+  if (statement.trim().empty())
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-006",
+                                    "procedural statement identity must be non-empty");
+  if (!state.statements.insert(statement).second)
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-007",
+                                    llvm::Twine("duplicate procedural statement identity '") +
+                                        statement + "'");
+  auto order = operation->getAttrOfType<IntegerAttr>("authored_order");
+  if (!order || order.getInt() != state.nextAssignmentOrder)
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-007",
+                                    "procedural assignment order must be contiguous and authored");
+
+  ProceduralVariableState *target = nullptr;
+  if (failed(resolveProceduralVariable(operation, operation->getOperand(0), state, target)))
+    return failure();
+
+  llvm::StringRef valueKind = textAttr(operation, "value_kind");
+  llvm::StringRef valueDimension = textAttr(operation, "value_dimension");
+  if (!oneOf(valueKind, {"integer", "real", "boolean"}) ||
+      !proceduralKindsCompatible(valueKind, target->type.getKind()))
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-012",
+                                    "assigned value kind is incompatible with the target variable");
+  if (!nodal::isCanonicalDimensionSignature(valueDimension) ||
+      valueDimension != target->type.getDimension())
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-013",
+                                    "assigned value dimension does not match the target variable");
+
+  for (Value value : operation->getOperands().drop_front()) {
+    if (!value.getDefiningOp<nodal::AnalogVariableReadOp>())
+      return nodal::emitMappedFailure(
+          operation, "NODAL-ANALOG-033-017",
+          "procedural assignment value operands must be explicit variable reads");
+  }
+
+  if (failed(verifyAnalysisApplicability(operation)) || failed(verifyGuardShape(operation)))
+    return failure();
+  if (auto guardReads = operation->getAttrOfType<ArrayAttr>("guard_reads")) {
+    if (failed(verifyReadInventory(operation, guardReads, state)))
+      return failure();
+  }
+
+  target->initialized = true;
+  ++state.nextAssignmentOrder;
+  return success();
+}
+
+LogicalResult verifyProceduralBlock(Block &block, ProceduralVerificationState &state) {
+  for (Operation &operation : block) {
+    if (llvm::isa<nodal::AnalogVariableOp>(operation)) {
+      if (failed(verifyProceduralDeclaration(&operation, state)))
+        return failure();
+      continue;
+    }
+    if (llvm::isa<nodal::AnalogVariableReadOp>(operation)) {
+      if (failed(verifyProceduralRead(&operation, state)))
+        return failure();
+      continue;
+    }
+    if (llvm::isa<nodal::AnalogAssignOp>(operation)) {
+      if (failed(verifyProceduralAssignment(&operation, state)))
+        return failure();
+      continue;
+    }
+    if (llvm::isa<nodal::AnalogScopeOp>(operation)) {
+      if (failed(verifyProceduralScope(&operation, state)))
+        return failure();
+      continue;
+    }
+    if (llvm::isa<nodal::AnalogProcedureOp>(operation))
+      return nodal::emitMappedFailure(&operation, "NODAL-ANALOG-033-018",
+                                      "nested analog procedural regions are not supported");
+    return nodal::emitMappedFailure(&operation, "NODAL-ANALOG-033-008",
+                                    "operation is not legal in an analog procedural region");
+  }
+  return success();
+}
+
+LogicalResult verifyAnalogProcedure(Operation *operation) {
+  if (failed(requireSingleBlock(operation)))
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-008",
+                                    "analog procedural region requires exactly one body block");
+  llvm::StringRef owner = textAttr(operation, "owner");
+  if (owner.trim().empty())
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-009",
+                                    "analog procedural owner must be non-empty");
+  ProceduralVerificationState state;
+  state.owner = owner;
+  return verifyProceduralBlock(operation->getRegion(0).front(), state);
 }
 
 } // namespace
@@ -382,12 +752,84 @@ LogicalResult nodal::AnalogOp::verify() {
                    nodal::AnalogAddOp, nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp,
                    nodal::AnalogNegOp, nodal::AnalogCompareOp, nodal::AnalogLogicOp,
                    nodal::AnalogSelectOp, nodal::AnalogDdtOp, nodal::AccessOp,
-                   nodal::TerminalAccessOp, nodal::PortFlowAccessOp, nodal::ContributeOp>(
-            operation))
+                   nodal::TerminalAccessOp, nodal::PortFlowAccessOp, nodal::ContributeOp,
+                   nodal::AnalogProcedureOp>(operation))
       return operation.emitOpError(
           "NODAL-ANALOG-REGION-002: operation is not legal in the analog numeric region");
   }
   return success();
+}
+
+LogicalResult nodal::AnalogProcedureOp::verify() { return verifyAnalogProcedure(getOperation()); }
+
+LogicalResult nodal::AnalogScopeOp::verify() {
+  if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-033-008",
+                                       "procedural lexical scope")))
+    return failure();
+  if (failed(requireSingleBlock(getOperation())))
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-033-016",
+                             "procedural lexical scope requires one body block");
+  if (textAttr(getOperation(), "scope_id").trim().empty())
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-033-016",
+                             "procedural lexical scope identity must be non-empty");
+  return requireText(getOperation(), "owner", "procedural lexical scope owner");
+}
+
+LogicalResult nodal::AnalogVariableOp::verify() {
+  if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-033-003",
+                                       "procedural variable declaration")))
+    return failure();
+  if (failed(requireText(getOperation(), "identity", "procedural variable identity")) ||
+      failed(requireText(getOperation(), "owner", "procedural variable owner")))
+    return failure();
+  auto variableType = llvm::dyn_cast<nodal::VariableType>(getOperation()->getResult(0).getType());
+  if (!variableType)
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-033-019",
+                             "procedural variable requires !nodal.variable result type");
+  return verifyVariableInitializerShape(getOperation(), variableType);
+}
+
+LogicalResult nodal::AnalogVariableReadOp::verify() {
+  if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-033-008",
+                                       "procedural variable read")))
+    return failure();
+  if (failed(requireText(getOperation(), "read_id", "procedural read identity")) ||
+      failed(requireText(getOperation(), "owner", "procedural read owner")))
+    return failure();
+  auto variableType = llvm::dyn_cast<nodal::VariableType>(getOperation()->getOperand(0).getType());
+  auto result = getProceduralValueInfo(getOperation()->getResult(0).getType());
+  if (!variableType || failed(result) || result->kind != variableType.getKind() ||
+      result->dimension != variableType.getDimension())
+    return emitMappedFailure(
+        getOperation(), "NODAL-ANALOG-033-012",
+        "procedural read result kind or dimension does not match its variable");
+  return success();
+}
+
+LogicalResult nodal::AnalogAssignOp::verify() {
+  if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-033-008",
+                                       "procedural assignment")))
+    return failure();
+  if (failed(requireText(getOperation(), "statement_id", "procedural statement identity")) ||
+      failed(requireText(getOperation(), "owner", "procedural assignment owner")))
+    return failure();
+  auto variableType = llvm::dyn_cast<nodal::VariableType>(getOperation()->getOperand(0).getType());
+  if (!variableType)
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-033-019",
+                             "procedural assignment target requires !nodal.variable");
+  llvm::StringRef valueKind = textAttr(getOperation(), "value_kind");
+  llvm::StringRef valueDimension = textAttr(getOperation(), "value_dimension");
+  if (!oneOf(valueKind, {"integer", "real", "boolean"}) ||
+      !proceduralKindsCompatible(valueKind, variableType.getKind()))
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-033-012",
+                             "assigned value kind is incompatible with the target variable");
+  if (!nodal::isCanonicalDimensionSignature(valueDimension) ||
+      valueDimension != variableType.getDimension())
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-033-013",
+                             "assigned value dimension does not match the target variable");
+  if (failed(verifyAnalysisApplicability(getOperation())))
+    return failure();
+  return verifyGuardShape(getOperation());
 }
 
 LogicalResult nodal::RealLiteralOp::verify() {

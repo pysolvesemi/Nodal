@@ -64,3 +64,20 @@ Verilog-AMS emission.
 Increment 33 remains unchecked in the roadmap until the complete implementation
 passes its exact-head matrix, is merged, and a separate evidence-closure pull
 request records immutable evidence.
+
+## Final implementation matrix
+
+| Requirement | Authoritative implementation | Acceptance evidence |
+|---|---|---|
+| First-class variable identity and type | `!nodal.variable<kind, dimension>` and `nodal.analog_variable` | native parse/generic round-trip and invalid type fixtures |
+| Explicit reads | `nodal.analog_variable_read` | read-before-initialization native rejection and public bridge serialization |
+| Ordered assignment | `nodal.analog_assign` with contiguous `authored_order` | native order rejection plus deterministic Scala snapshot tests |
+| Lexical and component ownership | `nodal.analog_procedure` and `nodal.analog_scope` verifier | owner, nested-region, scope, and cross-component tests |
+| Type, dimension, guard, and analysis legality | native recursive procedural verifier | dedicated invalid MLIR fixtures and Scala semantic tests |
+| Compiler-boundary diagnostics | `NODAL-ANALOG-033-001` through `-019` in the diagnostic inventory | native diagnostics retain semantic path and MLIR location |
+| Source-map preservation | declaration/read/assignment `loc(...)` plus root source-map inventory | generic native round-trip and bridge source tests |
+| Authoritative serialization | ordinary `ScalaToMlirBridge` emits all procedural operations | deterministic document/hash test; no sidecar required for acceptance |
+
+Increment 33 implementation is merge-ready only when the normal contract, Scala, and native
+compiler lanes pass from the same commit. Roadmap/evidence closure remains a separate merge after
+the implementation commit is present on `dev`.

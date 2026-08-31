@@ -143,6 +143,7 @@ private[nodal] final case class ConstructionSnapshot(
     analogRegions: Vector[KernelAnalogRegionSnapshot] = Vector.empty,
     analogSemantics: AnalogEquationRuntime.Snapshot =
       AnalogEquationRuntime.Snapshot(Vector.empty, Vector.empty),
+    analogProcedural: Vector[AnalogProceduralRuntime.Snapshot] = Vector.empty,
     waivers: Vector[KernelWaiverSnapshot] = Vector.empty
 )
 
@@ -447,6 +448,19 @@ private final class ConstructionSession(val options: EmitOptions):
     finally
       val removed = domainStack.remove(domainStack.size - 1)
       if removed ne domain then fail("NODAL-DOMAIN-019", "lexical domain stack is corrupt")
+
+  def currentModulePath: String = provisionalModulePath(currentModule.handle)
+
+  def captureAnalogProceduralSource: Option[AnalogProceduralRuntime.Source] =
+    semanticOrigin
+      .captureSemanticSource()
+      .map(source =>
+        AnalogProceduralRuntime.Source(
+          source.path,
+          source.line,
+          source.column
+        )
+      )
 
   def currentDomain: Option[ClockDomain] = domainStack.lastOption
 
@@ -1624,18 +1638,21 @@ private final class ConstructionSession(val options: EmitOptions):
     val modules = snapshots(resolved)
     val abi = interfaceAbi(resolved)
     val snapshot = ConstructionSnapshot(
-      modulePath(rootHandle),
-      modules,
-      abi,
-      resolvedNets(),
-      topology(),
-      semantic.names,
-      semantic.origins,
-      semantic.generatedNames,
-      semantic.sourceMap,
-      analogSnapshots(),
-      analogSemanticRecorder.snapshot,
-      waiverSnapshots(semantic.sourceMap)
+      root = modulePath(rootHandle),
+      modules = modules,
+      interfaceAbi = abi,
+      resolvedNets = resolvedNets(),
+      topology = topology(),
+      names = semantic.names,
+      origins = semantic.origins,
+      generatedNames = semantic.generatedNames,
+      sourceMap = semantic.sourceMap,
+      analogRegions = analogSnapshots(),
+      analogSemantics = analogSemanticRecorder.snapshot,
+      analogProcedural = AnalogProceduralConstruction.snapshots(module =>
+        modulePath(moduleHandle(module))
+      ),
+      waivers = waiverSnapshots(semantic.sourceMap)
     )
     val kind = classify(snapshot)
     val report = DesignReport(
@@ -1658,6 +1675,7 @@ private[nodal] object ConstructionKernel:
     if Current.isBound then Some(Current.get) else None
 
   private def elaborate(top: => Module, options: EmitOptions): (Emission, ConstructionSnapshot) =
+    AnalogProceduralConstruction.reset()
     val session = new ConstructionSession(options)
     var result: Option[(Emission, ConstructionSnapshot)] = None
     ScopedValue.where(Current, session).run(
@@ -1678,6 +1696,17 @@ private[nodal] object ConstructionKernel:
     elaborate(top, options)._2
 
   def beginModule(module: Module): Unit = active.foreach(_.beginModule(module))
+
+  def currentModulePath: String = active
+    .map(_.currentModulePath)
+    .getOrElse(
+      throw new IllegalStateException(
+        "procedural module construction has no active transaction"
+      )
+    )
+
+  def captureAnalogProceduralSource: Option[AnalogProceduralRuntime.Source] =
+    active.flatMap(_.captureAnalogProceduralSource)
 
   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
     active.foreach(_.registerDomain(domain, kind))

@@ -141,6 +141,7 @@ private[nodal] object ScalaToMlirBridge:
         "nodal.bridge.topology" -> topologyInventory,
         "nodal.bridge.source_map" -> sourceMapInventory,
         "nodal.bridge.analog_semantics" -> analogSemanticInventory,
+        "nodal.bridge.analog_procedural" -> AnalogProceduralMlir.inventory(snapshot),
         "nodal.target.profile" -> quoted(targetProfile),
         "nodal.backend.profile" -> quoted(backendProfile),
         "nodal.backend.check_profile" -> quoted("default"),
@@ -181,6 +182,7 @@ ${indent(body, 2)}
       val analog = snapshot.analogRegions.nonEmpty ||
         snapshot.analogSemantics.equations.nonEmpty ||
         snapshot.analogSemantics.contributions.nonEmpty ||
+        snapshot.analogProcedural.nonEmpty ||
         declarationKinds.exists(analogKinds.contains)
       val digital = declarationKinds.exists(digitalKinds.contains) ||
         snapshot.interfaceAbi.nonEmpty ||
@@ -552,6 +554,8 @@ ${indent(body, 2)}
           parameterSymbols,
           accessBranches
         )
+
+      body ++= AnalogProceduralMlir.renderModule(snapshot, module.path)
 
       operation(
         "nodal.module",
@@ -1149,20 +1153,19 @@ ${indent(body, 2)}
       )
 
     private def sourceMapInventory: String =
-      array(
-        snapshot.sourceMap.sortBy(entry =>
-          (
-            entry.semanticPath,
-            entry.source.path,
-            entry.source.line,
-            entry.source.column
-          )
-        ).map: entry =>
-          dictionary(
-            Vector("semantic_path" -> quoted(entry.semanticPath)) ++
-              sourceFields(entry.source)
-          )
-      )
+      val ordinary = snapshot.sourceMap.sortBy(entry =>
+        (
+          entry.semanticPath,
+          entry.source.path,
+          entry.source.line,
+          entry.source.column
+        )
+      ).map: entry =>
+        dictionary(
+          Vector("semantic_path" -> quoted(entry.semanticPath)) ++
+            sourceFields(entry.source)
+        )
+      array(ordinary ++ AnalogProceduralMlir.sourceMapEntries(snapshot))
 
     private def sourceFields(path: String): Vector[(String, String)] =
       sourceByPath.get(path).toVector.flatMap(source => sourceFields(source))

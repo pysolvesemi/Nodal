@@ -58,6 +58,16 @@ final class BridgeTop extends Module:
     child.param(_.width, 12.U(8))
     output := input
 
+final class BridgeProceduralTop extends Module:
+  val accumulator: Variable[Real] = variable(Real, 1.0.V)
+  val scratch: Variable[Real] = variable(Real, 0.0.V)
+
+  analogProcedure:
+    scratch := accumulator
+    scratch := 2.0.V
+    when(true.B):
+      accumulator := scratch
+
 object ScalaToMlirBridgeTests extends TestSuite:
   private def workDirectory(): Path =
     Files.createTempDirectory("nodal-bridge-test-")
@@ -89,6 +99,25 @@ object ScalaToMlirBridgeTests extends TestSuite:
       assert(first.text.contains("loc(\""))
       assert(first.text.endsWith("\n"))
       assert(!first.text.contains("\r"))
+
+    test("analog procedural IR retains order, source locations, and serialization"):
+      val first = ScalaToMlirBridge.lower(new BridgeProceduralTop)
+      val second = ScalaToMlirBridge.lower(new BridgeProceduralTop)
+
+      assert(first == second)
+      assert(first.text.contains("\"nodal.analog_procedure\""))
+      assert(first.text.contains("\"nodal.analog_variable\""))
+      assert(first.text.contains("\"nodal.analog_variable_read\""))
+      assert(first.text.contains("\"nodal.analog_assign\""))
+      assert(first.text.contains("\"nodal.analog_scope\""))
+      assert(first.text.contains("!nodal.variable<\"real\", \"voltage\">"))
+      assert(first.text.contains("nodal.bridge.analog_procedural"))
+      assert(first.text.contains("authored_order = 0 : i64"))
+      assert(first.text.contains("authored_order = 1 : i64"))
+      assert(first.text.contains("authored_order = 2 : i64"))
+      assert(first.text.contains("ScalaToMlirBridgeTests.scala"))
+      assert(first.text.contains("loc(\""))
+      assert(first.sha256 == second.sha256)
 
     test("snapshot insertion order does not affect the bridge"):
       val snapshot = ConstructionKernel.inspect(new BridgeTop)

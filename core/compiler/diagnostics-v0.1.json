@@ -150,6 +150,27 @@
       "NODAL-ACCESS-PORT-001",
       "NODAL-PROBE-KIND-001",
       "NODAL-PROBE-PROVENANCE-001"
+    ],
+    "analog-procedural-assignment": [
+      "NODAL-ANALOG-033-001",
+      "NODAL-ANALOG-033-002",
+      "NODAL-ANALOG-033-003",
+      "NODAL-ANALOG-033-004",
+      "NODAL-ANALOG-033-005",
+      "NODAL-ANALOG-033-006",
+      "NODAL-ANALOG-033-007",
+      "NODAL-ANALOG-033-008",
+      "NODAL-ANALOG-033-009",
+      "NODAL-ANALOG-033-010",
+      "NODAL-ANALOG-033-011",
+      "NODAL-ANALOG-033-012",
+      "NODAL-ANALOG-033-013",
+      "NODAL-ANALOG-033-014",
+      "NODAL-ANALOG-033-015",
+      "NODAL-ANALOG-033-016",
+      "NODAL-ANALOG-033-017",
+      "NODAL-ANALOG-033-018",
+      "NODAL-ANALOG-033-019"
     ]
   },
   "preserved_prefixes": [
@@ -185,6 +206,7 @@
     "NODAL-ANALOG-DIVIDE-",
     "NODAL-BACKEND-QUANTITY-",
     "NODAL-ACCESS-",
-    "NODAL-PROBE-"
+    "NODAL-PROBE-",
+    "NODAL-ANALOG-033-"
   ]
 }

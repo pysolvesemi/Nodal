@@ -23,10 +23,66 @@ index d7fcc8a..786e0a6 100644
      if (identity.empty())
        fail("NODAL-ANALOG-033-001", "procedural variable identity must be non-empty");
 diff --git a/core/scala/api/src/nodal/AnalogProceduralConstruction.scala b/core/scala/api/src/nodal/AnalogProceduralConstruction.scala
-index 1a37243..decfd94 100644
+index 1a37243..0a65924 100644
 --- a/core/scala/api/src/nodal/AnalogProceduralConstruction.scala
 +++ b/core/scala/api/src/nodal/AnalogProceduralConstruction.scala
-@@ -118,6 +118,7 @@ private[nodal] object AnalogProceduralConstruction:
+@@ -35,11 +35,21 @@ private[nodal] object AnalogProceduralConstruction:
+   private val current = new ThreadLocal[State]
+ 
+   private def state: State =
+-    var value = current.get()
+-    if value == null then
+-      value = new State
++    Option(current.get()).getOrElse:
++      val value = new State
+       current.set(value)
+-    value
++      value
++
++  private def fail(
++      code: String,
++      message: String,
++      path: Option[String] = None
++  ): Nothing =
++    scala.util.Failure[Nothing](
++      new AnalogProceduralRuntime.Failure(
++        AnalogProceduralRuntime.Diagnostic(code, message, path)
++      )
++    ).get
+ 
+   private def moduleName(module: Module): String =
+     val value = module.getClass.getSimpleName.stripSuffix("$")
+@@ -47,11 +57,9 @@ private[nodal] object AnalogProceduralConstruction:
+ 
+   private def activeModule: ModuleState =
+     state.stack.lastOption.getOrElse(
+-      throw new AnalogProceduralRuntime.Failure(
+-        AnalogProceduralRuntime.Diagnostic(
+-          "NODAL-ANALOG-033-003",
+-          "procedural variable construction has no active component"
+-        )
++      fail(
++        "NODAL-ANALOG-033-003",
++        "procedural variable construction has no active component"
+       )
+     )
+ 
+@@ -99,11 +107,9 @@ private[nodal] object AnalogProceduralConstruction:
+     case "Bool" => AnalogProceduralRuntime.ScalarKind.Boolean
+     case "Real" => AnalogProceduralRuntime.ScalarKind.Real
+     case other =>
+-      throw new AnalogProceduralRuntime.Failure(
+-        AnalogProceduralRuntime.Diagnostic(
+-          "NODAL-ANALOG-033-019",
+-          s"unsupported procedural variable scalar kind '$other'"
+-        )
++      fail(
++        "NODAL-ANALOG-033-019",
++        s"unsupported procedural variable scalar kind '$other'"
+       )
+ 
+   private def dimensionFromUnit(unit: String): String = unit match
+@@ -118,6 +124,7 @@ private[nodal] object AnalogProceduralConstruction:
    private def collectReads(value: Any): Vector[AnalogProceduralRuntime.Variable] =
      val result = mutable.LinkedHashSet.empty[AnalogProceduralRuntime.Variable]
      def visit(candidate: Any): Unit = candidate match
@@ -34,7 +90,7 @@ index 1a37243..decfd94 100644
        case reference: AnyRef =>
          state.modules.iterator
            .flatMap(module => Option(module.variables.get(reference)))
-@@ -125,14 +126,13 @@ private[nodal] object AnalogProceduralConstruction:
+@@ -125,14 +132,13 @@ private[nodal] object AnalogProceduralConstruction:
          reference match
            case expression: KernelExpr[?] => expression.operands.foreach(visit)
            case _ => ()
@@ -50,10 +106,54 @@ index 1a37243..decfd94 100644
    ): AnalogProceduralRuntime.ValueType =
      val reads = collectReads(expression)
      val kind = CandidateRuntime
+@@ -166,7 +172,7 @@ private[nodal] object AnalogProceduralConstruction:
+ 
+   private def materializeVariables(module: ModuleState): Unit =
+     module.pending.foreach: pending =>
+-      if module.variables.get(pending.value) == null then
++      if !module.variables.containsKey(pending.value) then
+         val initialValue = pending.initializer.map: initializer =>
+           semanticValue(initializer)
+         val inferredDimension = initialValue
+@@ -203,19 +209,15 @@ private[nodal] object AnalogProceduralConstruction:
+   def assign[A <: Data](target: Variable[A], expression: Expr[A]): Unit =
+     val module = activeModule
+     if module.procedureDepth == 0 then
+-      throw new AnalogProceduralRuntime.Failure(
+-        AnalogProceduralRuntime.Diagnostic(
+-          "NODAL-ANALOG-033-008",
+-          "analog variable assignment requires an active procedural region"
+-        )
++      fail(
++        "NODAL-ANALOG-033-008",
++        "analog variable assignment requires an active procedural region"
+       )
+     materializeVariables(module)
+     val variable = Option(module.variables.get(target)).getOrElse(
+-      throw new AnalogProceduralRuntime.Failure(
+-        AnalogProceduralRuntime.Diagnostic(
+-          "NODAL-ANALOG-033-017",
+-          "procedural assignment target is not registered in the active component"
+-        )
++      fail(
++        "NODAL-ANALOG-033-017",
++        "procedural assignment target is not registered in the active component"
+       )
+     )
+     val statement = s"statement_${module.statementSerial}"
 diff --git a/core/scala/api/src/nodal/AnalogProceduralRuntime.scala b/core/scala/api/src/nodal/AnalogProceduralRuntime.scala
-index 3857f12..2789b9e 100644
+index 3857f12..3efa4d3 100644
 --- a/core/scala/api/src/nodal/AnalogProceduralRuntime.scala
 +++ b/core/scala/api/src/nodal/AnalogProceduralRuntime.scala
+@@ -90,7 +90,7 @@ private[nodal] object AnalogProceduralRuntime:
+     )
+ 
+     private def fail(code: String, message: String, path: Option[String] = None): Nothing =
+-      throw new Failure(Diagnostic(code, message, path))
++      scala.util.Failure[Nothing](new Failure(Diagnostic(code, message, path))).get
+ 
+     private def requireProcedure(path: Option[String] = None): Unit =
+       if !procedureActive then
 @@ -179,7 +179,12 @@ private[nodal] object AnalogProceduralRuntime:
          initializer: Option[Value] = None,
          source: Option[Source] = None
@@ -68,11 +168,39 @@ index 3857f12..2789b9e 100644
        if identity.trim.isEmpty then
          fail("NODAL-ANALOG-033-001", "procedural variable identity must be non-empty")
        val canonical = s"$owner.${scopeStack.mkString(".")}.${identity.trim}"
+diff --git a/core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala b/core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala
+index f74e3d9..85f0cda 100644
+--- a/core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala
++++ b/core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala
+@@ -73,7 +73,9 @@ object AnalogProceduralConstructionTests extends TestSuite:
+ 
+     test("public assignment outside analogProcedure is rejected"):
+       val failure =
+-        scala.util.Try(ConstructionKernel.inspect(new PublicAnalogAssignmentOutsideProcedure)).failed.get
++        scala.util.Try(
++          ConstructionKernel.inspect(new PublicAnalogAssignmentOutsideProcedure)
++        ).failed.get
+           .asInstanceOf[AnalogProceduralRuntime.Failure]
+       assert(failure.diagnostic.code == "NODAL-ANALOG-033-008")
+ 
 diff --git a/examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala b/examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala
-index c428b36..6012b3a 100644
+index c428b36..6198264 100644
 --- a/examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala
 +++ b/examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala
-@@ -124,7 +124,7 @@ object Increment33RuntimeCheck:
+@@ -69,7 +69,11 @@ object Increment33RuntimeCheck:
+         recorder.assign("inner-write", scratch, recorder.read(local))
+ 
+       expect("NODAL-ANALOG-033-010"):
+-        recorder.assign("scope-escape", escaped.get, AnalogProceduralRuntime.Value("1.0V", RealVoltage))
++        recorder.assign(
++          "scope-escape",
++          escaped.get,
++          AnalogProceduralRuntime.Value("1.0V", RealVoltage)
++        )
+ 
+     val snapshot = recorder.snapshot
+     assert(snapshot.variables.map(_.declarationOrder) == Vector(0, 1, 2, 3))
+@@ -124,7 +128,7 @@ object Increment33RuntimeCheck:
          )
  
      val outside = new AnalogProceduralRuntime.Recorder("Outside")

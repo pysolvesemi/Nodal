@@ -23,4 +23,6 @@ workflow.
 **Pre-stamp closure Core CI:** `33372560008`
 
 This owner-authored checkpoint triggers the complete exact-head closure matrix
-after the validated content was published by the isolated materializer.
+after the validated content was published by the isolated materializer. The PR
+metadata includes the exact `## Validation` and `## Design gate` contribution-
+policy headings required by all inherited workflow gates.

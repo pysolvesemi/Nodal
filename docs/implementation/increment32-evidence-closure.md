@@ -21,3 +21,6 @@ workflow.
 **Closure PR:** #99
 **Pre-stamp closure validation baseline:** `e9ea39e823d5a226a65b952e176d3bb90ecda0aa`
 **Pre-stamp closure Core CI:** `33372560008`
+
+This owner-authored checkpoint triggers the complete exact-head closure matrix
+after the validated content was published by the isolated materializer.

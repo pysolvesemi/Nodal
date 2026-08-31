@@ -1,6 +1,8 @@
 # Nodal Analog Procedural Assignment Design Gate v0.1
 
-**Status:** Implementation contract  
+**Status:** Approved  
+**Scope:** compiler-ir  
+**Scope:** public-api  
 **Increment:** 33  
 **Predecessor:** validated Increment 32 equation/contribution semantics  
 **Public compatibility base:** Nodal API v0.3

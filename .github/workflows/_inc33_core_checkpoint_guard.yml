@@ -1,0 +1,62 @@
+name: Increment 33 Core Checkpoint Guard
+
+on:
+  push:
+    branches:
+      - automation/inc33-source-bundle-20260831
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  validate-and-mark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out Increment 33 checkpoint
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Wait for deterministic repair if needed
+        run: |
+          git fetch origin increment/33-analog-variables-procedural-assignment-v5
+          git reset --hard origin/increment/33-analog-variables-procedural-assignment-v5
+
+      - name: Validate semantic core
+        run: |
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./mill examples.continuousTimeApi.runMain \
+            nodal.increment33fixture.Increment33RuntimeCheck \
+            /tmp/increment33-scala-witness.txt
+          grep -F 'variables=4' /tmp/increment33-scala-witness.txt
+          grep -F 'assignments=5' /tmp/increment33-scala-witness.txt
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Publish immutable green checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head=$(git rev-parse HEAD)
+          git push --force origin "$head":refs/heads/checkpoint/increment-33-semantic-core-green
+          pr=$(gh api \
+            --method GET \
+            -f state=open \
+            -f head='pysolvesemi:increment/33-analog-variables-procedural-assignment-v5' \
+            '/repos/pysolvesemi/Nodal/pulls' \
+            --jq '.[0].number // empty')
+          if [ -n "$pr" ]; then
+            gh api --method POST \
+              -f body="Increment 33 semantic-core checkpoint passed on exact head \`$head\`: predecessor contracts, Scala/native witnesses, mutation tests, Scalafmt, Scalafix, Markdown, and whitespace validation are green. Public construction/bridge integration remains the next checkpoint." \
+              "/repos/pysolvesemi/Nodal/issues/$pr/comments"
+          fi

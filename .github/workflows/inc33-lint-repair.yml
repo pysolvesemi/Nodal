@@ -1,0 +1,55 @@
+name: Increment 33 lint-safe failure-path repair
+
+on:
+  push:
+    branches:
+      - automation/inc33-staging-materializer-controller-20260831
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out repair controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc33-staging-materializer-controller-20260831
+          fetch-depth: 0
+
+      - name: Capture deterministic repair
+        run: cp .inc33-repair/repair-02.py /tmp/inc33-repair-02.py
+
+      - name: Check out staged Increment 33 tree
+        shell: bash
+        run: |
+          git checkout -B automation/inc33-compiler-ir-staging-20260831 \
+            origin/automation/inc33-compiler-ir-staging-20260831
+          python3 /tmp/inc33-repair-02.py
+          rm -f /tmp/inc33-repair-02.py
+
+      - name: Apply repository style rules
+        shell: bash
+        run: |
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal style fix \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Validate structural checkpoint
+        run: python3 scripts/check_increment33.py
+
+      - name: Publish repaired staging tree
+        shell: bash
+        run: |
+          git config user.name "nodal-automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(scala): use lint-safe procedural failure paths"
+          git push origin HEAD:automation/inc33-compiler-ir-staging-20260831
+
+      - name: Validate Scala core
+        run: ./nodal core scala

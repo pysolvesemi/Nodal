@@ -39,7 +39,7 @@ jobs:
           ./nodal style bootstrap \
             --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
 
-      - name: Format and publish repaired tree
+      - name: Format and publish repaired code and tests
         shell: bash
         run: |
           ./nodal style fix \
@@ -48,7 +48,6 @@ jobs:
           git config user.name "nodal-automation"
           git config user.email "actions@users.noreply.github.com"
           git add \
-            .github/workflows/increment-33-analog-procedural-assignment.yml \
             core/compiler/test/CMakeLists.txt \
             scripts/check_increment33.py \
             tests/compiler/test_increment33.py

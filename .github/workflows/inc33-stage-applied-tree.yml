@@ -61,9 +61,6 @@ jobs:
           PY
           git diff --check
 
-      - name: Check structural contract
-        run: python3 scripts/check_increment33.py
-
       - name: Publish staging tree
         shell: bash
         run: |
@@ -72,3 +69,6 @@ jobs:
           git add -A
           git commit -m "stage: apply Increment 33 compiler IR tranche"
           git push --force origin HEAD:automation/inc33-compiler-ir-staging-20260831
+
+      - name: Check structural contract
+        run: python3 scripts/check_increment33.py

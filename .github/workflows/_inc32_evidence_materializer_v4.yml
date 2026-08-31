@@ -1,0 +1,64 @@
+name: Increment 32 Evidence Materializer V4
+
+on:
+  push:
+    branches:
+      - automation/inc32-evidence-materializer-v4
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      TARGET_BRANCH: increment/32-evidence-closure
+    steps:
+      - name: Check out materializer controls
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc32-evidence-materializer-v4
+          path: control
+          fetch-depth: 1
+
+      - name: Check out closure branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/32-evidence-closure
+          path: target
+          fetch-depth: 0
+
+      - name: Apply accepted evidence and closure contracts
+        run: python3 control/.automation/inc32_close_v4.py target
+
+      - name: Validate closure candidate
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 -m unittest discover -s tests/api -p 'test_increment133.py'
+          python3 -m unittest discover -s tests/compiler -p 'test_increment32.py'
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Publish closure candidate
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            docs/implementation/increment32-evidence-closure.md \
+            docs/implementation/increment32-equation-contribution-semantics.md \
+            docs/roadmap/nodal-development-todo.md \
+            scripts/check_increment133.py \
+            tests/api/test_increment133.py \
+            tests/compiler/fixtures/increment32/manifest.json \
+            tests/compiler/test_increment32.py
+          git commit -m "Increment 32 — record accepted evidence and close roadmap"
+          git push origin HEAD:${TARGET_BRANCH}

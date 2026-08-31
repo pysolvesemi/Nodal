@@ -57,7 +57,9 @@ def Nodal_VariableType : Nodal_Type<"Variable", "variable"> {
     The handle retains the source scalar kind and canonical physical dimension.
     It is storage identity, not the current value. Reads are explicit
     `nodal.analog_variable_read` operations and writes are ordered
-    `nodal.analog_assign` statements.
+    `nodal.analog_assign` statements. Unsupported scalar kinds and
+    dimensioned Boolean variables are rejected at the compiler boundary with
+    `NODAL-ANALOG-033-019`.
   }];
   let parameters = (ins
     StringRefParameter<"integer, real, or boolean">:$kind,

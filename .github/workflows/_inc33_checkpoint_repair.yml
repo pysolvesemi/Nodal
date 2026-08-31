@@ -1,0 +1,123 @@
+name: Increment 33 Checkpoint Repair
+
+on:
+  push:
+    branches:
+      - automation/inc33-source-bundle-20260831
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out Increment 33 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Apply deterministic contract repairs
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          scala_path = Path('core/scala/api/src/nodal/AnalogProceduralRuntime.scala')
+          scala = scala_path.read_text()
+          old = '''    ): Variable =
+              requireProcedure(Option(identity).filter(_.nonEmpty))
+              if identity.trim.isEmpty then
+          '''.replace('              ', '      ')
+          new = '''    ): Variable =
+              if !procedureActive then
+                fail(
+                  "NODAL-ANALOG-033-003",
+                  "procedural variable declaration requires an active procedural region",
+                  Option(identity).filter(_.nonEmpty)
+                )
+              if identity.trim.isEmpty then
+          '''.replace('              ', '      ')
+          if old not in scala:
+              raise SystemExit('Scala declaration pattern was not found')
+          scala_path.write_text(scala.replace(old, new, 1))
+
+          native_path = Path('core/native/include/nodal/AnalogProceduralRuntime.h')
+          native = native_path.read_text()
+          if '#include <type_traits>\n' not in native:
+              native = native.replace('#include <string>\n', '#include <string>\n#include <type_traits>\n', 1)
+          old_native = '''    requireProcedure(identity.empty() ? std::nullopt : std::optional<std::string>(identity));
+              identity = trim(identity);
+          '''.replace('              ', '    ')
+          new_native = '''    if (!procedureActive_)
+              fail("NODAL-ANALOG-033-003",
+                   "procedural variable declaration requires an active procedural region",
+                   identity.empty() ? std::nullopt : std::optional<std::string>(identity));
+              identity = trim(identity);
+          '''.replace('              ', '    ')
+          if old_native not in native:
+              raise SystemExit('Native declaration pattern was not found')
+          native_path.write_text(native.replace(old_native, new_native, 1))
+
+          scala_witness = Path(
+              'examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala'
+          )
+          text = scala_witness.read_text().replace(
+              'expect("NODAL-ANALOG-033-008"):\n      outside.declare("illegal", RealVoltage)',
+              'expect("NODAL-ANALOG-033-003"):\n      outside.declare("illegal", RealVoltage)',
+          )
+          scala_witness.write_text(text)
+
+          native_witness = Path(
+              'tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp'
+          )
+          text = native_witness.read_text().replace(
+              'expect("NODAL-ANALOG-033-008", [&] {\n    (void)outside.declareVariable("illegal", RealVoltage);',
+              'expect("NODAL-ANALOG-033-003", [&] {\n    (void)outside.declareVariable("illegal", RealVoltage);',
+          )
+          native_witness.write_text(text)
+
+          checker = Path('scripts/check_increment33.py')
+          text = checker.read_text().replace(
+              '"NODAL-ANALOG-033-008",\n        "NODAL-ANALOG-033-009",',
+              '"NODAL-ANALOG-033-003",\n        "NODAL-ANALOG-033-009",',
+          )
+          checker.write_text(text)
+          PY
+
+      - name: Format Scala checkpoint
+        run: ./mill mill.scalalib.scalafmt/formatAll
+
+      - name: Validate checkpoint
+        run: |
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./mill examples.continuousTimeApi.runMain \
+            nodal.increment33fixture.Increment33RuntimeCheck \
+            /tmp/increment33-scala-witness.txt
+          test -s /tmp/increment33-scala-witness.txt
+          ./mill mill.scalalib.scalafmt/checkFormatAll
+          ./mill scalafix.check
+          python3 scripts/check_markdown.py
+          git diff --check
+
+      - name: Publish repaired checkpoint
+        run: |
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            core/native/include/nodal/AnalogProceduralRuntime.h \
+            core/scala/api/src/nodal/AnalogProceduralRuntime.scala \
+            examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala \
+            scripts/check_increment33.py \
+            tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp
+          if git diff --cached --quiet; then
+            echo 'No repair commit was required.'
+          else
+            git commit -m 'fix(increment33): align declaration diagnostics and header dependencies'
+            git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5
+          fi

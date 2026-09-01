@@ -1,0 +1,75 @@
+name: Increment 33 sticky dimension and native boundary repair
+
+on:
+  push:
+    branches:
+      - automation/inc33-p1-sticky-dimension-native-boundary-v1-20260901
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact reviewed Increment 33 head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Require exact reviewed baseline
+        run: test "$(git rev-parse HEAD)" = ef5cd258ae130d4239898020590eb1fcc42fc4d9
+
+      - name: Apply sticky-dimension and native-boundary repair
+        run: |
+          git fetch --no-tags origin \
+            automation/inc33-p1-sticky-dimension-native-boundary-v1-20260901
+          git show \
+            origin/automation/inc33-p1-sticky-dimension-native-boundary-v1-20260901:automation/inc33_sticky_dimension_native_boundary.py \
+            > /tmp/inc33_sticky_dimension_native_boundary.py
+          python3 /tmp/inc33_sticky_dimension_native_boundary.py
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format and run focused acceptance
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          test -x out/native/release/bin/nodalc
+          NODAL_NODALC="$PWD/out/native/release/bin/nodalc" \
+            ./mill core.scala.testkit.test.testOnly \
+              nodal.internal.testkit.ScalaToMlirBridgeTests
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Publish validated repair to Increment 33 branch
+        run: |
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            .github/workflows/increment-33-analog-procedural-assignment.yml \
+            core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+            core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
+            scripts/check_increment33.py \
+            tests/compiler/test_increment33.py
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m 'fix(increment33): keep dimension mismatches sticky through native CI'
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

@@ -1,0 +1,135 @@
+name: Increment 33 P1 review fixes v7
+
+on:
+  push:
+    branches:
+      - automation/inc33-p1-review-fixes-v7-20260901
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact Increment 33 implementation head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Require the reviewed baseline
+        run: test "$(git rev-parse HEAD)" = 848e5420bddf25869b48892d49bf90b824d2ee3b
+
+      - name: Apply validated semantic patch and scoped operation regression
+        run: |
+          git fetch --no-tags origin automation/inc33-p1-review-fixes-v5-20260901
+          python3 - <<'PY'
+          import subprocess
+          import textwrap
+          from pathlib import Path
+
+          source = subprocess.check_output(
+              [
+                  "git",
+                  "show",
+                  "1f13aca90246607e16f3ba392ef7bf97b772d277:.github/workflows/_inc33_p1_review_fixes_v5.yml",
+              ],
+              text=True,
+          )
+          begin_marker = "          python3 - <<'PY'\n"
+          end_marker = "\n          PY\n\n      - name: Install pinned native and lint toolchains"
+          begin = source.index(begin_marker) + len(begin_marker)
+          end = source.index(end_marker, begin)
+          script = textwrap.dedent(source[begin:end])
+          exec(compile(script, "increment33-p1-review-fix-v7.py", "exec"), {"__name__": "__main__"})
+
+          bridge_tests_path = Path(
+              "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
+          )
+          bridge_tests = bridge_tests_path.read_text(encoding="utf-8")
+          test_token = (
+              'test("nested procedural scopes preserve declaration and assignment chronology"):'
+          )
+          test_start = bridge_tests.index(test_token)
+          block_start = bridge_tests.index(
+              "      val document = ScalaToMlirBridge.fromSnapshot(snapshot)\n",
+              test_start,
+          )
+          block_end = bridge_tests.index(
+              '      sys.env.get("NODAL_NODALC").foreach: executable =>\n',
+              block_start,
+          )
+          operation_assertions = textwrap.indent(
+              textwrap.dedent(
+                  '''\
+                  val rendered = AnalogProceduralMlir.renderModule(snapshot, program.owner).head
+                  val declaration0 = rendered.indexOf("declaration_order = 0 : i64")
+                  val assignment0 = rendered.indexOf("authored_order = 0 : i64")
+                  val declaration1 = rendered.indexOf("declaration_order = 1 : i64")
+                  val assignment1 = rendered.indexOf("authored_order = 1 : i64")
+                  assert(declaration0 >= 0)
+                  assert(assignment0 > declaration0)
+                  assert(declaration1 > assignment0)
+                  assert(assignment1 > declaration1)
+
+                  val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+
+                  '''
+              ),
+              "      ",
+          )
+          bridge_tests = (
+              bridge_tests[:block_start]
+              + operation_assertions
+              + bridge_tests[block_end:]
+          )
+          bridge_tests_path.write_text(bridge_tests, encoding="utf-8")
+          PY
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format and run focused acceptance
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          test -x out/native/release/bin/nodalc
+          NODAL_NODALC="$PWD/out/native/release/bin/nodalc" \
+            ./mill core.scala.testkit.test.testOnly \
+              nodal.internal.testkit.ScalaToMlirBridgeTests
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Publish validated review fixes
+        run: |
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            .github/workflows/increment-33-analog-procedural-assignment.yml \
+            core/scala/api/src/nodal/AnalogProceduralConstruction.scala \
+            core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+            core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala \
+            core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
+            core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala \
+            scripts/check_increment33.py \
+            tests/compiler/test_increment33.py
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m 'fix(increment33): preserve nested chronology and compound dimensions'
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

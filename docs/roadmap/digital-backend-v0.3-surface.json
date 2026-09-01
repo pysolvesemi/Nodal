@@ -8,6 +8,8 @@
     "architecture_adr": "docs/architecture/0010-digital-verilog-open-source-verification.md",
     "verification_plan": "docs/roadmap/digital-verilog-open-source-verification-plan.md",
     "language_standards": "docs/roadmap/digital-hdl-language-standards.md",
+    "rnm_udn_digitized_modeling_plan": "docs/roadmap/systemverilog-rnm-udn-digitized-modeling-plan.md",
+    "rnm_udn_digitized_modeling_surface": "docs/roadmap/systemverilog-rnm-udn-digitized-modeling-surface.json",
     "main_roadmap": "docs/roadmap/nodal-development-todo.md",
     "formal_architecture": "docs/architecture/0014-target-neutral-formal-verification.md",
     "formal_plan": "docs/roadmap/formal-verification-v0.1-plan.md",
@@ -49,7 +51,31 @@
     "baseline": "IEEE-1800-2023",
     "status": "future-separately-gated",
     "auto_selected": false,
-    "replaces_portable_verilog": false
+    "replaces_portable_verilog": false,
+    "rnm_and_udn": "explicit-capability-profiles-not-a-separate-backend",
+    "continuous_to_rnm_projection_is_implicit": false,
+    "fixed_point_projection_is_implicit": false
+  },
+  "rnm_udn_model_reuse": {
+    "existing_standard_vendor_project_or_user_library_algorithm": "reuse-not-reimplement",
+    "copy_translate_or_lightly_rename_external_algorithm": false,
+    "bundle_proprietary_library_source": false,
+    "generate_imports_wrappers_adapters_manifests_and_harnesses": true,
+    "external_binding_version_hash_license_provenance_required": true,
+    "selected_external_library_is_algorithm_authority": true,
+    "missing_or_incompatible_binding_fails_before_accepted_emission": true,
+    "nodal_owned_resolver_default": false,
+    "nodal_owned_resolver_requires_explicit_owned_semantics_and_validation": true,
+    "full_driver_set_preserved": true,
+    "partial_resolution_requires_declared_validated_algebraic_properties": true
+  },
+  "fixed_point_digitized_modeling": {
+    "relationship_to_external_rnm_binding": "separate-explicit-transformation",
+    "backend_auto_selects": false,
+    "nodal_owns_normalization_recurrence_range_scaling_rounding_overflow_quantization_and_error_evidence": true,
+    "existing_arithmetic_dsp_or_model_libraries_may_be_bound": true,
+    "library_binding_may_hide_numeric_or_timing_change": false,
+    "bit_accurate_reference_and_rtl_parity_required": true
   },
   "open_source_tools": {
     "lint_and_fast_simulation": "Verilator",
@@ -86,7 +112,9 @@
     "explicit_transform_required": true,
     "architecture": "docs/architecture/0011-ams-fpga-approximation-validation.md",
     "plan": "docs/roadmap/ams-fpga-validation-plan.md",
-    "post_transform_backend": "Backend.Verilog"
+    "post_transform_backend": "Backend.Verilog",
+    "not_an_external_rnm_library_reimplementation": true,
+    "may_bind_existing_exact_fixed_point_or_operator_libraries": true
   },
   "backend_profile_freeze_increment": 15,
   "user_authored_formal_gate_increment": 109,

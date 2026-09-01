@@ -28,6 +28,7 @@ jobs:
           python3 - <<'PY'
           import subprocess
           import textwrap
+          from pathlib import Path
 
           source = subprocess.check_output(
               [
@@ -92,6 +93,24 @@ jobs:
           script = script[:workflow_start] + workflow_repair + script[workflow_end:]
 
           exec(compile(script, "increment33-p1-review-fix-v3.py", "exec"), {"__name__": "__main__"})
+
+          kernel_path = Path("core/scala/api/src/nodal/ElaborationConstructionKernel.scala")
+          kernel_lines = kernel_path.read_text(encoding="utf-8").splitlines()
+          cleaned = []
+          for index, line in enumerate(kernel_lines):
+              if line.strip() == "\\":
+                  following = next(
+                      (
+                          candidate.strip()
+                          for candidate in kernel_lines[index + 1 :]
+                          if candidate.strip()
+                      ),
+                      "",
+                  )
+                  if following.startswith("private def namedAnalogDimension"):
+                      continue
+              cleaned.append(line)
+          kernel_path.write_text("\n".join(cleaned) + "\n", encoding="utf-8")
           PY
 
       - name: Install pinned native and lint toolchains

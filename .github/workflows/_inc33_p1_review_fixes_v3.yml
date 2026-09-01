@@ -1,0 +1,141 @@
+name: Increment 33 P1 review fixes v3
+
+on:
+  push:
+    branches:
+      - automation/inc33-p1-review-fixes-v3-20260901
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact Increment 33 implementation head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Require the reviewed baseline
+        run: test "$(git rev-parse HEAD)" = 848e5420bddf25869b48892d49bf90b824d2ee3b
+
+      - name: Apply chronology and compound-dimension fixes
+        run: |
+          git fetch --no-tags origin automation/inc33-p1-review-fixes-v2-20260901
+          python3 - <<'PY'
+          import subprocess
+          import textwrap
+
+          source = subprocess.check_output(
+              [
+                  "git",
+                  "show",
+                  "7fe7f6fd49d118ae76afc7b17b2d553794afc874:.github/workflows/_inc33_p1_review_fixes_v2.yml",
+              ],
+              text=True,
+          )
+          begin_marker = "          python3 - <<'PY'\n"
+          end_marker = "\n          PY\n\n      - name: Install pinned native and lint toolchains"
+          begin = source.index(begin_marker) + len(begin_marker)
+          end = source.index(end_marker, begin)
+          script = textwrap.dedent(source[begin:end])
+
+          checker_start = script.index("checker = replace_lines(\n    checker,")
+          checker_end = script.index("checker_path.write_text", checker_start)
+          checker_repair = '''roadmap_token = '    roadmap = read_text(root, "docs/roadmap/nodal-development-todo.md")'
+          roadmap_start = checker.index(roadmap_token)
+          regression_start = checker.find("construction_tests = read_text(")
+          if regression_start >= 0 and regression_start < roadmap_start:
+              regression_start = checker.rfind("\\n", 0, regression_start) + 1
+              checker = checker[:regression_start] + regression_checks + checker[roadmap_start:]
+          else:
+              checker = checker[:roadmap_start] + regression_checks + checker[roadmap_start:]
+          '''
+          script = script[:checker_start] + checker_repair + script[checker_end:]
+
+          mutation_start = script.index("mutations = replace_lines(\n    mutations,")
+          mutation_end = script.index("mutation_path.write_text", mutation_start)
+          mutation_repair = '''mutation_token = "def test_compound_dimension_regression_mutation_is_rejected"
+          mutation_end_token = 'if __name__ == "__main__":'
+          mutation_end_position = mutations.index(mutation_end_token)
+          mutation_end_line = mutations.rfind("\\n", 0, mutation_end_position) + 1
+          mutation_start_position = mutations.find(mutation_token)
+          if mutation_start_position >= 0 and mutation_start_position < mutation_end_line:
+              mutation_start_line = mutations.rfind("\\n", 0, mutation_start_position) + 1
+              mutations = (
+                  mutations[:mutation_start_line]
+                  + mutation_methods
+                  + mutations[mutation_end_line:]
+              )
+          else:
+              mutations = (
+                  mutations[:mutation_end_line]
+                  + mutation_methods
+                  + mutations[mutation_end_line:]
+              )
+          '''
+          script = script[:mutation_start] + mutation_repair + script[mutation_end:]
+
+          workflow_start = script.index("workflow = replace_lines(\n    workflow,")
+          workflow_end = script.index("workflow_path.write_text", workflow_start)
+          workflow_repair = '''native_token = "- name: Execute native compiler and verifier suite"
+          scala_token = "- name: Execute Scala source-semantic witness"
+          native_position = workflow.index(native_token)
+          native_line = workflow.rfind("\\n", 0, native_position) + 1
+          scala_position = workflow.index(scala_token, native_position)
+          scala_line = workflow.rfind("\\n", 0, scala_position) + 1
+          workflow = workflow[:native_line] + native_step + workflow[scala_line:]
+          '''
+          script = script[:workflow_start] + workflow_repair + script[workflow_end:]
+
+          exec(compile(script, "increment33-p1-review-fix-v3.py", "exec"), {"__name__": "__main__"})
+          PY
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format and run focused acceptance
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          test -x out/native/release/bin/nodalc
+          NODAL_NODALC="$PWD/out/native/release/bin/nodalc" \
+            ./mill core.scala.testkit.test.testOnly \
+              nodal.internal.testkit.ScalaToMlirBridgeTests
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Publish validated review fixes
+        run: |
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            .github/workflows/increment-33-analog-procedural-assignment.yml \
+            core/scala/api/src/nodal/AnalogProceduralConstruction.scala \
+            core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+            core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala \
+            core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
+            core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala \
+            scripts/check_increment33.py \
+            tests/compiler/test_increment33.py
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m 'fix(increment33): preserve nested chronology and compound dimensions'
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

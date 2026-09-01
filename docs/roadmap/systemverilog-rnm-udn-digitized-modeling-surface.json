@@ -1,0 +1,94 @@
+{
+  "schema": 1,
+  "status": "binding-roadmap-clarification",
+  "decision_date": "2026-09-01",
+  "title": "SystemVerilog RNM, UDN, and digitized-model reuse",
+  "documents": {
+    "language_standards": "docs/roadmap/digital-hdl-language-standards.md",
+    "main_roadmap": "docs/roadmap/nodal-development-todo.md",
+    "plan": "docs/roadmap/systemverilog-rnm-udn-digitized-modeling-plan.md",
+    "digital_backend_surface": "docs/roadmap/digital-backend-v0.3-surface.json",
+    "ams_fpga_plan": "docs/roadmap/ams-fpga-validation-plan.md"
+  },
+  "backend": {
+    "identity": "Backend.SystemVerilog",
+    "baseline": "IEEE-1800-2023",
+    "status": "future-separately-gated",
+    "backend_auto_selects": false,
+    "rnm_is_backend_identity": false,
+    "rnm_and_udn_are_explicit_capability_profiles": true
+  },
+  "binding_rule": {
+    "existing_standard_vendor_or_project_rnm_udn_algorithms": "reuse-not-reimplement",
+    "copy_or_transliterate_external_library_algorithm": false,
+    "bundle_proprietary_library_source": false,
+    "generate_imports_wrappers_adapters_and_manifests": true,
+    "preserve_target_neutral_nodal_semantics": true,
+    "external_binding_is_versioned_and_capability_checked": true,
+    "selected_external_library_is_algorithm_authority_for_that_profile": true
+  },
+  "supported_model_origins": [
+    "existing external RNM or UDN library binding",
+    "user-supplied SystemVerilog RNM module, interface, package, nettype, resolver, or connect module",
+    "user-authored target-neutral discrete Nodal model",
+    "explicit continuous-model-to-RNM projection after a separate capability gate",
+    "explicit fixed-point digitized projection"
+  ],
+  "external_binding_contract": {
+    "required_metadata": [
+      "stable binding and capability IDs",
+      "library/package/module/nettype/resolver/connect-module symbols",
+      "version, content hash, license and provenance",
+      "compile and elaboration order",
+      "required simulator and vendor profile",
+      "parameter, port, interface and quantity mapping",
+      "physical dimensions, units and scale",
+      "direction, driver, no-drive, unknown and resolution behavior",
+      "event, delta-cycle and update semantics",
+      "source maps, diagnostics and validation evidence"
+    ],
+    "source_may_remain_external": true,
+    "missing_library_or_capability_fails_before_emission": true
+  },
+  "nodal_owned_resolver_policy": {
+    "default": "do-not-generate-when-an-approved-external-binding-is-selected",
+    "allowed_only_when": [
+      "the resolution semantics are explicitly Nodal-owned",
+      "no approved external implementation is selected",
+      "standalone generation is explicitly requested",
+      "the resolver is capability-checked, deterministic, source-mapped and validated"
+    ],
+    "must_not_duplicate_known_external_algorithm": true,
+    "partial_or_tree_resolution_requires_declared_algebraic_properties": true
+  },
+  "fixed_point_boundary": {
+    "relationship_to_rnm_library_binding": "separate-explicit-transformation",
+    "nodal_owns": [
+      "model normalization and discrete recurrence",
+      "sample and rate contract",
+      "range and binary-point analysis",
+      "rounding, overflow and guard-bit policy",
+      "quantization and error-budget evidence",
+      "bit-accurate reference and RTL parity"
+    ],
+    "existing_fixed_point_or_operator_libraries_may_be_bound": true,
+    "library_use_must_not_hide_numeric_semantic_changes": true,
+    "backend_auto_selects_transformation": false
+  },
+  "roadmap_allocation": {
+    "increment_68": "target-neutral discrete-real/resolved-quantity semantics and external RNM/UDN binding contract",
+    "increment_69": "typed real/logic/UDN bridges, connect behavior and profile mapping",
+    "increment_87_88": "tool-adapter, packaging, trust, license, provenance and conformance support",
+    "increment_99": "IEEE 1800-2023 RNM/UDN and vendor/project library research and design gate",
+    "increments_100_106": "explicit fixed-point digitized transformation and validation",
+    "increment_130": "SystemVerilog RNM/UDN emission, imports, wrappers and native/flat parity",
+    "ams_verification_8_10": "UVM-MS and simulator-profile integration without copying model algorithms"
+  },
+  "non_goals": [
+    "reimplementing an existing RNM electrical or resolution library inside Nodal",
+    "silently translating arbitrary continuous-time behavior to RNM",
+    "treating vendor-specific wreal or connect behavior as portable IEEE SystemVerilog",
+    "claiming portability or equivalence from one successful parser or simulator",
+    "replacing the authoritative Verilog-A or Verilog-AMS reference without validation evidence"
+  ]
+}

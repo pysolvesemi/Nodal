@@ -1,0 +1,706 @@
+name: Increment 33 final P1 repair v1
+
+on:
+  push:
+    branches:
+      - automation/inc33-p1-final-repair-v1-20260901
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact Increment 33 review head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Require reviewed baseline
+        run: test "$(git rev-parse HEAD)" = 6154290b31b93c0d510836bf09976d2834f44270
+
+      - name: Apply fail-closed dimension and chronology repair
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          def replace_once(path: Path, old: str, new: str, label: str) -> None:
+              text = path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          construction_path = Path(
+              "core/scala/api/src/nodal/AnalogProceduralConstruction.scala"
+          )
+          replace_once(
+              construction_path,
+              textwrap.dedent(
+                  '''\
+                      val inferredDimension = ConstructionKernel.analogDimension(expression)
+                      val dimension = inferredDimension
+                        .filterNot(_ == "unknown")
+                        .orElse(reads.headOption.map(_.valueType.dimension))
+                        .orElse(inferredDimension)
+                        .getOrElse("unknown")
+                  '''
+              ),
+              textwrap.dedent(
+                  '''\
+                      val dimension = ConstructionKernel
+                        .analogDimension(expression)
+                        .orElse(reads.headOption.map(_.valueType.dimension))
+                        .orElse(fallback.map(_.dimension))
+                        .getOrElse("unknown")
+                  '''
+              ),
+              "procedural expression dimension block",
+          )
+
+          runtime_path = Path("core/scala/api/src/nodal/AnalogProceduralRuntime.scala")
+          replace_once(
+              runtime_path,
+              textwrap.dedent(
+                  '''\
+                    final case class VariableRecord(
+                        variable: Variable,
+                        initializer: Option[Value],
+                        source: Option[Source],
+                        declarationOrder: Int
+                    )
+                  '''
+              ),
+              textwrap.dedent(
+                  '''\
+                    final case class VariableRecord(
+                        variable: Variable,
+                        initializer: Option[Value],
+                        source: Option[Source],
+                        declarationOrder: Int,
+                        operationOrder: Int = -1
+                    )
+                  '''
+              ),
+              "Scala variable record",
+          )
+          replace_once(
+              runtime_path,
+              textwrap.dedent(
+                  '''\
+                    final case class AssignmentRecord(
+                        identity: String,
+                        target: Variable,
+                        value: Value,
+                        authoredOrder: Int,
+                        scope: Vector[String],
+                        guard: Option[Value],
+                        analyses: Vector[String],
+                        source: Option[Source]
+                    )
+                  '''
+              ),
+              textwrap.dedent(
+                  '''\
+                    final case class AssignmentRecord(
+                        identity: String,
+                        target: Variable,
+                        value: Value,
+                        authoredOrder: Int,
+                        scope: Vector[String],
+                        guard: Option[Value],
+                        analyses: Vector[String],
+                        source: Option[Source],
+                        operationOrder: Int = -1
+                    )
+                  '''
+              ),
+              "Scala assignment record",
+          )
+          replace_once(
+              runtime_path,
+              "      val record = VariableRecord(variable, initializer, source, variables.size)\n",
+              textwrap.dedent(
+                  '''\
+                        val record = VariableRecord(
+                          variable,
+                          initializer,
+                          source,
+                          variables.size,
+                          variables.size + assignments.size
+                        )
+                  '''
+              ),
+              "Scala declaration operation order",
+          )
+          replace_once(
+              runtime_path,
+              textwrap.dedent(
+                  '''\
+                        canonicalAnalyses.toVector.sorted,
+                        source
+                      )
+                  '''
+              ),
+              textwrap.dedent(
+                  '''\
+                        canonicalAnalyses.toVector.sorted,
+                        source,
+                        variables.size + assignments.size
+                      )
+                  '''
+              ),
+              "Scala assignment operation order",
+          )
+
+          native_path = Path("core/native/include/nodal/AnalogProceduralRuntime.h")
+          replace_once(
+              native_path,
+              textwrap.dedent(
+                  '''\
+                    struct VariableRecord {
+                      Variable variable;
+                      std::optional<Value> initializer;
+                      std::optional<Source> source;
+                      std::size_t declarationOrder = 0;
+                    };
+                  '''
+              ),
+              textwrap.dedent(
+                  '''\
+                    struct VariableRecord {
+                      Variable variable;
+                      std::optional<Value> initializer;
+                      std::optional<Source> source;
+                      std::size_t declarationOrder = 0;
+                      std::size_t operationOrder = 0;
+                    };
+                  '''
+              ),
+              "native variable record",
+          )
+          replace_once(
+              native_path,
+              textwrap.dedent(
+                  '''\
+                    struct AssignmentRecord {
+                      std::string identity;
+                      Variable target;
+                      Value value;
+                      std::size_t authoredOrder = 0;
+                      std::vector<std::string> scope;
+                      std::optional<Value> guard;
+                      std::vector<std::string> analyses;
+                      std::optional<Source> source;
+                    };
+                  '''
+              ),
+              textwrap.dedent(
+                  '''\
+                    struct AssignmentRecord {
+                      std::string identity;
+                      Variable target;
+                      Value value;
+                      std::size_t authoredOrder = 0;
+                      std::vector<std::string> scope;
+                      std::optional<Value> guard;
+                      std::vector<std::string> analyses;
+                      std::optional<Source> source;
+                      std::size_t operationOrder = 0;
+                    };
+                  '''
+              ),
+              "native assignment record",
+          )
+          replace_once(
+              native_path,
+              "    VariableRecord record{variable, initializer, source, variables_.size()};\n",
+              textwrap.dedent(
+                  '''\
+                        VariableRecord record{variable, initializer, source, variables_.size(),
+                                              variables_.size() + assignments_.size()};
+                  '''
+              ),
+              "native declaration operation order",
+          )
+          replace_once(
+              native_path,
+              textwrap.dedent(
+                  '''\
+                        assignments_.push_back(AssignmentRecord{canonical, target, value, assignments_.size(),
+                                                                scopeStack_, guard, canonicalAnalyses, source});
+                  '''
+              ),
+              textwrap.dedent(
+                  '''\
+                        assignments_.push_back(AssignmentRecord{
+                            canonical, target, value, assignments_.size(), scopeStack_, guard,
+                            canonicalAnalyses, source, variables_.size() + assignments_.size()});
+                  '''
+              ),
+              "native assignment operation order",
+          )
+
+          evidence_path = Path(
+              "core/scala/bridge/src/nodal/bridge/AnalogProceduralEvidence.scala"
+          )
+          replace_once(
+              evidence_path,
+              "\\\"declaration_order\\\":${record.declarationOrder},\\\"source\\\"",
+              "\\\"declaration_order\\\":${record.declarationOrder},\\\"operation_order\\\":${record.operationOrder},\\\"source\\\"",
+              "evidence variable operation order",
+          )
+          replace_once(
+              evidence_path,
+              "\\\"authored_order\\\":${record.authoredOrder},\\\"scope\\\"",
+              "\\\"authored_order\\\":${record.authoredOrder},\\\"operation_order\\\":${record.operationOrder},\\\"scope\\\"",
+              "evidence assignment operation order",
+          )
+          replace_once(
+              evidence_path,
+              "declaration_order = ${record.declarationOrder}\"\n",
+              "declaration_order = ${record.declarationOrder}, operation_order = ${record.operationOrder}\"\n",
+              "evidence MLIR variable operation order",
+          )
+          replace_once(
+              evidence_path,
+              "authored_order = ${record.authoredOrder}, guard =",
+              "authored_order = ${record.authoredOrder}, operation_order = ${record.operationOrder}, guard =",
+              "evidence MLIR assignment operation order",
+          )
+
+          renderer_path = Path(
+              "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala"
+          )
+          renderer = renderer_path.read_text(encoding="utf-8")
+          renderer = renderer.replace(
+              '                "declaration_order" -> integer(record.declarationOrder),\n',
+              '                "declaration_order" -> integer(record.declarationOrder),\n'
+              '                "operation_order" -> integer(record.operationOrder),\n',
+              1,
+          )
+          renderer = renderer.replace(
+              '                "authored_order" -> integer(record.authoredOrder),\n',
+              '                "authored_order" -> integer(record.authoredOrder),\n'
+              '                "operation_order" -> integer(record.operationOrder),\n',
+              1,
+          )
+          renderer = renderer.replace(
+              '        "declaration_order" -> integer(record.declarationOrder),\n',
+              '        "declaration_order" -> integer(record.declarationOrder),\n'
+              '        "operation_order" -> integer(record.operationOrder),\n',
+              1,
+          )
+          renderer = renderer.replace(
+              '        "authored_order" -> integer(record.authoredOrder),\n',
+              '        "authored_order" -> integer(record.authoredOrder),\n'
+              '        "operation_order" -> integer(record.operationOrder),\n',
+              1,
+          )
+          helper_start = renderer.index("  private final case class OrderSpan")
+          helper_end = renderer.index("\n  private def renderScopeBody(", helper_start)
+          operation_helpers = textwrap.dedent(
+              '''\
+                private final case class OperationSpan(first: Int, last: Int)
+
+                private def declarationOperationOrder(
+                    record: AnalogProceduralRuntime.VariableRecord
+                ): Int =
+                  if record.operationOrder >= 0 then record.operationOrder
+                  else record.declarationOrder * 2
+
+                private def assignmentOperationOrder(
+                    record: AnalogProceduralRuntime.AssignmentRecord
+                ): Int =
+                  if record.operationOrder >= 0 then record.operationOrder
+                  else record.authoredOrder * 2 + 1
+
+                private def scopeOperationOrders(node: ScopeNode): Vector[Int] =
+                  node.declarations.iterator.map(declarationOperationOrder).toVector ++
+                    node.assignments.iterator.map(assignmentOperationOrder).toVector ++
+                    node.children.valuesIterator.flatMap(child =>
+                      scopeOperationOrders(child)
+                    ).toVector
+
+                private def operationSpan(event: Event): OperationSpan = event match
+                  case DeclarationEvent(record) =>
+                    val order = declarationOperationOrder(record)
+                    OperationSpan(order, order)
+                  case AssignmentEvent(record) =>
+                    val order = assignmentOperationOrder(record)
+                    OperationSpan(order, order)
+                  case ScopeEvent(scope) =>
+                    val orders = scopeOperationOrders(scope)
+                    require(orders.nonEmpty, "procedural lexical scope contains no operations")
+                    OperationSpan(orders.min, orders.max)
+
+                private def deterministicEventKey(
+                    event: Event
+                ): (Int, Int, Int, String, Int, Int, Int, String) =
+                  val span = operationSpan(event)
+                  event.source match
+                    case Some(source) =>
+                      (
+                        span.first,
+                        span.last,
+                        0,
+                        source.file,
+                        source.line,
+                        source.column,
+                        event.category,
+                        event.identity
+                      )
+                    case None =>
+                      (
+                        span.first,
+                        span.last,
+                        1,
+                        "",
+                        Int.MaxValue,
+                        Int.MaxValue,
+                        event.category,
+                        event.identity
+                      )
+
+                private def orderEvents(events: Vector[Event]): Vector[Event] =
+                  val spans = events.map(operationSpan)
+                  for
+                    leftIndex <- events.indices
+                    rightIndex <- (leftIndex + 1) until events.size
+                  do
+                    val left = spans(leftIndex)
+                    val right = spans(rightIndex)
+                    require(
+                      left.last < right.first || right.last < left.first,
+                      "procedural operation ranges overlap across lexical events"
+                    )
+                  events.sortBy(deterministicEventKey)
+              '''
+          )
+          renderer = (
+              renderer[:helper_start]
+              + operation_helpers
+              + "\n"
+              + renderer[helper_end:]
+          )
+          renderer_path.write_text(renderer, encoding="utf-8")
+
+          construction_tests_path = Path(
+              "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala"
+          )
+          construction_tests = construction_tests_path.read_text(encoding="utf-8")
+          class_anchor = "final class PublicAnalogCompoundVoltage extends Module:\n"
+          mismatch_class = textwrap.dedent(
+              '''\
+                final class PublicAnalogCompoundReadDimensionMismatch extends Module:
+                  val voltage: Variable[Real] = variable(Real, 0.0.V)
+
+                  analogProcedure:
+                    voltage := voltage + 1.0.real
+
+              '''
+          )
+          if mismatch_class.strip() not in construction_tests:
+              if construction_tests.count(class_anchor) != 1:
+                  raise SystemExit("compound-read mismatch class anchor is not unique")
+              construction_tests = construction_tests.replace(
+                  class_anchor, mismatch_class + class_anchor, 1
+              )
+          test_anchor = '    test("public compound voltage assignment retains its physical dimension"):\n'
+          mismatch_test = textwrap.dedent(
+              '''\
+                    test("public incompatible compound dimensions are rejected without read fallback"):
+                      val failure =
+                        scala.util.Try(
+                          ConstructionKernel.inspect(new PublicAnalogCompoundReadDimensionMismatch)
+                        ).failed.get
+                          .asInstanceOf[AnalogProceduralRuntime.Failure]
+                      assert(failure.diagnostic.code == "NODAL-ANALOG-033-013")
+
+              '''
+          )
+          if "public incompatible compound dimensions are rejected without read fallback" not in construction_tests:
+              if construction_tests.count(test_anchor) != 1:
+                  raise SystemExit("compound-read mismatch test anchor is not unique")
+              construction_tests = construction_tests.replace(
+                  test_anchor, mismatch_test + test_anchor, 1
+              )
+          construction_tests_path.write_text(construction_tests, encoding="utf-8")
+
+          bridge_tests_path = Path(
+              "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
+          )
+          bridge_tests = bridge_tests_path.read_text(encoding="utf-8")
+          suite_anchor = "object ScalaToMlirBridgeTests extends TestSuite:\n"
+          dependency_class = textwrap.dedent(
+              '''\
+                final class BridgeProceduralInitializerDependency extends Module:
+                  analogProcedure:
+                    val source: Variable[Real] = variable(Real)
+                    source := 1.0.V
+                    val sink: Variable[Real] = variable(Real, source)
+                    source := 2.0.V
+
+              '''
+          )
+          if "final class BridgeProceduralInitializerDependency" not in bridge_tests:
+              if bridge_tests.count(suite_anchor) != 1:
+                  raise SystemExit("bridge dependency class anchor is not unique")
+              bridge_tests = bridge_tests.replace(
+                  suite_anchor, dependency_class + suite_anchor, 1
+              )
+          test_anchor = '    test("snapshot insertion order does not affect the bridge"):\n'
+          dependency_test = textwrap.dedent(
+              '''\
+                    test("initializing assignments precede dependent declarations independent of provenance"):
+                      val snapshot = ConstructionKernel.inspect(new BridgeProceduralInitializerDependency)
+                      val program = snapshot.analogProcedural.head
+                      assert(program.variables.map(_.operationOrder) == Vector(0, 2))
+                      assert(program.assignments.map(_.operationOrder) == Vector(1, 3))
+
+                      val inverted = program.copy(
+                        variables = program.variables.map: record =>
+                          val source =
+                            if record.operationOrder == 0 then
+                              AnalogProceduralRuntime.Source("z-helper.scala", 400, 1)
+                            else AnalogProceduralRuntime.Source("a-helper.scala", 1, 1)
+                          record.copy(source = Some(source)),
+                        assignments = program.assignments.map: record =>
+                          val source =
+                            if record.operationOrder == 1 then
+                              AnalogProceduralRuntime.Source("z-helper.scala", 300, 1)
+                            else AnalogProceduralRuntime.Source("a-helper.scala", 2, 1)
+                          record.copy(source = Some(source))
+                      )
+                      val modified = snapshot.copy(
+                        analogProcedural = snapshot.analogProcedural.updated(0, inverted)
+                      )
+                      val rendered = AnalogProceduralMlir.renderModule(modified, program.owner).head
+                      val declaration0 = rendered.indexOf("operation_order = 0 : i64")
+                      val assignment0 = rendered.indexOf("operation_order = 1 : i64")
+                      val declaration1 = rendered.indexOf("operation_order = 2 : i64")
+                      val assignment1 = rendered.indexOf("operation_order = 3 : i64")
+                      assert(declaration0 >= 0)
+                      assert(assignment0 > declaration0)
+                      assert(declaration1 > assignment0)
+                      assert(assignment1 > declaration1)
+
+                      val document = ScalaToMlirBridge.fromSnapshot(modified)
+                      sys.env.get("NODAL_NODALC").foreach: executable =>
+                        val directory = workDirectory()
+                        try
+                          val success = NativeCompilerClient
+                            .run(
+                              document,
+                              NativeCompilerRequest(
+                                executable = Path.of(executable).toAbsolutePath,
+                                arguments = Vector("--mlir-print-op-generic"),
+                                workingDirectory = directory,
+                                timeout = Duration.ofSeconds(30)
+                              )
+                            )
+                            .asInstanceOf[NativeCompilerSuccess]
+                          assert(success.normalizedMlir.contains("operation_order"))
+                        finally delete(directory)
+
+              '''
+          )
+          if "initializing assignments precede dependent declarations independent of provenance" not in bridge_tests:
+              if bridge_tests.count(test_anchor) != 1:
+                  raise SystemExit("bridge dependency test anchor is not unique")
+              bridge_tests = bridge_tests.replace(
+                  test_anchor, dependency_test + test_anchor, 1
+              )
+          bridge_tests_path.write_text(bridge_tests, encoding="utf-8")
+
+          scala_witness_path = Path(
+              "examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala"
+          )
+          replace_once(
+              scala_witness_path,
+              "    assert(snapshot.assignments.map(_.authoredOrder) == Vector(0, 1, 2, 3, 4))\n",
+              "    assert(snapshot.assignments.map(_.authoredOrder) == Vector(0, 1, 2, 3, 4))\n"
+              "    assert(snapshot.variables.map(_.operationOrder) == Vector(0, 1, 2, 7))\n"
+              "    assert(snapshot.assignments.map(_.operationOrder) == Vector(3, 4, 5, 6, 8))\n",
+              "Scala witness operation chronology",
+          )
+
+          native_witness_path = Path(
+              "tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp"
+          )
+          replace_once(
+              native_witness_path,
+              textwrap.dedent(
+                  '''\
+                      for (std::size_t index = 0; index < snapshot.assignments.size(); ++index)
+                        assert(snapshot.assignments[index].authoredOrder == index);
+                  '''
+              ),
+              textwrap.dedent(
+                  '''\
+                      for (std::size_t index = 0; index < snapshot.assignments.size(); ++index)
+                        assert(snapshot.assignments[index].authoredOrder == index);
+                      assert((std::vector<std::size_t>{snapshot.variables[0].operationOrder,
+                                                       snapshot.variables[1].operationOrder,
+                                                       snapshot.variables[2].operationOrder,
+                                                       snapshot.variables[3].operationOrder} ==
+                              std::vector<std::size_t>{0, 1, 2, 7}));
+                      assert((std::vector<std::size_t>{snapshot.assignments[0].operationOrder,
+                                                       snapshot.assignments[1].operationOrder,
+                                                       snapshot.assignments[2].operationOrder,
+                                                       snapshot.assignments[3].operationOrder,
+                                                       snapshot.assignments[4].operationOrder} ==
+                              std::vector<std::size_t>{3, 4, 5, 6, 8}));
+                  '''
+              ),
+              "native witness operation chronology",
+          )
+
+          checker_path = Path("scripts/check_increment33.py")
+          checker = checker_path.read_text(encoding="utf-8")
+          checker = checker.replace(
+              '        "authoredOrder",\n',
+              '        "authoredOrder",\n        "operationOrder",\n',
+              1,
+          )
+          checker = checker.replace(
+              '        "authoredOrder",\n',
+              '        "authoredOrder",\n        "operationOrder",\n',
+              1,
+          )
+          check_anchor = textwrap.dedent(
+              '''\
+                    require(
+                        "nested procedural scopes preserve declaration and assignment chronology"
+                        in bridge_tests,
+                        "NODAL-INC33-061: nested chronology regression is missing",
+                    )
+              '''
+          )
+          additional_checks = check_anchor + textwrap.dedent(
+              '''\
+                    require(
+                        "public incompatible compound dimensions are rejected without read fallback"
+                        in construction_tests,
+                        "NODAL-INC33-062: compound read-dimension regression is missing",
+                    )
+                    require(
+                        "initializing assignments precede dependent declarations independent of provenance"
+                        in bridge_tests,
+                        "NODAL-INC33-063: initializer dependency chronology regression is missing",
+                    )
+                    require(
+                        "operationOrder" in procedural_bridge,
+                        "NODAL-INC33-064: combined procedural operation order is not serialized",
+                    )
+              '''
+          )
+          if checker.count(check_anchor) != 1:
+              raise SystemExit("checker regression anchor is not unique")
+          checker = checker.replace(check_anchor, additional_checks, 1)
+          checker_path.write_text(checker, encoding="utf-8")
+
+          mutation_path = Path("tests/compiler/test_increment33.py")
+          mutations = mutation_path.read_text(encoding="utf-8")
+          mutation_anchor = '\nif __name__ == "__main__":\n'
+          new_mutations = textwrap.dedent(
+              '''\
+
+                  def test_compound_read_dimension_regression_mutation_is_rejected(self) -> None:
+                      temporary, root = self.fixture()
+                      with temporary:
+                          path = (
+                              root
+                              / "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala"
+                          )
+                          path.write_text(
+                              path.read_text(encoding="utf-8").replace(
+                                  "public incompatible compound dimensions are rejected without read fallback",
+                                  "compound read-dimension regression removed",
+                                  1,
+                              ),
+                              encoding="utf-8",
+                          )
+                          self.assert_rejected(root, "compound read-dimension regression is missing")
+
+                  def test_initializer_dependency_chronology_mutation_is_rejected(self) -> None:
+                      temporary, root = self.fixture()
+                      with temporary:
+                          path = (
+                              root
+                              / "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
+                          )
+                          path.write_text(
+                              path.read_text(encoding="utf-8").replace(
+                                  "initializing assignments precede dependent declarations independent of provenance",
+                                  "initializer dependency chronology regression removed",
+                                  1,
+                              ),
+                              encoding="utf-8",
+                          )
+                          self.assert_rejected(
+                              root, "initializer dependency chronology regression is missing"
+                          )
+              '''
+          )
+          if "test_initializer_dependency_chronology_mutation_is_rejected" not in mutations:
+              if mutations.count(mutation_anchor) != 1:
+                  raise SystemExit("mutation insertion anchor is not unique")
+              mutations = mutations.replace(
+                  mutation_anchor, new_mutations + mutation_anchor, 1
+              )
+          mutation_path.write_text(mutations, encoding="utf-8")
+          PY
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format and run focused acceptance
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          test -x out/native/release/bin/nodalc
+          NODAL_NODALC="$PWD/out/native/release/bin/nodalc" \
+            ./mill core.scala.testkit.test.testOnly \
+              nodal.internal.testkit.ScalaToMlirBridgeTests
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Publish validated repair to Increment 33 branch
+        run: |
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            core/native/include/nodal/AnalogProceduralRuntime.h \
+            core/scala/api/src/nodal/AnalogProceduralConstruction.scala \
+            core/scala/api/src/nodal/AnalogProceduralRuntime.scala \
+            core/scala/bridge/src/nodal/bridge/AnalogProceduralEvidence.scala \
+            core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala \
+            core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
+            core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala \
+            examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala \
+            scripts/check_increment33.py \
+            tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp \
+            tests/compiler/test_increment33.py
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m 'fix(increment33): preserve operation chronology and incompatible dimensions'
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

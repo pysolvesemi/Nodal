@@ -47,26 +47,27 @@ jobs:
           )
           renderer = renderer_path.read_text(encoding="utf-8")
           helper_anchor = "  private def renderScopeBody(\n"
-          helpers = '''  private def earliestAssignmentOrder(node: ScopeNode): Option[Int] =
-            val local = node.assignments.iterator.map(_.authoredOrder)
-            val nested = node.children.valuesIterator.flatMap(earliestAssignmentOrder)
-            (local ++ nested).minOption
-
-          private def earliestDeclarationOrder(node: ScopeNode): Option[Int] =
-            val local = node.declarations.iterator.map(_.declarationOrder)
-            val nested = node.children.valuesIterator.flatMap(earliestDeclarationOrder)
-            (local ++ nested).minOption
-
-          private def authoredSequence(event: Event): (Int, Int) = event match
-            case DeclarationEvent(record) => (0, record.declarationOrder)
-            case AssignmentEvent(record) => (1, record.authoredOrder)
-            case ScopeEvent(scope) =>
-              earliestAssignmentOrder(scope)
-                .map(order => (1, order))
-                .orElse(earliestDeclarationOrder(scope).map(order => (0, order)))
-                .getOrElse((2, Int.MaxValue))
-
-          '''
+          helpers = (
+              "  private def earliestAssignmentOrder(node: ScopeNode): Option[Int] =\n"
+              "    val local = node.assignments.iterator.map(_.authoredOrder)\n"
+              "    val nested = node.children.valuesIterator.flatMap(earliestAssignmentOrder)\n"
+              "    (local ++ nested).minOption\n"
+              "\n"
+              "  private def earliestDeclarationOrder(node: ScopeNode): Option[Int] =\n"
+              "    val local = node.declarations.iterator.map(_.declarationOrder)\n"
+              "    val nested = node.children.valuesIterator.flatMap(earliestDeclarationOrder)\n"
+              "    (local ++ nested).minOption\n"
+              "\n"
+              "  private def authoredSequence(event: Event): (Int, Int) = event match\n"
+              "    case DeclarationEvent(record) => (0, record.declarationOrder)\n"
+              "    case AssignmentEvent(record) => (1, record.authoredOrder)\n"
+              "    case ScopeEvent(scope) =>\n"
+              "      earliestAssignmentOrder(scope)\n"
+              "        .map(order => (1, order))\n"
+              "        .orElse(earliestDeclarationOrder(scope).map(order => (0, order)))\n"
+              "        .getOrElse((2, Int.MaxValue))\n"
+              "\n"
+          )
           if "private def authoredSequence(event: Event)" not in renderer:
               if renderer.count(helper_anchor) != 1:
                   raise SystemExit("renderScopeBody anchor was not found exactly once")
@@ -81,29 +82,31 @@ jobs:
           old_sort = renderer[sort_start:sort_end]
           if "source.file" not in old_sort or "event.order" not in old_sort:
               raise SystemExit("unexpected event sort implementation")
-          new_sort = '''    val sorted = events.sortBy: event =>
-            val (phase, sequence) = authoredSequence(event)
-            event.source match
-              case Some(source) =>
-                (
-                  phase,
-                  sequence,
-                  event.category,
-                  source.file,
-                  source.line,
-                  source.column,
-                  event.identity
-                )
-              case None =>
-                (
-                  phase,
-                  sequence,
-                  event.category,
-                  "",
-                  Int.MaxValue,
-                  Int.MaxValue,
-                  event.identity
-                )'''
+          new_sort = (
+              "    val sorted = events.sortBy: event =>\n"
+              "      val (phase, sequence) = authoredSequence(event)\n"
+              "      event.source match\n"
+              "        case Some(source) =>\n"
+              "          (\n"
+              "            phase,\n"
+              "            sequence,\n"
+              "            event.category,\n"
+              "            source.file,\n"
+              "            source.line,\n"
+              "            source.column,\n"
+              "            event.identity\n"
+              "          )\n"
+              "        case None =>\n"
+              "          (\n"
+              "            phase,\n"
+              "            sequence,\n"
+              "            event.category,\n"
+              "            \"\",\n"
+              "            Int.MaxValue,\n"
+              "            Int.MaxValue,\n"
+              "            event.identity\n"
+              "          )"
+          )
           renderer = renderer[:sort_start] + new_sort + renderer[sort_end:]
           renderer_path.write_text(renderer, encoding="utf-8")
 
@@ -112,13 +115,14 @@ jobs:
           )
           construction_tests = construction_tests_path.read_text(encoding="utf-8")
           class_anchor = "final class PublicAnalogAssignmentOutsideProcedure extends Module:\n"
-          dimensionless_class = '''final class PublicAnalogDimensionlessMismatch extends Module:
-            val voltage: Variable[Real] = variable(Real, 0.0.V)
-
-            analogProcedure:
-              voltage := 0.0.real
-
-          '''
+          dimensionless_class = (
+              "final class PublicAnalogDimensionlessMismatch extends Module:\n"
+              "  val voltage: Variable[Real] = variable(Real, 0.0.V)\n"
+              "\n"
+              "  analogProcedure:\n"
+              "    voltage := 0.0.real\n"
+              "\n"
+          )
           if "final class PublicAnalogDimensionlessMismatch" not in construction_tests:
               if construction_tests.count(class_anchor) != 1:
                   raise SystemExit("construction test class anchor was not found exactly once")
@@ -129,15 +133,16 @@ jobs:
               )
 
           test_anchor = '    test("public assignment outside analogProcedure is rejected"):\n'
-          dimensionless_test = '''    test("public dimensionless assignment to a voltage variable is rejected"):
-            val failure =
-              scala.util.Try(
-                ConstructionKernel.inspect(new PublicAnalogDimensionlessMismatch)
-              ).failed.get
-                .asInstanceOf[AnalogProceduralRuntime.Failure]
-            assert(failure.diagnostic.code == "NODAL-ANALOG-033-013")
-
-          '''
+          dimensionless_test = (
+              '    test("public dimensionless assignment to a voltage variable is rejected"):\n'
+              "      val failure =\n"
+              "        scala.util.Try(\n"
+              "          ConstructionKernel.inspect(new PublicAnalogDimensionlessMismatch)\n"
+              "        ).failed.get\n"
+              "          .asInstanceOf[AnalogProceduralRuntime.Failure]\n"
+              '      assert(failure.diagnostic.code == "NODAL-ANALOG-033-013")\n'
+              "\n"
+          )
           if "public dimensionless assignment to a voltage variable is rejected" not in construction_tests:
               if construction_tests.count(test_anchor) != 1:
                   raise SystemExit("construction test method anchor was not found exactly once")
@@ -153,33 +158,34 @@ jobs:
           )
           bridge_tests = bridge_tests_path.read_text(encoding="utf-8")
           snapshot_test_anchor = '    test("snapshot insertion order does not affect the bridge"):\n'
-          order_test = '''    test("analog procedural rendering prefers authored order to provenance"):
-            val snapshot = ConstructionKernel.inspect(new BridgeProceduralTop)
-            val program = snapshot.analogProcedural.head
-            val invertedSources = program.assignments.zipWithIndex.map:
-              case (record, 0) =>
-                record.copy(
-                  source = Some(AnalogProceduralRuntime.Source("z-helper.scala", 200, 1))
-                )
-              case (record, 1) =>
-                record.copy(
-                  source = Some(AnalogProceduralRuntime.Source("a-helper.scala", 10, 1))
-                )
-              case (record, _) => record
-            val modified = snapshot.copy(
-              analogProcedural = snapshot.analogProcedural.updated(
-                0,
-                program.copy(assignments = invertedSources)
-              )
-            )
-
-            val document = ScalaToMlirBridge.fromSnapshot(modified)
-            val first = document.text.indexOf("authored_order = 0 : i64")
-            val second = document.text.indexOf("authored_order = 1 : i64")
-            assert(first >= 0)
-            assert(second > first)
-
-          '''
+          order_test = (
+              '    test("analog procedural rendering prefers authored order to provenance"):\n'
+              "      val snapshot = ConstructionKernel.inspect(new BridgeProceduralTop)\n"
+              "      val program = snapshot.analogProcedural.head\n"
+              "      val invertedSources = program.assignments.zipWithIndex.map:\n"
+              "        case (record, 0) =>\n"
+              "          record.copy(\n"
+              '            source = Some(AnalogProceduralRuntime.Source("z-helper.scala", 200, 1))\n'
+              "          )\n"
+              "        case (record, 1) =>\n"
+              "          record.copy(\n"
+              '            source = Some(AnalogProceduralRuntime.Source("a-helper.scala", 10, 1))\n'
+              "          )\n"
+              "        case (record, _) => record\n"
+              "      val modified = snapshot.copy(\n"
+              "        analogProcedural = snapshot.analogProcedural.updated(\n"
+              "          0,\n"
+              "          program.copy(assignments = invertedSources)\n"
+              "        )\n"
+              "      )\n"
+              "\n"
+              "      val document = ScalaToMlirBridge.fromSnapshot(modified)\n"
+              '      val first = document.text.indexOf("authored_order = 0 : i64")\n'
+              '      val second = document.text.indexOf("authored_order = 1 : i64")\n'
+              "      assert(first >= 0)\n"
+              "      assert(second > first)\n"
+              "\n"
+          )
           if "analog procedural rendering prefers authored order to provenance" not in bridge_tests:
               if bridge_tests.count(snapshot_test_anchor) != 1:
                   raise SystemExit("bridge test method anchor was not found exactly once")

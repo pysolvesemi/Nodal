@@ -2,13 +2,14 @@
 
 **Status:** Normative roadmap target
 **Architecture:** [ADR 0010](../architecture/0010-digital-verilog-open-source-verification.md)
+**Digital HDL standards:** [digital-hdl-language-standards.md](digital-hdl-language-standards.md)
 **Public API freeze:** Increment 15 unified v0.3 backend-profile gate
 
 **Future user-authored formal gate:** Increment 109
 
 ## Goal
 
-Allow a Nodal design containing only digital constructs to emit portable synthesizable Verilog and be linted, simulated, synthesized, equivalence-checked, and formally verified without a commercial or Verilog-AMS simulator.
+Allow a Nodal design containing only digital constructs to emit a portable synthesizable subset of IEEE 1364-2005 Verilog and be linted, simulated, synthesized, equivalence-checked, and formally verified without a commercial or Verilog-AMS simulator.
 
 The design rule is:
 
@@ -39,7 +40,9 @@ The selected backend and classification evidence are included in the emission re
 
 An explicit `Backend.Verilog` request rejects analog or mixed-signal constructs before translation. Backend selection never depends on which tools happen to be installed.
 
-A future `Backend.SystemVerilog` profile may be added separately. Portable Verilog is the initial required profile because the native Yosys frontend supports a broad Verilog-2005 subset and a narrower SystemVerilog subset.
+`Backend.Verilog` is the required pure-digital backend and targets a tool-qualified, synthesizable subset of IEEE 1364-2005. It must not emit SystemVerilog syntax or require a SystemVerilog parser. For digital-only designs, `Backend.Auto` continues to select `Backend.Verilog`.
+
+A future, separate `Backend.SystemVerilog` targets IEEE 1800-2023 through its own capability gate, implementation, and tool-qualification matrix. It may provide native arrays, structs, interfaces/modports, enums, packages, assertions, and other approved SystemVerilog constructs, but it does not replace or redefine the IEEE 1364-2005 backend.
 
 ## Digital-only classification
 
@@ -72,9 +75,9 @@ Digital-only classification rejects or promotes away from Verilog when the hiera
 
 The classifier produces a deterministic construct inventory and the first source location that prevents a narrower backend.
 
-## Portable Verilog profile
+## IEEE 1364-2005 portable Verilog profile
 
-The required output is a conservative synthesizable IEEE 1364-2005-style subset.
+The required output is a conservative, synthesizable, tool-qualified subset of IEEE 1364-2005 Verilog. The profile does not silently accept or emit IEEE 1800 SystemVerilog syntax.
 
 ### Required constructs
 
@@ -118,7 +121,6 @@ The portable profile follows [ADR 0016](../architecture/0016-signed-types-and-st
 - bounded hardware iteration emits a procedural `for` or verified unrolled operations according to a locked profile decision;
 - runtime/unbounded loops and hidden multi-cycle iteration are unsupported in the initial portable profile.
 
-
 ## Enum and FSM lowering
 
 The portable profile follows [ADR 0015](../architecture/0015-native-scala-enum-and-hierarchical-fsm.md):
@@ -129,8 +131,7 @@ The portable profile follows [ADR 0015](../architecture/0015-native-scala-enum-a
 - local FSM compact/one-hot/Gray/custom/Auto encoding is implementation metadata and cannot change public enum ABI;
 - nested/parallel/timed/bounded-procedure FSMs lower to explicit state, completion, counter, join, and stack logic;
 - state/case names, transitions, encodings, source maps, and coverage IDs remain in sidecar manifests;
-- future SystemVerilog native enum emission is a separate capability gate but must preserve the same numeric values.
-
+- future IEEE 1800-2023 `Backend.SystemVerilog` native enum emission is a separate capability gate but must preserve the same numeric values.
 
 ## Shaped-value, materialization, and quality lowering
 
@@ -145,15 +146,14 @@ The portable profile follows ADRs [0017](../architecture/0017-semantic-multidime
 - mandatory internal checks run before render, then the target is reparsed and independently linted/synthesized by the selected profile;
 - failed partial output is diagnostic-only.
 
-Future SystemVerilog defaults to unpacked multidimensional ports of packed elements and supports an explicit packed-dimensional layout. It must preserve the same Nodal row-major ABI and signed element semantics.
-
+The future IEEE 1800-2023 `Backend.SystemVerilog` defaults to unpacked multidimensional ports of packed elements and supports an explicit packed-dimensional layout. It must preserve the same Nodal row-major ABI and signed element semantics.
 
 ## Capability profiles
 
 The backend publishes separate feature sets for:
 
-- `digital-verilog-synth`: portable synthesizable RTL;
-- `digital-verilog-sim`: explicitly allowed simulation-only behavior;
+- `digital-verilog-synth`: portable synthesizable IEEE 1364-2005 RTL;
+- `digital-verilog-sim`: explicitly allowed simulation-only IEEE 1364-2005 behavior;
 - `digital-verilog-formal`: assertions/assumptions/covers and harness constructs supported by the open-source formal flow;
 - black-box/technology extensions;
 - unsupported features with stable diagnostics.
@@ -199,7 +199,7 @@ Warnings are classified as errors, expected limitations, or waived portability f
 
 Required uses:
 
-- explicit Verilog-2005 language mode;
+- explicit IEEE 1364-2005 language mode;
 - independent parser and elaboration check;
 - event-driven smoke and portability simulation;
 - VCD/FST waveform capture where supported;
@@ -245,7 +245,7 @@ cocotb is not required for Nodal's Scala-native test API and does not define Nod
 
 Each representative digital fixture runs a reproducible Yosys script that:
 
-1. reads generated Verilog in the declared language profile;
+1. reads generated Verilog in the declared IEEE 1364-2005 profile;
 2. elaborates the selected top and parameters;
 3. checks hierarchy and unresolved references;
 4. lowers processes, memories, and state machines;
@@ -274,10 +274,10 @@ Yosys equivalence flows compare:
 - deterministic re-emission of normalized IR;
 - supported parameter instantiations against the same parameterized source;
 - post-synthesis generic netlists against source RTL;
-- fixed-latency automatic pipelines against latency-aligned reference behavior.
-- signed expression lowering and procedural-versus-unrolled/generate-normalized loop implementations against the same typed reference semantics.
-- enum/FSM behavior before and after approved recoding, hierarchy flattening, minimization, or synthesis, aligned by semantic state/transition identity rather than raw encoded bits.
-- shaped flatten/unpack/index/reshape behavior and signed element views across portable/future layouts.
+- fixed-latency automatic pipelines against latency-aligned reference behavior;
+- signed expression lowering and procedural-versus-unrolled/generate-normalized loop implementations against the same typed reference semantics;
+- enum/FSM behavior before and after approved recoding, hierarchy flattening, minimization, or synthesis, aligned by semantic state/transition identity rather than raw encoded bits;
+- shaped flatten/unpack/index/reshape behavior and signed element views across portable/future layouts;
 - inline-safe versus readable/debug materialization profiles, aligned by typed expression origin rather than generated temporary names.
 
 Pipeline equivalence tracks transaction identity, valid/bubble state, sidebands, reset, and published latency. Elastic pipelines require protocol-level safety/equivalence properties rather than same-cycle output equality.
@@ -303,9 +303,9 @@ Initial reusable property suites prove:
 - reset convergence and legal post-reset output validity;
 - fixed pipeline latency and sideband alignment;
 - CDC/RDC wrapper assumptions and guarantees;
-- no output before a valid input transaction.
-- signed extension/cast/shift correctness, loop index bounds, finite parameter envelopes, no out-of-range access, and no unintended loop-carried combinational recurrence.
-- legal enum/state encoding, one-hot invariants, allowed FSM transition relations, reset convergence, no unintended deadlock, nested/parallel completion, and bounded call-stack overflow/underflow safety.
+- no output before a valid input transaction;
+- signed extension/cast/shift correctness, loop index bounds, finite parameter envelopes, no out-of-range access, and no unintended loop-carried combinational recurrence;
+- legal enum/state encoding, one-hot invariants, allowed FSM transition relations, reset convergence, no unintended deadlock, nested/parallel completion, and bounded call-stack overflow/underflow safety;
 - multidimensional index bounds and flatten/reshape equivalence, structural-storage invariants, no accidental latch/combinational loop/multiple driver, and accepted-emission gate completeness.
 
 Formal syntax remains within the open-source frontend capability profile. Unsupported SVA is lowered to verification-only immediate checks, monitor logic, or a sidecar harness, or rejected with a stable diagnostic. Such monitor logic never enters `digital-verilog-synth`.
@@ -343,7 +343,7 @@ Expected tool limitations are versioned and source-located. A test is not silent
 ### Pull-request required
 
 - design classification and `Backend.Auto` selection;
-- deterministic portable Verilog emission;
+- deterministic IEEE 1364-2005 Verilog emission;
 - Verilator lint and representative simulation;
 - Icarus parse/elaboration and smoke simulation;
 - Yosys synthesis/check/stat;
@@ -366,7 +366,7 @@ Expected tool limitations are versioned and source-located. A test is not silent
 
 Freeze:
 
-- `Backend.Auto` and `Backend.Verilog`;
+- `Backend.Auto` and IEEE 1364-2005 `Backend.Verilog`;
 - design-kind reporting;
 - explicit synth/sim/formal digital profiles;
 - deterministic classification evidence;
@@ -377,7 +377,7 @@ Freeze:
 Implement:
 
 - digital-only analysis;
-- portable Verilog translation;
+- portable IEEE 1364-2005 Verilog translation;
 - aggregate/protocol flattening;
 - canonical enum/localparam lowering and manual/flat/hierarchical/parallel/timed/bounded-procedure FSM lowering;
 - parameterized hierarchy and generate;
@@ -403,28 +403,36 @@ Implement:
 - SBY harness generation and property libraries;
 - CI artifacts and failure triage.
 
+### Separate SystemVerilog backend
+
+After its separate design gate, implement `Backend.SystemVerilog` against IEEE 1800-2023 with an independent capability and tool matrix, then prove semantic and logical-ABI parity with the required IEEE 1364-2005 backend. This work must not introduce SystemVerilog syntax into `Backend.Verilog` or change `Backend.Auto` selection implicitly.
+
 ### Deferred user-authored formal verification
 
 After the public formal gate, implement target-neutral properties, harness/contracts, symbolic values, sampled history, bounded temporal semantics, pluggable proof tasks, vacuity/coverage, typed counterexample replay, and property-library conformance through Increments 109-113. This work is not a prerequisite for the initial digital/AMS preview.
 
 ## Exit criteria
 
-The pure-digital path is considered complete only when:
+The pure-digital Verilog path is considered complete only when:
 
-1. `Backend.Auto` deterministically emits Verilog for a digital-only hierarchy;
+1. `Backend.Auto` deterministically emits IEEE 1364-2005 Verilog for a digital-only hierarchy;
 2. analog-only and mixed-signal designs select the correct narrower/broader profiles;
 3. explicit incompatible backend requests fail before translation;
-4. portable Verilog compiles in Verilator, Icarus, and Yosys;
+4. generated IEEE 1364-2005 Verilog compiles in Verilator, Icarus, and Yosys without requiring SystemVerilog mode;
 5. generated clock/reset, CDC/RDC, memory, hierarchy, and automatic-pipeline examples synthesize;
 6. Scala simulation drives generated HDL under Verilator and Icarus;
 7. representative SBY proofs and Yosys equivalence checks pass;
 8. parameterized digital modules remain one symbolic module definition;
 9. tool versions, commands, hashes, logs, waveforms, reports, and counterexamples are retained reproducibly.
 
+The future IEEE 1800-2023 `Backend.SystemVerilog` has a separate completion and tool-qualification gate and cannot satisfy or replace these Verilog requirements.
+
 ## References
 
+- Binding digital HDL standards: [digital-hdl-language-standards.md](digital-hdl-language-standards.md)
 - Verilator guide: <https://verilator.org/guide/latest/>
 - Icarus Verilog flags: <https://steveicarus.github.io/iverilog/usage/command_line_flags.html>
 - Yosys Verilog frontend: <https://yosyshq.readthedocs.io/projects/yosys/en/stable/cmd/index_frontends.html>
 - SBY: <https://yosyshq.readthedocs.io/projects/sby/en/stable/>
 - cocotb simulator support: <https://docs.cocotb.org/en/stable/simulator_support.html>
+- IEEE SystemVerilog 1800-2023 via Accellera/IEEE: <https://www.accellera.org/downloads/ieee>

@@ -12,6 +12,11 @@
   "native_runtime": "core/native/include/nodal/AnalogProceduralRuntime.h",
   "scala_witness": "examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala",
   "native_witness": "tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp",
+  "review_repairs": {
+    "nested_scope_declaration_assignment_chronology": true,
+    "compound_expression_dimension_propagation": true,
+    "focused_validation_run": 33525821970
+  },
   "semantics": {
     "component_local_variables": true,
     "optional_initializers": true,

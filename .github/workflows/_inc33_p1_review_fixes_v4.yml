@@ -79,6 +79,36 @@ jobs:
                   1,
               )
           mutation_path.write_text(mutations, encoding="utf-8")
+
+          bridge_path = Path(
+              "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
+          )
+          bridge = bridge_path.read_text(encoding="utf-8")
+          start_token = (
+              'val declaration0 = document.text.indexOf('
+              '"declaration_order = 0 : i64")'
+          )
+          end_token = "assert(assignment1 > declaration1)"
+          token_index = bridge.index(start_token)
+          block_start = bridge.rfind("\n", 0, token_index) + 1
+          end_index = bridge.index(end_token, token_index) + len(end_token)
+          block_end = bridge.index("\n", end_index) + 1
+          indent = bridge[block_start:token_index]
+          chronology = "\n".join(
+              indent + line
+              for line in (
+                  'val declaration0 = document.text.indexOf("\\\"nodal.analog_variable\\\"")',
+                  'val assignment0 = document.text.indexOf("\\\"nodal.analog_assign\\\"", declaration0 + 1)',
+                  'val declaration1 = document.text.indexOf("\\\"nodal.analog_variable\\\"", declaration0 + 1)',
+                  'val assignment1 = document.text.indexOf("\\\"nodal.analog_assign\\\"", assignment0 + 1)',
+                  "assert(declaration0 >= 0)",
+                  "assert(assignment0 > declaration0)",
+                  "assert(declaration1 > assignment0)",
+                  "assert(assignment1 > declaration1)",
+              )
+          ) + "\n"
+          bridge = bridge[:block_start] + chronology + bridge[block_end:]
+          bridge_path.write_text(bridge, encoding="utf-8")
           PY
 
       - name: Install pinned native and lint toolchains

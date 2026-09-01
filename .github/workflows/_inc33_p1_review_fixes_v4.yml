@@ -59,6 +59,26 @@ jobs:
           if token in construction:
               raise SystemExit("obsolete dimensionFromUnit helper remains")
           construction_path.write_text(construction, encoding="utf-8")
+
+          mutation_path = Path("tests/compiler/test_increment33.py")
+          mutations = mutation_path.read_text(encoding="utf-8")
+          required_entry = (
+              '    "core/scala/testkit/test/src/nodal/'
+              'AnalogProceduralConstructionTests.scala",\n'
+          )
+          if required_entry not in mutations:
+              anchor = (
+                  '    "core/scala/testkit/test/src/nodal/internal/testkit/'
+                  'ScalaToMlirBridgeTests.scala",\n'
+              )
+              if anchor not in mutations:
+                  raise SystemExit("Increment 33 REQUIRED fixture anchor is missing")
+              mutations = mutations.replace(
+                  anchor,
+                  required_entry + anchor,
+                  1,
+              )
+          mutation_path.write_text(mutations, encoding="utf-8")
           PY
 
       - name: Install pinned native and lint toolchains

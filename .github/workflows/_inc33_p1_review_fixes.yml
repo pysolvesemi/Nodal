@@ -199,9 +199,8 @@ jobs:
           ./nodal style bootstrap \
             --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
 
-      - name: Format and run focused acceptance
+      - name: Run focused acceptance
         run: |
-          ./mill mill.scalalib.scalafmt/formatAll
           python3 scripts/check_increment31.py
           python3 scripts/check_increment133.py
           python3 scripts/check_increment32.py

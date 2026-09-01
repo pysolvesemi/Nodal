@@ -69,11 +69,21 @@ jobs:
             --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
 
       - name: Execute Scala source-semantic witness
+        shell: bash
         run: |
           report=/tmp/increment33-scala-witness.txt
-          ./mill examples.continuousTimeApi.runMain \
-            nodal.increment33fixture.Increment33RuntimeCheck \
-            "$report"
+          for attempt in 1 2; do
+            rm -f "$report"
+            if ./mill -i examples.continuousTimeApi.runMain \
+              nodal.increment33fixture.Increment33RuntimeCheck \
+              "$report"; then
+              break
+            fi
+            if [ "$attempt" -eq 2 ]; then
+              exit 1
+            fi
+            echo 'Retrying Increment 33 Scala witness after a transient Mill subprocess failure.'
+          done
           test -s "$report"
           grep -F 'variables=4' "$report"
           grep -F 'assignments=5' "$report"

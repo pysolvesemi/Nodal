@@ -7,6 +7,7 @@
   "documents": {
     "architecture_adr": "docs/architecture/0010-digital-verilog-open-source-verification.md",
     "verification_plan": "docs/roadmap/digital-verilog-open-source-verification-plan.md",
+    "language_standards": "docs/roadmap/digital-hdl-language-standards.md",
     "main_roadmap": "docs/roadmap/nodal-development-todo.md",
     "formal_architecture": "docs/architecture/0014-target-neutral-formal-verification.md",
     "formal_plan": "docs/roadmap/formal-verification-v0.1-plan.md",
@@ -24,7 +25,7 @@
     "Backend.VerilogA",
     "Backend.VerilogAMS"
   ],
-  "future_optional_backend": "Backend.SystemVerilog through a separate capability gate",
+  "future_optional_backend": "Backend.SystemVerilog targeting IEEE 1800-2023 through a separate capability gate",
   "auto_selection": {
     "DigitalOnly": "Backend.Verilog",
     "AnalogOnly": "Backend.VerilogA",
@@ -36,10 +37,19 @@
     "digital-verilog-formal"
   ],
   "portable_verilog": {
-    "baseline": "IEEE-1364-2005-style-subset",
+    "backend": "Backend.Verilog",
+    "baseline": "IEEE-1364-2005-portable-synthesizable-subset",
     "systemverilog_required": false,
+    "systemverilog_syntax_allowed": false,
     "aggregate_boundary_strategy": "deterministic-flattening",
     "parameterized_module_cloning": false
+  },
+  "systemverilog": {
+    "backend": "Backend.SystemVerilog",
+    "baseline": "IEEE-1800-2023",
+    "status": "future-separately-gated",
+    "auto_selected": false,
+    "replaces_portable_verilog": false
   },
   "open_source_tools": {
     "lint_and_fast_simulation": "Verilator",
@@ -97,9 +107,9 @@
   },
   "enum_fsm": {
     "architecture": "docs/architecture/0015-native-scala-enum-and-hierarchical-fsm.md",
-    "portable_verilog_enum": "localparam plus vector/integer storage",
+    "portable_verilog_enum": "IEEE 1364-2005 localparam plus vector/integer storage",
     "enum_configuration": "module parameter with canonical numeric value",
-    "future_systemverilog_enum": "native typedef enum logic",
+    "future_systemverilog_enum": "IEEE 1800-2023 native typedef enum logic",
     "local_fsm_recoding_preserves_public_enum_abi": true,
     "hierarchical_parallel_timed_bounded_procedure_lowering": true,
     "required_proofs": [
@@ -113,8 +123,8 @@
   },
   "signed_and_loops": {
     "architecture": "docs/architecture/0016-signed-types-and-staged-loops.md",
-    "portable_verilog_signed": "signed vectors parameters localparams memories and fields",
-    "future_systemverilog_signed": "logic signed and equivalent exact-width constructs",
+    "portable_verilog_signed": "IEEE 1364-2005 signed vectors parameters localparams memories and fields",
+    "future_systemverilog_signed": "IEEE 1800-2023 logic signed and equivalent exact-width constructs",
     "generate": "genvar generate for",
     "bounded_iteration": [
       "procedural for",
@@ -131,9 +141,9 @@
     ]
   },
   "shaped_values_naming_quality": {
-    "portable_verilog_multidimensional_port": "flat packed carrier",
-    "future_systemverilog_default": "unpacked multidimensional port",
-    "future_systemverilog_optional": "packed multidimensional layout",
+    "portable_verilog_multidimensional_port": "IEEE 1364-2005 flat packed carrier",
+    "future_systemverilog_default": "IEEE 1800-2023 unpacked multidimensional port",
+    "future_systemverilog_optional": "IEEE 1800-2023 packed multidimensional layout",
     "signed_flat_elements": "signed element views",
     "unexpected_Vec_memory_inference_audited": true,
     "temporary_default": "InlineSafe",

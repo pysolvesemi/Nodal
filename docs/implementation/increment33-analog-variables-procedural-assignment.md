@@ -2,10 +2,11 @@
 
 ## Status
 
-Implementation checkpoint in progress. The source-semantic Scala and native
-recorders, deterministic ordered snapshots, stable diagnostics, and independent
-witnesses are present. Public construction-kernel and bridge retention remain
-the next checkpoint before implementation acceptance.
+Implementation is complete and undergoing exact-head acceptance. Public
+construction, ordered source-semantic recording, Scala-to-MLIR serialization,
+native IR verification, compiler-boundary diagnostics, and source-map coverage
+are present. The roadmap remains open until the implementation is merged and a
+separate evidence-closure pull request records immutable validation evidence.
 
 ## Baseline
 
@@ -33,7 +34,25 @@ The Increment 33 runtime models:
 - optional file/line/column provenance;
 - deterministic declaration-order and statement-order snapshots.
 
-The Scala and native witnesses exercise matching positive and negative cases.
+The public construction path records these semantics in the compiler-owned
+construction snapshot. The ordinary Scala-to-MLIR bridge emits first-class
+variable declaration, explicit variable read, lexical scope, and ordered
+assignment operations. Scala and native witnesses exercise matching positive
+and negative cases.
+
+## Review hardening
+
+Two P1 review findings were corrected before acceptance:
+
+1. Procedural rendering now gives declaration and assignment order precedence
+   over source-file and source-line provenance. Helper functions or multiple
+   source files therefore cannot reverse authored assignment order.
+2. A known dimensionless expression remains dimensionless during assignment
+   checking. It cannot inherit the destination variable's physical dimension.
+
+Dedicated regressions invert assignment source locations while retaining
+`authored_order`, and reject assignment of `0.0.real` to a voltage variable with
+`NODAL-ANALOG-033-013`.
 
 ## Semantic separation
 
@@ -45,14 +64,6 @@ Procedural `:=` is an ordered variable update. It remains distinct from:
 
 No source assignment is converted into an equation or contribution, and no
 sequence of assignments is collapsed to one last-writer-wins record.
-
-## Next implementation checkpoint
-
-The next checkpoint wires this semantic runtime into the existing public
-`variable`, `analogProcedure`, and `:=` construction paths. It will retain the
-result in `ConstructionSnapshot`, Scala-to-MLIR source documents, and canonical
-reproducibility evidence, with production-path tests and mutations proving the
-integration.
 
 ## Deliberately deferred
 
@@ -71,13 +82,14 @@ request records immutable evidence.
 |---|---|---|
 | First-class variable identity and type | `!nodal.variable<kind, dimension>` and `nodal.analog_variable` | native parse/generic round-trip and invalid type fixtures |
 | Explicit reads | `nodal.analog_variable_read` | read-before-initialization native rejection and public bridge serialization |
-| Ordered assignment | `nodal.analog_assign` with contiguous `authored_order` | native order rejection plus deterministic Scala snapshot tests |
+| Ordered assignment | `nodal.analog_assign` with contiguous `authored_order` | native order rejection, source-provenance inversion regression, and deterministic Scala snapshot tests |
 | Lexical and component ownership | `nodal.analog_procedure` and `nodal.analog_scope` verifier | owner, nested-region, scope, and cross-component tests |
-| Type, dimension, guard, and analysis legality | native recursive procedural verifier | dedicated invalid MLIR fixtures and Scala semantic tests |
+| Type, dimension, guard, and analysis legality | native recursive procedural verifier | dedicated invalid MLIR fixtures, dimensionless-to-voltage regression, and Scala semantic tests |
 | Compiler-boundary diagnostics | `NODAL-ANALOG-033-001` through `-019` in the diagnostic inventory | native diagnostics retain semantic path and MLIR location |
 | Source-map preservation | declaration/read/assignment `loc(...)` plus root source-map inventory | generic native round-trip and bridge source tests |
 | Authoritative serialization | ordinary `ScalaToMlirBridge` emits all procedural operations | deterministic document/hash test; no sidecar required for acceptance |
 
-Increment 33 implementation is merge-ready only when the normal contract, Scala, and native
-compiler lanes pass from the same commit. Roadmap/evidence closure remains a separate merge after
-the implementation commit is present on `dev`.
+Increment 33 implementation is merge-ready only when the normal contract, Scala,
+and native compiler lanes and all inherited workflows pass from the same exact
+commit. Roadmap/evidence closure remains a separate merge after the implementation
+commit is present on `dev`.

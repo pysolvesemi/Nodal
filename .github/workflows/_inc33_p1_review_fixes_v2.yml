@@ -28,6 +28,7 @@ jobs:
           python3 - <<'PY'
           import subprocess
           import textwrap
+          from pathlib import Path
 
           source = subprocess.check_output(
               [
@@ -43,6 +44,519 @@ jobs:
           end = source.index(end_marker, begin)
           script = textwrap.dedent(source[begin:end])
           exec(compile(script, "increment33-p1-review-fix.py", "exec"), {"__name__": "__main__"})
+
+          def replace_lines(text: str, start_token: str, end_token: str, replacement: str) -> str:
+              start_token_index = text.index(start_token)
+              start = text.rfind("\n", 0, start_token_index) + 1
+              end_token_index = text.index(end_token, start_token_index + len(start_token))
+              end = text.rfind("\n", 0, end_token_index) + 1
+              return text[:start] + replacement.rstrip() + "\n" + text[end:]
+
+          construction_path = Path(
+              "core/scala/api/src/nodal/AnalogProceduralConstruction.scala"
+          )
+          construction = construction_path.read_text(encoding="utf-8")
+          if "  private def dimensionFromUnit(unit: String): String =\n" in construction:
+              start = construction.index(
+                  "  private def dimensionFromUnit(unit: String): String =\n"
+              )
+              end = construction.index("  private def collectReads", start)
+              construction = construction[:start] + construction[end:]
+          construction_dimension = textwrap.indent(
+              textwrap.dedent(
+                  '''\
+                  val inferredDimension = ConstructionKernel.analogDimension(expression)
+                  val dimension = inferredDimension
+                    .filterNot(_ == "unknown")
+                    .orElse(reads.headOption.map(_.valueType.dimension))
+                    .orElse(inferredDimension)
+                    .getOrElse("unknown")
+                  '''
+              ),
+              "    ",
+          )
+          construction = replace_lines(
+              construction,
+              "val inferredDimension = ConstructionKernel.analogDimension(expression)",
+              "AnalogProceduralRuntime.ValueType(kind, dimension)",
+              construction_dimension,
+          )
+          registered_dimension = textwrap.indent(
+              textwrap.dedent(
+                  '''\
+                  def registeredDimension(value: AnyRef): Option[String] =
+                    Option(current.get()).toVector
+                      .flatMap(_.modules.iterator)
+                      .flatMap(module => Option(module.variables.get(value)))
+                      .map(_.valueType.dimension)
+                      .headOption
+
+                  '''
+              ),
+              "  ",
+          )
+          construction = replace_lines(
+              construction,
+              "def registeredDimension(value: AnyRef): Option[String] =",
+              "private def registeredIdentity(module: ModuleState, value: AnyRef): Option[String] =",
+              registered_dimension,
+          )
+          construction_path.write_text(construction, encoding="utf-8")
+
+          kernel_path = Path(
+              "core/scala/api/src/nodal/ElaborationConstructionKernel.scala"
+          )
+          kernel = kernel_path.read_text(encoding="utf-8")
+          variable_case = textwrap.indent(
+              textwrap.dedent(
+                  '''\
+                  case variable: Variable[?] =>
+                    AnalogProceduralConstruction
+                      .registeredDimension(variable)
+                      .map(namedAnalogDimension)
+                      .getOrElse(AnalogDimension.Unknown)
+                  '''
+              ),
+              "    ",
+          )
+          kernel = replace_lines(
+              kernel,
+              "case variable: Variable[?] =>",
+              "case expression: KernelExpr[?] =>",
+              variable_case,
+          )
+          kernel = kernel.replace(
+              "        case _ =>\n          expression.operation match\n",
+              "        case Some(_) => AnalogDimension.Dimensionless\n"
+              "        case None =>\n          expression.operation match\n",
+              1,
+          )
+          named_dimension = textwrap.indent(
+              textwrap.dedent(
+                  r'''\
+                  private def namedAnalogDimension(value: String): AnalogDimension =
+                    value.trim match
+                      case "dimensionless" | "1" => AnalogDimension.Dimensionless
+                      case "voltage" => AnalogDimension.Voltage
+                      case "current" => AnalogDimension.Current
+                      case "time" => AnalogDimension.Time
+                      case "frequency" => AnalogDimension.Dimensionless.divide(AnalogDimension.Time)
+                      case "temperature" => AnalogDimension.Temperature
+                      case "charge" => AnalogDimension.Current.multiply(AnalogDimension.Time)
+                      case "power" => AnalogDimension.Voltage.multiply(AnalogDimension.Current)
+                      case "resistance" => AnalogDimension.Voltage.divide(AnalogDimension.Current)
+                      case "capacitance" =>
+                        AnalogDimension.Current
+                          .multiply(AnalogDimension.Time)
+                          .divide(AnalogDimension.Voltage)
+                      case "" | "unknown" => AnalogDimension.Unknown
+                      case signature =>
+                        val factors = signature.split("\\*").toVector
+                        val parsed = factors.map: factor =>
+                          factor.split("\\^", 2).toVector match
+                            case Vector(name) if name.nonEmpty => Some(name -> 1)
+                            case Vector(name, exponent) if name.nonEmpty =>
+                              exponent.toIntOption.filter(_ != 0).map(value => name -> value)
+                            case _ => None
+                        if factors.nonEmpty && parsed.forall(_.nonEmpty) then
+                          val powers = parsed.flatten
+                            .groupMapReduce(_._1)(_._2)(_ + _)
+                            .filter(_._2 != 0)
+                          AnalogDimension(powers)
+                        else AnalogDimension.Unknown
+
+                  '''
+              ),
+              "  ",
+          )
+          kernel = replace_lines(
+              kernel,
+              "private def namedAnalogDimension(value: String): AnalogDimension =",
+              "private def physicalDimension(value: PhysicalDimension): AnalogDimension =",
+              named_dimension,
+          )
+          public_dimension = textwrap.indent(
+              textwrap.dedent(
+                  '''\
+                  def analogDimension(value: Any): Option[String] =
+                    active.map(_.inferAnalogDimension(value).canonical)
+
+                  '''
+              ),
+              "  ",
+          )
+          kernel = replace_lines(
+              kernel,
+              "def analogDimension(value: Any): Option[String] =",
+              "def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =",
+              public_dimension,
+          )
+          kernel_path.write_text(kernel, encoding="utf-8")
+
+          renderer_path = Path(
+              "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala"
+          )
+          renderer = renderer_path.read_text(encoding="utf-8")
+          renderer_helpers = textwrap.indent(
+              textwrap.dedent(
+                  '''\
+                  private final case class OrderSpan(first: Int, last: Int)
+
+                  private def orderSpan(values: Iterable[Int]): Option[OrderSpan] =
+                    val collected = values.toVector
+                    if collected.isEmpty then None
+                    else Some(OrderSpan(collected.min, collected.max))
+
+                  private def scopeDeclarationOrders(node: ScopeNode): Vector[Int] =
+                    node.declarations.iterator.map(_.declarationOrder).toVector ++
+                      node.children.valuesIterator.flatMap(child =>
+                        scopeDeclarationOrders(child)
+                      ).toVector
+
+                  private def scopeAssignmentOrders(node: ScopeNode): Vector[Int] =
+                    node.assignments.iterator.map(_.authoredOrder).toVector ++
+                      node.children.valuesIterator.flatMap(child =>
+                        scopeAssignmentOrders(child)
+                      ).toVector
+
+                  private def declarationSpan(event: Event): Option[OrderSpan] = event match
+                    case DeclarationEvent(record) =>
+                      Some(OrderSpan(record.declarationOrder, record.declarationOrder))
+                    case AssignmentEvent(_) => None
+                    case ScopeEvent(scope) => orderSpan(scopeDeclarationOrders(scope))
+
+                  private def assignmentSpan(event: Event): Option[OrderSpan] = event match
+                    case DeclarationEvent(_) => None
+                    case AssignmentEvent(record) =>
+                      Some(OrderSpan(record.authoredOrder, record.authoredOrder))
+                    case ScopeEvent(scope) => orderSpan(scopeAssignmentOrders(scope))
+
+                  private def declarationUses(
+                      record: AnalogProceduralRuntime.VariableRecord
+                  ): Set[String] =
+                    record.initializer.toVector.flatMap(_.reads).map(_.identity).toSet
+
+                  private def assignmentUses(
+                      record: AnalogProceduralRuntime.AssignmentRecord
+                  ): Set[String] =
+                    (Vector(record.target.identity) ++
+                      record.value.reads.map(_.identity) ++
+                      record.guard.toVector.flatMap(_.reads).map(_.identity)).toSet
+
+                  private def scopeDefinitions(node: ScopeNode): Set[String] =
+                    node.declarations.iterator.map(_.variable.identity).toSet ++
+                      node.children.valuesIterator.flatMap(child =>
+                        scopeDefinitions(child)
+                      ).toSet
+
+                  private def scopeUses(node: ScopeNode): Set[String] =
+                    node.declarations.iterator.flatMap(declarationUses).toSet ++
+                      node.assignments.iterator.flatMap(assignmentUses).toSet ++
+                      node.children.valuesIterator.flatMap(child => scopeUses(child)).toSet
+
+                  private def definitions(event: Event): Set[String] = event match
+                    case DeclarationEvent(record) => Set(record.variable.identity)
+                    case AssignmentEvent(_) => Set.empty
+                    case ScopeEvent(scope) => scopeDefinitions(scope)
+
+                  private def uses(event: Event): Set[String] = event match
+                    case DeclarationEvent(record) => declarationUses(record)
+                    case AssignmentEvent(record) => assignmentUses(record)
+                    case ScopeEvent(scope) => scopeUses(scope)
+
+                  private def relativeOrder(
+                      left: Option[OrderSpan],
+                      right: Option[OrderSpan]
+                  ): Option[Boolean] = (left, right) match
+                    case (Some(lhs), Some(rhs)) if lhs.last < rhs.first => Some(true)
+                    case (Some(lhs), Some(rhs)) if rhs.last < lhs.first => Some(false)
+                    case (Some(_), Some(_)) =>
+                      throw new IllegalArgumentException(
+                        "procedural event order contains overlapping semantic intervals"
+                      )
+                    case _ => None
+
+                  private def deterministicEventKey(
+                      event: Event
+                  ): (Int, String, Int, Int, Int, Int, String) = event.source match
+                    case Some(source) =>
+                      (
+                        0,
+                        source.file,
+                        source.line,
+                        source.column,
+                        event.category,
+                        event.order,
+                        event.identity
+                      )
+                    case None =>
+                      (
+                        1,
+                        "",
+                        Int.MaxValue,
+                        Int.MaxValue,
+                        event.category,
+                        event.order,
+                        event.identity
+                      )
+
+                  private def orderEvents(events: Vector[Event]): Vector[Event] =
+                    val outgoing = Vector.fill(events.size)(mutable.LinkedHashSet.empty[Int])
+                    val indegree = Array.fill(events.size)(0)
+
+                    def addEdge(source: Int, destination: Int): Unit =
+                      if outgoing(source).add(destination) then indegree(destination) += 1
+
+                    for
+                      leftIndex <- events.indices
+                      rightIndex <- (leftIndex + 1) until events.size
+                    do
+                      val left = events(leftIndex)
+                      val right = events(rightIndex)
+                      val semanticOrder = Vector(
+                        relativeOrder(declarationSpan(left), declarationSpan(right)),
+                        relativeOrder(assignmentSpan(left), assignmentSpan(right))
+                      ).flatten
+                      if semanticOrder.contains(true) && semanticOrder.contains(false) then
+                        throw new IllegalArgumentException(
+                          "procedural declaration and assignment orders contradict each other"
+                        )
+                      semanticOrder.headOption.foreach: leftBeforeRight =>
+                        if leftBeforeRight then addEdge(leftIndex, rightIndex)
+                        else addEdge(rightIndex, leftIndex)
+
+                      if definitions(left).exists(uses(right).contains) then
+                        addEdge(leftIndex, rightIndex)
+                      if definitions(right).exists(uses(left).contains) then
+                        addEdge(rightIndex, leftIndex)
+
+                    val ready = mutable.ArrayBuffer.from(
+                      events.indices.filter(index => indegree(index) == 0)
+                    )
+                    val ordered = mutable.ArrayBuffer.empty[Event]
+                    while ready.nonEmpty do
+                      val readyPosition = ready.indices.minBy(index =>
+                        deterministicEventKey(events(ready(index)))
+                      )
+                      val next = ready.remove(readyPosition)
+                      ordered += events(next)
+                      outgoing(next).toVector.sorted.foreach: destination =>
+                        indegree(destination) -= 1
+                        if indegree(destination) == 0 then ready += destination
+
+                    require(
+                      ordered.size == events.size,
+                      "procedural event dependencies contain a chronology cycle"
+                    )
+                    ordered.toVector
+
+                  '''
+              ),
+              "  ",
+          )
+          renderer = replace_lines(
+              renderer,
+              "private final case class OrderSpan(first: Int, last: Int)",
+              "private def renderScopeBody(",
+              renderer_helpers,
+          )
+          renderer_path.write_text(renderer, encoding="utf-8")
+
+          construction_tests_path = Path(
+              "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala"
+          )
+          construction_tests = construction_tests_path.read_text(encoding="utf-8")
+          compound_tests = textwrap.indent(
+              textwrap.dedent(
+                  '''\
+                  test("public compound dimensionless assignment to a voltage variable is rejected"):
+                    val failure =
+                      scala.util.Try(
+                        ConstructionKernel.inspect(new PublicAnalogCompoundDimensionlessMismatch)
+                      ).failed.get
+                        .asInstanceOf[AnalogProceduralRuntime.Failure]
+                    assert(failure.diagnostic.code == "NODAL-ANALOG-033-013")
+
+                  test("public compound voltage assignment retains its physical dimension"):
+                    val snapshot = ConstructionKernel.inspect(new PublicAnalogCompoundVoltage)
+                    val assignment = snapshot.analogProcedural.head.assignments.head
+                    assert(assignment.value.valueType.dimension == "voltage")
+
+                  '''
+              ),
+              "    ",
+          )
+          construction_tests = replace_lines(
+              construction_tests,
+              'test("public compound dimensionless assignment to a voltage variable is rejected"):',
+              'test("public assignment outside analogProcedure is rejected"):',
+              compound_tests,
+          )
+          construction_tests_path.write_text(construction_tests, encoding="utf-8")
+
+          bridge_tests_path = Path(
+              "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
+          )
+          bridge_tests = bridge_tests_path.read_text(encoding="utf-8")
+          nested_test = textwrap.indent(
+              textwrap.dedent(
+                  '''\
+                  test("nested procedural scopes preserve declaration and assignment chronology"):
+                    val snapshot = ConstructionKernel.inspect(new BridgeProceduralNestedChronology)
+                    val program = snapshot.analogProcedural.head
+                    assert(program.variables.map(_.declarationOrder) == Vector(0, 1))
+                    assert(program.assignments.map(_.authoredOrder) == Vector(0, 1))
+
+                    val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+                    val declaration0 = document.text.indexOf("declaration_order = 0 : i64")
+                    val assignment0 = document.text.indexOf("authored_order = 0 : i64")
+                    val declaration1 = document.text.indexOf("declaration_order = 1 : i64")
+                    val assignment1 = document.text.indexOf("authored_order = 1 : i64")
+                    assert(declaration0 >= 0)
+                    assert(assignment0 > declaration0)
+                    assert(declaration1 > assignment0)
+                    assert(assignment1 > declaration1)
+
+                    sys.env.get("NODAL_NODALC").foreach: executable =>
+                      val directory = workDirectory()
+                      try
+                        val success = NativeCompilerClient
+                          .run(
+                            document,
+                            NativeCompilerRequest(
+                              executable = Path.of(executable).toAbsolutePath,
+                              arguments = Vector("--mlir-print-op-generic"),
+                              workingDirectory = directory,
+                              timeout = Duration.ofSeconds(30)
+                            )
+                          )
+                          .asInstanceOf[NativeCompilerSuccess]
+                        assert(success.normalizedMlir.contains("authored_order"))
+                        assert(success.normalizedMlir.contains("declaration_order"))
+                      finally delete(directory)
+
+                  '''
+              ),
+              "    ",
+          )
+          bridge_tests = replace_lines(
+              bridge_tests,
+              'test("nested procedural scopes preserve declaration and assignment chronology"):',
+              'test("snapshot insertion order does not affect the bridge"):',
+              nested_test,
+          )
+          bridge_tests_path.write_text(bridge_tests, encoding="utf-8")
+
+          checker_path = Path("scripts/check_increment33.py")
+          checker = checker_path.read_text(encoding="utf-8")
+          regression_checks = textwrap.indent(
+              textwrap.dedent(
+                  '''\
+                  construction_tests = read_text(
+                      root,
+                      "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala",
+                  )
+                  require(
+                      "public compound dimensionless assignment to a voltage variable is rejected"
+                      in construction_tests,
+                      "NODAL-INC33-060: compound dimension regression is missing",
+                  )
+                  require(
+                      "nested procedural scopes preserve declaration and assignment chronology"
+                      in bridge_tests,
+                      "NODAL-INC33-061: nested chronology regression is missing",
+                  )
+
+                  '''
+              ),
+              "    ",
+          )
+          checker = replace_lines(
+              checker,
+              "construction_tests = read_text(",
+              'roadmap = read_text(root, "docs/roadmap/nodal-development-todo.md")',
+              regression_checks,
+          )
+          checker_path.write_text(checker, encoding="utf-8")
+
+          mutation_path = Path("tests/compiler/test_increment33.py")
+          mutations = mutation_path.read_text(encoding="utf-8")
+          mutation_methods = textwrap.indent(
+              textwrap.dedent(
+                  '''\
+                  def test_compound_dimension_regression_mutation_is_rejected(self) -> None:
+                      temporary, root = self.fixture()
+                      with temporary:
+                          path = (
+                              root
+                              / "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala"
+                          )
+                          path.write_text(
+                              path.read_text(encoding="utf-8").replace(
+                                  "public compound dimensionless assignment to a voltage variable is rejected",
+                                  "compound dimension regression removed",
+                                  1,
+                              ),
+                              encoding="utf-8",
+                          )
+                          self.assert_rejected(root, "compound dimension regression is missing")
+
+                  def test_nested_chronology_regression_mutation_is_rejected(self) -> None:
+                      temporary, root = self.fixture()
+                      with temporary:
+                          path = (
+                              root
+                              / "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
+                          )
+                          path.write_text(
+                              path.read_text(encoding="utf-8").replace(
+                                  "nested procedural scopes preserve declaration and assignment chronology",
+                                  "nested chronology regression removed",
+                                  1,
+                              ),
+                              encoding="utf-8",
+                          )
+                          self.assert_rejected(root, "nested chronology regression is missing")
+
+                  '''
+              ),
+              "    ",
+          )
+          mutations = replace_lines(
+              mutations,
+              "def test_compound_dimension_regression_mutation_is_rejected",
+              'if __name__ == "__main__":',
+              mutation_methods,
+          )
+          mutation_path.write_text(mutations, encoding="utf-8")
+
+          workflow_path = Path(
+              ".github/workflows/increment-33-analog-procedural-assignment.yml"
+          )
+          workflow = workflow_path.read_text(encoding="utf-8")
+          native_step = textwrap.indent(
+              textwrap.dedent(
+                  '''\
+                  - name: Execute native compiler and verifier suite
+                    run: |
+                      ./nodal core native \\
+                        --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \\
+                        --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+                      test -x out/native/release/bin/nodalc
+                      NODAL_NODALC="$PWD/out/native/release/bin/nodalc" \\
+                        ./mill core.scala.testkit.test.testOnly \\
+                          nodal.internal.testkit.ScalaToMlirBridgeTests
+                  '''
+              ),
+              "      ",
+          )
+          workflow = replace_lines(
+              workflow,
+              "- name: Execute native compiler and verifier suite",
+              "- name: Execute Scala source-semantic witness",
+              native_step,
+          )
+          workflow_path.write_text(workflow, encoding="utf-8")
           PY
 
       - name: Install pinned native and lint toolchains
@@ -83,7 +597,9 @@ jobs:
             core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
             core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala \
             core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
-            core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala
+            core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala \
+            scripts/check_increment33.py \
+            tests/compiler/test_increment33.py
           git diff --cached --check
           test -n "$(git diff --cached --name-only)"
           git commit -m 'fix(increment33): preserve nested chronology and compound dimensions'

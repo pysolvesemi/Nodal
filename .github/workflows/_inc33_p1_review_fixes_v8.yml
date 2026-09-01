@@ -28,6 +28,7 @@ jobs:
           python3 - <<'PY'
           import subprocess
           import textwrap
+          from pathlib import Path
 
           source = subprocess.check_output(
               [
@@ -43,6 +44,37 @@ jobs:
           end = source.index(end_marker, begin)
           script = textwrap.dedent(source[begin:end])
           exec(compile(script, "increment33-p1-review-fix-v8.py", "exec"), {"__name__": "__main__"})
+
+          renderer_path = Path(
+              "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala"
+          )
+          renderer = renderer_path.read_text(encoding="utf-8")
+          overlap_throw = '''      throw new IllegalArgumentException(
+                "procedural event order contains overlapping semantic intervals"
+              )'''
+          overlap_require = '''      require(
+                false,
+                "procedural event order contains overlapping semantic intervals"
+              )
+              None'''
+          if renderer.count(overlap_throw) != 1:
+              raise SystemExit("overlapping-order throw site was not found exactly once")
+          renderer = renderer.replace(overlap_throw, overlap_require, 1)
+
+          contradiction_throw = '''      if semanticOrder.contains(true) && semanticOrder.contains(false) then
+                throw new IllegalArgumentException(
+                  "procedural declaration and assignment orders contradict each other"
+                )'''
+          contradiction_require = '''      require(
+                !(semanticOrder.contains(true) && semanticOrder.contains(false)),
+                "procedural declaration and assignment orders contradict each other"
+              )'''
+          if renderer.count(contradiction_throw) != 1:
+              raise SystemExit("contradictory-order throw site was not found exactly once")
+          renderer = renderer.replace(contradiction_throw, contradiction_require, 1)
+          if "throw new IllegalArgumentException" in renderer:
+              raise SystemExit("explicit IllegalArgumentException remains in procedural renderer")
+          renderer_path.write_text(renderer, encoding="utf-8")
           PY
 
       - name: Install pinned native and lint toolchains

@@ -38,8 +38,16 @@ jobs:
               "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
           )
           text = path.read_text(encoding="utf-8")
-          old = "    val sink: Variable[Real] = variable(Real, source)\n    source := 2.0.V\n"
-          new = "    val sink: Variable[Real] = variable(Real, source)\n    source := sink\n"
+          old = (
+              "    source := 1.0.V\n"
+              "    val sink: Variable[Real] = variable(Real, source)\n"
+              "    source := 2.0.V\n"
+          )
+          new = (
+              "    source := 1.0.real\n"
+              "    val sink: Variable[Real] = variable(Real, source)\n"
+              "    source := sink\n"
+          )
           if text.count(old) != 1:
               raise SystemExit("initializer dependency fixture was not found exactly once")
           path.write_text(text.replace(old, new, 1), encoding="utf-8")

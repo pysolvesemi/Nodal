@@ -43,6 +43,7 @@ jobs:
           begin = source.index(begin_marker) + len(begin_marker)
           end = source.index(end_marker, begin)
           script = textwrap.dedent(source[begin:end])
+          script = script.replace("r'''\\\n", "r'''\n", 1)
 
           checker_start = script.index("checker = replace_lines(\n    checker,")
           checker_end = script.index("checker_path.write_text", checker_start)

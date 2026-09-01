@@ -24,6 +24,7 @@ The Increment 33 runtime models:
 - nested lexical scopes and scope escape rejection;
 - component ownership and cross-owner rejection;
 - exact authored assignment order;
+- one combined operation order across declarations and assignments;
 - repeated writes retained as separate statements;
 - straight-line read-before-write analysis;
 - integer-to-real promotion without implicit narrowing;
@@ -32,7 +33,7 @@ The Increment 33 runtime models:
 - canonical analysis applicability;
 - stable source and statement identities;
 - optional file/line/column provenance;
-- deterministic declaration-order and statement-order snapshots.
+- deterministic declaration-order, assignment-order, and operation-order snapshots.
 
 The public construction path records these semantics in the compiler-owned
 construction snapshot. The ordinary Scala-to-MLIR bridge emits first-class
@@ -42,17 +43,26 @@ and negative cases.
 
 ## Review hardening
 
-Two P1 review findings were corrected before acceptance:
+Four P1 review findings were corrected before acceptance:
 
-1. Procedural rendering now gives declaration and assignment order precedence
-   over source-file and source-line provenance. Helper functions or multiple
-   source files therefore cannot reverse authored assignment order.
+1. Procedural rendering gives authored semantic order precedence over
+   source-file and source-line provenance. Helper functions or multiple source
+   files therefore cannot reverse authored assignment order.
 2. A known dimensionless expression remains dimensionless during assignment
    checking. It cannot inherit the destination variable's physical dimension.
+3. Recursive dimension inference preserves an incompatible compound expression
+   as `unknown`; it cannot replace that result with the dimension of the first
+   variable read. For example, `voltage := voltage + 1.0.real` is rejected with
+   `NODAL-ANALOG-033-013`.
+4. Variable declarations and assignments carry one monotonically increasing
+   `operation_order` in addition to their category-specific counters. This
+   preserves declaration/assignment interleaving, including an assignment that
+   initializes a value before a later declaration reads it in an initializer,
+   even when source coordinates are deliberately inverted.
 
-Dedicated regressions invert assignment source locations while retaining
-`authored_order`, and reject assignment of `0.0.real` to a voltage variable with
-`NODAL-ANALOG-033-013`.
+Dedicated regressions cover bare and compound dimension mismatches, nested
+lexical-scope chronology, assignment-before-dependent-initializer chronology,
+and native `nodalc` parsing of the resulting first-class procedural MLIR.
 
 ## Semantic separation
 
@@ -83,8 +93,9 @@ request records immutable evidence.
 | First-class variable identity and type | `!nodal.variable<kind, dimension>` and `nodal.analog_variable` | native parse/generic round-trip and invalid type fixtures |
 | Explicit reads | `nodal.analog_variable_read` | read-before-initialization native rejection and public bridge serialization |
 | Ordered assignment | `nodal.analog_assign` with contiguous `authored_order` | native order rejection, source-provenance inversion regression, and deterministic Scala snapshot tests |
+| Cross-category chronology | declaration and assignment records with one contiguous `operation_order` | nested-scope and assignment-before-dependent-initializer regressions with inverted provenance and native parsing |
 | Lexical and component ownership | `nodal.analog_procedure` and `nodal.analog_scope` verifier | owner, nested-region, scope, and cross-component tests |
-| Type, dimension, guard, and analysis legality | native recursive procedural verifier | dedicated invalid MLIR fixtures, dimensionless-to-voltage regression, and Scala semantic tests |
+| Type, dimension, guard, and analysis legality | native recursive procedural verifier | dedicated invalid MLIR fixtures, bare and compound dimension regressions, and Scala semantic tests |
 | Compiler-boundary diagnostics | `NODAL-ANALOG-033-001` through `-019` in the diagnostic inventory | native diagnostics retain semantic path and MLIR location |
 | Source-map preservation | declaration/read/assignment `loc(...)` plus root source-map inventory | generic native round-trip and bridge source tests |
 | Authoritative serialization | ordinary `ScalaToMlirBridge` emits all procedural operations | deterministic document/hash test; no sidecar required for acceptance |

@@ -7,6 +7,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -59,6 +60,7 @@ struct VariableRecord {
   std::optional<Value> initializer;
   std::optional<Source> source;
   std::size_t declarationOrder = 0;
+  std::size_t operationOrder = 0;
 };
 
 struct AssignmentRecord {
@@ -70,6 +72,7 @@ struct AssignmentRecord {
   std::optional<Value> guard;
   std::vector<std::string> analyses;
   std::optional<Source> source;
+  std::size_t operationOrder = 0;
 };
 
 struct Snapshot {
@@ -175,7 +178,8 @@ public:
       validateInitializer(variable, *initializer);
       validateReads(*initializer);
     }
-    VariableRecord record{variable, initializer, source, variables_.size()};
+    VariableRecord record{variable, initializer, source, variables_.size(),
+                          variables_.size() + assignments_.size()};
     variables_.emplace(canonical, MutableVariable{record, initializer.has_value()});
     return variable;
   }
@@ -242,8 +246,9 @@ public:
                      [&](const std::string &analysis) { return knownAnalyses_.contains(analysis); }))
       fail("NODAL-ANALOG-033-015", "invalid procedural analysis applicability", canonical);
 
-    assignments_.push_back(AssignmentRecord{canonical, target, value, assignments_.size(),
-                                            scopeStack_, guard, canonicalAnalyses, source});
+    assignments_.push_back(AssignmentRecord{
+        canonical, target, value, assignments_.size(), scopeStack_, guard,
+        canonicalAnalyses, source, variables_.size() + assignments_.size()});
     statements_.insert(canonical);
     targetState.initialized = true;
   }

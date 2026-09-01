@@ -192,5 +192,43 @@ class Increment33ContractTests(unittest.TestCase):
             )
             self.assert_rejected(root, "nested chronology regression is missing")
 
+
+    def test_compound_read_dimension_regression_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = (
+                root
+                / "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala"
+            )
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "public incompatible compound dimensions are rejected without read fallback",
+                    "compound read-dimension regression removed",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "compound read-dimension regression is missing")
+
+    def test_initializer_dependency_chronology_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = (
+                root
+                / "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
+            )
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "initializing assignments precede dependent declarations independent of provenance",
+                    "initializer dependency chronology regression removed",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(
+                root, "initializer dependency chronology regression is missing"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -40,7 +40,7 @@ private[nodal] object AnalogProceduralEvidence:
           .map: record =>
             val scope = record.variable.declarationScope.map(quoted).mkString("[", ",", "]")
             val initializer = record.initializer.map(renderedValue).getOrElse("null")
-            s"{\"identity\":${quoted(record.variable.identity)},\"owner\":${quoted(record.variable.owner)},\"scope\":$scope,\"type\":${valueType(record.variable.valueType)},\"initializer\":$initializer,\"declaration_order\":${record.declarationOrder},\"source\":${source(record.source)}}"
+            s"{\"identity\":${quoted(record.variable.identity)},\"owner\":${quoted(record.variable.owner)},\"scope\":$scope,\"type\":${valueType(record.variable.valueType)},\"initializer\":$initializer,\"declaration_order\":${record.declarationOrder},\"operation_order\":${record.operationOrder},\"source\":${source(record.source)}}"
           .mkString("[", ",", "]")
         val assignments = snapshot.assignments
           .sortBy(_.authoredOrder)
@@ -48,7 +48,7 @@ private[nodal] object AnalogProceduralEvidence:
             val scope = record.scope.map(quoted).mkString("[", ",", "]")
             val analyses = record.analyses.sorted.map(quoted).mkString("[", ",", "]")
             val guard = record.guard.map(renderedValue).getOrElse("null")
-            s"{\"identity\":${quoted(record.identity)},\"target\":${quoted(record.target.identity)},\"value\":${renderedValue(record.value)},\"authored_order\":${record.authoredOrder},\"scope\":$scope,\"guard\":$guard,\"analyses\":$analyses,\"source\":${source(record.source)}}"
+            s"{\"identity\":${quoted(record.identity)},\"target\":${quoted(record.target.identity)},\"value\":${renderedValue(record.value)},\"authored_order\":${record.authoredOrder},\"operation_order\":${record.operationOrder},\"scope\":$scope,\"guard\":$guard,\"analyses\":$analyses,\"source\":${source(record.source)}}"
           .mkString("[", ",", "]")
         s"{\"owner\":${quoted(snapshot.owner)},\"variables\":$variables,\"assignments\":$assignments}"
       .mkString("[", ",", "]")
@@ -59,11 +59,11 @@ private[nodal] object AnalogProceduralEvidence:
         s"  nodal.bridge.analog_procedural owner = ${quoted(snapshot.owner)} {"
       val variables = snapshot.variables.sortBy(_.declarationOrder).map: record =>
         val initializer = record.initializer.map(_.rendered).map(quoted).getOrElse("none")
-        s"    nodal.bridge.analog_variable identity = ${quoted(record.variable.identity)}, kind = ${quoted(record.variable.valueType.kind.label)}, dimension = ${quoted(record.variable.valueType.dimension)}, initializer = $initializer, declaration_order = ${record.declarationOrder}"
+        s"    nodal.bridge.analog_variable identity = ${quoted(record.variable.identity)}, kind = ${quoted(record.variable.valueType.kind.label)}, dimension = ${quoted(record.variable.valueType.dimension)}, initializer = $initializer, declaration_order = ${record.declarationOrder}, operation_order = ${record.operationOrder}"
       val assignments = snapshot.assignments.sortBy(_.authoredOrder).map: record =>
         val guard = record.guard.map(_.rendered).map(quoted).getOrElse("none")
         val analyses = record.analyses.sorted.map(quoted).mkString("[", ", ", "]")
-        s"    nodal.bridge.procedural_assign identity = ${quoted(record.identity)}, target = ${quoted(record.target.identity)}, value = ${quoted(record.value.rendered)}, kind = ${quoted(record.value.valueType.kind.label)}, dimension = ${quoted(record.value.valueType.dimension)}, authored_order = ${record.authoredOrder}, guard = $guard, analyses = $analyses"
+        s"    nodal.bridge.procedural_assign identity = ${quoted(record.identity)}, target = ${quoted(record.target.identity)}, value = ${quoted(record.value.rendered)}, kind = ${quoted(record.value.valueType.kind.label)}, dimension = ${quoted(record.value.valueType.dimension)}, authored_order = ${record.authoredOrder}, operation_order = ${record.operationOrder}, guard = $guard, analyses = $analyses"
       header +: (variables ++ assignments :+ "  }")
 
   def mlirText(snapshots: Vector[AnalogProceduralRuntime.Snapshot]): String =

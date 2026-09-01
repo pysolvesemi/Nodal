@@ -67,6 +67,17 @@ int main() {
     assert(snapshot.variables[index].declarationOrder == index);
   for (std::size_t index = 0; index < snapshot.assignments.size(); ++index)
     assert(snapshot.assignments[index].authoredOrder == index);
+  assert((std::vector<std::size_t>{snapshot.variables[0].operationOrder,
+                                   snapshot.variables[1].operationOrder,
+                                   snapshot.variables[2].operationOrder,
+                                   snapshot.variables[3].operationOrder} ==
+          std::vector<std::size_t>{0, 1, 2, 7}));
+  assert((std::vector<std::size_t>{snapshot.assignments[0].operationOrder,
+                                   snapshot.assignments[1].operationOrder,
+                                   snapshot.assignments[2].operationOrder,
+                                   snapshot.assignments[3].operationOrder,
+                                   snapshot.assignments[4].operationOrder} ==
+          std::vector<std::size_t>{3, 4, 5, 6, 8}));
   assert(snapshot.assignments[0].identity == "ProceduralTop.capture");
   assert(snapshot.assignments[1].identity == "ProceduralTop.update");
   assert(snapshot.assignments[2].identity == "ProceduralTop.repeat-update");

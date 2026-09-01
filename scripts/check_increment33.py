@@ -181,6 +181,7 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         "def read",
         "def assign",
         "authoredOrder",
+        "operationOrder",
         "NODAL-ANALOG-033-011",
         "targetState.initialized = true",
         "assignments.toVector",
@@ -193,6 +194,7 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         "declareVariable",
         "void assign",
         "authoredOrder",
+        "operationOrder",
         "NODAL-ANALOG-033-011",
         "targetState.initialized = true",
         "result.assignments = assignments_",
@@ -317,6 +319,28 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         "nested procedural scopes preserve declaration and assignment chronology"
         in bridge_tests,
         "NODAL-INC33-061: nested chronology regression is missing",
+    )
+    require(
+        "public incompatible compound dimensions are rejected without read fallback"
+        in construction_tests,
+        "NODAL-INC33-062: compound read-dimension regression is missing",
+    )
+    require(
+        "initializing assignments precede dependent declarations independent of provenance"
+        in bridge_tests,
+        "NODAL-INC33-063: initializer dependency chronology regression is missing",
+    )
+    require(
+        "operation_order" in procedural_bridge,
+        "NODAL-INC33-064: combined procedural operation order is not serialized",
+    )
+    require(
+        "snapshot.variables.map(_.operationOrder)" in scala_witness,
+        "NODAL-INC33-065: Scala witness does not prove combined operation order",
+    )
+    require(
+        "snapshot.variables[0].operationOrder" in native_witness,
+        "NODAL-INC33-066: native witness does not prove combined operation order",
     )
 
     roadmap = read_text(root, "docs/roadmap/nodal-development-todo.md")

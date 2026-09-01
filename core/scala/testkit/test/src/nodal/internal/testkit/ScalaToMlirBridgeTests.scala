@@ -76,6 +76,13 @@ final class BridgeProceduralNestedChronology extends Module:
     val later: Variable[Real] = variable(Real, 0.0.V)
     later := 2.0.V
 
+final class BridgeProceduralInitializerDependency extends Module:
+  analogProcedure:
+    val source: Variable[Real] = variable(Real)
+    source := 1.0.real
+    val sink: Variable[Real] = variable(Real, source)
+    source := sink
+
 object ScalaToMlirBridgeTests extends TestSuite:
   private def workDirectory(): Path =
     Files.createTempDirectory("nodal-bridge-test-")
@@ -227,6 +234,59 @@ object ScalaToMlirBridgeTests extends TestSuite:
           assert(success.normalizedMlir.contains("authored_order"))
           assert(success.normalizedMlir.contains("declaration_order"))
         finally delete(directory)
+    test("initializing assignments precede dependent declarations independent of provenance"):
+      val snapshot = ConstructionKernel.inspect(new BridgeProceduralInitializerDependency)
+      val program = snapshot.analogProcedural.head
+      assert(program.variables.map(_.operationOrder) == Vector(0, 2))
+      assert(program.assignments.map(_.operationOrder) == Vector(1, 3))
+
+      val invertedVariables = program.variables.map: record =>
+        val source =
+          if record.operationOrder == 0 then
+            AnalogProceduralRuntime.Source("z-helper.scala", 400, 1)
+          else AnalogProceduralRuntime.Source("a-helper.scala", 1, 1)
+        record.copy(source = Some(source))
+      val invertedAssignments = program.assignments.map: record =>
+        val source =
+          if record.operationOrder == 1 then
+            AnalogProceduralRuntime.Source("z-helper.scala", 300, 1)
+          else AnalogProceduralRuntime.Source("a-helper.scala", 2, 1)
+        record.copy(source = Some(source))
+      val inverted = program.copy(
+        variables = invertedVariables,
+        assignments = invertedAssignments
+      )
+      val modified = snapshot.copy(
+        analogProcedural = snapshot.analogProcedural.updated(0, inverted)
+      )
+      val rendered = AnalogProceduralMlir.renderModule(modified, program.owner).head
+      val declaration0 = rendered.indexOf("operation_order = 0 : i64")
+      val assignment0 = rendered.indexOf("operation_order = 1 : i64")
+      val declaration1 = rendered.indexOf("operation_order = 2 : i64")
+      val assignment1 = rendered.indexOf("operation_order = 3 : i64")
+      assert(declaration0 >= 0)
+      assert(assignment0 > declaration0)
+      assert(declaration1 > assignment0)
+      assert(assignment1 > declaration1)
+
+      val document = ScalaToMlirBridge.fromSnapshot(modified)
+      sys.env.get("NODAL_NODALC").foreach: executable =>
+        val directory = workDirectory()
+        try
+          val success = NativeCompilerClient
+            .run(
+              document,
+              NativeCompilerRequest(
+                executable = Path.of(executable).toAbsolutePath,
+                arguments = Vector("--mlir-print-op-generic"),
+                workingDirectory = directory,
+                timeout = Duration.ofSeconds(30)
+              )
+            )
+            .asInstanceOf[NativeCompilerSuccess]
+          assert(success.normalizedMlir.contains("operation_order"))
+        finally delete(directory)
+
     test("snapshot insertion order does not affect the bridge"):
       val snapshot = ConstructionKernel.inspect(new BridgeTop)
       val permuted = snapshot.copy(

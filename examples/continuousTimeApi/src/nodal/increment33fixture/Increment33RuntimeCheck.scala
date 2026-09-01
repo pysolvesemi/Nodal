@@ -78,6 +78,8 @@ object Increment33RuntimeCheck:
     val snapshot = recorder.snapshot
     assert(snapshot.variables.map(_.declarationOrder) == Vector(0, 1, 2, 3))
     assert(snapshot.assignments.map(_.authoredOrder) == Vector(0, 1, 2, 3, 4))
+    assert(snapshot.variables.map(_.operationOrder) == Vector(0, 1, 2, 7))
+    assert(snapshot.assignments.map(_.operationOrder) == Vector(3, 4, 5, 6, 8))
     assert(snapshot.assignments.map(_.identity) == Vector(
       "ProceduralTop.capture",
       "ProceduralTop.update",

@@ -40,7 +40,8 @@ private[nodal] object AnalogProceduralRuntime:
       variable: Variable,
       initializer: Option[Value],
       source: Option[Source],
-      declarationOrder: Int
+      declarationOrder: Int,
+      operationOrder: Int = -1
   )
 
   final case class AssignmentRecord(
@@ -51,7 +52,8 @@ private[nodal] object AnalogProceduralRuntime:
       scope: Vector[String],
       guard: Option[Value],
       analyses: Vector[String],
-      source: Option[Source]
+      source: Option[Source],
+      operationOrder: Int = -1
   )
 
   final case class Snapshot(
@@ -201,7 +203,13 @@ private[nodal] object AnalogProceduralRuntime:
       val variable = Variable(canonical, owner, scopeStack, valueType)
       initializer.foreach(validateInitializer(variable, _))
       initializer.foreach(validateReads)
-      val record = VariableRecord(variable, initializer, source, variables.size)
+      val record = VariableRecord(
+        variable,
+        initializer,
+        source,
+        variables.size,
+        variables.size + assignments.size
+      )
       variables += canonical -> MutableVariable(record, initializer.nonEmpty)
       variable
 
@@ -274,7 +282,8 @@ private[nodal] object AnalogProceduralRuntime:
         scopeStack,
         guard,
         canonicalAnalyses.toVector.sorted,
-        source
+        source,
+        variables.size + assignments.size
       )
       statements += canonicalStatement
       targetState.initialized = true

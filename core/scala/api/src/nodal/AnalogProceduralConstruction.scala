@@ -122,11 +122,8 @@ private[nodal] object AnalogProceduralConstruction:
       .orElse(reads.headOption.map(_.valueType.kind))
       .orElse(fallback.map(_.kind))
       .getOrElse(AnalogProceduralRuntime.ScalarKind.Real)
-    val inferredDimension = ConstructionKernel.analogDimension(expression)
-    val dimension = inferredDimension
-      .filterNot(_ == "unknown")
-      .orElse(reads.headOption.map(_.valueType.dimension))
-      .orElse(inferredDimension)
+    val dimension = ConstructionKernel
+      .analogDimension(expression)
       .getOrElse("unknown")
     AnalogProceduralRuntime.ValueType(kind, dimension)
 

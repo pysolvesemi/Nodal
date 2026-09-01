@@ -1,4 +1,4 @@
-name: Increment 33 Checkpoint Repair
+name: Increment 33 Review Repair
 
 on:
   push:
@@ -11,113 +11,428 @@ permissions:
 jobs:
   repair:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 60
     steps:
-      - name: Check out Increment 33 branch
+      - name: Check out exact Increment 33 implementation head
         uses: actions/checkout@v6
         with:
           ref: increment/33-analog-variables-procedural-assignment-v5
           fetch-depth: 0
 
-      - name: Apply deterministic contract repairs
+      - name: Guard expected implementation head
+        run: |
+          test "$(git rev-parse HEAD)" = "2356c98e0ad3e586344bedaa6ddc849c92b7bec8"
+
+      - name: Apply P1 review repairs and regressions
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          scala_path = Path('core/scala/api/src/nodal/AnalogProceduralRuntime.scala')
-          scala = scala_path.read_text()
-          old = '''    ): Variable =
-              requireProcedure(Option(identity).filter(_.nonEmpty))
-              if identity.trim.isEmpty then
-          '''.replace('              ', '      ')
-          new = '''    ): Variable =
-              if !procedureActive then
-                fail(
-                  "NODAL-ANALOG-033-003",
-                  "procedural variable declaration requires an active procedural region",
-                  Option(identity).filter(_.nonEmpty)
+          def replace_once(path_name: str, old: str, new: str) -> None:
+              path = Path(path_name)
+              text = path.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"required patch anchor not found in {path_name}: {old[:120]!r}")
+              path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          runtime = "core/scala/api/src/nodal/AnalogProceduralRuntime.scala"
+          replace_once(
+              runtime,
+              '''  final case class VariableRecord(
+              variable: Variable,
+              initializer: Option[Value],
+              source: Option[Source],
+              declarationOrder: Int
+          )
+
+          final case class AssignmentRecord(
+              identity: String,
+              target: Variable,
+              value: Value,
+              authoredOrder: Int,
+              scope: Vector[String],
+              guard: Option[Value],
+              analyses: Vector[String],
+              source: Option[Source]
+          )
+          '''.replace("          ", ""),
+              '''  final case class VariableRecord(
+              variable: Variable,
+              initializer: Option[Value],
+              source: Option[Source],
+              declarationOrder: Int,
+              sequenceOrder: Int = declarationOrder
+          )
+
+          final case class AssignmentRecord(
+              identity: String,
+              target: Variable,
+              value: Value,
+              authoredOrder: Int,
+              scope: Vector[String],
+              guard: Option[Value],
+              analyses: Vector[String],
+              source: Option[Source],
+              sequenceOrder: Int = authoredOrder
+          )
+          '''.replace("          ", ""),
+          )
+          replace_once(
+              runtime,
+              '''    private var scopeSerial = 0
+          '''.replace("          ", ""),
+              '''    private var scopeSerial = 0
+              private var nextSequenceOrder = 0
+          '''.replace("          ", ""),
+          )
+          replace_once(
+              runtime,
+              '''    private def fail(code: String, message: String, path: Option[String] = None): Nothing =
+              reject(Diagnostic(code, message, path))
+
+              private def requireProcedure(path: Option[String] = None): Unit =
+          '''.replace("              ", "      "),
+              '''    private def fail(code: String, message: String, path: Option[String] = None): Nothing =
+              reject(Diagnostic(code, message, path))
+
+              private def claimSequenceOrder(): Int =
+                val result = nextSequenceOrder
+                nextSequenceOrder += 1
+                result
+
+              private def requireProcedure(path: Option[String] = None): Unit =
+          '''.replace("              ", "      "),
+          )
+          replace_once(
+              runtime,
+              '''      val record = VariableRecord(variable, initializer, source, variables.size)
+          '''.replace("          ", ""),
+              '''      val record = VariableRecord(
+                variable,
+                initializer,
+                source,
+                variables.size,
+                claimSequenceOrder()
+              )
+          '''.replace("          ", ""),
+          )
+          replace_once(
+              runtime,
+              '''      assignments += AssignmentRecord(
+                canonicalStatement,
+                target,
+                value,
+                assignments.size,
+                scopeStack,
+                guard,
+                canonicalAnalyses.toVector.sorted,
+                source
+              )
+          '''.replace("          ", ""),
+              '''      assignments += AssignmentRecord(
+                canonicalStatement,
+                target,
+                value,
+                assignments.size,
+                scopeStack,
+                guard,
+                canonicalAnalyses.toVector.sorted,
+                source,
+                claimSequenceOrder()
+              )
+          '''.replace("          ", ""),
+          )
+
+          construction = "core/scala/api/src/nodal/AnalogProceduralConstruction.scala"
+          replace_once(
+              construction,
+              '''    val dimension = CandidateRuntime
+                .expressionUnit(expression)
+                .map(dimensionFromUnit)
+                .filterNot(_ == "dimensionless")
+                .orElse(reads.headOption.map(_.valueType.dimension))
+          '''.replace("              ", "      "),
+              '''    val dimension = CandidateRuntime
+                .expressionUnit(expression)
+                .map(dimensionFromUnit)
+                .orElse(reads.headOption.map(_.valueType.dimension))
+          '''.replace("              ", "      "),
+          )
+
+          renderer = "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala"
+          replace_once(
+              renderer,
+              '''  private sealed trait Event:
+              def source: Option[AnalogProceduralRuntime.Source]
+              def category: Int
+              def order: Int
+              def identity: String
+
+            private final case class DeclarationEvent(
+                record: AnalogProceduralRuntime.VariableRecord
+            ) extends Event:
+              def source = record.source
+              def category = 0
+              def order = record.declarationOrder
+              def identity = record.variable.identity
+
+            private final case class AssignmentEvent(
+                record: AnalogProceduralRuntime.AssignmentRecord
+            ) extends Event:
+              def source = record.source
+              def category = 1
+              def order = record.authoredOrder
+              def identity = record.identity
+
+            private final case class ScopeEvent(scope: ScopeNode) extends Event:
+              def source = earliestSource(scope)
+              def category = 2
+              def order = scope.path.mkString(".").hashCode
+              def identity = scope.path.mkString(".")
+          '''.replace("            ", ""),
+              '''  private sealed trait Event:
+              def source: Option[AnalogProceduralRuntime.Source]
+              def category: Int
+              def sequenceOrder: Int
+              def identity: String
+
+            private final case class DeclarationEvent(
+                record: AnalogProceduralRuntime.VariableRecord
+            ) extends Event:
+              def source = record.source
+              def category = 0
+              def sequenceOrder = record.sequenceOrder
+              def identity = record.variable.identity
+
+            private final case class AssignmentEvent(
+                record: AnalogProceduralRuntime.AssignmentRecord
+            ) extends Event:
+              def source = record.source
+              def category = 1
+              def sequenceOrder = record.sequenceOrder
+              def identity = record.identity
+
+            private final case class ScopeEvent(scope: ScopeNode) extends Event:
+              def source = earliestSource(scope)
+              def category = 2
+              def sequenceOrder = earliestSequenceOrder(scope)
+              def identity = scope.path.mkString(".")
+          '''.replace("            ", ""),
+          )
+          replace_once(
+              renderer,
+              '''    (local ++ nested)
+                .sortBy(value => (value.file, value.line, value.column))
+                .headOption
+
+              private def renderScopeBody(
+          '''.replace("              ", "      "),
+              '''    (local ++ nested)
+                .sortBy(value => (value.file, value.line, value.column))
+                .headOption
+
+              private def earliestSequenceOrder(node: ScopeNode): Int =
+                (
+                  node.declarations.iterator.map(_.sequenceOrder) ++
+                    node.assignments.iterator.map(_.sequenceOrder) ++
+                    node.children.valuesIterator.map(earliestSequenceOrder)
+                ).minOption.getOrElse(Int.MaxValue)
+
+              private def renderScopeBody(
+          '''.replace("              ", "      "),
+          )
+          replace_once(
+              renderer,
+              '''    val sorted = events.sortBy: event =>
+                event.source match
+                  case Some(source) =>
+                    (
+                      0,
+                      source.file,
+                      source.line,
+                      source.column,
+                      event.category,
+                      event.order,
+                      event.identity
+                    )
+                  case None =>
+                    (
+                      1,
+                      "",
+                      Int.MaxValue,
+                      Int.MaxValue,
+                      event.category,
+                      event.order,
+                      event.identity
+                    )
+          '''.replace("              ", "      "),
+              '''    val sorted = events.sortBy: event =>
+                (
+                  event.sequenceOrder,
+                  event.category,
+                  event.source.map(_.file).getOrElse(""),
+                  event.source.map(_.line).getOrElse(Int.MaxValue),
+                  event.source.map(_.column).getOrElse(Int.MaxValue),
+                  event.identity
                 )
-              if identity.trim.isEmpty then
-          '''.replace('              ', '      ')
-          if old not in scala:
-              raise SystemExit('Scala declaration pattern was not found')
-          scala_path.write_text(scala.replace(old, new, 1))
+          '''.replace("              ", "      "),
+          )
 
-          native_path = Path('core/native/include/nodal/AnalogProceduralRuntime.h')
-          native = native_path.read_text()
-          if '#include <type_traits>\n' not in native:
-              native = native.replace('#include <string>\n', '#include <string>\n#include <type_traits>\n', 1)
-          old_native = '''    requireProcedure(identity.empty() ? std::nullopt : std::optional<std::string>(identity));
-              identity = trim(identity);
-          '''.replace('              ', '    ')
-          new_native = '''    if (!procedureActive_)
-              fail("NODAL-ANALOG-033-003",
-                   "procedural variable declaration requires an active procedural region",
-                   identity.empty() ? std::nullopt : std::optional<std::string>(identity));
-              identity = trim(identity);
-          '''.replace('              ', '    ')
-          if old_native not in native:
-              raise SystemExit('Native declaration pattern was not found')
-          native_path.write_text(native.replace(old_native, new_native, 1))
+          construction_tests = (
+              "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala"
+          )
+          replace_once(
+              construction_tests,
+              '''final class PublicAnalogDimensionMismatch extends Module:
+            val voltage: Variable[Real] = variable(Real, 0.0.V)
 
-          scala_witness = Path(
-              'examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala'
-          )
-          text = scala_witness.read_text().replace(
-              'expect("NODAL-ANALOG-033-008"):\n      outside.declare("illegal", RealVoltage)',
-              'expect("NODAL-ANALOG-033-003"):\n      outside.declare("illegal", RealVoltage)',
-          )
-          scala_witness.write_text(text)
+            analogProcedure:
+              voltage := 1.0.A
 
-          native_witness = Path(
-              'tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp'
-          )
-          text = native_witness.read_text().replace(
-              'expect("NODAL-ANALOG-033-008", [&] {\n    (void)outside.declareVariable("illegal", RealVoltage);',
-              'expect("NODAL-ANALOG-033-003", [&] {\n    (void)outside.declareVariable("illegal", RealVoltage);',
-          )
-          native_witness.write_text(text)
+          final class PublicAnalogAssignmentOutsideProcedure extends Module:
+          '''.replace("          ", ""),
+              '''final class PublicAnalogDimensionMismatch extends Module:
+            val voltage: Variable[Real] = variable(Real, 0.0.V)
 
-          checker = Path('scripts/check_increment33.py')
-          text = checker.read_text().replace(
-              '"NODAL-ANALOG-033-008",\n        "NODAL-ANALOG-033-009",',
-              '"NODAL-ANALOG-033-003",\n        "NODAL-ANALOG-033-009",',
+            analogProcedure:
+              voltage := 1.0.A
+
+          final class PublicAnalogDimensionlessAssignmentMismatch extends Module:
+            val voltage: Variable[Real] = variable(Real, 0.0.V)
+
+            analogProcedure:
+              voltage := 0.0.real
+
+          final class PublicAnalogAssignmentOutsideProcedure extends Module:
+          '''.replace("          ", ""),
           )
-          checker.write_text(text)
+          replace_once(
+              construction_tests,
+              '''    test("public assignment dimension mismatch is rejected"):
+                val failure =
+                  scala.util.Try(ConstructionKernel.inspect(new PublicAnalogDimensionMismatch)).failed.get
+                    .asInstanceOf[AnalogProceduralRuntime.Failure]
+                assert(failure.diagnostic.code == "NODAL-ANALOG-033-013")
+
+              test("public assignment outside analogProcedure is rejected"):
+          '''.replace("              ", "      "),
+              '''    test("public assignment dimension mismatch is rejected"):
+                val failure =
+                  scala.util.Try(ConstructionKernel.inspect(new PublicAnalogDimensionMismatch)).failed.get
+                    .asInstanceOf[AnalogProceduralRuntime.Failure]
+                assert(failure.diagnostic.code == "NODAL-ANALOG-033-013")
+
+              test("dimensionless assignment cannot inherit the target dimension"):
+                val failure = scala.util
+                  .Try(ConstructionKernel.inspect(new PublicAnalogDimensionlessAssignmentMismatch))
+                  .failed
+                  .get
+                  .asInstanceOf[AnalogProceduralRuntime.Failure]
+                assert(failure.diagnostic.code == "NODAL-ANALOG-033-013")
+
+              test("public assignment outside analogProcedure is rejected"):
+          '''.replace("              ", "      "),
+          )
+
+          bridge_tests = (
+              "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
+          )
+          replace_once(
+              bridge_tests,
+              '''      assert(
+                expectedSourcePaths.forall(path =>
+                  occurrences(first.text, s"semantic_path = \\"$path\\"") >= 2
+                )
+              )
+
+            test("snapshot insertion order does not affect the bridge"):
+          '''.replace("            ", ""),
+              '''      assert(
+                expectedSourcePaths.forall(path =>
+                  occurrences(first.text, s"semantic_path = \\"$path\\"") >= 2
+                )
+              )
+
+            test("procedural MLIR prioritizes authored order over source provenance"):
+              val snapshot = ConstructionKernel.inspect(new BridgeProceduralTop)
+              val program = snapshot.analogProcedural.head
+              val ordered = program.assignments.sortBy(_.authoredOrder)
+              val reversedSources = ordered.map(_.source).reverse
+              val adversarialProgram = program.copy(
+                assignments = ordered.zip(reversedSources).map: (record, source) =>
+                  record.copy(source = source)
+              )
+              val adversarial = snapshot.copy(
+                analogProcedural = snapshot.analogProcedural.map: candidate =>
+                  if candidate.owner == program.owner then adversarialProgram else candidate
+              )
+              val text = ScalaToMlirBridge.fromSnapshot(adversarial).text
+              val positions = ordered.map: record =>
+                text.indexOf(s"statement_id = \\"${record.identity}\\"")
+
+              assert(positions.forall(_ >= 0))
+              assert(positions == positions.sorted)
+
+            test("snapshot insertion order does not affect the bridge"):
+          '''.replace("            ", ""),
+          )
+
+          checker = "scripts/check_increment33.py"
+          replace_once(
+              checker,
+              '''        "authoredOrder",
+                "NODAL-ANALOG-033-011",
+          '''.replace("              ", "      "),
+              '''        "authoredOrder",
+                "sequenceOrder",
+                "NODAL-ANALOG-033-011",
+          '''.replace("              ", "      "),
+          )
+          replace_once(
+              checker,
+              '''        "nodal.bridge.source_map",
+              ):
+          '''.replace("              ", "      "),
+              '''        "nodal.bridge.source_map",
+                "procedural MLIR prioritizes authored order over source provenance",
+              ):
+          '''.replace("              ", "      "),
+          )
           PY
 
-      - name: Format Scala checkpoint
+      - name: Format repaired Scala sources
         run: ./mill mill.scalalib.scalafmt/formatAll
 
-      - name: Validate checkpoint
+      - name: Validate focused and repository Scala contracts
         run: |
           python3 scripts/check_increment31.py
           python3 scripts/check_increment133.py
           python3 scripts/check_increment32.py
           python3 scripts/check_increment33.py --compile
           python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./nodal core scala
           ./mill examples.continuousTimeApi.runMain \
             nodal.increment33fixture.Increment33RuntimeCheck \
             /tmp/increment33-scala-witness.txt
           test -s /tmp/increment33-scala-witness.txt
+          grep -F 'variables=4' /tmp/increment33-scala-witness.txt
+          grep -F 'assignments=5' /tmp/increment33-scala-witness.txt
           ./mill mill.scalalib.scalafmt/checkFormatAll
           ./mill scalafix.check
           python3 scripts/check_markdown.py
           git diff --check
 
-      - name: Publish repaired checkpoint
+      - name: Publish reviewed implementation checkpoint
         run: |
           git config user.name pysolvesemi
           git config user.email pysolvesemi@gmail.com
           git add \
-            core/native/include/nodal/AnalogProceduralRuntime.h \
+            core/scala/api/src/nodal/AnalogProceduralConstruction.scala \
             core/scala/api/src/nodal/AnalogProceduralRuntime.scala \
-            examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala \
-            scripts/check_increment33.py \
-            tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp
-          if git diff --cached --quiet; then
-            echo 'No repair commit was required.'
-          else
-            git commit -m 'fix(increment33): align declaration diagnostics and header dependencies'
-            git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5
-          fi
+            core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala \
+            core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
+            core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala \
+            scripts/check_increment33.py
+          git diff --cached --check
+          git commit -m 'fix(increment33): preserve authored order and dimensionless types'
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

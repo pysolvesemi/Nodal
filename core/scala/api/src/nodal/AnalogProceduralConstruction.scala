@@ -134,7 +134,6 @@ private[nodal] object AnalogProceduralConstruction:
     val dimension = CandidateRuntime
       .expressionUnit(expression)
       .map(dimensionFromUnit)
-      .filterNot(_ == "dimensionless")
       .orElse(reads.headOption.map(_.valueType.dimension))
       .orElse(fallback.map(_.dimension))
       .getOrElse("dimensionless")

@@ -26,6 +26,12 @@ final class PublicAnalogDimensionMismatch extends Module:
   analogProcedure:
     voltage := 1.0.A
 
+final class PublicAnalogDimensionlessMismatch extends Module:
+  val voltage: Variable[Real] = variable(Real, 0.0.V)
+
+  analogProcedure:
+    voltage := 0.0.real
+
 final class PublicAnalogAssignmentOutsideProcedure extends Module:
   val voltage: Variable[Real] = variable(Real, 0.0.V)
   voltage := 1.0.V
@@ -78,6 +84,14 @@ object AnalogProceduralConstructionTests extends TestSuite:
     test("public assignment dimension mismatch is rejected"):
       val failure =
         scala.util.Try(ConstructionKernel.inspect(new PublicAnalogDimensionMismatch)).failed.get
+          .asInstanceOf[AnalogProceduralRuntime.Failure]
+      assert(failure.diagnostic.code == "NODAL-ANALOG-033-013")
+
+    test("public dimensionless assignment to a voltage variable is rejected"):
+      val failure =
+        scala.util.Try(
+          ConstructionKernel.inspect(new PublicAnalogDimensionlessMismatch)
+        ).failed.get
           .asInstanceOf[AnalogProceduralRuntime.Failure]
       assert(failure.diagnostic.code == "NODAL-ANALOG-033-013")
 

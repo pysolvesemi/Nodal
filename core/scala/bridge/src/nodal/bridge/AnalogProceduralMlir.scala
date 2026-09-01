@@ -229,6 +229,25 @@ private[nodal] object AnalogProceduralMlir:
       .sortBy(value => (value.file, value.line, value.column))
       .headOption
 
+  private def earliestAssignmentOrder(node: ScopeNode): Option[Int] =
+    val local = node.assignments.iterator.map(_.authoredOrder)
+    val nested = node.children.valuesIterator.flatMap(earliestAssignmentOrder)
+    (local ++ nested).minOption
+
+  private def earliestDeclarationOrder(node: ScopeNode): Option[Int] =
+    val local = node.declarations.iterator.map(_.declarationOrder)
+    val nested = node.children.valuesIterator.flatMap(earliestDeclarationOrder)
+    (local ++ nested).minOption
+
+  private def authoredSequence(event: Event): (Int, Int) = event match
+    case DeclarationEvent(record) => (0, record.declarationOrder)
+    case AssignmentEvent(record) => (1, record.authoredOrder)
+    case ScopeEvent(scope) =>
+      earliestAssignmentOrder(scope)
+        .map(order => (1, order))
+        .orElse(earliestDeclarationOrder(scope).map(order => (0, order)))
+        .getOrElse((2, Int.MaxValue))
+
   private def renderScopeBody(
       node: ScopeNode,
       program: AnalogProceduralRuntime.Snapshot,
@@ -241,25 +260,26 @@ private[nodal] object AnalogProceduralMlir:
         node.assignments.toVector.map(AssignmentEvent.apply) ++
         node.children.values.toVector.map(ScopeEvent.apply)
     val sorted = events.sortBy: event =>
+      val (phase, sequence) = authoredSequence(event)
       event.source match
         case Some(source) =>
           (
-            0,
+            phase,
+            sequence,
+            event.category,
             source.file,
             source.line,
             source.column,
-            event.category,
-            event.order,
             event.identity
           )
         case None =>
           (
-            1,
+            phase,
+            sequence,
+            event.category,
             "",
             Int.MaxValue,
             Int.MaxValue,
-            event.category,
-            event.order,
             event.identity
           )
 

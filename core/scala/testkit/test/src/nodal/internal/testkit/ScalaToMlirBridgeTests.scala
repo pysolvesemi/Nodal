@@ -158,6 +158,32 @@ object ScalaToMlirBridgeTests extends TestSuite:
         )
       )
 
+    test("analog procedural rendering prefers authored order to provenance"):
+      val snapshot = ConstructionKernel.inspect(new BridgeProceduralTop)
+      val program = snapshot.analogProcedural.head
+      val invertedSources = program.assignments.zipWithIndex.map:
+        case (record, 0) =>
+          record.copy(
+            source = Some(AnalogProceduralRuntime.Source("z-helper.scala", 200, 1))
+          )
+        case (record, 1) =>
+          record.copy(
+            source = Some(AnalogProceduralRuntime.Source("a-helper.scala", 10, 1))
+          )
+        case (record, _) => record
+      val modified = snapshot.copy(
+        analogProcedural = snapshot.analogProcedural.updated(
+          0,
+          program.copy(assignments = invertedSources)
+        )
+      )
+
+      val document = ScalaToMlirBridge.fromSnapshot(modified)
+      val first = document.text.indexOf("authored_order = 0 : i64")
+      val second = document.text.indexOf("authored_order = 1 : i64")
+      assert(first >= 0)
+      assert(second > first)
+
     test("snapshot insertion order does not affect the bridge"):
       val snapshot = ConstructionKernel.inspect(new BridgeTop)
       val permuted = snapshot.copy(

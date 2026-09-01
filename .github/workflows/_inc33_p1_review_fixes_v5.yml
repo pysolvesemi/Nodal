@@ -1,0 +1,109 @@
+name: Increment 33 P1 review fixes v5
+
+on:
+  push:
+    branches:
+      - automation/inc33-p1-review-fixes-v5-20260901
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact Increment 33 implementation head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Require the reviewed baseline
+        run: test "$(git rev-parse HEAD)" = 848e5420bddf25869b48892d49bf90b824d2ee3b
+
+      - name: Apply validated semantic patch and fixture correction
+        run: |
+          git fetch --no-tags origin automation/inc33-p1-review-fixes-v4-20260901
+          python3 - <<'PY'
+          import subprocess
+          import textwrap
+          from pathlib import Path
+
+          source = subprocess.check_output(
+              [
+                  "git",
+                  "show",
+                  "a469573bdd90561ebea2ad5dadc8daf30473bd4f:.github/workflows/_inc33_p1_review_fixes_v4.yml",
+              ],
+              text=True,
+          )
+          begin_marker = "          python3 - <<'PY'\n"
+          end_marker = "\n          PY\n\n      - name: Install pinned native and lint toolchains"
+          begin = source.index(begin_marker) + len(begin_marker)
+          end = source.index(end_marker, begin)
+          script = textwrap.dedent(source[begin:end])
+          exec(compile(script, "increment33-p1-review-fix-v5.py", "exec"), {"__name__": "__main__"})
+
+          mutation_path = Path("tests/compiler/test_increment33.py")
+          mutations = mutation_path.read_text(encoding="utf-8")
+          required = (
+              '    "core/scala/testkit/test/src/nodal/'
+              'AnalogProceduralConstructionTests.scala",\n'
+          )
+          anchor = (
+              '    "core/scala/testkit/test/src/nodal/internal/testkit/'
+              'ScalaToMlirBridgeTests.scala",\n'
+          )
+          if required not in mutations:
+              if mutations.count(anchor) != 1:
+                  raise SystemExit("mutation fixture insertion anchor was not found exactly once")
+              mutations = mutations.replace(anchor, required + anchor, 1)
+          mutation_path.write_text(mutations, encoding="utf-8")
+          PY
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format and run focused acceptance
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          test -x out/native/release/bin/nodalc
+          NODAL_NODALC="$PWD/out/native/release/bin/nodalc" \
+            ./mill core.scala.testkit.test.testOnly \
+              nodal.internal.testkit.ScalaToMlirBridgeTests
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Publish validated review fixes
+        run: |
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            .github/workflows/increment-33-analog-procedural-assignment.yml \
+            core/scala/api/src/nodal/AnalogProceduralConstruction.scala \
+            core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+            core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala \
+            core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
+            core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala \
+            scripts/check_increment33.py \
+            tests/compiler/test_increment33.py
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m 'fix(increment33): preserve nested chronology and compound dimensions'
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

@@ -304,6 +304,21 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
             f"NODAL-INC33-041: compiler diagnostic inventory is missing code {code:03d}",
         )
 
+    construction_tests = read_text(
+        root,
+        "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala",
+    )
+    require(
+        "public compound dimensionless assignment to a voltage variable is rejected"
+        in construction_tests,
+        "NODAL-INC33-060: compound dimension regression is missing",
+    )
+    require(
+        "nested procedural scopes preserve declaration and assignment chronology"
+        in bridge_tests,
+        "NODAL-INC33-061: nested chronology regression is missing",
+    )
+
     roadmap = read_text(root, "docs/roadmap/nodal-development-todo.md")
     require(
         "**Revision:** 1.43" in roadmap,

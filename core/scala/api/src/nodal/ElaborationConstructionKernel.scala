@@ -713,9 +713,15 @@ private final class ConstructionSession(val options: EmitOptions):
       )
     leftCanonical -> rightCanonical
 
-  private def inferAnalogDimension(value: Any): AnalogDimension = value match
+  def inferAnalogDimension(value: Any): AnalogDimension = value match
     case parameter: Param[?] => inferAnalogDimension(parameter.default)
     case state: AnalogState => physicalDimension(state.dimension)
+
+    case variable: Variable[?] =>
+      AnalogProceduralConstruction
+        .registeredDimension(variable)
+        .map(namedAnalogDimension)
+        .getOrElse(AnalogDimension.Unknown)
     case expression: KernelExpr[?] =>
       expression.literal match
         case Some(literal) if literal.kind == "real" =>
@@ -723,7 +729,8 @@ private final class ConstructionSession(val options: EmitOptions):
             expression.operands.lift(1).collect { case value: String => value }.getOrElse("")
           val zero = literal.value.toDoubleOption.contains(0.0)
           unitDimension(unit, zero)
-        case _ =>
+        case Some(_) => AnalogDimension.Dimensionless
+        case None =>
           expression.operation match
             case Some("analog_add") | Some("analog_sub") =>
               expression.operands.map(inferAnalogDimension).reduceOption(_.compatibleAdd(_))
@@ -788,6 +795,36 @@ private final class ConstructionSession(val options: EmitOptions):
       case "temperature" => AnalogDimension.Temperature
       case _ => AnalogDimension.Unknown
 
+  private def namedAnalogDimension(value: String): AnalogDimension =
+    value.trim match
+      case "dimensionless" | "1" => AnalogDimension.Dimensionless
+      case "voltage" => AnalogDimension.Voltage
+      case "current" => AnalogDimension.Current
+      case "time" => AnalogDimension.Time
+      case "frequency" => AnalogDimension.Dimensionless.divide(AnalogDimension.Time)
+      case "temperature" => AnalogDimension.Temperature
+      case "charge" => AnalogDimension.Current.multiply(AnalogDimension.Time)
+      case "power" => AnalogDimension.Voltage.multiply(AnalogDimension.Current)
+      case "resistance" => AnalogDimension.Voltage.divide(AnalogDimension.Current)
+      case "capacitance" =>
+        AnalogDimension.Current
+          .multiply(AnalogDimension.Time)
+          .divide(AnalogDimension.Voltage)
+      case "" | "unknown" => AnalogDimension.Unknown
+      case signature =>
+        val factors = signature.split("\\*").toVector
+        val parsed = factors.map: factor =>
+          factor.split("\\^", 2).toVector match
+            case Vector(name) if name.nonEmpty => Some(name -> 1)
+            case Vector(name, exponent) if name.nonEmpty =>
+              exponent.toIntOption.filter(_ != 0).map(value => name -> value)
+            case _ => None
+        if factors.nonEmpty && parsed.forall(_.nonEmpty) then
+          val powers = parsed.flatten
+            .groupMapReduce(_._1)(_._2)(_ + _)
+            .filter(_._2 != 0)
+          AnalogDimension(powers)
+        else AnalogDimension.Unknown
   private def physicalDimension(value: PhysicalDimension): AnalogDimension =
     value.name.trim.toLowerCase match
       case "dimensionless" => AnalogDimension.Dimensionless
@@ -1717,6 +1754,8 @@ private[nodal] object ConstructionKernel:
   def captureAnalogProceduralSource: Option[AnalogProceduralRuntime.Source] =
     active.flatMap(_.captureAnalogProceduralSource)
 
+  def analogDimension(value: Any): Option[String] =
+    active.map(_.inferAnalogDimension(value).canonical)
   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
     active.foreach(_.registerDomain(domain, kind))
 

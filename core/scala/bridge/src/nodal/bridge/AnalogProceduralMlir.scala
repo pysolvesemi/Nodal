@@ -229,25 +229,157 @@ private[nodal] object AnalogProceduralMlir:
       .sortBy(value => (value.file, value.line, value.column))
       .headOption
 
-  private def earliestAssignmentOrder(node: ScopeNode): Option[Int] =
-    val local = node.assignments.iterator.map(_.authoredOrder)
-    val nested = node.children.valuesIterator.flatMap(earliestAssignmentOrder)
-    (local ++ nested).minOption
+  private final case class OrderSpan(first: Int, last: Int)
 
-  private def earliestDeclarationOrder(node: ScopeNode): Option[Int] =
-    val local = node.declarations.iterator.map(_.declarationOrder)
-    val nested = node.children.valuesIterator.flatMap(earliestDeclarationOrder)
-    (local ++ nested).minOption
+  private def orderSpan(values: Iterable[Int]): Option[OrderSpan] =
+    val collected = values.toVector
+    if collected.isEmpty then None
+    else Some(OrderSpan(collected.min, collected.max))
 
-  private def authoredSequence(event: Event): (Int, Int) = event match
-    case DeclarationEvent(record) => (0, record.declarationOrder)
-    case AssignmentEvent(record) => (1, record.authoredOrder)
-    case ScopeEvent(scope) =>
-      earliestAssignmentOrder(scope)
-        .map(order => (1, order))
-        .orElse(earliestDeclarationOrder(scope).map(order => (0, order)))
-        .getOrElse((2, Int.MaxValue))
+  private def scopeDeclarationOrders(node: ScopeNode): Vector[Int] =
+    node.declarations.iterator.map(_.declarationOrder).toVector ++
+      node.children.valuesIterator.flatMap(child =>
+        scopeDeclarationOrders(child)
+      ).toVector
 
+  private def scopeAssignmentOrders(node: ScopeNode): Vector[Int] =
+    node.assignments.iterator.map(_.authoredOrder).toVector ++
+      node.children.valuesIterator.flatMap(child =>
+        scopeAssignmentOrders(child)
+      ).toVector
+
+  private def declarationSpan(event: Event): Option[OrderSpan] = event match
+    case DeclarationEvent(record) =>
+      Some(OrderSpan(record.declarationOrder, record.declarationOrder))
+    case AssignmentEvent(_) => None
+    case ScopeEvent(scope) => orderSpan(scopeDeclarationOrders(scope))
+
+  private def assignmentSpan(event: Event): Option[OrderSpan] = event match
+    case DeclarationEvent(_) => None
+    case AssignmentEvent(record) =>
+      Some(OrderSpan(record.authoredOrder, record.authoredOrder))
+    case ScopeEvent(scope) => orderSpan(scopeAssignmentOrders(scope))
+
+  private def declarationUses(
+      record: AnalogProceduralRuntime.VariableRecord
+  ): Set[String] =
+    record.initializer.toVector.flatMap(_.reads).map(_.identity).toSet
+
+  private def assignmentUses(
+      record: AnalogProceduralRuntime.AssignmentRecord
+  ): Set[String] =
+    (Vector(record.target.identity) ++
+      record.value.reads.map(_.identity) ++
+      record.guard.toVector.flatMap(_.reads).map(_.identity)).toSet
+
+  private def scopeDefinitions(node: ScopeNode): Set[String] =
+    node.declarations.iterator.map(_.variable.identity).toSet ++
+      node.children.valuesIterator.flatMap(child =>
+        scopeDefinitions(child)
+      ).toSet
+
+  private def scopeUses(node: ScopeNode): Set[String] =
+    node.declarations.iterator.flatMap(declarationUses).toSet ++
+      node.assignments.iterator.flatMap(assignmentUses).toSet ++
+      node.children.valuesIterator.flatMap(child => scopeUses(child)).toSet
+
+  private def definitions(event: Event): Set[String] = event match
+    case DeclarationEvent(record) => Set(record.variable.identity)
+    case AssignmentEvent(_) => Set.empty
+    case ScopeEvent(scope) => scopeDefinitions(scope)
+
+  private def uses(event: Event): Set[String] = event match
+    case DeclarationEvent(record) => declarationUses(record)
+    case AssignmentEvent(record) => assignmentUses(record)
+    case ScopeEvent(scope) => scopeUses(scope)
+
+  private def relativeOrder(
+      left: Option[OrderSpan],
+      right: Option[OrderSpan]
+  ): Option[Boolean] = (left, right) match
+    case (Some(lhs), Some(rhs)) if lhs.last < rhs.first => Some(true)
+    case (Some(lhs), Some(rhs)) if rhs.last < lhs.first => Some(false)
+    case (Some(_), Some(_)) =>
+      require(
+        false,
+        "procedural event order contains overlapping semantic intervals"
+      )
+      None
+    case _ => None
+
+  private def deterministicEventKey(
+      event: Event
+  ): (Int, String, Int, Int, Int, Int, String) = event.source match
+    case Some(source) =>
+      (
+        0,
+        source.file,
+        source.line,
+        source.column,
+        event.category,
+        event.order,
+        event.identity
+      )
+    case None =>
+      (
+        1,
+        "",
+        Int.MaxValue,
+        Int.MaxValue,
+        event.category,
+        event.order,
+        event.identity
+      )
+
+  private def orderEvents(events: Vector[Event]): Vector[Event] =
+    val outgoing = Vector.fill(events.size)(mutable.LinkedHashSet.empty[Int])
+    val indegree = Array.fill(events.size)(0)
+
+    def addEdge(source: Int, destination: Int): Unit =
+      if outgoing(source).add(destination) then indegree(destination) += 1
+
+    for
+      leftIndex <- events.indices
+      rightIndex <- (leftIndex + 1) until events.size
+    do
+      val left = events(leftIndex)
+      val right = events(rightIndex)
+      val semanticOrder = Vector(
+        relativeOrder(declarationSpan(left), declarationSpan(right)),
+        relativeOrder(assignmentSpan(left), assignmentSpan(right))
+      ).flatten
+      require(
+        !(semanticOrder.contains(true) && semanticOrder.contains(false)),
+        "procedural declaration and assignment orders contradict each other"
+      )
+      semanticOrder.headOption.foreach: leftBeforeRight =>
+        if leftBeforeRight then addEdge(leftIndex, rightIndex)
+        else addEdge(rightIndex, leftIndex)
+
+      if definitions(left).exists(uses(right).contains) then
+        addEdge(leftIndex, rightIndex)
+      if definitions(right).exists(uses(left).contains) then
+        addEdge(rightIndex, leftIndex)
+
+    val ready = mutable.ArrayBuffer.from(
+      events.indices.filter(index => indegree(index) == 0)
+    )
+    val ordered = mutable.ArrayBuffer.empty[Event]
+    while ready.nonEmpty do
+      val readyPosition = ready.indices.minBy(index =>
+        deterministicEventKey(events(ready(index)))
+      )
+      val next = ready.remove(readyPosition)
+      ordered += events(next)
+      outgoing(next).toVector.sorted.foreach: destination =>
+        indegree(destination) -= 1
+        if indegree(destination) == 0 then ready += destination
+
+    require(
+      ordered.size == events.size,
+      "procedural event dependencies contain a chronology cycle"
+    )
+    ordered.toVector
   private def renderScopeBody(
       node: ScopeNode,
       program: AnalogProceduralRuntime.Snapshot,
@@ -259,29 +391,7 @@ private[nodal] object AnalogProceduralMlir:
       node.declarations.toVector.map(DeclarationEvent.apply) ++
         node.assignments.toVector.map(AssignmentEvent.apply) ++
         node.children.values.toVector.map(ScopeEvent.apply)
-    val sorted = events.sortBy: event =>
-      val (phase, sequence) = authoredSequence(event)
-      event.source match
-        case Some(source) =>
-          (
-            phase,
-            sequence,
-            event.category,
-            source.file,
-            source.line,
-            source.column,
-            event.identity
-          )
-        case None =>
-          (
-            phase,
-            sequence,
-            event.category,
-            "",
-            Int.MaxValue,
-            Int.MaxValue,
-            event.identity
-          )
+    val sorted = orderEvents(events)
 
     sorted.flatMap:
       case DeclarationEvent(record) =>

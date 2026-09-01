@@ -96,15 +96,6 @@ private[nodal] object AnalogProceduralConstruction:
         )
       )
 
-  private def dimensionFromUnit(unit: String): String = unit match
-    case "" => "dimensionless"
-    case "V" => "voltage"
-    case "A" => "current"
-    case "Ohm" => "resistance"
-    case "F" => "capacitance"
-    case "s" => "time"
-    case other => other
-
   private def collectReads(value: Any): Vector[AnalogProceduralRuntime.Variable] =
     val result = mutable.LinkedHashSet.empty[AnalogProceduralRuntime.Variable]
     def visit(candidate: Any): Unit = candidate match
@@ -131,12 +122,12 @@ private[nodal] object AnalogProceduralConstruction:
       .orElse(reads.headOption.map(_.valueType.kind))
       .orElse(fallback.map(_.kind))
       .getOrElse(AnalogProceduralRuntime.ScalarKind.Real)
-    val dimension = CandidateRuntime
-      .expressionUnit(expression)
-      .map(dimensionFromUnit)
+    val inferredDimension = ConstructionKernel.analogDimension(expression)
+    val dimension = inferredDimension
+      .filterNot(_ == "unknown")
       .orElse(reads.headOption.map(_.valueType.dimension))
-      .orElse(fallback.map(_.dimension))
-      .getOrElse("dimensionless")
+      .orElse(inferredDimension)
+      .getOrElse("unknown")
     AnalogProceduralRuntime.ValueType(kind, dimension)
 
   private def rendered(expression: Expr[? <: Data]): String = expression match
@@ -173,6 +164,12 @@ private[nodal] object AnalogProceduralConstruction:
         )
         module.variables.put(pending.value, variable)
 
+  def registeredDimension(value: AnyRef): Option[String] =
+    Option(current.get()).toVector
+      .flatMap(_.modules.iterator)
+      .flatMap(module => Option(module.variables.get(value)))
+      .map(_.valueType.dimension)
+      .headOption
   private def registeredIdentity(module: ModuleState, value: AnyRef): Option[String] =
     Option(module.variables.get(value)).map(_.identity).orElse:
       module.pending

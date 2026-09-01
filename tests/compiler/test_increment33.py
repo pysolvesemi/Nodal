@@ -27,6 +27,7 @@ REQUIRED = (
     "core/scala/api/src/nodal/AnalogProceduralRuntime.scala",
     "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala",
     "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala",
+    "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala",
     "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala",
     "docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md",
     "docs/implementation/increment33-analog-variables-procedural-assignment.md",
@@ -156,6 +157,40 @@ class Increment33ContractTests(unittest.TestCase):
             )
             self.assert_rejected(root, "compiler type model is missing")
 
+
+    def test_compound_dimension_regression_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = (
+                root
+                / "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala"
+            )
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "public compound dimensionless assignment to a voltage variable is rejected",
+                    "compound dimension regression removed",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "compound dimension regression is missing")
+
+    def test_nested_chronology_regression_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = (
+                root
+                / "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
+            )
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "nested procedural scopes preserve declaration and assignment chronology",
+                    "nested chronology regression removed",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "nested chronology regression is missing")
 
 if __name__ == "__main__":
     unittest.main()

@@ -68,6 +68,14 @@ final class BridgeProceduralTop extends Module:
     when(true.B):
       accumulator := scratch
 
+final class BridgeProceduralNestedChronology extends Module:
+  analogProcedure:
+    when(true.B):
+      val scoped: Variable[Real] = variable(Real, 0.0.V)
+      scoped := 1.0.V
+    val later: Variable[Real] = variable(Real, 0.0.V)
+    later := 2.0.V
+
 object ScalaToMlirBridgeTests extends TestSuite:
   private def workDirectory(): Path =
     Files.createTempDirectory("nodal-bridge-test-")
@@ -184,6 +192,41 @@ object ScalaToMlirBridgeTests extends TestSuite:
       assert(first >= 0)
       assert(second > first)
 
+    test("nested procedural scopes preserve declaration and assignment chronology"):
+      val snapshot = ConstructionKernel.inspect(new BridgeProceduralNestedChronology)
+      val program = snapshot.analogProcedural.head
+      assert(program.variables.map(_.declarationOrder) == Vector(0, 1))
+      assert(program.assignments.map(_.authoredOrder) == Vector(0, 1))
+
+      val rendered = AnalogProceduralMlir.renderModule(snapshot, program.owner).head
+      val declaration0 = rendered.indexOf("declaration_order = 0 : i64")
+      val assignment0 = rendered.indexOf("authored_order = 0 : i64")
+      val declaration1 = rendered.indexOf("declaration_order = 1 : i64")
+      val assignment1 = rendered.indexOf("authored_order = 1 : i64")
+      assert(declaration0 >= 0)
+      assert(assignment0 > declaration0)
+      assert(declaration1 > assignment0)
+      assert(assignment1 > declaration1)
+
+      val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+
+      sys.env.get("NODAL_NODALC").foreach: executable =>
+        val directory = workDirectory()
+        try
+          val success = NativeCompilerClient
+            .run(
+              document,
+              NativeCompilerRequest(
+                executable = Path.of(executable).toAbsolutePath,
+                arguments = Vector("--mlir-print-op-generic"),
+                workingDirectory = directory,
+                timeout = Duration.ofSeconds(30)
+              )
+            )
+            .asInstanceOf[NativeCompilerSuccess]
+          assert(success.normalizedMlir.contains("authored_order"))
+          assert(success.normalizedMlir.contains("declaration_order"))
+        finally delete(directory)
     test("snapshot insertion order does not affect the bridge"):
       val snapshot = ConstructionKernel.inspect(new BridgeTop)
       val permuted = snapshot.copy(

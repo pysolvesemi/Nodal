@@ -152,7 +152,6 @@ jobs:
           git config user.name pysolvesemi
           git config user.email pysolvesemi@gmail.com
           git add \
-            .github/workflows/increment-33-analog-procedural-assignment.yml \
             core/scala/api/src/nodal/AnalogProceduralConstruction.scala \
             core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
             core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala \

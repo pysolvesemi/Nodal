@@ -31,6 +31,19 @@ jobs:
             origin/automation/inc33-p1-final-repair-v5-20260901:automation/inc33_final_p1_repair.py \
             > /tmp/inc33_final_p1_repair.py
           python3 /tmp/inc33_final_p1_repair.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path(
+              "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
+          )
+          text = path.read_text(encoding="utf-8")
+          old = "    val sink: Variable[Real] = variable(Real, source)\n    source := 2.0.V\n"
+          new = "    val sink: Variable[Real] = variable(Real, source)\n    source := sink\n"
+          if text.count(old) != 1:
+              raise SystemExit("initializer dependency fixture was not found exactly once")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
 
       - name: Install pinned native and lint toolchains
         run: |

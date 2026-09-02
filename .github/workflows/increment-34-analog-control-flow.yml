@@ -3,7 +3,7 @@ name: Increment 34 Analog Control Flow
 on:
   pull_request:
     branches:
-      - increment/33-analog-variables-procedural-assignment-v5
+      - dev
     paths:
       - '.github/workflows/increment-34-analog-control-flow.yml'
       - 'core/scala/api/src/nodal/AnalogControlFlowRuntime.scala'

@@ -44,6 +44,12 @@ final class PublicAnalogCompoundReadDimensionMismatch extends Module:
   analogProcedure:
     voltage := voltage + 1.0.real
 
+final class PublicAnalogNestedCompoundReadDimensionMismatch extends Module:
+  val voltage: Variable[Real] = variable(Real, 0.0.V)
+
+  analogProcedure:
+    voltage := (voltage + 1.0.real) + voltage
+
 final class PublicAnalogCompoundVoltage extends Module:
   val voltage: Variable[Real] = variable(Real, 0.0.V)
 
@@ -125,6 +131,18 @@ object AnalogProceduralConstructionTests extends TestSuite:
       val failure = scala.util
         .Try(
           ConstructionKernel.inspect(new PublicAnalogCompoundReadDimensionMismatch)
+        )
+        .failed
+        .get
+        .asInstanceOf[AnalogProceduralRuntime.Failure]
+      assert(failure.diagnostic.code == "NODAL-ANALOG-033-013")
+
+    test("public nested incompatible compound dimensions remain unknown"):
+      val failure = scala.util
+        .Try(
+          ConstructionKernel.inspect(
+            new PublicAnalogNestedCompoundReadDimensionMismatch
+          )
         )
         .failed
         .get

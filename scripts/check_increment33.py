@@ -343,6 +343,28 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         "NODAL-INC33-066: native witness does not prove combined operation order",
     )
 
+    construction_kernel = read_text(
+        root,
+        "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",
+    )
+    compatible_add_start = construction_kernel.index(
+        "  def compatibleAdd(other: AnalogDimension): AnalogDimension =\n"
+    )
+    compatible_add_end = construction_kernel.index(
+        "\n  def canonical: String =", compatible_add_start
+    )
+    compatible_add = construction_kernel[compatible_add_start:compatible_add_end]
+    require(
+        "if isUnknown || other.isUnknown then AnalogDimension.Unknown"
+        in compatible_add,
+        "NODAL-INC33-067: recursive dimension mismatches are not sticky",
+    )
+    require(
+        "public nested incompatible compound dimensions remain unknown"
+        in construction_tests,
+        "NODAL-INC33-068: nested compound-dimension regression is missing",
+    )
+
     roadmap = read_text(root, "docs/roadmap/nodal-development-todo.md")
     require(
         "**Revision:** 1.43" in roadmap,
@@ -360,6 +382,12 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
     workflow_path = root / ".github/workflows/increment-33-analog-procedural-assignment.yml"
     if workflow_path.exists():
         workflow = workflow_path.read_text(encoding="utf-8")
+        require(
+            'NODAL_NODALC="$PWD/out/native/release/bin/nodalc"' in workflow
+            and "core.scala.testkit.test.testOnly" in workflow
+            and "ScalaToMlirBridgeTests" in workflow,
+            "NODAL-INC33-069: Scala bridge regressions do not execute against nodalc",
+        )
         require("contents: read" in workflow, "NODAL-INC33-030: workflow must be read-only")
         for forbidden in ("contents: write", "pull-requests: write", "git push", "gh pr merge"):
             require(forbidden not in workflow, f"NODAL-INC33-031: workflow contains {forbidden!r}")

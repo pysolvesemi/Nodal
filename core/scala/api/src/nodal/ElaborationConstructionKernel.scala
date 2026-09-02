@@ -234,10 +234,9 @@ private final case class AnalogDimension(
       )
 
   def compatibleAdd(other: AnalogDimension): AnalogDimension =
-    if isZero && !other.isUnknown then other.copy(isZero = other.isZero || isZero)
-    else if other.isZero && !isUnknown then copy(isZero = isZero || other.isZero)
-    else if isUnknown then other
-    else if other.isUnknown then this
+    if isUnknown || other.isUnknown then AnalogDimension.Unknown
+    else if isZero then other.copy(isZero = other.isZero || isZero)
+    else if other.isZero then copy(isZero = isZero || other.isZero)
     else if powers == other.powers then copy(isZero = isZero && other.isZero)
     else AnalogDimension.Unknown
 

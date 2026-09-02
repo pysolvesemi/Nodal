@@ -25,6 +25,7 @@ REQUIRED = (
     "core/compiler/test/IR/analog-procedural-invalid-variable-kind.mlir",
     "core/native/include/nodal/AnalogProceduralRuntime.h",
     "core/scala/api/src/nodal/AnalogProceduralRuntime.scala",
+    "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",
     "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala",
     "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala",
     "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala",
@@ -227,6 +228,56 @@ class Increment33ContractTests(unittest.TestCase):
             )
             self.assert_rejected(
                 root, "initializer dependency chronology regression is missing"
+            )
+
+    def test_recursive_dimension_mismatch_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/api/src/nodal/ElaborationConstructionKernel.scala"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "  def compatibleAdd(other: AnalogDimension): AnalogDimension =\n"
+                    "    if isUnknown || other.isUnknown then AnalogDimension.Unknown\n",
+                    "  def compatibleAdd(other: AnalogDimension): AnalogDimension =\n"
+                    "    if isUnknown then other\n",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "recursive dimension mismatches are not sticky")
+
+    def test_nested_compound_dimension_regression_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = (
+                root
+                / "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala"
+            )
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "public nested incompatible compound dimensions remain unknown",
+                    "nested compound-dimension regression removed",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "nested compound-dimension regression is missing")
+
+    def test_nodalc_bridge_boundary_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / ".github/workflows/increment-33-analog-procedural-assignment.yml"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    'NODAL_NODALC="$PWD/out/native/release/bin/nodalc"',
+                    'NODAL_NODALC_DISABLED="$PWD/out/native/release/bin/nodalc"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(
+                root,
+                "Scala bridge regressions do not execute against nodalc",
             )
 
 

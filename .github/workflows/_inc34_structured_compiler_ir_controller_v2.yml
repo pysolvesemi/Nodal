@@ -1,0 +1,176 @@
+name: Increment 34 Structured Compiler IR Controller v2
+
+on:
+  push:
+    branches:
+      - automation/inc34-bridge-native-ir-controller-v1
+    paths:
+      - '.github/automation/inc34_patch_scala.py'
+      - '.github/automation/inc34_patch_native.py'
+      - '.github/automation/inc34_patch_contracts.py'
+      - '.github/automation/inc34_post_repair.py'
+      - '.github/workflows/_inc34_structured_compiler_ir_controller_v2.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-34-structured-compiler-ir-controller-v2
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 80
+    steps:
+      - name: Check out controller sources
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-bridge-native-ir-controller-v1
+          path: controller
+          fetch-depth: 1
+
+      - name: Check out current Increment 34 feature branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/34-analog-control-flow-v1
+          path: work
+          fetch-depth: 0
+
+      - name: Materialize complete structured compiler IR tranche
+        shell: bash
+        run: |
+          python3 -m py_compile \
+            controller/.github/automation/inc34_patch_scala.py \
+            controller/.github/automation/inc34_patch_native.py \
+            controller/.github/automation/inc34_patch_contracts.py \
+            controller/.github/automation/inc34_post_repair.py
+          python3 controller/.github/automation/inc34_patch_scala.py --root work
+          python3 controller/.github/automation/inc34_patch_native.py --root work
+          python3 controller/.github/automation/inc34_patch_contracts.py --root work
+          python3 controller/.github/automation/inc34_post_repair.py --root work
+
+      - name: Install locked native and lint toolchains
+        working-directory: work
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          echo "NODAL_NATIVE_TOOLCHAIN=${RUNNER_TEMP}/nodal-native-toolchain" >> "${GITHUB_ENV}"
+          echo "NODAL_LINT_TOOLCHAIN=${RUNNER_TEMP}/nodal-lint-toolchain" >> "${GITHUB_ENV}"
+
+      - name: Format staged implementation
+        working-directory: work
+        shell: bash
+        run: |
+          ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources
+          clang_format=$(find "${NODAL_LINT_TOOLCHAIN}" -type f -name clang-format -perm -u+x | head -n 1)
+          test -n "${clang_format}"
+          "${clang_format}" -i core/compiler/lib/Dialect/Nodal/NodalOps.cpp
+
+      - name: Validate Increment 33 and Increment 34 contracts
+        working-directory: work
+        run: |
+          python3 scripts/check_increment33.py
+          python3 scripts/check_increment34.py
+          python3 -m unittest discover -s tests/compiler -p 'test_increment34.py'
+          git diff --check
+
+      - name: Compile and test Scala core
+        working-directory: work
+        run: ./nodal core scala
+
+      - name: Build, lint, and test native core
+        working-directory: work
+        run: |
+          ./nodal core native \
+            --toolchain "${NODAL_NATIVE_TOOLCHAIN}" \
+            --lint-toolchain "${NODAL_LINT_TOOLCHAIN}"
+
+      - name: Execute public construction witnesses
+        working-directory: work
+        shell: bash
+        run: |
+          runtime_report="${RUNNER_TEMP}/increment34-runtime.txt"
+          construction_report="${RUNNER_TEMP}/increment34-construction.txt"
+          ./mill -i examples.continuousTimeApi.runMain \
+            nodal.increment34fixture.Increment34RuntimeCheck \
+            "${runtime_report}"
+          ./mill -i examples.continuousTimeApi.runMain \
+            nodal.increment34fixture.Increment34ConstructionCheck \
+            "${construction_report}"
+          grep -F 'conditional_definite=true' "${runtime_report}"
+          grep -F 'case_definite=true' "${runtime_report}"
+          grep -F 'loop_definite=true' "${runtime_report}"
+          grep -F 'static_definite=true' "${runtime_report}"
+          grep -F 'public_conditional_snapshots=1' "${construction_report}"
+          grep -F 'public_case_snapshots=1' "${construction_report}"
+          grep -F 'flat_assignments=0' "${construction_report}"
+
+      - name: Validate structured native parse and source maps directly
+        working-directory: work
+        shell: bash
+        run: |
+          nodalc=$(find out -type f -name nodalc -perm -u+x | head -n 1)
+          test -n "${nodalc}"
+          "${nodalc}" \
+            --mlir-print-op-generic \
+            --mlir-print-debuginfo \
+            core/compiler/test/IR/analog-control-flow.mlir \
+            > "${RUNNER_TEMP}/increment34-structured.mlir"
+          grep -F '"nodal.analog_if"' "${RUNNER_TEMP}/increment34-structured.mlir"
+          grep -F '"nodal.analog_case"' "${RUNNER_TEMP}/increment34-structured.mlir"
+          grep -F '"nodal.analog_loop"' "${RUNNER_TEMP}/increment34-structured.mlir"
+          grep -F '"nodal.analog_break"' "${RUNNER_TEMP}/increment34-structured.mlir"
+          grep -F '"nodal.analog_continue"' "${RUNNER_TEMP}/increment34-structured.mlir"
+          grep -F 'AnalogControlFlow.scala' "${RUNNER_TEMP}/increment34-structured.mlir"
+
+      - name: Require repository style and clean patch
+        working-directory: work
+        run: |
+          ./nodal style check --lint-toolchain "${NODAL_LINT_TOOLCHAIN}"
+          git diff --check
+
+      - name: Save validation report
+        if: always()
+        working-directory: work
+        shell: bash
+        run: |
+          {
+            echo "controller_sha=${GITHUB_SHA}"
+            echo "feature_base=$(git rev-parse HEAD)"
+            echo "workflow_status=${{ job.status }}"
+            echo
+            git status --short --branch
+            echo
+            git diff --stat
+          } > "${RUNNER_TEMP}/increment34-controller-report.txt"
+          git diff --binary > "${RUNNER_TEMP}/increment34-controller.patch"
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: increment34-structured-compiler-ir-controller-v2
+          path: |
+            ${{ runner.temp }}/increment34-controller-report.txt
+            ${{ runner.temp }}/increment34-controller.patch
+            ${{ runner.temp }}/increment34-structured.mlir
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: Commit and publish validated Increment 34 checkpoint
+        working-directory: work
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No Increment 34 structured compiler IR changes were required.'
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'feat(increment34): integrate structured analog compiler IR'
+          git push origin HEAD:increment/34-analog-control-flow-v1

@@ -12,26 +12,19 @@ preserving variable ownership, lexical scope, authored statement order, physical
 dimensions, source provenance, and the separation between procedural assignment,
 equations, contributions, and conservative connectivity.
 
-## First tranche
+## Accepted source form
 
-The initial Increment 34 checkpoint adds:
+The public construction tranche uses explicit analog-only builders:
 
-- the approved source-semantic contract;
-- an executable Scala control-flow model;
-- explicit static and runtime condition classification;
-- first-match conditional chains;
-- dimensionless integer and Boolean case selection;
-- exact static loops and runtime loops with a finite maximum;
-- scoped `break` and `continue`;
-- branch-sensitive definite-assignment analysis;
-- regressions for missing `else`, missing case default, zero-trip loops,
-  `continue` paths, duplicate case labels, and illegal loop exits;
-- a machine-readable implementation manifest, mutation tests, and a permanent
-  read-only workflow.
+- `analogConditional`, `analogWhen`, `analogElseWhen`,
+  `analogStaticWhen`, `analogStaticElseWhen`, and `analogOtherwise`;
+- runtime and static `analogCase`, exact `analogCaseArm`, and one optional
+  `analogCaseDefault`;
+- exact `analogRepeat` and finite runtime `analogLoop`;
+- `analogBreak()` and `analogContinue()`.
 
-This checkpoint is deliberately stacked on the unmerged Increment 33
-implementation. It does not bypass the predecessor gate and cannot merge to
-`dev` before Increment 33 closes.
+No ordinary Scala or digital control form acquires analog runtime semantics by
+inference.
 
 ## Dataflow model
 
@@ -40,8 +33,12 @@ each reachable path.
 
 ### Sequential blocks
 
-An assignment adds its target after all value reads are validated. An explicit
-read requires its variable to be present in the incoming set.
+A declaration validates its initializer reads before adding an initialized
+variable. An assignment validates all value reads before adding its target. An
+explicit read requires its variable to be present in the incoming set.
+
+A block-local declaration is removed from normal, `break`, and `continue` states
+when the block exits.
 
 ### Conditional chains
 
@@ -49,9 +46,9 @@ Each reachable arm starts from the same incoming set. The outgoing normal state
 is the intersection of all reachable arm states. Without `else`, the unchanged
 incoming set is another reachable alternative.
 
-Static false arms do not participate in dataflow. The first static true arm
-terminates the chain. Runtime arms remain possible while the unmatched path
-continues to later arms.
+Static false arms remain structurally retained but do not contribute reachable
+read-before-write paths. The first static true arm terminates the chain.
+Runtime arms remain possible while the unmatched path continues to later arms.
 
 ### Case statements
 
@@ -65,33 +62,26 @@ A zero-minimum loop includes the incoming set among possible exits, so body-only
 assignments are not definite after the loop.
 
 For a loop with at least one guaranteed iteration, the result intersects normal,
-`break`, and `continue` exit states from the first reachable iteration. This is
+`break`, and `continue` states from the first reachable iteration. This is
 conservative because later iterations may add initialization but cannot make a
-first-iteration omission definite.
+first-iteration omission definite under the initial contract.
 
 `break` and `continue` are consumed by the nearest runtime-bounded loop.
 
-## Current boundaries
+## Flat Increment 33 compatibility
 
-The first checkpoint does not yet:
+Straight-line procedures continue to use the Increment 33 recorder unchanged.
 
-- connect the public `analogProcedure` construction path to the new statement
-  tree;
-- freeze final Scala spelling for case and loop builders;
-- replace the Increment 33 flat assignment snapshot;
-- add first-class `nodal.analog_if`, `nodal.analog_case`,
-  `nodal.analog_loop`, `nodal.analog_break`, or
-  `nodal.analog_continue` operations;
-- add native compiler verifiers or direct-MLIR fixtures;
-- serialize control-flow source maps or reproducibility evidence;
-- legalize or emit procedural target HDL.
+When an explicit Increment 34 control construct is present, the construction
+bridge retains declarations and assignments in the structured tree and removes
+assignments from the published flat Increment 33 snapshot. This prevents a
+runtime branch from being misrepresented as one unconditional ordered sequence.
 
-Those items are the next implementation tranches, not evidence gaps claimed as
-complete work.
+Root declarations that predate the first control construct remain available in
+the Increment 33 variable inventory. Control-local declarations remain in the
+Increment 34 tree until canonical construction-snapshot integration is complete.
 
-## Planned tranches
-
-### Tranche 34a — source-semantic foundation
+## Tranche 34a — source-semantic foundation
 
 - [x] Freeze structured control-flow semantics.
 - [x] Implement branch-sensitive definite-assignment analyzer.
@@ -99,44 +89,75 @@ complete work.
 - [x] Implement case-label, `break`, and `continue` legality.
 - [x] Add executable Scala witness and mutation-locked contract checker.
 - [x] Publish a stacked draft pull request.
-- [ ] Pass the exact-head Increment 34 workflow.
+- [x] Pass the exact-head Increment 34 workflow and Core CI.
 
-### Tranche 34b — public construction
+The only inherited failure on the first exact head occurred after all repository
+tests passed, when the Increment 19 online toolchain probe received an external
+GitHub HTTP 403 rate-limit response. It is not treated as accepted final matrix
+evidence and must be rerun.
 
-- [ ] Compile-prototype concise conditional, case, and loop spelling.
-- [ ] Bind the approved spelling to `analogProcedure`.
-- [ ] Preserve nested lexical scope and authored operation order.
-- [ ] Retain stable source identities and branch paths.
-- [ ] Add public positive and negative construction tests.
+## Tranche 34b — public construction
 
-### Tranche 34c — bridge and native IR
+- [x] Freeze explicit analog-only conditional, case, loop, and exit spelling.
+- [x] Bind the accepted spelling to `analogProcedure` construction.
+- [x] Build an owner-remapped immutable structured snapshot.
+- [x] Preserve nested lexical scope, authored statement order, and source spans.
+- [x] Run branch-sensitive definite-assignment over real public assignments.
+- [x] Retain static unreachable branches while excluding their reads from
+  reachable-path analysis.
+- [x] Preserve block-local declarations and remove them at block exit.
+- [x] Prevent structured assignments from appearing as a false flat Increment 33
+  sequence.
+- [x] Add public positive and negative construction tests and a standalone
+  construction witness.
+- [ ] Pass the exact-head Increment 34 workflow and all inherited workflows.
+- [ ] Complete review of the public-construction exact head.
 
-- [ ] Add first-class Nodal control-flow operations and regions.
+## Tranche 34c — bridge and native IR
+
+- [ ] Add the control-flow tree to the canonical `ConstructionSnapshot`.
+- [ ] Add first-class Nodal conditional, case, loop, break, continue, scope, and
+  declaration operations and regions.
 - [ ] Serialize the Scala statement tree without flattening branches.
 - [ ] Implement native structural and branch-sensitive verifiers.
 - [ ] Add direct-MLIR positive and negative fixtures.
 - [ ] Preserve complete source-map coverage through parse and print.
 
-### Tranche 34d — closure
+## Tranche 34d — closure
 
-- [ ] Complete deterministic evidence serialization.
+- [ ] Complete deterministic reproducibility serialization.
 - [ ] Run the full inherited workflow matrix on one exact head.
 - [ ] Perform a fresh review and repair all findings.
 - [ ] Merge after Increment 33 is closed.
 - [ ] Run post-merge Core CI and dedicated Increment 34 validation.
-- [ ] Record immutable evidence and mark the roadmap item complete in a
-  separate closure pull request.
+- [ ] Record immutable evidence and mark the roadmap item complete in a separate
+  closure pull request.
+
+## Current boundaries
+
+The public-construction checkpoint does not yet:
+
+- add the control-flow tree to the canonical `ConstructionSnapshot`;
+- expose control-flow through Scala-to-MLIR serialization;
+- add first-class `nodal.analog_if`, `nodal.analog_case`,
+  `nodal.analog_loop`, `nodal.analog_break`, or
+  `nodal.analog_continue` operations;
+- add native compiler verifiers or direct-MLIR fixtures;
+- serialize complete control-flow source maps or reproducibility evidence;
+- legalize or emit procedural target HDL.
+
+Those items remain active Increment 34 work, not evidence gaps claimed as
+complete behavior.
 
 ## Review focus
 
 The next review should pay particular attention to:
 
-- whether first-match static/runtime conditional analysis is conservative;
-- whether `break` and `continue` states are merged correctly;
-- whether a guaranteed first loop iteration is sufficient for each propagated
-  initialization fact;
-- whether static selection still validates unreachable source structure;
-- whether the eventual public API can reuse existing `when`/`elsewhen`/
-  `otherwise` without changing digital semantics;
-- whether case selector restrictions are appropriate for the first portable
-  Verilog-A/Verilog-AMS target profile.
+- first-match static/runtime conditional analysis;
+- `break` and `continue` state propagation;
+- the conservative guaranteed-first-iteration rule;
+- structural validation of statically unreachable branches;
+- block-local declaration lifetime;
+- ownership and final instance-path remapping;
+- separation between the structured tree and Increment 33 flat snapshots;
+- future lowering of the accepted public spelling into first-class native IR.

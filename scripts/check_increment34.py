@@ -36,16 +36,36 @@ def load_json(root: Path, relative: str) -> dict[str, Any]:
     return value
 
 
+def require_tokens(content: str, tokens: tuple[str, ...], code: str, label: str) -> None:
+    for token in tokens:
+        require(token in content, f"{code}: {label} is missing {token!r}")
+
+
 def check_repository(root: Path) -> None:
     roadmap = read_text(root, "docs/roadmap/nodal-development-todo.md")
     design_gate = read_text(root, "docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md")
     implementation = read_text(
         root, "docs/implementation/increment34-analog-control-flow.md"
     )
+    public_api = read_text(root, "core/scala/api/src/nodal/AnalogControlFlowApi.scala")
     runtime = read_text(root, "core/scala/api/src/nodal/AnalogControlFlowRuntime.scala")
-    witness = read_text(
+    construction = read_text(
+        root, "core/scala/api/src/nodal/AnalogControlFlowConstruction.scala"
+    )
+    procedural = read_text(
+        root, "core/scala/api/src/nodal/AnalogProceduralConstruction.scala"
+    )
+    construction_tests = read_text(
+        root,
+        "core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala",
+    )
+    runtime_witness = read_text(
         root,
         "examples/continuousTimeApi/src/nodal/increment34fixture/Increment34RuntimeCheck.scala",
+    )
+    construction_witness = read_text(
+        root,
+        "examples/continuousTimeApi/src/nodal/increment34fixture/Increment34ConstructionCheck.scala",
     )
     readme = read_text(root, "tests/compiler/fixtures/increment34/README.md")
     workflow = read_text(
@@ -86,16 +106,20 @@ def check_repository(root: Path) -> None:
         manifest.get("schema") == 1
         and manifest.get("increment") == 34
         and manifest.get("status") == "implementation-in-progress"
-        and manifest.get("tranche") == "34a-source-semantic-foundation",
+        and manifest.get("tranche") == "34b-public-construction",
         "NODAL-INC34-010: manifest identity or tranche is invalid",
     )
     require(
         manifest.get("design_gate")
         == "docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md"
+        and manifest.get("public_api")
+        == "core/scala/api/src/nodal/AnalogControlFlowApi.scala"
         and manifest.get("scala_runtime")
         == "core/scala/api/src/nodal/AnalogControlFlowRuntime.scala"
-        and manifest.get("scala_witness")
-        == "examples/continuousTimeApi/src/nodal/increment34fixture/Increment34RuntimeCheck.scala",
+        and manifest.get("construction_bridge")
+        == "core/scala/api/src/nodal/AnalogControlFlowConstruction.scala"
+        and manifest.get("public_construction_tests")
+        == "core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala",
         "NODAL-INC34-011: manifest artifact paths are invalid",
     )
 
@@ -119,7 +143,10 @@ def check_repository(root: Path) -> None:
         "zero_trip_loop_conservative",
         "first_iteration_exit_intersection",
         "reachable_read_before_write",
+        "unreachable_read_retention",
+        "block_local_declarations",
         "unbounded_loop_rejection",
+        "structured_flattening_prohibited",
     ):
         require(
             semantics.get(key) is True,
@@ -138,7 +165,15 @@ def check_repository(root: Path) -> None:
     )
     for key in (
         "public_construction_kernel",
-        "compiler_owned_snapshot",
+        "owner_remapped_source_snapshot",
+        "increment33_flat_snapshot_separation",
+    ):
+        require(
+            integration.get(key) is True,
+            f"NODAL-INC34-016: completed integration {key!r} is not recorded",
+        )
+    for key in (
+        "canonical_construction_snapshot",
         "scala_to_mlir",
         "first_class_compiler_ir",
         "native_ir_verification",
@@ -149,17 +184,17 @@ def check_repository(root: Path) -> None:
     ):
         require(
             integration.get(key) is False,
-            f"NODAL-INC34-016: unfinished integration {key!r} must not be claimed complete",
+            f"NODAL-INC34-017: unfinished integration {key!r} must not be claimed complete",
         )
 
     require(
         manifest.get("stable_diagnostic_prefix") == "NODAL-ANALOG-034-",
-        "NODAL-INC34-017: diagnostic prefix is invalid",
+        "NODAL-INC34-018: diagnostic prefix is invalid",
     )
     deferred = manifest.get("deferred")
-    require(isinstance(deferred, list), "NODAL-INC34-018: deferred must be a list")
+    require(isinstance(deferred, list), "NODAL-INC34-019: deferred must be a list")
     for item in (
-        "public-construction-integration",
+        "canonical-construction-snapshot",
         "scala-to-mlir-control-flow",
         "native-control-flow-ir",
         "native-control-flow-verification",
@@ -173,127 +208,251 @@ def check_repository(root: Path) -> None:
     ):
         require(
             item in deferred,
-            f"NODAL-INC34-019: deferred boundary {item!r} is missing",
+            f"NODAL-INC34-020: deferred boundary {item!r} is missing",
         )
     require(
         manifest.get("validation") is None,
-        "NODAL-INC34-020: validation evidence must remain null before exact-head acceptance",
+        "NODAL-INC34-021: validation evidence must remain null before exact-head acceptance",
     )
 
-    for token in (
-        "**Status:** Approved for staged implementation",
-        "**Increment:** 34",
-        "first-match semantics",
-        "intersection of the definitely initialized sets",
-        "minimumIterations == 0",
-        "runtime-bounded loop",
-        "no fall-through",
-        "NODAL-ANALOG-034-001",
-        "NODAL-ANALOG-034-015",
-        "The roadmap item remains unchecked",
-    ):
-        require(
-            token in design_gate,
-            f"NODAL-INC34-021: design gate is missing {token!r}",
-        )
+    require_tokens(
+        design_gate,
+        (
+            "**Status:** Approved for staged implementation",
+            "**Scope:** public-api",
+            "**Increment:** 34",
+            "analogConditional",
+            "analogStaticWhen",
+            "analogCaseArm",
+            "analogRepeat",
+            "analogLoop",
+            "first-match semantics",
+            "intersection of the definitely initialized sets",
+            "minimumIterations == 0",
+            "runtime-bounded loop",
+            "no fall-through",
+            "Once an explicit Increment 34 control construct appears",
+            "NODAL-ANALOG-034-001",
+            "NODAL-ANALOG-034-015",
+            "The roadmap item remains unchecked",
+        ),
+        "NODAL-INC34-022",
+        "design gate",
+    )
 
-    for token in (
-        "**Status:** In progress",
-        "Tranche 34a — source-semantic foundation",
-        "- [x] Implement branch-sensitive definite-assignment analyzer.",
-        "Tranche 34b — public construction",
-        "Tranche 34c — bridge and native IR",
-        "This checkpoint is deliberately stacked",
-    ):
-        require(
-            token in implementation,
-            f"NODAL-INC34-022: implementation record is missing {token!r}",
-        )
+    require_tokens(
+        implementation,
+        (
+            "**Status:** In progress",
+            "Tranche 34a — source-semantic foundation",
+            "Tranche 34b — public construction",
+            "- [x] Bind the accepted spelling to `analogProcedure` construction.",
+            "Tranche 34c — bridge and native IR",
+            "assignments from the published flat Increment 33 snapshot",
+            "runtime branch from being misrepresented",
+        ),
+        "NODAL-INC34-023",
+        "implementation record",
+    )
 
-    for token in (
-        "private[nodal] object AnalogControlFlowRuntime",
-        "enum Stage:",
-        "enum LoopStage:",
-        "enum CaseLabel:",
-        "sealed trait Statement:",
-        "final case class IfThenElse",
-        "final case class CaseStatement",
-        "final case class Loop",
-        "final case class Break",
-        "final case class Continue",
-        "validateCondition",
-        "validateSelector",
-        "duplicate case label",
-        "static loop requires one exact compile-time trip count",
-        "break is legal only in the nearest runtime-bounded loop",
-        "continue is legal only in the nearest runtime-bounded loop",
-        "private def intersectAll",
-        "states.tail.foldLeft(first)(_ intersect _)",
-        "Flow(Some(input), Vector.empty, Vector.empty)",
-        "if loop.minimumIterations == 0 then exits += input",
-        "exits ++= body.breaks",
-        "exits ++= body.continues",
-        "NODAL-ANALOG-034-004",
-        "NODAL-ANALOG-034-010",
-        "NODAL-ANALOG-034-011",
-    ):
-        require(
-            token in runtime,
-            f"NODAL-INC34-023: Scala control-flow runtime is missing {token!r}",
-        )
+    require_tokens(
+        public_api,
+        (
+            "def analogConditional",
+            "def analogWhen",
+            "def analogElseWhen",
+            "def analogStaticWhen",
+            "def analogStaticElseWhen",
+            "def analogOtherwise",
+            "def analogCase(selector: Expr[Integer])",
+            '@targetName("analogBooleanCase")',
+            "def analogStaticCase(selector: Int)",
+            "def analogCaseArm(first: Int",
+            "def analogCaseDefault",
+            "def analogRepeat",
+            "def analogLoop",
+            "def analogBreak",
+            "def analogContinue",
+        ),
+        "NODAL-INC34-024",
+        "public control-flow API",
+    )
 
-    for token in (
-        'expect("NODAL-ANALOG-034-004")',
-        'expect("NODAL-ANALOG-034-006")',
-        'expect("NODAL-ANALOG-034-010")',
-        'expect("NODAL-ANALOG-034-011")',
-        "minimumIterations = 0",
-        "minimumIterations = 1",
-        "Statement.Continue",
-        "Condition.static(false)",
-        "Condition.static(true)",
-        "conditional_definite=",
-        "case_definite=",
-        "loop_definite=",
-        "static_definite=",
-    ):
-        require(
-            token in witness,
-            f"NODAL-INC34-024: executable witness is missing {token!r}",
-        )
+    require_tokens(
+        runtime,
+        (
+            "private[nodal] object AnalogControlFlowRuntime",
+            "enum Stage:",
+            "enum LoopStage:",
+            "enum CaseLabel:",
+            "final case class Declare",
+            "final case class Scope",
+            "final case class IfThenElse",
+            "final case class CaseStatement",
+            "final case class Loop",
+            "final case class Break",
+            "final case class Continue",
+            "condition.staticValue.isEmpty || condition.reads.nonEmpty",
+            "static condition requires a compile-time Boolean value without dynamic reads",
+            "duplicate case label",
+            "static loop requires one exact compile-time trip count",
+            "break is legal only in the nearest runtime-bounded loop",
+            "continue is legal only in the nearest runtime-bounded loop",
+            "private def removeLocals",
+            "flow.breaks.map(_ -- locals)",
+            "states.tail.foldLeft(first)(_ intersect _)",
+            "if loop.minimumIterations == 0 then exits += input",
+            "exits ++= body.breaks",
+            "exits ++= body.continues",
+            "NODAL-ANALOG-034-004",
+            "NODAL-ANALOG-034-010",
+            "NODAL-ANALOG-034-011",
+        ),
+        "NODAL-INC34-025",
+        "Scala control-flow runtime",
+    )
 
-    for token in (
-        "both conditional arms",
-        "duplicate case labels",
-        "zero-minimum loop",
-        "`break` and `continue` outside",
-    ):
-        require(
-            token in readme,
-            f"NODAL-INC34-025: fixture README is missing {token!r}",
-        )
+    require_tokens(
+        construction,
+        (
+            "private[nodal] object AnalogControlFlowConstruction",
+            "final case class Snapshot",
+            "def remapOwner",
+            "final class Builder",
+            "def conditionalBranch",
+            "def caseSelection",
+            "def caseArm",
+            "def loop",
+            "def breakStatement",
+            "def continueStatement",
+            "def finish",
+            "AnalogControlFlowRuntime.analyze(frozen)",
+            "private[nodal] object AnalogControlFlowInspection",
+        ),
+        "NODAL-INC34-026",
+        "control-flow construction bridge",
+    )
+
+    require_tokens(
+        procedural,
+        (
+            "var controlBuilder",
+            "var controlSnapshot",
+            "materializeWithControlFlow",
+            "captureDeclaration",
+            "builder.appendAssignment",
+            "if !builder.hasStructuredControl && builder.atRoot",
+            "def conditionalBranch",
+            "def integerCase",
+            "def runtimeLoop",
+            "def breakStatement",
+            "def continueStatement",
+            "snapshot.copy(assignments = Vector.empty)",
+            "def controlSnapshots",
+        ),
+        "NODAL-INC34-027",
+        "procedural construction integration",
+    )
+
+    require_tokens(
+        construction_tests,
+        (
+            "public conditional retains branches and establishes definite assignment",
+            "public conditional missing else preserves the unmatched incoming path",
+            "public case with default establishes definite assignment",
+            "public case without default preserves the unmatched incoming path",
+            "static false branch remains retained",
+            "zero-minimum runtime loop does not establish initialization",
+            "continue path participates in conservative loop exit intersection",
+            "break after assignment preserves the assigned exit state",
+            "branch-local declaration remains nested",
+            "child control-flow snapshot resolves to the authored instance path",
+            "structured branch assignment rejects a foreign component variable",
+            "assignments.isEmpty",
+        ),
+        "NODAL-INC34-028",
+        "public construction tests",
+    )
+
+    require_tokens(
+        runtime_witness,
+        (
+            'expect("NODAL-ANALOG-034-004")',
+            'expect("NODAL-ANALOG-034-006")',
+            'expect("NODAL-ANALOG-034-010")',
+            'expect("NODAL-ANALOG-034-011")',
+            "minimumIterations = 0",
+            "minimumIterations = 1",
+            "Statement.Continue",
+            "Condition.static(false)",
+            "Condition.static(true)",
+            "static-dead-read",
+            "conditional_definite=",
+            "case_definite=",
+            "loop_definite=",
+            "static_definite=",
+        ),
+        "NODAL-INC34-029",
+        "source-semantic witness",
+    )
+
+    require_tokens(
+        construction_witness,
+        (
+            "Increment34ConditionalFixture",
+            "analogConditional",
+            "analogCase(mode)",
+            "AnalogControlFlowInspection.inspect",
+            'missingElse == "NODAL-ANALOG-034-004"',
+            "assignments.isEmpty",
+            "public_conditional_snapshots=",
+            "public_case_snapshots=",
+        ),
+        "NODAL-INC34-030",
+        "public construction witness",
+    )
+
+    require_tokens(
+        readme,
+        (
+            "both conditional arms",
+            "duplicate case labels",
+            "zero-minimum loop",
+            "`break` and `continue` outside",
+            "block-local declarations",
+            "authored instance paths",
+            "false flat Increment 33",
+        ),
+        "NODAL-INC34-031",
+        "fixture README",
+    )
 
     require(
         "contents: write" not in workflow
         and "pull-requests: write" not in workflow
         and "actions: write" not in workflow,
-        "NODAL-INC34-027: Increment 34 workflow must remain read-only",
+        "NODAL-INC34-032: Increment 34 workflow must remain read-only",
     )
-    for token in (
-        "name: Increment 34 Analog Control Flow",
-        "actions/checkout@v6",
-        "python3 scripts/check_increment33.py",
-        "python3 scripts/check_increment34.py",
-        "test_increment34.py",
-        "nodal.increment34fixture.Increment34RuntimeCheck",
-        "./nodal core scala",
-        "./nodal style check",
-        "contents: read",
-    ):
-        require(
-            token in workflow,
-            f"NODAL-INC34-026: permanent workflow is missing {token!r}",
-        )
+    require_tokens(
+        workflow,
+        (
+            "name: Increment 34 Analog Control Flow",
+            "actions/checkout@v6",
+            "AnalogControlFlowApi.scala",
+            "AnalogControlFlowConstruction.scala",
+            "AnalogControlFlowConstructionTests.scala",
+            "python3 scripts/check_increment33.py",
+            "python3 scripts/check_increment34.py",
+            "test_increment34.py",
+            "nodal.increment34fixture.Increment34RuntimeCheck",
+            "nodal.increment34fixture.Increment34ConstructionCheck",
+            "./nodal core scala",
+            "./nodal style check",
+            "contents: read",
+        ),
+        "NODAL-INC34-033",
+        "permanent workflow",
+    )
 
     forbidden_names = {
         "_inc34_materializer.yml",
@@ -305,7 +464,7 @@ def check_repository(root: Path) -> None:
             continue
         require(
             path.name not in forbidden_names,
-            f"NODAL-INC34-028: temporary/generated files remain: {path}",
+            f"NODAL-INC34-034: temporary/generated files remain: {path}",
         )
 
 

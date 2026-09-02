@@ -18,10 +18,15 @@ SPEC.loader.exec_module(CHECKER)
 
 REQUIRED = (
     ".github/workflows/increment-34-analog-control-flow.yml",
+    "core/scala/api/src/nodal/AnalogControlFlowApi.scala",
+    "core/scala/api/src/nodal/AnalogControlFlowConstruction.scala",
     "core/scala/api/src/nodal/AnalogControlFlowRuntime.scala",
+    "core/scala/api/src/nodal/AnalogProceduralConstruction.scala",
+    "core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala",
     "docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md",
     "docs/implementation/increment34-analog-control-flow.md",
     "docs/roadmap/nodal-development-todo.md",
+    "examples/continuousTimeApi/src/nodal/increment34fixture/Increment34ConstructionCheck.scala",
     "examples/continuousTimeApi/src/nodal/increment34fixture/Increment34RuntimeCheck.scala",
     "scripts/check_increment34.py",
     "tests/compiler/fixtures/increment33/manifest.json",
@@ -127,6 +132,107 @@ class Increment34ContractTests(unittest.TestCase):
             )
             self.assert_rejected(root, "Scala control-flow runtime is missing")
 
+    def test_local_lifetime_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/api/src/nodal/AnalogControlFlowRuntime.scala"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "flow.breaks.map(_ -- locals)",
+                    "flow.breaks",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "Scala control-flow runtime is missing")
+
+    def test_static_dynamic_read_guard_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/api/src/nodal/AnalogControlFlowRuntime.scala"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "condition.staticValue.isEmpty || condition.reads.nonEmpty",
+                    "condition.staticValue.isEmpty",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "Scala control-flow runtime is missing")
+
+    def test_public_api_static_spelling_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/api/src/nodal/AnalogControlFlowApi.scala"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "def analogStaticWhen",
+                    "def removedAnalogStaticWhen",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "public control-flow API is missing")
+
+    def test_builder_analysis_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/api/src/nodal/AnalogControlFlowConstruction.scala"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "AnalogControlFlowRuntime.analyze(frozen)",
+                    "AnalogControlFlowRuntime.Result(Set.empty, 0)",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "control-flow construction bridge is missing")
+
+    def test_flattening_guard_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/api/src/nodal/AnalogProceduralConstruction.scala"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "snapshot.copy(assignments = Vector.empty)",
+                    "snapshot",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "procedural construction integration is missing")
+
+    def test_owner_remap_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/api/src/nodal/AnalogControlFlowConstruction.scala"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "def remapOwner(newOwner: String)",
+                    "def disabledRemapOwner(newOwner: String)",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "control-flow construction bridge is missing")
+
+    def test_public_missing_else_regression_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = (
+                root
+                / "core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala"
+            )
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "public conditional missing else preserves the unmatched incoming path",
+                    "missing-else regression removed",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "public construction tests is missing")
+
     def test_duplicate_case_regression_mutation_is_rejected(self) -> None:
         temporary, root = self.fixture()
         with temporary:
@@ -142,7 +248,16 @@ class Increment34ContractTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            self.assert_rejected(root, "executable witness is missing")
+            self.assert_rejected(root, "source-semantic witness is missing")
+
+    def test_public_construction_claim_is_required(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "tests/compiler/fixtures/increment34/manifest.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["integration"]["public_construction_kernel"] = False
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            self.assert_rejected(root, "completed integration")
 
     def test_unfinished_integration_claim_is_rejected(self) -> None:
         temporary, root = self.fixture()

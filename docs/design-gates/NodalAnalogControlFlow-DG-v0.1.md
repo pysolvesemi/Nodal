@@ -1,8 +1,8 @@
 # Nodal Analog Control Flow Design Gate v0.1
 
 **Status:** Approved for staged implementation  
-**Scope:** public-api  
 **Scope:** source-semantics  
+**Scope:** public-api  
 **Scope:** definite-assignment analysis  
 **Increment:** 34  
 **Predecessor:** Increment 33 analog variables and ordered procedural assignment  
@@ -17,18 +17,67 @@ Control flow determines which ordered procedural statements may execute. It does
 not turn assignment into an unordered equation, additive contribution,
 conservative connection, solver equation, or backend text fragment.
 
-The first implementation tranche freezes the source-semantic statement tree and
-branch-sensitive definite-assignment rules. Public construction integration,
-first-class MLIR operations, native verifier coverage, source-map serialization,
-and target lowering remain mandatory follow-on work in the same increment.
+## Frozen public construction surface
+
+Increment 34 uses explicit analog-only builders. Ordinary Scala `if`, `match`,
+`while`, collection iteration, and the existing digital `when` surface do not
+acquire analog runtime meaning by inference.
+
+The accepted public spelling is:
+
+```scala
+analogProcedure:
+  analogConditional:
+    analogWhen(runtimeCondition):
+      value := first
+    analogElseWhen(otherRuntimeCondition):
+      value := second
+    analogStaticElseWhen(compileTimeCondition):
+      value := third
+    analogOtherwise:
+      value := fallback
+
+  analogCase(runtimeIntegerOrBoolean):
+    analogCaseArm(0):
+      value := first
+    analogCaseArm(1, 2):
+      value := second
+    analogCaseDefault:
+      value := fallback
+
+  analogStaticCase(compileTimeIntegerOrBoolean):
+    analogCaseArm(0):
+      value := first
+    analogCaseDefault:
+      value := fallback
+
+  analogRepeat(4):
+    value := next
+
+  analogLoop(runtimeIterations, maximumIterations = 8, minimumIterations = 1):
+    analogConditional:
+      analogWhen(stop):
+        analogBreak()
+      analogOtherwise:
+        analogContinue()
+```
+
+`analogWhen` and `analogElseWhen` are runtime conditions.
+`analogStaticWhen` and `analogStaticElseWhen` accept only Scala Boolean values.
+`analogCase` accepts runtime `Expr[Integer]` or `Expr[Bool]` selectors.
+`analogStaticCase` accepts only Scala `Int` or Boolean selectors.
+
+`analogRepeat` is an exact static loop. `analogLoop` is runtime-bounded and
+requires an explicit positive finite maximum. This naming keeps staging visible
+at the call site and prevents body-based staging inference.
 
 ## Structured statement model
 
 An analog procedural region retains a nested statement tree containing:
 
 - lexical blocks;
-- ordered variable declarations, reads, and assignments inherited from Increment
-  33;
+- ordered variable declarations, reads, and assignments inherited from
+  Increment 33;
 - `if` / `else-if` / `else` selection;
 - non-fall-through `case` selection with exact labels and at most one default;
 - statically exact loops;
@@ -42,13 +91,18 @@ tree traversal counters, or backend rendering order.
 Authored statement order remains authoritative inside each block. Source file,
 line, and column are provenance and deterministic tie-breakers only.
 
+Once an explicit Increment 34 control construct appears, the compiler must not
+publish its assignments as one flattened Increment 33 straight-line sequence.
+The structured tree is authoritative for ordering and definite assignment.
+
 ## Conditions and static/runtime staging
 
 Every conditional expression is a dimensionless Boolean value.
 
 A condition is classified explicitly as either:
 
-1. **static**, with a compile-time Boolean result; or
+1. **static**, with a compile-time Boolean result and no dynamic variable reads;
+   or
 2. **runtime**, with no compile-time selected result.
 
 The compiler must not infer staging from the statements inside a branch. A static
@@ -124,6 +178,16 @@ the initial contract.
 
 Labeled exits and multi-level exits remain deferred.
 
+## Lexical declarations
+
+A declaration inside a conditional arm, case arm, loop body, or retained lexical
+scope is local to that block and its descendants. It does not escape through a
+normal, `break`, or `continue` edge.
+
+Initializer kind and physical dimension are checked independently of reachability.
+Initializer reads participate in branch-sensitive definite-assignment analysis
+only on reachable paths.
+
 ## Branch-sensitive definite assignment
 
 Increment 33 straight-line initialization state becomes a control-flow dataflow
@@ -138,8 +202,9 @@ intersection; its state is propagated to the enclosing loop.
 A missing `else` or missing case default contributes the incoming state as an
 unmatched path.
 
-Reads in a condition, selector, loop bound, assignment value, or explicit read
-must be definitely initialized on the path where the read occurs.
+Reads in a condition, selector, loop bound, declaration initializer, assignment
+value, or explicit read must be definitely initialized on the path where the
+read occurs.
 
 The analysis is monotonic: assignment can add a definitely initialized variable,
 but control-flow merging cannot invent initialization that is absent from any
@@ -149,7 +214,7 @@ reachable path.
 
 Static selection may prove a branch unreachable for dataflow. The compiler still
 validates the unreachable branch's syntax, identities, scalar kinds, dimensions,
-case labels, loop bounds, ownership, and structural legality.
+case labels, loop bounds, ownership, lexical scope, and structural legality.
 
 Read-before-write diagnostics are required only on reachable source-semantic
 paths in this initial contract. A later warning policy may report suspicious
@@ -173,8 +238,10 @@ Increment 34 reserves `NODAL-ANALOG-034-*` for at least:
 - `NODAL-ANALOG-034-011` illegal `continue`;
 - `NODAL-ANALOG-034-012` unsupported case pattern or fall-through request;
 - `NODAL-ANALOG-034-013` unsupported labeled or multi-level loop exit;
-- `NODAL-ANALOG-034-014` invalid control-flow read or assignment target;
-- `NODAL-ANALOG-034-015` empty conditional, case, or case arm.
+- `NODAL-ANALOG-034-014` invalid control-flow read, declaration, or assignment
+  target;
+- `NODAL-ANALOG-034-015` empty or malformed conditional, case, arm, or builder
+  group.
 
 Diagnostics retain the stable control statement path and source location whenever
 available.
@@ -191,8 +258,11 @@ Increment 34 must ultimately retain the structured statement tree through:
 - native verification and compiler-boundary diagnostics;
 - source-map round-trip tests.
 
-The first tranche supplies the executable source-semantic analyzer and exact
-contract. It does not claim those remaining integration layers are complete.
+The public-construction tranche supplies the explicit API, mutable construction
+bridge, owner-remapped immutable snapshot, and executable branch-sensitive
+analysis. Canonical `ConstructionSnapshot` integration, Scala-to-MLIR bridging,
+first-class native operations, and target lowering remain later tranches of the
+same increment.
 
 No control-flow operation is executable solver code in this increment. Verilog-A
 or Verilog-AMS emission, event scheduling, residual/DAE construction, and solver
@@ -216,9 +286,9 @@ This gate does not enable:
 ## Acceptance
 
 Increment 34 is complete only when the approved semantics are integrated through
-the public construction path, source snapshots, first-class compiler IR, native
-verifiers, stable diagnostics, deterministic serialization, source maps,
-positive and negative fixtures, mutation tests, Core CI, and every inherited
+the public construction path, canonical source snapshots, first-class compiler
+IR, native verifiers, stable diagnostics, deterministic serialization, source
+maps, positive and negative fixtures, mutation tests, Core CI, and every inherited
 workflow on one exact head.
 
 The roadmap item remains unchecked until the implementation is merged into

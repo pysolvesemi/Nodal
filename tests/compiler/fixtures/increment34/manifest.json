@@ -9,11 +9,17 @@
     "roadmap_revision": "1.43"
   },
   "design_gate": "docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md",
-  "protected_scopes": ["public-api"],
+  "protected_scopes": [
+    "public-api"
+  ],
   "implementation_record": "docs/implementation/increment34-analog-control-flow.md",
+  "public_api": "core/scala/api/src/nodal/AnalogControlFlowApi.scala",
   "scala_runtime": "core/scala/api/src/nodal/AnalogControlFlowRuntime.scala",
+  "construction_bridge": "core/scala/api/src/nodal/AnalogControlFlowConstruction.scala",
   "scala_witness": "examples/continuousTimeApi/src/nodal/increment34fixture/Increment34RuntimeCheck.scala",
-  "tranche": "34a-source-semantic-foundation",
+  "public_construction_witness": "examples/continuousTimeApi/src/nodal/increment34fixture/Increment34ConstructionCheck.scala",
+  "public_construction_tests": "core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala",
+  "tranche": "34b-public-construction",
   "semantics": {
     "structured_statement_tree": true,
     "stable_control_identities": true,
@@ -32,13 +38,18 @@
     "zero_trip_loop_conservative": true,
     "first_iteration_exit_intersection": true,
     "reachable_read_before_write": true,
+    "unreachable_read_retention": true,
+    "block_local_declarations": true,
     "unbounded_loop_rejection": true,
+    "structured_flattening_prohibited": true,
     "case_fallthrough": false,
     "labeled_loop_exit": false
   },
   "integration": {
-    "public_construction_kernel": false,
-    "compiler_owned_snapshot": false,
+    "public_construction_kernel": true,
+    "owner_remapped_source_snapshot": true,
+    "increment33_flat_snapshot_separation": true,
+    "canonical_construction_snapshot": false,
     "scala_to_mlir": false,
     "first_class_compiler_ir": false,
     "native_ir_verification": false,
@@ -49,9 +60,7 @@
   },
   "stable_diagnostic_prefix": "NODAL-ANALOG-034-",
   "deferred": [
-    "public-control-flow-spelling",
-    "public-construction-integration",
-    "compiler-snapshot-integration",
+    "canonical-construction-snapshot",
     "scala-to-mlir-control-flow",
     "native-control-flow-ir",
     "native-control-flow-verification",

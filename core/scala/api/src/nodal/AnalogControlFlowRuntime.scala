@@ -4,8 +4,8 @@ import scala.collection.mutable
 
 /** Structured analog control-flow model introduced by Increment 34.
   *
-  * The first tranche is deliberately source-semantic. It preserves conditionals, case selection,
-  * bounded loops, break/continue, authored identities, and branch-sensitive definite assignment
+  * The model preserves conditionals, case selection, bounded loops, break/continue, lexical
+  * declarations, authored identities, source provenance, and branch-sensitive definite assignment
   * without executing a solver or lowering control flow to a target HDL.
   */
 private[nodal] object AnalogControlFlowRuntime:
@@ -27,7 +27,11 @@ private[nodal] object AnalogControlFlowRuntime:
   final class Failure(val diagnostic: Diagnostic)
       extends IllegalArgumentException(diagnostic.toString)
 
-  private def fail(code: String, message: String, path: Option[String] = None): Nothing =
+  private[nodal] def fail(
+      code: String,
+      message: String,
+      path: Option[String] = None
+  ): Nothing =
     scala.util.Failure[Nothing](new Failure(Diagnostic(code, message, path))).get
 
   final case class Condition(
@@ -35,11 +39,16 @@ private[nodal] object AnalogControlFlowRuntime:
       reads: Set[String],
       stage: Stage,
       staticValue: Option[scala.Boolean],
-      valueType: AnalogProceduralRuntime.ValueType
+      valueType: AnalogProceduralRuntime.ValueType,
+      source: Option[AnalogProceduralRuntime.Source] = None
   )
 
   object Condition:
-    def runtime(rendered: String, reads: Set[String] = Set.empty): Condition =
+    def runtime(
+        rendered: String,
+        reads: Set[String] = Set.empty,
+        source: Option[AnalogProceduralRuntime.Source] = None
+    ): Condition =
       Condition(
         rendered,
         reads,
@@ -48,10 +57,15 @@ private[nodal] object AnalogControlFlowRuntime:
         AnalogProceduralRuntime.ValueType(
           AnalogProceduralRuntime.ScalarKind.Boolean,
           "dimensionless"
-        )
+        ),
+        source
       )
 
-    def static(value: scala.Boolean, rendered: String = "static-condition"): Condition =
+    def static(
+        value: scala.Boolean,
+        rendered: String = "static-condition",
+        source: Option[AnalogProceduralRuntime.Source] = None
+    ): Condition =
       Condition(
         rendered,
         Set.empty,
@@ -60,7 +74,8 @@ private[nodal] object AnalogControlFlowRuntime:
         AnalogProceduralRuntime.ValueType(
           AnalogProceduralRuntime.ScalarKind.Boolean,
           "dimensionless"
-        )
+        ),
+        source
       )
 
   final case class Selector(
@@ -68,48 +83,70 @@ private[nodal] object AnalogControlFlowRuntime:
       reads: Set[String],
       kind: AnalogProceduralRuntime.ScalarKind,
       dimension: String,
-      staticValue: Option[CaseLabel] = None
+      staticValue: Option[CaseLabel] = None,
+      source: Option[AnalogProceduralRuntime.Source] = None
   )
 
   object Selector:
-    def runtimeInteger(rendered: String, reads: Set[String] = Set.empty): Selector =
+    def runtimeInteger(
+        rendered: String,
+        reads: Set[String] = Set.empty,
+        source: Option[AnalogProceduralRuntime.Source] = None
+    ): Selector =
       Selector(
         rendered,
         reads,
         AnalogProceduralRuntime.ScalarKind.Integer,
-        "dimensionless"
+        "dimensionless",
+        source = source
       )
 
-    def runtimeBoolean(rendered: String, reads: Set[String] = Set.empty): Selector =
+    def runtimeBoolean(
+        rendered: String,
+        reads: Set[String] = Set.empty,
+        source: Option[AnalogProceduralRuntime.Source] = None
+    ): Selector =
       Selector(
         rendered,
         reads,
         AnalogProceduralRuntime.ScalarKind.Boolean,
-        "dimensionless"
+        "dimensionless",
+        source = source
       )
 
-    def staticInteger(value: Long, rendered: String = "static-selector"): Selector =
+    def staticInteger(
+        value: Long,
+        rendered: String = "static-selector",
+        source: Option[AnalogProceduralRuntime.Source] = None
+    ): Selector =
       Selector(
         rendered,
         Set.empty,
         AnalogProceduralRuntime.ScalarKind.Integer,
         "dimensionless",
-        Some(CaseLabel.Integer(value))
+        Some(CaseLabel.Integer(value)),
+        source
       )
 
     def staticBoolean(
         value: scala.Boolean,
-        rendered: String = "static-selector"
+        rendered: String = "static-selector",
+        source: Option[AnalogProceduralRuntime.Source] = None
     ): Selector =
       Selector(
         rendered,
         Set.empty,
         AnalogProceduralRuntime.ScalarKind.Boolean,
         "dimensionless",
-        Some(CaseLabel.Boolean(value))
+        Some(CaseLabel.Boolean(value)),
+        source
       )
 
-  final case class Block(identity: String, statements: Vector[Statement])
+  final case class Block(
+      identity: String,
+      statements: Vector[Statement],
+      source: Option[AnalogProceduralRuntime.Source] = None
+  )
 
   final case class ConditionalBranch(condition: Condition, body: Block)
 
@@ -117,27 +154,50 @@ private[nodal] object AnalogControlFlowRuntime:
 
   sealed trait Statement:
     def identity: String
+    def source: Option[AnalogProceduralRuntime.Source]
 
   object Statement:
+    final case class Declare(
+        identity: String,
+        variable: String,
+        initialized: scala.Boolean,
+        initializerReads: Set[String] = Set.empty,
+        local: scala.Boolean = false,
+        source: Option[AnalogProceduralRuntime.Source] = None
+    ) extends Statement
+
     final case class Assign(
         identity: String,
         target: String,
-        reads: Set[String] = Set.empty
+        reads: Set[String] = Set.empty,
+        source: Option[AnalogProceduralRuntime.Source] = None
     ) extends Statement
 
-    final case class Read(identity: String, variable: String) extends Statement
+    final case class Read(
+        identity: String,
+        variable: String,
+        source: Option[AnalogProceduralRuntime.Source] = None
+    ) extends Statement
+
+    final case class Scope(
+        identity: String,
+        body: Block,
+        source: Option[AnalogProceduralRuntime.Source] = None
+    ) extends Statement
 
     final case class IfThenElse(
         identity: String,
         branches: Vector[ConditionalBranch],
-        otherwise: Option[Block]
+        otherwise: Option[Block],
+        source: Option[AnalogProceduralRuntime.Source] = None
     ) extends Statement
 
     final case class CaseStatement(
         identity: String,
         selector: Selector,
         arms: Vector[CaseArm],
-        default: Option[Block]
+        default: Option[Block],
+        source: Option[AnalogProceduralRuntime.Source] = None
     ) extends Statement
 
     final case class Loop(
@@ -146,16 +206,30 @@ private[nodal] object AnalogControlFlowRuntime:
         minimumIterations: Int,
         maximumIterations: Int,
         boundReads: Set[String],
-        body: Block
+        body: Block,
+        boundValueType: AnalogProceduralRuntime.ValueType =
+          AnalogProceduralRuntime.ValueType(
+            AnalogProceduralRuntime.ScalarKind.Integer,
+            "dimensionless"
+          ),
+        staticTripCount: Option[Int] = None,
+        source: Option[AnalogProceduralRuntime.Source] = None
     ) extends Statement
 
-    final case class Break(identity: String) extends Statement
+    final case class Break(
+        identity: String,
+        source: Option[AnalogProceduralRuntime.Source] = None
+    ) extends Statement
 
-    final case class Continue(identity: String) extends Statement
+    final case class Continue(
+        identity: String,
+        source: Option[AnalogProceduralRuntime.Source] = None
+    ) extends Statement
 
   final case class Result(
       definitelyInitialized: Set[String],
-      retainedControlNodes: Int
+      retainedControlNodes: Int,
+      reachableNormalExit: scala.Boolean = true
   )
 
   private final case class Flow(
@@ -169,14 +243,25 @@ private[nodal] object AnalogControlFlowRuntime:
       initiallyInitialized: Set[String] = Set.empty
   ): Result =
     val identities = mutable.HashSet.empty[String]
-    validateBlock(root, identities, Vector.empty)
-    val flow = analyzeBlock(root, initiallyInitialized, 0)
-    Result(flow.normal.getOrElse(Set.empty), identities.size)
+    val declarations = mutable.HashSet.empty[String]
+    validateBlock(root, identities, declarations, Vector.empty, isRoot = true)
+    val flow = analyzeBlock(root, initiallyInitialized, 0, retainLocals = true)
+    Result(
+      flow.normal.getOrElse(Set.empty),
+      identities.size,
+      flow.normal.nonEmpty
+    )
 
   private def validateIdentity(identity: String, identities: mutable.Set[String]): Unit =
     val canonical = identity.trim
     if canonical.isEmpty then
       fail("NODAL-ANALOG-034-001", "control-flow identity must be non-empty")
+    if canonical != identity then
+      fail(
+        "NODAL-ANALOG-034-001",
+        "control-flow identity must already be canonical",
+        Some(identity)
+      )
     if identities.contains(canonical) then
       fail(
         "NODAL-ANALOG-034-001",
@@ -184,6 +269,14 @@ private[nodal] object AnalogControlFlowRuntime:
         Some(canonical)
       )
     identities += canonical
+
+  private def validateVariable(value: String, label: String, path: String): Unit =
+    if value.trim.isEmpty || value.trim != value then
+      fail(
+        "NODAL-ANALOG-034-014",
+        s"$label must be a non-empty canonical variable identity",
+        Some(path)
+      )
 
   private def validateCondition(condition: Condition, path: String): Unit =
     if condition.rendered.trim.isEmpty then
@@ -203,10 +296,11 @@ private[nodal] object AnalogControlFlowRuntime:
         Some(path)
       )
     condition.stage match
-      case Stage.Static if condition.staticValue.isEmpty =>
+      case Stage.Static
+          if condition.staticValue.isEmpty || condition.reads.nonEmpty =>
         fail(
           "NODAL-ANALOG-034-003",
-          "static condition requires a compile-time Boolean value",
+          "static condition requires a compile-time Boolean value without dynamic reads",
           Some(path)
         )
       case Stage.Runtime if condition.staticValue.nonEmpty =>
@@ -241,37 +335,65 @@ private[nodal] object AnalogControlFlowRuntime:
         "case selector must be a dimensionless integer or Boolean value",
         Some(path)
       )
-    selector.staticValue.foreach: value =>
-      if labelKind(value) != selector.kind then
+    selector.staticValue match
+      case Some(_) if selector.reads.nonEmpty =>
+        fail(
+          "NODAL-ANALOG-034-003",
+          "static case selector cannot contain dynamic reads",
+          Some(path)
+        )
+      case Some(value) if labelKind(value) != selector.kind =>
         fail(
           "NODAL-ANALOG-034-007",
           "static case selector value does not match selector kind",
           Some(path)
         )
+      case _ => ()
+
+  private def requireNonEmptyBlock(block: Block, label: String, path: String): Unit =
+    if block.statements.isEmpty then
+      fail(
+        "NODAL-ANALOG-034-015",
+        s"$label must contain at least one statement",
+        Some(path)
+      )
 
   private def validateBlock(
       block: Block,
       identities: mutable.Set[String],
-      loopStack: Vector[LoopStage]
+      declarations: mutable.Set[String],
+      loopStack: Vector[LoopStage],
+      isRoot: scala.Boolean
   ): Unit =
     validateIdentity(block.identity, identities)
     block.statements.foreach:
+      case declaration: Statement.Declare =>
+        validateIdentity(declaration.identity, identities)
+        validateVariable(declaration.variable, "declaration variable", declaration.identity)
+        if declarations.contains(declaration.variable) then
+          fail(
+            "NODAL-ANALOG-034-014",
+            s"duplicate control-flow variable '${declaration.variable}'",
+            Some(declaration.identity)
+          )
+        declarations += declaration.variable
+        if isRoot && declaration.local then
+          fail(
+            "NODAL-ANALOG-034-014",
+            "root declaration cannot be marked local",
+            Some(declaration.identity)
+          )
       case assignment: Statement.Assign =>
         validateIdentity(assignment.identity, identities)
-        if assignment.target.trim.isEmpty then
-          fail(
-            "NODAL-ANALOG-034-014",
-            "control-flow assignment target must be non-empty",
-            Some(assignment.identity)
-          )
+        validateVariable(assignment.target, "control-flow assignment target", assignment.identity)
+        assignment.reads.foreach: read =>
+          validateVariable(read, "control-flow assignment read", assignment.identity)
       case read: Statement.Read =>
         validateIdentity(read.identity, identities)
-        if read.variable.trim.isEmpty then
-          fail(
-            "NODAL-ANALOG-034-014",
-            "control-flow read target must be non-empty",
-            Some(read.identity)
-          )
+        validateVariable(read.variable, "control-flow read target", read.identity)
+      case scope: Statement.Scope =>
+        validateIdentity(scope.identity, identities)
+        validateBlock(scope.body, identities, declarations, loopStack, isRoot = false)
       case conditional: Statement.IfThenElse =>
         validateIdentity(conditional.identity, identities)
         if conditional.branches.isEmpty then
@@ -282,8 +404,27 @@ private[nodal] object AnalogControlFlowRuntime:
           )
         conditional.branches.zipWithIndex.foreach: (branch, index) =>
           validateCondition(branch.condition, s"${conditional.identity}.condition_$index")
-          validateBlock(branch.body, identities, loopStack)
-        conditional.otherwise.foreach(validateBlock(_, identities, loopStack))
+          requireNonEmptyBlock(
+            branch.body,
+            "conditional branch",
+            s"${conditional.identity}.branch_$index"
+          )
+          validateBlock(
+            branch.body,
+            identities,
+            declarations,
+            loopStack,
+            isRoot = false
+          )
+        conditional.otherwise.foreach: alternative =>
+          requireNonEmptyBlock(alternative, "conditional else branch", conditional.identity)
+          validateBlock(
+            alternative,
+            identities,
+            declarations,
+            loopStack,
+            isRoot = false
+          )
       case selection: Statement.CaseStatement =>
         validateIdentity(selection.identity, identities)
         validateSelector(selection.selector, selection.identity)
@@ -316,10 +457,30 @@ private[nodal] object AnalogControlFlowRuntime:
                 Some(selection.identity)
               )
             labels += key
-          validateBlock(arm.body, identities, loopStack)
-        selection.default.foreach(validateBlock(_, identities, loopStack))
+        selection.arms.zipWithIndex.foreach: (arm, index) =>
+          requireNonEmptyBlock(arm.body, "case arm", s"${selection.identity}.arm_$index")
+          validateBlock(arm.body, identities, declarations, loopStack, isRoot = false)
+        selection.default.foreach: alternative =>
+          requireNonEmptyBlock(alternative, "case default arm", selection.identity)
+          validateBlock(
+            alternative,
+            identities,
+            declarations,
+            loopStack,
+            isRoot = false
+          )
       case loop: Statement.Loop =>
         validateIdentity(loop.identity, identities)
+        val expectedBoundType = AnalogProceduralRuntime.ValueType(
+          AnalogProceduralRuntime.ScalarKind.Integer,
+          "dimensionless"
+        )
+        if loop.boundValueType != expectedBoundType then
+          fail(
+            "NODAL-ANALOG-034-008",
+            "bounded loop requires a dimensionless integer bound",
+            Some(loop.identity)
+          )
         if loop.minimumIterations < 0 ||
           loop.maximumIterations < 0 ||
           loop.minimumIterations > loop.maximumIterations
@@ -332,20 +493,28 @@ private[nodal] object AnalogControlFlowRuntime:
         loop.stage match
           case LoopStage.Static
               if loop.minimumIterations != loop.maximumIterations ||
-                loop.boundReads.nonEmpty =>
+                loop.boundReads.nonEmpty ||
+                !loop.staticTripCount.contains(loop.minimumIterations) =>
             fail(
               "NODAL-ANALOG-034-009",
               "static loop requires one exact compile-time trip count",
               Some(loop.identity)
             )
-          case LoopStage.RuntimeBounded if loop.maximumIterations == 0 =>
+          case LoopStage.RuntimeBounded
+              if loop.maximumIterations == 0 || loop.staticTripCount.nonEmpty =>
             fail(
               "NODAL-ANALOG-034-008",
-              "runtime loop requires a positive finite maximum",
+              "runtime loop requires a positive finite maximum and a dynamic bound",
               Some(loop.identity)
             )
           case _ => ()
-        validateBlock(loop.body, identities, loopStack :+ loop.stage)
+        validateBlock(
+          loop.body,
+          identities,
+          declarations,
+          loopStack :+ loop.stage,
+          isRoot = false
+        )
       case exit: Statement.Break =>
         validateIdentity(exit.identity, identities)
         if loopStack.lastOption != Some(LoopStage.RuntimeBounded) then
@@ -386,21 +555,37 @@ private[nodal] object AnalogControlFlowRuntime:
       flows.flatMap(_.continues)
     )
 
+  private def removeLocals(flow: Flow, locals: Set[String]): Flow =
+    if locals.isEmpty then flow
+    else
+      Flow(
+        flow.normal.map(_ -- locals),
+        flow.breaks.map(_ -- locals),
+        flow.continues.map(_ -- locals)
+      )
+
   private def analyzeBlock(
       block: Block,
       input: Set[String],
-      loopDepth: Int
+      loopDepth: Int,
+      retainLocals: scala.Boolean = false
   ): Flow =
     var normal: Option[Set[String]] = Some(input)
     val breaks = mutable.ArrayBuffer.empty[Set[String]]
     val continues = mutable.ArrayBuffer.empty[Set[String]]
+    val locals = mutable.HashSet.empty[String]
     block.statements.foreach: statement =>
+      statement match
+        case declaration: Statement.Declare if declaration.local =>
+          locals += declaration.variable
+        case _ => ()
       normal.foreach: state =>
         val next = analyzeStatement(statement, state, loopDepth)
         normal = next.normal
         breaks ++= next.breaks
         continues ++= next.continues
-    Flow(normal, breaks.toVector, continues.toVector)
+    val flow = Flow(normal, breaks.toVector, continues.toVector)
+    if retainLocals then flow else removeLocals(flow, locals.toSet)
 
   private def analyzeConditional(
       conditional: Statement.IfThenElse,
@@ -478,12 +663,20 @@ private[nodal] object AnalogControlFlowRuntime:
       input: Set[String],
       loopDepth: Int
   ): Flow = statement match
+    case declaration: Statement.Declare =>
+      checkReads(declaration.initializerReads, input, declaration.identity)
+      val output =
+        if declaration.initialized then input + declaration.variable
+        else input - declaration.variable
+      Flow(Some(output), Vector.empty, Vector.empty)
     case assignment: Statement.Assign =>
       checkReads(assignment.reads, input, assignment.identity)
       Flow(Some(input + assignment.target), Vector.empty, Vector.empty)
     case read: Statement.Read =>
       checkReads(Set(read.variable), input, read.identity)
       Flow(Some(input), Vector.empty, Vector.empty)
+    case scope: Statement.Scope =>
+      analyzeBlock(scope.body, input, loopDepth)
     case conditional: Statement.IfThenElse =>
       analyzeConditional(conditional, input, loopDepth)
     case selection: Statement.CaseStatement =>

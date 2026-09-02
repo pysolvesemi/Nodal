@@ -6,7 +6,11 @@ on:
       - dev
     paths:
       - '.github/workflows/increment-34-analog-control-flow.yml'
+      - 'core/scala/api/src/nodal/AnalogControlFlowApi.scala'
+      - 'core/scala/api/src/nodal/AnalogControlFlowConstruction.scala'
       - 'core/scala/api/src/nodal/AnalogControlFlowRuntime.scala'
+      - 'core/scala/api/src/nodal/AnalogProceduralConstruction.scala'
+      - 'core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala'
       - 'docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md'
       - 'docs/implementation/increment34-analog-control-flow.md'
       - 'docs/roadmap/nodal-development-todo.md'
@@ -67,6 +71,28 @@ jobs:
           grep -F 'duplicate_case=NODAL-ANALOG-034-006' "$report"
           grep -F 'break_scope=NODAL-ANALOG-034-010' "$report"
           grep -F 'continue_scope=NODAL-ANALOG-034-011' "$report"
+
+      - name: Execute public construction witness
+        shell: bash
+        run: |
+          report=/tmp/increment34-construction-witness.txt
+          for attempt in 1 2; do
+            rm -f "$report"
+            if ./mill -i examples.continuousTimeApi.runMain \
+              nodal.increment34fixture.Increment34ConstructionCheck \
+              "$report"; then
+              break
+            fi
+            if [ "$attempt" -eq 2 ]; then
+              exit 1
+            fi
+            echo 'Retrying Increment 34 construction witness after a transient Mill failure.'
+          done
+          test -s "$report"
+          grep -F 'public_conditional_snapshots=1' "$report"
+          grep -F 'public_case_snapshots=1' "$report"
+          grep -F 'public_missing_else=NODAL-ANALOG-034-004' "$report"
+          grep -F 'flat_assignments=0' "$report"
 
       - name: Check repository style and documentation
         run: |

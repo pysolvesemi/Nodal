@@ -119,11 +119,17 @@ object Increment34RuntimeCheck:
               Vector(
                 CaseArm(
                   Vector(CaseLabel.Integer(0)),
-                  Block("duplicate-case-zero", Vector.empty)
+                  Block(
+                    "duplicate-case-zero",
+                    Vector(assignment("duplicate-case-assign-zero", "value"))
+                  )
                 ),
                 CaseArm(
                   Vector(CaseLabel.Integer(0)),
-                  Block("duplicate-case-again", Vector.empty)
+                  Block(
+                    "duplicate-case-again",
+                    Vector(assignment("duplicate-case-assign-again", "value"))
+                  )
                 )
               ),
               None
@@ -233,7 +239,10 @@ object Increment34RuntimeCheck:
             Vector(
               ConditionalBranch(
                 Condition.static(false),
-                Block("static-dead", Vector.empty)
+                Block(
+                  "static-dead",
+                  Vector(Statement.Read("static-dead-read", "uninitialized"))
+                )
               ),
               ConditionalBranch(
                 Condition.static(true),

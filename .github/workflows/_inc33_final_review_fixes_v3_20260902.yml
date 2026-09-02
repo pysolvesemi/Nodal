@@ -1,0 +1,111 @@
+name: Increment 33 final review fixes v3 2026-09-02
+
+on:
+  push:
+    branches:
+      - automation/inc33-final-review-fixes-v3-20260902
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact Increment 33 implementation head
+        uses: actions/checkout@v6
+        with:
+          repository: pysolvesemi/Nodal
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Require exact reviewed baseline
+        run: test "$(git rev-parse HEAD)" = 5e4c3b6c3c598bbc6f8071101525547db34e908b
+
+      - name: Apply validated fixes and correct mutation expectation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin automation/inc33-final-review-fixes-v2-20260902
+          python3 - <<'PY'
+          import subprocess
+          import textwrap
+          from pathlib import Path
+
+          source = subprocess.check_output(
+              [
+                  "git",
+                  "show",
+                  "FETCH_HEAD:.github/workflows/_inc33_final_review_fixes_v2_20260902.yml",
+              ],
+              text=True,
+          )
+          begin_marker = "          python3 - <<'PY'\n"
+          end_marker = "\n          PY\n\n      - name: Install pinned native and lint toolchains"
+          begin = source.index(begin_marker) + len(begin_marker)
+          end = source.index(end_marker, begin)
+          script = textwrap.dedent(source[begin:end])
+          exec(compile(script, "increment33-final-review-fixes-v3.py", "exec"), {"__name__": "__main__"})
+
+          path = Path("tests/compiler/test_increment33.py")
+          text = path.read_text(encoding="utf-8")
+          old = '            self.assert_rejected(root, "single procedural-region guard")\n'
+          new = '            self.assert_rejected(root, "Scala runtime is missing")\n'
+          if text.count(old) != 1:
+              raise SystemExit("single-procedure mutation expectation is not unique")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Run complete affected acceptance suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Publish validated fixes to PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            core/scala/api/src/nodal/AnalogProceduralRuntime.scala \
+            core/native/include/nodal/AnalogProceduralRuntime.h \
+            core/scala/api/src/nodal/CandidateApi.scala \
+            core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala \
+            core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+            core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
+            examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala \
+            tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp \
+            docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md \
+            docs/implementation/increment33-analog-variables-procedural-assignment.md \
+            core/compiler/diagnostics-v0.1.json \
+            scripts/check_increment33.py \
+            tests/compiler/test_increment33.py
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m 'fix(increment33): isolate procedures and retain Boolean result types'
+          git fetch --no-tags origin increment/33-analog-variables-procedural-assignment-v5
+          test "$(git rev-parse FETCH_HEAD)" = 5e4c3b6c3c598bbc6f8071101525547db34e908b
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

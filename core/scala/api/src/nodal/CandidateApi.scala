@@ -379,7 +379,7 @@ final case class CdcWaiver(
 
 object Cdc:
   def sync(bit: Expr[Bool], to: ClockDomain, stages: Int = 2): Expr[Bool] =
-    CandidateRuntime.expr(bit, to, stages)
+    CandidateRuntime.booleanExpr("cdc_sync", bit, to, stages)
 
   def gray[A <: Data](
       grayValue: Gray[A],
@@ -388,7 +388,7 @@ object Cdc:
   ): Expr[A] = CandidateRuntime.expr(grayValue, to, stages)
 
   def pulse(pulse: Pulse, to: ClockDomain): Expr[Bool] =
-    CandidateRuntime.expr(pulse, to)
+    CandidateRuntime.booleanExpr("cdc_pulse", pulse, to)
 
   def handshake[A <: Data](payload: Expr[A], to: ClockDomain): Expr[A] =
     CandidateRuntime.expr(payload, to)
@@ -514,10 +514,14 @@ extension (left: Expr[Real])
   def /(right: Expr[Real]): Expr[Real] =
     CandidateRuntime.analogExpr("analog_div", left, right)
   def unary_- : Expr[Real] = CandidateRuntime.expr(left)
-  def >(right: Expr[Real]): Expr[Bool] = CandidateRuntime.expr(left, right)
-  def >=(right: Expr[Real]): Expr[Bool] = CandidateRuntime.expr(left, right)
-  def <(right: Expr[Real]): Expr[Bool] = CandidateRuntime.expr(left, right)
-  def <=(right: Expr[Real]): Expr[Bool] = CandidateRuntime.expr(left, right)
+  def >(right: Expr[Real]): Expr[Bool] =
+    CandidateRuntime.booleanExpr("real_gt", left, right)
+  def >=(right: Expr[Real]): Expr[Bool] =
+    CandidateRuntime.booleanExpr("real_ge", left, right)
+  def <(right: Expr[Real]): Expr[Bool] =
+    CandidateRuntime.booleanExpr("real_lt", left, right)
+  def <=(right: Expr[Real]): Expr[Bool] =
+    CandidateRuntime.booleanExpr("real_le", left, right)
   infix def <+(value: Expr[Real]): Unit =
     CandidateRuntime.analogContribution(left, value)
 
@@ -526,9 +530,11 @@ extension (left: Expr[UInt])
   def +(right: Expr[UInt]): Expr[UInt] = CandidateRuntime.expr(left, right)
 
 extension (left: Expr[Bool])
-  def &&(right: Expr[Bool]): Expr[Bool] = CandidateRuntime.expr(left, right)
-  def ||(right: Expr[Bool]): Expr[Bool] = CandidateRuntime.expr(left, right)
-  def unary_! : Expr[Bool] = CandidateRuntime.expr(left)
+  def &&(right: Expr[Bool]): Expr[Bool] =
+    CandidateRuntime.booleanExpr("bool_and", left, right)
+  def ||(right: Expr[Bool]): Expr[Bool] =
+    CandidateRuntime.booleanExpr("bool_or", left, right)
+  def unary_! : Expr[Bool] = CandidateRuntime.booleanExpr("bool_not", left)
   def rising: Event = CandidateRuntime.event(left, Edge.Rising)
   def falling: Event = CandidateRuntime.event(left, Edge.Falling)
 
@@ -678,6 +684,15 @@ private[nodal] object CandidateRuntime:
 
   def expr[A <: Data](values: Any*): Expr[A] =
     val expression = new KernelExpr[A](values.toVector)
+    ConstructionKernel.expression(expression)
+    expression
+
+  def booleanExpr(operation: String, values: Any*): Expr[Bool] =
+    val expression = new KernelExpr[Bool](
+      values.toVector,
+      resultType = Some(KernelTypeDescriptor("Bool")),
+      operation = Some(operation)
+    )
     ConstructionKernel.expression(expression)
     expression
 

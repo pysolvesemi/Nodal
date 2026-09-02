@@ -115,6 +115,10 @@ public:
   template <typename Body> decltype(auto) procedure(Body &&body) {
     if (procedureActive_)
       fail("NODAL-ANALOG-033-018", "nested analog procedural regions are not supported");
+    if (procedureSeen_)
+      fail("NODAL-ANALOG-033-020",
+           "multiple analog procedural regions per component are deferred");
+    procedureSeen_ = true;
     procedureActive_ = true;
     scopeStack_ = {"procedure"};
     try {
@@ -355,6 +359,7 @@ private:
 
   std::string owner_;
   bool procedureActive_ = false;
+  bool procedureSeen_ = false;
   std::vector<std::string> scopeStack_;
   std::size_t scopeSerial_ = 0;
   std::unordered_map<std::string, MutableVariable> variables_;

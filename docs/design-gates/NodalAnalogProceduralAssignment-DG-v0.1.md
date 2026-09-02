@@ -54,6 +54,11 @@ is always illegal, even when a spelling happens to match.
 Increment 33 records structured statement order but does not implement dynamic
 conditionals, cases, or loops; those remain owned by Increment 34.
 
+The Increment 33 construction recorders retain exactly one top-level procedural
+region per component. A second top-level region is diagnosed rather than merged
+with the first, so definite-assignment state cannot leak between independent
+regions. First-class multi-region construction snapshots are deferred.
+
 ## Initialization and read-before-write
 
 A variable is definitely initialized when either:
@@ -113,7 +118,8 @@ Increment 33 reserves `NODAL-ANALOG-033-*` for at least:
 - `NODAL-ANALOG-033-016` invalid lexical scope identity;
 - `NODAL-ANALOG-033-017` unknown variable identity;
 - `NODAL-ANALOG-033-018` nested procedural region;
-- `NODAL-ANALOG-033-019` unsupported variable scalar kind.
+- `NODAL-ANALOG-033-019` unsupported variable scalar kind;
+- `NODAL-ANALOG-033-020` multiple top-level procedural regions in one component.
 
 Diagnostics include the relevant stable variable or statement path whenever one
 is available.
@@ -130,6 +136,7 @@ executable solver code or emitted HDL.
 The following are not enabled by this gate:
 
 - analog conditionals, cases, loops, break, or continue;
+- multiple independent top-level procedural regions per component;
 - branch-sensitive definite-assignment analysis;
 - topology expansion or residual/DAE construction;
 - solver-state allocation or solver execution;

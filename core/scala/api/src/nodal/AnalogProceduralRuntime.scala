@@ -82,6 +82,7 @@ private[nodal] object AnalogProceduralRuntime:
     private val assignments = mutable.ArrayBuffer.empty[AssignmentRecord]
     private val statements = mutable.HashSet.empty[String]
     private var procedureActive = false
+    private var procedureSeen = false
     private var scopeStack = Vector.empty[String]
     private var scopeSerial = 0
 
@@ -161,6 +162,12 @@ private[nodal] object AnalogProceduralRuntime:
     def procedure[A](body: => A): A =
       if procedureActive then
         fail("NODAL-ANALOG-033-018", "nested analog procedural regions are not supported")
+      if procedureSeen then
+        fail(
+          "NODAL-ANALOG-033-020",
+          "multiple analog procedural regions per component are deferred"
+        )
+      procedureSeen = true
       procedureActive = true
       scopeStack = Vector("procedure")
       try body

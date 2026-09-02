@@ -133,6 +133,14 @@ object Increment33RuntimeCheck:
     expect("NODAL-ANALOG-033-008"):
       outside.declare("illegal", RealVoltage)
 
+    val multipleProcedures =
+      new AnalogProceduralRuntime.Recorder("MultipleProcedures")
+    multipleProcedures.procedure:
+      ()
+    expect("NODAL-ANALOG-033-020"):
+      multipleProcedures.procedure:
+        ()
+
     if arguments.nonEmpty then
       java.nio.file.Files.writeString(
         java.nio.file.Path.of(arguments(0)),

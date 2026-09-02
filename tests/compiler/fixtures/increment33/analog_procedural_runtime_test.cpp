@@ -121,6 +121,12 @@ int main() {
     (void)outside.declareVariable("illegal", RealVoltage);
   });
 
+  Recorder multipleProcedures("MultipleProcedures");
+  multipleProcedures.procedure([] {});
+  expect("NODAL-ANALOG-033-020", [&] {
+    multipleProcedures.procedure([] {});
+  });
+
   std::cout << "Increment 33 native procedural runtime witness passed\n";
   return 0;
 }

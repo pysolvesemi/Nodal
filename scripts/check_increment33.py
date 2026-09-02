@@ -156,6 +156,10 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
     design_gate = read_text(root, "docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md")
     implementation = read_text(root, "docs/implementation/increment33-analog-variables-procedural-assignment.md")
     scala_runtime = read_text(root, "core/scala/api/src/nodal/AnalogProceduralRuntime.scala")
+    candidate_api = read_text(root, "core/scala/api/src/nodal/CandidateApi.scala")
+    continuous_api = read_text(
+        root, "core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala"
+    )
     native_runtime = read_text(root, "core/native/include/nodal/AnalogProceduralRuntime.h")
     scala_witness = read_text(
         root,
@@ -184,6 +188,9 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         "operationOrder",
         "NODAL-ANALOG-033-011",
         "targetState.initialized = true",
+        "private var procedureSeen = false",
+        "if procedureSeen then",
+        "NODAL-ANALOG-033-020",
         "assignments.toVector",
     )
     for token in scala_tokens:
@@ -197,12 +204,14 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         "operationOrder",
         "NODAL-ANALOG-033-011",
         "targetState.initialized = true",
+        "procedureSeen_",
+        "NODAL-ANALOG-033-020",
         "result.assignments = assignments_",
     )
     for token in native_tokens:
         require(token in native_runtime, f"NODAL-INC33-021: native runtime is missing {token!r}")
 
-    for code in range(1, 20):
+    for code in range(1, 21):
         diagnostic = f"NODAL-ANALOG-033-{code:03d}"
         require(
             diagnostic in design_gate or diagnostic in scala_runtime or diagnostic in native_runtime,
@@ -300,7 +309,7 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
             token in bridge_tests,
             f"NODAL-INC33-045: procedural bridge/source-map test is missing {token!r}",
         )
-    for code in range(1, 20):
+    for code in range(1, 21):
         require(
             f"NODAL-ANALOG-033-{code:03d}" in diagnostics,
             f"NODAL-INC33-041: compiler diagnostic inventory is missing code {code:03d}",
@@ -363,6 +372,37 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         "public nested incompatible compound dimensions remain unknown"
         in construction_tests,
         "NODAL-INC33-068: nested compound-dimension regression is missing",
+    )
+
+    require(
+        "def booleanExpr(" in candidate_api
+        and 'resultType = Some(KernelTypeDescriptor("Bool"))' in candidate_api
+        and '"real_gt"' in candidate_api
+        and '"bool_and"' in candidate_api
+        and "CandidateRuntime.booleanExpr" in continuous_api,
+        "NODAL-INC33-070: Boolean expression result metadata is not retained",
+    )
+    require(
+        'expression.resultType.exists(_.kind == "Bool")' in construction_kernel,
+        "NODAL-INC33-071: Boolean expression dimension is not forced dimensionless",
+    )
+    require(
+        "public Boolean comparison assignment retains result type and dimension"
+        in construction_tests,
+        "NODAL-INC33-072: Boolean comparison assignment regression is missing",
+    )
+    require(
+        "private var procedureSeen = false" in scala_runtime
+        and "if procedureSeen then" in scala_runtime
+        and "procedureSeen_" in native_runtime
+        and "NODAL-ANALOG-033-020" in scala_runtime
+        and "NODAL-ANALOG-033-020" in native_runtime,
+        "NODAL-INC33-073: single procedural-region guard is missing",
+    )
+    require(
+        "multiple top-level analogProcedure regions are rejected"
+        in construction_tests,
+        "NODAL-INC33-074: multiple procedural-region regression is missing",
     )
 
     developer_commands = read_text(root, "scripts/nodal.py")

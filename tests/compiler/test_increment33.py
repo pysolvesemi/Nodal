@@ -26,6 +26,8 @@ REQUIRED = (
     "core/compiler/test/IR/analog-procedural-invalid-variable-kind.mlir",
     "core/native/include/nodal/AnalogProceduralRuntime.h",
     "core/scala/api/src/nodal/AnalogProceduralRuntime.scala",
+    "core/scala/api/src/nodal/CandidateApi.scala",
+    "core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala",
     "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",
     "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala",
     "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala",
@@ -280,6 +282,34 @@ class Increment33ContractTests(unittest.TestCase):
                 root,
                 "native command does not execute Scala bridge regressions against nodalc",
             )
+
+    def test_boolean_result_metadata_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/api/src/nodal/CandidateApi.scala"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    'resultType = Some(KernelTypeDescriptor("Bool"))',
+                    "resultType = None",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "Boolean expression result metadata")
+
+    def test_single_procedure_guard_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/api/src/nodal/AnalogProceduralRuntime.scala"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "if procedureSeen then",
+                    "if false then",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "Scala runtime is missing")
 
 
 if __name__ == "__main__":

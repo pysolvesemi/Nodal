@@ -50,6 +50,22 @@ final class PublicAnalogNestedCompoundReadDimensionMismatch extends Module:
   analogProcedure:
     voltage := (voltage + 1.0.real) + voltage
 
+final class PublicAnalogBooleanComparisonAssignment extends Module:
+  val voltage: Variable[Real] = variable(Real, 0.0.V)
+  val flag: Variable[Bool] = variable(Bool, false.B)
+
+  analogProcedure:
+    flag := (voltage > 1.0.V) && true.B
+
+final class PublicAnalogMultipleProceduralRegions extends Module:
+  val voltage: Variable[Real] = variable(Real, 0.0.V)
+
+  analogProcedure:
+    voltage := 1.0.V
+
+  analogProcedure:
+    voltage := 2.0.V
+
 final class PublicAnalogCompoundVoltage extends Module:
   val voltage: Variable[Real] = variable(Real, 0.0.V)
 
@@ -148,6 +164,28 @@ object AnalogProceduralConstructionTests extends TestSuite:
         .get
         .asInstanceOf[AnalogProceduralRuntime.Failure]
       assert(failure.diagnostic.code == "NODAL-ANALOG-033-013")
+
+    test("public Boolean comparison assignment retains result type and dimension"):
+      val snapshot =
+        ConstructionKernel.inspect(new PublicAnalogBooleanComparisonAssignment)
+      val assignment = snapshot.analogProcedural.head.assignments.head
+      assert(
+        assignment.value.valueType == AnalogProceduralRuntime.ValueType(
+          AnalogProceduralRuntime.ScalarKind.Boolean,
+          "dimensionless"
+        )
+      )
+      assert(assignment.value.reads.exists(_.identity.endsWith(".variable_0")))
+
+    test("multiple top-level analogProcedure regions are rejected"):
+      val failure = scala.util
+        .Try(
+          ConstructionKernel.inspect(new PublicAnalogMultipleProceduralRegions)
+        )
+        .failed
+        .get
+        .asInstanceOf[AnalogProceduralRuntime.Failure]
+      assert(failure.diagnostic.code == "NODAL-ANALOG-033-020")
 
     test("public compound voltage assignment retains its physical dimension"):
       val snapshot = ConstructionKernel.inspect(new PublicAnalogCompoundVoltage)

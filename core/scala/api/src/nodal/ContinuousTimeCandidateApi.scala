@@ -227,7 +227,7 @@ def discontinuity(contract: DiscontinuityContract)(body: => Unit): Unit =
 
 object AnalysisContext:
   def active(kind: AnalysisKind): Expr[Bool] =
-    CandidateRuntime.expr("candidate-analysis-active", kind)
+    CandidateRuntime.booleanExpr("candidate-analysis-active", kind)
 
   def time: Expr[Real] = CandidateRuntime.analogExpr("candidate-analysis-time")
 
@@ -244,7 +244,7 @@ object EnvironmentContext:
     CandidateRuntime.analogExpr("candidate-operating-condition", name, dimension)
 
   def corner(name: String): Expr[Bool] =
-    CandidateRuntime.expr("candidate-environment-corner", name)
+    CandidateRuntime.booleanExpr("candidate-environment-corner", name)
 
   def sweepCoordinate(name: String, dimension: PhysicalDimension): Expr[Real] =
     CandidateRuntime.analogExpr("candidate-sweep-coordinate", name, dimension)

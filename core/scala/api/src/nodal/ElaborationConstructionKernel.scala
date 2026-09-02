@@ -721,6 +721,9 @@ private final class ConstructionSession(val options: EmitOptions):
         .registeredDimension(variable)
         .map(namedAnalogDimension)
         .getOrElse(AnalogDimension.Unknown)
+    case expression: KernelExpr[?]
+        if expression.resultType.exists(_.kind == "Bool") =>
+      AnalogDimension.Dimensionless
     case expression: KernelExpr[?] =>
       expression.literal match
         case Some(literal) if literal.kind == "real" =>

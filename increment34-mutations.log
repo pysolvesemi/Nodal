@@ -1,0 +1,416 @@
+EEEEEE/usr/lib/python3.12/tempfile.py:1075: ResourceWarning: Implicitly cleaning up <TemporaryDirectory '/tmp/tmpignktskn'>
+  _warnings.warn(warn_message, ResourceWarning)
+/usr/lib/python3.12/tempfile.py:1075: ResourceWarning: Implicitly cleaning up <TemporaryDirectory '/tmp/tmp2_0gcyf9'>
+  _warnings.warn(warn_message, ResourceWarning)
+/usr/lib/python3.12/tempfile.py:1075: ResourceWarning: Implicitly cleaning up <TemporaryDirectory '/tmp/tmps1lx_8g3'>
+  _warnings.warn(warn_message, ResourceWarning)
+/usr/lib/python3.12/tempfile.py:1075: ResourceWarning: Implicitly cleaning up <TemporaryDirectory '/tmp/tmpgmeo0gt4'>
+  _warnings.warn(warn_message, ResourceWarning)
+/usr/lib/python3.12/tempfile.py:1075: ResourceWarning: Implicitly cleaning up <TemporaryDirectory '/tmp/tmp77l_h1o7'>
+  _warnings.warn(warn_message, ResourceWarning)
+/usr/lib/python3.12/tempfile.py:1075: ResourceWarning: Implicitly cleaning up <TemporaryDirectory '/tmp/tmpt10spw3v'>
+  _warnings.warn(warn_message, ResourceWarning)
+EEEEEEEEEEEEEEEEEEE
+======================================================================
+ERROR: test_baseline_head_mutation_is_rejected (test_increment34.Increment34ContractTests.test_baseline_head_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 82, in test_baseline_head_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_branch_intersection_mutation_is_rejected (test_increment34.Increment34ContractTests.test_branch_intersection_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 91, in test_branch_intersection_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_break_legality_mutation_is_rejected (test_increment34.Increment34ContractTests.test_break_legality_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 119, in test_break_legality_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_builder_analysis_mutation_is_rejected (test_increment34.Increment34ContractTests.test_builder_analysis_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 189, in test_builder_analysis_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_canonical_snapshot_claim_is_required (test_increment34.Increment34ContractTests.test_canonical_snapshot_claim_is_required)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 288, in test_canonical_snapshot_claim_is_required
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_canonical_snapshot_field_mutation_is_rejected (test_increment34.Increment34ContractTests.test_canonical_snapshot_field_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 203, in test_canonical_snapshot_field_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_continue_exit_merge_mutation_is_rejected (test_increment34.Increment34ContractTests.test_continue_exit_merge_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 133, in test_continue_exit_merge_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_duplicate_case_regression_mutation_is_rejected (test_increment34.Increment34ContractTests.test_duplicate_case_regression_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 262, in test_duplicate_case_regression_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_flattening_guard_mutation_is_rejected (test_increment34.Increment34ContractTests.test_flattening_guard_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 217, in test_flattening_guard_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_local_lifetime_mutation_is_rejected (test_increment34.Increment34ContractTests.test_local_lifetime_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 147, in test_local_lifetime_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_native_branch_intersection_mutation_is_rejected (test_increment34.Increment34ContractTests.test_native_branch_intersection_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 350, in test_native_branch_intersection_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_native_control_op_mutation_is_rejected (test_increment34.Increment34ContractTests.test_native_control_op_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 321, in test_native_control_op_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_native_verifier_mutation_is_rejected (test_increment34.Increment34ContractTests.test_native_verifier_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 335, in test_native_verifier_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_owner_remap_mutation_is_rejected (test_increment34.Increment34ContractTests.test_owner_remap_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 231, in test_owner_remap_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_premature_roadmap_closure_is_rejected (test_increment34.Increment34ContractTests.test_premature_roadmap_closure_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 69, in test_premature_roadmap_closure_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_public_api_static_spelling_mutation_is_rejected (test_increment34.Increment34ContractTests.test_public_api_static_spelling_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 175, in test_public_api_static_spelling_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_public_construction_claim_is_required (test_increment34.Increment34ContractTests.test_public_construction_claim_is_required)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 279, in test_public_construction_claim_is_required
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_public_missing_else_regression_mutation_is_rejected (test_increment34.Increment34ContractTests.test_public_missing_else_regression_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 245, in test_public_missing_else_regression_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_python_cache_is_ignored (test_increment34.Increment34ContractTests.test_python_cache_is_ignored)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 378, in test_python_cache_is_ignored
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_repository_checkpoint_passes (test_increment34.Increment34ContractTests.test_repository_checkpoint_passes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 66, in test_repository_checkpoint_passes
+    CHECKER.check_repository(ROOT)
+  File "/home/runner/work/Nodal/Nodal/work/scripts/check_increment34.py", line 66, in check_repository
+    bridge_tests = read_text(
+                   ^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/scripts/check_increment34.py", line 23, in read_text
+    require(path.is_file(), f"NODAL-INC34-001: missing required file {relative}")
+  File "/home/runner/work/Nodal/Nodal/work/scripts/check_increment34.py", line 18, in require
+    raise CheckFailure(message)
+check_increment34.CheckFailure: NODAL-INC34-001: missing required file core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala
+
+======================================================================
+ERROR: test_static_dynamic_read_guard_mutation_is_rejected (test_increment34.Increment34ContractTests.test_static_dynamic_read_guard_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 161, in test_static_dynamic_read_guard_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_structured_bridge_mutation_is_rejected (test_increment34.Increment34ContractTests.test_structured_bridge_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 307, in test_structured_bridge_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_unfinished_integration_claim_is_rejected (test_increment34.Increment34ContractTests.test_unfinished_integration_claim_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 297, in test_unfinished_integration_claim_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_write_enabled_workflow_is_rejected (test_increment34.Increment34ContractTests.test_write_enabled_workflow_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 364, in test_write_enabled_workflow_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+======================================================================
+ERROR: test_zero_trip_loop_mutation_is_rejected (test_increment34.Increment34ContractTests.test_zero_trip_loop_mutation_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 105, in test_zero_trip_loop_mutation_is_rejected
+    temporary, root = self.fixture()
+                      ^^^^^^^^^^^^^^
+  File "/home/runner/work/Nodal/Nodal/work/tests/compiler/test_increment34.py", line 57, in fixture
+    shutil.copy2(source, destination)
+  File "/usr/lib/python3.12/shutil.py", line 475, in copy2
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "/usr/lib/python3.12/shutil.py", line 260, in copyfile
+    with open(src, 'rb') as fsrc:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/Nodal/Nodal/work/core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
+
+----------------------------------------------------------------------
+Ran 25 tests in 0.060s
+
+FAILED (errors=25)

@@ -1,0 +1,15 @@
+        %3 = "nodal.analog_variable_read"(%2) <{metadata = {semantic_path = "ControlTop.final_read"}, owner = "ControlTop", read_id = "ControlTop.final_read"}> : (!nodal.variable<"real", "1">) -> !nodal.quantity<"real", "1"> loc(#loc20)
+#loc4 = loc("AnalogControlFlow.scala":10:5)
+#loc5 = loc("AnalogControlFlow.scala":11:5)
+#loc6 = loc("AnalogControlFlow.scala":12:5)
+#loc9 = loc("AnalogControlFlow.scala":20:9)
+#loc11 = loc("AnalogControlFlow.scala":21:9)
+#loc15 = loc("AnalogControlFlow.scala":22:9)
+#loc16 = loc("AnalogControlFlow.scala":31:11)
+#loc18 = loc("AnalogControlFlow.scala":23:9)
+#loc19 = loc("AnalogControlFlow.scala":35:11)
+#loc20 = loc("AnalogControlFlow.scala":80:7)
+AnalogControlFlow.scala:80:7: error: NODAL-ANALOG-034-004: procedural variable 'ControlTop.procedure.value' is read before definite initialization on this control-flow path [semantic-path=ControlTop.read_after_if] [hierarchy-path=ControlTop] [source-range=AnalogControlFlow.scala:80:7-80:7]
+AnalogControlFlow.scala:80:7: error: NODAL-ANALOG-034-004: procedural variable 'ControlTop.procedure.value' is read before definite initialization on this control-flow path [semantic-path=ControlTop.read_after_case] [hierarchy-path=ControlTop] [source-range=AnalogControlFlow.scala:80:7-80:7]
+AnalogControlFlow.scala:80:7: error: NODAL-ANALOG-034-004: procedural variable 'ControlTop.procedure.value' is read before definite initialization on this control-flow path [semantic-path=ControlTop.read_after_loop] [hierarchy-path=ControlTop] [source-range=AnalogControlFlow.scala:80:7-80:7]
+AnalogControlFlow.scala:80:7: error: NODAL-ANALOG-034-004: procedural variable 'ControlTop.procedure.value' is read before definite initialization on this control-flow path [semantic-path=ControlTop.read_after_continue_loop] [hierarchy-path=ControlTop] [source-range=AnalogControlFlow.scala:80:7-80:7]

@@ -1,0 +1,13 @@
++ /usr/bin/python3 /home/runner/work/Nodal/Nodal/work/scripts/bootstrap_lint_toolchain.py install --prefix /home/runner/work/_temp/nodal-lint-toolchain
+Collecting clang-format==22.1.8
+  Downloading clang_format-22.1.8-py2.py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (4.7 kB)
+Collecting clang-tidy==22.1.8
+  Downloading clang_tidy-22.1.8-py2.py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (4.1 kB)
+Downloading clang_format-22.1.8-py2.py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (1.8 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.8/1.8 MB 40.2 MB/s eta 0:00:00
+Downloading clang_tidy-22.1.8-py2.py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (44.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 44.1/44.1 MB 104.6 MB/s eta 0:00:00
+Installing collected packages: clang-tidy, clang-format
+Successfully installed clang-format-22.1.8 clang-tidy-22.1.8
+lint toolchain: /home/runner/work/_temp/nodal-lint-toolchain
+lock: nodal-lint-2026.08.21

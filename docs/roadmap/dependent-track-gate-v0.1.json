@@ -13,7 +13,7 @@
       "docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md",
       "docs/roadmap/native-digital-simulator-adapters-v0.1-plan.md"
     ],
-    "latest_foundation_increment": 157,
+    "latest_foundation_increment": 159,
     "foundation_increment_148_owns_native_adapter_contracts": true,
     "foundation_increment_150_is_architecture_only": true,
     "foundation_increment_151_is_architecture_only": true,

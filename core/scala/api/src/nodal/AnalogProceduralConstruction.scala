@@ -4,8 +4,8 @@ import java.util.IdentityHashMap
 
 import scala.collection.mutable
 
-/** Construction-session adapter that connects the frozen public API to the Increment 33
-  * procedural recorder and the Increment 34 structured control-flow builder.
+/** Construction-session adapter that connects the frozen public API to the Increment 33 procedural
+  * recorder and the Increment 34 structured control-flow builder.
   *
   * Increment 33 remains authoritative for straight-line procedures. Once an explicit Increment 34
   * control construct is observed, assignments and declarations are retained in the structured
@@ -704,7 +704,8 @@ private[nodal] object AnalogProceduralConstruction:
           target = remapVariable(assignment.target),
           value = remapValue(assignment.value),
           guard = assignment.guard.map(remapValue)
-        )
+        ),
+      controlFlow = snapshot.controlFlow.map(_.remapOwner(owner))
     )
 
   def snapshots(
@@ -723,11 +724,14 @@ private[nodal] object AnalogProceduralConstruction:
             AnalogProceduralRuntime.Snapshot(
               module.owner,
               module.variableRecords.toVector,
-              Vector.empty
+              Vector.empty,
+              module.controlSnapshot
             )
           else module.recorder.snapshot
         val retained = remapSnapshot(sourceSnapshot, owner)
-        Option.when(retained.variables.nonEmpty || retained.assignments.nonEmpty)(retained)
+        Option.when(
+          retained.variables.nonEmpty || retained.assignments.nonEmpty || retained.controlFlow.nonEmpty
+        )(retained)
 
   def controlSnapshots: Vector[AnalogControlFlowConstruction.Snapshot] =
     Option(current.get()).map(_.finalizedControlSnapshots).getOrElse(Vector.empty)

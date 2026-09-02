@@ -1,0 +1,225 @@
+name: Increment 33 native boundary integration 2026-09-02
+
+on:
+  push:
+    branches:
+      - automation/inc33-native-boundary-integration-20260902
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact repaired Increment 33 head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Require exact baseline
+        run: test "$(git rev-parse HEAD)" = 5c9a855cc752e3d446505caac6b91ddbe342acd2
+
+      - name: Integrate Scala bridge verification into native command
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          nodal_path = Path("scripts/nodal.py")
+          nodal = nodal_path.read_text(encoding="utf-8")
+          marker = "    lint_toolchain = _managed_lint_toolchain(\n"
+          bridge_block = (
+              "    nodalc = (\n"
+              "        root\n"
+              '        / "out"\n'
+              '        / "native"\n'
+              '        / "release"\n'
+              '        / "bin"\n'
+              '        / ("nodalc.exe" if os.name == "nt" else "nodalc")\n'
+              "    )\n"
+              "    if not nodalc.is_file():\n"
+              "        raise DeveloperCommandError(\n"
+              '            "NODAL-DEV-009",\n'
+              '            f"native build did not produce the compiler executable: {nodalc}",\n'
+              "        )\n"
+              "    runner.run(\n"
+              "        _mill(\n"
+              "            root,\n"
+              '            "-i",\n'
+              '            "core.scala.testkit.test.testOnly",\n'
+              '            "nodal.internal.testkit.ScalaToMlirBridgeTests",\n'
+              "        ),\n"
+              '        env={**env, "NODAL_NODALC": str(nodalc)},\n'
+              "    )\n"
+          )
+          if "NODAL-DEV-009" not in nodal:
+              if nodal.count(marker) != 1:
+                  raise SystemExit("native lint marker is not unique")
+              nodal = nodal.replace(marker, bridge_block + marker, 1)
+          nodal_path.write_text(nodal, encoding="utf-8")
+
+          developer_tests_path = Path("tests/developer/test_developer_commands.py")
+          developer_tests = developer_tests_path.read_text(encoding="utf-8")
+          native_marker = '        native = root / "managed-native"\n'
+          native_setup = (
+              native_marker
+              "        nodalc = (\n"
+              "            root\n"
+              '            / "out"\n'
+              '            / "native"\n'
+              '            / "release"\n'
+              '            / "bin"\n'
+              '            / ("nodalc.exe" if os.name == "nt" else "nodalc")\n'
+              "        )\n"
+              "        nodalc.parent.mkdir(parents=True)\n"
+              '        nodalc.write_text("compiler\\n", encoding="utf-8")\n'
+          )
+          if "nodalc.parent.mkdir(parents=True)" not in developer_tests:
+              if developer_tests.count(native_marker) < 1:
+                  raise SystemExit("native test setup marker is missing")
+              start = developer_tests.index(
+                  native_marker,
+                  developer_tests.index("def test_core_native_uses_managed_toolchain"),
+              )
+              developer_tests = (
+                  developer_tests[:start]
+                  + developer_tests[start:].replace(native_marker, native_setup, 1)
+              )
+
+          assertion_marker = (
+              '        self.assertFalse(any("run_clang_tools.py" in " ".join(command) for command in commands))\n'
+          )
+          bridge_assertions = (
+              assertion_marker
+              "        bridge_calls = [\n"
+              "            call\n"
+              "            for call in runner.calls\n"
+              '            if "ScalaToMlirBridgeTests" in " ".join(call[0])\n'
+              "        ]\n"
+              "        self.assertEqual(len(bridge_calls), 1)\n"
+              '        self.assertEqual(bridge_calls[0][1]["NODAL_NODALC"], str(nodalc))\n'
+              "        self.assertEqual(\n"
+              '            bridge_calls[0][1]["NODAL_NATIVE_TOOLCHAIN"], str(native)\n'
+              "        )\n"
+          )
+          if "bridge_calls = [" not in developer_tests:
+              if developer_tests.count(assertion_marker) != 1:
+                  raise SystemExit("native bridge assertion marker is not unique")
+              developer_tests = developer_tests.replace(
+                  assertion_marker,
+                  bridge_assertions,
+                  1,
+              )
+          developer_tests_path.write_text(developer_tests, encoding="utf-8")
+
+          checker_path = Path("scripts/check_increment33.py")
+          checker = checker_path.read_text(encoding="utf-8")
+          old_boundary = (
+              "        require(\n"
+              '            \'NODAL_NODALC="$PWD/out/native/release/bin/nodalc"\' in workflow\n'
+              '            and "core.scala.testkit.test.testOnly" in workflow\n'
+              '            and "ScalaToMlirBridgeTests" in workflow,\n'
+              '            "NODAL-INC33-069: Scala bridge regressions do not execute against nodalc",\n'
+              "        )\n"
+          )
+          if old_boundary in checker:
+              checker = checker.replace(old_boundary, "", 1)
+          roadmap_marker = '    roadmap = read_text(root, "docs/roadmap/nodal-development-todo.md")\n'
+          command_check = (
+              "    developer_commands = read_text(root, \"scripts/nodal.py\")\n"
+              "    require(\n"
+              '        \'"NODAL_NODALC": str(nodalc)\' in developer_commands\n'
+              '        and "core.scala.testkit.test.testOnly" in developer_commands\n'
+              '        and "nodal.internal.testkit.ScalaToMlirBridgeTests" in developer_commands,\n'
+              '        "NODAL-INC33-069: native command does not execute Scala bridge regressions against nodalc",\n'
+              "    )\n"
+              "\n"
+          )
+          if "native command does not execute Scala bridge regressions" not in checker:
+              if checker.count(roadmap_marker) != 1:
+                  raise SystemExit("checker roadmap marker is not unique")
+              checker = checker.replace(
+                  roadmap_marker,
+                  command_check + roadmap_marker,
+                  1,
+              )
+          checker_path.write_text(checker, encoding="utf-8")
+
+          mutation_path = Path("tests/compiler/test_increment33.py")
+          mutations = mutation_path.read_text(encoding="utf-8")
+          required_entry = '    "scripts/nodal.py",\n'
+          if required_entry not in mutations:
+              required_marker = '    "scripts/check_increment33.py",\n'
+              if mutations.count(required_marker) != 1:
+                  raise SystemExit("mutation REQUIRED scripts marker is not unique")
+              mutations = mutations.replace(
+                  required_marker,
+                  required_marker + required_entry,
+                  1,
+              )
+          old_path = (
+              '            path = root / ".github/workflows/increment-33-analog-procedural-assignment.yml"\n'
+          )
+          new_path = '            path = root / "scripts/nodal.py"\n'
+          if old_path in mutations:
+              mutations = mutations.replace(old_path, new_path, 1)
+          old_token = 'NODAL_NODALC="$PWD/out/native/release/bin/nodalc"'
+          new_token = '"NODAL_NODALC": str(nodalc)'
+          if old_token in mutations:
+              mutations = mutations.replace(old_token, new_token, 1)
+          old_disabled = 'NODAL_NODALC_DISABLED="$PWD/out/native/release/bin/nodalc"'
+          new_disabled = '"NODAL_NODALC_DISABLED": str(nodalc)'
+          if old_disabled in mutations:
+              mutations = mutations.replace(old_disabled, new_disabled, 1)
+          mutations = mutations.replace(
+              "Scala bridge regressions do not execute against nodalc",
+              "native command does not execute Scala bridge regressions against nodalc",
+          )
+          mutation_path.write_text(mutations, encoding="utf-8")
+          PY
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Run affected validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests/developer -p 'test_*.py'
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Publish native-boundary integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            scripts/nodal.py \
+            tests/developer/test_developer_commands.py \
+            scripts/check_increment33.py \
+            tests/compiler/test_increment33.py
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m 'fix(increment33): exercise Scala bridge through native command'
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

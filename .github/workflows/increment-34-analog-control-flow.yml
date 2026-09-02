@@ -100,7 +100,7 @@ jobs:
             --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
           if ! ./nodal style check \
             --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"; then
-            ./mill formatAll || true
+            ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources || true
             git --no-pager diff -- \
               core/scala/api/src/nodal/AnalogControlFlowApi.scala \
               core/scala/api/src/nodal/AnalogProceduralConstruction.scala

@@ -1,0 +1,387 @@
+{
+  "schema": 1,
+  "track_id": "low-power-power-intent",
+  "display_name": "Low-Power Architecture and Power Intent",
+  "track_version": "0.1",
+  "status": "planned-blocked-by-foundation",
+  "defined_date": "2026-09-02",
+  "plan": "docs/roadmap/low-power-power-intent-v0.1-plan.md",
+  "foundation": {
+    "roadmap": "docs/roadmap/nodal-development-todo.md",
+    "readiness_adr": "docs/architecture/0024-minimal-asic-advanced-io-readiness-boundary.md",
+    "readiness_increments": [
+      150,
+      151
+    ],
+    "completion_rule": "all-foundation-checkboxes-complete",
+    "implementation_before_barrier": false,
+    "research_before_barrier": true,
+    "missing_core_identity_returns_to_foundation": true,
+    "dependent_implementation_changes_foundation_exit_criteria": false
+  },
+  "canonical_architecture": {
+    "source_of_truth": "nodal-power-intent-ir",
+    "upf_is_canonical": false,
+    "upf_roles": [
+      "generated-projection",
+      "constrained-import",
+      "opaque-external-attachment"
+    ],
+    "semantic_binding": "stable-nodal-identities-not-generated-hierarchy-strings",
+    "layers": [
+      "canonical-power-intent-ir",
+      "reusable-low-power-library",
+      "versioned-technology-and-tool-profiles"
+    ],
+    "mlir_policy": "nodal-owned-operations-or-attributes-unless-compatible-upstream-semantics-exist-at-implementation-time",
+    "unsupported_behavior": "fail-with-source-correlated-capability-diagnostic",
+    "silent_omission": false,
+    "silent_approximation": false
+  },
+  "standards": {
+    "normative_external_baseline": "IEEE 1801-2024",
+    "common_name": "UPF 4.0",
+    "initial_generation_profile": "IEEE1801_2024_Core",
+    "initial_open_implementation_profile": "OpenROAD_Supported",
+    "arbitrary_tcl_import": false,
+    "typed_vendor_escape_initially_required": false,
+    "profile_downgrade_must_be_explicit": true
+  },
+  "semantic_categories": [
+    "supply-port",
+    "supply-net",
+    "supply-set",
+    "power-domain",
+    "power-switch",
+    "power-state",
+    "power-transition",
+    "operating-point",
+    "isolation-strategy",
+    "level-shift-strategy",
+    "combined-isolation-level-shift-strategy",
+    "retention-strategy",
+    "always-on-strategy",
+    "technology-mapping",
+    "hierarchical-refinement",
+    "typed-vendor-extension"
+  ],
+  "crossing_analysis": {
+    "subjects": [
+      "scalar",
+      "aggregate",
+      "interface",
+      "protocol",
+      "clock",
+      "reset",
+      "memory",
+      "hard-macro",
+      "supported-mixed-signal-boundary"
+    ],
+    "outcomes": [
+      "proven-no-action",
+      "isolation",
+      "level-shift",
+      "combined-cell",
+      "always-on-buffer",
+      "retention-aware-handling",
+      "typed-waiver",
+      "error"
+    ],
+    "coverage_required": true,
+    "stale_and_multiple_match_diagnostics": true
+  },
+  "primitive_library": {
+    "planned_location": "libraries/lowpower",
+    "core_depends_on_library": false,
+    "candidate_primitives": [
+      "ClockGate",
+      "GlitchlessClockMux",
+      "IsolationClamp",
+      "LevelShifter",
+      "IsolationLevelShifter",
+      "RetentionReg",
+      "RetentionBank",
+      "PowerAwareMemory",
+      "AlwaysOnBuffer",
+      "PowerSwitch",
+      "PowerDomainController"
+    ],
+    "generic_behavioral_model_required": true,
+    "power_aware_model_required": true,
+    "formal_or_temporal_properties_required": true,
+    "technology_mapping_manifest_required": true,
+    "generic_model_is_signoff_implementation": false
+  },
+  "insertion_and_transformation_policy": {
+    "initial_strategy": "diagnose-and-explicitly-apply",
+    "silent_cell_insertion": false,
+    "automatic_clock_gating": {
+      "initially_enabled": false,
+      "later_optional": true,
+      "explicit_opt_in": true,
+      "required_evidence": [
+        "enable-equivalence",
+        "scan-and-test-handling",
+        "timing-and-cell-capability",
+        "profitability",
+        "determinism",
+        "rollback"
+      ],
+      "may_change_latency": false,
+      "may_change_reset_or_cdc_rdc_semantics": false
+    }
+  },
+  "sequencing": {
+    "one_universal_sequence": false,
+    "explicit_operations": [
+      "block-new-transactions",
+      "quiesce",
+      "gate-clock",
+      "save-retained-state",
+      "assert-isolation",
+      "assert-or-release-reset",
+      "switch-supply",
+      "wait-for-stability",
+      "restore-retained-state",
+      "release-isolation",
+      "release-clock"
+    ],
+    "typed_request_acknowledge_protocol": true,
+    "register_ir_integration": "optional"
+  },
+  "verification": {
+    "power_states": [
+      "powered",
+      "off",
+      "corrupt",
+      "isolated",
+      "retained",
+      "restoring",
+      "invalid-transition"
+    ],
+    "required_checks": [
+      "isolation-before-invalid-source",
+      "save-before-power-off",
+      "stable-supply-before-restore-or-deisolation",
+      "restore-before-use",
+      "legal-clock-reset-ordering",
+      "quiescence-before-shutdown",
+      "always-on-control-ownership",
+      "protocol-safety"
+    ],
+    "coverage": [
+      "state",
+      "transition",
+      "crossing",
+      "strategy",
+      "waiver"
+    ],
+    "commercial_simulator_defines_canonical_semantics": false
+  },
+  "implementation_boundary": {
+    "low_power_track_owns": [
+      "power-intent-ir",
+      "upf-profiles",
+      "primitive-mappings",
+      "power-aware-semantics",
+      "crossing-analysis",
+      "activity-and-power-analysis",
+      "bounded-low-power-optimizations"
+    ],
+    "asic_productivity_signoff_track_owns": [
+      "synthesis",
+      "floorplanning",
+      "power-grid",
+      "placement",
+      "clock-tree-synthesis",
+      "routing",
+      "extraction",
+      "sta",
+      "ir-drop",
+      "electromigration",
+      "drc",
+      "lvs",
+      "signoff"
+    ],
+    "fpga_unsupported_asic_intent": "explicitly-unsupported-not-approximated"
+  },
+  "required_artifacts": [
+    "normalized-power-intent-ir",
+    "supply-domain-state-report",
+    "hierarchy-refinement-report",
+    "crossing-and-strategy-coverage-report",
+    "primitive-and-technology-mapping-manifest",
+    "generated-upf-and-identity-manifest",
+    "external-upf-provenance-and-limitations-report",
+    "power-sequence-and-transition-report",
+    "power-aware-verification-results",
+    "implementation-capability-and-inserted-cell-report",
+    "activity-and-power-report-with-corner-provenance",
+    "deterministic-artifact-hashes"
+  ],
+  "open_source_references": [
+    {
+      "name": "IEEE 1801-2024 and IEEE SA Open UPF",
+      "role": "normative-semantics-examples-and-upf-library-reference",
+      "adoption": "pin-commit-and-reverify-license-before-reuse"
+    },
+    {
+      "name": "OpenROAD UPF",
+      "role": "first-open-source-generation-and-implementation-profile",
+      "adoption": "profile-only-the-pinned-tested-subset"
+    },
+    {
+      "name": "OpenTitan primitives",
+      "role": "generic-and-technology-dependent-primitive-mapping-pattern",
+      "adoption": "reuse-pattern-not-project-specific-naming"
+    },
+    {
+      "name": "Lambdalib and Lambdapdk",
+      "role": "portable-cell-library-and-pdk-mapping-reference",
+      "adoption": "retain-nodal-power-intent-and-source-correlation"
+    },
+    {
+      "name": "Lighter",
+      "role": "optional-automatic-clock-gating-and-validation-reference",
+      "adoption": "no-default-transformation"
+    },
+    {
+      "name": "croc-pmu",
+      "role": "compact-end-to-end-pmu-upf-and-open-flow-witness",
+      "adoption": "case-study-requiring-independent-validation"
+    }
+  ],
+  "increments": [
+    {
+      "number": 1,
+      "id": "LP-001",
+      "title": "Architecture, public API, capability and evidence design gate",
+      "depends_on": [
+        "foundation-barrier"
+      ],
+      "status": "blocked"
+    },
+    {
+      "number": 2,
+      "id": "LP-002",
+      "title": "Canonical Power Intent IR, serialization and mandatory verifiers",
+      "depends_on": [
+        "LP-001"
+      ],
+      "status": "blocked"
+    },
+    {
+      "number": 3,
+      "id": "LP-003",
+      "title": "Supply network, power-domain hierarchy, legal states and refinement",
+      "depends_on": [
+        "LP-002"
+      ],
+      "status": "blocked"
+    },
+    {
+      "number": 4,
+      "id": "LP-004",
+      "title": "Power-domain crossing analysis and strategy legality",
+      "depends_on": [
+        "LP-003"
+      ],
+      "status": "blocked"
+    },
+    {
+      "number": 5,
+      "id": "LP-005",
+      "title": "Reusable primitive library and technology-mapping contract",
+      "depends_on": [
+        "LP-002",
+        "LP-004"
+      ],
+      "status": "blocked"
+    },
+    {
+      "number": 6,
+      "id": "LP-006",
+      "title": "Deterministic IEEE 1801-2024 UPF generation profiles",
+      "depends_on": [
+        "LP-003",
+        "LP-004",
+        "LP-005"
+      ],
+      "status": "blocked"
+    },
+    {
+      "number": 7,
+      "id": "LP-007",
+      "title": "Constrained UPF import, external attachment and semantic round-trip",
+      "depends_on": [
+        "LP-006"
+      ],
+      "status": "blocked"
+    },
+    {
+      "number": 8,
+      "id": "LP-008",
+      "title": "Power-management sequencing and reusable PMU/PPU/PDC library",
+      "depends_on": [
+        "LP-003",
+        "LP-005"
+      ],
+      "status": "blocked"
+    },
+    {
+      "number": 9,
+      "id": "LP-009",
+      "title": "Power-aware simulation, properties, coverage and equivalence evidence",
+      "depends_on": [
+        "LP-004",
+        "LP-005",
+        "LP-008"
+      ],
+      "status": "blocked"
+    },
+    {
+      "number": 10,
+      "id": "LP-010",
+      "title": "OpenROAD and open-PDK implementation profile",
+      "depends_on": [
+        "LP-005",
+        "LP-006"
+      ],
+      "status": "blocked"
+    },
+    {
+      "number": 11,
+      "id": "LP-011",
+      "title": "Activity, power estimation and explicitly bounded optimization",
+      "depends_on": [
+        "LP-005",
+        "LP-009",
+        "LP-010"
+      ],
+      "status": "blocked"
+    },
+    {
+      "number": 12,
+      "id": "LP-012",
+      "title": "Ecosystem qualification, documentation and v1.0 release closure",
+      "depends_on": [
+        "LP-007",
+        "LP-008",
+        "LP-009",
+        "LP-010",
+        "LP-011"
+      ],
+      "status": "blocked"
+    }
+  ],
+  "release_criteria": {
+    "all_increments_complete": true,
+    "all_crossings_closed": true,
+    "all_required_primitives_mapped_or_rejected": true,
+    "generated_and_imported_upf_identity_coverage": true,
+    "unsupported_behavior_fails": true,
+    "reproducible_open_source_witness": true,
+    "commercial_tool_required_for_initial_release": false,
+    "power_claims_require_model_activity_corner_and_tool_provenance": true
+  }
+}

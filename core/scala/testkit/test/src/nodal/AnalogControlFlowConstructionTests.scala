@@ -182,8 +182,12 @@ object AnalogControlFlowConstructionTests extends TestSuite:
       assert(snapshot.root.statements.exists(
         _.isInstanceOf[AnalogControlFlowRuntime.Statement.IfThenElse]
       ))
-      assert(inspection.construction.analogProcedural.head.assignments.isEmpty)
-      assert(inspection.construction.analogProcedural.head.controlFlow.contains(snapshot))
+      val program = inspection.construction.analogProcedural.head
+      assert(program.assignments.isEmpty)
+      assert(program.controlFlow.contains(snapshot))
+      assert(program.controlExpressions.nonEmpty)
+      assert(program.controlExpressions.forall(_.role == "assignment-value"))
+      assert(program.controlExpressions.forall(_.identity.startsWith(program.owner)))
 
     test("public conditional missing else preserves the unmatched incoming path"):
       val failure = controlFailure(new PublicAnalogConditionalMissingElse)
@@ -223,6 +227,12 @@ object AnalogControlFlowConstructionTests extends TestSuite:
           _.endsWith(".variable_1")
         )
       )
+      val expressions = inspection.construction.analogProcedural.head.controlExpressions
+      assert(expressions.exists(_.role == "assignment-value"))
+      val bound = expressions.find(_.role == "loop-bound")
+      assert(bound.nonEmpty)
+      assert(bound.exists(_.value.valueType.kind == AnalogProceduralRuntime.ScalarKind.Integer))
+      assert(bound.exists(_.value.reads.nonEmpty))
 
     test("zero-minimum runtime loop does not establish initialization"):
       val failure = controlFailure(new PublicAnalogZeroMinimumLoop)
@@ -265,10 +275,17 @@ object AnalogControlFlowConstructionTests extends TestSuite:
         inspection.controlFlow.head.root.identity ==
           "PublicAnalogControlParent.child.procedure"
       )
+      val program = inspection.construction.analogProcedural.head
+      assert(program.controlFlow.exists(_.owner == "PublicAnalogControlParent.child"))
       assert(
-        inspection.construction.analogProcedural.head.controlFlow.exists(
-          _.owner == "PublicAnalogControlParent.child"
+        program.controlExpressions.forall(
+          _.identity.startsWith("PublicAnalogControlParent.child")
         )
+      )
+      assert(
+        program.controlExpressions
+          .flatMap(_.value.reads)
+          .forall(_.owner == "PublicAnalogControlParent.child")
       )
 
     test("structured branch assignment rejects a foreign component variable"):

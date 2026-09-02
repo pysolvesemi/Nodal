@@ -1,0 +1,231 @@
+name: Increment 34 Structured IR Diagnostic v3
+
+on:
+  push:
+    branches:
+      - automation/inc34-structured-ir-diagnostic-v3
+    paths:
+      - '.github/workflows/_inc34_structured_ir_diagnostic_v3.yml'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: increment-34-structured-ir-diagnostic-v3
+  cancel-in-progress: false
+
+jobs:
+  diagnose-validate-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out controller scripts
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-structured-ir-diagnostic-v3
+          path: controller
+          fetch-depth: 1
+
+      - name: Check out current Increment 34 feature head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/34-analog-control-flow-v1
+          path: work
+          fetch-depth: 0
+
+      - name: Materialize, validate, and publish or report
+        id: gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          report_dir="${RUNNER_TEMP}/increment34-report"
+          mkdir -p "${report_dir}"
+          status_file="${report_dir}/status.tsv"
+          : > "${status_file}"
+          failed=0
+
+          gate() {
+            name="$1"
+            shift
+            log="${report_dir}/${name}.log"
+            echo "===== ${name} ====="
+            set +e
+            "$@" >"${log}" 2>&1
+            rc=$?
+            set -e
+            if [ "${rc}" -eq 0 ]; then
+              printf '%s\tPASS\t0\n' "${name}" >> "${status_file}"
+              echo "${name}: PASS"
+            else
+              printf '%s\tFAIL\t%s\n' "${name}" "${rc}" >> "${status_file}"
+              echo "${name}: FAIL (${rc})"
+              tail -n 160 "${log}" || true
+              failed=1
+            fi
+          }
+
+          cat > "${report_dir}/metadata.txt" <<EOF
+          controller_sha=${GITHUB_SHA}
+          controller_branch=${GITHUB_REF_NAME}
+          feature_branch=increment/34-analog-control-flow-v1
+          feature_base=$(git -C work rev-parse HEAD)
+          run_id=${GITHUB_RUN_ID}
+          EOF
+
+          gate patch-python-compile python3 -m py_compile \
+            controller/.github/automation/inc34_patch_scala.py \
+            controller/.github/automation/inc34_patch_native.py \
+            controller/.github/automation/inc34_patch_contracts.py \
+            controller/.github/automation/inc34_post_repair.py
+
+          if [ "${failed}" -eq 0 ]; then
+            gate patch-scala python3 \
+              controller/.github/automation/inc34_patch_scala.py --root work
+            gate patch-native python3 \
+              controller/.github/automation/inc34_patch_native.py --root work
+            gate patch-contracts python3 \
+              controller/.github/automation/inc34_patch_contracts.py --root work
+            gate patch-post-repair python3 \
+              controller/.github/automation/inc34_post_repair.py --root work
+          fi
+
+          if [ "${failed}" -eq 0 ]; then
+            gate native-bootstrap bash -lc \
+              'cd work && ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/nodal-native-toolchain"'
+            gate lint-bootstrap bash -lc \
+              'cd work && ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"'
+          fi
+
+          if [ -d "${RUNNER_TEMP}/nodal-lint-toolchain" ]; then
+            gate scala-format bash -lc \
+              'cd work && ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources'
+            gate cpp-format bash -lc \
+              'clang_format=$(find "${RUNNER_TEMP}/nodal-lint-toolchain" -type f -name clang-format -perm -u+x | head -n 1); test -n "${clang_format}"; "${clang_format}" -i work/core/compiler/lib/Dialect/Nodal/NodalOps.cpp'
+          else
+            printf '%s\tSKIP\t1\n' scala-format >> "${status_file}"
+            printf '%s\tSKIP\t1\n' cpp-format >> "${status_file}"
+            failed=1
+          fi
+
+          gate increment33-contract bash -lc 'cd work && python3 scripts/check_increment33.py'
+          gate increment34-contract bash -lc 'cd work && python3 scripts/check_increment34.py'
+          gate increment34-mutations bash -lc \
+            "cd work && python3 -m unittest discover -s tests/compiler -p 'test_increment34.py'"
+          gate diff-check bash -lc 'cd work && git diff --check'
+          gate scala-core bash -lc 'cd work && ./nodal core scala'
+
+          if [ -d "${RUNNER_TEMP}/nodal-native-toolchain" ] && \
+             [ -d "${RUNNER_TEMP}/nodal-lint-toolchain" ]; then
+            gate native-core bash -lc \
+              'cd work && ./nodal core native --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"'
+          else
+            printf '%s\tSKIP\t1\n' native-core >> "${status_file}"
+            failed=1
+          fi
+
+          gate runtime-witness bash -lc \
+            'cd work && report="${RUNNER_TEMP}/increment34-runtime.txt" && ./mill -i examples.continuousTimeApi.runMain nodal.increment34fixture.Increment34RuntimeCheck "${report}" && grep -F "conditional_definite=true" "${report}" && grep -F "case_definite=true" "${report}" && grep -F "loop_definite=true" "${report}" && grep -F "static_definite=true" "${report}"'
+          gate construction-witness bash -lc \
+            'cd work && report="${RUNNER_TEMP}/increment34-construction.txt" && ./mill -i examples.continuousTimeApi.runMain nodal.increment34fixture.Increment34ConstructionCheck "${report}" && grep -F "public_conditional_snapshots=1" "${report}" && grep -F "public_case_snapshots=1" "${report}" && grep -F "flat_assignments=0" "${report}"'
+
+          if [ -d work/out ]; then
+            gate native-direct-roundtrip bash -lc \
+              'cd work && nodalc=$(find out -type f -name nodalc -perm -u+x | head -n 1) && test -n "${nodalc}" && "${nodalc}" --mlir-print-op-generic --mlir-print-debuginfo core/compiler/test/IR/analog-control-flow.mlir > "${RUNNER_TEMP}/increment34-structured.mlir" && grep -F "\"nodal.analog_if\"" "${RUNNER_TEMP}/increment34-structured.mlir" && grep -F "\"nodal.analog_case\"" "${RUNNER_TEMP}/increment34-structured.mlir" && grep -F "\"nodal.analog_loop\"" "${RUNNER_TEMP}/increment34-structured.mlir" && grep -F "AnalogControlFlow.scala" "${RUNNER_TEMP}/increment34-structured.mlir"'
+          else
+            printf '%s\tSKIP\t1\n' native-direct-roundtrip >> "${status_file}"
+            failed=1
+          fi
+
+          if [ -d "${RUNNER_TEMP}/nodal-lint-toolchain" ]; then
+            gate repository-style bash -lc \
+              'cd work && ./nodal style check --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"'
+          else
+            printf '%s\tSKIP\t1\n' repository-style >> "${status_file}"
+            failed=1
+          fi
+
+          git -C work diff --binary > "${report_dir}/candidate.patch"
+          git -C work status --short --branch > "${report_dir}/git-status.txt"
+          git -C work diff --stat > "${report_dir}/diff-stat.txt"
+          cp "${RUNNER_TEMP}/increment34-structured.mlir" \
+            "${report_dir}/increment34-structured.mlir" 2>/dev/null || true
+          cp "${RUNNER_TEMP}/increment34-runtime.txt" \
+            "${report_dir}/increment34-runtime.txt" 2>/dev/null || true
+          cp "${RUNNER_TEMP}/increment34-construction.txt" \
+            "${report_dir}/increment34-construction.txt" 2>/dev/null || true
+
+          {
+            echo '# Increment 34 structured compiler-IR diagnostic'
+            echo
+            echo '```text'
+            cat "${report_dir}/metadata.txt"
+            echo '```'
+            echo
+            echo '## Gate results'
+            echo
+            echo '| Gate | Result | Exit |'
+            echo '|---|---:|---:|'
+            while IFS=$'\t' read -r name outcome rc; do
+              printf '| `%s` | %s | %s |\n' "${name}" "${outcome}" "${rc}"
+            done < "${status_file}"
+            echo
+            echo '## Candidate diff'
+            echo
+            echo '```text'
+            cat "${report_dir}/diff-stat.txt"
+            echo '```'
+            echo
+            if [ "${failed}" -eq 0 ]; then
+              echo '**Outcome: PASS. The validated checkpoint was published to PR #109.**'
+            else
+              echo '**Outcome: FAIL. The feature branch was not modified. Exact logs are retained on the diagnostic-results branch.**'
+            fi
+          } > "${report_dir}/README.md"
+
+          git -C work config user.name github-actions[bot]
+          git -C work config user.email 41898282+github-actions[bot]@users.noreply.github.com
+
+          if [ "${failed}" -eq 0 ]; then
+            git -C work fetch --no-tags origin \
+              increment/34-analog-control-flow-v1:refs/remotes/origin/increment/34-analog-control-flow-v1
+            original=$(sed -n 's/^feature_base=//p' "${report_dir}/metadata.txt")
+            remote=$(git -C work rev-parse origin/increment/34-analog-control-flow-v1)
+            if [ "${original}" != "${remote}" ]; then
+              echo "feature branch moved during validation: ${original} -> ${remote}" \
+                >> "${report_dir}/README.md"
+              failed=1
+            else
+              git -C work add -A
+              git -C work commit -m \
+                'feat(increment34): integrate structured analog compiler IR'
+              published=$(git -C work rev-parse HEAD)
+              echo "published_sha=${published}" >> "${report_dir}/metadata.txt"
+              git -C work push origin \
+                HEAD:increment/34-analog-control-flow-v1
+            fi
+          fi
+
+          result_branch=automation/inc34-structured-ir-results-v3
+          rm -rf result
+          git clone --no-checkout "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" result
+          git -C result checkout --orphan result-root
+          git -C result rm -rf . >/dev/null 2>&1 || true
+          cp -R "${report_dir}/." result/
+          git -C result add -A
+          git -C result config user.name github-actions[bot]
+          git -C result config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git -C result commit -m \
+            "ci(increment34): record structured IR diagnostic ${GITHUB_RUN_ID}"
+          git -C result push --force origin HEAD:"${result_branch}"
+
+          if [ "${failed}" -eq 0 ]; then
+            gh pr comment 109 --repo "${GITHUB_REPOSITORY}" \
+              --body "Increment 34 structured compiler-IR checkpoint passed every staged gate and was published. Results: branch \`${result_branch}\`; workflow run \`${GITHUB_RUN_ID}\`."
+          else
+            gh pr comment 109 --repo "${GITHUB_REPOSITORY}" \
+              --body "Increment 34 structured compiler-IR checkpoint did not publish because one or more staged gates failed. Exact status, patch, and logs: branch \`${result_branch}\`; workflow run \`${GITHUB_RUN_ID}\`."
+            exit 1
+          fi

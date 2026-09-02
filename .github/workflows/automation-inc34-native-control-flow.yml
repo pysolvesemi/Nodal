@@ -1,0 +1,109 @@
+name: Increment 34 native control-flow materializer
+
+on:
+  push:
+    branches:
+      - automation/inc34-native-control-flow-20260902
+    paths:
+      - '.github/workflows/automation-inc34-native-control-flow.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  materialize-and-verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-native-control-flow-20260902
+          path: controller
+
+      - name: Check out exact Increment 34 head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/34-analog-control-flow-v1
+          fetch-depth: 0
+          path: target
+
+      - name: Enforce the accepted starting head
+        working-directory: target
+        run: |
+          test "$(git rev-parse HEAD)" = "604dd738c6acff5191d6f851155d3fcad103531f"
+
+      - name: Materialize first-class native control flow
+        run: |
+          base64 --decode controller/automation/materialize_inc34_native.py.gz.b64 \
+            | gzip --decompress > /tmp/materialize_inc34_native.py
+          python3 /tmp/materialize_inc34_native.py target
+
+      - name: Install pinned native and lint toolchains
+        working-directory: target
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format new native sources
+        working-directory: target
+        shell: bash
+        run: |
+          formatter="${RUNNER_TEMP}/nodal-lint-toolchain/bin/clang-format"
+          test -x "$formatter"
+          "$formatter" -i \
+            core/compiler/include/nodal/Dialect/Nodal/AnalogControlFlow.h \
+            core/compiler/lib/Dialect/Nodal/AnalogControlFlow.cpp \
+            core/compiler/lib/Dialect/Nodal/NodalOps.cpp
+
+      - name: Validate repository contracts
+        working-directory: target
+        run: |
+          python3 scripts/check_increment33.py
+          python3 scripts/check_increment34.py
+          python3 -m unittest discover -s tests/compiler -p 'test_increment34.py'
+
+      - name: Compile Scala API and bridge suite
+        working-directory: target
+        run: ./nodal core scala
+
+      - name: Build and execute the complete native suite
+        working-directory: target
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate style and patch cleanliness
+        working-directory: target
+        run: |
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Commit verified native control flow
+        working-directory: target
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            .github/workflows/increment-34-analog-control-flow.yml \
+            core/compiler/include/nodal/Dialect/Nodal/AnalogControlFlow.h \
+            core/compiler/include/nodal/Dialect/Nodal/NodalOps.td \
+            core/compiler/lib/Dialect/Nodal/AnalogControlFlow.cpp \
+            core/compiler/lib/Dialect/Nodal/CMakeLists.txt \
+            core/compiler/lib/Dialect/Nodal/NodalOps.cpp \
+            core/compiler/test/CMakeLists.txt \
+            core/compiler/test/IR/analog-control-flow.mlir \
+            core/compiler/test/IR/analog-control-flow-invalid-definite.mlir \
+            core/compiler/test/IR/analog-control-flow-invalid-case.mlir \
+            core/compiler/test/IR/analog-control-flow-invalid-break.mlir \
+            tests/compiler/fixtures/increment34/README.md
+          git commit -m "feat(increment34): add native structured control-flow IR"
+          git push origin \
+            HEAD:increment/34-analog-control-flow-v1 \
+            --force-with-lease=refs/heads/increment/34-analog-control-flow-v1:604dd738c6acff5191d6f851155d3fcad103531f

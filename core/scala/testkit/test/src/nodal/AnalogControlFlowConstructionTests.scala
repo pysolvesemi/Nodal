@@ -183,6 +183,7 @@ object AnalogControlFlowConstructionTests extends TestSuite:
         _.isInstanceOf[AnalogControlFlowRuntime.Statement.IfThenElse]
       ))
       assert(inspection.construction.analogProcedural.head.assignments.isEmpty)
+      assert(inspection.construction.analogProcedural.head.controlFlow.contains(snapshot))
 
     test("public conditional missing else preserves the unmatched incoming path"):
       val failure = controlFailure(new PublicAnalogConditionalMissingElse)
@@ -263,6 +264,11 @@ object AnalogControlFlowConstructionTests extends TestSuite:
       assert(
         inspection.controlFlow.head.root.identity ==
           "PublicAnalogControlParent.child.procedure"
+      )
+      assert(
+        inspection.construction.analogProcedural.head.controlFlow.exists(
+          _.owner == "PublicAnalogControlParent.child"
+        )
       )
 
     test("structured branch assignment rejects a foreign component variable"):

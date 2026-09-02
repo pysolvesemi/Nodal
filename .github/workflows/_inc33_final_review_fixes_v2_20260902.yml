@@ -1,0 +1,536 @@
+name: Increment 33 final review fixes v2 2026-09-02
+
+on:
+  push:
+    branches:
+      - automation/inc33-final-review-fixes-v2-20260902
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact Increment 33 implementation head
+        uses: actions/checkout@v6
+        with:
+          repository: pysolvesemi/Nodal
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Require exact reviewed baseline
+        run: test "$(git rev-parse HEAD)" = 5e4c3b6c3c598bbc6f8071101525547db34e908b
+
+      - name: Apply procedure isolation and Boolean result-type fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              candidate = Path(path)
+              text = candidate.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement anchor, found {count}: {old!r}")
+              candidate.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          def replace_count(path: str, old: str, new: str, expected: int) -> None:
+              candidate = Path(path)
+              text = candidate.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(
+                      f"{path}: expected {expected} replacement anchors, found {count}: {old!r}"
+                  )
+              candidate.write_text(text.replace(old, new), encoding="utf-8")
+
+          def insert_before(path: str, marker: str, payload: str, guard: str) -> None:
+              candidate = Path(path)
+              text = candidate.read_text(encoding="utf-8")
+              if guard in text:
+                  return
+              count = text.count(marker)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one insertion anchor, found {count}: {marker!r}")
+              candidate.write_text(text.replace(marker, payload + marker, 1), encoding="utf-8")
+
+          scala_runtime = "core/scala/api/src/nodal/AnalogProceduralRuntime.scala"
+          replace_once(
+              scala_runtime,
+              "    private val statements = mutable.HashSet.empty[String]\n"
+              "    private var procedureActive = false\n"
+              "    private var scopeStack = Vector.empty[String]\n",
+              "    private val statements = mutable.HashSet.empty[String]\n"
+              "    private var procedureActive = false\n"
+              "    private var procedureSeen = false\n"
+              "    private var scopeStack = Vector.empty[String]\n",
+          )
+          replace_once(
+              scala_runtime,
+              "    def procedure[A](body: => A): A =\n"
+              "      if procedureActive then\n"
+              "        fail(\"NODAL-ANALOG-033-018\", \"nested analog procedural regions are not supported\")\n"
+              "      procedureActive = true\n"
+              "      scopeStack = Vector(\"procedure\")\n"
+              "      try body\n"
+              "      finally\n"
+              "        scopeStack = Vector.empty\n"
+              "        procedureActive = false\n",
+              "    def procedure[A](body: => A): A =\n"
+              "      if procedureActive then\n"
+              "        fail(\"NODAL-ANALOG-033-018\", \"nested analog procedural regions are not supported\")\n"
+              "      if procedureSeen then\n"
+              "        fail(\n"
+              "          \"NODAL-ANALOG-033-020\",\n"
+              "          \"multiple analog procedural regions per component are deferred\"\n"
+              "        )\n"
+              "      procedureSeen = true\n"
+              "      procedureActive = true\n"
+              "      scopeStack = Vector(\"procedure\")\n"
+              "      try body\n"
+              "      finally\n"
+              "        scopeStack = Vector.empty\n"
+              "        procedureActive = false\n",
+          )
+
+          native_runtime = "core/native/include/nodal/AnalogProceduralRuntime.h"
+          replace_once(
+              native_runtime,
+              "    if (procedureActive_)\n"
+              "      fail(\"NODAL-ANALOG-033-018\", \"nested analog procedural regions are not supported\");\n"
+              "    procedureActive_ = true;\n",
+              "    if (procedureActive_)\n"
+              "      fail(\"NODAL-ANALOG-033-018\", \"nested analog procedural regions are not supported\");\n"
+              "    if (procedureSeen_)\n"
+              "      fail(\"NODAL-ANALOG-033-020\",\n"
+              "           \"multiple analog procedural regions per component are deferred\");\n"
+              "    procedureSeen_ = true;\n"
+              "    procedureActive_ = true;\n",
+          )
+          replace_once(
+              native_runtime,
+              "  std::string owner_;\n"
+              "  bool procedureActive_ = false;\n"
+              "  std::vector<std::string> scopeStack_;\n",
+              "  std::string owner_;\n"
+              "  bool procedureActive_ = false;\n"
+              "  bool procedureSeen_ = false;\n"
+              "  std::vector<std::string> scopeStack_;\n",
+          )
+
+          candidate_api = "core/scala/api/src/nodal/CandidateApi.scala"
+          replace_once(
+              candidate_api,
+              "  def expr[A <: Data](values: Any*): Expr[A] =\n"
+              "    val expression = new KernelExpr[A](values.toVector)\n"
+              "    ConstructionKernel.expression(expression)\n"
+              "    expression\n\n"
+              "  def analogExpr(operation: String, values: Any*): Expr[Real] =\n",
+              "  def expr[A <: Data](values: Any*): Expr[A] =\n"
+              "    val expression = new KernelExpr[A](values.toVector)\n"
+              "    ConstructionKernel.expression(expression)\n"
+              "    expression\n\n"
+              "  def booleanExpr(operation: String, values: Any*): Expr[Bool] =\n"
+              "    val expression = new KernelExpr[Bool](\n"
+              "      values.toVector,\n"
+              "      resultType = Some(KernelTypeDescriptor(\"Bool\")),\n"
+              "      operation = Some(operation)\n"
+              "    )\n"
+              "    ConstructionKernel.expression(expression)\n"
+              "    expression\n\n"
+              "  def analogExpr(operation: String, values: Any*): Expr[Real] =\n",
+          )
+          replacements = {
+              "    CandidateRuntime.expr(bit, to, stages)\n":
+                  "    CandidateRuntime.booleanExpr(\"cdc_sync\", bit, to, stages)\n",
+              "    CandidateRuntime.expr(pulse, to)\n":
+                  "    CandidateRuntime.booleanExpr(\"cdc_pulse\", pulse, to)\n",
+              "  def >(right: Expr[Real]): Expr[Bool] = CandidateRuntime.expr(left, right)\n":
+                  "  def >(right: Expr[Real]): Expr[Bool] =\n"
+                  "    CandidateRuntime.booleanExpr(\"real_gt\", left, right)\n",
+              "  def >=(right: Expr[Real]): Expr[Bool] = CandidateRuntime.expr(left, right)\n":
+                  "  def >=(right: Expr[Real]): Expr[Bool] =\n"
+                  "    CandidateRuntime.booleanExpr(\"real_ge\", left, right)\n",
+              "  def <(right: Expr[Real]): Expr[Bool] = CandidateRuntime.expr(left, right)\n":
+                  "  def <(right: Expr[Real]): Expr[Bool] =\n"
+                  "    CandidateRuntime.booleanExpr(\"real_lt\", left, right)\n",
+              "  def <=(right: Expr[Real]): Expr[Bool] = CandidateRuntime.expr(left, right)\n":
+                  "  def <=(right: Expr[Real]): Expr[Bool] =\n"
+                  "    CandidateRuntime.booleanExpr(\"real_le\", left, right)\n",
+              "  def &&(right: Expr[Bool]): Expr[Bool] = CandidateRuntime.expr(left, right)\n":
+                  "  def &&(right: Expr[Bool]): Expr[Bool] =\n"
+                  "    CandidateRuntime.booleanExpr(\"bool_and\", left, right)\n",
+              "  def ||(right: Expr[Bool]): Expr[Bool] = CandidateRuntime.expr(left, right)\n":
+                  "  def ||(right: Expr[Bool]): Expr[Bool] =\n"
+                  "    CandidateRuntime.booleanExpr(\"bool_or\", left, right)\n",
+              "  def unary_! : Expr[Bool] = CandidateRuntime.expr(left)\n":
+                  "  def unary_! : Expr[Bool] = CandidateRuntime.booleanExpr(\"bool_not\", left)\n",
+          }
+          for old, new in replacements.items():
+              replace_once(candidate_api, old, new)
+
+          continuous_api = "core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala"
+          replace_once(
+              continuous_api,
+              "    CandidateRuntime.expr(\"candidate-analysis-active\", kind)\n",
+              "    CandidateRuntime.booleanExpr(\"candidate-analysis-active\", kind)\n",
+          )
+          replace_once(
+              continuous_api,
+              "    CandidateRuntime.expr(\"candidate-environment-corner\", name)\n",
+              "    CandidateRuntime.booleanExpr(\"candidate-environment-corner\", name)\n",
+          )
+
+          construction_kernel = "core/scala/api/src/nodal/ElaborationConstructionKernel.scala"
+          replace_once(
+              construction_kernel,
+              "    case variable: Variable[?] =>\n"
+              "      AnalogProceduralConstruction\n"
+              "        .registeredDimension(variable)\n"
+              "        .map(namedAnalogDimension)\n"
+              "        .getOrElse(AnalogDimension.Unknown)\n"
+              "    case expression: KernelExpr[?] =>\n",
+              "    case variable: Variable[?] =>\n"
+              "      AnalogProceduralConstruction\n"
+              "        .registeredDimension(variable)\n"
+              "        .map(namedAnalogDimension)\n"
+              "        .getOrElse(AnalogDimension.Unknown)\n"
+              "    case expression: KernelExpr[?]\n"
+              "        if expression.resultType.exists(_.kind == \"Bool\") =>\n"
+              "      AnalogDimension.Dimensionless\n"
+              "    case expression: KernelExpr[?] =>\n",
+          )
+
+          construction_tests = (
+              "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala"
+          )
+          insert_before(
+              construction_tests,
+              "final class PublicAnalogCompoundVoltage extends Module:\n",
+              "final class PublicAnalogBooleanComparisonAssignment extends Module:\n"
+              "  val voltage: Variable[Real] = variable(Real, 0.0.V)\n"
+              "  val flag: Variable[Bool] = variable(Bool, false.B)\n\n"
+              "  analogProcedure:\n"
+              "    flag := (voltage > 1.0.V) && true.B\n\n"
+              "final class PublicAnalogMultipleProceduralRegions extends Module:\n"
+              "  val voltage: Variable[Real] = variable(Real, 0.0.V)\n\n"
+              "  analogProcedure:\n"
+              "    voltage := 1.0.V\n\n"
+              "  analogProcedure:\n"
+              "    voltage := 2.0.V\n\n",
+              "final class PublicAnalogBooleanComparisonAssignment",
+          )
+          insert_before(
+              construction_tests,
+              '    test("public compound voltage assignment retains its physical dimension"):\n',
+              '    test("public Boolean comparison assignment retains result type and dimension"):\n'
+              "      val snapshot =\n"
+              "        ConstructionKernel.inspect(new PublicAnalogBooleanComparisonAssignment)\n"
+              "      val assignment = snapshot.analogProcedural.head.assignments.head\n"
+              "      assert(\n"
+              "        assignment.value.valueType == AnalogProceduralRuntime.ValueType(\n"
+              "          AnalogProceduralRuntime.ScalarKind.Boolean,\n"
+              '          "dimensionless"\n'
+              "        )\n"
+              "      )\n"
+              "      assert(assignment.value.reads.exists(_.identity.endsWith(\".variable_0\")))\n\n"
+              '    test("multiple top-level analogProcedure regions are rejected"):\n'
+              "      val failure = scala.util\n"
+              "        .Try(\n"
+              "          ConstructionKernel.inspect(new PublicAnalogMultipleProceduralRegions)\n"
+              "        )\n"
+              "        .failed\n"
+              "        .get\n"
+              "        .asInstanceOf[AnalogProceduralRuntime.Failure]\n"
+              '      assert(failure.diagnostic.code == "NODAL-ANALOG-033-020")\n\n',
+              "public Boolean comparison assignment retains result type and dimension",
+          )
+
+          scala_witness = (
+              "examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala"
+          )
+          insert_before(
+              scala_witness,
+              "    if arguments.nonEmpty then\n",
+              "    val multipleProcedures =\n"
+              "      new AnalogProceduralRuntime.Recorder(\"MultipleProcedures\")\n"
+              "    multipleProcedures.procedure:\n"
+              "      ()\n"
+              '    expect("NODAL-ANALOG-033-020"):\n'
+              "      multipleProcedures.procedure:\n"
+              "        ()\n\n",
+              'expect("NODAL-ANALOG-033-020")',
+          )
+
+          native_witness = (
+              "tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp"
+          )
+          insert_before(
+              native_witness,
+              '  std::cout << "Increment 33 native procedural runtime witness passed\\n";\n',
+              "  Recorder multipleProcedures(\"MultipleProcedures\");\n"
+              "  multipleProcedures.procedure([] {});\n"
+              '  expect("NODAL-ANALOG-033-020", [&] {\n'
+              "    multipleProcedures.procedure([] {});\n"
+              "  });\n\n",
+              'Recorder multipleProcedures("MultipleProcedures")',
+          )
+
+          design_gate = "docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md"
+          replace_once(
+              design_gate,
+              "Increment 33 records structured statement order but does not implement dynamic\n"
+              "conditionals, cases, or loops; those remain owned by Increment 34.\n",
+              "Increment 33 records structured statement order but does not implement dynamic\n"
+              "conditionals, cases, or loops; those remain owned by Increment 34.\n\n"
+              "The Increment 33 construction recorders retain exactly one top-level procedural\n"
+              "region per component. A second top-level region is diagnosed rather than merged\n"
+              "with the first, so definite-assignment state cannot leak between independent\n"
+              "regions. First-class multi-region construction snapshots are deferred.\n",
+          )
+          replace_once(
+              design_gate,
+              "- `NODAL-ANALOG-033-019` unsupported variable scalar kind.\n",
+              "- `NODAL-ANALOG-033-019` unsupported variable scalar kind;\n"
+              "- `NODAL-ANALOG-033-020` multiple top-level procedural regions in one component.\n",
+          )
+          replace_once(
+              design_gate,
+              "- analog conditionals, cases, loops, break, or continue;\n",
+              "- analog conditionals, cases, loops, break, or continue;\n"
+              "- multiple independent top-level procedural regions per component;\n",
+          )
+
+          implementation = (
+              "docs/implementation/increment33-analog-variables-procedural-assignment.md"
+          )
+          replace_once(
+              implementation,
+              "- explicit procedural-region legality;\n",
+              "- explicit procedural-region legality;\n"
+              "- one isolated top-level procedural region per component, with additional regions diagnosed;\n",
+          )
+          replace_once(
+              implementation,
+              "Four P1 review findings were corrected before acceptance:\n",
+              "Six P1 review findings were corrected before acceptance:\n",
+          )
+          replace_once(
+              implementation,
+              "4. Variable declarations and assignments carry one monotonically increasing\n"
+              "   `operation_order` in addition to their category-specific counters. This\n"
+              "   preserves declaration/assignment interleaving, including an assignment that\n"
+              "   initializes a value before a later declaration reads it in an initializer,\n"
+              "   even when source coordinates are deliberately inverted.\n",
+              "4. Variable declarations and assignments carry one monotonically increasing\n"
+              "   `operation_order` in addition to their category-specific counters. This\n"
+              "   preserves declaration/assignment interleaving, including an assignment that\n"
+              "   initializes a value before a later declaration reads it in an initializer,\n"
+              "   even when source coordinates are deliberately inverted.\n"
+              "5. A recorder cannot combine independent top-level procedural regions. A second\n"
+              "   region is rejected with `NODAL-ANALOG-033-020`, preventing definite-assignment\n"
+              "   state and operation counters from leaking across procedures.\n"
+              "6. Boolean-producing expressions retain an explicit `Bool` result descriptor and\n"
+              "   dimensionless result dimension. Comparisons and nested Boolean logic therefore\n"
+              "   assign legally to Boolean variables while still retaining their operand reads.\n",
+          )
+          replace_once(
+              implementation,
+              "Dedicated regressions cover bare and compound dimension mismatches, nested\n"
+              "lexical-scope chronology, assignment-before-dependent-initializer chronology,\n"
+              "and native `nodalc` parsing of the resulting first-class procedural MLIR.\n",
+              "Dedicated regressions cover bare and compound dimension mismatches, nested\n"
+              "lexical-scope chronology, assignment-before-dependent-initializer chronology,\n"
+              "Boolean comparison result typing, repeated top-level procedural-region rejection,\n"
+              "and native `nodalc` parsing of the resulting first-class procedural MLIR.\n",
+          )
+          replace_once(
+              implementation,
+              "Increment 34 owns procedural conditionals, cases, loops, break/continue, and\n"
+              "branch-sensitive definite-assignment analysis. Later increments own topology and\n",
+              "Increment 34 owns procedural conditionals, cases, loops, break/continue, multiple\n"
+              "independent top-level procedural regions, and branch-sensitive definite-assignment\n"
+              "analysis. Later increments own topology and\n",
+          )
+          replace_once(
+              implementation,
+              "| Compiler-boundary diagnostics | `NODAL-ANALOG-033-001` through `-019` in the diagnostic inventory | native diagnostics retain semantic path and MLIR location |\n",
+              "| Compiler-boundary diagnostics | `NODAL-ANALOG-033-001` through `-020` in the diagnostic inventory | native diagnostics retain semantic path and MLIR location |\n",
+          )
+
+          diagnostics = "core/compiler/diagnostics-v0.1.json"
+          replace_once(
+              diagnostics,
+              '      "NODAL-ANALOG-033-018",\n      "NODAL-ANALOG-033-019"\n',
+              '      "NODAL-ANALOG-033-018",\n'
+              '      "NODAL-ANALOG-033-019",\n'
+              '      "NODAL-ANALOG-033-020"\n',
+          )
+
+          checker = "scripts/check_increment33.py"
+          replace_once(
+              checker,
+              '    scala_runtime = read_text(root, "core/scala/api/src/nodal/AnalogProceduralRuntime.scala")\n'
+              '    native_runtime = read_text(root, "core/native/include/nodal/AnalogProceduralRuntime.h")\n',
+              '    scala_runtime = read_text(root, "core/scala/api/src/nodal/AnalogProceduralRuntime.scala")\n'
+              '    candidate_api = read_text(root, "core/scala/api/src/nodal/CandidateApi.scala")\n'
+              '    continuous_api = read_text(\n'
+              '        root, "core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala"\n'
+              '    )\n'
+              '    native_runtime = read_text(root, "core/native/include/nodal/AnalogProceduralRuntime.h")\n',
+          )
+          replace_once(
+              checker,
+              '        "targetState.initialized = true",\n        "assignments.toVector",\n',
+              '        "targetState.initialized = true",\n'
+              '        "private var procedureSeen = false",\n'
+              '        "if procedureSeen then",\n'
+              '        "NODAL-ANALOG-033-020",\n'
+              '        "assignments.toVector",\n',
+          )
+          replace_once(
+              checker,
+              '        "targetState.initialized = true",\n        "result.assignments = assignments_",\n',
+              '        "targetState.initialized = true",\n'
+              '        "procedureSeen_",\n'
+              '        "NODAL-ANALOG-033-020",\n'
+              '        "result.assignments = assignments_",\n',
+          )
+          replace_count(checker, "for code in range(1, 20):", "for code in range(1, 21):", 2)
+          insert_before(
+              checker,
+              '    developer_commands = read_text(root, "scripts/nodal.py")\n',
+              "    require(\n"
+              "        \"def booleanExpr(\" in candidate_api\n"
+              "        and 'resultType = Some(KernelTypeDescriptor(\"Bool\"))' in candidate_api\n"
+              "        and '\"real_gt\"' in candidate_api\n"
+              "        and '\"bool_and\"' in candidate_api\n"
+              "        and \"CandidateRuntime.booleanExpr\" in continuous_api,\n"
+              "        \"NODAL-INC33-070: Boolean expression result metadata is not retained\",\n"
+              "    )\n"
+              "    require(\n"
+              "        'expression.resultType.exists(_.kind == \"Bool\")' in construction_kernel,\n"
+              "        \"NODAL-INC33-071: Boolean expression dimension is not forced dimensionless\",\n"
+              "    )\n"
+              "    require(\n"
+              "        \"public Boolean comparison assignment retains result type and dimension\"\n"
+              "        in construction_tests,\n"
+              "        \"NODAL-INC33-072: Boolean comparison assignment regression is missing\",\n"
+              "    )\n"
+              "    require(\n"
+              "        \"private var procedureSeen = false\" in scala_runtime\n"
+              "        and \"if procedureSeen then\" in scala_runtime\n"
+              "        and \"procedureSeen_\" in native_runtime\n"
+              "        and \"NODAL-ANALOG-033-020\" in scala_runtime\n"
+              "        and \"NODAL-ANALOG-033-020\" in native_runtime,\n"
+              "        \"NODAL-INC33-073: single procedural-region guard is missing\",\n"
+              "    )\n"
+              "    require(\n"
+              "        \"multiple top-level analogProcedure regions are rejected\"\n"
+              "        in construction_tests,\n"
+              "        \"NODAL-INC33-074: multiple procedural-region regression is missing\",\n"
+              "    )\n\n",
+              "NODAL-INC33-070",
+          )
+
+          mutation_tests = "tests/compiler/test_increment33.py"
+          replace_once(
+              mutation_tests,
+              '    "core/scala/api/src/nodal/AnalogProceduralRuntime.scala",\n'
+              '    "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",\n',
+              '    "core/scala/api/src/nodal/AnalogProceduralRuntime.scala",\n'
+              '    "core/scala/api/src/nodal/CandidateApi.scala",\n'
+              '    "core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala",\n'
+              '    "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",\n',
+          )
+          insert_before(
+              mutation_tests,
+              '\n\nif __name__ == "__main__":\n',
+              "\n"
+              "    def test_boolean_result_metadata_mutation_is_rejected(self) -> None:\n"
+              "        temporary, root = self.fixture()\n"
+              "        with temporary:\n"
+              '            path = root / "core/scala/api/src/nodal/CandidateApi.scala"\n'
+              "            path.write_text(\n"
+              "                path.read_text(encoding=\"utf-8\").replace(\n"
+              '                    \'resultType = Some(KernelTypeDescriptor("Bool"))\',\n'
+              '                    "resultType = None",\n'
+              "                    1,\n"
+              "                ),\n"
+              '                encoding="utf-8",\n'
+              "            )\n"
+              "            self.assert_rejected(root, \"Boolean expression result metadata\")\n"
+              "\n"
+              "    def test_single_procedure_guard_mutation_is_rejected(self) -> None:\n"
+              "        temporary, root = self.fixture()\n"
+              "        with temporary:\n"
+              '            path = root / "core/scala/api/src/nodal/AnalogProceduralRuntime.scala"\n'
+              "            path.write_text(\n"
+              "                path.read_text(encoding=\"utf-8\").replace(\n"
+              '                    "if procedureSeen then",\n'
+              '                    "if false then",\n'
+              "                    1,\n"
+              "                ),\n"
+              '                encoding="utf-8",\n'
+              "            )\n"
+              "            self.assert_rejected(root, \"single procedural-region guard\")\n",
+              "test_boolean_result_metadata_mutation_is_rejected",
+          )
+          PY
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format and run complete affected acceptance suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Publish validated fixes to PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            core/scala/api/src/nodal/AnalogProceduralRuntime.scala \
+            core/native/include/nodal/AnalogProceduralRuntime.h \
+            core/scala/api/src/nodal/CandidateApi.scala \
+            core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala \
+            core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+            core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
+            examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala \
+            tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp \
+            docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md \
+            docs/implementation/increment33-analog-variables-procedural-assignment.md \
+            core/compiler/diagnostics-v0.1.json \
+            scripts/check_increment33.py \
+            tests/compiler/test_increment33.py
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m 'fix(increment33): isolate procedures and retain Boolean result types'
+          git fetch --no-tags origin increment/33-analog-variables-procedural-assignment-v5
+          test "$(git rev-parse FETCH_HEAD)" = 5e4c3b6c3c598bbc6f8071101525547db34e908b
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

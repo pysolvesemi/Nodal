@@ -1,0 +1,570 @@
+name: Increment 33 evidence closure controller v2
+
+on:
+  push:
+    branches:
+      - automation/inc33-closure-stage-20260831
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+jobs:
+  close-increment-33:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      IMPLEMENTATION_PR: "102"
+      CLOSURE_BRANCH: increment/33-evidence-closure-v3-20260902
+    steps:
+      - name: Wait for reviewed implementation merge and post-merge validation tag
+        id: implementation
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import time
+
+          repo = os.environ["REPOSITORY"]
+          deadline = time.time() + 10800
+          while time.time() < deadline:
+              try:
+                  tag = json.loads(subprocess.check_output(
+                      ["gh", "api", f"repos/{repo}/git/ref/tags/increment-33-implementation-merged-green"],
+                      text=True,
+                      stderr=subprocess.DEVNULL,
+                  ))["object"]["sha"]
+              except subprocess.CalledProcessError:
+                  time.sleep(20)
+                  continue
+              dev = json.loads(subprocess.check_output(
+                  ["gh", "api", f"repos/{repo}/git/ref/heads/dev"], text=True
+              ))["object"]["sha"]
+              if tag == dev:
+                  with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                      output.write(f"sha={dev}\n")
+                  raise SystemExit(0)
+              time.sleep(20)
+          raise SystemExit("timed out waiting for the reviewed Increment 33 implementation merge")
+          PY
+
+      - name: Check out exact validated implementation merge
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.implementation.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Create staged evidence closure
+        id: stage
+        shell: bash
+        env:
+          IMPLEMENTATION_MERGE: ${{ steps.implementation.outputs.sha }}
+        run: |
+          git switch -C "${CLOSURE_BRANCH}"
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          repo = os.environ["REPOSITORY"]
+          implementation_merge = os.environ["IMPLEMENTATION_MERGE"]
+          implementation_pr = json.loads(subprocess.check_output(
+              ["gh", "api", f"repos/{repo}/pulls/{os.environ['IMPLEMENTATION_PR']}"], text=True
+          ))
+          implementation_head = implementation_pr["head"]["sha"]
+
+          def workflow_evidence(sha: str, event: str, names: set[str]) -> dict[str, dict[str, object]]:
+              payload = json.loads(subprocess.check_output(
+                  ["gh", "api", f"repos/{repo}/actions/runs?head_sha={sha}&event={event}&per_page=100"],
+                  text=True,
+              ))
+              latest = {}
+              for run in sorted(payload.get("workflow_runs", []), key=lambda item: (item["run_number"], item["id"])):
+                  latest[run["name"]] = run
+              missing = sorted(names.difference(latest))
+              failed = sorted(
+                  name for name in names.intersection(latest)
+                  if latest[name]["status"] != "completed" or latest[name]["conclusion"] != "success"
+              )
+              if missing or failed:
+                  raise SystemExit(f"workflow evidence incomplete for {sha}: missing={missing} failed={failed}")
+              return {
+                  name: {
+                      "run_id": latest[name]["id"],
+                      "conclusion": latest[name]["conclusion"],
+                      "head_sha": latest[name]["head_sha"],
+                  }
+                  for name in sorted(names)
+              }
+
+          required = {
+              "Core CI",
+              "Increment 13 Core Semantic Candidates",
+              "Increment 14 Pipeline and Interface Candidates",
+              "Increment 15 Unified Public API Freeze",
+              "Increment 16 Elaboration Construction Kernel",
+              "Increment 17 Source Origin Naming",
+              "Increment 18 MLIR Dialect Skeleton",
+              "Increment 19 Core MLIR Model",
+              "Increment 20 Scala-to-MLIR Bridge",
+              "Increment 21 Native Semantic Pipeline",
+              "Increment 22 Cross-Layer Diagnostics",
+              "Increment 23 Backend Framework",
+              "Increment 24 Minimal Analog IR",
+              "Increment 25 RC Filter Vertical Slice",
+              "Increment 26 Reproducibility Contract",
+              "Increment 27 Natures and Disciplines",
+              "Increment 28 Electrical Conservative Connectivity",
+              "Increment 29 Parameters Constants Ranges and Units",
+              "Increment 30 Analog Numeric Types and Expression Typing",
+              "Increment 31 Potential and Flow Access",
+              "Increment 32 Equation and Contribution Semantics",
+              "Increment 133 Analog Semantic API",
+              "Increment 33 Analog Procedural Assignment",
+          }
+          implementation_runs = workflow_evidence(implementation_head, "pull_request", required)
+          post_merge_runs = workflow_evidence(
+              implementation_merge,
+              "push",
+              {"Core CI", "Increment 33 Analog Procedural Assignment"},
+          )
+
+          manifest_path = Path("tests/compiler/fixtures/increment33/manifest.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          manifest["status"] = "closure-staged"
+          manifest["validation"] = {
+              "schema": "nodal.increment33.validation.v1",
+              "implementation": {
+                  "pull_request": int(os.environ["IMPLEMENTATION_PR"]),
+                  "accepted_head": implementation_head,
+                  "merge_commit": implementation_merge,
+                  "exact_head_workflows": implementation_runs,
+                  "post_merge_workflows": post_merge_runs,
+              },
+              "closure": {
+                  "pull_request": None,
+                  "staged_head": None,
+                  "staged_workflows": {},
+                  "final_head": None,
+                  "final_workflows": {},
+                  "merge_commit": None,
+              },
+          }
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+          checker_path = Path("scripts/check_increment33.py")
+          checker = checker_path.read_text(encoding="utf-8")
+
+          def require_blocks(text: str) -> list[tuple[int, int, str]]:
+              return [
+                  (match.start(), match.end(), match.group(0))
+                  for match in re.finditer(r"    require\(\n.*?\n    \)\n", text, re.DOTALL)
+              ]
+
+          blocks = require_blocks(checker)
+          validation_blocks = [
+              block for block in blocks
+              if "validation" in block[2] and "manifest.get(\"status\")" not in block[2]
+          ]
+          for start, end, block in reversed(validation_blocks):
+              if "is None" in block or "must remain null" in block.lower():
+                  checker = checker[:start] + checker[end:]
+
+          blocks = require_blocks(checker)
+          status_blocks = [block for block in blocks if 'manifest.get("status")' in block[2]]
+          if len(status_blocks) != 1:
+              raise SystemExit(f"expected one manifest status require block, found {len(status_blocks)}")
+          start, end, _ = status_blocks[0]
+          status_logic = '''    status = manifest.get("status")
+    require(
+        status
+        in {
+            "implementation-in-progress",
+            "closure-staged",
+            "validated-analog-procedural-assignment",
+        },
+        "NODAL-INC33-005: unexpected Increment 33 manifest status",
+    )
+    validation = manifest.get("validation")
+    if status == "implementation-in-progress":
+        require(
+            validation is None,
+            "NODAL-INC33-006: implementation manifest validation must remain null",
+        )
+    else:
+        require(
+            isinstance(validation, dict),
+            "NODAL-INC33-006: closure manifest validation must be an object",
+        )
+        implementation_evidence = validation.get("implementation")
+        closure_evidence = validation.get("closure")
+        require(
+            isinstance(implementation_evidence, dict)
+            and implementation_evidence.get("pull_request") == 102
+            and isinstance(implementation_evidence.get("accepted_head"), str)
+            and len(implementation_evidence.get("accepted_head")) == 40
+            and isinstance(implementation_evidence.get("merge_commit"), str)
+            and len(implementation_evidence.get("merge_commit")) == 40
+            and len(implementation_evidence.get("exact_head_workflows", {})) == 23
+            and len(implementation_evidence.get("post_merge_workflows", {})) == 2,
+            "NODAL-INC33-065: implementation acceptance evidence is incomplete",
+        )
+        require(
+            isinstance(closure_evidence, dict),
+            "NODAL-INC33-066: closure evidence must be an object",
+        )
+        if status == "validated-analog-procedural-assignment":
+            require(
+                isinstance(closure_evidence.get("pull_request"), int)
+                and closure_evidence.get("pull_request") > 0
+                and isinstance(closure_evidence.get("staged_head"), str)
+                and len(closure_evidence.get("staged_head")) == 40
+                and len(closure_evidence.get("staged_workflows", {})) == 23,
+                "NODAL-INC33-067: validated closure evidence is incomplete",
+            )
+'''
+          checker = checker[:start] + status_logic + checker[end:]
+
+          revision_block = next(
+              (block for block in require_blocks(checker) if '"**Revision:** 1.43" in roadmap' in block[2]),
+              None,
+          )
+          checkbox_block = next(
+              (block for block in require_blocks(checker) if '"- [ ] **Increment 33 — Analog variables and procedural assignment**"' in block[2]),
+              None,
+          )
+          if revision_block is None or checkbox_block is None:
+              raise SystemExit("Increment 33 implementation roadmap checks were not found")
+          for start, end, _ in sorted((revision_block, checkbox_block), reverse=True):
+              checker = checker[:start] + checker[end:]
+          roadmap_anchor = '    roadmap = read_text(root, "docs/roadmap/nodal-development-todo.md")\n'
+          roadmap_logic = '''    if status == "validated-analog-procedural-assignment":
+        require(
+            "**Revision:** 1.44" in roadmap,
+            "NODAL-INC33-027: validated roadmap revision must be 1.44",
+        )
+        require(
+            "- [x] **Increment 33 — Analog variables and procedural assignment**" in roadmap,
+            "NODAL-INC33-029: validated Increment 33 must be checked",
+        )
+    else:
+        require(
+            "**Revision:** 1.43" in roadmap,
+            "NODAL-INC33-027: roadmap revision must remain 1.43 before final closure",
+        )
+        require(
+            "- [ ] **Increment 33 — Analog variables and procedural assignment**" in roadmap,
+            "NODAL-INC33-029: Increment 33 must remain unchecked before final closure",
+        )
+'''
+          if checker.count(roadmap_anchor) != 1:
+              raise SystemExit("roadmap read anchor is not unique")
+          checker = checker.replace(roadmap_anchor, roadmap_anchor + roadmap_logic, 1)
+          checker_path.write_text(checker, encoding="utf-8")
+          PY
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          git diff --check
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add tests/compiler/fixtures/increment33/manifest.json scripts/check_increment33.py
+          git commit -m "chore(increment33): stage accepted implementation evidence"
+          git push --force-with-lease origin "HEAD:${CLOSURE_BRANCH}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Open evidence closure pull request
+        id: closure_pr
+        shell: bash
+        run: |
+          existing="$(gh pr list --repo "${REPOSITORY}" --state open --head "${CLOSURE_BRANCH}" --json number --jq '.[0].number // ""')"
+          if test -z "$existing"; then
+            url="$(gh pr create --repo "${REPOSITORY}" --base dev --head "${CLOSURE_BRANCH}" --title "Increment 33 — Record accepted evidence and close roadmap" --body $'## Summary\n\nRecords the separately validated acceptance evidence for Increment 33 after implementation PR #102 merged and passed post-merge CI.\n\n## Validation\n\nThe first closure head keeps the roadmap open while the complete 23-workflow matrix is validated. A second evidence-only commit records those immutable run IDs, advances the roadmap to revision 1.44, and checks Increment 33.\n\n## Design gate\n\n`docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md`')"
+            number="${url##*/}"
+          else
+            number="$existing"
+          fi
+          echo "number=${number}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for staged closure workflow matrix
+        id: staged_matrix
+        shell: bash
+        env:
+          STAGED_HEAD: ${{ steps.stage.outputs.sha }}
+          CLOSURE_PR_NUMBER: ${{ steps.closure_pr.outputs.number }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import time
+
+          required = {
+              "Core CI",
+              "Increment 13 Core Semantic Candidates",
+              "Increment 14 Pipeline and Interface Candidates",
+              "Increment 15 Unified Public API Freeze",
+              "Increment 16 Elaboration Construction Kernel",
+              "Increment 17 Source Origin Naming",
+              "Increment 18 MLIR Dialect Skeleton",
+              "Increment 19 Core MLIR Model",
+              "Increment 20 Scala-to-MLIR Bridge",
+              "Increment 21 Native Semantic Pipeline",
+              "Increment 22 Cross-Layer Diagnostics",
+              "Increment 23 Backend Framework",
+              "Increment 24 Minimal Analog IR",
+              "Increment 25 RC Filter Vertical Slice",
+              "Increment 26 Reproducibility Contract",
+              "Increment 27 Natures and Disciplines",
+              "Increment 28 Electrical Conservative Connectivity",
+              "Increment 29 Parameters Constants Ranges and Units",
+              "Increment 30 Analog Numeric Types and Expression Typing",
+              "Increment 31 Potential and Flow Access",
+              "Increment 32 Equation and Contribution Semantics",
+              "Increment 133 Analog Semantic API",
+              "Increment 33 Analog Procedural Assignment",
+          }
+          repo = os.environ["REPOSITORY"]
+          head = os.environ["STAGED_HEAD"]
+          number = int(os.environ["CLOSURE_PR_NUMBER"])
+          deadline = time.time() + 3600
+          while time.time() < deadline:
+              payload = json.loads(subprocess.check_output(
+                  ["gh", "api", f"repos/{repo}/actions/runs?head_sha={head}&event=pull_request&per_page=100"], text=True
+              ))
+              latest = {}
+              for run in sorted(payload.get("workflow_runs", []), key=lambda item: (item["run_number"], item["id"])):
+                  if any(pr.get("number") == number for pr in run.get("pull_requests", [])):
+                      latest[run["name"]] = run
+              failed = [name for name in required if name in latest and latest[name]["status"] == "completed" and latest[name]["conclusion"] != "success"]
+              if failed:
+                  raise SystemExit("staged closure workflow failure: " + ", ".join(failed))
+              if all(name in latest and latest[name]["status"] == "completed" and latest[name]["conclusion"] == "success" for name in required):
+                  evidence = {name: {"run_id": latest[name]["id"], "conclusion": latest[name]["conclusion"], "head_sha": latest[name]["head_sha"]} for name in sorted(required)}
+                  with open("staged-closure-workflows.json", "w", encoding="utf-8") as output:
+                      json.dump(evidence, output, indent=2)
+                  with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                      output.write("ready=true\n")
+                  raise SystemExit(0)
+              time.sleep(20)
+          raise SystemExit("timed out waiting for staged closure workflows")
+          PY
+
+      - name: Materialize final accepted evidence and roadmap closure
+        id: final
+        shell: bash
+        env:
+          STAGED_HEAD: ${{ steps.stage.outputs.sha }}
+          CLOSURE_PR_NUMBER: ${{ steps.closure_pr.outputs.number }}
+        run: |
+          git fetch origin "${CLOSURE_BRANCH}"
+          git switch -C "${CLOSURE_BRANCH}" "origin/${CLOSURE_BRANCH}"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest_path = Path("tests/compiler/fixtures/increment33/manifest.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          manifest["status"] = "validated-analog-procedural-assignment"
+          closure = manifest["validation"]["closure"]
+          closure["pull_request"] = int(os.environ["CLOSURE_PR_NUMBER"])
+          closure["staged_head"] = os.environ["STAGED_HEAD"]
+          closure["staged_workflows"] = json.loads(
+              Path("staged-closure-workflows.json").read_text(encoding="utf-8")
+          )
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+          roadmaps = [
+              Path("docs/roadmap/nodal-development-todo.md"),
+              Path("TODO.md"),
+          ]
+          changed = 0
+          for path in roadmaps:
+              if not path.exists():
+                  continue
+              text = path.read_text(encoding="utf-8")
+              updated = text.replace("**Revision:** 1.43", "**Revision:** 1.44", 1)
+              updated = updated.replace(
+                  "- [ ] **Increment 33 — Analog variables and procedural assignment**",
+                  "- [x] **Increment 33 — Analog variables and procedural assignment**",
+                  1,
+              )
+              if updated != text:
+                  path.write_text(updated, encoding="utf-8")
+                  changed += 1
+          if changed == 0:
+              raise SystemExit("no authoritative roadmap was advanced for Increment 33")
+          PY
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          git diff --check
+          git add tests/compiler/fixtures/increment33/manifest.json scripts/check_increment33.py docs/roadmap/nodal-development-todo.md
+          if test -f TODO.md; then git add TODO.md; fi
+          git commit -m "chore(increment33): record validated evidence and close roadmap"
+          git push origin "HEAD:${CLOSURE_BRANCH}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for final closure matrix and request review
+        id: final_matrix
+        shell: bash
+        env:
+          FINAL_HEAD: ${{ steps.final.outputs.sha }}
+          CLOSURE_PR_NUMBER: ${{ steps.closure_pr.outputs.number }}
+        run: |
+          gh pr comment "${CLOSURE_PR_NUMBER}" --repo "${REPOSITORY}" --body "@codex review\n\nPlease review the exact Increment 33 evidence-closure head \`${FINAL_HEAD}\`. This PR must contain evidence/checker/roadmap changes only."
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import time
+
+          required = {
+              "Core CI",
+              "Increment 13 Core Semantic Candidates",
+              "Increment 14 Pipeline and Interface Candidates",
+              "Increment 15 Unified Public API Freeze",
+              "Increment 16 Elaboration Construction Kernel",
+              "Increment 17 Source Origin Naming",
+              "Increment 18 MLIR Dialect Skeleton",
+              "Increment 19 Core MLIR Model",
+              "Increment 20 Scala-to-MLIR Bridge",
+              "Increment 21 Native Semantic Pipeline",
+              "Increment 22 Cross-Layer Diagnostics",
+              "Increment 23 Backend Framework",
+              "Increment 24 Minimal Analog IR",
+              "Increment 25 RC Filter Vertical Slice",
+              "Increment 26 Reproducibility Contract",
+              "Increment 27 Natures and Disciplines",
+              "Increment 28 Electrical Conservative Connectivity",
+              "Increment 29 Parameters Constants Ranges and Units",
+              "Increment 30 Analog Numeric Types and Expression Typing",
+              "Increment 31 Potential and Flow Access",
+              "Increment 32 Equation and Contribution Semantics",
+              "Increment 133 Analog Semantic API",
+              "Increment 33 Analog Procedural Assignment",
+          }
+          repo = os.environ["REPOSITORY"]
+          head = os.environ["FINAL_HEAD"]
+          number = int(os.environ["CLOSURE_PR_NUMBER"])
+          owner, name = repo.split("/", 1)
+          deadline = time.time() + 3600
+          query = r'''
+          query($owner:String!, $name:String!, $number:Int!) {
+            repository(owner:$owner, name:$name) {
+              pullRequest(number:$number) {
+                reviews(last:100) { nodes { author { login } commit { oid } submittedAt } }
+                comments(last:100) { nodes { author { login } createdAt body } }
+                reviewThreads(first:100) { nodes { isResolved isOutdated } }
+              }
+            }
+          }
+          '''
+          while time.time() < deadline:
+              payload = json.loads(subprocess.check_output(
+                  ["gh", "api", f"repos/{repo}/actions/runs?head_sha={head}&event=pull_request&per_page=100"], text=True
+              ))
+              latest = {}
+              for run in sorted(payload.get("workflow_runs", []), key=lambda item: (item["run_number"], item["id"])):
+                  if any(pr.get("number") == number for pr in run.get("pull_requests", [])):
+                      latest[run["name"]] = run
+              failed = [name for name in required if name in latest and latest[name]["status"] == "completed" and latest[name]["conclusion"] != "success"]
+              if failed:
+                  raise SystemExit("final closure workflow failure: " + ", ".join(failed))
+              matrix_green = all(name in latest and latest[name]["status"] == "completed" and latest[name]["conclusion"] == "success" for name in required)
+              review_payload = json.loads(subprocess.check_output([
+                  "gh", "api", "graphql",
+                  "-f", f"query={query}",
+                  "-F", f"owner={owner}",
+                  "-F", f"name={name}",
+                  "-F", f"number={number}",
+              ], text=True))["data"]["repository"]["pullRequest"]
+              exact_reviews = [review for review in review_payload["reviews"]["nodes"] if (review.get("author") or {}).get("login") == "chatgpt-codex-connector" and (review.get("commit") or {}).get("oid") == head]
+              bot_comments = [comment for comment in review_payload["comments"]["nodes"] if (comment.get("author") or {}).get("login") == "chatgpt-codex-connector"]
+              active = [thread for thread in review_payload["reviewThreads"]["nodes"] if not thread["isResolved"] and not thread["isOutdated"]]
+              if active:
+                  raise SystemExit("final closure review has unresolved findings")
+              if matrix_green and (exact_reviews or bot_comments):
+                  raise SystemExit(0)
+              time.sleep(20)
+          raise SystemExit("timed out waiting for final closure validation and review")
+          PY
+
+      - name: Merge evidence closure
+        id: closure_merge
+        shell: bash
+        env:
+          FINAL_HEAD: ${{ steps.final.outputs.sha }}
+          CLOSURE_PR_NUMBER: ${{ steps.closure_pr.outputs.number }}
+        run: |
+          current="$(gh pr view "${CLOSURE_PR_NUMBER}" --repo "${REPOSITORY}" --json headRefOid,state,isDraft --jq '.headRefOid + " " + .state + " " + (.isDraft|tostring)')"
+          test "$current" = "${FINAL_HEAD} OPEN false"
+          gh pr merge "${CLOSURE_PR_NUMBER}" --repo "${REPOSITORY}" --squash --admin
+          for attempt in $(seq 1 60); do
+            sha="$(gh pr view "${CLOSURE_PR_NUMBER}" --repo "${REPOSITORY}" --json mergeCommit --jq '.mergeCommit.oid // ""')"
+            merged_at="$(gh pr view "${CLOSURE_PR_NUMBER}" --repo "${REPOSITORY}" --json mergedAt --jq '.mergedAt // ""')"
+            if test -n "$sha" && test -n "$merged_at"; then
+              echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1
+
+      - name: Require final post-merge workflows and publish immutable closure refs
+        shell: bash
+        env:
+          CLOSURE_MERGE: ${{ steps.closure_merge.outputs.sha }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import time
+
+          repo = os.environ["REPOSITORY"]
+          sha = os.environ["CLOSURE_MERGE"]
+          required = {"Core CI", "Increment 33 Analog Procedural Assignment"}
+          deadline = time.time() + 3600
+          while time.time() < deadline:
+              dev = json.loads(subprocess.check_output(
+                  ["gh", "api", f"repos/{repo}/git/ref/heads/dev"], text=True
+              ))["object"]["sha"]
+              if dev != sha:
+                  raise SystemExit(f"dev moved unexpectedly: expected {sha}, found {dev}")
+              payload = json.loads(subprocess.check_output(
+                  ["gh", "api", f"repos/{repo}/actions/runs?head_sha={sha}&event=push&per_page=100"], text=True
+              ))
+              latest = {}
+              for run in sorted(payload.get("workflow_runs", []), key=lambda item: (item["run_number"], item["id"])):
+                  latest[run["name"]] = run
+              failed = [name for name in required if name in latest and latest[name]["status"] == "completed" and latest[name]["conclusion"] != "success"]
+              if failed:
+                  raise SystemExit("final post-merge workflow failure: " + ", ".join(failed))
+              if all(name in latest and latest[name]["status"] == "completed" and latest[name]["conclusion"] == "success" for name in required):
+                  raise SystemExit(0)
+              time.sleep(20)
+          raise SystemExit("timed out waiting for final post-merge validation")
+          PY
+          git init final-refs
+          cd final-refs
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git"
+          git fetch --no-tags origin "${CLOSURE_MERGE}"
+          for tag in increment-33-validated increment-33-final-audit-green increment-33-independent-readback-green; do
+            git tag -f "$tag" "${CLOSURE_MERGE}"
+            git push --force origin "refs/tags/$tag"
+          done

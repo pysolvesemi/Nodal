@@ -1,8 +1,9 @@
 {
   "schema": 1,
   "status": "active",
-  "roadmap_revision": "1.28",
+  "roadmap_revision": "1.43",
   "verification_plan_revision": "0.3",
+  "low_power_plan_revision": "0.1",
   "foundation_track": {
     "roadmap": "docs/roadmap/nodal-development-todo.md",
     "completion_rule": "all-foundation-checkboxes-complete",
@@ -12,7 +13,7 @@
       "docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md",
       "docs/roadmap/native-digital-simulator-adapters-v0.1-plan.md"
     ],
-    "latest_foundation_increment": 157,
+    "latest_foundation_increment": 159,
     "foundation_increment_148_owns_native_adapter_contracts": true,
     "foundation_increment_150_is_architecture_only": true,
     "foundation_increment_151_is_architecture_only": true,
@@ -44,6 +45,17 @@
       "numbering_starts_at": 1,
       "planned_increment_count": 12,
       "implementation_status": "blocked-by-foundation"
+    },
+    {
+      "id": "low-power-power-intent",
+      "display_name": "Low-Power Architecture and Power Intent",
+      "numbering_starts_at": 1,
+      "planned_increment_count": 12,
+      "implementation_status": "blocked-by-foundation",
+      "research_status": "allowed-before-foundation-completion",
+      "todo_defined": true,
+      "plan": "docs/roadmap/low-power-power-intent-v0.1-plan.md",
+      "surface": "docs/roadmap/low-power-power-intent-v0.1-surface.json"
     },
     {
       "id": "asic-productivity-signoff",
@@ -110,17 +122,32 @@
     "unsupported_feature_policy": "fail-or-explicitly-precompute-never-silently-omit",
     "vendor_variation_policy": "thin-adapter-profile"
   },
+  "low_power_architecture": {
+    "readiness_adr": "docs/architecture/0024-minimal-asic-advanced-io-readiness-boundary.md",
+    "plan": "docs/roadmap/low-power-power-intent-v0.1-plan.md",
+    "surface": "docs/roadmap/low-power-power-intent-v0.1-surface.json",
+    "canonical_semantics": "nodal-power-intent-ir",
+    "upf_is_projection_not_canonical": true,
+    "standard_baseline": "IEEE 1801-2024",
+    "initial_open_profile": "OpenROAD_Supported",
+    "primitive_library": "libraries/lowpower",
+    "implementation_status": "blocked-by-foundation",
+    "implementation_changes_foundation_exit_criteria": false,
+    "physical_signoff_owned_by_asic_productivity_signoff_track": true
+  },
   "asic_advanced_io_architecture": {
     "adr": "docs/architecture/0024-minimal-asic-advanced-io-readiness-boundary.md",
     "foundation_extension": "docs/roadmap/asic-memory-dependent-tracks-v0.1-plan.md",
     "foundation_policy": "semantic-identities-capabilities-source-correlation-and-adapter-seams-only",
     "open_source_rtl_to_gds_readiness": "architecture-seam-only",
     "implementation_todo_defined": false,
-    "implementation_deferred_to_future_separately_approved_tracks": true
+    "implementation_deferred_to_future_separately_approved_tracks": true,
+    "power_intent_implementation_track": "low-power-power-intent"
   },
   "detailed_plans": [
     "docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md",
     "docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md",
-    "docs/roadmap/native-digital-simulator-adapters-v0.1-plan.md"
+    "docs/roadmap/native-digital-simulator-adapters-v0.1-plan.md",
+    "docs/roadmap/low-power-power-intent-v0.1-plan.md"
   ]
 }

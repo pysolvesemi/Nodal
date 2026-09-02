@@ -22,6 +22,7 @@ REQUIRED = (
     "core/scala/api/src/nodal/AnalogControlFlowConstruction.scala",
     "core/scala/api/src/nodal/AnalogControlFlowRuntime.scala",
     "core/scala/api/src/nodal/AnalogProceduralConstruction.scala",
+    "core/scala/api/src/nodal/AnalogProceduralRuntime.scala",
     "core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala",
     "docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md",
     "docs/implementation/increment34-analog-control-flow.md",
@@ -188,6 +189,20 @@ class Increment34ContractTests(unittest.TestCase):
             )
             self.assert_rejected(root, "control-flow construction bridge is missing")
 
+    def test_canonical_snapshot_field_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/api/src/nodal/AnalogProceduralRuntime.scala"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "controlFlow: Option[AnalogControlFlowConstruction.Snapshot] = None",
+                    "removedControlFlow: Option[AnalogControlFlowConstruction.Snapshot] = None",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "canonical procedural snapshot is missing")
+
     def test_flattening_guard_mutation_is_rejected(self) -> None:
         temporary, root = self.fixture()
         with temporary:
@@ -256,6 +271,15 @@ class Increment34ContractTests(unittest.TestCase):
             path = root / "tests/compiler/fixtures/increment34/manifest.json"
             document = json.loads(path.read_text(encoding="utf-8"))
             document["integration"]["public_construction_kernel"] = False
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            self.assert_rejected(root, "completed integration")
+
+    def test_canonical_snapshot_claim_is_required(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "tests/compiler/fixtures/increment34/manifest.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["integration"]["canonical_construction_snapshot"] = False
             path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
             self.assert_rejected(root, "completed integration")
 

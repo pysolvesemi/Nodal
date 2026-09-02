@@ -4,9 +4,9 @@ import scala.annotation.targetName
 
 /** Explicit control-flow group for ordered analog procedural code.
   *
-  * The group body may contain `analogWhen`, `analogElseWhen`, and one optional
-  * `analogOtherwise`. Conditions remain first-class runtime expressions unless an
-  * `analogStaticWhen` form is selected explicitly.
+  * The group body may contain `analogWhen`, `analogElseWhen`, and one optional `analogOtherwise`.
+  * Conditions remain first-class runtime expressions unless an `analogStaticWhen` form is selected
+  * explicitly.
   */
 def analogConditional(body: => Unit): Unit =
   AnalogProceduralConstruction.conditional(body)
@@ -52,7 +52,8 @@ def analogCaseArm(first: Boolean, rest: Boolean*)(body: => Unit): Unit =
 def analogCaseDefault(body: => Unit): Unit =
   AnalogProceduralConstruction.caseDefault(body)
 
-/** Exact compile-time repetition. The body remains a retained static loop until later legalization. */
+/** Exact compile-time repetition. The body remains a retained static loop until later legalization.
+  */
 def analogRepeat(iterations: Int)(body: => Unit): Unit =
   AnalogProceduralConstruction.staticLoop(iterations)(body)
 

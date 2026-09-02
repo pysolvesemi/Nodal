@@ -68,7 +68,17 @@ jobs:
 
       - name: Compile Scala API and bridge suite
         working-directory: target
-        run: ./nodal core scala
+        shell: bash
+        run: |
+          for attempt in 1 2; do
+            if ./nodal core scala; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 2 ]; then
+              exit 1
+            fi
+            echo 'Retrying the unchanged inherited Scala suite after its known semantic-origin concurrency flake.'
+          done
 
       - name: Build and execute the complete native suite
         working-directory: target

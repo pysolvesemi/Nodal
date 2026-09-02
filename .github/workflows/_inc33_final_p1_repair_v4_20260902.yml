@@ -1,0 +1,147 @@
+name: Increment 33 final P1 repair v4 2026-09-02
+
+on:
+  push:
+    branches:
+      - automation/inc33-final-p1-repair-v4-20260902
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact Increment 33 implementation head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Require reviewed baseline
+        run: test "$(git rev-parse HEAD)" = ef5cd258ae130d4239898020590eb1fcc42fc4d9
+
+      - name: Apply final P1 fixes with precise mutation coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin automation/inc33-final-p1-repair-v3-20260902
+          python3 - <<'PY'
+          import subprocess
+          import textwrap
+          from pathlib import Path
+
+          source = subprocess.check_output(
+              [
+                  "git",
+                  "show",
+                  "FETCH_HEAD:.github/workflows/_inc33_final_p1_repair_v3_20260902.yml",
+              ],
+              text=True,
+          )
+          begin_marker = "          python3 - <<'PY'\n"
+          end_marker = "\n          PY\n\n      - name: Install pinned native and lint toolchains"
+          begin = source.index(begin_marker) + len(begin_marker)
+          end = source.index(end_marker, begin)
+          script = textwrap.dedent(source[begin:end])
+          exec(compile(script, "increment33-final-p1-repair-v4.py", "exec"), {"__name__": "__main__"})
+
+          checker_path = Path("scripts/check_increment33.py")
+          checker = checker_path.read_text(encoding="utf-8")
+          old_check = (
+              "    require(\n"
+              '        "if isUnknown || other.isUnknown then AnalogDimension.Unknown"\n'
+              "        in construction_kernel,\n"
+              '        "NODAL-INC33-067: recursive dimension mismatches are not sticky",\n'
+              "    )\n"
+          )
+          new_check = (
+              '    compatible_add_start = construction_kernel.index(\n'
+              '        "  def compatibleAdd(other: AnalogDimension): AnalogDimension =\\n"\n'
+              "    )\n"
+              '    compatible_add_end = construction_kernel.index(\n'
+              '        "\\n  def canonical: String =", compatible_add_start\n'
+              "    )\n"
+              "    compatible_add = construction_kernel[compatible_add_start:compatible_add_end]\n"
+              "    require(\n"
+              '        "if isUnknown || other.isUnknown then AnalogDimension.Unknown"\n'
+              "        in compatible_add,\n"
+              '        "NODAL-INC33-067: recursive dimension mismatches are not sticky",\n'
+              "    )\n"
+          )
+          if checker.count(old_check) != 1:
+              raise SystemExit("checker sticky-dimension block is not unique")
+          checker = checker.replace(old_check, new_check, 1)
+          checker_path.write_text(checker, encoding="utf-8")
+
+          mutation_path = Path("tests/compiler/test_increment33.py")
+          mutations = mutation_path.read_text(encoding="utf-8")
+          old_mutation = (
+              '                path.read_text(encoding="utf-8").replace(\n'
+              '                    "if isUnknown || other.isUnknown then AnalogDimension.Unknown",\n'
+              '                    "if isUnknown then other",\n'
+              "                    1,\n"
+              "                ),\n"
+          )
+          new_mutation = (
+              '                path.read_text(encoding="utf-8").replace(\n'
+              '                    "  def compatibleAdd(other: AnalogDimension): AnalogDimension =\\n"\n'
+              '                    "    if isUnknown || other.isUnknown then AnalogDimension.Unknown\\n",\n'
+              '                    "  def compatibleAdd(other: AnalogDimension): AnalogDimension =\\n"\n'
+              '                    "    if isUnknown then other\\n",\n'
+              "                    1,\n"
+              "                ),\n"
+          )
+          if mutations.count(old_mutation) != 1:
+              raise SystemExit("recursive-dimension mutation block is not unique")
+          mutations = mutations.replace(old_mutation, new_mutation, 1)
+          mutation_path.write_text(mutations, encoding="utf-8")
+          PY
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format and run focused acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          test -x out/native/release/bin/nodalc
+          NODAL_NODALC="$PWD/out/native/release/bin/nodalc" \
+            ./mill -i core.scala.testkit.test.testOnly \
+              nodal.internal.testkit.ScalaToMlirBridgeTests
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Publish validated review fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            .github/workflows/increment-33-analog-procedural-assignment.yml \
+            core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+            core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
+            scripts/check_increment33.py \
+            tests/compiler/test_increment33.py
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m 'fix(increment33): keep nested mismatches sticky and exercise nodalc'
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

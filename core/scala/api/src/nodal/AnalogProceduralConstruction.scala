@@ -711,8 +711,11 @@ private[nodal] object AnalogProceduralConstruction:
       resolveOwner: Module => String
   ): Vector[AnalogProceduralRuntime.Snapshot] =
     Option(current.get()).toVector.flatMap: value =>
-      value.finalizedControlSnapshots = value.modules.flatMap: module =>
-        module.controlSnapshot.map(_.remapOwner(resolveOwner(module.module)))
+      value.finalizedControlSnapshots = value.modules.iterator
+        .flatMap(module =>
+          module.controlSnapshot.map(_.remapOwner(resolveOwner(module.module)))
+        )
+        .toVector
       value.modules.flatMap: module =>
         val owner = resolveOwner(module.module)
         val sourceSnapshot =

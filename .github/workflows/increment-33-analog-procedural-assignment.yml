@@ -68,6 +68,14 @@ jobs:
             --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
             --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
 
+      - name: Execute Scala bridge regressions against nodalc
+        shell: bash
+        run: |
+          test -x out/native/release/bin/nodalc
+          NODAL_NODALC="$PWD/out/native/release/bin/nodalc" \
+            ./mill -i core.scala.testkit.test.testOnly \
+              nodal.internal.testkit.ScalaToMlirBridgeTests
+
       - name: Execute Scala source-semantic witness
         shell: bash
         run: |

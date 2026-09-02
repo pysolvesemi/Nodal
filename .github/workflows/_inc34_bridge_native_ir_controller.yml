@@ -70,6 +70,31 @@ jobs:
       - name: Materialize structured bridge and native IR tranche
         run: python3 /tmp/increment34_bridge_ir.py --root repo
 
+      - name: Use the repository-compliant Scala failure idiom
+        working-directory: repo
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("core/scala/bridge/src/nodal/bridge/AnalogControlFlowMlir.scala")
+          text = path.read_text(encoding="utf-8")
+          marker = "private[nodal] object AnalogControlFlowMlir:\n  import AnalogControlFlowRuntime.*\n"
+          helper = (
+              marker
+              + "\n  private def fail(message: String): Nothing =\n"
+              + "    scala.util.Failure[Nothing](new IllegalArgumentException(message)).get\n"
+          )
+          if text.count(marker) != 1:
+              raise SystemExit("Increment 34 Scala failure-helper insertion point was not unique")
+          prohibited = "throw new IllegalArgumentException("
+          if text.count(prohibited) != 3:
+              raise SystemExit("Increment 34 expected exactly three provisional throw expressions")
+          text = text.replace(marker, helper, 1)
+          text = text.replace(prohibited, "fail(")
+          path.write_text(text, encoding="utf-8")
+          PY
+
       - name: Format Scala sources deterministically
         working-directory: repo
         run: ./mill -i mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources

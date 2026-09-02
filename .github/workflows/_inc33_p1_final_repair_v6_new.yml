@@ -1,0 +1,84 @@
+name: Increment 33 robust final P1 repair v6
+
+on:
+  push:
+    branches:
+      - automation/inc33-p1-review-fixes-v6-20260901
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out current Increment 33 branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Capture exact baseline and load repair program
+        id: baseline
+        shell: bash
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git fetch --no-tags origin automation/inc33-p1-review-fixes-v6-20260901
+          git show FETCH_HEAD:.ci/inc33_final_repair_v6.py > "${RUNNER_TEMP}/inc33_final_repair_v6.py"
+          test -s "${RUNNER_TEMP}/inc33_final_repair_v6.py"
+
+      - name: Apply final repair
+        run: python3 "${RUNNER_TEMP}/inc33_final_repair_v6.py"
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format and validate repaired implementation
+        run: |
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          test -x out/native/release/bin/nodalc
+          NODAL_NODALC="$PWD/out/native/release/bin/nodalc" \
+            ./mill core.scala.testkit.test.testOnly \
+              nodal.internal.testkit.AnalogProceduralConstructionTests \
+              nodal.internal.testkit.ScalaToMlirBridgeTests
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Publish validated source-only repair
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ steps.baseline.outputs.sha }}"
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            core/scala/api/src/nodal/AnalogProceduralConstruction.scala \
+            core/scala/api/src/nodal/AnalogProceduralRuntime.scala \
+            core/native/include/nodal/AnalogProceduralRuntime.h \
+            core/scala/bridge/src/nodal/bridge/AnalogProceduralEvidence.scala \
+            core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala \
+            core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
+            core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala \
+            examples/continuousTimeApi/src/nodal/increment33fixture/Increment33RuntimeCheck.scala \
+            tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp \
+            scripts/check_increment33.py \
+            tests/compiler/test_increment33.py
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m "fix(increment33): retain compound dimensions and global operation order"
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

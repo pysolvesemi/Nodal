@@ -28,6 +28,8 @@ private[nodal] object AnalogProceduralConstruction:
     val pending = mutable.ArrayBuffer.empty[PendingVariable]
     val variables = new IdentityHashMap[AnyRef, AnalogProceduralRuntime.Variable]()
     val variableRecords = mutable.ArrayBuffer.empty[AnalogProceduralRuntime.VariableRecord]
+    val controlExpressions =
+      mutable.ArrayBuffer.empty[AnalogProceduralRuntime.ControlExpressionRecord]
     var statementSerial = 0
     var scopeSerial = 0
     var procedureDepth = 0
@@ -480,6 +482,12 @@ private[nodal] object AnalogProceduralConstruction:
         source
       )
     )
+    module.controlExpressions += AnalogProceduralRuntime.ControlExpressionRecord(
+      statement,
+      "assignment-value",
+      value,
+      source
+    )
     if !builder.hasStructuredControl then
       module.recorder.assign(
         statement.stripPrefix(s"${module.owner}."),
@@ -639,6 +647,12 @@ private[nodal] object AnalogProceduralConstruction:
       None,
       source
     ): identity =>
+      module.controlExpressions += AnalogProceduralRuntime.ControlExpressionRecord(
+        identity.stripSuffix(".body"),
+        "loop-bound",
+        bound,
+        source
+      )
       withControlScope(module, identity)(body)
 
   def breakStatement(): Unit =
@@ -705,7 +719,12 @@ private[nodal] object AnalogProceduralConstruction:
           value = remapValue(assignment.value),
           guard = assignment.guard.map(remapValue)
         ),
-      controlFlow = snapshot.controlFlow.map(_.remapOwner(owner))
+      controlFlow = snapshot.controlFlow.map(_.remapOwner(owner)),
+      controlExpressions = snapshot.controlExpressions.map: expression =>
+        expression.copy(
+          identity = remapIdentity(expression.identity),
+          value = remapValue(expression.value)
+        )
     )
 
   def snapshots(
@@ -725,12 +744,14 @@ private[nodal] object AnalogProceduralConstruction:
               module.owner,
               module.variableRecords.toVector,
               Vector.empty,
-              module.controlSnapshot
+              module.controlSnapshot,
+              module.controlExpressions.toVector
             )
           else module.recorder.snapshot
         val retained = remapSnapshot(sourceSnapshot, owner)
         Option.when(
-          retained.variables.nonEmpty || retained.assignments.nonEmpty || retained.controlFlow.nonEmpty
+          retained.variables.nonEmpty || retained.assignments.nonEmpty ||
+            retained.controlFlow.nonEmpty || retained.controlExpressions.nonEmpty
         )(retained)
 
   def controlSnapshots: Vector[AnalogControlFlowConstruction.Snapshot] =

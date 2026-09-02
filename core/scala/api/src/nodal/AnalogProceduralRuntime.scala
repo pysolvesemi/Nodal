@@ -56,10 +56,17 @@ private[nodal] object AnalogProceduralRuntime:
       operationOrder: Int = -1
   )
 
+  /** Canonical procedural program retained by the construction snapshot.
+    *
+    * Straight-line Increment 33 programs populate `assignments`. Structured Increment 34 programs
+    * populate `controlFlow` and deliberately leave `assignments` empty so runtime branches are not
+    * represented as one unconditional sequence.
+    */
   final case class Snapshot(
       owner: String,
       variables: Vector[VariableRecord],
-      assignments: Vector[AssignmentRecord]
+      assignments: Vector[AssignmentRecord],
+      controlFlow: Option[AnalogControlFlowConstruction.Snapshot] = None
   )
 
   final case class Diagnostic(code: String, message: String, path: Option[String] = None):

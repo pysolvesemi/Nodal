@@ -1,0 +1,9 @@
+conditional_definite=true
+case_definite=true
+loop_definite=true
+static_definite=true
+missing_else=NODAL-ANALOG-034-004
+zero_trip=NODAL-ANALOG-034-004
+duplicate_case=NODAL-ANALOG-034-006
+break_scope=NODAL-ANALOG-034-010
+continue_scope=NODAL-ANALOG-034-011

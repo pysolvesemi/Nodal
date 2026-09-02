@@ -1,0 +1,39 @@
++ /usr/bin/python3 /home/runner/work/Nodal/Nodal/work/scripts/bootstrap_lint_toolchain.py status --json --toolchain /home/runner/work/_temp/nodal-lint-toolchain --require
++ /usr/bin/python3 /home/runner/work/Nodal/Nodal/work/scripts/check_markdown.py
+Markdown check passed
++ /usr/bin/python3 /home/runner/work/Nodal/Nodal/work/scripts/check_package_visibility.py
+package visibility check passed
++ /usr/bin/python3 /home/runner/work/Nodal/Nodal/work/scripts/check_contribution_policy.py
+contribution policy check passed
++ /home/runner/work/Nodal/Nodal/work/mill mill.scalalib.scalafmt/checkFormatAll
+/home/runner/.cache/nodal/mill/mill-1.1.7.sh mill.scalalib.scalafmt/checkFormatAll
+29] mill.scalalib.scalafmt.ScalafmtModule/checkFormatAll Everything is formatted already
+29/29, SUCCESS] /home/runner/.cache/nodal/mill/mill-1.1.7.sh mill.scalalib.scalafmt/checkFormatAll
++ /home/runner/work/Nodal/Nodal/work/mill scalafix.check
+/home/runner/.cache/nodal/mill/mill-1.1.7.sh scalafix.check
+5] scalafix.check WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+5] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by scalafix.internal.reflect.ClasspathOps$ (file:/home/runner/.cache/coursier/v1/https/repo1.maven.org/maven2/ch/epfl/scala/scalafix-reflect_2.13.18/0.14.7/scalafix-reflect_2.13.18-0.14.7.jar)
+5] WARNING: Please consider reporting this to the maintainers of class scalafix.internal.reflect.ClasspathOps$
+5] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+5] /home/runner/work/Nodal/Nodal/work/core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala:364:9: error: [DisableSyntax.throw] exceptions should be avoided, consider encoding the error in the return type instead
+5]         throw new IllegalArgumentException(
+5]         ^^^^^
+5] /home/runner/work/Nodal/Nodal/work/core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala:408:13: error: [DisableSyntax.throw] exceptions should be avoided, consider encoding the error in the return type instead
+5]             throw new IllegalArgumentException(
+5]             ^^^^^
+5] /home/runner/work/Nodal/Nodal/work/core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala:455:13: error: [DisableSyntax.throw] exceptions should be avoided, consider encoding the error in the return type instead
+5]             throw new IllegalArgumentException(
+5]             ^^^^^
+5/5, 1 FAILED] /home/runner/.cache/nodal/mill/mill-1.1.7.sh scalafix.check 5s
+5] [error] scalafix.check
+os.SubprocessException: Result of /home/runner/.cache/coursier/arc/https/cdn.azul.com/zulu/bin/zulu25.32.17-ca-jdk25.0.2-linux_x64.tar.gz/zulu25.32.17-ca-jdk25.0.2-linux_x64/bin/java…: 64
+
+  os.SubprocessException$.apply(Model.scala:211)
+  os.proc.call(ProcessOps.scala:232)
+  mill.util.Jvm$.callProcess(Jvm.scala:102)
+  build_.package_$scalafix$.invoke(build.mill:58)
+  build_.package_$scalafix$.check$$anonfun$1(build.mill:60)
+  mill.api.Task$Named.evaluate(Task.scala:443)
+  mill.api.Task$Named.evaluate$(Task.scala:428)
+  mill.api.Task$Command.evaluate(Task.scala:525)
+NODAL-DEV-005: command failed with exit code 1

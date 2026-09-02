@@ -1,0 +1,2039 @@
+diff --git a/.github/workflows/increment-34-analog-control-flow.yml b/.github/workflows/increment-34-analog-control-flow.yml
+index 8253daf..8990f09 100644
+--- a/.github/workflows/increment-34-analog-control-flow.yml
++++ b/.github/workflows/increment-34-analog-control-flow.yml
+@@ -12,6 +12,12 @@ on:
+       - 'core/scala/api/src/nodal/AnalogProceduralConstruction.scala'
+       - 'core/scala/api/src/nodal/AnalogProceduralRuntime.scala'
+       - 'core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala'
++      - 'core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala'
++      - 'core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala'
++      - 'core/compiler/include/nodal/Dialect/Nodal/NodalOps.td'
++      - 'core/compiler/lib/Dialect/Nodal/NodalOps.cpp'
++      - 'core/compiler/test/CMakeLists.txt'
++      - 'core/compiler/test/IR/analog-control-flow*.mlir'
+       - 'docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md'
+       - 'docs/implementation/increment34-analog-control-flow.md'
+       - 'docs/roadmap/nodal-development-todo.md'
+@@ -30,7 +36,7 @@ permissions:
+ jobs:
+   increment-34-analog-control-flow:
+     runs-on: ubuntu-24.04
+-    timeout-minutes: 45
++    timeout-minutes: 70
+     steps:
+       - name: Check out repository
+         uses: actions/checkout@v6
+@@ -95,6 +101,29 @@ jobs:
+           grep -F 'public_missing_else=NODAL-ANALOG-034-004' "$report"
+           grep -F 'flat_assignments=0' "$report"
+ 
++
++      - name: Build and validate structured native control flow
++        run: |
++          ./nodal bootstrap \
++            --mode prebuilt \
++            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
++          ./nodal style bootstrap \
++            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
++          ./nodal core native \
++            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
++            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
++          nodalc=$(find out -type f -name nodalc -perm -u+x | head -n 1)
++          test -n "${nodalc}"
++          "${nodalc}" \
++            --mlir-print-op-generic \
++            --mlir-print-debuginfo \
++            core/compiler/test/IR/analog-control-flow.mlir \
++            > "${RUNNER_TEMP}/increment34-structured.mlir"
++          grep -F '"nodal.analog_if"' "${RUNNER_TEMP}/increment34-structured.mlir"
++          grep -F '"nodal.analog_case"' "${RUNNER_TEMP}/increment34-structured.mlir"
++          grep -F '"nodal.analog_loop"' "${RUNNER_TEMP}/increment34-structured.mlir"
++          grep -F 'AnalogControlFlow.scala' "${RUNNER_TEMP}/increment34-structured.mlir"
++
+       - name: Check repository style and documentation
+         run: |
+           ./nodal style bootstrap \
+diff --git a/core/compiler/include/nodal/Dialect/Nodal/NodalOps.td b/core/compiler/include/nodal/Dialect/Nodal/NodalOps.td
+index db33769..9dc43cb 100644
+--- a/core/compiler/include/nodal/Dialect/Nodal/NodalOps.td
++++ b/core/compiler/include/nodal/Dialect/Nodal/NodalOps.td
+@@ -769,6 +769,109 @@ def Nodal_AnalogScopeOp : Nodal_Op<"analog_scope", [NoTerminator]> {
+   let hasVerifier = 1;
+ }
+ 
++
++def Nodal_AnalogIfOp : Nodal_Op<"analog_if", [NoTerminator]> {
++  let summary = "First-match structured analog conditional";
++  let arguments = (ins
++    StrAttr:$statement_id,
++    StrAttr:$owner,
++    DictionaryAttr:$metadata
++  );
++  let regions = (region SizedRegion<1>:$body);
++  let hasVerifier = 1;
++}
++
++def Nodal_AnalogIfArmOp
++    : Nodal_Op<"analog_if_arm", [HasParent<"AnalogIfOp">, NoTerminator]> {
++  let summary = "One retained arm of a structured analog conditional";
++  let arguments = (ins
++    StrAttr:$arm_id,
++    StrAttr:$owner,
++    BoolAttr:$is_else,
++    StrAttr:$stage,
++    StrAttr:$condition_value,
++    StrAttr:$condition_kind,
++    StrAttr:$condition_dimension,
++    ArrayAttr:$condition_reads,
++    BoolAttr:$static_value_present,
++    BoolAttr:$static_value,
++    DictionaryAttr:$metadata
++  );
++  let regions = (region SizedRegion<1>:$body);
++  let hasVerifier = 1;
++}
++
++def Nodal_AnalogCaseOp : Nodal_Op<"analog_case", [NoTerminator]> {
++  let summary = "Exact non-fall-through structured analog case selection";
++  let arguments = (ins
++    StrAttr:$statement_id,
++    StrAttr:$owner,
++    StrAttr:$selector_value,
++    StrAttr:$selector_kind,
++    StrAttr:$selector_dimension,
++    ArrayAttr:$selector_reads,
++    BoolAttr:$static_value_present,
++    StrAttr:$static_value,
++    DictionaryAttr:$metadata
++  );
++  let regions = (region SizedRegion<1>:$body);
++  let hasVerifier = 1;
++}
++
++def Nodal_AnalogCaseArmOp
++    : Nodal_Op<"analog_case_arm", [HasParent<"AnalogCaseOp">, NoTerminator]> {
++  let summary = "One exact non-fall-through analog case arm";
++  let arguments = (ins
++    StrAttr:$arm_id,
++    StrAttr:$owner,
++    BoolAttr:$is_default,
++    ArrayAttr:$labels,
++    DictionaryAttr:$metadata
++  );
++  let regions = (region SizedRegion<1>:$body);
++  let hasVerifier = 1;
++}
++
++def Nodal_AnalogLoopOp : Nodal_Op<"analog_loop", [NoTerminator]> {
++  let summary = "Exact static or finite runtime-bounded analog loop";
++  let arguments = (ins
++    StrAttr:$statement_id,
++    StrAttr:$owner,
++    StrAttr:$stage,
++    I64Attr:$minimum_iterations,
++    I64Attr:$maximum_iterations,
++    StrAttr:$bound_value,
++    StrAttr:$bound_kind,
++    StrAttr:$bound_dimension,
++    ArrayAttr:$bound_reads,
++    BoolAttr:$static_trip_count_present,
++    I64Attr:$static_trip_count,
++    DictionaryAttr:$metadata
++  );
++  let regions = (region SizedRegion<1>:$body);
++  let hasVerifier = 1;
++}
++
++def Nodal_AnalogBreakOp : Nodal_Op<"analog_break"> {
++  let summary = "Exit the nearest runtime-bounded analog loop";
++  let arguments = (ins
++    StrAttr:$statement_id,
++    StrAttr:$owner,
++    DictionaryAttr:$metadata
++  );
++  let hasVerifier = 1;
++}
++
++def Nodal_AnalogContinueOp : Nodal_Op<"analog_continue"> {
++  let summary = "Continue the nearest runtime-bounded analog loop";
++  let arguments = (ins
++    StrAttr:$statement_id,
++    StrAttr:$owner,
++    DictionaryAttr:$metadata
++  );
++  let hasVerifier = 1;
++}
++
+ def Nodal_AnalogVariableOp : Nodal_Op<"analog_variable"> {
+   let summary = "Declaration of one typed analog procedural variable";
+   let arguments = (ins
+diff --git a/core/compiler/lib/Dialect/Nodal/NodalOps.cpp b/core/compiler/lib/Dialect/Nodal/NodalOps.cpp
+index f0f8d39..80c8a08 100644
+--- a/core/compiler/lib/Dialect/Nodal/NodalOps.cpp
++++ b/core/compiler/lib/Dialect/Nodal/NodalOps.cpp
+@@ -19,8 +19,11 @@
+ #include "llvm/ADT/StringSet.h"
+ 
+ #include <initializer_list>
++#include <iterator>
+ #include <optional>
++#include <set>
+ #include <string>
++#include <vector>
+ 
+ using namespace mlir;
+ 
+@@ -489,6 +492,490 @@ LogicalResult verifyProceduralBlock(Block &block, ProceduralVerificationState &s
+   return success();
+ }
+ 
++LogicalResult verifyStructuredProceduralBlock(Block &block, llvm::StringRef owner) {
++  for (Operation &operation : block) {
++    if (llvm::isa<nodal::AnalogVariableOp, nodal::AnalogVariableReadOp, nodal::AnalogAssignOp,
++                  nodal::AnalogBreakOp, nodal::AnalogContinueOp>(operation)) {
++      if (textAttr(&operation, "owner") != owner)
++        return nodal::emitMappedFailure(
++            &operation, "NODAL-ANALOG-034-014",
++            "structured procedural operation owner does not match the enclosing component");
++      continue;
++    }
++
++    if (auto scope = llvm::dyn_cast<nodal::AnalogScopeOp>(&operation)) {
++      if (textAttr(&operation, "owner") != owner)
++        return nodal::emitMappedFailure(
++            &operation, "NODAL-ANALOG-034-014",
++            "structured lexical scope owner does not match the enclosing component");
++      if (failed(
++              verifyStructuredProceduralBlock(scope.getOperation()->getRegion(0).front(), owner)))
++        return failure();
++      continue;
++    }
++
++    if (auto conditional = llvm::dyn_cast<nodal::AnalogIfOp>(&operation)) {
++      if (textAttr(&operation, "owner") != owner)
++        return nodal::emitMappedFailure(
++            &operation, "NODAL-ANALOG-034-014",
++            "structured conditional owner does not match the enclosing component");
++      for (Operation &nested : conditional.getOperation()->getRegion(0).front()) {
++        auto arm = llvm::dyn_cast<nodal::AnalogIfArmOp>(&nested);
++        if (!arm)
++          return nodal::emitMappedFailure(
++              &nested, "NODAL-ANALOG-034-015",
++              "analog conditional body may contain only analog_if_arm operations");
++        if (failed(
++                verifyStructuredProceduralBlock(arm.getOperation()->getRegion(0).front(), owner)))
++          return failure();
++      }
++      continue;
++    }
++
++    if (auto selection = llvm::dyn_cast<nodal::AnalogCaseOp>(&operation)) {
++      if (textAttr(&operation, "owner") != owner)
++        return nodal::emitMappedFailure(
++            &operation, "NODAL-ANALOG-034-014",
++            "structured case owner does not match the enclosing component");
++      for (Operation &nested : selection.getOperation()->getRegion(0).front()) {
++        auto arm = llvm::dyn_cast<nodal::AnalogCaseArmOp>(&nested);
++        if (!arm)
++          return nodal::emitMappedFailure(
++              &nested, "NODAL-ANALOG-034-015",
++              "analog case body may contain only analog_case_arm operations");
++        if (failed(
++                verifyStructuredProceduralBlock(arm.getOperation()->getRegion(0).front(), owner)))
++          return failure();
++      }
++      continue;
++    }
++
++    if (auto loop = llvm::dyn_cast<nodal::AnalogLoopOp>(&operation)) {
++      if (textAttr(&operation, "owner") != owner)
++        return nodal::emitMappedFailure(
++            &operation, "NODAL-ANALOG-034-014",
++            "structured loop owner does not match the enclosing component");
++      if (failed(verifyStructuredProceduralBlock(loop.getOperation()->getRegion(0).front(), owner)))
++        return failure();
++      continue;
++    }
++
++    if (llvm::isa<nodal::AnalogIfArmOp, nodal::AnalogCaseArmOp>(operation))
++      return nodal::emitMappedFailure(
++          &operation, "NODAL-ANALOG-034-015",
++          "analog control-flow arm must be nested directly under its owning selection");
++
++    if (llvm::isa<nodal::AnalogProcedureOp>(operation))
++      return nodal::emitMappedFailure(&operation, "NODAL-ANALOG-033-018",
++                                      "nested analog procedural regions are not supported");
++
++    return nodal::emitMappedFailure(
++        &operation, "NODAL-ANALOG-034-014",
++        "operation is not legal in structured analog procedural control flow");
++  }
++  return success();
++}
++
++using StructuredInitializedSet = std::set<std::string>;
++
++struct StructuredVariableInfo {
++  Block *declarationBlock = nullptr;
++};
++
++struct StructuredDataflowContext {
++  llvm::StringMap<StructuredVariableInfo> variables;
++};
++
++struct StructuredFlow {
++  std::optional<StructuredInitializedSet> normal;
++  std::vector<StructuredInitializedSet> breaks;
++  std::vector<StructuredInitializedSet> continues;
++};
++
++std::optional<StructuredInitializedSet>
++intersectStructuredStates(const std::vector<StructuredInitializedSet> &states) {
++  if (states.empty())
++    return std::nullopt;
++  StructuredInitializedSet result = states.front();
++  for (auto state = std::next(states.begin()); state != states.end(); ++state) {
++    for (auto value = result.begin(); value != result.end();) {
++      if (state->find(*value) == state->end())
++        value = result.erase(value);
++      else
++        ++value;
++    }
++  }
++  return result;
++}
++
++void appendStructuredEscapes(StructuredFlow &destination, const StructuredFlow &source) {
++  destination.breaks.insert(destination.breaks.end(), source.breaks.begin(), source.breaks.end());
++  destination.continues.insert(destination.continues.end(), source.continues.begin(),
++                               source.continues.end());
++}
++
++void removeStructuredLocals(StructuredFlow &flow, const std::vector<std::string> &locals) {
++  auto remove = [&](StructuredInitializedSet &state) {
++    for (const std::string &identity : locals)
++      state.erase(identity);
++  };
++  if (flow.normal)
++    remove(*flow.normal);
++  for (StructuredInitializedSet &state : flow.breaks)
++    remove(state);
++  for (StructuredInitializedSet &state : flow.continues)
++    remove(state);
++}
++
++LogicalResult collectStructuredVariables(Block &block, llvm::StringRef owner,
++                                         StructuredDataflowContext &context) {
++  for (Operation &operation : block) {
++    if (llvm::isa<nodal::AnalogVariableOp>(operation)) {
++      llvm::StringRef identity = textAttr(&operation, "identity");
++      if (identity.trim().empty())
++        return nodal::emitMappedFailure(&operation, "NODAL-ANALOG-034-014",
++                                        "structured variable identity must be non-empty");
++      if (textAttr(&operation, "owner") != owner)
++        return nodal::emitMappedFailure(
++            &operation, "NODAL-ANALOG-034-014",
++            "structured variable owner does not match the enclosing component");
++      if (!context.variables.try_emplace(identity, StructuredVariableInfo{operation.getBlock()})
++               .second)
++        return nodal::emitMappedFailure(&operation, "NODAL-ANALOG-034-014",
++                                        llvm::Twine("duplicate structured variable identity '") +
++                                            identity + "'");
++    }
++    for (Region &region : operation.getRegions()) {
++      for (Block &nested : region) {
++        if (failed(collectStructuredVariables(nested, owner, context)))
++          return failure();
++      }
++    }
++  }
++  return success();
++}
++
++LogicalResult requireStructuredRead(Operation *operation, llvm::StringRef identity,
++                                    const StructuredInitializedSet &initialized,
++                                    const StructuredDataflowContext &context) {
++  auto variable = context.variables.find(identity);
++  if (variable == context.variables.end())
++    return nodal::emitMappedFailure(
++        operation, "NODAL-ANALOG-034-014",
++        llvm::Twine("structured control flow references unknown variable '") + identity + "'");
++  if (!isVisibleFrom(operation->getBlock(), variable->second.declarationBlock))
++    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-014",
++                                    llvm::Twine("structured variable '") + identity +
++                                        "' is outside its lexical declaration scope");
++  if (initialized.find(identity.str()) == initialized.end())
++    return nodal::emitMappedFailure(
++        operation, "NODAL-ANALOG-034-004",
++        llvm::Twine("procedural variable '") + identity +
++            "' is read before definite initialization on this control-flow path");
++  return success();
++}
++
++LogicalResult requireStructuredReads(Operation *operation, llvm::StringRef attributeName,
++                                     const StructuredInitializedSet &initialized,
++                                     const StructuredDataflowContext &context) {
++  auto reads = operation->getAttrOfType<ArrayAttr>(attributeName);
++  if (!reads)
++    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-014",
++                                    llvm::Twine("missing structured read inventory '") +
++                                        attributeName + "'");
++  for (Attribute attribute : reads) {
++    auto identity = llvm::dyn_cast<StringAttr>(attribute);
++    if (!identity || identity.getValue().trim().empty())
++      return nodal::emitMappedFailure(
++          operation, "NODAL-ANALOG-034-014",
++          "structured read inventory entries must be non-empty identities");
++    if (failed(requireStructuredRead(operation, identity.getValue(), initialized, context)))
++      return failure();
++  }
++  return success();
++}
++
++FailureOr<std::string> structuredVariableIdentity(Operation *operation, Value value,
++                                                  const StructuredDataflowContext &context,
++                                                  bool requireInitialized,
++                                                  const StructuredInitializedSet &initialized) {
++  auto declaration = value.getDefiningOp<nodal::AnalogVariableOp>();
++  if (!declaration) {
++    (void)nodal::emitMappedFailure(
++        operation, "NODAL-ANALOG-034-014",
++        "structured procedural variable operand must resolve to an analog_variable");
++    return failure();
++  }
++  llvm::StringRef identity = textAttr(declaration.getOperation(), "identity");
++  auto variable = context.variables.find(identity);
++  if (variable == context.variables.end())
++    return failure();
++  if (!isVisibleFrom(operation->getBlock(), variable->second.declarationBlock)) {
++    (void)nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-014",
++                                   llvm::Twine("structured variable '") + identity +
++                                       "' is outside its lexical declaration scope");
++    return failure();
++  }
++  if (requireInitialized && initialized.find(identity.str()) == initialized.end()) {
++    (void)nodal::emitMappedFailure(
++        operation, "NODAL-ANALOG-034-004",
++        llvm::Twine("procedural variable '") + identity +
++            "' is read before definite initialization on this control-flow path");
++    return failure();
++  }
++  return identity.str();
++}
++
++FailureOr<StructuredFlow> analyzeStructuredDataflowBlock(Block &block,
++                                                         const StructuredInitializedSet &input,
++                                                         StructuredDataflowContext &context,
++                                                         bool retainLocals);
++
++FailureOr<StructuredFlow> analyzeStructuredIf(nodal::AnalogIfOp conditional,
++                                              const StructuredInitializedSet &input,
++                                              StructuredDataflowContext &context) {
++  StructuredFlow result;
++  std::vector<StructuredInitializedSet> normalStates;
++  bool unmatchedReachable = true;
++
++  for (Operation &operation : conditional.getOperation()->getRegion(0).front()) {
++    auto arm = llvm::cast<nodal::AnalogIfArmOp>(&operation);
++    auto isElse = operation.getAttrOfType<BoolAttr>("is_else");
++    bool reachable = unmatchedReachable;
++    if (isElse.getValue()) {
++      unmatchedReachable = false;
++    } else {
++      llvm::StringRef stage = textAttr(&operation, "stage");
++      if (stage == "static") {
++        auto value = operation.getAttrOfType<BoolAttr>("static_value");
++        reachable = unmatchedReachable && value.getValue();
++        if (value.getValue())
++          unmatchedReachable = false;
++      } else {
++        reachable = unmatchedReachable;
++      }
++    }
++
++    if (!reachable)
++      continue;
++    if (!isElse.getValue() &&
++        failed(requireStructuredReads(&operation, "condition_reads", input, context)))
++      return failure();
++    auto branch =
++        analyzeStructuredDataflowBlock(arm.getOperation()->getRegion(0).front(), input, context,
++                                       /*retainLocals=*/false);
++    if (failed(branch))
++      return failure();
++    if (branch->normal)
++      normalStates.push_back(*branch->normal);
++    appendStructuredEscapes(result, *branch);
++  }
++
++  if (unmatchedReachable)
++    normalStates.push_back(input);
++  result.normal = intersectStructuredStates(normalStates);
++  return result;
++}
++
++FailureOr<StructuredFlow> analyzeStructuredCase(nodal::AnalogCaseOp selection,
++                                                const StructuredInitializedSet &input,
++                                                StructuredDataflowContext &context) {
++  if (failed(requireStructuredReads(selection.getOperation(), "selector_reads", input, context)))
++    return failure();
++
++  StructuredFlow result;
++  std::vector<StructuredInitializedSet> normalStates;
++  auto staticPresent = selection.getOperation()->getAttrOfType<BoolAttr>("static_value_present");
++  llvm::StringRef staticValue = textAttr(selection.getOperation(), "static_value");
++  Operation *defaultArm = nullptr;
++
++  if (staticPresent.getValue()) {
++    Operation *selected = nullptr;
++    for (Operation &operation : selection.getOperation()->getRegion(0).front()) {
++      auto isDefault = operation.getAttrOfType<BoolAttr>("is_default");
++      if (isDefault.getValue()) {
++        defaultArm = &operation;
++        continue;
++      }
++      auto labels = operation.getAttrOfType<ArrayAttr>("labels");
++      for (Attribute attribute : labels) {
++        if (llvm::cast<StringAttr>(attribute).getValue() == staticValue) {
++          selected = &operation;
++          break;
++        }
++      }
++      if (selected)
++        break;
++    }
++    Operation *reachable = selected ? selected : defaultArm;
++    if (!reachable) {
++      result.normal = input;
++      return result;
++    }
++    auto branch = analyzeStructuredDataflowBlock(reachable->getRegion(0).front(), input, context,
++                                                 /*retainLocals=*/false);
++    if (failed(branch))
++      return failure();
++    return *branch;
++  }
++
++  bool hasDefault = false;
++  for (Operation &operation : selection.getOperation()->getRegion(0).front()) {
++    auto arm = llvm::cast<nodal::AnalogCaseArmOp>(&operation);
++    if (operation.getAttrOfType<BoolAttr>("is_default").getValue())
++      hasDefault = true;
++    auto branch =
++        analyzeStructuredDataflowBlock(arm.getOperation()->getRegion(0).front(), input, context,
++                                       /*retainLocals=*/false);
++    if (failed(branch))
++      return failure();
++    if (branch->normal)
++      normalStates.push_back(*branch->normal);
++    appendStructuredEscapes(result, *branch);
++  }
++  if (!hasDefault)
++    normalStates.push_back(input);
++  result.normal = intersectStructuredStates(normalStates);
++  return result;
++}
++
++FailureOr<StructuredFlow> analyzeStructuredLoop(nodal::AnalogLoopOp loop,
++                                                const StructuredInitializedSet &input,
++                                                StructuredDataflowContext &context) {
++  if (failed(requireStructuredReads(loop.getOperation(), "bound_reads", input, context)))
++    return failure();
++
++  llvm::StringRef stage = textAttr(loop.getOperation(), "stage");
++  auto minimum = loop.getOperation()->getAttrOfType<IntegerAttr>("minimum_iterations");
++  auto staticCount = loop.getOperation()->getAttrOfType<IntegerAttr>("static_trip_count");
++  if (stage == "static" && staticCount.getInt() == 0)
++    return StructuredFlow{input, {}, {}};
++
++  auto body =
++      analyzeStructuredDataflowBlock(loop.getOperation()->getRegion(0).front(), input, context,
++                                     /*retainLocals=*/false);
++  if (failed(body))
++    return failure();
++
++  std::vector<StructuredInitializedSet> exits;
++  if (minimum.getInt() == 0)
++    exits.push_back(input);
++  if (body->normal)
++    exits.push_back(*body->normal);
++  exits.insert(exits.end(), body->breaks.begin(), body->breaks.end());
++  exits.insert(exits.end(), body->continues.begin(), body->continues.end());
++
++  StructuredFlow result;
++  result.normal = intersectStructuredStates(exits);
++  return result;
++}
++
++FailureOr<StructuredFlow> analyzeStructuredDataflowStatement(Operation *operation,
++                                                             const StructuredInitializedSet &input,
++                                                             StructuredDataflowContext &context) {
++  if (llvm::isa<nodal::AnalogVariableOp>(operation)) {
++    StructuredInitializedSet output = input;
++    if (failed(requireStructuredReads(operation, "initializer_reads", input, context)))
++      return failure();
++    llvm::StringRef identity = textAttr(operation, "identity");
++    if (operation->getAttrOfType<BoolAttr>("initialized").getValue())
++      output.insert(identity.str());
++    return StructuredFlow{output, {}, {}};
++  }
++
++  if (llvm::isa<nodal::AnalogVariableReadOp>(operation)) {
++    auto identity = structuredVariableIdentity(operation, operation->getOperand(0), context,
++                                               /*requireInitialized=*/true, input);
++    if (failed(identity))
++      return failure();
++    return StructuredFlow{input, {}, {}};
++  }
++
++  if (llvm::isa<nodal::AnalogAssignOp>(operation)) {
++    StructuredInitializedSet output = input;
++    auto target = structuredVariableIdentity(operation, operation->getOperand(0), context,
++                                             /*requireInitialized=*/false, input);
++    if (failed(target))
++      return failure();
++    for (Value value : operation->getOperands().drop_front()) {
++      auto read = value.getDefiningOp<nodal::AnalogVariableReadOp>();
++      if (!read) {
++        (void)nodal::emitMappedFailure(
++            operation, "NODAL-ANALOG-034-014",
++            "structured assignment operands must be explicit variable reads");
++        return failure();
++      }
++      auto identity =
++          structuredVariableIdentity(operation, read.getOperation()->getOperand(0), context,
++                                     /*requireInitialized=*/true, input);
++      if (failed(identity))
++        return failure();
++    }
++    output.insert(*target);
++    return StructuredFlow{output, {}, {}};
++  }
++
++  if (auto scope = llvm::dyn_cast<nodal::AnalogScopeOp>(operation))
++    return analyzeStructuredDataflowBlock(scope.getOperation()->getRegion(0).front(), input,
++                                          context,
++                                          /*retainLocals=*/false);
++  if (auto conditional = llvm::dyn_cast<nodal::AnalogIfOp>(operation))
++    return analyzeStructuredIf(conditional, input, context);
++  if (auto selection = llvm::dyn_cast<nodal::AnalogCaseOp>(operation))
++    return analyzeStructuredCase(selection, input, context);
++  if (auto loop = llvm::dyn_cast<nodal::AnalogLoopOp>(operation))
++    return analyzeStructuredLoop(loop, input, context);
++  if (llvm::isa<nodal::AnalogBreakOp>(operation))
++    return StructuredFlow{std::nullopt, {input}, {}};
++  if (llvm::isa<nodal::AnalogContinueOp>(operation))
++    return StructuredFlow{std::nullopt, {}, {input}};
++
++  (void)nodal::emitMappedFailure(
++      operation, "NODAL-ANALOG-034-014",
++      "unsupported operation reached structured definite-assignment analysis");
++  return failure();
++}
++
++FailureOr<StructuredFlow> analyzeStructuredDataflowBlock(Block &block,
++                                                         const StructuredInitializedSet &input,
++                                                         StructuredDataflowContext &context,
++                                                         bool retainLocals) {
++  StructuredFlow flow{input, {}, {}};
++  std::vector<std::string> locals;
++  for (Operation &operation : block) {
++    if (llvm::isa<nodal::AnalogVariableOp>(operation))
++      locals.push_back(textAttr(&operation, "identity").str());
++    if (!flow.normal)
++      continue;
++    auto statement = analyzeStructuredDataflowStatement(&operation, *flow.normal, context);
++    if (failed(statement))
++      return failure();
++    appendStructuredEscapes(flow, *statement);
++    flow.normal = statement->normal;
++  }
++  if (!retainLocals)
++    removeStructuredLocals(flow, locals);
++  return flow;
++}
++
++LogicalResult verifyStructuredDefiniteAssignment(Operation *procedure, llvm::StringRef owner) {
++  StructuredDataflowContext context;
++  Block &body = procedure->getRegion(0).front();
++  if (failed(collectStructuredVariables(body, owner, context)))
++    return failure();
++  auto flow = analyzeStructuredDataflowBlock(body, StructuredInitializedSet{}, context,
++                                             /*retainLocals=*/true);
++  if (failed(flow))
++    return failure();
++  if (!flow->breaks.empty())
++    return nodal::emitMappedFailure(procedure, "NODAL-ANALOG-034-010",
++                                    "break escaped the nearest runtime-bounded analog loop");
++  if (!flow->continues.empty())
++    return nodal::emitMappedFailure(procedure, "NODAL-ANALOG-034-011",
++                                    "continue escaped the nearest runtime-bounded analog loop");
++  return success();
++}
++
+ LogicalResult verifySingleTopLevelProcedurePerModule(Operation *module) {
+   bool seenProcedure = false;
+   Operation *duplicateProcedure = nullptr;
+@@ -515,6 +1002,18 @@ LogicalResult verifyAnalogProcedure(Operation *operation) {
+   if (owner.trim().empty())
+     return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-009",
+                                     "analog procedural owner must be non-empty");
++  bool hasStructuredControl = false;
++  operation->walk([&](Operation *nested) {
++    if (llvm::isa<nodal::AnalogIfOp, nodal::AnalogCaseOp, nodal::AnalogLoopOp, nodal::AnalogBreakOp,
++                  nodal::AnalogContinueOp>(nested))
++      hasStructuredControl = true;
++  });
++  if (hasStructuredControl) {
++    if (failed(verifyStructuredProceduralBlock(operation->getRegion(0).front(), owner)))
++      return failure();
++    return verifyStructuredDefiniteAssignment(operation, owner);
++  }
++
+   ProceduralVerificationState state;
+   state.owner = owner;
+   return verifyProceduralBlock(operation->getRegion(0).front(), state);
+@@ -795,6 +1294,266 @@ LogicalResult nodal::AnalogScopeOp::verify() {
+   return requireText(getOperation(), "owner", "procedural lexical scope owner");
+ }
+ 
++LogicalResult nodal::AnalogIfOp::verify() {
++  if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-034-014",
++                                       "structured analog conditional")))
++    return failure();
++  if (failed(requireText(getOperation(), "statement_id", "conditional statement identity")) ||
++      failed(requireText(getOperation(), "owner", "conditional owner")) ||
++      failed(requireSingleBlock(getOperation())))
++    return failure();
++
++  llvm::StringSet<> armIds;
++  bool seenConditionalArm = false;
++  bool seenElse = false;
++  for (Operation &operation : getOperation()->getRegion(0).front()) {
++    auto arm = llvm::dyn_cast<nodal::AnalogIfArmOp>(&operation);
++    if (!arm)
++      return emitMappedFailure(&operation, "NODAL-ANALOG-034-015",
++                               "analog_if body may contain only analog_if_arm operations");
++    llvm::StringRef armId = textAttr(&operation, "arm_id");
++    if (armId.trim().empty() || !armIds.insert(armId).second)
++      return emitMappedFailure(&operation, "NODAL-ANALOG-034-001",
++                               "conditional arm identity must be non-empty and unique");
++    const bool isElse = operation.getAttrOfType<BoolAttr>("is_else").getValue();
++    if (isElse) {
++      if (seenElse)
++        return emitMappedFailure(&operation, "NODAL-ANALOG-034-015",
++                                 "analog conditional permits only one else arm");
++      seenElse = true;
++    } else {
++      if (seenElse)
++        return emitMappedFailure(&operation, "NODAL-ANALOG-034-015",
++                                 "conditional arm cannot follow the else arm");
++      seenConditionalArm = true;
++    }
++  }
++  if (!seenConditionalArm)
++    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-015",
++                             "analog conditional requires at least one condition arm");
++  return success();
++}
++
++LogicalResult nodal::AnalogIfArmOp::verify() {
++  if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-034-014",
++                                       "analog conditional arm")) ||
++      failed(requireSingleBlock(getOperation())) ||
++      failed(requireText(getOperation(), "arm_id", "conditional arm identity")) ||
++      failed(requireText(getOperation(), "owner", "conditional arm owner")))
++    return failure();
++  if (getOperation()->getRegion(0).front().empty())
++    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-015",
++                             "conditional arm must contain at least one statement");
++  if (failed(verifyStringArray(getOperation(), "condition_reads", "NODAL-ANALOG-034-002",
++                               "condition read")))
++    return failure();
++
++  auto isElse = getOperation()->getAttrOfType<BoolAttr>("is_else");
++  auto staticPresent = getOperation()->getAttrOfType<BoolAttr>("static_value_present");
++  auto staticValue = getOperation()->getAttrOfType<BoolAttr>("static_value");
++  if (!isElse || !staticPresent || !staticValue)
++    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-003",
++                             "conditional arm requires explicit staging metadata");
++
++  const llvm::StringRef stage = textAttr(getOperation(), "stage");
++  const llvm::StringRef value = textAttr(getOperation(), "condition_value");
++  const llvm::StringRef kind = textAttr(getOperation(), "condition_kind");
++  const llvm::StringRef dimension = textAttr(getOperation(), "condition_dimension");
++  auto reads = getOperation()->getAttrOfType<ArrayAttr>("condition_reads");
++  if (isElse.getValue()) {
++    if (stage != "else" || !value.empty() || !kind.empty() || !dimension.empty() ||
++        !reads.empty() || staticPresent.getValue())
++      return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-003",
++                               "else arm must not carry a condition or static value");
++    return success();
++  }
++
++  if (!oneOf(stage, {"static", "runtime"}) || value.trim().empty() || kind != "boolean" ||
++      dimension != "1")
++    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-002",
++                             "conditional arm requires a dimensionless Boolean condition");
++  if (stage == "static" && (!staticPresent.getValue() || !reads.empty()))
++    return emitMappedFailure(
++        getOperation(), "NODAL-ANALOG-034-003",
++        "static conditional arm requires a compile-time value without dynamic reads");
++  if (stage == "runtime" && staticPresent.getValue())
++    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-003",
++                             "runtime conditional arm cannot carry a compile-time selected value");
++  return success();
++}
++
++LogicalResult nodal::AnalogCaseOp::verify() {
++  if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-034-014",
++                                       "structured analog case")) ||
++      failed(requireText(getOperation(), "statement_id", "case statement identity")) ||
++      failed(requireText(getOperation(), "owner", "case owner")) ||
++      failed(requireSingleBlock(getOperation())) ||
++      failed(verifyStringArray(getOperation(), "selector_reads", "NODAL-ANALOG-034-005",
++                               "case selector read")))
++    return failure();
++
++  const llvm::StringRef kind = textAttr(getOperation(), "selector_kind");
++  const llvm::StringRef dimension = textAttr(getOperation(), "selector_dimension");
++  if (!oneOf(kind, {"integer", "boolean"}) || dimension != "1" ||
++      textAttr(getOperation(), "selector_value").trim().empty())
++    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-005",
++                             "case selector must be a dimensionless integer or Boolean value");
++
++  auto staticPresent = getOperation()->getAttrOfType<BoolAttr>("static_value_present");
++  auto reads = getOperation()->getAttrOfType<ArrayAttr>("selector_reads");
++  const llvm::StringRef staticValue = textAttr(getOperation(), "static_value");
++  if (!staticPresent)
++    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-003",
++                             "case selector requires explicit staging metadata");
++  if (staticPresent.getValue()) {
++    if (staticValue.empty() || !reads.empty())
++      return emitMappedFailure(
++          getOperation(), "NODAL-ANALOG-034-003",
++          "static case selector requires one exact value without dynamic reads");
++    if (!staticValue.starts_with(kind.str() + ":"))
++      return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-007",
++                               "static case selector value does not match selector kind");
++  } else if (!staticValue.empty()) {
++    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-003",
++                             "runtime case selector cannot carry a static value");
++  }
++
++  llvm::StringSet<> armIds;
++  llvm::StringSet<> labels;
++  bool seenOrdinary = false;
++  bool seenDefault = false;
++  for (Operation &operation : getOperation()->getRegion(0).front()) {
++    auto arm = llvm::dyn_cast<nodal::AnalogCaseArmOp>(&operation);
++    if (!arm)
++      return emitMappedFailure(&operation, "NODAL-ANALOG-034-015",
++                               "analog_case body may contain only analog_case_arm operations");
++    llvm::StringRef armId = textAttr(&operation, "arm_id");
++    if (armId.trim().empty() || !armIds.insert(armId).second)
++      return emitMappedFailure(&operation, "NODAL-ANALOG-034-001",
++                               "case arm identity must be non-empty and unique");
++    auto isDefault = operation.getAttrOfType<BoolAttr>("is_default");
++    auto armLabels = operation.getAttrOfType<ArrayAttr>("labels");
++    if (isDefault.getValue()) {
++      if (seenDefault || !armLabels.empty())
++        return emitMappedFailure(&operation, "NODAL-ANALOG-034-015",
++                                 "case permits one label-free default arm");
++      seenDefault = true;
++      continue;
++    }
++    if (seenDefault)
++      return emitMappedFailure(&operation, "NODAL-ANALOG-034-015",
++                               "case arm cannot follow the default arm");
++    seenOrdinary = true;
++    for (Attribute attribute : armLabels) {
++      auto label = llvm::dyn_cast<StringAttr>(attribute);
++      if (!label || !label.getValue().starts_with(kind.str() + ":"))
++        return emitMappedFailure(&operation, "NODAL-ANALOG-034-007",
++                                 "case label kind does not match the selector");
++      if (!labels.insert(label.getValue()).second)
++        return emitMappedFailure(&operation, "NODAL-ANALOG-034-006", "duplicate case label");
++    }
++  }
++  if (!seenOrdinary)
++    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-015",
++                             "analog case requires at least one labeled arm");
++  return success();
++}
++
++LogicalResult nodal::AnalogCaseArmOp::verify() {
++  if (failed(
++          requireProceduralAncestor(getOperation(), "NODAL-ANALOG-034-014", "analog case arm")) ||
++      failed(requireSingleBlock(getOperation())) ||
++      failed(requireText(getOperation(), "arm_id", "case arm identity")) ||
++      failed(requireText(getOperation(), "owner", "case arm owner")) ||
++      failed(verifyStringArray(getOperation(), "labels", "NODAL-ANALOG-034-007", "case label")))
++    return failure();
++  if (getOperation()->getRegion(0).front().empty())
++    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-015",
++                             "case arm must contain at least one statement");
++  auto isDefault = getOperation()->getAttrOfType<BoolAttr>("is_default");
++  auto labels = getOperation()->getAttrOfType<ArrayAttr>("labels");
++  if (!isDefault)
++    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-015",
++                             "case arm requires explicit default metadata");
++  if (isDefault.getValue() != labels.empty())
++    return emitMappedFailure(
++        getOperation(), "NODAL-ANALOG-034-015",
++        "default case arm must be label-free and ordinary arms require labels");
++  return success();
++}
++
++LogicalResult nodal::AnalogLoopOp::verify() {
++  if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-034-014",
++                                       "structured analog loop")) ||
++      failed(requireSingleBlock(getOperation())) ||
++      failed(requireText(getOperation(), "statement_id", "loop statement identity")) ||
++      failed(requireText(getOperation(), "owner", "loop owner")) ||
++      failed(requireText(getOperation(), "bound_value", "loop bound value")) ||
++      failed(verifyStringArray(getOperation(), "bound_reads", "NODAL-ANALOG-034-008",
++                               "loop bound read")))
++    return failure();
++  if (getOperation()->getRegion(0).front().empty())
++    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-015",
++                             "analog loop body must contain at least one statement");
++
++  const llvm::StringRef stage = textAttr(getOperation(), "stage");
++  const llvm::StringRef kind = textAttr(getOperation(), "bound_kind");
++  const llvm::StringRef dimension = textAttr(getOperation(), "bound_dimension");
++  auto minimum = getOperation()->getAttrOfType<IntegerAttr>("minimum_iterations");
++  auto maximum = getOperation()->getAttrOfType<IntegerAttr>("maximum_iterations");
++  auto staticPresent = getOperation()->getAttrOfType<BoolAttr>("static_trip_count_present");
++  auto staticCount = getOperation()->getAttrOfType<IntegerAttr>("static_trip_count");
++  auto reads = getOperation()->getAttrOfType<ArrayAttr>("bound_reads");
++  if (!oneOf(stage, {"static", "runtime"}) || kind != "integer" || dimension != "1" || !minimum ||
++      !maximum || !staticPresent || !staticCount)
++    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-008",
++                             "loop requires a dimensionless integer finite envelope");
++  const int64_t minimumValue = minimum.getInt();
++  const int64_t maximumValue = maximum.getInt();
++  if (minimumValue < 0 || maximumValue < minimumValue)
++    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-008",
++                             "loop envelope must be finite, ordered, and non-negative");
++
++  if (stage == "static") {
++    if (!staticPresent.getValue() || staticCount.getInt() != minimumValue ||
++        minimumValue != maximumValue || !reads.empty())
++      return emitMappedFailure(
++          getOperation(), "NODAL-ANALOG-034-009",
++          "static loop requires one exact non-negative compile-time trip count");
++  } else {
++    if (maximumValue == 0 || staticPresent.getValue())
++      return emitMappedFailure(
++          getOperation(), "NODAL-ANALOG-034-008",
++          "runtime loop requires a positive finite maximum and no static trip count");
++  }
++  return success();
++}
++
++LogicalResult nodal::AnalogBreakOp::verify() {
++  if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-034-010", "analog break")) ||
++      failed(requireText(getOperation(), "statement_id", "break statement identity")) ||
++      failed(requireText(getOperation(), "owner", "break owner")))
++    return failure();
++  auto loop = getOperation()->getParentOfType<nodal::AnalogLoopOp>();
++  if (!loop || textAttr(loop.getOperation(), "stage") != "runtime")
++    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-010",
++                             "break is legal only in the nearest runtime-bounded analog loop");
++  return success();
++}
++
++LogicalResult nodal::AnalogContinueOp::verify() {
++  if (failed(
++          requireProceduralAncestor(getOperation(), "NODAL-ANALOG-034-011", "analog continue")) ||
++      failed(requireText(getOperation(), "statement_id", "continue statement identity")) ||
++      failed(requireText(getOperation(), "owner", "continue owner")))
++    return failure();
++  auto loop = getOperation()->getParentOfType<nodal::AnalogLoopOp>();
++  if (!loop || textAttr(loop.getOperation(), "stage") != "runtime")
++    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-011",
++                             "continue is legal only in the nearest runtime-bounded analog loop");
++  return success();
++}
++
+ LogicalResult nodal::AnalogVariableOp::verify() {
+   if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-033-003",
+                                        "procedural variable declaration")))
+diff --git a/core/compiler/test/CMakeLists.txt b/core/compiler/test/CMakeLists.txt
+index 99a067c..130b113 100644
+--- a/core/compiler/test/CMakeLists.txt
++++ b/core/compiler/test/CMakeLists.txt
+@@ -551,6 +551,54 @@ add_test(
+     -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
+ )
+ 
++
++add_test(
++  NAME nodal.native.analog-control-flow-roundtrip
++  COMMAND nodalc
++    "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow.mlir"
++)
++set_tests_properties(
++  nodal.native.analog-control-flow-roundtrip
++  PROPERTIES
++    PASS_REGULAR_EXPRESSION "nodal[.]analog_loop"
++)
++
++add_test(
++  NAME nodal.native.analog-control-flow-source-map-roundtrip
++  COMMAND nodalc
++    --mlir-print-op-generic
++    --mlir-print-debuginfo
++    "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow.mlir"
++)
++set_tests_properties(
++  nodal.native.analog-control-flow-source-map-roundtrip
++  PROPERTIES
++    PASS_REGULAR_EXPRESSION "AnalogControlFlow[.]scala"
++)
++
++foreach(_fixture IN ITEMS break loop condition case)
++  add_test(
++    NAME nodal.native.analog-control-flow-rejects-${_fixture}
++    COMMAND "${CMAKE_COMMAND}"
++      "-DNODALC=$<TARGET_FILE:nodalc>"
++      "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow-invalid-${_fixture}.mlir"
++      "-DDIAGNOSTIC=NODAL-ANALOG-034-"
++      -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
++  )
++endforeach()
++
++
++foreach(_fixture IN ITEMS missing-else missing-default zero-trip continue-path)
++  add_test(
++    NAME nodal.native.analog-control-flow-rejects-${_fixture}
++    COMMAND "${CMAKE_COMMAND}"
++      "-DNODALC=$<TARGET_FILE:nodalc>"
++      "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow-invalid-${_fixture}.mlir"
++      "-DDIAGNOSTIC=NODAL-ANALOG-034-004"
++      -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
++  )
++endforeach()
++
+ add_custom_target(check-nodal-native
+   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
+   DEPENDS
+diff --git a/core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala b/core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala
+index 173115c..8d03ba5 100644
+--- a/core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala
++++ b/core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala
+@@ -74,9 +74,83 @@ private[nodal] object AnalogProceduralMlir:
+                 "guard" -> quoted(record.guard.map(_.rendered).getOrElse(""))
+               ) ++ sourceFields(record.source)
+             )
+-          variables ++ assignments
++          variables ++ assignments ++ structuredInventory(program)
+     )
+ 
++  private def structuredInventory(
++      program: AnalogProceduralRuntime.Snapshot
++  ): Vector[String] =
++    program.controlFlow.toVector.flatMap: control =>
++      val result = mutable.ArrayBuffer.empty[String]
++
++      def add(
++          kind: String,
++          identity: String,
++          source: Option[AnalogProceduralRuntime.Source]
++      ): Unit =
++        result += dictionary(
++          Vector(
++            "kind" -> quoted(kind),
++            "identity" -> quoted(identity),
++            "owner" -> quoted(program.owner)
++          ) ++ sourceFields(source)
++        )
++
++      def visitBlock(block: AnalogControlFlowRuntime.Block): Unit =
++        add("control_block", block.identity, block.source)
++        block.statements.foreach:
++          case value: AnalogControlFlowRuntime.Statement.Declare =>
++            add("control_declaration", value.identity, value.source)
++          case value: AnalogControlFlowRuntime.Statement.Assign =>
++            add("control_assignment", value.identity, value.source)
++          case value: AnalogControlFlowRuntime.Statement.Read =>
++            add("control_read", value.identity, value.source)
++          case value: AnalogControlFlowRuntime.Statement.Scope =>
++            add("control_scope", value.identity, value.source)
++            visitBlock(value.body)
++          case value: AnalogControlFlowRuntime.Statement.IfThenElse =>
++            add("control_if", value.identity, value.source)
++            value.branches.zipWithIndex.foreach: (branch, index) =>
++              add(
++                "control_if_condition",
++                s"${value.identity}.condition_$index",
++                branch.condition.source
++              )
++              visitBlock(branch.body)
++            value.otherwise.foreach(visitBlock)
++          case value: AnalogControlFlowRuntime.Statement.CaseStatement =>
++            add("control_case", value.identity, value.source)
++            add("control_case_selector", s"${value.identity}.selector", value.selector.source)
++            value.arms.foreach(arm => visitBlock(arm.body))
++            value.default.foreach(visitBlock)
++          case value: AnalogControlFlowRuntime.Statement.Loop =>
++            add("control_loop", value.identity, value.source)
++            visitBlock(value.body)
++          case value: AnalogControlFlowRuntime.Statement.Break =>
++            add("control_break", value.identity, value.source)
++          case value: AnalogControlFlowRuntime.Statement.Continue =>
++            add("control_continue", value.identity, value.source)
++
++      visitBlock(control.root)
++      program.controlExpressions
++        .sortBy(value => (value.identity, value.role))
++        .foreach: expression =>
++          result += dictionary(
++            Vector(
++              "kind" -> quoted("control_expression"),
++              "identity" -> quoted(expression.identity),
++              "role" -> quoted(expression.role),
++              "owner" -> quoted(program.owner),
++              "value" -> quoted(expression.value.rendered),
++              "value_kind" -> quoted(expression.value.valueType.kind.label),
++              "value_dimension" -> quoted(
++                canonicalDimension(expression.value.valueType.dimension)
++              ),
++              "reads" -> array(expression.value.reads.map(value => quoted(value.identity)))
++            ) ++ sourceFields(expression.source)
++          )
++      result.toVector
++
+   def sourceMapEntries(snapshot: ConstructionSnapshot): Vector[String] =
+     snapshot.analogProcedural
+       .sortBy(_.owner)
+@@ -121,10 +195,67 @@ private[nodal] object AnalogProceduralMlir:
+           record.source.toVector.flatMap: source =>
+             record.value.reads.indices.map: index =>
+               sourceMapEntry(s"${record.identity}.read_$index", source)
+-        wrappers ++ scopes ++ variables ++ assignments ++ reads
++        wrappers ++ scopes ++ variables ++ assignments ++ reads ++
++          structuredSourceMapEntries(program)
+       .distinct
+       .sortBy(identity)
+ 
++  private def structuredSourceMapEntries(
++      program: AnalogProceduralRuntime.Snapshot
++  ): Vector[String] =
++    program.controlFlow.toVector.flatMap: control =>
++      val entries = mutable.ArrayBuffer.empty[String]
++
++      def add(path: String, source: Option[AnalogProceduralRuntime.Source]): Unit =
++        source.foreach(value => entries += sourceMapEntry(path, value))
++
++      def visitBlock(block: AnalogControlFlowRuntime.Block): Unit =
++        add(block.identity, block.source)
++        block.statements.foreach:
++          case value: AnalogControlFlowRuntime.Statement.Declare =>
++            add(value.identity, value.source)
++          case value: AnalogControlFlowRuntime.Statement.Assign =>
++            add(value.identity, value.source)
++            program.controlExpressions
++              .find(expression =>
++                expression.identity == value.identity &&
++                  expression.role == "assignment-value"
++              )
++              .foreach: expression =>
++                expression.value.reads.indices.foreach: index =>
++                  add(s"${value.identity}.read_$index", expression.source.orElse(value.source))
++          case value: AnalogControlFlowRuntime.Statement.Read =>
++            add(value.identity, value.source)
++          case value: AnalogControlFlowRuntime.Statement.Scope =>
++            add(value.identity, value.source)
++            visitBlock(value.body)
++          case value: AnalogControlFlowRuntime.Statement.IfThenElse =>
++            add(value.identity, value.source)
++            value.branches.zipWithIndex.foreach: (branch, index) =>
++              add(s"${value.identity}.condition_$index", branch.condition.source)
++              visitBlock(branch.body)
++            value.otherwise.foreach(visitBlock)
++          case value: AnalogControlFlowRuntime.Statement.CaseStatement =>
++            add(value.identity, value.source)
++            add(s"${value.identity}.selector", value.selector.source)
++            value.arms.foreach(arm => visitBlock(arm.body))
++            value.default.foreach(visitBlock)
++          case value: AnalogControlFlowRuntime.Statement.Loop =>
++            add(value.identity, value.source)
++            program.controlExpressions
++              .find(expression =>
++                expression.identity == value.identity && expression.role == "loop-bound"
++              )
++              .foreach(expression => add(s"${value.identity}.bound", expression.source))
++            visitBlock(value.body)
++          case value: AnalogControlFlowRuntime.Statement.Break =>
++            add(value.identity, value.source)
++          case value: AnalogControlFlowRuntime.Statement.Continue =>
++            add(value.identity, value.source)
++
++      visitBlock(control.root)
++      entries.toVector
++
+   private def sourceMapEntry(
+       semanticPath: String,
+       source: AnalogProceduralRuntime.Source
+@@ -143,6 +274,14 @@ private[nodal] object AnalogProceduralMlir:
+   private def renderProgram(
+       program: AnalogProceduralRuntime.Snapshot,
+       programIndex: Int
++  ): String =
++    program.controlFlow match
++      case Some(control) => renderStructuredProgram(program, programIndex, control)
++      case None => renderFlatProgram(program, programIndex)
++
++  private def renderFlatProgram(
++      program: AnalogProceduralRuntime.Snapshot,
++      programIndex: Int
+   ): String =
+     val root = ScopeNode(Vector("procedure"))
+     val variables = program.variables.sortBy(_.declarationOrder)
+@@ -194,6 +333,354 @@ private[nodal] object AnalogProceduralMlir:
+       source = procedureSource
+     )
+ 
++  private def renderStructuredProgram(
++      program: AnalogProceduralRuntime.Snapshot,
++      programIndex: Int,
++      control: AnalogControlFlowConstruction.Snapshot
++  ): String =
++    val variables = program.variables.sortBy(_.declarationOrder)
++    val variableRecords = variables.map(record => record.variable.identity -> record).toMap
++    val variableHandles = variables.map(record =>
++      record.variable.identity ->
++        s"%procedural_${programIndex}_variable_${record.declarationOrder}"
++    ).toMap
++    val variableTypes = variables.map(record =>
++      record.variable.identity -> variableType(record.variable)
++    ).toMap
++    val expressions = program.controlExpressions
++      .groupBy(value => value.identity -> value.role)
++      .view
++      .mapValues(_.head)
++      .toMap
++    var readSerial = 0
++    var authoredAssignmentOrder = 0
++
++    def expression(
++        identity: String,
++        role: String
++    ): AnalogProceduralRuntime.ControlExpressionRecord =
++      expressions.getOrElse(
++        identity -> role,
++        throw new IllegalArgumentException(
++          s"structured analog operation '$identity' is missing '$role' payload"
++        )
++      )
++
++    def label(value: AnalogControlFlowRuntime.CaseLabel): String = value match
++      case AnalogControlFlowRuntime.CaseLabel.Integer(number) => s"integer:$number"
++      case AnalogControlFlowRuntime.CaseLabel.Boolean(boolean) => s"boolean:$boolean"
++
++    def renderReads(
++        statementIdentity: String,
++        reads: Vector[AnalogProceduralRuntime.Variable],
++        source: Option[AnalogProceduralRuntime.Source]
++    ): (Vector[String], Vector[String], Vector[String]) =
++      val lines = mutable.ArrayBuffer.empty[String]
++      val values = mutable.ArrayBuffer.empty[String]
++      val types = mutable.ArrayBuffer.empty[String]
++      reads.zipWithIndex.foreach: (read, index) =>
++        val result = s"%procedural_${programIndex}_structured_read_$readSerial"
++        readSerial += 1
++        val resultType = valueType(read.valueType)
++        val readPath = s"$statementIdentity.read_$index"
++        lines += operation(
++          "nodal.analog_variable_read",
++          results = Vector(result),
++          operands = Vector(variableHandles(read.identity)),
++          operandTypes = Vector(variableTypes(read.identity)),
++          resultTypes = Vector(resultType),
++          attributes = Vector(
++            "read_id" -> quoted(readPath),
++            "owner" -> quoted(program.owner),
++            "metadata" -> metadata(readPath, source)
++          ),
++          source = source
++        )
++        values += result
++        types += resultType
++      (lines.toVector, values.toVector, types.toVector)
++
++    def renderBlock(block: AnalogControlFlowRuntime.Block): String =
++      block.statements.flatMap:
++        case declaration: AnalogControlFlowRuntime.Statement.Declare =>
++          val record = variableRecords.getOrElse(
++            declaration.variable,
++            throw new IllegalArgumentException(
++              s"structured declaration '${declaration.variable}' has no variable record"
++            )
++          )
++          Vector(renderDeclaration(record, program, variableHandles))
++
++        case assignment: AnalogControlFlowRuntime.Statement.Assign =>
++          val payload = expression(assignment.identity, "assignment-value")
++          val (readLines, readValues, readTypes) =
++            renderReads(assignment.identity, payload.value.reads, assignment.source)
++          val order = authoredAssignmentOrder
++          authoredAssignmentOrder += 1
++          val assign = operation(
++            "nodal.analog_assign",
++            operands = Vector(variableHandles(assignment.target)) ++ readValues,
++            operandTypes = Vector(variableTypes(assignment.target)) ++ readTypes,
++            attributes = Vector(
++              "statement_id" -> quoted(assignment.identity),
++              "authored_order" -> integer(order),
++              "operation_order" -> integer(order),
++              "owner" -> quoted(program.owner),
++              "value_kind" -> quoted(payload.value.valueType.kind.label),
++              "value_dimension" -> quoted(
++                canonicalDimension(payload.value.valueType.dimension)
++              ),
++              "analyses" -> array(Vector(quoted("dc"), quoted("transient"))),
++              "guard_present" -> boolean(false),
++              "guard_value" -> quoted(""),
++              "guard_kind" -> quoted(""),
++              "guard_dimension" -> quoted(""),
++              "guard_reads" -> array(Vector.empty),
++              "metadata" -> metadata(
++                assignment.identity,
++                assignment.source,
++                Vector(
++                  "scope" -> array(Vector(quoted(block.identity))),
++                  "value" -> quoted(payload.value.rendered)
++                )
++              )
++            ),
++            source = assignment.source
++          )
++          readLines :+ assign
++
++        case read: AnalogControlFlowRuntime.Statement.Read =>
++          val variable = variableRecords.getOrElse(
++            read.variable,
++            throw new IllegalArgumentException(
++              s"structured read '${read.variable}' has no variable record"
++            )
++          ).variable
++          val result = s"%procedural_${programIndex}_structured_read_$readSerial"
++          readSerial += 1
++          Vector(
++            operation(
++              "nodal.analog_variable_read",
++              results = Vector(result),
++              operands = Vector(variableHandles(variable.identity)),
++              operandTypes = Vector(variableTypes(variable.identity)),
++              resultTypes = Vector(valueType(variable.valueType)),
++              attributes = Vector(
++                "read_id" -> quoted(read.identity),
++                "owner" -> quoted(program.owner),
++                "metadata" -> metadata(read.identity, read.source)
++              ),
++              source = read.source
++            )
++          )
++
++        case scope: AnalogControlFlowRuntime.Statement.Scope =>
++          Vector(
++            operation(
++              "nodal.analog_scope",
++              attributes = Vector(
++                "scope_id" -> quoted(scope.identity),
++                "owner" -> quoted(program.owner),
++                "metadata" -> metadata(scope.identity, scope.source)
++              ),
++              regions = Vector(renderBlock(scope.body)),
++              source = scope.source
++            )
++          )
++
++        case conditional: AnalogControlFlowRuntime.Statement.IfThenElse =>
++          val arms = conditional.branches.zipWithIndex.map: (branch, index) =>
++            val condition = branch.condition
++            operation(
++              "nodal.analog_if_arm",
++              attributes = Vector(
++                "arm_id" -> quoted(branch.body.identity),
++                "owner" -> quoted(program.owner),
++                "is_else" -> boolean(false),
++                "stage" -> quoted(condition.stage.toString.toLowerCase),
++                "condition_value" -> quoted(condition.rendered),
++                "condition_kind" -> quoted(condition.valueType.kind.label),
++                "condition_dimension" -> quoted(
++                  canonicalDimension(condition.valueType.dimension)
++                ),
++                "condition_reads" -> array(condition.reads.toVector.sorted.map(quoted)),
++                "static_value_present" -> boolean(condition.staticValue.nonEmpty),
++                "static_value" -> boolean(condition.staticValue.getOrElse(false)),
++                "metadata" -> metadata(
++                  s"${conditional.identity}.condition_$index",
++                  condition.source
++                )
++              ),
++              regions = Vector(renderBlock(branch.body)),
++              source = condition.source.orElse(branch.body.source)
++            )
++          val otherwise = conditional.otherwise.toVector.map: body =>
++            operation(
++              "nodal.analog_if_arm",
++              attributes = Vector(
++                "arm_id" -> quoted(body.identity),
++                "owner" -> quoted(program.owner),
++                "is_else" -> boolean(true),
++                "stage" -> quoted("else"),
++                "condition_value" -> quoted(""),
++                "condition_kind" -> quoted(""),
++                "condition_dimension" -> quoted(""),
++                "condition_reads" -> array(Vector.empty),
++                "static_value_present" -> boolean(false),
++                "static_value" -> boolean(false),
++                "metadata" -> metadata(body.identity, body.source)
++              ),
++              regions = Vector(renderBlock(body)),
++              source = body.source
++            )
++          Vector(
++            operation(
++              "nodal.analog_if",
++              attributes = Vector(
++                "statement_id" -> quoted(conditional.identity),
++                "owner" -> quoted(program.owner),
++                "metadata" -> metadata(conditional.identity, conditional.source)
++              ),
++              regions = Vector((arms ++ otherwise).mkString("\n")),
++              source = conditional.source
++            )
++          )
++
++        case selection: AnalogControlFlowRuntime.Statement.CaseStatement =>
++          val selector = selection.selector
++          val arms = selection.arms.map: arm =>
++            operation(
++              "nodal.analog_case_arm",
++              attributes = Vector(
++                "arm_id" -> quoted(arm.body.identity),
++                "owner" -> quoted(program.owner),
++                "is_default" -> boolean(false),
++                "labels" -> array(arm.labels.map(value => quoted(label(value)))),
++                "metadata" -> metadata(arm.body.identity, arm.body.source)
++              ),
++              regions = Vector(renderBlock(arm.body)),
++              source = arm.body.source
++            )
++          val default = selection.default.toVector.map: body =>
++            operation(
++              "nodal.analog_case_arm",
++              attributes = Vector(
++                "arm_id" -> quoted(body.identity),
++                "owner" -> quoted(program.owner),
++                "is_default" -> boolean(true),
++                "labels" -> array(Vector.empty),
++                "metadata" -> metadata(body.identity, body.source)
++              ),
++              regions = Vector(renderBlock(body)),
++              source = body.source
++            )
++          val staticSelector = selector.staticValue.map(label).getOrElse("")
++          Vector(
++            operation(
++              "nodal.analog_case",
++              attributes = Vector(
++                "statement_id" -> quoted(selection.identity),
++                "owner" -> quoted(program.owner),
++                "selector_value" -> quoted(selector.rendered),
++                "selector_kind" -> quoted(selector.kind.label),
++                "selector_dimension" -> quoted(canonicalDimension(selector.dimension)),
++                "selector_reads" -> array(selector.reads.toVector.sorted.map(quoted)),
++                "static_value_present" -> boolean(selector.staticValue.nonEmpty),
++                "static_value" -> quoted(staticSelector),
++                "metadata" -> metadata(
++                  s"${selection.identity}.selector",
++                  selector.source.orElse(selection.source)
++                )
++              ),
++              regions = Vector((arms ++ default).mkString("\n")),
++              source = selection.source.orElse(selector.source)
++            )
++          )
++
++        case loop: AnalogControlFlowRuntime.Statement.Loop =>
++          val stage = loop.stage match
++            case AnalogControlFlowRuntime.LoopStage.Static => "static"
++            case AnalogControlFlowRuntime.LoopStage.RuntimeBounded => "runtime"
++          val bound = expressions.get(loop.identity -> "loop-bound")
++          Vector(
++            operation(
++              "nodal.analog_loop",
++              attributes = Vector(
++                "statement_id" -> quoted(loop.identity),
++                "owner" -> quoted(program.owner),
++                "stage" -> quoted(stage),
++                "minimum_iterations" -> integer(loop.minimumIterations),
++                "maximum_iterations" -> integer(loop.maximumIterations),
++                "bound_value" -> quoted(
++                  bound.map(_.value.rendered).getOrElse(
++                    loop.staticTripCount.map(_.toString).getOrElse("")
++                  )
++                ),
++                "bound_kind" -> quoted(loop.boundValueType.kind.label),
++                "bound_dimension" -> quoted(
++                  canonicalDimension(loop.boundValueType.dimension)
++                ),
++                "bound_reads" -> array(loop.boundReads.toVector.sorted.map(quoted)),
++                "static_trip_count_present" -> boolean(loop.staticTripCount.nonEmpty),
++                "static_trip_count" -> integer(loop.staticTripCount.getOrElse(0)),
++                "metadata" -> metadata(loop.identity, loop.source)
++              ),
++              regions = Vector(renderBlock(loop.body)),
++              source = loop.source
++            )
++          )
++
++        case value: AnalogControlFlowRuntime.Statement.Break =>
++          Vector(
++            operation(
++              "nodal.analog_break",
++              attributes = Vector(
++                "statement_id" -> quoted(value.identity),
++                "owner" -> quoted(program.owner),
++                "metadata" -> metadata(value.identity, value.source)
++              ),
++              source = value.source
++            )
++          )
++
++        case value: AnalogControlFlowRuntime.Statement.Continue =>
++          Vector(
++            operation(
++              "nodal.analog_continue",
++              attributes = Vector(
++                "statement_id" -> quoted(value.identity),
++                "owner" -> quoted(program.owner),
++                "metadata" -> metadata(value.identity, value.source)
++              ),
++              source = value.source
++            )
++          )
++      .mkString("\n")
++
++    val allSources =
++      (program.variables.flatMap(_.source) ++
++        program.controlExpressions.flatMap(_.source) ++
++        control.root.source.toVector)
++        .sortBy(value => (value.file, value.line, value.column))
++    val procedureSource = allSources.headOption
++    val procedurePath = s"${program.owner}.analogProcedure"
++    val procedure = operation(
++      "nodal.analog_procedure",
++      attributes = Vector(
++        "owner" -> quoted(program.owner),
++        "metadata" -> metadata(procedurePath, procedureSource)
++      ),
++      regions = Vector(renderBlock(control.root)),
++      source = procedureSource
++    )
++    val analogPath = s"${program.owner}.analogProcedural"
++    operation(
++      "nodal.analog",
++      attributes = Vector("metadata" -> metadata(analogPath, procedureSource)),
++      regions = Vector(procedure),
++      source = procedureSource
++    )
++
+   private sealed trait Event:
+     def source: Option[AnalogProceduralRuntime.Source]
+     def category: Int
+diff --git a/docs/implementation/increment34-analog-control-flow.md b/docs/implementation/increment34-analog-control-flow.md
+index cc06ba0..114ae08 100644
+--- a/docs/implementation/increment34-analog-control-flow.md
++++ b/docs/implementation/increment34-analog-control-flow.md
+@@ -119,12 +119,16 @@ evidence and must be rerun.
+ ## Tranche 34c — bridge and native IR
+ 
+ - [x] Add the control-flow tree to the canonical `ConstructionSnapshot`.
+-- [ ] Add first-class Nodal conditional, case, loop, break, continue, scope, and
++- [x] Add first-class Nodal conditional, case, loop, break, continue, scope, and
+   declaration operations and regions.
+-- [ ] Serialize the Scala statement tree without flattening branches.
+-- [ ] Implement native structural and branch-sensitive verifiers.
+-- [ ] Add direct-MLIR positive and negative fixtures.
+-- [ ] Preserve complete source-map coverage through parse and print.
++- [x] Serialize the Scala statement tree without flattening branches.
++- [x] Implement native structural verifiers and stable compiler-boundary
++  diagnostics.
++- [x] Add direct-MLIR positive and negative fixtures.
++- [x] Preserve structured source-map coverage through native parse and print.
++- [x] Retain deterministic control-node and typed-expression inventories.
++- [x] Implement native branch-sensitive definite-assignment dataflow over the
++  first-class regions, including unmatched selection and bounded-loop exits.
+ 
+ ## Tranche 34d — closure
+ 
+@@ -138,15 +142,16 @@ evidence and must be rerun.
+ 
+ ## Current boundaries
+ 
+-The canonical construction checkpoint does not yet:
++The structured compiler-IR checkpoint now preserves the canonical Scala tree
++through deterministic textual MLIR, first-class native regions, structural
++verification, stable diagnostics, direct positive and negative fixtures, and
++source-correlated native parse/print.
+ 
+-- expose structured control flow through Scala-to-MLIR serialization;
+-- add first-class `nodal.analog_if`, `nodal.analog_case`,
+-  `nodal.analog_loop`, `nodal.analog_break`, or
+-  `nodal.analog_continue` operations;
+-- add native compiler verifiers or direct-MLIR fixtures;
+-- serialize complete control-flow source maps or reproducibility evidence;
+-- legalize or emit procedural target HDL.
++It does not yet:
++
++- complete the exact-head inherited workflow matrix and fresh review;
++- legalize or emit procedural target HDL;
++- form solver equations, residuals, or executable analysis schedules.
+ 
+ Those items remain active Increment 34 work, not evidence gaps claimed as
+ complete behavior.
+diff --git a/scripts/check_increment34.py b/scripts/check_increment34.py
+index c2d33e5..47938c3 100755
+--- a/scripts/check_increment34.py
++++ b/scripts/check_increment34.py
+@@ -60,6 +60,22 @@ def check_repository(root: Path) -> None:
+     )
+     readme = read_text(root, "tests/compiler/fixtures/increment34/README.md")
+     workflow = read_text(root, ".github/workflows/increment-34-analog-control-flow.yml")
++    bridge = read_text(
++        root, "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala"
++    )
++    bridge_tests = read_text(
++        root, "core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala"
++    )
++    native_ops = read_text(
++        root, "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td"
++    )
++    native_verifier = read_text(
++        root, "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
++    )
++    native_cmake = read_text(root, "core/compiler/test/CMakeLists.txt")
++    native_fixture = read_text(
++        root, "core/compiler/test/IR/analog-control-flow.mlir"
++    )
+     predecessor = load_json(root, "tests/compiler/fixtures/increment33/manifest.json")
+     manifest = load_json(root, "tests/compiler/fixtures/increment34/manifest.json")
+ 
+@@ -87,7 +103,7 @@ def check_repository(root: Path) -> None:
+         manifest.get("schema") == 1
+         and manifest.get("increment") == 34
+         and manifest.get("status") == "implementation-in-progress"
+-        and manifest.get("tranche") == "34c-canonical-snapshot",
++        and manifest.get("tranche") == "34c-native-branch-sensitive-dataflow",
+         "NODAL-INC34-008: manifest identity or tranche is invalid",
+     )
+ 
+@@ -115,6 +131,13 @@ def check_repository(root: Path) -> None:
+         "block_local_declarations",
+         "unbounded_loop_rejection",
+         "structured_flattening_prohibited",
++        "typed_control_expression_payloads",
++        "structured_ir_regions",
++        "structured_source_map_entries",
++        "native_continue_exit_intersection",
++        "native_zero_trip_loop_conservative",
++        "native_missing_default_intersection",
++        "native_missing_else_intersection",
+     ):
+         require(
+             semantics.get(key) is True,
+@@ -133,18 +156,19 @@ def check_repository(root: Path) -> None:
+         "owner_remapped_source_snapshot",
+         "increment33_flat_snapshot_separation",
+         "canonical_construction_snapshot",
+-    ):
+-        require(
+-            integration.get(key) is True,
+-            f"NODAL-INC34-013: completed integration {key!r} is not recorded",
+-        )
+-    for key in (
+         "scala_to_mlir",
+         "first_class_compiler_ir",
+         "native_ir_verification",
+         "compiler_boundary_diagnostics",
+         "source_map_roundtrip",
+         "authoritative_serialization",
++        "native_branch_sensitive_definite_assignment",
++    ):
++        require(
++            integration.get(key) is True,
++            f"NODAL-INC34-013: completed integration {key!r} is not recorded",
++        )
++    for key in (
+         "target_lowering",
+     ):
+         require(
+@@ -155,8 +179,10 @@ def check_repository(root: Path) -> None:
+     require(isinstance(deferred, list), "NODAL-INC34-015: deferred must be a list")
+     require(
+         "canonical-construction-snapshot" not in deferred
+-        and "scala-to-mlir-control-flow" in deferred
+-        and "native-control-flow-ir" in deferred,
++        and "scala-to-mlir-control-flow" not in deferred
++        and "native-control-flow-ir" not in deferred
++        and "source-map-roundtrip" not in deferred
++        and "native-branch-sensitive-definite-assignment" not in deferred,
+         "NODAL-INC34-015: completed and deferred integration boundaries are inconsistent",
+     )
+     require(manifest.get("validation") is None, "NODAL-INC34-015: validation must remain null")
+@@ -383,6 +409,9 @@ def check_repository(root: Path) -> None:
+             "nodal.increment34fixture.Increment34RuntimeCheck",
+             "nodal.increment34fixture.Increment34ConstructionCheck",
+             "./nodal core scala",
++            "Build and validate structured native control flow",
++            "./nodal core native",
++            "analog-control-flow.mlir",
+             "./nodal style check",
+             "contents: read",
+         ),
+@@ -390,6 +419,138 @@ def check_repository(root: Path) -> None:
+         "permanent workflow",
+     )
+ 
++
++    require_tokens(
++        bridge,
++        (
++            "private def structuredInventory",
++            "private def structuredSourceMapEntries",
++            "private def renderStructuredProgram",
++            '"nodal.analog_if"',
++            '"nodal.analog_if_arm"',
++            '"nodal.analog_case"',
++            '"nodal.analog_case_arm"',
++            '"nodal.analog_loop"',
++            '"nodal.analog_break"',
++            '"nodal.analog_continue"',
++            'expression.identity == value.identity',
++            'expression.role == "assignment-value"',
++        ),
++        "NODAL-INC34-030",
++        "structured Scala-to-MLIR bridge",
++    )
++    require_tokens(
++        bridge_tests,
++        (
++            "BridgeStructuredProceduralTop",
++            "structured analog control flow serializes without flattening",
++            'first.text.contains("\\"nodal.analog_if\\"")',
++            'first.text.contains("\\"nodal.analog_case\\"")',
++            'first.text.contains("\\"nodal.analog_loop\\"")',
++            "program.assignments.isEmpty",
++            "program.controlFlow.nonEmpty",
++        ),
++        "NODAL-INC34-031",
++        "structured bridge tests",
++    )
++    require_tokens(
++        native_ops,
++        (
++            'Nodal_Op<"analog_if"',
++            'Nodal_Op<"analog_if_arm"',
++            'Nodal_Op<"analog_case"',
++            'Nodal_Op<"analog_case_arm"',
++            'Nodal_Op<"analog_loop"',
++            'Nodal_Op<"analog_break"',
++            'Nodal_Op<"analog_continue"',
++        ),
++        "NODAL-INC34-032",
++        "first-class native control-flow operations",
++    )
++    require_tokens(
++        native_verifier,
++        (
++            "verifyStructuredProceduralBlock",
++            "LogicalResult nodal::AnalogIfOp::verify()",
++            "LogicalResult nodal::AnalogCaseOp::verify()",
++            "LogicalResult nodal::AnalogLoopOp::verify()",
++            "LogicalResult nodal::AnalogBreakOp::verify()",
++            "LogicalResult nodal::AnalogContinueOp::verify()",
++            '"NODAL-ANALOG-034-002"',
++            '"NODAL-ANALOG-034-006"',
++            '"NODAL-ANALOG-034-008"',
++            '"NODAL-ANALOG-034-010"',
++            '"NODAL-ANALOG-034-011"',
++        ),
++        "NODAL-INC34-033",
++        "native structured control-flow verification",
++    )
++    require_tokens(
++        native_cmake,
++        (
++            "nodal.native.analog-control-flow-roundtrip",
++            "nodal.native.analog-control-flow-source-map-roundtrip",
++            "analog-control-flow-invalid-${_fixture}.mlir",
++        ),
++        "NODAL-INC34-034",
++        "native structured control-flow tests",
++    )
++    require_tokens(
++        native_fixture,
++        (
++            '"nodal.analog_if"',
++            '"nodal.analog_if_arm"',
++            '"nodal.analog_case"',
++            '"nodal.analog_case_arm"',
++            '"nodal.analog_loop"',
++            '"nodal.analog_break"',
++            '"nodal.analog_continue"',
++            "AnalogControlFlow.scala",
++        ),
++        "NODAL-INC34-035",
++        "native structured control-flow fixture",
++    )
++
++
++    require_tokens(
++        native_verifier,
++        (
++            "verifyStructuredDefiniteAssignment",
++            "analyzeStructuredIf",
++            "analyzeStructuredCase",
++            "analyzeStructuredLoop",
++            "intersectStructuredStates",
++            '"NODAL-ANALOG-034-004"',
++            "body->continues.begin()",
++            "minimum.getInt() == 0",
++            "unmatchedReachable",
++        ),
++        "NODAL-INC34-036",
++        "native branch-sensitive definite assignment",
++    )
++    for fixture in (
++        "missing-else",
++        "missing-default",
++        "zero-trip",
++        "continue-path",
++    ):
++        require(
++            (root / f"core/compiler/test/IR/analog-control-flow-invalid-{fixture}.mlir").is_file(),
++            f"NODAL-INC34-037: missing native dataflow fixture {fixture}",
++        )
++    require_tokens(
++        native_cmake,
++        (
++            "analog-control-flow-rejects-missing-else",
++            "missing-default",
++            "zero-trip",
++            "continue-path",
++            "NODAL-ANALOG-034-004",
++        ),
++        "NODAL-INC34-038",
++        "native branch-sensitive dataflow tests",
++    )
++
+     forbidden_names = {
+         "_inc34_materializer.yml",
+         "_increment34_materializer.yml",
+diff --git a/tests/compiler/fixtures/increment34/README.md b/tests/compiler/fixtures/increment34/README.md
+index 5a2baaa..e5ea077 100644
+--- a/tests/compiler/fixtures/increment34/README.md
++++ b/tests/compiler/fixtures/increment34/README.md
+@@ -25,6 +25,16 @@ The source-semantic runtime and executable witnesses prove:
+ - structured assignments are not published as a false flat Increment 33
+   assignment sequence.
+ 
+-The checkpoint intentionally does not add canonical construction-snapshot
+-serialization, native MLIR control-flow operations, a solver, or Verilog-A and
+-Verilog-AMS lowering. Those remain active tranches of Increment 34.
++The structured compiler-IR checkpoint additionally proves that the canonical
++tree is serialized without flattening into first-class `nodal.analog_if`,
++`nodal.analog_case`, `nodal.analog_loop`, `nodal.analog_break`, and
++`nodal.analog_continue` operations; native structural diagnostics reject
++invalid condition dimensions, duplicate labels, unbounded loops, and loop
++exits outside the nearest runtime-bounded loop; and source locations survive
++native parse and generic print.
++
++Native branch-sensitive definite-assignment now intersects all reachable
++normal, unmatched, `break`, and `continue` exits and rejects reachable reads
++after incomplete conditionals, cases, and zero-minimum loops. Solver
++construction, target legalization, and Verilog-A or Verilog-AMS procedural
++lowering remain deferred to their owning increments.
+diff --git a/tests/compiler/fixtures/increment34/manifest.json b/tests/compiler/fixtures/increment34/manifest.json
+index 1bcdabe..faf33f3 100644
+--- a/tests/compiler/fixtures/increment34/manifest.json
++++ b/tests/compiler/fixtures/increment34/manifest.json
+@@ -19,7 +19,7 @@
+   "scala_witness": "examples/continuousTimeApi/src/nodal/increment34fixture/Increment34RuntimeCheck.scala",
+   "public_construction_witness": "examples/continuousTimeApi/src/nodal/increment34fixture/Increment34ConstructionCheck.scala",
+   "public_construction_tests": "core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala",
+-  "tranche": "34c-canonical-snapshot",
++  "tranche": "34c-native-branch-sensitive-dataflow",
+   "semantics": {
+     "structured_statement_tree": true,
+     "stable_control_identities": true,
+@@ -44,29 +44,30 @@
+     "structured_flattening_prohibited": true,
+     "typed_control_expression_payloads": true,
+     "case_fallthrough": false,
+-    "labeled_loop_exit": false
++    "labeled_loop_exit": false,
++    "structured_ir_regions": true,
++    "structured_source_map_entries": true,
++    "native_missing_else_intersection": true,
++    "native_missing_default_intersection": true,
++    "native_zero_trip_loop_conservative": true,
++    "native_continue_exit_intersection": true
+   },
+   "integration": {
+     "public_construction_kernel": true,
+     "owner_remapped_source_snapshot": true,
+     "increment33_flat_snapshot_separation": true,
+     "canonical_construction_snapshot": true,
+-    "scala_to_mlir": false,
+-    "first_class_compiler_ir": false,
+-    "native_ir_verification": false,
+-    "compiler_boundary_diagnostics": false,
+-    "source_map_roundtrip": false,
+-    "authoritative_serialization": false,
+-    "target_lowering": false
++    "scala_to_mlir": true,
++    "first_class_compiler_ir": true,
++    "native_ir_verification": true,
++    "compiler_boundary_diagnostics": true,
++    "source_map_roundtrip": true,
++    "authoritative_serialization": true,
++    "target_lowering": false,
++    "native_branch_sensitive_definite_assignment": true
+   },
+   "stable_diagnostic_prefix": "NODAL-ANALOG-034-",
+   "deferred": [
+-    "scala-to-mlir-control-flow",
+-    "native-control-flow-ir",
+-    "native-control-flow-verification",
+-    "compiler-boundary-control-flow-diagnostics",
+-    "source-map-roundtrip",
+-    "reproducibility-serialization",
+     "labeled-loop-exits",
+     "case-patterns-and-ranges",
+     "residual-dae-construction",
+@@ -75,5 +76,10 @@
+     "verilog-a-lowering",
+     "verilog-ams-lowering"
+   ],
+-  "validation": null
++  "validation": null,
++  "bridge_renderer": "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala",
++  "bridge_tests": "core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala",
++  "native_ops": "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td",
++  "native_verifier": "core/compiler/lib/Dialect/Nodal/NodalOps.cpp",
++  "native_fixture": "core/compiler/test/IR/analog-control-flow.mlir"
+ }
+diff --git a/tests/compiler/test_increment34.py b/tests/compiler/test_increment34.py
+index b7569d8..c80b8fd 100644
+--- a/tests/compiler/test_increment34.py
++++ b/tests/compiler/test_increment34.py
+@@ -24,6 +24,16 @@ REQUIRED = (
+     "core/scala/api/src/nodal/AnalogProceduralConstruction.scala",
+     "core/scala/api/src/nodal/AnalogProceduralRuntime.scala",
+     "core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala",
++    "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala",
++    "core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala",
++    "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td",
++    "core/compiler/lib/Dialect/Nodal/NodalOps.cpp",
++    "core/compiler/test/CMakeLists.txt",
++    "core/compiler/test/IR/analog-control-flow.mlir",
++    "core/compiler/test/IR/analog-control-flow-invalid-missing-else.mlir",
++    "core/compiler/test/IR/analog-control-flow-invalid-missing-default.mlir",
++    "core/compiler/test/IR/analog-control-flow-invalid-zero-trip.mlir",
++    "core/compiler/test/IR/analog-control-flow-invalid-continue-path.mlir",
+     "docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md",
+     "docs/implementation/increment34-analog-control-flow.md",
+     "docs/roadmap/nodal-development-todo.md",
+@@ -288,10 +298,83 @@ class Increment34ContractTests(unittest.TestCase):
+         with temporary:
+             path = root / "tests/compiler/fixtures/increment34/manifest.json"
+             document = json.loads(path.read_text(encoding="utf-8"))
+-            document["integration"]["first_class_compiler_ir"] = True
++            document["integration"]["target_lowering"] = True
+             path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+             self.assert_rejected(root, "must not be claimed complete")
+ 
++
++    def test_structured_bridge_mutation_is_rejected(self) -> None:
++        temporary, root = self.fixture()
++        with temporary:
++            path = root / "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala"
++            path.write_text(
++                path.read_text(encoding="utf-8").replace(
++                    '"nodal.analog_if"',
++                    '"nodal.removed_analog_if"',
++                    1,
++                ),
++                encoding="utf-8",
++            )
++            self.assert_rejected(root, "structured Scala-to-MLIR bridge is missing")
++
++    def test_native_control_op_mutation_is_rejected(self) -> None:
++        temporary, root = self.fixture()
++        with temporary:
++            path = root / "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td"
++            path.write_text(
++                path.read_text(encoding="utf-8").replace(
++                    'Nodal_Op<"analog_loop"',
++                    'Nodal_Op<"removed_analog_loop"',
++                    1,
++                ),
++                encoding="utf-8",
++            )
++            self.assert_rejected(root, "first-class native control-flow operations is missing")
++
++    def test_native_verifier_mutation_is_rejected(self) -> None:
++        temporary, root = self.fixture()
++        with temporary:
++            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
++            path.write_text(
++                path.read_text(encoding="utf-8").replace(
++                    "LogicalResult nodal::AnalogBreakOp::verify()",
++                    "LogicalResult nodal::RemovedAnalogBreakOp::verify()",
++                    1,
++                ),
++                encoding="utf-8",
++            )
++            self.assert_rejected(root, "native structured control-flow verification is missing")
++
++
++
++    def test_native_dataflow_manifest_mutation_is_rejected(self) -> None:
++        temporary, root = self.fixture()
++        with temporary:
++            path = root / "tests/compiler/fixtures/increment34/manifest.json"
++            document = json.loads(path.read_text(encoding="utf-8"))
++            document["integration"][
++                "native_branch_sensitive_definite_assignment"
++            ] = False
++            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
++            self.assert_rejected(
++                root,
++                "completed integration 'native_branch_sensitive_definite_assignment' is not recorded",
++            )
++
++    def test_native_branch_intersection_mutation_is_rejected(self) -> None:
++        temporary, root = self.fixture()
++        with temporary:
++            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
++            path.write_text(
++                path.read_text(encoding="utf-8").replace(
++                    "body->continues.begin()",
++                    "body->breaks.begin()",
++                    1,
++                ),
++                encoding="utf-8",
++            )
++            self.assert_rejected(root, "native branch-sensitive definite assignment is missing")
++
+     def test_write_enabled_workflow_is_rejected(self) -> None:
+         temporary, root = self.fixture()
+         with temporary:

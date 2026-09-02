@@ -44,6 +44,7 @@ def check_repository(root: Path) -> None:
     implementation = read_text(root, "docs/implementation/increment34-analog-control-flow.md")
     public_api = read_text(root, "core/scala/api/src/nodal/AnalogControlFlowApi.scala")
     runtime = read_text(root, "core/scala/api/src/nodal/AnalogControlFlowRuntime.scala")
+    procedural_runtime = read_text(root, "core/scala/api/src/nodal/AnalogProceduralRuntime.scala")
     construction = read_text(root, "core/scala/api/src/nodal/AnalogControlFlowConstruction.scala")
     procedural = read_text(root, "core/scala/api/src/nodal/AnalogProceduralConstruction.scala")
     construction_tests = read_text(
@@ -86,7 +87,7 @@ def check_repository(root: Path) -> None:
         manifest.get("schema") == 1
         and manifest.get("increment") == 34
         and manifest.get("status") == "implementation-in-progress"
-        and manifest.get("tranche") == "34b-public-construction",
+        and manifest.get("tranche") == "34c-canonical-snapshot",
         "NODAL-INC34-008: manifest identity or tranche is invalid",
     )
 
@@ -131,13 +132,13 @@ def check_repository(root: Path) -> None:
         "public_construction_kernel",
         "owner_remapped_source_snapshot",
         "increment33_flat_snapshot_separation",
+        "canonical_construction_snapshot",
     ):
         require(
             integration.get(key) is True,
             f"NODAL-INC34-013: completed integration {key!r} is not recorded",
         )
     for key in (
-        "canonical_construction_snapshot",
         "scala_to_mlir",
         "first_class_compiler_ir",
         "native_ir_verification",
@@ -150,6 +151,14 @@ def check_repository(root: Path) -> None:
             integration.get(key) is False,
             f"NODAL-INC34-014: unfinished integration {key!r} must not be claimed complete",
         )
+    deferred = manifest.get("deferred")
+    require(isinstance(deferred, list), "NODAL-INC34-015: deferred must be a list")
+    require(
+        "canonical-construction-snapshot" not in deferred
+        and "scala-to-mlir-control-flow" in deferred
+        and "native-control-flow-ir" in deferred,
+        "NODAL-INC34-015: completed and deferred integration boundaries are inconsistent",
+    )
     require(manifest.get("validation") is None, "NODAL-INC34-015: validation must remain null")
 
     require_tokens(
@@ -176,6 +185,7 @@ def check_repository(root: Path) -> None:
             "Tranche 34b — public construction",
             "Tranche 34c — bridge and native IR",
             "runtime branch from being misrepresented",
+            "- [x] Add the control-flow tree to the canonical `ConstructionSnapshot`.",
         ),
         "NODAL-INC34-017",
         "implementation record",
@@ -232,6 +242,16 @@ def check_repository(root: Path) -> None:
         "Scala control-flow runtime",
     )
     require_tokens(
+        procedural_runtime,
+        (
+            "Canonical procedural program retained by the construction snapshot",
+            "controlFlow: Option[AnalogControlFlowConstruction.Snapshot] = None",
+            "Structured Increment 34 programs",
+        ),
+        "NODAL-INC34-020",
+        "canonical procedural snapshot",
+    )
+    require_tokens(
         construction,
         (
             "private[nodal] object AnalogControlFlowConstruction",
@@ -248,7 +268,7 @@ def check_repository(root: Path) -> None:
             "AnalogControlFlowRuntime.analyze(frozen)",
             "private[nodal] object AnalogControlFlowInspection",
         ),
-        "NODAL-INC34-020",
+        "NODAL-INC34-021",
         "control-flow construction bridge",
     )
     require_tokens(
@@ -265,15 +285,17 @@ def check_repository(root: Path) -> None:
             "def runtimeLoop",
             "def breakStatement",
             "def continueStatement",
+            "controlFlow = snapshot.controlFlow.map(_.remapOwner(owner))",
+            "module.controlSnapshot",
+            "retained.controlFlow.nonEmpty",
             "def controlSnapshots",
         ),
-        "NODAL-INC34-021",
+        "NODAL-INC34-022",
         "procedural construction integration",
     )
     require(
-        "snapshot.copy(assignments = Vector.empty)" in procedural
-        or ("module.variableRecords.toVector" in procedural and "Vector.empty" in procedural),
-        "NODAL-INC34-021: procedural construction integration is missing flat-snapshot separation",
+        "module.variableRecords.toVector" in procedural and "Vector.empty" in procedural,
+        "NODAL-INC34-022: procedural construction integration is missing flat-snapshot separation",
     )
     require_tokens(
         construction_tests,
@@ -288,8 +310,9 @@ def check_repository(root: Path) -> None:
             "child control-flow snapshot resolves to the authored instance path",
             "structured branch assignment rejects a foreign component variable",
             "assignments.isEmpty",
+            "controlFlow.contains(snapshot)",
         ),
-        "NODAL-INC34-022",
+        "NODAL-INC34-023",
         "public construction tests",
     )
     require_tokens(
@@ -309,7 +332,7 @@ def check_repository(root: Path) -> None:
             "loop_definite=",
             "static_definite=",
         ),
-        "NODAL-INC34-023",
+        "NODAL-INC34-024",
         "source-semantic witness",
     )
     require_tokens(
@@ -324,7 +347,7 @@ def check_repository(root: Path) -> None:
             "public_conditional_snapshots=",
             "public_case_snapshots=",
         ),
-        "NODAL-INC34-024",
+        "NODAL-INC34-025",
         "public construction witness",
     )
     require_tokens(
@@ -338,7 +361,7 @@ def check_repository(root: Path) -> None:
             "authored instance paths",
             "false flat Increment 33",
         ),
-        "NODAL-INC34-025",
+        "NODAL-INC34-026",
         "fixture README",
     )
 
@@ -346,13 +369,14 @@ def check_repository(root: Path) -> None:
         "contents: write" not in workflow
         and "pull-requests: write" not in workflow
         and "actions: write" not in workflow,
-        "NODAL-INC34-026: Increment 34 workflow must remain read-only",
+        "NODAL-INC34-027: Increment 34 workflow must remain read-only",
     )
     require_tokens(
         workflow,
         (
             "name: Increment 34 Analog Control Flow",
             "actions/checkout@v6",
+            "core/scala/api/src/nodal/AnalogProceduralRuntime.scala",
             "python3 scripts/check_increment33.py",
             "python3 scripts/check_increment34.py",
             "test_increment34.py",
@@ -362,7 +386,7 @@ def check_repository(root: Path) -> None:
             "./nodal style check",
             "contents: read",
         ),
-        "NODAL-INC34-027",
+        "NODAL-INC34-028",
         "permanent workflow",
     )
 
@@ -376,7 +400,7 @@ def check_repository(root: Path) -> None:
             continue
         require(
             path.name not in forbidden_names,
-            f"NODAL-INC34-028: temporary/generated files remain: {path}",
+            f"NODAL-INC34-029: temporary/generated files remain: {path}",
         )
 
 

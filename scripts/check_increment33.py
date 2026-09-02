@@ -365,6 +365,14 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         "NODAL-INC33-068: nested compound-dimension regression is missing",
     )
 
+    developer_commands = read_text(root, "scripts/nodal.py")
+    require(
+        '"NODAL_NODALC": str(nodalc)' in developer_commands
+        and "core.scala.testkit.test.testOnly" in developer_commands
+        and "nodal.internal.testkit.ScalaToMlirBridgeTests" in developer_commands,
+        "NODAL-INC33-069: native command does not execute Scala bridge regressions against nodalc",
+    )
+
     roadmap = read_text(root, "docs/roadmap/nodal-development-todo.md")
     require(
         "**Revision:** 1.43" in roadmap,
@@ -382,12 +390,6 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
     workflow_path = root / ".github/workflows/increment-33-analog-procedural-assignment.yml"
     if workflow_path.exists():
         workflow = workflow_path.read_text(encoding="utf-8")
-        require(
-            'NODAL_NODALC="$PWD/out/native/release/bin/nodalc"' in workflow
-            and "core.scala.testkit.test.testOnly" in workflow
-            and "ScalaToMlirBridgeTests" in workflow,
-            "NODAL-INC33-069: Scala bridge regressions do not execute against nodalc",
-        )
         require("contents: read" in workflow, "NODAL-INC33-030: workflow must be read-only")
         for forbidden in ("contents: write", "pull-requests: write", "git push", "gh pr merge"):
             require(forbidden not in workflow, f"NODAL-INC33-031: workflow contains {forbidden!r}")

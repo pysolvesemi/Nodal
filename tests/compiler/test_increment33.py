@@ -17,6 +17,7 @@ SPEC.loader.exec_module(CHECKER)
 
 REQUIRED = (
     ".github/workflows/increment-33-analog-procedural-assignment.yml",
+    "scripts/nodal.py",
     "core/compiler/diagnostics-v0.1.json",
     "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td",
     "core/compiler/include/nodal/Dialect/Nodal/NodalTypes.td",
@@ -266,18 +267,18 @@ class Increment33ContractTests(unittest.TestCase):
     def test_nodalc_bridge_boundary_mutation_is_rejected(self) -> None:
         temporary, root = self.fixture()
         with temporary:
-            path = root / ".github/workflows/increment-33-analog-procedural-assignment.yml"
+            path = root / "scripts/nodal.py"
             path.write_text(
                 path.read_text(encoding="utf-8").replace(
-                    'NODAL_NODALC="$PWD/out/native/release/bin/nodalc"',
-                    'NODAL_NODALC_DISABLED="$PWD/out/native/release/bin/nodalc"',
+                    '"NODAL_NODALC": str(nodalc)',
+                    '"NODAL_NODALC_DISABLED": str(nodalc)',
                     1,
                 ),
                 encoding="utf-8",
             )
             self.assert_rejected(
                 root,
-                "Scala bridge regressions do not execute against nodalc",
+                "native command does not execute Scala bridge regressions against nodalc",
             )
 
 

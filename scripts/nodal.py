@@ -180,6 +180,28 @@ def command_core_native(args: argparse.Namespace, root: Path, runner: Runner) ->
         ),
         env=env,
     )
+    nodalc = (
+        root
+        / "out"
+        / "native"
+        / "release"
+        / "bin"
+        / ("nodalc.exe" if os.name == "nt" else "nodalc")
+    )
+    if not nodalc.is_file():
+        raise DeveloperCommandError(
+            "NODAL-DEV-009",
+            f"native build did not produce the compiler executable: {nodalc}",
+        )
+    runner.run(
+        _mill(
+            root,
+            "-i",
+            "core.scala.testkit.test.testOnly",
+            "nodal.internal.testkit.ScalaToMlirBridgeTests",
+        ),
+        env={**env, "NODAL_NODALC": str(nodalc)},
+    )
     lint_toolchain = _managed_lint_toolchain(
         root,
         runner,

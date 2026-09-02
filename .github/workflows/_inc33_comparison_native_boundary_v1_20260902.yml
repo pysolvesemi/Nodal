@@ -1,0 +1,512 @@
+name: Increment 33 comparison and native boundary v1 2026-09-02
+
+on:
+  push:
+    branches:
+      - automation/inc33-comparison-native-boundary-v1-20260902
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact Increment 33 implementation head
+        uses: actions/checkout@v6
+        with:
+          repository: pysolvesemi/Nodal
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Require exact reviewed baseline
+        run: test "$(git rev-parse HEAD)" = eb017a0eb88a7e821acb6e424b317857eb8838fc
+
+      - name: Apply comparison-dimension and native multiplicity fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              candidate = Path(path)
+              text = candidate.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"{path}: expected one replacement anchor, found {count}: {old!r}"
+                  )
+              candidate.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+          def insert_before(path: str, marker: str, payload: str, guard: str) -> None:
+              candidate = Path(path)
+              text = candidate.read_text(encoding="utf-8")
+              if guard in text:
+                  return
+              count = text.count(marker)
+              if count != 1:
+                  raise SystemExit(
+                      f"{path}: expected one insertion anchor, found {count}: {marker!r}"
+                  )
+              candidate.write_text(text.replace(marker, payload + marker, 1), encoding="utf-8")
+
+
+          construction_kernel = "core/scala/api/src/nodal/ElaborationConstructionKernel.scala"
+          insert_before(
+              construction_kernel,
+              "  def inferAnalogDimension(value: Any): AnalogDimension = value match\n",
+              "  private def inferBooleanExpressionDimension(\n"
+              "      expression: KernelExpr[?]\n"
+              "  ): AnalogDimension =\n"
+              "    expression.operation match\n"
+              "      case Some(\"real_gt\") | Some(\"real_ge\") | Some(\"real_lt\") |\n"
+              "          Some(\"real_le\") =>\n"
+              "        expression.operands match\n"
+              "          case Vector(left, right) =>\n"
+              "            val compatible = inferAnalogDimension(left)\n"
+              "              .compatibleAdd(inferAnalogDimension(right))\n"
+              "            if compatible.isUnknown then AnalogDimension.Unknown\n"
+              "            else AnalogDimension.Dimensionless\n"
+              "          case _ => AnalogDimension.Unknown\n"
+              "      case Some(\"bool_and\") | Some(\"bool_or\") =>\n"
+              "        val dimensions = expression.operands.map(inferAnalogDimension)\n"
+              "        if dimensions.nonEmpty && dimensions.forall(isDimensionlessBoolean) then\n"
+              "          AnalogDimension.Dimensionless\n"
+              "        else AnalogDimension.Unknown\n"
+              "      case Some(\"bool_not\") =>\n"
+              "        expression.operands match\n"
+              "          case Vector(operand)\n"
+              "              if isDimensionlessBoolean(inferAnalogDimension(operand)) =>\n"
+              "            AnalogDimension.Dimensionless\n"
+              "          case _ => AnalogDimension.Unknown\n"
+              "      case _ => AnalogDimension.Dimensionless\n\n"
+              "  private def isDimensionlessBoolean(dimension: AnalogDimension): Boolean =\n"
+              "    !dimension.isUnknown && dimension.powers.isEmpty\n\n",
+              "private def inferBooleanExpressionDimension",
+          )
+          replace_once(
+              construction_kernel,
+              "    case expression: KernelExpr[?]\n"
+              "        if expression.resultType.exists(_.kind == \"Bool\") =>\n"
+              "      AnalogDimension.Dimensionless\n",
+              "    case expression: KernelExpr[?]\n"
+              "        if expression.resultType.exists(_.kind == \"Bool\") =>\n"
+              "      inferBooleanExpressionDimension(expression)\n",
+          )
+
+          construction_tests = (
+              "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala"
+          )
+          insert_before(
+              construction_tests,
+              "final class PublicAnalogCompoundVoltage extends Module:\n",
+              "final class PublicAnalogIncompatibleComparisonDimensions extends Module:\n"
+              "  val voltage: Variable[Real] = variable(Real, 0.0.V)\n"
+              "  val current: Variable[Real] = variable(Real, 0.0.A)\n"
+              "  val flag: Variable[Bool] = variable(Bool, false.B)\n\n"
+              "  analogProcedure:\n"
+              "    flag := (voltage > current) && true.B\n\n",
+              "final class PublicAnalogIncompatibleComparisonDimensions",
+          )
+          insert_before(
+              construction_tests,
+              '    test("public Boolean comparison assignment retains result type and dimension"):\n',
+              '    test("public comparison rejects incompatible operand dimensions through Boolean logic"):\n'
+              "      val failure = scala.util\n"
+              "        .Try(\n"
+              "          ConstructionKernel.inspect(\n"
+              "            new PublicAnalogIncompatibleComparisonDimensions\n"
+              "          )\n"
+              "        )\n"
+              "        .failed\n"
+              "        .get\n"
+              "        .asInstanceOf[AnalogProceduralRuntime.Failure]\n"
+              '      assert(failure.diagnostic.code == "NODAL-ANALOG-033-013")\n\n',
+              "public comparison rejects incompatible operand dimensions through Boolean logic",
+          )
+
+          nodal_ops = "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
+          insert_before(
+              nodal_ops,
+              "LogicalResult verifyAnalogProcedure(Operation *operation) {\n",
+              "LogicalResult verifySingleTopLevelProcedurePerModule(Operation *module) {\n"
+              "  bool seenProcedure = false;\n"
+              "  Operation *duplicateProcedure = nullptr;\n"
+              "  module->walk([&](nodal::AnalogProcedureOp procedure) {\n"
+              "    auto parentModule = procedure->getParentOfType<nodal::ModuleOp>();\n"
+              "    if (!parentModule || parentModule.getOperation() != module ||\n"
+              "        procedure->getParentOfType<nodal::AnalogProcedureOp>())\n"
+              "      return;\n"
+              "    if (seenProcedure && !duplicateProcedure)\n"
+              "      duplicateProcedure = procedure.getOperation();\n"
+              "    seenProcedure = true;\n"
+              "  });\n"
+              "  if (!duplicateProcedure)\n"
+              "    return success();\n"
+              "  return nodal::emitMappedFailure(\n"
+              "      duplicateProcedure, \"NODAL-ANALOG-033-020\",\n"
+              "      \"multiple analog procedural regions per component are deferred\");\n"
+              "}\n\n",
+              "verifySingleTopLevelProcedurePerModule",
+          )
+          replace_once(
+              nodal_ops,
+              "LogicalResult nodal::ModuleOp::verify() {\n"
+              "  if (failed(requireText(getOperation(), mlir::SymbolTable::getSymbolAttrName(), \"module symbol\")))\n"
+              "    return failure();\n"
+              "  return requireSingleBlock(getOperation());\n"
+              "}\n",
+              "LogicalResult nodal::ModuleOp::verify() {\n"
+              "  if (failed(requireText(getOperation(), mlir::SymbolTable::getSymbolAttrName(), \"module symbol\")))\n"
+              "    return failure();\n"
+              "  if (failed(requireSingleBlock(getOperation())))\n"
+              "    return failure();\n"
+              "  return verifySingleTopLevelProcedurePerModule(getOperation());\n"
+              "}\n",
+          )
+
+          multiple_fixture_path = Path(
+              "core/compiler/test/IR/analog-procedural-invalid-multiple.mlir"
+          )
+          if multiple_fixture_path.exists():
+              raise SystemExit("multiple-procedure fixture unexpectedly already exists")
+          multiple_fixture_path.write_text(
+              "module {\n"
+              "  \"nodal.module\"() <{metadata = {}, sym_name = \"MultipleProcedures\"}> ({\n"
+              "  ^bb0:\n"
+              "    \"nodal.analog\"() <{metadata = {semantic_path = \"MultipleProcedures.first\"}}> ({\n"
+              "    ^bb0:\n"
+              "      \"nodal.analog_procedure\"() <{metadata = {}, owner = \"MultipleProcedures\"}> ({\n"
+              "      ^bb0:\n"
+              "      }) : () -> ()\n"
+              "    }) : () -> ()\n"
+              "    \"nodal.analog\"() <{metadata = {semantic_path = \"MultipleProcedures.second\"}}> ({\n"
+              "    ^bb0:\n"
+              "      \"nodal.analog_procedure\"() <{metadata = {}, owner = \"MultipleProcedures\"}> ({\n"
+              "      ^bb0:\n"
+              "      }) : () -> ()\n"
+              "    }) : () -> ()\n"
+              "  }) : () -> ()\n"
+              "}\n",
+              encoding="utf-8",
+          )
+
+          cmake = "core/compiler/test/CMakeLists.txt"
+          insert_before(
+              cmake,
+              "add_custom_target(check-nodal-native\n",
+              "add_test(\n"
+              "  NAME nodal.native.analog-procedural-rejects-multiple\n"
+              "  COMMAND \"${CMAKE_COMMAND}\"\n"
+              "    \"-DNODALC=$<TARGET_FILE:nodalc>\"\n"
+              "    \"-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-procedural-invalid-multiple.mlir\"\n"
+              "    \"-DDIAGNOSTIC=NODAL-ANALOG-033-020\"\n"
+              "    -P \"${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake\"\n"
+              ")\n\n",
+              "nodal.native.analog-procedural-rejects-multiple",
+          )
+
+          manifest_path = Path("tests/compiler/fixtures/increment33/manifest.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          semantics = manifest["semantics"]
+          semantics["comparison_operand_dimension_checking"] = True
+          semantics["single_procedural_region_per_component"] = True
+          deferred = manifest["deferred"]
+          if "multiple-procedural-regions" not in deferred:
+              deferred.insert(deferred.index("branch-sensitive-definite-assignment"), "multiple-procedural-regions")
+          repairs = manifest["review_repairs"]
+          repairs["comparison_operand_dimension_validation"] = True
+          repairs["native_multiple_procedure_boundary"] = True
+          repairs["focused_validation_run"] = int(os.environ["GITHUB_RUN_ID"])
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+          readme = "tests/compiler/fixtures/increment33/README.md"
+          replace_once(
+              readme,
+              "- assigned physical dimensions must match;\n"
+              "- guards are Boolean and dimensionless;\n",
+              "- assigned physical dimensions must match;\n"
+              "- comparison operands must have compatible physical dimensions;\n"
+              "- guards are Boolean and dimensionless;\n",
+          )
+          replace_once(
+              readme,
+              "- declarations and assignments require an active procedural region.\n",
+              "- declarations and assignments require an active procedural region;\n"
+              "- a component cannot contain multiple top-level procedural regions.\n",
+          )
+
+          design_gate = "docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md"
+          replace_once(
+              design_gate,
+              "regions. First-class multi-region construction snapshots are deferred.\n",
+              "regions. The native module verifier enforces the same one-region boundary across\n"
+              "all analog regions belonging to a component, including directly authored MLIR.\n"
+              "First-class multi-region construction snapshots are deferred.\n",
+          )
+          replace_once(
+              design_gate,
+              "same physical dimension as the variable. Integer-to-real promotion is legal;\n"
+              "real-to-integer narrowing is not implicit.\n",
+              "same physical dimension as the variable. Boolean comparisons validate that their\n"
+              "real operands have compatible physical dimensions before producing a dimensionless\n"
+              "Boolean result, and invalid comparison dimensions remain invalid through nested\n"
+              "Boolean logic. Integer-to-real promotion is legal; real-to-integer narrowing is not\n"
+              "implicit.\n",
+          )
+
+          implementation = (
+              "docs/implementation/increment33-analog-variables-procedural-assignment.md"
+          )
+          replace_once(
+              implementation,
+              "- physical-dimension compatibility;\n"
+              "- dimensionless Boolean guards;\n",
+              "- physical-dimension compatibility, including comparison operands;\n"
+              "- dimensionless Boolean guards;\n",
+          )
+          replace_once(
+              implementation,
+              "Six P1 review findings were corrected before acceptance:\n",
+              "Eight P1 review findings were corrected before acceptance:\n",
+          )
+          replace_once(
+              implementation,
+              "6. Boolean-producing expressions retain an explicit `Bool` result descriptor and\n"
+              "   dimensionless result dimension. Comparisons and nested Boolean logic therefore\n"
+              "   assign legally to Boolean variables while still retaining their operand reads.\n",
+              "6. Boolean-producing expressions retain an explicit `Bool` result descriptor and\n"
+              "   dimensionless result dimension. Comparisons and nested Boolean logic therefore\n"
+              "   assign legally to Boolean variables while still retaining their operand reads.\n"
+              "7. Real comparison operands are recursively dimension-checked before a Boolean\n"
+              "   result is accepted. Incompatible comparisons such as `voltage > current` remain\n"
+              "   invalid through surrounding Boolean logic and fail with `NODAL-ANALOG-033-013`.\n"
+              "8. The native module verifier counts top-level procedural regions across every\n"
+              "   analog region in one component and rejects a second region with\n"
+              "   `NODAL-ANALOG-033-020`, including MLIR authored outside the Scala frontend.\n",
+          )
+          replace_once(
+              implementation,
+              "Boolean comparison result typing, repeated top-level procedural-region rejection,\n"
+              "and native `nodalc` parsing of the resulting first-class procedural MLIR.\n",
+              "Boolean comparison result typing and operand-dimension rejection, repeated\n"
+              "top-level procedural-region rejection in both construction and native MLIR, and\n"
+              "native `nodalc` parsing of the resulting first-class procedural MLIR.\n",
+          )
+          replace_once(
+              implementation,
+              "| Lexical and component ownership | `nodal.analog_procedure` and `nodal.analog_scope` verifier | owner, nested-region, scope, and cross-component tests |\n",
+              "| Lexical and component ownership | `nodal.analog_procedure` and `nodal.analog_scope` verifier | owner, nested-region, scope, and cross-component tests |\n"
+              "| Procedural-region multiplicity | module-wide native count plus recorder guard | exact `NODAL-ANALOG-033-020` fixture with procedures in separate analog regions |\n",
+          )
+          replace_once(
+              implementation,
+              "| Type, dimension, guard, and analysis legality | native recursive procedural verifier | dedicated invalid MLIR fixtures, bare and compound dimension regressions, and Scala semantic tests |\n",
+              "| Type, dimension, guard, and analysis legality | native recursive procedural verifier and typed construction inference | dedicated invalid MLIR fixtures, bare/compound/comparison dimension regressions, and Scala semantic tests |\n",
+          )
+
+          checker = "scripts/check_increment33.py"
+          replace_once(
+              checker,
+              '        "straight_line_read_before_write",\n'
+              '        "physical_dimension_checking",\n',
+              '        "straight_line_read_before_write",\n'
+              '        "single_procedural_region_per_component",\n'
+              '        "physical_dimension_checking",\n'
+              '        "comparison_operand_dimension_checking",\n',
+          )
+          replace_once(
+              checker,
+              '        "analog-control-flow",\n'
+              '        "residual-dae-construction",\n',
+              '        "analog-control-flow",\n'
+              '        "multiple-procedural-regions",\n'
+              '        "residual-dae-construction",\n',
+          )
+          replace_once(
+              checker,
+              '    invalid_variable_kind = read_text(\n'
+              '        root, "core/compiler/test/IR/analog-procedural-invalid-variable-kind.mlir"\n'
+              '    )\n',
+              '    invalid_variable_kind = read_text(\n'
+              '        root, "core/compiler/test/IR/analog-procedural-invalid-variable-kind.mlir"\n'
+              '    )\n'
+              '    invalid_multiple_procedures = read_text(\n'
+              '        root, "core/compiler/test/IR/analog-procedural-invalid-multiple.mlir"\n'
+              '    )\n',
+          )
+          replace_once(
+              checker,
+              '        "verifyAnalogProcedure",\n'
+              '        "NODAL-ANALOG-033-011",\n',
+              '        "verifyAnalogProcedure",\n'
+              '        "verifySingleTopLevelProcedurePerModule",\n'
+              '        "NODAL-ANALOG-033-020",\n'
+              '        "NODAL-ANALOG-033-011",\n',
+          )
+          replace_once(
+              checker,
+              "    require(\n"
+              "        'expression.resultType.exists(_.kind == \"Bool\")' in construction_kernel,\n"
+              "        \"NODAL-INC33-071: Boolean expression dimension is not forced dimensionless\",\n"
+              "    )\n",
+              "    require(\n"
+              "        'expression.resultType.exists(_.kind == \"Bool\")' in construction_kernel\n"
+              "        and \"inferBooleanExpressionDimension(expression)\" in construction_kernel,\n"
+              "        \"NODAL-INC33-071: Boolean expression dimension inference is not delegated\",\n"
+              "    )\n",
+          )
+          insert_before(
+              checker,
+              '    developer_commands = read_text(root, "scripts/nodal.py")\n',
+              "    require(\n"
+              "        \"private def inferBooleanExpressionDimension\" in construction_kernel\n"
+              "        and '\"real_gt\"' in construction_kernel\n"
+              "        and \"compatibleAdd(inferAnalogDimension(right))\" in construction_kernel\n"
+              "        and '\"bool_and\"' in construction_kernel\n"
+              "        and \"dimensions.forall(isDimensionlessBoolean)\" in construction_kernel,\n"
+              "        \"NODAL-INC33-075: Boolean comparison operand dimensions are not validated recursively\",\n"
+              "    )\n"
+              "    require(\n"
+              "        \"public comparison rejects incompatible operand dimensions through Boolean logic\"\n"
+              "        in construction_tests,\n"
+              "        \"NODAL-INC33-076: incompatible comparison-dimension regression is missing\",\n"
+              "    )\n"
+              "    require(\n"
+              "        \"verifySingleTopLevelProcedurePerModule\" in operation_verifiers\n"
+              "        and \"getParentOfType<nodal::AnalogProcedureOp>\" in operation_verifiers\n"
+              "        and \"return verifySingleTopLevelProcedurePerModule(getOperation())\"\n"
+              "        in operation_verifiers,\n"
+              "        \"NODAL-INC33-077: native module boundary does not reject multiple top-level procedures\",\n"
+              "    )\n"
+              "    require(\n"
+              "        invalid_multiple_procedures.count('\"nodal.analog\"') == 2\n"
+              "        and invalid_multiple_procedures.count('\"nodal.analog_procedure\"') == 2\n"
+              "        and \"nodal.native.analog-procedural-rejects-multiple\" in compiler_tests\n"
+              "        and \"analog-procedural-invalid-multiple.mlir\" in compiler_tests\n"
+              "        and '\"-DDIAGNOSTIC=NODAL-ANALOG-033-020\"' in compiler_tests,\n"
+              "        \"NODAL-INC33-078: exact native multiple-procedure diagnostic fixture is missing\",\n"
+              "    )\n"
+              "    require(\n"
+              "        semantics.get(\"comparison_operand_dimension_checking\") is True\n"
+              "        and semantics.get(\"single_procedural_region_per_component\") is True\n"
+              "        and \"multiple-procedural-regions\" in deferred,\n"
+              "        \"NODAL-INC33-079: manifest does not retain final review boundaries\",\n"
+              "    )\n\n",
+              "NODAL-INC33-075",
+          )
+
+          mutation_tests = "tests/compiler/test_increment33.py"
+          replace_once(
+              mutation_tests,
+              '    "core/compiler/test/IR/analog-procedural-invalid-variable-kind.mlir",\n',
+              '    "core/compiler/test/IR/analog-procedural-invalid-variable-kind.mlir",\n'
+              '    "core/compiler/test/IR/analog-procedural-invalid-multiple.mlir",\n',
+          )
+          insert_before(
+              mutation_tests,
+              '\n\nif __name__ == "__main__":\n',
+              "\n"
+              "    def test_comparison_operand_dimension_validation_mutation_is_rejected(self) -> None:\n"
+              "        temporary, root = self.fixture()\n"
+              "        with temporary:\n"
+              '            path = root / "core/scala/api/src/nodal/ElaborationConstructionKernel.scala"\n'
+              "            path.write_text(\n"
+              "                path.read_text(encoding=\"utf-8\").replace(\n"
+              '                    "inferBooleanExpressionDimension(expression)",\n'
+              '                    "AnalogDimension.Dimensionless",\n'
+              "                    1,\n"
+              "                ),\n"
+              '                encoding="utf-8",\n'
+              "            )\n"
+              "            self.assert_rejected(root, \"Boolean expression dimension inference is not delegated\")\n"
+              "\n"
+              "    def test_native_multiple_procedure_boundary_mutation_is_rejected(self) -> None:\n"
+              "        temporary, root = self.fixture()\n"
+              "        with temporary:\n"
+              '            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"\n'
+              "            path.write_text(\n"
+              "                path.read_text(encoding=\"utf-8\").replace(\n"
+              '                    "return verifySingleTopLevelProcedurePerModule(getOperation());",\n'
+              '                    "return success();",\n'
+              "                    1,\n"
+              "                ),\n"
+              '                encoding="utf-8",\n'
+              "            )\n"
+              "            self.assert_rejected(root, \"native module boundary does not reject\")\n"
+              "\n"
+              "    def test_native_multiple_procedure_fixture_mutation_is_rejected(self) -> None:\n"
+              "        temporary, root = self.fixture()\n"
+              "        with temporary:\n"
+              '            path = root / "core/compiler/test/CMakeLists.txt"\n'
+              "            path.write_text(\n"
+              "                path.read_text(encoding=\"utf-8\").replace(\n"
+              '                    \'"-DDIAGNOSTIC=NODAL-ANALOG-033-020"\',\n'
+              '                    \'"-DDIAGNOSTIC=NODAL-ANALOG-033-999"\',\n'
+              "                    1,\n"
+              "                ),\n"
+              '                encoding="utf-8",\n'
+              "            )\n"
+              "            self.assert_rejected(root, \"exact native multiple-procedure diagnostic fixture\")\n",
+              "test_comparison_operand_dimension_validation_mutation_is_rejected",
+          )
+          PY
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format and run complete affected acceptance suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Publish validated fixes to PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+            core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
+            core/compiler/lib/Dialect/Nodal/NodalOps.cpp \
+            core/compiler/test/CMakeLists.txt \
+            core/compiler/test/IR/analog-procedural-invalid-multiple.mlir \
+            tests/compiler/fixtures/increment33/manifest.json \
+            tests/compiler/fixtures/increment33/README.md \
+            docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md \
+            docs/implementation/increment33-analog-variables-procedural-assignment.md \
+            scripts/check_increment33.py \
+            tests/compiler/test_increment33.py
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m 'fix(increment33): validate comparisons and native procedure count'
+          git fetch --no-tags origin increment/33-analog-variables-procedural-assignment-v5
+          test "$(git rev-parse FETCH_HEAD)" = eb017a0eb88a7e821acb6e424b317857eb8838fc
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

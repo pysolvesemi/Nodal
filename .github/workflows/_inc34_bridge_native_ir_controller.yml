@@ -1,0 +1,127 @@
+name: Increment 34 Bridge Native IR Controller
+
+on:
+  push:
+    branches:
+      - automation/inc34-bridge-native-ir-controller-v1
+    paths:
+      - '.github/workflows/_inc34_bridge_native_ir_controller.yml'
+      - 'automation/inc34/materializer.b64.*'
+
+permissions:
+  contents: write
+
+jobs:
+  materialize-validate-stage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 80
+    env:
+      EXPECTED_HEAD: 604dd738c6acff5191d6f851155d3fcad103531f
+      FEATURE_BRANCH: increment/34-analog-control-flow-v1
+      STAGING_BRANCH: automation/inc34-bridge-native-ir-staged-v1
+    steps:
+      - name: Check out controller payload
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-bridge-native-ir-controller-v1
+          path: controller
+          fetch-depth: 1
+
+      - name: Check out exact Increment 34 implementation head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          path: repo
+          fetch-depth: 0
+
+      - name: Guard the feature lease and reconstruct materializer
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_head=$(git -C repo ls-remote origin "refs/heads/${FEATURE_BRANCH}" | awk '{print $1}')
+          test "${remote_head}" = "${EXPECTED_HEAD}"
+          cat controller/automation/inc34/materializer.b64.* > /tmp/increment34_bridge_ir.py.gz.b64
+          echo '0d1ab633c9e2a41397921c6fe2e897b13088363fa72bdc78e70b5c501b88c51d  /tmp/increment34_bridge_ir.py.gz.b64' | sha256sum -c -
+          base64 --decode /tmp/increment34_bridge_ir.py.gz.b64 | gzip --decompress > /tmp/increment34_bridge_ir.py
+          echo '47f53e855521c9b968a842a2e6cf1571724ecea29079f82e01db514ed80bada4  /tmp/increment34_bridge_ir.py' | sha256sum -c -
+          python3 -m py_compile /tmp/increment34_bridge_ir.py
+
+      - name: Materialize structured bridge and native IR tranche
+        run: python3 /tmp/increment34_bridge_ir.py --root repo
+
+      - name: Format Scala sources deterministically
+        working-directory: repo
+        run: ./mill -i mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources
+
+      - name: Validate Increment 33 and Increment 34 contracts
+        working-directory: repo
+        run: |
+          python3 scripts/check_increment33.py
+          python3 scripts/check_increment34.py
+          python3 -m unittest discover -s tests/compiler -p 'test_increment34.py'
+
+      - name: Compile and test Scala core
+        working-directory: repo
+        run: ./nodal core scala
+
+      - name: Install locked native and lint toolchains
+        working-directory: repo
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Configure build lint and test native core
+        working-directory: repo
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate repository style and patch hygiene
+        working-directory: repo
+        run: |
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+          test -z "$(git status --porcelain | grep -E '(^|/)(out|build|__pycache__)(/|$)|[.]pyc$' || true)"
+
+      - name: Commit validated staging checkpoint
+        working-directory: repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$(git status --porcelain)"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            core/compiler/include/nodal/Dialect/Nodal/NodalOps.td \
+            core/compiler/lib/Dialect/Nodal/NodalOps.cpp \
+            core/compiler/test/CMakeLists.txt \
+            core/compiler/test/IR/analog-control-flow.mlir \
+            core/compiler/test/IR/analog-control-flow-invalid-break.mlir \
+            core/compiler/test/IR/analog-control-flow-invalid-condition.mlir \
+            core/compiler/test/IR/analog-control-flow-invalid-case-label.mlir \
+            core/scala/bridge/src/nodal/bridge/AnalogControlFlowMlir.scala \
+            core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala \
+            core/scala/testkit/test/src/nodal/AnalogControlFlowMlirTests.scala \
+            docs/implementation/increment34-analog-control-flow.md \
+            scripts/check_increment34.py \
+            tests/compiler/fixtures/increment34/README.md \
+            tests/compiler/fixtures/increment34/manifest.json \
+            tests/compiler/test_increment34.py
+          git diff --cached --check
+          git commit -m 'feat(increment34): add structured bridge and native control IR'
+          staged_head=$(git rev-parse HEAD)
+          printf '%s\n' "${staged_head}" | tee /tmp/increment34-staged-head.txt
+          git push origin "HEAD:refs/heads/${STAGING_BRANCH}"
+
+      - name: Upload exact staging evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: increment34-bridge-native-ir-staging
+          path: /tmp/increment34-staged-head.txt
+          if-no-files-found: error
+          retention-days: 7

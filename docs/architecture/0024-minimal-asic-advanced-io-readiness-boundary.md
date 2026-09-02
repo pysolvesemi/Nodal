@@ -1,7 +1,8 @@
 # ADR 0024 — Minimal ASIC and advanced-I/O readiness boundary
 
 **Status:** Accepted  
-**Date:** 2026-08-23
+**Date:** 2026-08-23  
+**Amended:** 2026-09-02
 
 ## Context
 
@@ -53,7 +54,7 @@ Nodal must preserve stable identities and capability metadata for future:
 - isolation, level shifting, retention, and always-on intent;
 - DVFS or operating-point association.
 
-Foundation does **not** implement UPF generation/import, power-aware simulation, isolation/retention insertion, or power analysis.
+Foundation does **not** implement UPF generation/import, power-aware simulation, isolation/retention insertion, or power analysis. Those implementations are owned by the separately numbered [Low-Power Architecture and Power Intent Track](../roadmap/low-power-power-intent-v0.1-plan.md) after the Foundation barrier opens.
 
 ### 4. DFT/DFx seam
 
@@ -77,21 +78,25 @@ Foundation does **not** parse every format, create custom analog layout, run DRC
 
 Actual implementation is deliberately deferred to independently numbered tracks:
 
-1. **ASIC Productivity and Sign-off Track**, numbering from Increment 1.
-2. **Memory Interface IP and PHY Track**, numbering from Increment 1.
+1. **Low-Power Architecture and Power Intent Track**, numbering from Increment 1 and blocked until every Foundation increment is complete.
+2. **ASIC Productivity and Sign-off Track**, numbering from Increment 1 after its own roadmap is approved.
+3. **Memory Interface IP and PHY Track**, numbering from Increment 1 after its own roadmap is approved.
 
-Memory standards such as DFI and LPDDR remain versioned libraries/profiles in the dependent track rather than core language semantics.
+Memory standards such as DFI and LPDDR remain versioned libraries/profiles in the dependent track rather than core language semantics. The Low-Power track owns canonical Power Intent IR, UPF interoperability, reusable low-power primitives, power-aware verification semantics, and technology mappings; the ASIC track owns physical implementation and sign-off.
 
 ## Barrier policy
 
 This ADR is fulfilled in Foundation by recording and validating these identities, ownership boundaries, capability seams, and track contracts. No SDC, UPF, DFT, custom-layout, PHY-training, or LPDDR implementation is required to release the Foundation barrier.
 
-If later research discovers a genuinely new **core semantic identity** that cannot be expressed through these seams, that identity returns to Foundation. Vendor implementations, protocol libraries, device-specific algorithms, and sign-off adapters do not.
+The Low-Power roadmap may be researched and maintained before the barrier, but none of its implementation increments may start or merge until every Foundation increment is complete. Its completion is not a Foundation exit criterion.
+
+If later research discovers a genuinely new **core semantic identity** that cannot be expressed through these seams, that identity returns to Foundation. Vendor implementations, protocol libraries, device-specific algorithms, UPF profiles, reusable low-power components, and sign-off adapters do not.
 
 ## Consequences
 
-- Foundation remains small and can complete without waiting for full ASIC or LPDDR implementation.
+- Foundation remains small and can complete without waiting for full ASIC, low-power, or LPDDR implementation.
+- Low-power architecture and power intent have a dedicated implementation track rather than being hidden inside physical-design or memory-interface work.
 - Complex controller/PHY development can evolve in dependent tracks without hard-coding vendor syntax into Nodal core.
 - Source, constraint, power, DFT, hard-macro, verification, and generated-artifact correlation can share stable semantic identities.
 - A behavioral AMS PHY model is not confused with a process-specific hardened PHY implementation.
-- Future ASIC and memory-interface work may add APIs through their own design gates without reopening the core architecture unless a new core semantic category is truly required.
+- Future low-power, ASIC, and memory-interface work may add APIs through their own design gates without reopening the core architecture unless a new core semantic category is truly required.

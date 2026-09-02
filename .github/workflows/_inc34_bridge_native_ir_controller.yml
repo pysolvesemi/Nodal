@@ -44,6 +44,18 @@ jobs:
           echo '0d1ab633c9e2a41397921c6fe2e897b13088363fa72bdc78e70b5c501b88c51d  /tmp/increment34_bridge_ir.py.gz.b64' | sha256sum -c -
           base64 --decode /tmp/increment34_bridge_ir.py.gz.b64 | gzip --decompress > /tmp/increment34_bridge_ir.py
           echo '47f53e855521c9b968a842a2e6cf1571724ecea29079f82e01db514ed80bada4  /tmp/increment34_bridge_ir.py' | sha256sum -c -
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("/tmp/increment34_bridge_ir.py")
+          text = path.read_text(encoding="utf-8")
+          old = 'path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")'
+          new = 'path.write_text(json.dumps(document, indent=2) + "\\n", encoding="utf-8")'
+          if text.count(old) != 1:
+              raise SystemExit("Increment 34 materializer repair target was not unique")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          echo 'b81f1d8b036721d53196536740c2f0ef81a5af866843a6a0ac77a8f212b1a016  /tmp/increment34_bridge_ir.py' | sha256sum -c -
           python3 -m py_compile /tmp/increment34_bridge_ir.py
 
       - name: Materialize structured bridge and native IR tranche

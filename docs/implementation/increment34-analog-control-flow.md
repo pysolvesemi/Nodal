@@ -74,12 +74,15 @@ Straight-line procedures continue to use the Increment 33 recorder unchanged.
 
 When an explicit Increment 34 control construct is present, the construction
 bridge retains declarations and assignments in the structured tree and removes
-assignments from the published flat Increment 33 snapshot. This prevents a
+assignments from the published flat Increment 33 sequence. This prevents a
 runtime branch from being misrepresented as one unconditional ordered sequence.
 
-Root declarations that predate the first control construct remain available in
-the Increment 33 variable inventory. Control-local declarations remain in the
-Increment 34 tree until canonical construction-snapshot integration is complete.
+Each canonical `AnalogProceduralRuntime.Snapshot` now carries one optional typed
+`controlFlow` tree. Straight-line programs leave that field empty and retain the
+Increment 33 assignment vector. Structured programs retain variables plus the
+control-flow tree and deliberately keep the flat assignment vector empty. Owner
+remapping applies to both the procedural inventory and the embedded tree,
+including authored child-instance paths.
 
 ## Tranche 34a — source-semantic foundation
 
@@ -115,7 +118,7 @@ evidence and must be rerun.
 
 ## Tranche 34c — bridge and native IR
 
-- [ ] Add the control-flow tree to the canonical `ConstructionSnapshot`.
+- [x] Add the control-flow tree to the canonical `ConstructionSnapshot`.
 - [ ] Add first-class Nodal conditional, case, loop, break, continue, scope, and
   declaration operations and regions.
 - [ ] Serialize the Scala statement tree without flattening branches.
@@ -135,10 +138,9 @@ evidence and must be rerun.
 
 ## Current boundaries
 
-The public-construction checkpoint does not yet:
+The canonical construction checkpoint does not yet:
 
-- add the control-flow tree to the canonical `ConstructionSnapshot`;
-- expose control-flow through Scala-to-MLIR serialization;
+- expose structured control flow through Scala-to-MLIR serialization;
 - add first-class `nodal.analog_if`, `nodal.analog_case`,
   `nodal.analog_loop`, `nodal.analog_break`, or
   `nodal.analog_continue` operations;
@@ -159,5 +161,5 @@ The next review should pay particular attention to:
 - structural validation of statically unreachable branches;
 - block-local declaration lifetime;
 - ownership and final instance-path remapping;
-- separation between the structured tree and Increment 33 flat snapshots;
-- future lowering of the accepted public spelling into first-class native IR.
+- canonical snapshot retention and separation from Increment 33 flat snapshots;
+- lowering of the accepted public spelling into first-class native IR.

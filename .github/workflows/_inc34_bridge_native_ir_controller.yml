@@ -49,11 +49,20 @@ jobs:
 
           path = Path("/tmp/increment34_bridge_ir.py")
           text = path.read_text(encoding="utf-8")
-          old = 'path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")'
-          new = 'path.write_text(json.dumps(document, indent=2) + "\\n", encoding="utf-8")'
-          if text.count(old) != 1:
+          lines = text.splitlines()
+          matches = [
+              index
+              for index, line in enumerate(lines)
+              if "path.write_text(json.dumps(document" in line
+          ]
+          if len(matches) != 1:
               raise SystemExit("Increment 34 materializer repair target was not unique")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          index = matches[0]
+          needle = chr(92) + "n"
+          if lines[index].count(needle) != 1:
+              raise SystemExit("Increment 34 materializer newline token was not unique")
+          lines[index] = lines[index].replace(needle, chr(92) * 2 + "n", 1)
+          path.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
           PY
           echo 'b81f1d8b036721d53196536740c2f0ef81a5af866843a6a0ac77a8f212b1a016  /tmp/increment34_bridge_ir.py' | sha256sum -c -
           python3 -m py_compile /tmp/increment34_bridge_ir.py

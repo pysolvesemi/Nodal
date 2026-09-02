@@ -10,6 +10,7 @@ on:
       - 'core/scala/api/src/nodal/AnalogControlFlowConstruction.scala'
       - 'core/scala/api/src/nodal/AnalogControlFlowRuntime.scala'
       - 'core/scala/api/src/nodal/AnalogProceduralConstruction.scala'
+      - 'core/scala/api/src/nodal/AnalogProceduralRuntime.scala'
       - 'core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala'
       - 'docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md'
       - 'docs/implementation/increment34-analog-control-flow.md'
@@ -103,7 +104,9 @@ jobs:
             ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources || true
             git --no-pager diff -- \
               core/scala/api/src/nodal/AnalogControlFlowApi.scala \
-              core/scala/api/src/nodal/AnalogProceduralConstruction.scala
+              core/scala/api/src/nodal/AnalogProceduralConstruction.scala \
+              core/scala/api/src/nodal/AnalogProceduralRuntime.scala \
+              core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala
             exit 1
           fi
           git diff --check

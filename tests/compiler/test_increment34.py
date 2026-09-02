@@ -194,8 +194,8 @@ class Increment34ContractTests(unittest.TestCase):
             path = root / "core/scala/api/src/nodal/AnalogProceduralConstruction.scala"
             path.write_text(
                 path.read_text(encoding="utf-8").replace(
-                    "snapshot.copy(assignments = Vector.empty)",
-                    "snapshot",
+                    "module.variableRecords.toVector",
+                    "module.recorder.snapshot.variables",
                     1,
                 ),
                 encoding="utf-8",

@@ -51,6 +51,24 @@ def Nodal_QuantityType : Nodal_Type<"Quantity", "quantity"> {
   let genVerifyDecl = 1;
 }
 
+def Nodal_VariableType : Nodal_Type<"Variable", "variable"> {
+  let summary = "Typed component-local analog procedural variable handle";
+  let description = [{
+    The handle retains the source scalar kind and canonical physical dimension.
+    It is storage identity, not the current value. Reads are explicit
+    `nodal.analog_variable_read` operations and writes are ordered
+    `nodal.analog_assign` statements. Unsupported scalar kinds and
+    dimensioned Boolean variables are rejected at the compiler boundary with
+    `NODAL-ANALOG-033-019`.
+  }];
+  let parameters = (ins
+    StringRefParameter<"integer, real, or boolean">:$kind,
+    StringRefParameter<"canonical physical dimension signature">:$dimension
+  );
+  let assemblyFormat = "`<` $kind `,` $dimension `>`";
+  let genVerifyDecl = 1;
+}
+
 def Nodal_ShapedType : Nodal_Type<"Shaped", "shaped"> {
   let summary = "Ranked structural value with symbolic-capable dimensions";
   let description = [{

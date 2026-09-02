@@ -102,6 +102,19 @@ LogicalResult nodal::QuantityType::verify(llvm::function_ref<InFlightDiagnostic(
   return success();
 }
 
+LogicalResult nodal::VariableType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
+                                          llvm::StringRef kind, llvm::StringRef dimension) {
+  if (kind != "integer" && kind != "real" && kind != "boolean")
+    return emitError()
+           << "NODAL-ANALOG-033-019: procedural variable kind must be integer, real, or boolean";
+  if (!nodal::isCanonicalDimensionSignature(dimension))
+    return emitError() << "NODAL-ANALOG-033-005: procedural variable dimension must be canonical";
+  if (kind == "boolean" && dimension != "1")
+    return emitError()
+           << "NODAL-ANALOG-033-019: Boolean procedural variables must be dimensionless";
+  return success();
+}
+
 LogicalResult nodal::ShapedType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
                                         llvm::StringRef dimensions, Type elementType) {
   if (!elementType)

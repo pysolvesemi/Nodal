@@ -58,9 +58,37 @@ final class BridgeTop extends Module:
     child.param(_.width, 12.U(8))
     output := input
 
+final class BridgeProceduralTop extends Module:
+  val accumulator: Variable[Real] = variable(Real, 1.0.V)
+  val scratch: Variable[Real] = variable(Real, 0.0.V)
+
+  analogProcedure:
+    scratch := accumulator
+    scratch := 2.0.V
+    when(true.B):
+      accumulator := scratch
+
+final class BridgeProceduralNestedChronology extends Module:
+  analogProcedure:
+    when(true.B):
+      val scoped: Variable[Real] = variable(Real, 0.0.V)
+      scoped := 1.0.V
+    val later: Variable[Real] = variable(Real, 0.0.V)
+    later := 2.0.V
+
+final class BridgeProceduralInitializerDependency extends Module:
+  analogProcedure:
+    val source: Variable[Real] = variable(Real)
+    source := 1.0.real
+    val sink: Variable[Real] = variable(Real, source)
+    source := sink
+
 object ScalaToMlirBridgeTests extends TestSuite:
   private def workDirectory(): Path =
     Files.createTempDirectory("nodal-bridge-test-")
+
+  private def occurrences(text: String, token: String): Int =
+    text.sliding(token.length).count(_ == token)
 
   private def delete(path: Path): Unit =
     if Files.isDirectory(path) then
@@ -89,6 +117,175 @@ object ScalaToMlirBridgeTests extends TestSuite:
       assert(first.text.contains("loc(\""))
       assert(first.text.endsWith("\n"))
       assert(!first.text.contains("\r"))
+
+    test("analog procedural IR retains order, source locations, and serialization"):
+      val first = ScalaToMlirBridge.lower(new BridgeProceduralTop)
+      val second = ScalaToMlirBridge.lower(new BridgeProceduralTop)
+
+      assert(first == second)
+      assert(first.text.contains("\"nodal.analog_procedure\""))
+      assert(first.text.contains("\"nodal.analog_variable\""))
+      assert(first.text.contains("\"nodal.analog_variable_read\""))
+      assert(first.text.contains("\"nodal.analog_assign\""))
+      assert(first.text.contains("\"nodal.analog_scope\""))
+      assert(first.text.contains("!nodal.variable<\"real\", \"voltage\">"))
+      assert(first.text.contains("nodal.bridge.analog_procedural"))
+      assert(first.text.contains("authored_order = 0 : i64"))
+      assert(first.text.contains("authored_order = 1 : i64"))
+      assert(first.text.contains("authored_order = 2 : i64"))
+      assert(first.text.contains("ScalaToMlirBridgeTests.scala"))
+      assert(first.text.contains("loc(\""))
+      assert(first.sha256 == second.sha256)
+
+      val snapshot = ConstructionKernel.inspect(new BridgeProceduralTop)
+      val program = snapshot.analogProcedural.head
+      assert(program.variables.forall(_.source.nonEmpty))
+      assert(program.assignments.forall(_.source.nonEmpty))
+      val wrapperPaths = Vector(
+        s"${program.owner}.analogProcedural",
+        s"${program.owner}.analogProcedure"
+      )
+      val variablePaths = program.variables.map(_.variable.identity)
+      val assignmentPaths = program.assignments.map(_.identity)
+      val readPaths = program.assignments.flatMap: record =>
+        record.value.reads.indices.map(index => s"${record.identity}.read_$index")
+      val authoredScopes =
+        program.variables.map(_.variable.declarationScope) ++ program.assignments.map(_.scope)
+      val scopePaths = authoredScopes
+        .flatMap: scope =>
+          val canonical =
+            if scope.headOption.contains("procedure") then scope
+            else Vector("procedure") ++ scope
+          (2 to canonical.size).map(size =>
+            s"${program.owner}.${canonical.take(size).mkString(".")}"
+          )
+        .distinct
+      val expectedSourcePaths =
+        (wrapperPaths ++ scopePaths ++ variablePaths ++ assignmentPaths ++
+          readPaths).distinct.sorted
+
+      assert(readPaths.nonEmpty)
+      assert(scopePaths.nonEmpty)
+      assert(first.text.contains("nodal.bridge.source_map"))
+      assert(
+        expectedSourcePaths.forall(path =>
+          occurrences(first.text, s"semantic_path = \"$path\"") >= 2
+        )
+      )
+
+    test("analog procedural rendering prefers authored order to provenance"):
+      val snapshot = ConstructionKernel.inspect(new BridgeProceduralTop)
+      val program = snapshot.analogProcedural.head
+      val invertedSources = program.assignments.zipWithIndex.map:
+        case (record, 0) =>
+          record.copy(
+            source = Some(AnalogProceduralRuntime.Source("z-helper.scala", 200, 1))
+          )
+        case (record, 1) =>
+          record.copy(
+            source = Some(AnalogProceduralRuntime.Source("a-helper.scala", 10, 1))
+          )
+        case (record, _) => record
+      val modified = snapshot.copy(
+        analogProcedural = snapshot.analogProcedural.updated(
+          0,
+          program.copy(assignments = invertedSources)
+        )
+      )
+
+      val document = ScalaToMlirBridge.fromSnapshot(modified)
+      val first = document.text.indexOf("authored_order = 0 : i64")
+      val second = document.text.indexOf("authored_order = 1 : i64")
+      assert(first >= 0)
+      assert(second > first)
+
+    test("nested procedural scopes preserve declaration and assignment chronology"):
+      val snapshot = ConstructionKernel.inspect(new BridgeProceduralNestedChronology)
+      val program = snapshot.analogProcedural.head
+      assert(program.variables.map(_.declarationOrder) == Vector(0, 1))
+      assert(program.assignments.map(_.authoredOrder) == Vector(0, 1))
+
+      val rendered = AnalogProceduralMlir.renderModule(snapshot, program.owner).head
+      val declaration0 = rendered.indexOf("declaration_order = 0 : i64")
+      val assignment0 = rendered.indexOf("authored_order = 0 : i64")
+      val declaration1 = rendered.indexOf("declaration_order = 1 : i64")
+      val assignment1 = rendered.indexOf("authored_order = 1 : i64")
+      assert(declaration0 >= 0)
+      assert(assignment0 > declaration0)
+      assert(declaration1 > assignment0)
+      assert(assignment1 > declaration1)
+
+      val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+
+      sys.env.get("NODAL_NODALC").foreach: executable =>
+        val directory = workDirectory()
+        try
+          val success = NativeCompilerClient
+            .run(
+              document,
+              NativeCompilerRequest(
+                executable = Path.of(executable).toAbsolutePath,
+                arguments = Vector("--mlir-print-op-generic"),
+                workingDirectory = directory,
+                timeout = Duration.ofSeconds(30)
+              )
+            )
+            .asInstanceOf[NativeCompilerSuccess]
+          assert(success.normalizedMlir.contains("authored_order"))
+          assert(success.normalizedMlir.contains("declaration_order"))
+        finally delete(directory)
+    test("initializing assignments precede dependent declarations independent of provenance"):
+      val snapshot = ConstructionKernel.inspect(new BridgeProceduralInitializerDependency)
+      val program = snapshot.analogProcedural.head
+      assert(program.variables.map(_.operationOrder) == Vector(0, 2))
+      assert(program.assignments.map(_.operationOrder) == Vector(1, 3))
+
+      val invertedVariables = program.variables.map: record =>
+        val source =
+          if record.operationOrder == 0 then
+            AnalogProceduralRuntime.Source("z-helper.scala", 400, 1)
+          else AnalogProceduralRuntime.Source("a-helper.scala", 1, 1)
+        record.copy(source = Some(source))
+      val invertedAssignments = program.assignments.map: record =>
+        val source =
+          if record.operationOrder == 1 then
+            AnalogProceduralRuntime.Source("z-helper.scala", 300, 1)
+          else AnalogProceduralRuntime.Source("a-helper.scala", 2, 1)
+        record.copy(source = Some(source))
+      val inverted = program.copy(
+        variables = invertedVariables,
+        assignments = invertedAssignments
+      )
+      val modified = snapshot.copy(
+        analogProcedural = snapshot.analogProcedural.updated(0, inverted)
+      )
+      val rendered = AnalogProceduralMlir.renderModule(modified, program.owner).head
+      val declaration0 = rendered.indexOf("operation_order = 0 : i64")
+      val assignment0 = rendered.indexOf("operation_order = 1 : i64")
+      val declaration1 = rendered.indexOf("operation_order = 2 : i64")
+      val assignment1 = rendered.indexOf("operation_order = 3 : i64")
+      assert(declaration0 >= 0)
+      assert(assignment0 > declaration0)
+      assert(declaration1 > assignment0)
+      assert(assignment1 > declaration1)
+
+      val document = ScalaToMlirBridge.fromSnapshot(modified)
+      sys.env.get("NODAL_NODALC").foreach: executable =>
+        val directory = workDirectory()
+        try
+          val success = NativeCompilerClient
+            .run(
+              document,
+              NativeCompilerRequest(
+                executable = Path.of(executable).toAbsolutePath,
+                arguments = Vector("--mlir-print-op-generic"),
+                workingDirectory = directory,
+                timeout = Duration.ofSeconds(30)
+              )
+            )
+            .asInstanceOf[NativeCompilerSuccess]
+          assert(success.normalizedMlir.contains("operation_order"))
+        finally delete(directory)
 
     test("snapshot insertion order does not affect the bridge"):
       val snapshot = ConstructionKernel.inspect(new BridgeTop)
@@ -195,6 +392,32 @@ object ScalaToMlirBridgeTests extends TestSuite:
         try assert(!entries.iterator().hasNext)
         finally entries.close()
       finally delete(directory)
+
+    test("locked nodalc parses procedural bridge MLIR when configured"):
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          val directory = workDirectory()
+          try
+            val document = ScalaToMlirBridge.lower(new BridgeProceduralTop)
+            val success = NativeCompilerClient
+              .run(
+                document,
+                NativeCompilerRequest(
+                  executable = Path.of(executable).toAbsolutePath,
+                  arguments = Vector("--mlir-print-op-generic"),
+                  workingDirectory = directory,
+                  timeout = Duration.ofSeconds(30)
+                )
+              )
+              .asInstanceOf[NativeCompilerSuccess]
+            assert(success.normalizedMlir.contains("\"nodal.analog_variable\""))
+            assert(success.normalizedMlir.contains("\"nodal.analog_variable_read\""))
+            assert(success.normalizedMlir.contains("\"nodal.analog_assign\""))
+            assert(success.normalizedMlir.contains("nodal.bridge.source_map"))
+            assert(success.normalizedMlir.contains(".read_0"))
+            assert(success.normalizedMlir.contains("authored_order"))
+          finally delete(directory)
 
     test("locked nodalc parses and normalizes bridge MLIR when configured"):
       sys.env.get("NODAL_NODALC") match

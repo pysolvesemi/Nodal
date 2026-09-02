@@ -50,6 +50,17 @@ class RecordingRunner:
             stdout = json.dumps(
                 {"found": str(self.lint_toolchain) if self.lint_toolchain else None, "rejected": {}}
             )
+        if normalized[:2] == ("cmake", "--build"):
+            nodalc = (
+                self.root
+                / "out"
+                / "native"
+                / "release"
+                / "bin"
+                / ("nodalc.exe" if os.name == "nt" else "nodalc")
+            )
+            nodalc.parent.mkdir(parents=True, exist_ok=True)
+            nodalc.write_text("compiler\n", encoding="utf-8")
         return subprocess.CompletedProcess(normalized, 0, stdout=stdout, stderr="")
 
 
@@ -130,6 +141,24 @@ class UnifiedDeveloperCommandTests(unittest.TestCase):
         self.assertEqual(commands[4][-2:], ("--target", "check-nodal-native"))
         self.assertTrue(any("bootstrap_lint_toolchain.py" in " ".join(command) for command in commands))
         self.assertFalse(any("run_clang_tools.py" in " ".join(command) for command in commands))
+        nodalc = (
+            root
+            / "out"
+            / "native"
+            / "release"
+            / "bin"
+            / ("nodalc.exe" if os.name == "nt" else "nodalc")
+        )
+        bridge_calls = [
+            call
+            for call in runner.calls
+            if "ScalaToMlirBridgeTests" in " ".join(call[0])
+        ]
+        self.assertEqual(len(bridge_calls), 1)
+        self.assertEqual(bridge_calls[0][1]["NODAL_NODALC"], str(nodalc))
+        self.assertEqual(
+            bridge_calls[0][1]["NODAL_NATIVE_TOOLCHAIN"], str(native)
+        )
 
     def test_style_bootstrap_uses_pinned_installer(self) -> None:
         temporary, root = self.temporary_root()

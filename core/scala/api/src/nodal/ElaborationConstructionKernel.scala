@@ -143,6 +143,7 @@ private[nodal] final case class ConstructionSnapshot(
     analogRegions: Vector[KernelAnalogRegionSnapshot] = Vector.empty,
     analogSemantics: AnalogEquationRuntime.Snapshot =
       AnalogEquationRuntime.Snapshot(Vector.empty, Vector.empty),
+    analogProcedural: Vector[AnalogProceduralRuntime.Snapshot] = Vector.empty,
     waivers: Vector[KernelWaiverSnapshot] = Vector.empty
 )
 
@@ -233,10 +234,9 @@ private final case class AnalogDimension(
       )
 
   def compatibleAdd(other: AnalogDimension): AnalogDimension =
-    if isZero && !other.isUnknown then other.copy(isZero = other.isZero || isZero)
-    else if other.isZero && !isUnknown then copy(isZero = isZero || other.isZero)
-    else if isUnknown then other
-    else if other.isUnknown then this
+    if isUnknown || other.isUnknown then AnalogDimension.Unknown
+    else if isZero then other.copy(isZero = other.isZero || isZero)
+    else if other.isZero then copy(isZero = isZero || other.isZero)
     else if powers == other.powers then copy(isZero = isZero && other.isZero)
     else AnalogDimension.Unknown
 
@@ -447,6 +447,19 @@ private final class ConstructionSession(val options: EmitOptions):
     finally
       val removed = domainStack.remove(domainStack.size - 1)
       if removed ne domain then fail("NODAL-DOMAIN-019", "lexical domain stack is corrupt")
+
+  def currentModulePath: String = provisionalModulePath(currentModule.handle)
+
+  def captureAnalogProceduralSource: Option[AnalogProceduralRuntime.Source] =
+    semanticOrigin
+      .captureSemanticSource()
+      .map(source =>
+        AnalogProceduralRuntime.Source(
+          source.path,
+          source.line,
+          source.column
+        )
+      )
 
   def currentDomain: Option[ClockDomain] = domainStack.lastOption
 
@@ -699,9 +712,47 @@ private final class ConstructionSession(val options: EmitOptions):
       )
     leftCanonical -> rightCanonical
 
-  private def inferAnalogDimension(value: Any): AnalogDimension = value match
+  private def inferBooleanExpressionDimension(
+      expression: KernelExpr[?]
+  ): AnalogDimension =
+    expression.operation match
+      case Some("real_gt") | Some("real_ge") | Some("real_lt") |
+          Some("real_le") =>
+        expression.operands match
+          case Vector(left, right) =>
+            val compatible = inferAnalogDimension(left)
+              .compatibleAdd(inferAnalogDimension(right))
+            if compatible.isUnknown then AnalogDimension.Unknown
+            else AnalogDimension.Dimensionless
+          case _ => AnalogDimension.Unknown
+      case Some("bool_and") | Some("bool_or") =>
+        val dimensions = expression.operands.map(inferAnalogDimension)
+        if dimensions.nonEmpty && dimensions.forall(isDimensionlessBoolean) then
+          AnalogDimension.Dimensionless
+        else AnalogDimension.Unknown
+      case Some("bool_not") =>
+        expression.operands match
+          case Vector(operand)
+              if isDimensionlessBoolean(inferAnalogDimension(operand)) =>
+            AnalogDimension.Dimensionless
+          case _ => AnalogDimension.Unknown
+      case _ => AnalogDimension.Dimensionless
+
+  private def isDimensionlessBoolean(dimension: AnalogDimension): Boolean =
+    !dimension.isUnknown && dimension.powers.isEmpty
+
+  def inferAnalogDimension(value: Any): AnalogDimension = value match
     case parameter: Param[?] => inferAnalogDimension(parameter.default)
     case state: AnalogState => physicalDimension(state.dimension)
+
+    case variable: Variable[?] =>
+      AnalogProceduralConstruction
+        .registeredDimension(variable)
+        .map(namedAnalogDimension)
+        .getOrElse(AnalogDimension.Unknown)
+    case expression: KernelExpr[?]
+        if expression.resultType.exists(_.kind == "Bool") =>
+      inferBooleanExpressionDimension(expression)
     case expression: KernelExpr[?] =>
       expression.literal match
         case Some(literal) if literal.kind == "real" =>
@@ -709,7 +760,8 @@ private final class ConstructionSession(val options: EmitOptions):
             expression.operands.lift(1).collect { case value: String => value }.getOrElse("")
           val zero = literal.value.toDoubleOption.contains(0.0)
           unitDimension(unit, zero)
-        case _ =>
+        case Some(_) => AnalogDimension.Dimensionless
+        case None =>
           expression.operation match
             case Some("analog_add") | Some("analog_sub") =>
               expression.operands.map(inferAnalogDimension).reduceOption(_.compatibleAdd(_))
@@ -774,6 +826,36 @@ private final class ConstructionSession(val options: EmitOptions):
       case "temperature" => AnalogDimension.Temperature
       case _ => AnalogDimension.Unknown
 
+  private def namedAnalogDimension(value: String): AnalogDimension =
+    value.trim match
+      case "dimensionless" | "1" => AnalogDimension.Dimensionless
+      case "voltage" => AnalogDimension.Voltage
+      case "current" => AnalogDimension.Current
+      case "time" => AnalogDimension.Time
+      case "frequency" => AnalogDimension.Dimensionless.divide(AnalogDimension.Time)
+      case "temperature" => AnalogDimension.Temperature
+      case "charge" => AnalogDimension.Current.multiply(AnalogDimension.Time)
+      case "power" => AnalogDimension.Voltage.multiply(AnalogDimension.Current)
+      case "resistance" => AnalogDimension.Voltage.divide(AnalogDimension.Current)
+      case "capacitance" =>
+        AnalogDimension.Current
+          .multiply(AnalogDimension.Time)
+          .divide(AnalogDimension.Voltage)
+      case "" | "unknown" => AnalogDimension.Unknown
+      case signature =>
+        val factors = signature.split("\\*").toVector
+        val parsed = factors.map: factor =>
+          factor.split("\\^", 2).toVector match
+            case Vector(name) if name.nonEmpty => Some(name -> 1)
+            case Vector(name, exponent) if name.nonEmpty =>
+              exponent.toIntOption.filter(_ != 0).map(value => name -> value)
+            case _ => None
+        if factors.nonEmpty && parsed.forall(_.nonEmpty) then
+          val powers = parsed.flatten
+            .groupMapReduce(_._1)(_._2)(_ + _)
+            .filter(_._2 != 0)
+          AnalogDimension(powers)
+        else AnalogDimension.Unknown
   private def physicalDimension(value: PhysicalDimension): AnalogDimension =
     value.name.trim.toLowerCase match
       case "dimensionless" => AnalogDimension.Dimensionless
@@ -905,10 +987,17 @@ private final class ConstructionSession(val options: EmitOptions):
       case None => record.className
       case Some(parentHandle) =>
         val parent = records(parentHandle)
-        val instance = parent.instances.find(_.child == handle).getOrElse(
-          fail("NODAL-HIERARCHY-020", "child Module has no Instance record")
-        )
-        s"${provisionalModulePath(parentHandle)}.${record.className}_${instance.ordinal}"
+        val ordinal = parent.instances
+          .find(_.child == handle)
+          .map(_.ordinal)
+          .orElse:
+            if !record.attached && moduleStack.exists(_.handle == handle) then
+              Some(parent.instances.size)
+            else None
+          .getOrElse(
+            fail("NODAL-HIERARCHY-020", "child Module has no Instance record")
+          )
+        s"${provisionalModulePath(parentHandle)}.${record.className}_$ordinal"
 
   private def modulePath(handle: Long): String =
     semanticResult.flatMap(_.modulePaths.get(handle)).getOrElse(provisionalModulePath(handle))
@@ -1624,18 +1713,21 @@ private final class ConstructionSession(val options: EmitOptions):
     val modules = snapshots(resolved)
     val abi = interfaceAbi(resolved)
     val snapshot = ConstructionSnapshot(
-      modulePath(rootHandle),
-      modules,
-      abi,
-      resolvedNets(),
-      topology(),
-      semantic.names,
-      semantic.origins,
-      semantic.generatedNames,
-      semantic.sourceMap,
-      analogSnapshots(),
-      analogSemanticRecorder.snapshot,
-      waiverSnapshots(semantic.sourceMap)
+      root = modulePath(rootHandle),
+      modules = modules,
+      interfaceAbi = abi,
+      resolvedNets = resolvedNets(),
+      topology = topology(),
+      names = semantic.names,
+      origins = semantic.origins,
+      generatedNames = semantic.generatedNames,
+      sourceMap = semantic.sourceMap,
+      analogRegions = analogSnapshots(),
+      analogSemantics = analogSemanticRecorder.snapshot,
+      analogProcedural = AnalogProceduralConstruction.snapshots(module =>
+        modulePath(moduleHandle(module))
+      ),
+      waivers = waiverSnapshots(semantic.sourceMap)
     )
     val kind = classify(snapshot)
     val report = DesignReport(
@@ -1658,6 +1750,7 @@ private[nodal] object ConstructionKernel:
     if Current.isBound then Some(Current.get) else None
 
   private def elaborate(top: => Module, options: EmitOptions): (Emission, ConstructionSnapshot) =
+    AnalogProceduralConstruction.reset()
     val session = new ConstructionSession(options)
     var result: Option[(Emission, ConstructionSnapshot)] = None
     ScopedValue.where(Current, session).run(
@@ -1679,6 +1772,21 @@ private[nodal] object ConstructionKernel:
 
   def beginModule(module: Module): Unit = active.foreach(_.beginModule(module))
 
+  def currentModulePath: String = active
+    .map(_.currentModulePath)
+    .getOrElse(
+      scala.util.Failure[String](
+        new IllegalStateException(
+          "procedural module construction has no active transaction"
+        )
+      ).get
+    )
+
+  def captureAnalogProceduralSource: Option[AnalogProceduralRuntime.Source] =
+    active.flatMap(_.captureAnalogProceduralSource)
+
+  def analogDimension(value: Any): Option[String] =
+    active.map(_.inferAnalogDimension(value).canonical)
   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
     active.foreach(_.registerDomain(domain, kind))
 

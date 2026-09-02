@@ -1,0 +1,96 @@
+name: Increment 33 Analog Procedural Assignment
+
+on:
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - '.github/workflows/increment-33-analog-procedural-assignment.yml'
+      - 'core/compiler/**'
+      - 'core/native/include/nodal/AnalogProceduralRuntime.h'
+      - 'core/scala/api/src/nodal/AnalogProceduralConstruction.scala'
+      - 'core/scala/api/src/nodal/AnalogProceduralRuntime.scala'
+      - 'core/scala/api/src/nodal/CandidateApi.scala'
+      - 'core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala'
+      - 'core/scala/api/src/nodal/ElaborationConstructionKernel.scala'
+      - 'core/scala/bridge/src/nodal/bridge/AnalogProceduralEvidence.scala'
+      - 'core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala'
+      - 'core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala'
+      - 'core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala'
+      - 'core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala'
+      - 'docs/design-gates/NodalAnalogProceduralAssignment-DG-v0.1.md'
+      - 'docs/implementation/increment33-analog-variables-procedural-assignment.md'
+      - 'examples/continuousTimeApi/src/nodal/increment33fixture/**'
+      - 'scripts/check_increment33.py'
+      - 'tests/compiler/fixtures/increment32/manifest.json'
+      - 'tests/compiler/fixtures/increment33/**'
+      - 'tests/compiler/test_increment33.py'
+      - 'docs/roadmap/nodal-development-todo.md'
+  push:
+    branches:
+      - increment/33-analog-variables-procedural-assignment-v5
+
+permissions:
+  contents: read
+
+jobs:
+  increment-33-analog-procedural-assignment:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate predecessor and Increment 33 contracts
+        run: |
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+
+      - name: Execute Scala API and bridge suite
+        run: ./nodal core scala
+
+      - name: Execute native compiler and verifier suite
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Execute Scala source-semantic witness
+        shell: bash
+        run: |
+          report=/tmp/increment33-scala-witness.txt
+          for attempt in 1 2; do
+            rm -f "$report"
+            if ./mill -i examples.continuousTimeApi.runMain \
+              nodal.increment33fixture.Increment33RuntimeCheck \
+              "$report"; then
+              break
+            fi
+            if [ "$attempt" -eq 2 ]; then
+              exit 1
+            fi
+            echo 'Retrying Increment 33 Scala witness after a transient Mill subprocess failure.'
+          done
+          test -s "$report"
+          grep -F 'variables=4' "$report"
+          grep -F 'assignments=5' "$report"
+          grep -F 'ProceduralTop.capture,ProceduralTop.update,ProceduralTop.repeat-update' "$report"
+
+      - name: Check repository style and documentation
+        run: |
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check

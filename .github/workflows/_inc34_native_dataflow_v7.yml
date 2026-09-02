@@ -1,0 +1,80 @@
+name: Increment 34 Native Dataflow v7
+
+on:
+  push:
+    branches:
+      - automation/inc34-native-dataflow-v7
+    paths:
+      - '.github/workflows/_inc34_native_dataflow_v7.yml'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: increment-34-native-dataflow-v7
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - name: Check out controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-native-dataflow-v7
+          path: controller
+          fetch-depth: 1
+
+      - name: Check out current Increment 34 feature head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/34-analog-control-flow-v1
+          path: work
+          fetch-depth: 0
+
+      - name: Repair v6 evidence assertion and specialize runner for v7
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          controller = Path('controller')
+          contract = controller / '.github/automation/inc34_patch_native_dataflow_contract_repair.py'
+          text = contract.read_text(encoding='utf-8')
+          old = "integration 'native_branch_sensitive_definite_assignment' is not complete"
+          new = "completed integration 'native_branch_sensitive_definite_assignment' is not recorded"
+          if old not in text and new not in text:
+              raise SystemExit('v6 native-dataflow evidence assertion was not found')
+          contract.write_text(text.replace(old, new), encoding='utf-8')
+
+          runner = controller / '.github/automation/inc34_run_native_dataflow_v6.sh'
+          text = runner.read_text(encoding='utf-8')
+          text = text.replace(
+              'automation/inc34-native-dataflow-results-v6',
+              'automation/inc34-native-dataflow-results-v7',
+          )
+          text = text.replace(
+              '# Increment 34 native dataflow v6',
+              '# Increment 34 native dataflow v7',
+          )
+          text = text.replace(
+              'structured native dataflow v6',
+              'structured native dataflow v7',
+          )
+          text = text.replace(
+              'record native dataflow v6',
+              'record native dataflow v7',
+          )
+          runner.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Execute guarded Increment 34 continuation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash controller/.github/automation/inc34_run_native_dataflow_v6.sh \
+            "${GITHUB_WORKSPACE}/controller" \
+            "${GITHUB_WORKSPACE}/work" \
+            "${RUNNER_TEMP}/inc34-v7"

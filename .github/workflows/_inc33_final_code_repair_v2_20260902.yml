@@ -1,0 +1,102 @@
+name: Increment 33 final code repair v2 2026-09-02
+
+on:
+  push:
+    branches:
+      - automation/inc33-final-code-repair-v2-20260902
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact Increment 33 workflow-updated head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Require exact baseline
+        run: test "$(git rev-parse HEAD)" = b9e07e9ebafbf5fdbe0a67f288c4706fe5c53a3e
+
+      - name: Apply validated source and regression changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            automation/inc33-final-p1-repair-v4-20260902:refs/remotes/origin/inc33-final-p1-repair-v4 \
+            automation/inc33-final-p1-repair-v3-20260902:refs/remotes/origin/inc33-final-p1-repair-v3
+          python3 - <<'PY'
+          import subprocess
+          import textwrap
+
+          source = subprocess.check_output(
+              [
+                  "git",
+                  "show",
+                  "refs/remotes/origin/inc33-final-p1-repair-v4:.github/workflows/_inc33_final_p1_repair_v4_20260902.yml",
+              ],
+              text=True,
+          )
+          begin_marker = "          python3 - <<'PY'\n"
+          end_marker = "\n          PY\n\n      - name: Install pinned native and lint toolchains"
+          begin = source.index(begin_marker) + len(begin_marker)
+          end = source.index(end_marker, begin)
+          script = textwrap.dedent(source[begin:end])
+          script = script.replace(
+              '"FETCH_HEAD:.github/workflows/_inc33_final_p1_repair_v3_20260902.yml"',
+              '"refs/remotes/origin/inc33-final-p1-repair-v3:.github/workflows/_inc33_final_p1_repair_v3_20260902.yml"',
+              1,
+          )
+          exec(compile(script, "increment33-final-code-repair-v2.py", "exec"), {"__name__": "__main__"})
+          PY
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Run complete affected acceptance suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          test -x out/native/release/bin/nodalc
+          NODAL_NODALC="$PWD/out/native/release/bin/nodalc" \
+            ./mill -i core.scala.testkit.test.testOnly \
+              nodal.internal.testkit.ScalaToMlirBridgeTests
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Publish non-workflow changes to PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+            core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
+            scripts/check_increment33.py \
+            tests/compiler/test_increment33.py
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          test -z "$(git diff --name-only -- .github/workflows/increment-33-analog-procedural-assignment.yml)"
+          git commit -m 'fix(increment33): keep nested mismatches sticky and lock regressions'
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

@@ -42,6 +42,7 @@
     "block_local_declarations": true,
     "unbounded_loop_rejection": true,
     "structured_flattening_prohibited": true,
+    "typed_control_expression_payloads": true,
     "case_fallthrough": false,
     "labeled_loop_exit": false
   },

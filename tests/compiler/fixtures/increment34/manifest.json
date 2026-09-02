@@ -19,7 +19,7 @@
   "scala_witness": "examples/continuousTimeApi/src/nodal/increment34fixture/Increment34RuntimeCheck.scala",
   "public_construction_witness": "examples/continuousTimeApi/src/nodal/increment34fixture/Increment34ConstructionCheck.scala",
   "public_construction_tests": "core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala",
-  "tranche": "34b-public-construction",
+  "tranche": "34c-canonical-snapshot",
   "semantics": {
     "structured_statement_tree": true,
     "stable_control_identities": true,
@@ -49,7 +49,7 @@
     "public_construction_kernel": true,
     "owner_remapped_source_snapshot": true,
     "increment33_flat_snapshot_separation": true,
-    "canonical_construction_snapshot": false,
+    "canonical_construction_snapshot": true,
     "scala_to_mlir": false,
     "first_class_compiler_ir": false,
     "native_ir_verification": false,
@@ -60,7 +60,6 @@
   },
   "stable_diagnostic_prefix": "NODAL-ANALOG-034-",
   "deferred": [
-    "canonical-construction-snapshot",
     "scala-to-mlir-control-flow",
     "native-control-flow-ir",
     "native-control-flow-verification",

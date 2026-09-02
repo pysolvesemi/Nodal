@@ -1,0 +1,11 @@
+ .../workflows/increment-34-analog-control-flow.yml |  31 +-
+ .../include/nodal/Dialect/Nodal/NodalOps.td        | 103 +++++
+ core/compiler/lib/Dialect/Nodal/NodalOps.cpp       | 368 ++++++++++++++++
+ core/compiler/test/CMakeLists.txt                  |  36 ++
+ .../src/nodal/bridge/AnalogProceduralMlir.scala    | 486 ++++++++++++++++++++-
+ .../increment34-analog-control-flow.md             |  33 +-
+ scripts/check_increment34.py                       | 135 +++++-
+ tests/compiler/fixtures/increment34/README.md      |  14 +-
+ tests/compiler/fixtures/increment34/manifest.json  |  35 +-
+ tests/compiler/test_increment34.py                 |  51 ++-
+ 10 files changed, 1247 insertions(+), 45 deletions(-)

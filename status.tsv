@@ -1,0 +1,17 @@
+patch-python-compile	PASS	0
+patch-scala	FAIL	1
+patch-native	PASS	0
+patch-contracts	PASS	0
+patch-post-repair	FAIL	1
+scala-format	SKIP	1
+cpp-format	SKIP	1
+increment33-contract	PASS	0
+increment34-contract	FAIL	1
+increment34-mutations	FAIL	1
+diff-check	PASS	0
+scala-core	PASS	0
+native-core	SKIP	1
+runtime-witness	PASS	0
+construction-witness	PASS	0
+native-direct-roundtrip	FAIL	1
+repository-style	SKIP	1

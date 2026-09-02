@@ -1,0 +1,37 @@
+name: Increment 34 Source Bundle 20260902
+
+on:
+  push:
+    branches:
+      - automation/inc34-source-bundle-20260902-v1
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out current Increment 34 head
+        uses: actions/checkout@v6
+        with:
+          ref: 604dd738c6acff5191d6f851155d3fcad103531f
+          fetch-depth: 0
+
+      - name: Package exact source snapshot
+        shell: bash
+        run: |
+          git rev-parse HEAD > /tmp/nodal-inc34-head.txt
+          tar --exclude=.git --exclude=out --exclude=build \
+            -czf /tmp/nodal-inc34-source.tgz .
+
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodal-inc34-source-20260902
+          path: |
+            /tmp/nodal-inc34-source.tgz
+            /tmp/nodal-inc34-head.txt
+          if-no-files-found: error
+          retention-days: 1

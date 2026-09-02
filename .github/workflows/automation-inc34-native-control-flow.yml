@@ -66,19 +66,35 @@ jobs:
           python3 scripts/check_increment34.py
           python3 -m unittest discover -s tests/compiler -p 'test_increment34.py'
 
-      - name: Compile Scala API and bridge suite
+      - name: Compile Scala and execute deterministic Increment 34 suites
         working-directory: target
         shell: bash
         run: |
-          for attempt in 1 2; do
-            if ./nodal core scala; then
-              exit 0
-            fi
-            if [ "$attempt" -eq 2 ]; then
-              exit 1
-            fi
-            echo 'Retrying the unchanged inherited Scala suite after its known semantic-origin concurrency flake.'
-          done
+          ./mill -i core.scala.testkit.test.compile
+          ./mill -i core.scala.testkit.test.testOnly \
+            nodal.internal.testkit.AnalogControlFlowConstructionTests
+          ./mill -i core.scala.testkit.test.testOnly \
+            nodal.internal.testkit.AnalogProceduralConstructionTests
+          ./mill -i core.scala.testkit.test.testOnly \
+            nodal.internal.testkit.ScalaToMlirBridgeTests
+
+      - name: Execute Increment 34 source and construction witnesses
+        working-directory: target
+        shell: bash
+        run: |
+          runtime_report=/tmp/increment34-runtime.txt
+          construction_report=/tmp/increment34-construction.txt
+          ./mill -i examples.continuousTimeApi.runMain \
+            nodal.increment34fixture.Increment34RuntimeCheck \
+            "$runtime_report"
+          ./mill -i examples.continuousTimeApi.runMain \
+            nodal.increment34fixture.Increment34ConstructionCheck \
+            "$construction_report"
+          test -s "$runtime_report"
+          test -s "$construction_report"
+          grep -F 'conditional_definite=true' "$runtime_report"
+          grep -F 'public_conditional_snapshots=1' "$construction_report"
+          grep -F 'flat_assignments=0' "$construction_report"
 
       - name: Build and execute the complete native suite
         working-directory: target

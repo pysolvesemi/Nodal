@@ -1,0 +1,130 @@
+name: Increment 34 Bridge Native IR Controller v1
+
+on:
+  push:
+    branches:
+      - automation/inc34-bridge-native-ir-controller-v1
+    paths:
+      - '.github/automation/inc34_patch_scala.py'
+      - '.github/automation/inc34_patch_native.py'
+      - '.github/workflows/_inc34_bridge_native_ir_controller_v1.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-34-bridge-native-ir-controller-v1
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - name: Check out controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-bridge-native-ir-controller-v1
+          path: controller
+          fetch-depth: 1
+
+      - name: Check out current Increment 34 feature head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/34-analog-control-flow-v1
+          path: work
+          fetch-depth: 0
+
+      - name: Materialize structured bridge and native IR
+        run: |
+          python3 -m py_compile \
+            controller/.github/automation/inc34_patch_scala.py \
+            controller/.github/automation/inc34_patch_native.py
+          python3 controller/.github/automation/inc34_patch_scala.py --root work
+          python3 controller/.github/automation/inc34_patch_native.py --root work
+
+      - name: Install locked toolchains
+        working-directory: work
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          echo "NODAL_NATIVE_TOOLCHAIN=${RUNNER_TEMP}/nodal-native-toolchain" >> "${GITHUB_ENV}"
+          echo "NODAL_LINT_TOOLCHAIN=${RUNNER_TEMP}/nodal-lint-toolchain" >> "${GITHUB_ENV}"
+
+      - name: Format staged Scala and C++ sources
+        working-directory: work
+        shell: bash
+        run: |
+          ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources
+          clang_format=$(find "${NODAL_LINT_TOOLCHAIN}" -type f -name clang-format -perm -u+x | head -n 1)
+          test -n "${clang_format}"
+          "${clang_format}" -i core/compiler/lib/Dialect/Nodal/NodalOps.cpp
+
+      - name: Validate repository contracts and mutation suite
+        working-directory: work
+        run: |
+          python3 scripts/check_increment33.py
+          python3 scripts/check_increment34.py
+          python3 -m unittest discover -s tests/compiler -p 'test_increment34.py'
+          git diff --check
+
+      - name: Compile and test Scala core
+        working-directory: work
+        run: ./nodal core scala
+
+      - name: Build, lint, and test native core
+        working-directory: work
+        run: |
+          ./nodal core native \
+            --toolchain "${NODAL_NATIVE_TOOLCHAIN}" \
+            --lint-toolchain "${NODAL_LINT_TOOLCHAIN}"
+
+      - name: Execute Increment 34 public witnesses
+        working-directory: work
+        run: |
+          runtime_report="${RUNNER_TEMP}/increment34-runtime.txt"
+          construction_report="${RUNNER_TEMP}/increment34-construction.txt"
+          ./mill -i examples.continuousTimeApi.runMain \
+            nodal.increment34fixture.Increment34RuntimeCheck \
+            "${runtime_report}"
+          ./mill -i examples.continuousTimeApi.runMain \
+            nodal.increment34fixture.Increment34ConstructionCheck \
+            "${construction_report}"
+          grep -F 'conditional_definite=true' "${runtime_report}"
+          grep -F 'case_definite=true' "${runtime_report}"
+          grep -F 'loop_definite=true' "${runtime_report}"
+          grep -F 'public_conditional_snapshots=1' "${construction_report}"
+          grep -F 'flat_assignments=0' "${construction_report}"
+
+      - name: Require repository style
+        working-directory: work
+        run: |
+          ./nodal style check --lint-toolchain "${NODAL_LINT_TOOLCHAIN}"
+          git diff --check
+
+      - name: Commit and publish validated checkpoint
+        working-directory: work
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No Increment 34 bridge/native IR changes were required.'
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala \
+            core/scala/bridge/test/src/nodal/bridge/ScalaToMlirBridgeTests.scala \
+            core/compiler/include/nodal/Dialect/Nodal/NodalOps.td \
+            core/compiler/lib/Dialect/Nodal/NodalOps.cpp \
+            core/compiler/test/CMakeLists.txt \
+            core/compiler/test/IR/analog-control-flow.mlir \
+            core/compiler/test/IR/analog-control-flow-invalid-break.mlir \
+            core/compiler/test/IR/analog-control-flow-invalid-loop.mlir \
+            core/compiler/test/IR/analog-control-flow-invalid-condition.mlir \
+            core/compiler/test/IR/analog-control-flow-invalid-case.mlir
+          git commit -m 'feat(increment34): serialize structured analog control flow to native IR'
+          git push origin HEAD:increment/34-analog-control-flow-v1

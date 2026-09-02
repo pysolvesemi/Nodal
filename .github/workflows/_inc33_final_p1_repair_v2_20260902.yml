@@ -1,0 +1,306 @@
+name: Increment 33 final P1 repair v2 2026-09-02
+
+on:
+  push:
+    branches:
+      - automation/inc33-final-p1-repair-v2-20260902
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact Increment 33 implementation head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Require reviewed baseline
+        run: test "$(git rev-parse HEAD)" = ef5cd258ae130d4239898020590eb1fcc42fc4d9
+
+      - name: Apply sticky-dimension and nodalc-boundary fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          def insert_before(path: Path, marker: str, payload: str, guard: str) -> None:
+              text = path.read_text(encoding="utf-8")
+              if guard in text:
+                  return
+              if text.count(marker) != 1:
+                  raise SystemExit(f"{path}: insertion marker is not unique: {marker!r}")
+              path.write_text(text.replace(marker, payload + marker, 1), encoding="utf-8")
+
+          kernel_path = Path("core/scala/api/src/nodal/ElaborationConstructionKernel.scala")
+          kernel = kernel_path.read_text(encoding="utf-8")
+          start_marker = "  def compatibleAdd(other: AnalogDimension): AnalogDimension =\n"
+          end_marker = "\n  def canonical: String ="
+          start = kernel.index(start_marker)
+          end = kernel.index(end_marker, start)
+          replacement = textwrap.dedent(
+              '''\
+                def compatibleAdd(other: AnalogDimension): AnalogDimension =
+                  if isUnknown || other.isUnknown then AnalogDimension.Unknown
+                  else if isZero then other.copy(isZero = other.isZero || isZero)
+                  else if other.isZero then copy(isZero = isZero || other.isZero)
+                  else if powers == other.powers then copy(isZero = isZero && other.isZero)
+                  else AnalogDimension.Unknown
+              '''
+          )
+          kernel = kernel[:start] + replacement + kernel[end:]
+          if kernel.count("if isUnknown || other.isUnknown then AnalogDimension.Unknown") != 1:
+              raise SystemExit("sticky unknown dimension rule was not installed exactly once")
+          kernel_path.write_text(kernel, encoding="utf-8")
+
+          construction_tests_path = Path(
+              "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala"
+          )
+          insert_before(
+              construction_tests_path,
+              "final class PublicAnalogCompoundVoltage extends Module:\n",
+              textwrap.dedent(
+                  '''\
+                    final class PublicAnalogNestedCompoundReadDimensionMismatch extends Module:
+                      val voltage: Variable[Real] = variable(Real, 0.0.V)
+
+                      analogProcedure:
+                        voltage := (voltage + 1.0.real) + voltage
+
+                  '''
+              ),
+              "final class PublicAnalogNestedCompoundReadDimensionMismatch",
+          )
+          insert_before(
+              construction_tests_path,
+              '    test("public compound voltage assignment retains its physical dimension"):\n',
+              textwrap.dedent(
+                  '''\
+                        test("public nested incompatible compound dimensions remain unknown"):
+                          val failure = scala.util
+                            .Try(
+                              ConstructionKernel.inspect(
+                                new PublicAnalogNestedCompoundReadDimensionMismatch
+                              )
+                            )
+                            .failed
+                            .get
+                            .asInstanceOf[AnalogProceduralRuntime.Failure]
+                          assert(failure.diagnostic.code == "NODAL-ANALOG-033-013")
+
+                  '''
+              ),
+              "public nested incompatible compound dimensions remain unknown",
+          )
+
+          workflow_path = Path(
+              ".github/workflows/increment-33-analog-procedural-assignment.yml"
+          )
+          insert_before(
+              workflow_path,
+              "      - name: Execute Scala source-semantic witness\n",
+              textwrap.dedent(
+                  '''\
+                        - name: Execute Scala bridge regressions against nodalc
+                          shell: bash
+                          run: |
+                            test -x out/native/release/bin/nodalc
+                            NODAL_NODALC="$PWD/out/native/release/bin/nodalc" \\
+                              ./mill -i core.scala.testkit.test.testOnly \\
+                                nodal.internal.testkit.ScalaToMlirBridgeTests
+
+                  '''
+              ),
+              "Execute Scala bridge regressions against nodalc",
+          )
+
+          checker_path = Path("scripts/check_increment33.py")
+          checker = checker_path.read_text(encoding="utf-8")
+          construction_anchor = (
+              '    construction_tests = read_text(\n'
+              '        root,\n'
+              '        "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala",\n'
+              '    )\n'
+          )
+          if "NODAL-INC33-067" not in checker:
+              if checker.count(construction_anchor) != 1:
+                  raise SystemExit("checker construction anchor is not unique")
+              checker = checker.replace(
+                  construction_anchor,
+                  construction_anchor
+                  + '    construction_kernel = read_text(\n'
+                  + '        root,\n'
+                  + '        "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",\n'
+                  + '    )\n'
+                  + '    require(\n'
+                  + '        "if isUnknown || other.isUnknown then AnalogDimension.Unknown"\n'
+                  + '        in construction_kernel,\n'
+                  + '        "NODAL-INC33-067: recursive dimension mismatches are not sticky",\n'
+                  + '    )\n',
+                  1,
+              )
+
+          nested_check_marker = (
+              '    require(\n'
+              '        "initializing assignments precede dependent declarations independent of provenance"\n'
+          )
+          if "NODAL-INC33-068" not in checker:
+              if checker.count(nested_check_marker) != 1:
+                  raise SystemExit("checker nested regression anchor is not unique")
+              checker = checker.replace(
+                  nested_check_marker,
+                  '    require(\n'
+                  '        "public nested incompatible compound dimensions remain unknown"\n'
+                  '        in construction_tests,\n'
+                  '        "NODAL-INC33-068: nested compound-dimension regression is missing",\n'
+                  '    )\n'
+                  + nested_check_marker,
+                  1,
+              )
+
+          workflow_read = '        workflow = workflow_path.read_text(encoding="utf-8")\n'
+          if "NODAL-INC33-069" not in checker:
+              if checker.count(workflow_read) != 1:
+                  raise SystemExit("checker workflow anchor is not unique")
+              checker = checker.replace(
+                  workflow_read,
+                  workflow_read
+                  + '        require(\n'
+                  + '            \'NODAL_NODALC="$PWD/out/native/release/bin/nodalc"\' in workflow\n'
+                  + '            and "core.scala.testkit.test.testOnly" in workflow\n'
+                  + '            and "ScalaToMlirBridgeTests" in workflow,\n'
+                  + '            "NODAL-INC33-069: Scala bridge regressions do not execute against nodalc",\n'
+                  + '        )\n',
+                  1,
+              )
+          checker_path.write_text(checker, encoding="utf-8")
+
+          mutation_path = Path("tests/compiler/test_increment33.py")
+          mutations = mutation_path.read_text(encoding="utf-8")
+          required_entry = '    "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",\n'
+          if required_entry not in mutations:
+              required_anchor = '    "core/scala/api/src/nodal/AnalogProceduralRuntime.scala",\n'
+              if mutations.count(required_anchor) != 1:
+                  raise SystemExit("mutation REQUIRED anchor is not unique")
+              mutations = mutations.replace(
+                  required_anchor,
+                  required_anchor + required_entry,
+                  1,
+              )
+
+          if "test_recursive_dimension_mismatch_mutation_is_rejected" not in mutations:
+              mutation_anchor = '\n\nif __name__ == "__main__":\n'
+              if mutations.count(mutation_anchor) != 1:
+                  raise SystemExit("mutation method anchor is not unique")
+              methods = textwrap.dedent(
+                  '''\
+
+                      def test_recursive_dimension_mismatch_mutation_is_rejected(self) -> None:
+                          temporary, root = self.fixture()
+                          with temporary:
+                              path = root / "core/scala/api/src/nodal/ElaborationConstructionKernel.scala"
+                              path.write_text(
+                                  path.read_text(encoding="utf-8").replace(
+                                      "if isUnknown || other.isUnknown then AnalogDimension.Unknown",
+                                      "if isUnknown then other",
+                                      1,
+                                  ),
+                                  encoding="utf-8",
+                              )
+                              self.assert_rejected(root, "recursive dimension mismatches are not sticky")
+
+                      def test_nested_compound_dimension_regression_mutation_is_rejected(self) -> None:
+                          temporary, root = self.fixture()
+                          with temporary:
+                              path = (
+                                  root
+                                  / "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala"
+                              )
+                              path.write_text(
+                                  path.read_text(encoding="utf-8").replace(
+                                      "public nested incompatible compound dimensions remain unknown",
+                                      "nested compound-dimension regression removed",
+                                      1,
+                                  ),
+                                  encoding="utf-8",
+                              )
+                              self.assert_rejected(root, "nested compound-dimension regression is missing")
+
+                      def test_nodalc_bridge_boundary_mutation_is_rejected(self) -> None:
+                          temporary, root = self.fixture()
+                          with temporary:
+                              path = root / ".github/workflows/increment-33-analog-procedural-assignment.yml"
+                              path.write_text(
+                                  path.read_text(encoding="utf-8").replace(
+                                      'NODAL_NODALC="$PWD/out/native/release/bin/nodalc"',
+                                      'NODAL_NODALC_DISABLED="$PWD/out/native/release/bin/nodalc"',
+                                      1,
+                                  ),
+                                  encoding="utf-8",
+                              )
+                              self.assert_rejected(
+                                  root,
+                                  "Scala bridge regressions do not execute against nodalc",
+                              )
+                  '''
+              )
+              mutations = mutations.replace(
+                  mutation_anchor,
+                  methods + mutation_anchor,
+                  1,
+              )
+          mutation_path.write_text(mutations, encoding="utf-8")
+          PY
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Format and run focused acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          test -x out/native/release/bin/nodalc
+          NODAL_NODALC="$PWD/out/native/release/bin/nodalc" \
+            ./mill -i core.scala.testkit.test.testOnly \
+              nodal.internal.testkit.ScalaToMlirBridgeTests
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Publish validated review fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            .github/workflows/increment-33-analog-procedural-assignment.yml \
+            core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+            core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala \
+            scripts/check_increment33.py \
+            tests/compiler/test_increment33.py
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m 'fix(increment33): keep nested mismatches sticky and exercise nodalc'
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

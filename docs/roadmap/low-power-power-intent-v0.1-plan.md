@@ -143,9 +143,13 @@ The following projects are research and qualification references recorded on 202
 | [IEEE 1801-2024](https://standards.ieee.org/ieee/1801/7466/) and the [IEEE SA Open UPF project](https://opensource.ieee.org/upf) | normative terminology, semantics, Annex E examples, reusable UPF-library concepts, conformance fixtures | do not copy standard prose into Nodal; preserve license/provenance for adopted open-source examples |
 | [OpenROAD UPF module](https://openroad.readthedocs.io/en/latest/main/src/upf/README.html) and its regression tests | first executable open-source UPF reader/writer and implementation capability profile | profile the exact tested subset; never equate current OpenROAD support with complete IEEE 1801 support |
 | [OpenTitan primitives](https://opentitan.org/book/hw/ip/prim/index.html) | fixed semantic primitive interfaces with generic and technology-dependent implementations | reuse the mapping pattern, not OpenTitan-specific module naming as Nodal semantics |
+| [Chisel RegEnable](https://github.com/chipsalliance/chisel/blob/main/src/main/scala/chisel3/util/Reg.scala), [CIRCT ClockGate](https://github.com/chipsalliance/chisel/blob/main/src/main/scala/chisel3/util/circt/ClockGate.scala), [clock scopes](https://www.chisel-lang.org/docs/explanations/multi-clock), and [ExtModule/black boxes](https://github.com/chipsalliance/chisel/blob/main/docs/src/explanations/blackboxes.md) | comparative API ergonomics for register enables, safe clock-gate intent, scoped clocks/resets, and external technology-cell wrappers | comparative only: Chisel does not define Nodal power-domain, supply, retention, isolation, level-shift, or UPF semantics; do not copy APIs or infer power intent from an external module |
+| [SpinalHDL ClockEnableArea](https://github.com/SpinalHDL/SpinalHDL/blob/dev/core/src/main/scala/spinal/core/Area.scala), [ClockGating](https://github.com/SpinalHDL/SpinalHDL/blob/dev/lib/src/main/scala/spinal/lib/Misc.scala), clock-domain/`SlowArea`, CDC, and `BlackBox` facilities | comparative API ergonomics for composable enable areas, rate control, clock-domain scoping, CDC-aware integration, and external cells; use direct clock-AND construction as a negative safety example | comparative only: Nodal must distinguish register enable from a semantic glitch-free gate and a technology-mapped ICG cell; never adopt direct `clock & enable` as a qualified ASIC clock-gating primitive |
 | [Lambdalib](https://github.com/siliconcompiler/lambdalib) and Lambdapdk | portable cell abstraction, package organization, PDK mapping and reduced-order generic models | Nodal requires typed power intent and source correlation beyond a cell wrapper library |
 | [Lighter](https://github.com/AUCOHL/Lighter) | reference for an optional Yosys-based automatic clock-gating pass and validation methodology | no automatic gating until explicit opt-in, equivalence, DFT/test, timing, profitability and rollback contracts are proven |
 | [croc-pmu](https://github.com/joboscanprojects/croc-pmu) | compact end-to-end PMU, UPF, retention/isolation, firmware and OpenROAD-oriented qualification witness | case study only; independently validate sequencing, commands, cells, results and tool versions |
+
+Chisel and SpinalHDL are comparative HDL ergonomics and migration references only. They may inform concise source syntax, clock-scope composition, external-cell integration, and negative tests, but they do not define canonical Power Intent IR, UPF, power-state, power-domain-crossing, or sign-off semantics. Nodal must preserve an explicit four-way distinction among register enable, enable-area or rate control, semantic glitch-free clock-gating intent, and a technology-mapped integrated clock-gating cell.
 
 Nodal should reuse standards, algorithms, examples, models, or code only when doing so is technically exact and license-compatible. Nodal owns its IR, APIs, adapters, source maps, capability negotiation, diagnostics, tests, and validation evidence.
 
@@ -160,6 +164,7 @@ Every checkbox below remains blocked until the Foundation completion barrier ope
 - [ ] **Low-Power Increment 1 — Architecture, public API, capability and evidence design gate**
   - Accept a dedicated low-power ADR that refines ADR 0024 without moving implementation into Foundation.
   - Compile and compare concise public API candidates for supplies, domains, states, strategies, retained state, operating points, sequences, primitive selection, UPF profiles, imports, vendor escapes, reports and waivers.
+  - Compare Chisel `RegEnable`, CIRCT `ClockGate`, clock scopes and `ExtModule` with SpinalHDL `ClockEnableArea`, `SlowArea`, clock domains, `BlackBox` and `ClockGating` as ergonomic and migration references; record adopted, rejected and strengthened semantics without making either implementation canonical.
   - Freeze ownership between canonical IR, reusable libraries, generated UPF, attached external UPF, technology mappings, simulator semantics, implementation adapters, power analysis and ASIC sign-off.
   - Freeze stable IDs, hierarchy/refinement rules, source maps, deterministic serialization, artifact hashes, capability negotiation, unsupported-feature policy and normalized evidence.
   - Define positive and negative design-gate fixtures before accepting implementation.
@@ -188,6 +193,7 @@ Every checkbox below remains blocked until the Foundation completion barrier ope
 - [ ] **Low-Power Increment 5 — Reusable primitive library and technology-mapping contract**
   - Implement the approved clock gate, glitchless clock mux, isolation, level-shifter, combined, retention, always-on, power-switch, power-aware memory and controller primitives.
   - Reuse Foundation clock/reset/CDC/RDC contracts rather than creating duplicate domain semantics.
+  - Freeze and test the distinction among register enable, enable-area or rate control, semantic glitch-free clock gating, and technology-mapped ICG implementation, including reset priority, scan/test override, generated-clock/CDC effects, and rejection of direct clock-AND construction.
   - Provide generic behavioral and power-aware models, assertions, deterministic interfaces, parameter rules, scan/test controls, source/sink metadata and unsupported-use diagnostics.
   - Implement versioned technology-library mappings selected through capability profiles, with exact cell/port/polarity/function matching and a mapping manifest.
   - Never treat a generic model as a sign-off implementation or silently replace an unmapped required primitive with ordinary RTL.
@@ -243,6 +249,7 @@ Every checkbox below remains blocked until the Foundation completion barrier ope
   - Include at least one reproducible open-source implementation witness using a pinned OpenROAD/open-PDK combination whose required cells and capabilities have been verified.
   - Compare canonical IR, generated UPF, crossing reports, behavioral simulation, properties, implementation mappings, normalized power reports and source correlation across the matrix.
   - Publish the supported standard/tool/PDK/primitive/verification capability matrix, tutorials, migration guidance, failure examples, provenance and release evidence.
+  - Publish a migration/comparison note mapping common Chisel and SpinalHDL enable, gate, clock-domain and external-cell idioms into Nodal's stronger semantic categories and identifying constructs that require redesign rather than mechanical translation.
   - Close only when every required track artifact is deterministic, reviewable, reproducible and free of silent omission or approximation.
 
 ## Dependency and scheduling matrix
@@ -294,7 +301,7 @@ Acceptance requires that:
 
 Before Foundation completion, contributors may:
 
-- track IEEE 1801, CIRCT/MLIR, OpenROAD, OpenTitan, Lambdalib, Lighter, open PDK and power-aware simulator developments;
+- track IEEE 1801, CIRCT/MLIR, OpenROAD, OpenTitan, Chisel, SpinalHDL, Lambdalib, Lighter, open PDK and power-aware simulator developments;
 - prototype API candidates or parsers on non-merge research branches;
 - collect licensed examples, negative fixtures, expected diagnostics and capability matrices;
 - evaluate whether an apparent blocker is a genuinely missing Foundation identity seam;

@@ -236,6 +236,16 @@
       "adoption": "reuse-pattern-not-project-specific-naming"
     },
     {
+      "name": "Chisel RegEnable, CIRCT ClockGate, clock scopes and ExtModule",
+      "role": "comparative-register-enable-clock-gate-clock-scope-and-external-cell-api-reference",
+      "adoption": "ergonomic-and-migration-reference-only-not-power-intent-authority"
+    },
+    {
+      "name": "SpinalHDL ClockEnableArea, SlowArea, clock domains, CDC, BlackBox and ClockGating",
+      "role": "comparative-enable-area-rate-control-domain-and-external-cell-api-reference",
+      "adoption": "direct-clock-and-enable-construction-is-a-negative-safety-case"
+    },
+    {
       "name": "Lambdalib and Lambdapdk",
       "role": "portable-cell-library-and-pdk-mapping-reference",
       "adoption": "retain-nodal-power-intent-and-source-correlation"

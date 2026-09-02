@@ -1,0 +1,247 @@
+name: Increment 33 native boundary integration v4 2026-09-02
+
+on:
+  push:
+    branches:
+      - automation/inc33-native-boundary-integration-v4-20260902
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact repaired Increment 33 head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Require exact baseline
+        run: test "$(git rev-parse HEAD)" = 5c9a855cc752e3d446505caac6b91ddbe342acd2
+
+      - name: Integrate native boundary and regression contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          nodal_path = Path("scripts/nodal.py")
+          nodal = nodal_path.read_text(encoding="utf-8")
+          function_start = nodal.index(
+              "def command_core_native(args: argparse.Namespace, root: Path, runner: Runner) -> int:\n"
+          )
+          function_end = nodal.index("\ndef command_style_bootstrap", function_start)
+          native_function = nodal[function_start:function_end]
+          lint_marker = "    lint_toolchain = _managed_lint_toolchain(\n"
+          bridge_block = (
+              "    nodalc = (\n"
+              "        root\n"
+              '        / "out"\n'
+              '        / "native"\n'
+              '        / "release"\n'
+              '        / "bin"\n'
+              '        / ("nodalc.exe" if os.name == "nt" else "nodalc")\n'
+              "    )\n"
+              "    if not nodalc.is_file():\n"
+              "        raise DeveloperCommandError(\n"
+              '            "NODAL-DEV-009",\n'
+              '            f"native build did not produce the compiler executable: {nodalc}",\n'
+              "        )\n"
+              "    runner.run(\n"
+              "        _mill(\n"
+              "            root,\n"
+              '            "-i",\n'
+              '            "core.scala.testkit.test.testOnly",\n'
+              '            "nodal.internal.testkit.ScalaToMlirBridgeTests",\n'
+              "        ),\n"
+              '        env={**env, "NODAL_NODALC": str(nodalc)},\n'
+              "    )\n"
+          )
+          if "NODAL-DEV-009" not in native_function:
+              if native_function.count(lint_marker) != 1:
+                  raise SystemExit("native command lint marker is not unique")
+              native_function = native_function.replace(
+                  lint_marker,
+                  bridge_block + lint_marker,
+                  1,
+              )
+              nodal = nodal[:function_start] + native_function + nodal[function_end:]
+          nodal_path.write_text(nodal, encoding="utf-8")
+
+          developer_path = Path("tests/developer/test_developer_commands.py")
+          developer = developer_path.read_text(encoding="utf-8")
+          runner_marker = (
+              '        if "bootstrap_lint_toolchain.py" in rendered and "status" in normalized:\n'
+              "            stdout = json.dumps(\n"
+              '                {"found": str(self.lint_toolchain) if self.lint_toolchain else None, "rejected": {}}\n'
+              "            )\n"
+          )
+          build_fixture = runner_marker + (
+              '        if normalized[:2] == ("cmake", "--build"):\n'
+              "            nodalc = (\n"
+              "                self.root\n"
+              '                / "out"\n'
+              '                / "native"\n'
+              '                / "release"\n'
+              '                / "bin"\n'
+              '                / ("nodalc.exe" if os.name == "nt" else "nodalc")\n'
+              "            )\n"
+              "            nodalc.parent.mkdir(parents=True, exist_ok=True)\n"
+              '            nodalc.write_text("compiler\\n", encoding="utf-8")\n'
+          )
+          if "nodalc.parent.mkdir(parents=True, exist_ok=True)" not in developer:
+              if developer.count(runner_marker) != 1:
+                  raise SystemExit("recording runner marker is not unique")
+              developer = developer.replace(runner_marker, build_fixture, 1)
+
+          method_start = developer.index(
+              "    def test_core_native_uses_managed_toolchain(self) -> None:\n"
+          )
+          method_end = developer.index(
+              "\n    def test_style_bootstrap_uses_pinned_installer", method_start
+          )
+          method = developer[method_start:method_end]
+          assertion_marker = (
+              '        self.assertFalse(any("run_clang_tools.py" in " ".join(command) for command in commands))\n'
+          )
+          bridge_assertions = assertion_marker + (
+              "        nodalc = (\n"
+              "            root\n"
+              '            / "out"\n'
+              '            / "native"\n'
+              '            / "release"\n'
+              '            / "bin"\n'
+              '            / ("nodalc.exe" if os.name == "nt" else "nodalc")\n'
+              "        )\n"
+              "        bridge_calls = [\n"
+              "            call\n"
+              "            for call in runner.calls\n"
+              '            if "ScalaToMlirBridgeTests" in " ".join(call[0])\n'
+              "        ]\n"
+              "        self.assertEqual(len(bridge_calls), 1)\n"
+              '        self.assertEqual(bridge_calls[0][1]["NODAL_NODALC"], str(nodalc))\n'
+              "        self.assertEqual(\n"
+              '            bridge_calls[0][1]["NODAL_NATIVE_TOOLCHAIN"], str(native)\n'
+              "        )\n"
+          )
+          if "bridge_calls = [" not in method:
+              if method.count(assertion_marker) != 1:
+                  raise SystemExit("core native assertion marker is not unique")
+              method = method.replace(assertion_marker, bridge_assertions, 1)
+              developer = developer[:method_start] + method + developer[method_end:]
+          developer_path.write_text(developer, encoding="utf-8")
+
+          checker_path = Path("scripts/check_increment33.py")
+          checker = checker_path.read_text(encoding="utf-8")
+          boundary_start_token = (
+              "        require(\n"
+              '            \'NODAL_NODALC="$PWD/out/native/release/bin/nodalc"\' in workflow\n'
+          )
+          if boundary_start_token in checker:
+              boundary_start = checker.index(boundary_start_token)
+              boundary_end = checker.index(
+                  '        require("contents: read" in workflow',
+                  boundary_start,
+              )
+              checker = checker[:boundary_start] + checker[boundary_end:]
+          roadmap_marker = '    roadmap = read_text(root, "docs/roadmap/nodal-development-todo.md")\n'
+          command_check = (
+              '    developer_commands = read_text(root, "scripts/nodal.py")\n'
+              "    require(\n"
+              '        \'"NODAL_NODALC": str(nodalc)\' in developer_commands\n'
+              '        and "core.scala.testkit.test.testOnly" in developer_commands\n'
+              '        and "nodal.internal.testkit.ScalaToMlirBridgeTests" in developer_commands,\n'
+              '        "NODAL-INC33-069: native command does not execute Scala bridge regressions against nodalc",\n'
+              "    )\n"
+              "\n"
+          )
+          if "native command does not execute Scala bridge regressions" not in checker:
+              if checker.count(roadmap_marker) != 1:
+                  raise SystemExit("checker roadmap marker is not unique")
+              checker = checker.replace(roadmap_marker, command_check + roadmap_marker, 1)
+          checker_path.write_text(checker, encoding="utf-8")
+
+          mutation_path = Path("tests/compiler/test_increment33.py")
+          mutations = mutation_path.read_text(encoding="utf-8")
+          required_anchor = (
+              'REQUIRED = (\n'
+              '    ".github/workflows/increment-33-analog-procedural-assignment.yml",\n'
+          )
+          required_with_script = required_anchor + '    "scripts/nodal.py",\n'
+          if '    "scripts/nodal.py",\n' not in mutations:
+              if mutations.count(required_anchor) != 1:
+                  raise SystemExit("mutation REQUIRED tuple anchor is not unique")
+              mutations = mutations.replace(required_anchor, required_with_script, 1)
+
+          method_start = mutations.index(
+              "    def test_nodalc_bridge_boundary_mutation_is_rejected(self) -> None:\n"
+          )
+          method_end = mutations.index("\n\nif __name__ == \"__main__\":", method_start)
+          replacement_method = (
+              "    def test_nodalc_bridge_boundary_mutation_is_rejected(self) -> None:\n"
+              "        temporary, root = self.fixture()\n"
+              "        with temporary:\n"
+              '            path = root / "scripts/nodal.py"\n'
+              "            path.write_text(\n"
+              "                path.read_text(encoding=\"utf-8\").replace(\n"
+              '                    \'"NODAL_NODALC": str(nodalc)\',\n'
+              '                    \'"NODAL_NODALC_DISABLED": str(nodalc)\',\n'
+              "                    1,\n"
+              "                ),\n"
+              '                encoding="utf-8",\n'
+              "            )\n"
+              "            self.assert_rejected(\n"
+              "                root,\n"
+              '                "native command does not execute Scala bridge regressions against nodalc",\n'
+              "            )\n"
+          )
+          mutations = mutations[:method_start] + replacement_method + mutations[method_end:]
+          mutation_path.write_text(mutations, encoding="utf-8")
+          PY
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Run complete affected validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 -m unittest discover -s tests/developer -p 'test_*.py'
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Publish native-boundary integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            scripts/nodal.py \
+            tests/developer/test_developer_commands.py \
+            scripts/check_increment33.py \
+            tests/compiler/test_increment33.py
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m 'fix(increment33): exercise Scala bridge through native command'
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

@@ -57,7 +57,9 @@ conditionals, cases, or loops; those remain owned by Increment 34.
 The Increment 33 construction recorders retain exactly one top-level procedural
 region per component. A second top-level region is diagnosed rather than merged
 with the first, so definite-assignment state cannot leak between independent
-regions. First-class multi-region construction snapshots are deferred.
+regions. The native module verifier enforces the same one-region boundary across
+all analog regions belonging to a component, including directly authored MLIR.
+First-class multi-region construction snapshots are deferred.
 
 ## Initialization and read-before-write
 
@@ -71,8 +73,11 @@ performs straight-line dominance only. Branch-sensitive definite-assignment
 analysis is deferred until Increment 34 introduces analog control flow.
 
 An initializer and every assigned value must be type-compatible and have the
-same physical dimension as the variable. Integer-to-real promotion is legal;
-real-to-integer narrowing is not implicit.
+same physical dimension as the variable. Boolean comparisons validate that their
+real operands have compatible physical dimensions before producing a dimensionless
+Boolean result, and invalid comparison dimensions remain invalid through nested
+Boolean logic. Integer-to-real promotion is legal; real-to-integer narrowing is not
+implicit.
 
 ## Assignment metadata
 

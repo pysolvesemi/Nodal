@@ -111,7 +111,9 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         "lexical_scopes",
         "component_ownership",
         "straight_line_read_before_write",
+        "single_procedural_region_per_component",
         "physical_dimension_checking",
+        "comparison_operand_dimension_checking",
         "boolean_guards",
         "analysis_applicability",
         "source_provenance",
@@ -145,6 +147,7 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
     require(isinstance(deferred, list), "NODAL-INC33-016: deferred must be a list")
     for item in (
         "analog-control-flow",
+        "multiple-procedural-regions",
         "residual-dae-construction",
         "solver-execution",
         "target-legalization",
@@ -252,6 +255,9 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
     invalid_variable_kind = read_text(
         root, "core/compiler/test/IR/analog-procedural-invalid-variable-kind.mlir"
     )
+    invalid_multiple_procedures = read_text(
+        root, "core/compiler/test/IR/analog-procedural-invalid-multiple.mlir"
+    )
     for token in ("Nodal_VariableType", "NODAL-ANALOG-033-019"):
         require(token in types, f"NODAL-INC33-036: compiler type model is missing {token!r}")
     require(
@@ -273,6 +279,8 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         require(token in operations, f"NODAL-INC33-037: compiler IR is missing {token!r}")
     for token in (
         "verifyAnalogProcedure",
+        "verifySingleTopLevelProcedurePerModule",
+        "NODAL-ANALOG-033-020",
         "NODAL-ANALOG-033-011",
         "NODAL-ANALOG-033-012",
         "NODAL-ANALOG-033-013",
@@ -383,8 +391,9 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         "NODAL-INC33-070: Boolean expression result metadata is not retained",
     )
     require(
-        'expression.resultType.exists(_.kind == "Bool")' in construction_kernel,
-        "NODAL-INC33-071: Boolean expression dimension is not forced dimensionless",
+        'expression.resultType.exists(_.kind == "Bool")' in construction_kernel
+        and "inferBooleanExpressionDimension(expression)" in construction_kernel,
+        "NODAL-INC33-071: Boolean expression dimension inference is not delegated",
     )
     require(
         "public Boolean comparison assignment retains result type and dimension"
@@ -403,6 +412,41 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         "multiple top-level analogProcedure regions are rejected"
         in construction_tests,
         "NODAL-INC33-074: multiple procedural-region regression is missing",
+    )
+
+    require(
+        "private def inferBooleanExpressionDimension" in construction_kernel
+        and '"real_gt"' in construction_kernel
+        and "compatibleAdd(inferAnalogDimension(right))" in construction_kernel
+        and '"bool_and"' in construction_kernel
+        and "dimensions.forall(isDimensionlessBoolean)" in construction_kernel,
+        "NODAL-INC33-075: Boolean comparison operand dimensions are not validated recursively",
+    )
+    require(
+        "public comparison rejects incompatible operand dimensions through Boolean logic"
+        in construction_tests,
+        "NODAL-INC33-076: incompatible comparison-dimension regression is missing",
+    )
+    require(
+        "verifySingleTopLevelProcedurePerModule" in operation_verifiers
+        and "getParentOfType<nodal::AnalogProcedureOp>" in operation_verifiers
+        and "return verifySingleTopLevelProcedurePerModule(getOperation())"
+        in operation_verifiers,
+        "NODAL-INC33-077: native module boundary does not reject multiple top-level procedures",
+    )
+    require(
+        invalid_multiple_procedures.count('"nodal.analog"') == 2
+        and invalid_multiple_procedures.count('"nodal.analog_procedure"') == 2
+        and "nodal.native.analog-procedural-rejects-multiple" in compiler_tests
+        and "analog-procedural-invalid-multiple.mlir" in compiler_tests
+        and '"-DDIAGNOSTIC=NODAL-ANALOG-033-020"' in compiler_tests,
+        "NODAL-INC33-078: exact native multiple-procedure diagnostic fixture is missing",
+    )
+    require(
+        semantics.get("comparison_operand_dimension_checking") is True
+        and semantics.get("single_procedural_region_per_component") is True
+        and "multiple-procedural-regions" in deferred,
+        "NODAL-INC33-079: manifest does not retain final review boundaries",
     )
 
     developer_commands = read_text(root, "scripts/nodal.py")

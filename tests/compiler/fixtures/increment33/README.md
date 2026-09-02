@@ -13,8 +13,10 @@ The witness proves:
 - nested lexical variables cannot escape their scope;
 - cross-component access fails;
 - assigned physical dimensions must match;
+- comparison operands must have compatible physical dimensions;
 - guards are Boolean and dimensionless;
-- declarations and assignments require an active procedural region.
+- declarations and assignments require an active procedural region;
+- a component cannot contain multiple top-level procedural regions.
 
 The fixture intentionally does not execute a solver or emit Verilog-A. Those
 behaviors remain deferred to their owning increments.

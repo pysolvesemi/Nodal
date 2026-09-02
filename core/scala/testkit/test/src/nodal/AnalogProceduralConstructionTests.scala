@@ -66,6 +66,14 @@ final class PublicAnalogMultipleProceduralRegions extends Module:
   analogProcedure:
     voltage := 2.0.V
 
+final class PublicAnalogIncompatibleComparisonDimensions extends Module:
+  val voltage: Variable[Real] = variable(Real, 0.0.V)
+  val current: Variable[Real] = variable(Real, 0.0.A)
+  val flag: Variable[Bool] = variable(Bool, false.B)
+
+  analogProcedure:
+    flag := (voltage > current) && true.B
+
 final class PublicAnalogCompoundVoltage extends Module:
   val voltage: Variable[Real] = variable(Real, 0.0.V)
 
@@ -158,6 +166,18 @@ object AnalogProceduralConstructionTests extends TestSuite:
         .Try(
           ConstructionKernel.inspect(
             new PublicAnalogNestedCompoundReadDimensionMismatch
+          )
+        )
+        .failed
+        .get
+        .asInstanceOf[AnalogProceduralRuntime.Failure]
+      assert(failure.diagnostic.code == "NODAL-ANALOG-033-013")
+
+    test("public comparison rejects incompatible operand dimensions through Boolean logic"):
+      val failure = scala.util
+        .Try(
+          ConstructionKernel.inspect(
+            new PublicAnalogIncompatibleComparisonDimensions
           )
         )
         .failed

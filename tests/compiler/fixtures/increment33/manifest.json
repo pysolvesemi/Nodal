@@ -15,7 +15,9 @@
   "review_repairs": {
     "nested_scope_declaration_assignment_chronology": true,
     "compound_expression_dimension_propagation": true,
-    "focused_validation_run": 33525821970
+    "focused_validation_run": 33592719238,
+    "comparison_operand_dimension_validation": true,
+    "native_multiple_procedure_boundary": true
   },
   "semantics": {
     "component_local_variables": true,
@@ -42,11 +44,14 @@
     "native_ir_verification": true,
     "compiler_boundary_diagnostics": true,
     "source_map_roundtrip": true,
-    "authoritative_serialization": true
+    "authoritative_serialization": true,
+    "comparison_operand_dimension_checking": true,
+    "single_procedural_region_per_component": true
   },
   "stable_diagnostic_prefix": "NODAL-ANALOG-033-",
   "deferred": [
     "analog-control-flow",
+    "multiple-procedural-regions",
     "branch-sensitive-definite-assignment",
     "topology-expansion",
     "residual-dae-construction",

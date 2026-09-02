@@ -489,6 +489,24 @@ LogicalResult verifyProceduralBlock(Block &block, ProceduralVerificationState &s
   return success();
 }
 
+LogicalResult verifySingleTopLevelProcedurePerModule(Operation *module) {
+  bool seenProcedure = false;
+  Operation *duplicateProcedure = nullptr;
+  module->walk([&](nodal::AnalogProcedureOp procedure) {
+    auto parentModule = procedure->getParentOfType<nodal::ModuleOp>();
+    if (!parentModule || parentModule.getOperation() != module ||
+        procedure->getParentOfType<nodal::AnalogProcedureOp>())
+      return;
+    if (seenProcedure && !duplicateProcedure)
+      duplicateProcedure = procedure.getOperation();
+    seenProcedure = true;
+  });
+  if (!duplicateProcedure)
+    return success();
+  return nodal::emitMappedFailure(duplicateProcedure, "NODAL-ANALOG-033-020",
+                                  "multiple analog procedural regions per component are deferred");
+}
+
 LogicalResult verifyAnalogProcedure(Operation *operation) {
   if (failed(requireSingleBlock(operation)))
     return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-008",
@@ -514,7 +532,9 @@ LogicalResult nodal::PlaceholderOp::verify() {
 LogicalResult nodal::ModuleOp::verify() {
   if (failed(requireText(getOperation(), mlir::SymbolTable::getSymbolAttrName(), "module symbol")))
     return failure();
-  return requireSingleBlock(getOperation());
+  if (failed(requireSingleBlock(getOperation())))
+    return failure();
+  return verifySingleTopLevelProcedurePerModule(getOperation());
 }
 
 LogicalResult nodal::PortOp::verify() {

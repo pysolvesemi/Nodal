@@ -29,7 +29,7 @@ The Increment 33 runtime models:
 - repeated writes retained as separate statements;
 - straight-line read-before-write analysis;
 - integer-to-real promotion without implicit narrowing;
-- physical-dimension compatibility;
+- physical-dimension compatibility, including comparison operands;
 - dimensionless Boolean guards;
 - canonical analysis applicability;
 - stable source and statement identities;
@@ -44,7 +44,7 @@ and negative cases.
 
 ## Review hardening
 
-Six P1 review findings were corrected before acceptance:
+Eight P1 review findings were corrected before acceptance:
 
 1. Procedural rendering gives authored semantic order precedence over
    source-file and source-line provenance. Helper functions or multiple source
@@ -66,11 +66,18 @@ Six P1 review findings were corrected before acceptance:
 6. Boolean-producing expressions retain an explicit `Bool` result descriptor and
    dimensionless result dimension. Comparisons and nested Boolean logic therefore
    assign legally to Boolean variables while still retaining their operand reads.
+7. Real comparison operands are recursively dimension-checked before a Boolean
+   result is accepted. Incompatible comparisons such as `voltage > current` remain
+   invalid through surrounding Boolean logic and fail with `NODAL-ANALOG-033-013`.
+8. The native module verifier counts top-level procedural regions across every
+   analog region in one component and rejects a second region with
+   `NODAL-ANALOG-033-020`, including MLIR authored outside the Scala frontend.
 
 Dedicated regressions cover bare and compound dimension mismatches, nested
 lexical-scope chronology, assignment-before-dependent-initializer chronology,
-Boolean comparison result typing, repeated top-level procedural-region rejection,
-and native `nodalc` parsing of the resulting first-class procedural MLIR.
+Boolean comparison result typing and operand-dimension rejection, repeated
+top-level procedural-region rejection in both construction and native MLIR, and
+native `nodalc` parsing of the resulting first-class procedural MLIR.
 
 ## Semantic separation
 
@@ -104,7 +111,8 @@ request records immutable evidence.
 | Ordered assignment | `nodal.analog_assign` with contiguous `authored_order` | native order rejection, source-provenance inversion regression, and deterministic Scala snapshot tests |
 | Cross-category chronology | declaration and assignment records with one contiguous `operation_order` | nested-scope and assignment-before-dependent-initializer regressions with inverted provenance and native parsing |
 | Lexical and component ownership | `nodal.analog_procedure` and `nodal.analog_scope` verifier | owner, nested-region, scope, and cross-component tests |
-| Type, dimension, guard, and analysis legality | native recursive procedural verifier | dedicated invalid MLIR fixtures, bare and compound dimension regressions, and Scala semantic tests |
+| Procedural-region multiplicity | module-wide native count plus recorder guard | exact `NODAL-ANALOG-033-020` fixture with procedures in separate analog regions |
+| Type, dimension, guard, and analysis legality | native recursive procedural verifier and typed construction inference | dedicated invalid MLIR fixtures, bare/compound/comparison dimension regressions, and Scala semantic tests |
 | Compiler-boundary diagnostics | `NODAL-ANALOG-033-001` through `-020` in the diagnostic inventory | native diagnostics retain semantic path and MLIR location |
 | Source-map preservation | declaration/read/assignment `loc(...)` plus root source-map inventory | generic native round-trip and bridge source tests |
 | Authoritative serialization | ordinary `ScalaToMlirBridge` emits all procedural operations | deterministic document/hash test; no sidecar required for acceptance |

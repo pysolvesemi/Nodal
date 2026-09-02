@@ -712,6 +712,35 @@ private final class ConstructionSession(val options: EmitOptions):
       )
     leftCanonical -> rightCanonical
 
+  private def inferBooleanExpressionDimension(
+      expression: KernelExpr[?]
+  ): AnalogDimension =
+    expression.operation match
+      case Some("real_gt") | Some("real_ge") | Some("real_lt") |
+          Some("real_le") =>
+        expression.operands match
+          case Vector(left, right) =>
+            val compatible = inferAnalogDimension(left)
+              .compatibleAdd(inferAnalogDimension(right))
+            if compatible.isUnknown then AnalogDimension.Unknown
+            else AnalogDimension.Dimensionless
+          case _ => AnalogDimension.Unknown
+      case Some("bool_and") | Some("bool_or") =>
+        val dimensions = expression.operands.map(inferAnalogDimension)
+        if dimensions.nonEmpty && dimensions.forall(isDimensionlessBoolean) then
+          AnalogDimension.Dimensionless
+        else AnalogDimension.Unknown
+      case Some("bool_not") =>
+        expression.operands match
+          case Vector(operand)
+              if isDimensionlessBoolean(inferAnalogDimension(operand)) =>
+            AnalogDimension.Dimensionless
+          case _ => AnalogDimension.Unknown
+      case _ => AnalogDimension.Dimensionless
+
+  private def isDimensionlessBoolean(dimension: AnalogDimension): Boolean =
+    !dimension.isUnknown && dimension.powers.isEmpty
+
   def inferAnalogDimension(value: Any): AnalogDimension = value match
     case parameter: Param[?] => inferAnalogDimension(parameter.default)
     case state: AnalogState => physicalDimension(state.dimension)
@@ -723,7 +752,7 @@ private final class ConstructionSession(val options: EmitOptions):
         .getOrElse(AnalogDimension.Unknown)
     case expression: KernelExpr[?]
         if expression.resultType.exists(_.kind == "Bool") =>
-      AnalogDimension.Dimensionless
+      inferBooleanExpressionDimension(expression)
     case expression: KernelExpr[?] =>
       expression.literal match
         case Some(literal) if literal.kind == "real" =>

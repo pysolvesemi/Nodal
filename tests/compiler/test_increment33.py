@@ -24,6 +24,7 @@ REQUIRED = (
     "core/compiler/lib/Dialect/Nodal/NodalOps.cpp",
     "core/compiler/test/CMakeLists.txt",
     "core/compiler/test/IR/analog-procedural-invalid-variable-kind.mlir",
+    "core/compiler/test/IR/analog-procedural-invalid-multiple.mlir",
     "core/native/include/nodal/AnalogProceduralRuntime.h",
     "core/scala/api/src/nodal/AnalogProceduralRuntime.scala",
     "core/scala/api/src/nodal/CandidateApi.scala",
@@ -310,6 +311,48 @@ class Increment33ContractTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assert_rejected(root, "Scala runtime is missing")
+
+    def test_comparison_operand_dimension_validation_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/api/src/nodal/ElaborationConstructionKernel.scala"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "inferBooleanExpressionDimension(expression)",
+                    "AnalogDimension.Dimensionless",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "Boolean expression dimension inference is not delegated")
+
+    def test_native_multiple_procedure_boundary_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "return verifySingleTopLevelProcedurePerModule(getOperation());",
+                    "return success();",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "native module boundary does not reject")
+
+    def test_native_multiple_procedure_fixture_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/compiler/test/CMakeLists.txt"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    '"-DDIAGNOSTIC=NODAL-ANALOG-033-020"',
+                    '"-DDIAGNOSTIC=NODAL-ANALOG-033-999"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "exact native multiple-procedure diagnostic fixture")
 
 
 if __name__ == "__main__":

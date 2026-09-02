@@ -2,14 +2,15 @@
 
 **Status:** Normative Foundation-only roadmap extension  
 **Date:** 2026-08-23  
-**Roadmap revision:** 1.19  
+**Amended:** 2026-09-02  
+**Roadmap revision:** 1.43  
 **Architecture:** [ADR 0024](../architecture/0024-minimal-asic-advanced-io-readiness-boundary.md)  
 **Foundation:** the main Nodal Foundation roadmap plus Foundation Increments 150-151 below  
-**Implementation status:** deliberately unplanned
+**Implementation status:** deliberately outside this Foundation extension
 
 ## Intent
 
-This document contains only the minimum Foundation architecture needed to avoid blocking future controller/PHY-class ASIC and open-source physical-design work.
+This document contains only the minimum Foundation architecture needed to avoid blocking future controller/PHY-class ASIC, low-power, and open-source physical-design work.
 
 It does **not** define, schedule, authorize, or imply implementation increments for:
 
@@ -18,7 +19,7 @@ It does **not** define, schedule, authorize, or imply implementation increments 
 - DFI or LPDDR libraries, controllers, training engines, behavioral devices, or hard PHYs;
 - Yosys, OpenROAD, OpenROAD-flow-scripts, OpenLane, KLayout, commercial tools, or any specific foundry platform.
 
-Future implementation may receive a separately approved track whose numbering starts at 1. No such implementation TODO is created by this Foundation extension.
+Future ASIC and memory-interface implementation may receive separately approved tracks whose numbering starts at 1. Low-power implementation is now defined by the separate [Low-Power Architecture and Power Intent Track](low-power-power-intent-v0.1-plan.md), also numbered from 1 and blocked until every Foundation increment is complete. This Foundation extension itself creates no dependent-track implementation work and does not change the Foundation barrier.
 
 ## Foundation TODO
 
@@ -37,6 +38,7 @@ Future implementation may receive a separately approved track whose numbering st
   - Recognize synthesis, floorplanning, power-grid construction, placement, clock-tree synthesis, routing, extraction, GDS/OASIS assembly, DRC, and LVS as future adapter stage identities without defining their algorithms, scripts, command lines, or tool-specific public APIs.
   - Keep Yosys, OpenROAD, OpenROAD-flow-scripts, OpenLane, KLayout, commercial tools, PDK packages, SDC emission, physical execution, and sign-off outside Foundation.
   - Reserve future **ASIC Productivity and Sign-off** and **Memory Interface IP and PHY** track names. Each may start at Increment 1 only after a separate roadmap is explicitly approved.
+  - Route canonical Power Intent IR, UPF, reusable low-power primitives, power-aware verification, and technology mappings to the separately numbered Low-Power Architecture and Power Intent Track without adding them to Foundation.
   - This increment is architecture-only; no implementation TODO, compiler behavior, backend, plugin, library, tool adapter, or physical artifact is added.
 
 ## Architecture readiness boundary
@@ -65,6 +67,8 @@ These are architecture seams only. Foundation neither requires nor executes a pa
 
 Foundation may identify power domains, supplies, legal states and transitions, isolation, level shifting, retention, always-on intent, and operating-point associations. It does not implement UPF, insertion, power-aware simulation, or power analysis.
 
+The [Low-Power Architecture and Power Intent Track](low-power-power-intent-v0.1-plan.md) owns those implementations after the Foundation barrier. Its canonical Power Intent IR binds to these stable Foundation identities; its completion is not required to close Foundation.
+
 ### DFT/DFx identity
 
 Foundation may identify scan/test modes, overrides, MBIST/repair endpoints, JTAG/boundary-scan access, loopback/calibration-test observability, and test-specific timing/power targets. It does not implement scan insertion, ATPG, MBIST, boundary-scan generation, or ATE flows.
@@ -73,17 +77,16 @@ Foundation may identify scan/test modes, overrides, MBIST/repair endpoints, JTAG
 
 One logical external or hard-IP identity may reference applicable RTL, AMS, formal, Liberty, LEF, GDS/OASIS, SDF, SPEF, I/O-model, constraint, power, DFT, corner, and version metadata. Foundation does not parse every format, create layouts, define PDKs, or execute DRC/LVS/extraction.
 
-## Reserved future tracks — not TODOs
+## Dependent-track registration
 
-The following names and numbering policy are reserved only to prevent future roadmap ambiguity:
+- **Low-Power Architecture and Power Intent Track** — a normative roadmap is defined in [`low-power-power-intent-v0.1-plan.md`](low-power-power-intent-v0.1-plan.md); numbering starts at Increment 1; implementation is blocked until every Foundation increment is complete.
+- **ASIC Productivity and Sign-off Track** — future numbering starts at Increment 1; no TODO is defined here.
+- **Memory Interface IP and PHY Track** — future numbering starts at Increment 1; no TODO is defined here.
 
-- **ASIC Productivity and Sign-off Track** — future numbering starts at Increment 1.
-- **Memory Interface IP and PHY Track** — future numbering starts at Increment 1.
-
-This reservation contains no increment list, checkbox, prerequisite chain, implementation commitment, or authorization to start work. Exact scope must be proposed and approved later in a separate roadmap change.
+The Low-Power registration contains no Foundation checkbox or authorization to begin implementation. The two reserved names contain no increment list, checkbox, prerequisite chain, implementation commitment, or authorization to start work. Their exact scope must be proposed and approved later in separate roadmap changes.
 
 ## Foundation barrier clarification
 
-For this extension, Foundation completion requires only the architecture evidence recorded by Foundation Increments 150-151. It does not require an RTL-to-GDS run, generated GDS, a supported PDK, SDC/UPF/DFT implementation, an LPDDR controller, a PHY, or any external-tool integration.
+For this extension, Foundation completion requires only the architecture evidence recorded by Foundation Increments 150-151. It does not require an RTL-to-GDS run, generated GDS, a supported PDK, SDC/UPF/DFT implementation, a low-power primitive library, power-aware simulation, an LPDDR controller, a PHY, or any external-tool integration.
 
-A new memory standard, DFI revision, foundry, PDK, physical-design flow, or EDA tool should normally be handled by a future library, profile, plugin, or dependent-track roadmap. Foundation is reopened only for a genuinely missing target-neutral semantic identity that cannot be represented through ADR 0024 and this readiness boundary.
+A new power-intent standard, memory standard, DFI revision, foundry, PDK, physical-design flow, or EDA tool should normally be handled by a future library, profile, plugin, or dependent-track roadmap. Foundation is reopened only for a genuinely missing target-neutral semantic identity that cannot be represented through ADR 0024 and this readiness boundary.

@@ -1,0 +1,100 @@
+name: Increment 33 native boundary integration v3 2026-09-02
+
+on:
+  push:
+    branches:
+      - automation/inc33-native-boundary-integration-v3-20260902
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact repaired Increment 33 head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/33-analog-variables-procedural-assignment-v5
+          fetch-depth: 0
+
+      - name: Require exact baseline
+        run: test "$(git rev-parse HEAD)" = 5c9a855cc752e3d446505caac6b91ddbe342acd2
+
+      - name: Apply corrected native-boundary integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            automation/inc33-native-boundary-integration-v2-20260902:refs/remotes/origin/inc33-native-boundary-v2
+          python3 - <<'PY'
+          import subprocess
+          import textwrap
+
+          source = subprocess.check_output(
+              [
+                  "git",
+                  "show",
+                  "refs/remotes/origin/inc33-native-boundary-v2:.github/workflows/_inc33_native_boundary_integration_v2_20260902.yml",
+              ],
+              text=True,
+          )
+          begin_marker = "          python3 - <<'PY'\n"
+          end_marker = "\n          PY\n\n      - name: Install pinned native and lint toolchains"
+          begin = source.index(begin_marker) + len(begin_marker)
+          end = source.index(end_marker, begin)
+          script = textwrap.dedent(source[begin:end])
+          old = "required_marker = '    \"scripts/check_increment33.py\",\\n'"
+          new = (
+              "required_marker = "
+              "'    \".github/workflows/increment-33-analog-procedural-assignment.yml\",\\n'"
+          )
+          if script.count(old) != 1:
+              raise SystemExit("native-boundary REQUIRED anchor source is not unique")
+          script = script.replace(old, new, 1)
+          exec(compile(script, "increment33-native-boundary-v3.py", "exec"), {"__name__": "__main__"})
+          PY
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Run affected validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill mill.scalalib.scalafmt/reformatAll
+          python3 -m unittest discover -s tests/developer -p 'test_*.py'
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          ./nodal core scala
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          git diff --check
+
+      - name: Publish native-boundary integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name pysolvesemi
+          git config user.email pysolvesemi@gmail.com
+          git add \
+            scripts/nodal.py \
+            tests/developer/test_developer_commands.py \
+            scripts/check_increment33.py \
+            tests/compiler/test_increment33.py
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m 'fix(increment33): exercise Scala bridge through native command'
+          git push origin HEAD:increment/33-analog-variables-procedural-assignment-v5

@@ -1,0 +1,122 @@
+name: Increment 34 Evidence Consistency Fix v2
+
+on:
+  push:
+    branches:
+      - automation/inc34-evidence-consistency-fix-v2
+    paths:
+      - '.github/workflows/_inc34_evidence_consistency_fix_v2.yml'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: increment-34-evidence-consistency-fix-v2
+  cancel-in-progress: false
+
+jobs:
+  repair-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-evidence-consistency-fix-v2
+          path: controller
+          fetch-depth: 1
+
+      - name: Check out current closure head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/34-evidence-closure-v1
+          path: work
+          fetch-depth: 0
+
+      - name: Repair closure evidence consistency
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd work
+          base=$(git rev-parse HEAD)
+          remote=$(git ls-remote origin refs/heads/increment/34-evidence-closure-v1 | awk '{print $1}')
+          test "${base}" = "${remote}"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          validated = "b59ed10f423d4a66e7e47d66ec764b7ff22531e7"
+          staging = "da785a1fbb0d8381a83d9100e2318c553102efc8"
+
+          implementation = Path("docs/implementation/increment34-analog-control-flow.md")
+          text = implementation.read_text(encoding="utf-8")
+          old = """`33716060831`. Increment 34 itself remains unchecked
+          until its separate evidence closure.
+          """
+          new = """`33716060831`. Increment 34 remained unchecked through implementation merge
+          and post-merge validation. Separate evidence-closure PR #111 advances the
+          roadmap only after its own exact-head validation.
+          """
+          if old not in text:
+              raise SystemExit("implementation predecessor-status anchor missing")
+          text = text.replace(old, new, 1)
+          if staging not in text:
+              raise SystemExit("implementation staging SHA anchor missing")
+          implementation.write_text(text.replace(staging, validated), encoding="utf-8")
+
+          exact = Path("docs/implementation/increment34-exact-head-validation.md")
+          text = exact.read_text(encoding="utf-8")
+          old = """Increment 34 remains unchecked until implementation merge, post-merge
+          validation, and a separate evidence-closure pull request have completed.
+          """
+          new = """Increment 34 remained unchecked through implementation merge and post-merge
+          validation. Separate evidence-closure PR #111 now carries the roadmap
+          transition, which becomes authoritative only after that PR merges.
+          """
+          if old not in text:
+              raise SystemExit("exact-head closure-state anchor missing")
+          text = text.replace(old, new, 1)
+          if staging not in text:
+              raise SystemExit("exact-head staging SHA anchor missing")
+          exact.write_text(text.replace(staging, validated), encoding="utf-8")
+
+          roadmap = Path("docs/roadmap/nodal-development-todo.md")
+          text = roadmap.read_text(encoding="utf-8")
+          if text.count(staging) != 2:
+              raise SystemExit(
+                  f"roadmap staging SHA occurrence mismatch: {text.count(staging)}"
+              )
+          roadmap.write_text(text.replace(staging, validated), encoding="utf-8")
+
+          for path in (implementation, exact, roadmap):
+              content = path.read_text(encoding="utf-8")
+              if staging in content:
+                  raise SystemExit(f"stale staging SHA remains in {path}")
+          PY
+
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py
+          python3 scripts/check_increment34.py
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          python3 -m unittest discover -s tests/compiler -p 'test_increment34.py'
+          python3 scripts/check_markdown.py
+          python3 scripts/check_formatting_baseline.py
+          git diff --check
+
+          current=$(git ls-remote origin refs/heads/increment/34-evidence-closure-v1 | awk '{print $1}')
+          test "${current}" = "${base}"
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/implementation/increment34-analog-control-flow.md \
+                  docs/implementation/increment34-exact-head-validation.md \
+                  docs/roadmap/nodal-development-todo.md
+          git commit -m 'docs(increment34): align closure evidence identities'
+          git push origin HEAD:increment/34-evidence-closure-v1
+
+          published=$(git rev-parse HEAD)
+          gh pr comment 111 --repo "${GITHUB_REPOSITORY}" \
+            --body "Evidence consistency review repaired stale staging-SHA references and retrospective closure wording. Published head: \`${published}\`; controller run: \`${GITHUB_RUN_ID}\`."

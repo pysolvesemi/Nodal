@@ -39,6 +39,25 @@ python3 "${controller}/.github/automation/inc34_close_payload_v1.py" \
   --closure-head "${feature_base}" \
   --closure-run "${GITHUB_RUN_ID}"
 
+python3 - "${work}" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+for relative in (
+    "docs/implementation/increment34-analog-control-flow.md",
+    "docs/implementation/increment34-evidence-closure.md",
+    "docs/implementation/increment34-exact-head-validation.md",
+    "docs/roadmap/nodal-development-todo.md",
+):
+    path = root / relative
+    lines = path.read_text(encoding="utf-8").splitlines()
+    path.write_text(
+        "\n".join(line.rstrip() for line in lines) + "\n",
+        encoding="utf-8",
+    )
+PY
+
 python3 -m py_compile \
   "${work}/scripts/check_increment32.py" \
   "${work}/scripts/check_increment33.py" \

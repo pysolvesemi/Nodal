@@ -75,7 +75,35 @@ def main() -> int:
         text = text.replace(old, new, 1)''',
         "conditional arm deterministic replacement",
     )
+    text = replace_required(
+        text,
+        '        text = replace_once(text, old, new, "case arm owner check")',
+        '''        case_marker = "LogicalResult nodal::AnalogCaseOp::verify()"
+        if case_marker not in text:
+            raise SystemExit("case operation verifier was not found")
+        prefix, case_body = text.split(case_marker, 1)
+        if old not in case_body:
+            raise SystemExit("case arm owner check marker was not found")
+        text = prefix + case_marker + case_body.replace(old, new, 1)''',
+        "case arm deterministic replacement",
+    )
     post.write_text(text, encoding="utf-8")
+
+    dataflow_patch = automation / "inc34_patch_native_dataflow.py"
+    text = dataflow_patch.read_text(encoding="utf-8")
+    text = replace_required(
+        text,
+        '''            "analog-control-flow-rejects-missing-else",
+            "missing-default",
+            "zero-trip",
+            "continue-path",
+            "NODAL-ANALOG-034-004",''',
+        '''            "NAME nodal.native.analog-control-flow-rejects-${_fixture}",
+            "foreach(_fixture IN ITEMS missing-else missing-default zero-trip continue-path)",
+            "NODAL-ANALOG-034-004",''',
+        "templated native dataflow CMake contract",
+    )
+    dataflow_patch.write_text(text, encoding="utf-8")
 
     contract = automation / "inc34_patch_native_dataflow_contract_repair.py"
     text = contract.read_text(encoding="utf-8")

@@ -29,8 +29,9 @@ witness, direct-diagnostic, formatting, repository-style, and publication-lease
 gate. This owner-authored record creates the exact implementation head used for
 the complete inherited pull-request workflow matrix.
 
-Increment 34 remains unchecked until implementation merge, post-merge
-validation, and a separate evidence-closure pull request have completed.
+Increment 34 remained unchecked through implementation merge and post-merge
+validation. Separate evidence-closure PR #111 now carries the roadmap
+transition, which becomes authoritative only after that PR merges.
 
 ## Accepted implementation and post-merge evidence
 
@@ -41,7 +42,7 @@ validation, and a separate evidence-closure pull request have completed.
 - Post-merge Core CI: `33758905273`
 - Exact post-merge validation: `33759112770`
 - Evidence-closure PR: #111
-- Closure validation candidate: `da785a1fbb0d8381a83d9100e2318c553102efc8`
+- Closure validation candidate: `b59ed10f423d4a66e7e47d66ec764b7ff22531e7`
 - Closure validation run: `33761024228`
 
 The roadmap transition is made only by the separate evidence-closure pull

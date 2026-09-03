@@ -12,8 +12,9 @@ Increment 34 is validated against roadmap revision 1.44 and the completed
 Increment 33 evidence state. The predecessor record retains exact post-merge run
 `33714669557`, closure PR #110, closure validation head
 `4c9f285d387996b02d182279923c091dacdc5173`, and closure validation run
-`33716060831`. Increment 34 itself remains unchecked
-until its separate evidence closure.
+`33716060831`. Increment 34 remained unchecked through implementation merge
+and post-merge validation. Separate evidence-closure PR #111 advances the
+roadmap only after its own exact-head validation.
 
 ## Objective
 
@@ -176,7 +177,7 @@ source-correlated native parse/print.
 The exact-head inherited workflow matrix, final fresh review, implementation
 merge, Core CI, and independent post-merge validation are complete. Immutable
 closure evidence is recorded by PR #111 from candidate head
-`da785a1fbb0d8381a83d9100e2318c553102efc8` and validation run `33761024228`.
+`b59ed10f423d4a66e7e47d66ec764b7ff22531e7` and validation run `33761024228`.
 
 The implementation still does not legalize or emit procedural target HDL and
 does not form solver equations, residuals, or executable analysis schedules.

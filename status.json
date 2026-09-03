@@ -1,0 +1,16 @@
+{
+  "closure_head": "ae715e4b7ea045389933c1037da83394f7c1fe27",
+  "closure_merge": "605de95da0d4a9ffb65cab7cfa31bd46a7f6d556",
+  "closure_pull_request": 111,
+  "controller_attempt": 1,
+  "controller_run": 33796643111,
+  "detail": "Core CI failed or did not complete on the exact closure merge",
+  "final_core_ci_run": null,
+  "final_dev": "4c669a514e1fca42a254c4d842c8e1ad999e0e88",
+  "increment": 34,
+  "recorded_at": "2026-09-03T19:43:06.897580+00:00",
+  "repository": "pysolvesemi/Nodal",
+  "schema": 1,
+  "stage": "wait-final-core-ci",
+  "state": "failed"
+}

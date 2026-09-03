@@ -1,0 +1,58 @@
+name: Increment 34 Evidence Closure v4
+
+on:
+  push:
+    branches:
+      - automation/inc34-evidence-closure-controller-v1
+    paths:
+      - '.github/workflows/_inc34_evidence_closure_v4.yml'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: increment-34-evidence-closure-v1
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Check out Increment 34 closure controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-evidence-closure-controller-v1
+          path: controller
+          fetch-depth: 1
+
+      - name: Check out current Increment 34 evidence branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/34-evidence-closure-v1
+          path: work
+          fetch-depth: 0
+
+      - name: Materialize canonical closure evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/111" --jq '.head.sha')
+          draft=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/111" --jq '.draft')
+          dedicated=0
+          if [[ ${head} != da785a1fbb0d8381a83d9100e2318c553102efc8 ]]; then
+            dedicated=$(gh api \
+              "repos/${GITHUB_REPOSITORY}/contents/tests/compiler/fixtures/increment34/manifest.json?ref=${head}" \
+              --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d \
+              | jq -r '.validation.dedicated_boundary_workflow_run // 0' || true)
+          fi
+          if [[ ${head} != da785a1fbb0d8381a83d9100e2318c553102efc8 && \
+                ${draft} == false && ${dedicated} == 33732868285 ]]; then
+            echo "Canonical validated closure head is already published: ${head}"
+            exit 0
+          fi
+          bash controller/.github/automation/inc34_run_evidence_closure_v4.sh \
+            "${GITHUB_WORKSPACE}/controller" \
+            "${GITHUB_WORKSPACE}/work" \
+            "${RUNNER_TEMP}/inc34-evidence-closure-v4"

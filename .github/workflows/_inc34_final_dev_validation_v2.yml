@@ -1,0 +1,188 @@
+name: Increment 34 Final Dev Validation v2
+
+on:
+  push:
+    branches:
+      - automation/inc34-final-dev-validation-v2
+    paths:
+      - '.github/workflows/_inc34_final_dev_validation_v2.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-34-final-dev-validation-v2
+  cancel-in-progress: false
+
+jobs:
+  validate-final-dev:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    steps:
+      - name: Check out exact final dev commit
+        uses: actions/checkout@v6
+        with:
+          ref: 4c669a514e1fca42a254c4d842c8e1ad999e0e88
+          fetch-depth: 0
+
+      - name: Verify immutable final dev identity and ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=4c669a514e1fca42a254c4d842c8e1ad999e0e88
+          test "$(git rev-parse HEAD)" = "${expected}"
+          test "$(git ls-remote origin refs/heads/dev | awk '{print $1}')" = "${expected}"
+          git merge-base --is-ancestor \
+            a9d3ec50799953c41e7b9cf1d8bd6a2c5c9afd49 HEAD
+          git merge-base --is-ancestor \
+            605de95da0d4a9ffb65cab7cfa31bd46a7f6d556 HEAD
+
+      - name: Validate immutable Increment 34 closure evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import re
+
+          manifest = json.loads(
+              Path("tests/compiler/fixtures/increment34/manifest.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          assert manifest["schema"] == 1
+          assert manifest["increment"] == 34
+          assert manifest["status"] == "validated-analog-control-flow"
+          assert manifest["tranche"] == "34d-closure"
+          validation = manifest["validation"]
+          expected = {
+              "implementation_pull_request": 109,
+              "accepted_head": "207fd1b580e9428e9948cd4e4bd8f2060fde4b79",
+              "exact_head_workflow_count": 26,
+              "exact_head_core_ci_run": 33732864482,
+              "implementation_merge": "a9d3ec50799953c41e7b9cf1d8bd6a2c5c9afd49",
+              "post_merge_core_ci_run": 33758905273,
+              "exact_post_merge_validation_run": 33759112770,
+              "closure_pull_request": 111,
+              "closure_validation_head": "b59ed10f423d4a66e7e47d66ec764b7ff22531e7",
+              "closure_validation_run": 33761024228,
+          }
+          assert validation == expected
+
+          roadmap = Path("docs/roadmap/nodal-development-todo.md").read_text(
+              encoding="utf-8"
+          )
+          checked = "- [x] **Increment 34 — Analog control flow**"
+          opened = "- [ ] **Increment 34 — Analog control flow**"
+          assert "**Revision:** 1.45" in roadmap
+          assert roadmap.count(checked) == 1
+          assert opened not in roadmap
+          correct_link = (
+              "[`b59ed10f`](https://github.com/pysolvesemi/Nodal/commit/"
+              "b59ed10f423d4a66e7e47d66ec764b7ff22531e7)"
+          )
+          assert roadmap.count(correct_link) == 1
+          assert "[`da785a1f`](https://github.com/pysolvesemi/Nodal/commit/b59ed10f" not in roadmap
+
+          evidence = Path(
+              "docs/implementation/increment34-evidence-closure.md"
+          ).read_text(encoding="utf-8")
+          for token in (
+              "**Implementation PR:** #109",
+              "**Accepted implementation head:** `207fd1b580e9428e9948cd4e4bd8f2060fde4b79`",
+              "**Implementation merge:** `a9d3ec50799953c41e7b9cf1d8bd6a2c5c9afd49`",
+              "**Post-merge Core CI:** `33758905273`",
+              "**Exact post-merge validation:** `33759112770`",
+              "**Closure PR:** #111",
+              "**Closure validation head:** `b59ed10f423d4a66e7e47d66ec764b7ff22531e7`",
+              "**Closure validation run:** `33761024228`",
+          ):
+              assert token in evidence, token
+
+          implementation = Path(
+              "docs/implementation/increment34-analog-control-flow.md"
+          ).read_text(encoding="utf-8")
+          assert "**Status:** Validated" in implementation
+          assert "## Tranche 34d — closure" in implementation
+          closure_section = implementation.split("## Tranche 34d — closure", 1)[1]
+          closure_section = closure_section.split("## Current boundaries", 1)[0]
+          assert "- [ ]" not in closure_section
+          assert "b59ed10f423d4a66e7e47d66ec764b7ff22531e7" in closure_section
+
+          assert re.fullmatch(r"[0-9a-f]{40}", validation["accepted_head"])
+          print("Increment 34 immutable closure evidence is coherent.")
+          PY
+
+      - name: Validate Increment 32, 33, and 34 contracts and mutations
+        run: |
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py
+          python3 scripts/check_increment34.py
+          python3 -m unittest discover -s tests/compiler -p 'test_increment32.py'
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          python3 -m unittest discover -s tests/compiler -p 'test_increment34.py'
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+
+      - name: Compile Scala API and testkit
+        run: ./nodal core scala
+
+      - name: Execute Increment 34 semantic witnesses
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime="${RUNNER_TEMP}/increment34-final-runtime.txt"
+          construction="${RUNNER_TEMP}/increment34-final-construction.txt"
+          ./mill -i examples.continuousTimeApi.runMain \
+            nodal.increment34fixture.Increment34RuntimeCheck "${runtime}"
+          ./mill -i examples.continuousTimeApi.runMain \
+            nodal.increment34fixture.Increment34ConstructionCheck "${construction}"
+          grep -F 'conditional_definite=true' "${runtime}"
+          grep -F 'case_definite=true' "${runtime}"
+          grep -F 'loop_definite=true' "${runtime}"
+          grep -F 'missing_else=NODAL-ANALOG-034-004' "${runtime}"
+          grep -F 'zero_trip=NODAL-ANALOG-034-004' "${runtime}"
+          grep -F 'public_conditional_snapshots=1' "${construction}"
+          grep -F 'public_case_snapshots=1' "${construction}"
+          grep -F 'flat_assignments=0' "${construction}"
+          grep -F 'precontrol_scope_aligned=true' "${construction}"
+
+      - name: Bootstrap locked native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Build and validate the native compiler boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          nodalc=$(find out -type f -name nodalc -perm -u+x | head -n 1)
+          test -n "${nodalc}"
+          output="${RUNNER_TEMP}/increment34-final-structured.mlir"
+          "${nodalc}" \
+            --mlir-print-op-generic \
+            --mlir-print-debuginfo \
+            core/compiler/test/IR/analog-control-flow.mlir > "${output}"
+          grep -F '"nodal.analog_if"' "${output}"
+          grep -F '"nodal.analog_case"' "${output}"
+          grep -F '"nodal.analog_loop"' "${output}"
+          grep -F 'AnalogControlFlow.scala' "${output}"
+
+      - name: Validate repository style and final clean state
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" \
+            --base-ref HEAD^
+          git diff --check
+          test -z "$(git status --porcelain)"
+          expected=4c669a514e1fca42a254c4d842c8e1ad999e0e88
+          test "$(git rev-parse HEAD)" = "${expected}"
+          test "$(git ls-remote origin refs/heads/dev | awk '{print $1}')" = "${expected}"

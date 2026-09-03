@@ -1,0 +1,50 @@
+name: Increment 34 Native Sentinel v10
+
+on:
+  push:
+    branches:
+      - automation/inc34-native-sentinel-v10
+    paths:
+      - '.github/workflows/_inc34_native_sentinel_v10.yml'
+      - '.github/automation/inc34_native_sentinel_v10.py'
+      - '.github/automation/inc34_run_native_sentinel_v10.sh'
+      - '.github/automation/inc34_v10_generator_repair.py'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: increment-34-native-sentinel-v10
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - name: Check out sentinel controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-native-sentinel-v10
+          path: controller
+          fetch-depth: 1
+
+      - name: Check out current Increment 34 feature head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/34-analog-control-flow-v1
+          path: work
+          fetch-depth: 0
+
+      - name: Repair generated sentinel mutation source
+        run: python3 controller/.github/automation/inc34_v10_generator_repair.py
+
+      - name: Execute guarded canonical staging hardening
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash controller/.github/automation/inc34_run_native_sentinel_v10.sh \
+            "${GITHUB_WORKSPACE}/controller" \
+            "${GITHUB_WORKSPACE}/work" \
+            "${RUNNER_TEMP}/inc34-sentinel-v10"

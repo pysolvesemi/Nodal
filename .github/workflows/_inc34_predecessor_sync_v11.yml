@@ -1,0 +1,44 @@
+name: Increment 34 Predecessor Sync v11
+
+on:
+  push:
+    branches:
+      - automation/inc34-predecessor-sync-v11
+    paths:
+      - '.github/workflows/_inc34_predecessor_sync_v11.yml'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: increment-34-predecessor-sync-v11
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - name: Check out synchronization controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-predecessor-sync-v11
+          path: controller
+          fetch-depth: 1
+
+      - name: Check out current Increment 34 feature head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/34-analog-control-flow-v1
+          path: work
+          fetch-depth: 0
+
+      - name: Synchronize to validated Increment 33 closure
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash controller/.github/automation/inc34_run_predecessor_sync_v11.sh \
+            "${GITHUB_WORKSPACE}/controller" \
+            "${GITHUB_WORKSPACE}/work" \
+            "${RUNNER_TEMP}/inc34-predecessor-sync-v11"

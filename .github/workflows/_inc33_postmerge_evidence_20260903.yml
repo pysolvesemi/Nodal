@@ -1,0 +1,66 @@
+name: Increment 33 Exact Post-Merge Evidence
+
+on:
+  push:
+    branches:
+      - automation/inc33-postmerge-evidence-20260903
+    paths:
+      - '.github/workflows/_inc33_postmerge_evidence_20260903.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - name: Check out exact Increment 33 merge commit
+        uses: actions/checkout@v6
+        with:
+          ref: 2e0ff291b8d6c0f6dcc4b4c8e27cc33984cff1b8
+          fetch-depth: 0
+
+      - name: Install pinned native and lint toolchains
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate Increment 33 contracts and mutations
+        run: |
+          python3 scripts/check_increment31.py
+          python3 scripts/check_increment133.py
+          python3 scripts/check_increment32.py
+          python3 scripts/check_increment33.py --compile
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+
+      - name: Execute Scala API and bridge suite
+        run: ./nodal core scala
+
+      - name: Execute native compiler and verifier suite
+        run: |
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Execute source-semantic witness
+        run: |
+          report=/tmp/increment33-runtime.txt
+          ./mill -i examples.continuousTimeApi.runMain \
+            nodal.increment33fixture.Increment33RuntimeCheck \
+            "$report"
+          test -s "$report"
+          grep -F 'variables=4' "$report"
+          grep -F 'assignments=5' "$report"
+          grep -F 'ProceduralTop.capture,ProceduralTop.update,ProceduralTop.repeat-update' "$report"
+
+      - name: Check repository style and exact source state
+        run: |
+          ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          test "$(git rev-parse HEAD)" = \
+            2e0ff291b8d6c0f6dcc4b4c8e27cc33984cff1b8
+          git diff --exit-code

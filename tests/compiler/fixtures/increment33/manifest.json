@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "increment": 33,
-  "status": "implementation-in-progress",
+  "status": "validated-analog-procedural-assignment",
   "baseline": {
     "dev_commit": "b1d927772c2a33a535f7d7fbe44a3891900c2fa2",
     "increment_32_manifest": "validated-equation-contribution-semantics",
@@ -62,5 +62,15 @@
     "verilog-a-lowering",
     "verilog-ams-lowering"
   ],
-  "validation": null
+  "validation": {
+    "implementation_pull_request": 102,
+    "accepted_head": "ea7f7da51e85ba275dac71db7823ba0223f8d4ac",
+    "dedicated_boundary_workflow_run": 33592719238,
+    "implementation_merge": "2e0ff291b8d6c0f6dcc4b4c8e27cc33984cff1b8",
+    "post_merge_core_ci_run": 33605996500,
+    "exact_post_merge_validation_run": 33714669557,
+    "closure_pull_request": 110,
+    "closure_validation_head": "4c9f285d387996b02d182279923c091dacdc5173",
+    "closure_validation_run": 33716060831
+  }
 }

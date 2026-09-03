@@ -1,8 +1,8 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.43
+**Revision:** 1.44
 **Created:** 2026-08-20
-**Updated:** 2026-08-31
+**Updated:** 2026-09-03
 **Status:** Active roadmap
 **Primary language target:** Verilog-AMS 2023
 **Analog-only compatibility target:** Verilog-A
@@ -932,8 +932,10 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Require the approved equation/component checkpoint from Increment 133 before implementation begins.
   - Evidence: implementation PR [#97](https://github.com/pysolvesemi/Nodal/pull/97), accepted head [`6a76516a`](https://github.com/pysolvesemi/Nodal/commit/6a76516aba541ead97205e937118bb0f689fcd98), dedicated validation run [33370821599](https://github.com/pysolvesemi/Nodal/actions/runs/33370821599), merge commit [`e9ea39e8`](https://github.com/pysolvesemi/Nodal/commit/e9ea39e823d5a226a65b952e176d3bb90ecda0aa), and post-merge Core CI run [33372029305](https://github.com/pysolvesemi/Nodal/actions/runs/33372029305).
 
-- [ ] **Increment 33 — Analog variables and procedural assignment**
+- [x] **Increment 33 — Analog variables and procedural assignment**
   - Implement local variables, initialization, procedural assignment, scopes, read-before-write diagnostics, and lowering.
+
+  - Evidence: implementation PR [#102](https://github.com/pysolvesemi/Nodal/pull/102), accepted head [`ea7f7da5`](https://github.com/pysolvesemi/Nodal/commit/ea7f7da51e85ba275dac71db7823ba0223f8d4ac), dedicated boundary run [33592719238](https://github.com/pysolvesemi/Nodal/actions/runs/33592719238), merge commit [`2e0ff291`](https://github.com/pysolvesemi/Nodal/commit/2e0ff291b8d6c0f6dcc4b4c8e27cc33984cff1b8), post-merge Core CI run [33605996500](https://github.com/pysolvesemi/Nodal/actions/runs/33605996500), and exact post-merge validation run [33714669557](https://github.com/pysolvesemi/Nodal/actions/runs/33714669557).
 
 - [ ] **Increment 34 — Analog control flow**
   - Implement conditionals, case, bounded loops, break/continue where supported, and static/runtime legality.

@@ -74,11 +74,48 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
     manifest = read_json(root, manifest_path)
     require(manifest.get("schema") == 1, "NODAL-INC33-003: manifest schema must be 1")
     require(manifest.get("increment") == 33, "NODAL-INC33-004: manifest increment must be 33")
+    status = manifest.get("status")
     require(
-        manifest.get("status") == "implementation-in-progress",
-        "NODAL-INC33-005: checkpoint manifest must remain implementation-in-progress",
+        status in {
+            "implementation-in-progress",
+            "validated-analog-procedural-assignment",
+        },
+        f"NODAL-INC33-005: unsupported manifest status: {status}",
     )
-    require(manifest.get("validation") is None, "NODAL-INC33-006: validation must be null before evidence closure")
+    validation = manifest.get("validation")
+    if status == "implementation-in-progress":
+        require(
+            validation is None,
+            "NODAL-INC33-006: validation must be null before evidence closure",
+        )
+    else:
+        required_validation = (
+            "implementation_pull_request",
+            "accepted_head",
+            "dedicated_boundary_workflow_run",
+            "implementation_merge",
+            "post_merge_core_ci_run",
+            "exact_post_merge_validation_run",
+            "closure_pull_request",
+            "closure_validation_head",
+            "closure_validation_run",
+        )
+        require(
+            isinstance(validation, dict)
+            and all(validation.get(field) for field in required_validation),
+            "NODAL-INC33-006: validated manifest lacks complete evidence",
+        )
+        require(
+            validation.get("implementation_pull_request") == 102
+            and validation.get("accepted_head")
+            == "ea7f7da51e85ba275dac71db7823ba0223f8d4ac"
+            and validation.get("dedicated_boundary_workflow_run") == 33592719238
+            and validation.get("implementation_merge")
+            == "2e0ff291b8d6c0f6dcc4b4c8e27cc33984cff1b8"
+            and validation.get("post_merge_core_ci_run") == 33605996500
+            and validation.get("exact_post_merge_validation_run") == 33714669557,
+            "NODAL-INC33-006: validated manifest evidence does not match accepted implementation",
+        )
 
     baseline = manifest.get("baseline")
     require(isinstance(baseline, dict), "NODAL-INC33-007: manifest baseline must be an object")
@@ -459,17 +496,51 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
 
     roadmap = read_text(root, "docs/roadmap/nodal-development-todo.md")
     require(
-        "**Revision:** 1.43" in roadmap,
-        "NODAL-INC33-027: roadmap revision must remain 1.43 during implementation",
-    )
-    require(
         "- [x] **Increment 32 — First-class analog equations" in roadmap,
         "NODAL-INC33-028: Increment 32 must be checked before Increment 33",
     )
-    require(
-        "- [ ] **Increment 33 — Analog variables and procedural assignment**" in roadmap,
-        "NODAL-INC33-029: Increment 33 must remain unchecked before evidence closure",
+    increment33_open = (
+        "- [ ] **Increment 33 — Analog variables and procedural assignment**"
     )
+    increment33_closed = (
+        "- [x] **Increment 33 — Analog variables and procedural assignment**"
+    )
+    increment34_open = "- [ ] **Increment 34 — Analog control flow**"
+    require(
+        (increment33_open in roadmap) != (increment33_closed in roadmap),
+        "NODAL-INC33-029: Increment 33 roadmap state is missing or ambiguous",
+    )
+    if status == "implementation-in-progress":
+        require(
+            "**Revision:** 1.43" in roadmap and increment33_open in roadmap,
+            "NODAL-INC33-027: implementation state requires roadmap revision 1.43 with Increment 33 open",
+        )
+    else:
+        require(
+            "**Revision:** 1.44" in roadmap and increment33_closed in roadmap,
+            "NODAL-INC33-027: validated state requires roadmap revision 1.44 with Increment 33 closed",
+        )
+        require(
+            increment34_open in roadmap,
+            "NODAL-INC33-029: Increment 34 must remain unchecked during Increment 33 closure",
+        )
+        evidence = read_text(
+            root,
+            "docs/implementation/increment33-evidence-closure.md",
+        )
+        for token in (
+            "**Implementation PR:** #102",
+            "**Accepted implementation head:** `ea7f7da51e85ba275dac71db7823ba0223f8d4ac`",
+            "**Implementation merge:** `2e0ff291b8d6c0f6dcc4b4c8e27cc33984cff1b8`",
+            "**Exact post-merge validation:** `33714669557`",
+            f"**Closure PR:** #{validation['closure_pull_request']}",
+            f"**Closure validation head:** `{validation['closure_validation_head']}`",
+            f"**Closure validation run:** `{validation['closure_validation_run']}`",
+        ):
+            require(
+                token in evidence,
+                f"NODAL-INC33-080: evidence-closure record is missing {token!r}",
+            )
 
     workflow_path = root / ".github/workflows/increment-33-analog-procedural-assignment.yml"
     if workflow_path.exists():

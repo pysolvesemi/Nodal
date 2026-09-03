@@ -6,6 +6,7 @@ on:
       - automation/inc34-native-dataflow-v8
     paths:
       - '.github/workflows/_inc34_native_dataflow_v8.yml'
+      - '.github/automation/inc34_v8_repair_controller.py'
 
 permissions:
   contents: write

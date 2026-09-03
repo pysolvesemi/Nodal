@@ -10,30 +10,35 @@ import scala.collection.mutable
 private[nodal] object AnalogControlFlowConstruction:
   import AnalogControlFlowRuntime.*
 
+  private def requireCanonicalOwner(value: String, role: String): String =
+    val canonical = value.trim
+    if canonical.isEmpty || canonical != value then
+      AnalogControlFlowRuntime.fail(
+        "NODAL-ANALOG-034-001",
+        s"$role must be non-empty and canonical"
+      )
+    canonical
+
   final case class Snapshot(
       owner: String,
       root: Block,
       analysis: Result
   ):
     def remapOwner(newOwner: String): Snapshot =
-      val canonical = newOwner.trim
-      if canonical.isEmpty then
-        AnalogControlFlowRuntime.fail(
-          "NODAL-ANALOG-034-001",
-          "control-flow owner must be non-empty"
-        )
+      val currentOwner = requireCanonicalOwner(owner, "control-flow source owner")
+      val canonical = requireCanonicalOwner(newOwner, "control-flow destination owner")
 
       def remapPath(value: String): String =
-        if value == owner then canonical
-        else if value.startsWith(s"$owner.") then
-          s"$canonical${value.drop(owner.length)}"
+        if value == currentOwner then canonical
+        else if value.startsWith(s"$currentOwner.") then
+          s"$canonical${value.drop(currentOwner.length)}"
         else value
 
       def remapRendered(value: String): String =
         val result = new StringBuilder(value.length)
         var cursor = 0
         while cursor < value.length do
-          val matchIndex = value.indexOf(owner, cursor)
+          val matchIndex = value.indexOf(currentOwner, cursor)
           if matchIndex < 0 then
             result.append(value.substring(cursor))
             cursor = value.length
@@ -41,7 +46,7 @@ private[nodal] object AnalogControlFlowConstruction:
             val leftBoundary =
               matchIndex == 0 || !value.charAt(matchIndex - 1).isLetterOrDigit &&
                 value.charAt(matchIndex - 1) != '_' && value.charAt(matchIndex - 1) != '$'
-            val end = matchIndex + owner.length
+            val end = matchIndex + currentOwner.length
             val rightBoundary = end == value.length || value.charAt(end) == '.'
             if leftBoundary && rightBoundary then
               result.append(value.substring(cursor, matchIndex))
@@ -165,7 +170,8 @@ private[nodal] object AnalogControlFlowConstruction:
     var default: Option[Block] = None
 
   final class Builder(val owner: String):
-    private val root = new MutableBlock(s"$owner.procedure", None)
+    private val canonicalOwner = requireCanonicalOwner(owner, "control-flow owner")
+    private val root = new MutableBlock(s"$canonicalOwner.procedure", None)
     private val blocks = mutable.ArrayBuffer(root)
     private val frames = mutable.ArrayBuffer.empty[GroupFrame]
     private var controlSerial = 0
@@ -179,12 +185,12 @@ private[nodal] object AnalogControlFlowConstruction:
     private def current: MutableBlock = blocks.last
 
     private def nextIdentity(kind: String): String =
-      val identity = s"$owner.${kind}_$controlSerial"
+      val identity = s"$canonicalOwner.${kind}_$controlSerial"
       controlSerial += 1
       identity
 
     private def nextLexicalIdentity(): String =
-      val identity = s"$owner.scope_$lexicalSerial"
+      val identity = s"$canonicalOwner.scope_$lexicalSerial"
       lexicalSerial += 1
       identity
 
@@ -219,10 +225,11 @@ private[nodal] object AnalogControlFlowConstruction:
     def appendRead(statement: Statement.Read): Unit = append(statement)
 
     def lexicalScope[A](
-        source: Option[AnalogProceduralRuntime.Source]
+        source: Option[AnalogProceduralRuntime.Source],
+        identityOverride: Option[String] = None
     )(body: String => A): A =
       requireStatementPosition()
-      val identity = nextLexicalIdentity()
+      val identity = identityOverride.getOrElse(nextLexicalIdentity())
       val (block, result) = captureBlock(s"$identity.body", source)(body)
       append(Statement.Scope(identity, block, source))
       result
@@ -437,7 +444,7 @@ private[nodal] object AnalogControlFlowConstruction:
           "control-flow construction ended with an open group or block"
         )
       val frozen = root.freeze
-      Snapshot(owner, frozen, AnalogControlFlowRuntime.analyze(frozen))
+      Snapshot(canonicalOwner, frozen, AnalogControlFlowRuntime.analyze(frozen))
 
 private[nodal] object AnalogControlFlowInspection:
   def inspect(

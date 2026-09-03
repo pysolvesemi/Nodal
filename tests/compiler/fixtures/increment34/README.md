@@ -42,6 +42,8 @@ and canonical absent-value sentinels for runtime conditions and loops. Nested
 source declarations are required to remain block-local, and statically
 unreachable native regions still validate every variable reference for identity,
 ownership, and lexical visibility without emitting read-before-write errors.
+Control-flow snapshots require non-empty canonical owner identities. pre-control lexical scopes retain one shared recorder/structured identity when a later conditional, case, or loop converts the procedure to structured form.
+
 Solver
 construction, target legalization, and Verilog-A or Verilog-AMS
 procedural lowering remain deferred to their owning increments.

@@ -553,6 +553,43 @@ class Increment34ContractTests(unittest.TestCase):
             path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
             self.assert_rejected(root, "native hardening semantic")
 
+    def test_control_owner_validation_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/api/src/nodal/AnalogControlFlowConstruction.scala"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "control-flow source owner",
+                    "unvalidated source owner",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "control-flow construction bridge is missing")
+
+    def test_pre_control_scope_alignment_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/api/src/nodal/AnalogProceduralConstruction.scala"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "builder.lexicalScope(source, Some(builderIdentity))",
+                    "builder.lexicalScope(source)",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "procedural construction integration is missing")
+
+    def test_owner_scope_manifest_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "tests/compiler/fixtures/increment34/manifest.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["semantics"]["pre_control_lexical_scope_alignment"] = False
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            self.assert_rejected(root, "semantic contract")
+
     def test_write_enabled_workflow_is_rejected(self) -> None:
         temporary, root = self.fixture()
         with temporary:

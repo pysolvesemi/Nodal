@@ -187,6 +187,8 @@ normal, `break`, or `continue` edge.
 Initializer kind and physical dimension are checked independently of reachability.
 Initializer reads participate in branch-sensitive definite-assignment analysis
 only on reachable paths.
+- Control-flow owner identities are non-empty and canonical before construction or remapping.
+- A lexical scope authored before the first explicit control statement keeps the same semantic identity if the procedure later becomes structured.
 
 ## Branch-sensitive definite assignment
 

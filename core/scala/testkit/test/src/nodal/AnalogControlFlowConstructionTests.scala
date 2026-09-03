@@ -131,6 +131,20 @@ final class PublicAnalogBranchLocalDeclaration extends Module:
       analogOtherwise:
         sink := 2.0.real
 
+final class PublicAnalogScopeBeforeStructuredControl extends Module:
+  val select: Variable[Bool] = variable(Bool, false.B)
+  val sink: Variable[Real] = variable(Real, 0.0.real)
+
+  analogProcedure:
+    initial:
+      val local = variable(Real, 1.0.real)
+      local := 2.0.real
+    analogConditional:
+      analogWhen(select):
+        sink := 3.0.real
+      analogOtherwise:
+        sink := 4.0.real
+
 final class PublicAnalogControlChild extends Module:
   val select: Variable[Bool] = variable(Bool, false.B)
   val value: Variable[Real] = variable(Real)
@@ -266,6 +280,48 @@ object AnalogControlFlowConstructionTests extends TestSuite:
       assert(declarations.size == 1)
       assert(declarations.head.local)
       assert(declarations.head.variable.contains(".if_"))
+
+    test("lexical scope before first control retains one aligned semantic path"):
+      val inspection = AnalogControlFlowInspection.inspect(
+        new PublicAnalogScopeBeforeStructuredControl
+      )
+      val snapshot = inspection.controlFlow.head
+      val scope = snapshot.root.statements.collectFirst:
+        case value: AnalogControlFlowRuntime.Statement.Scope => value
+      assert(scope.nonEmpty)
+      val declaration = scope.toVector.flatMap(_.body.statements).collectFirst:
+        case value: AnalogControlFlowRuntime.Statement.Declare => value
+      assert(declaration.nonEmpty)
+      assert(declaration.exists(_.variable.startsWith(s"${scope.get.identity}.")))
+      val program = inspection.construction.analogProcedural.head
+      val record = program.variables.find(record =>
+        declaration.exists(_.variable == record.variable.identity)
+      )
+      assert(record.nonEmpty)
+      assert(
+        record.exists(
+          _.variable.declarationScope.mkString(".") ==
+            scope.get.identity.stripPrefix(s"${snapshot.owner}.")
+        )
+      )
+
+    test("control-flow owners are non-empty and canonical"):
+      val empty = scala.util
+        .Try(new AnalogControlFlowConstruction.Builder(""))
+        .failed
+        .get
+        .asInstanceOf[AnalogControlFlowRuntime.Failure]
+      assert(empty.diagnostic.code == "NODAL-ANALOG-034-001")
+      val snapshot = AnalogControlFlowInspection
+        .inspect(new PublicAnalogConditionalComplete)
+        .controlFlow
+        .head
+      val padded = scala.util
+        .Try(snapshot.remapOwner(" padded.owner"))
+        .failed
+        .get
+        .asInstanceOf[AnalogControlFlowRuntime.Failure]
+      assert(padded.diagnostic.code == "NODAL-ANALOG-034-001")
 
     test("child control-flow snapshot resolves to the authored instance path"):
       val inspection = AnalogControlFlowInspection.inspect(new PublicAnalogControlParent)

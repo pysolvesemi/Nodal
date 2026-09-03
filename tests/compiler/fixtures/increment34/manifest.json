@@ -64,7 +64,9 @@
     "native_canonical_condition_sentinels": true,
     "native_canonical_loop_sentinels": true,
     "nested_declaration_locality": true,
-    "native_unreachable_structural_reference_validation": true
+    "native_unreachable_structural_reference_validation": true,
+    "canonical_control_owner_identity": true,
+    "pre_control_lexical_scope_alignment": true
   },
   "integration": {
     "public_construction_kernel": true,

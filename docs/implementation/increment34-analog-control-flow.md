@@ -151,6 +151,8 @@ evidence and must be rerun.
   unreachable native regions without applying reachable-path read-before-write
   diagnostics.
 - [x] Reject nested source-semantic declarations that are not marked block-local.
+- [x] Reject empty or padded control-flow owners before construction or remapping.
+- [x] Keep recorder and structured identities aligned for lexical scopes authored before the first explicit control construct.
 
 ## Tranche 34d — closure
 

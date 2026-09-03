@@ -443,13 +443,16 @@ private[nodal] object AnalogProceduralConstruction:
     else
       val builder = activeBuilder(module)
       val source = ConstructionKernel.captureAnalogProceduralSource
-      builder.lexicalScope(source): builderIdentity =>
-        if builder.hasStructuredControl then
+      if builder.hasStructuredControl then
+        builder.lexicalScope(source): builderIdentity =>
           withControlScope(module, builderIdentity)(body)
-        else
-          val recorderIdentity = s"block_${module.scopeSerial}"
-          module.scopeSerial += 1
-          val stableScope = s"$recorderIdentity#${module.scopeSerial}"
+      else
+        val recorderIdentity = s"block_${module.scopeSerial}"
+        module.scopeSerial += 1
+        val stableScope = s"$recorderIdentity#${module.scopeSerial}"
+        val builderIdentity =
+          s"${module.owner}.${(module.controlScope :+ stableScope).mkString(".")}"
+        builder.lexicalScope(source, Some(builderIdentity)): _ =>
           module.controlScope = module.controlScope :+ stableScope
           try module.recorder.scope(recorderIdentity)(body)
           finally module.controlScope = module.controlScope.dropRight(1)

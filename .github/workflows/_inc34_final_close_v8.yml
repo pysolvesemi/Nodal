@@ -1,0 +1,35 @@
+name: Increment 34 Final Closure v8
+
+on:
+  push:
+    branches:
+      - automation/inc34-final-close-v8-20260904
+    paths:
+      - '.github/workflows/_inc34_final_close_v8.yml'
+
+permissions:
+  actions: write
+  contents: write
+  issues: write
+  pull-requests: write
+  statuses: write
+
+concurrency:
+  group: increment-34-final-close-v8
+  cancel-in-progress: false
+
+jobs:
+  close:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Check out final closure controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-final-close-v8-20260904
+          fetch-depth: 1
+
+      - name: Complete and validate Increment 34 closure
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/automation/inc34_final_close_v8.sh

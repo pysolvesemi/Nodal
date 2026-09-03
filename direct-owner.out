@@ -1,0 +1,7 @@
+core/compiler/test/IR/analog-control-flow-invalid-owner.mlir:6:7: error: NODAL-ANALOG-033-009: analog procedural owner must be non-empty and canonical [semantic-path=ControlTop.analogProcedure] [hierarchy-path=ControlTop] [source-range=core/compiler/test/IR/analog-control-flow-invalid-owner.mlir:6:7-6:7]
+      "nodal.analog_procedure"() <{metadata = {semantic_path = "ControlTop.analogProcedure"}, owner = " ControlTop"}> ({
+      ^
+core/compiler/test/IR/analog-control-flow-invalid-owner.mlir:6:7: note: see current operation: 
+"nodal.analog_procedure"() <{metadata = {semantic_path = "ControlTop.analogProcedure"}, owner = " ControlTop"}> ({
+  %0 = "nodal.analog_variable"() <{declaration_order = 0 : i64, identity = "ControlTop.procedure.value", initialized = true, initializer_dimension = "1", initializer_kind = "real", initializer_reads = [], initializer_value = "1.0", metadata = {semantic_path = "ControlTop.procedure.value"}, owner = " ControlTop"}> : () -> !nodal.variable<"real", "1">
+}) : () -> ()

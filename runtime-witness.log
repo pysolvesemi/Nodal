@@ -1,0 +1,10 @@
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::objectFieldOffset has been called by scala.runtime.LazyVals$ (file:/home/runner/.cache/coursier/v1/https/repo1.maven.org/maven2/org/scala-lang/scala-library/3.8.2/scala-library-3.8.2.jar)
+WARNING: Please consider reporting this to the maintainers of class scala.runtime.LazyVals$
+WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+/home/runner/.cache/nodal/mill/mill-1.1.7.sh exa...e/runner/work/_temp/increment34-runtime-v14.txt
+181] examples.continuousTimeApi.runMain
+181/181, SUCCESS] /home/runner/.cache/nodal/mill/mill-1...ork/_temp/increment34-runtime-v14.txt 4s
+unreachable_unknown=NODAL-ANALOG-034-014
+escaped_local=NODAL-ANALOG-034-014
+forward_reference=NODAL-ANALOG-034-014

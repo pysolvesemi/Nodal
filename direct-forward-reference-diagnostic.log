@@ -1,0 +1,1 @@
+core/compiler/test/IR/analog-control-flow-invalid-forward-reference.mlir:13:13: error: NODAL-ANALOG-034-014: structured variable 'ControlTop.procedure.future' must be declared before use [semantic-path=ControlTop.statement_0] [hierarchy-path=ControlTop] [source-range=core/compiler/test/IR/analog-control-flow-invalid-forward-reference.mlir:13:13-13:13]

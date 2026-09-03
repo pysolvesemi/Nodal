@@ -1,0 +1,3 @@
+    "native_unreachable_structural_reference_validation": true,
+    "canonical_control_owner_identity": true,
+    "pre_control_lexical_scope_alignment": true

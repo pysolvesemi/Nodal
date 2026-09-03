@@ -2,11 +2,10 @@
 
 ## Status
 
-Implementation is complete and undergoing exact-head acceptance. Public
-construction, ordered source-semantic recording, Scala-to-MLIR serialization,
-native IR verification, compiler-boundary diagnostics, and source-map coverage
-are present. The roadmap remains open until the implementation is merged and a
-separate evidence-closure pull request records immutable validation evidence.
+Implementation and evidence closure are complete. Public construction,
+ordered source-semantic recording, Scala-to-MLIR serialization, native IR
+verification, compiler-boundary diagnostics, and source-map coverage are
+validated through implementation PR #102 and evidence-closure PR #110.
 
 ## Baseline
 
@@ -98,9 +97,9 @@ analysis. Later increments own topology and
 DAE construction, solving, scheduling, target legalization, and Verilog-A or
 Verilog-AMS emission.
 
-Increment 33 remains unchecked in the roadmap until the complete implementation
-passes its exact-head matrix, is merged, and a separate evidence-closure pull
-request records immutable evidence.
+Increment 33 is checked in roadmap revision 1.44 after implementation merge,
+post-merge Core CI, and the separate evidence-closure validation. Increment 34
+remains unchecked until its own implementation and evidence closure complete.
 
 ## Final implementation matrix
 

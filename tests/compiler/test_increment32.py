@@ -147,15 +147,30 @@ class Increment32ContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             clone = Path(temporary) / "repo"
             shutil.copytree(ROOT, clone, ignore=shutil.ignore_patterns("out", ".git"))
-            roadmap = clone / MODULE.ROADMAP
-            text = roadmap.read_text(encoding="utf-8").replace(
-                "- [ ] **Increment 33 — Analog variables and procedural assignment**",
-                "- [x] **Increment 33 — Analog variables and procedural assignment**",
-                1,
+            manifest_path = clone / MODULE.INCREMENT33
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["status"] = "implementation-in-progress"
+            manifest["validation"] = None
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2) + "\n",
+                encoding="utf-8",
             )
-            roadmap.write_text(text, encoding="utf-8")
             codes = [problem.code for problem in MODULE.validate_files(clone)]
             self.assertIn("NODAL-INC32-028", codes)
+
+    def test_validated_increment33_requires_complete_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            clone = Path(temporary) / "repo"
+            shutil.copytree(ROOT, clone, ignore=shutil.ignore_patterns("out", ".git"))
+            manifest_path = clone / MODULE.INCREMENT33
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["validation"]["closure_validation_run"] = None
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            problems = MODULE.validate_files(clone)
+            self.assertIn("NODAL-INC32-028", [problem.code for problem in problems])
 
 
 if __name__ == "__main__":

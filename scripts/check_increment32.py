@@ -36,6 +36,7 @@ WORKFLOW = Path(".github/workflows/increment-32-equation-contribution-semantics.
 ROADMAP = Path("docs/roadmap/nodal-development-todo.md")
 INCREMENT31 = Path("tests/compiler/fixtures/increment31/manifest.json")
 INCREMENT133 = Path("tests/api/fixtures/increment133/manifest.json")
+INCREMENT33 = Path("tests/compiler/fixtures/increment33/manifest.json")
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,7 @@ def validate_files(root: Path) -> list[Problem]:
     roadmap = read(root, ROADMAP, problems, "NODAL-INC32-009")
     increment31 = load_json(root, INCREMENT31, problems, "NODAL-INC32-010")
     increment133 = load_json(root, INCREMENT133, problems, "NODAL-INC32-011")
+    increment33 = load_json(root, INCREMENT33, problems, "NODAL-INC32-052")
     if problems:
         return problems
 
@@ -378,6 +380,7 @@ def validate_files(root: Path) -> list[Problem]:
     open32 = "- [ ] **Increment 32 — First-class analog equations, blocks, and contribution semantics**"
     closed32 = "- [x] **Increment 32 — First-class analog equations, blocks, and contribution semantics**"
     open33 = "- [ ] **Increment 33 — Analog variables and procedural assignment**"
+    closed33 = "- [x] **Increment 33 — Analog variables and procedural assignment**"
     if status == "implemented-awaiting-evidence" and open32 not in roadmap:
         problems.append(
             Problem("NODAL-INC32-026", "pre-evidence roadmap must leave Increment 32 open")
@@ -386,9 +389,45 @@ def validate_files(root: Path) -> list[Problem]:
         problems.append(
             Problem("NODAL-INC32-027", "validated roadmap must close Increment 32")
         )
-    if open33 not in roadmap:
+    successor_status = increment33.get("status")
+    if (open33 in roadmap) == (closed33 in roadmap):
         problems.append(
-            Problem("NODAL-INC32-028", "Increment 33 must remain unchecked during closure")
+            Problem("NODAL-INC32-028", "Increment 33 roadmap state is missing or ambiguous")
+        )
+    elif successor_status == "implementation-in-progress":
+        if open33 not in roadmap:
+            problems.append(
+                Problem("NODAL-INC32-028", "pre-evidence Increment 33 must remain unchecked")
+            )
+    elif successor_status == "validated-analog-procedural-assignment":
+        validation33 = increment33.get("validation")
+        required33 = (
+            "implementation_pull_request",
+            "accepted_head",
+            "dedicated_boundary_workflow_run",
+            "implementation_merge",
+            "post_merge_core_ci_run",
+            "exact_post_merge_validation_run",
+            "closure_pull_request",
+            "closure_validation_head",
+            "closure_validation_run",
+        )
+        if closed33 not in roadmap:
+            problems.append(
+                Problem("NODAL-INC32-028", "validated Increment 33 must be checked in the roadmap")
+            )
+        if not isinstance(validation33, dict) or any(
+            not validation33.get(field) for field in required33
+        ):
+            problems.append(
+                Problem("NODAL-INC32-028", "validated Increment 33 lacks complete evidence")
+            )
+    else:
+        problems.append(
+            Problem(
+                "NODAL-INC32-028",
+                f"unsupported Increment 33 successor status: {successor_status}",
+            )
         )
     if status == "validated-equation-contribution-semantics":
         validation = manifest.get("validation")

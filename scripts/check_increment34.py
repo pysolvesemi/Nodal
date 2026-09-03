@@ -205,6 +205,8 @@ def check_repository(root: Path) -> None:
         "native_authored_order_verification",
         "native_guard_read_definite_assignment",
         "native_canonical_case_labels",
+        "nested_declaration_locality",
+        "native_unreachable_structural_reference_validation",
     ):
         require(
             semantics.get(key) is True,
@@ -327,6 +329,7 @@ def check_repository(root: Path) -> None:
             "break is legal only in the nearest runtime-bounded loop",
             "continue is legal only in the nearest runtime-bounded loop",
             "flow.breaks.map(_ -- locals)",
+            "nested declaration must be block-local",
             "states.tail.foldLeft(first)(_ intersect _)",
             "if loop.minimumIterations == 0 then exits += input",
             "exits ++= body.breaks",
@@ -428,6 +431,7 @@ def check_repository(root: Path) -> None:
             "case_definite=",
             "loop_definite=",
             "static_definite=",
+            "nested_nonlocal=NODAL-ANALOG-034-014",
         ),
         "NODAL-INC34-024",
         "source-semantic witness",
@@ -457,6 +461,7 @@ def check_repository(root: Path) -> None:
             "block-local declarations",
             "authored instance paths",
             "false flat Increment 33",
+            "unreachable native regions",
         ),
         "NODAL-INC34-026",
         "fixture README",
@@ -628,6 +633,8 @@ def check_repository(root: Path) -> None:
             "int64_t nextAssignmentOrder = 0",
             '"guard_reads", input, context',
             "isCanonicalStructuredCaseLabel",
+            "verifyStructuredReferenceInventory",
+            "verifyStructuredReferences",
             "structured declaration order must be contiguous and authored",
             "structured assignment order must be contiguous and authored",
         ),
@@ -639,6 +646,7 @@ def check_repository(root: Path) -> None:
         "order",
         "guard-read",
         "case-label",
+        "unreachable-reference",
     ):
         require(
             (root / f"core/compiler/test/IR/analog-control-flow-invalid-{fixture}.mlir").is_file(),
@@ -651,6 +659,7 @@ def check_repository(root: Path) -> None:
             "analog-control-flow-rejects-order",
             "analog-control-flow-rejects-guard-read",
             "analog-control-flow-rejects-case-label",
+            "analog-control-flow-rejects-unreachable-reference",
         ),
         "NODAL-INC34-042",
         "native structured hardening tests",

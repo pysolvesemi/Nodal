@@ -260,6 +260,29 @@ object Increment34RuntimeCheck:
     )
     assert(staticSelection.definitelyInitialized.contains("value"))
 
+    expect("NODAL-ANALOG-034-014"):
+      AnalogControlFlowRuntime.analyze(
+        Block(
+          "nested-nonlocal-root",
+          Vector(
+            Statement.Scope(
+              "nested-nonlocal-scope",
+              Block(
+                "nested-nonlocal-body",
+                Vector(
+                  Statement.Declare(
+                    "nested-nonlocal-declaration",
+                    "nested-local",
+                    initialized = true,
+                    local = false
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+
     val lines = Vector(
       s"conditional_definite=${conditional.definitelyInitialized.contains("value")}",
       s"case_definite=${selected.definitelyInitialized.contains("value")}",
@@ -269,6 +292,7 @@ object Increment34RuntimeCheck:
       "zero_trip=NODAL-ANALOG-034-004",
       "duplicate_case=NODAL-ANALOG-034-006",
       "break_scope=NODAL-ANALOG-034-010",
-      "continue_scope=NODAL-ANALOG-034-011"
+      "continue_scope=NODAL-ANALOG-034-011",
+      "nested_nonlocal=NODAL-ANALOG-034-014"
     )
     Files.writeString(report, lines.mkString("", System.lineSeparator(), System.lineSeparator()))

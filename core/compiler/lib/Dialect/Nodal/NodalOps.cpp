@@ -720,9 +720,12 @@ LogicalResult collectStructuredVariables(Block &block, llvm::StringRef owner,
   return success();
 }
 
-LogicalResult requireStructuredRead(Operation *operation, llvm::StringRef identity,
-                                    const StructuredInitializedSet &initialized,
-                                    const StructuredDataflowContext &context) {
+LogicalResult requireStructuredReference(Operation *operation, llvm::StringRef identity,
+                                         const StructuredDataflowContext &context) {
+  if (identity.trim().empty() || identity.trim() != identity)
+    return nodal::emitMappedFailure(
+        operation, "NODAL-ANALOG-034-014",
+        "structured variable reference must be non-empty and canonical");
   auto variable = context.variables.find(identity);
   if (variable == context.variables.end())
     return nodal::emitMappedFailure(
@@ -732,6 +735,14 @@ LogicalResult requireStructuredRead(Operation *operation, llvm::StringRef identi
     return nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-014",
                                     llvm::Twine("structured variable '") + identity +
                                         "' is outside its lexical declaration scope");
+  return success();
+}
+
+LogicalResult requireStructuredRead(Operation *operation, llvm::StringRef identity,
+                                    const StructuredInitializedSet &initialized,
+                                    const StructuredDataflowContext &context) {
+  if (failed(requireStructuredReference(operation, identity, context)))
+    return failure();
   if (initialized.find(identity.str()) == initialized.end())
     return nodal::emitMappedFailure(
         operation, "NODAL-ANALOG-034-004",
@@ -789,6 +800,79 @@ FailureOr<std::string> structuredVariableIdentity(Operation *operation, Value va
     return failure();
   }
   return identity.str();
+}
+
+LogicalResult verifyStructuredReferenceInventory(Operation *operation,
+                                                 llvm::StringRef attributeName,
+                                                 const StructuredDataflowContext &context) {
+  auto references = operation->getAttrOfType<ArrayAttr>(attributeName);
+  if (!references)
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-014",
+                                    llvm::Twine("missing structured reference inventory '") +
+                                        attributeName + "'");
+  for (Attribute attribute : references) {
+    auto identity = llvm::dyn_cast<StringAttr>(attribute);
+    if (!identity)
+      return nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-014",
+                                      "structured reference inventory entries must be strings");
+    if (failed(requireStructuredReference(operation, identity.getValue(), context)))
+      return failure();
+  }
+  return success();
+}
+
+LogicalResult verifyStructuredReferences(Block &block, const StructuredDataflowContext &context) {
+  const StructuredInitializedSet noInitializationRequirement;
+  for (Operation &operation : block) {
+    llvm::StringRef inventory;
+    if (llvm::isa<nodal::AnalogVariableOp>(operation))
+      inventory = "initializer_reads";
+    else if (llvm::isa<nodal::AnalogAssignOp>(operation))
+      inventory = "guard_reads";
+    else if (llvm::isa<nodal::AnalogIfArmOp>(operation))
+      inventory = "condition_reads";
+    else if (llvm::isa<nodal::AnalogCaseOp>(operation))
+      inventory = "selector_reads";
+    else if (llvm::isa<nodal::AnalogLoopOp>(operation))
+      inventory = "bound_reads";
+
+    if (!inventory.empty() &&
+        failed(verifyStructuredReferenceInventory(&operation, inventory, context)))
+      return failure();
+
+    if (llvm::isa<nodal::AnalogVariableReadOp>(operation)) {
+      if (failed(structuredVariableIdentity(&operation, operation.getOperand(0), context,
+                                            /*requireInitialized=*/false,
+                                            noInitializationRequirement)))
+        return failure();
+    }
+
+    if (llvm::isa<nodal::AnalogAssignOp>(operation)) {
+      if (failed(structuredVariableIdentity(&operation, operation.getOperand(0), context,
+                                            /*requireInitialized=*/false,
+                                            noInitializationRequirement)))
+        return failure();
+      for (Value value : operation.getOperands().drop_front()) {
+        auto read = value.getDefiningOp<nodal::AnalogVariableReadOp>();
+        if (!read)
+          return nodal::emitMappedFailure(
+              &operation, "NODAL-ANALOG-034-014",
+              "structured assignment operands must be explicit variable reads");
+        if (failed(structuredVariableIdentity(
+                &operation, read.getOperation()->getOperand(0), context,
+                /*requireInitialized=*/false, noInitializationRequirement)))
+          return failure();
+      }
+    }
+
+    for (Region &region : operation.getRegions()) {
+      for (Block &nested : region) {
+        if (failed(verifyStructuredReferences(nested, context)))
+          return failure();
+      }
+    }
+  }
+  return success();
 }
 
 FailureOr<StructuredFlow> analyzeStructuredDataflowBlock(Block &block,
@@ -1029,6 +1113,8 @@ LogicalResult verifyStructuredDefiniteAssignment(Operation *procedure, llvm::Str
   StructuredDataflowContext context;
   Block &body = procedure->getRegion(0).front();
   if (failed(collectStructuredVariables(body, owner, context)))
+    return failure();
+  if (failed(verifyStructuredReferences(body, context)))
     return failure();
   auto flow = analyzeStructuredDataflowBlock(body, StructuredInitializedSet{}, context,
                                              /*retainLocals=*/true);

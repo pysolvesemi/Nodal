@@ -62,7 +62,9 @@
     "native_guard_read_definite_assignment": true,
     "native_canonical_case_labels": true,
     "native_canonical_condition_sentinels": true,
-    "native_canonical_loop_sentinels": true
+    "native_canonical_loop_sentinels": true,
+    "nested_declaration_locality": true,
+    "native_unreachable_structural_reference_validation": true
   },
   "integration": {
     "public_construction_kernel": true,

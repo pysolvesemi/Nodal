@@ -383,6 +383,12 @@ private[nodal] object AnalogControlFlowRuntime:
             "root declaration cannot be marked local",
             Some(declaration.identity)
           )
+        if !isRoot && !declaration.local then
+          fail(
+            "NODAL-ANALOG-034-014",
+            "nested declaration must be block-local",
+            Some(declaration.identity)
+          )
       case assignment: Statement.Assign =>
         validateIdentity(assignment.identity, identities)
         validateVariable(assignment.target, "control-flow assignment target", assignment.identity)

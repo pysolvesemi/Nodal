@@ -38,7 +38,11 @@ normal, unmatched, `break`, and `continue` exits and rejects reachable reads
 after incomplete conditionals, cases, and zero-minimum loops. The native
 boundary also enforces procedure-wide operation identities, contiguous authored
 orders, assignment-guard dependencies, canonical integer and Boolean case labels,
-and canonical absent-value sentinels for runtime conditions and loops. Solver
+and canonical absent-value sentinels for runtime conditions and loops. Nested
+source declarations are required to remain block-local, and statically
+unreachable native regions still validate every variable reference for identity,
+ownership, and lexical visibility without emitting read-before-write errors.
+Solver
 construction, target legalization, and Verilog-A or Verilog-AMS
 procedural lowering remain deferred to their owning increments.
 

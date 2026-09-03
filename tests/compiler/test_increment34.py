@@ -37,6 +37,7 @@ REQUIRED = (
     "core/compiler/test/IR/analog-control-flow-invalid-duplicate-identity.mlir",
     "core/compiler/test/IR/analog-control-flow-invalid-order.mlir",
     "core/compiler/test/IR/analog-control-flow-invalid-guard-read.mlir",
+    "core/compiler/test/IR/analog-control-flow-invalid-unreachable-reference.mlir",
     "core/compiler/test/IR/analog-control-flow-invalid-case-label.mlir",
     "core/compiler/test/IR/analog-control-flow-invalid-runtime-static-sentinel.mlir",
     "core/compiler/test/IR/analog-control-flow-invalid-else-static-sentinel.mlir",
@@ -513,6 +514,44 @@ class Increment34ContractTests(unittest.TestCase):
             document["semantics"]["native_canonical_condition_sentinels"] = False
             path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
             self.assert_rejected(root, "native staging semantic")
+
+    def test_nested_declaration_locality_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/api/src/nodal/AnalogControlFlowRuntime.scala"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "nested declaration must be block-local",
+                    "removed nested declaration locality",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "Scala control-flow runtime is missing")
+
+    def test_unreachable_structural_reference_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "verifyStructuredReferenceInventory",
+                    "removedVerifyStructuredReferenceInventory",
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "native structured verifier hardening is missing")
+
+    def test_fresh_review_manifest_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "tests/compiler/fixtures/increment34/manifest.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["semantics"][
+                "native_unreachable_structural_reference_validation"
+            ] = False
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            self.assert_rejected(root, "native hardening semantic")
 
     def test_write_enabled_workflow_is_rejected(self) -> None:
         temporary, root = self.fixture()

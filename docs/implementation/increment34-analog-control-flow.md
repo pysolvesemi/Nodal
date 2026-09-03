@@ -147,6 +147,10 @@ evidence and must be rerun.
   compiler boundary.
 - [x] Reject hidden static values on runtime or else conditions and hidden
   static trip counts on runtime loops.
+- [x] Validate variable-reference identity and lexical visibility in statically
+  unreachable native regions without applying reachable-path read-before-write
+  diagnostics.
+- [x] Reject nested source-semantic declarations that are not marked block-local.
 
 ## Tranche 34d — closure
 

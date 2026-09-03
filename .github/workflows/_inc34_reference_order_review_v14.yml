@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: increment-34-reference-order-review-v14
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   validate-and-publish:
@@ -42,3 +42,5 @@ jobs:
             "${GITHUB_WORKSPACE}/controller" \
             "${GITHUB_WORKSPACE}/work" \
             "${RUNNER_TEMP}/inc34-reference-order-review-v14"
+
+      # Re-run on the published v13 owner/scope head with current documentation anchors.

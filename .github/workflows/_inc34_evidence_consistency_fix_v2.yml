@@ -85,7 +85,7 @@ jobs:
 
           roadmap = Path("docs/roadmap/nodal-development-todo.md")
           text = roadmap.read_text(encoding="utf-8")
-          if text.count(staging) != 2:
+          if text.count(staging) != 1:
               raise SystemExit(
                   f"roadmap staging SHA occurrence mismatch: {text.count(staging)}"
               )

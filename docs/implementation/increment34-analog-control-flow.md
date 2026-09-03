@@ -153,6 +153,8 @@ evidence and must be rerun.
 - [x] Reject nested source-semantic declarations that are not marked block-local.
 - [x] Reject empty or padded control-flow owners before construction or remapping.
 - [x] Keep recorder and structured identities aligned for lexical scopes authored before the first explicit control construct.
+- [x] Resolve source-semantic references against declarations visible at each authored position, including static-dead blocks.
+- [x] Require native variable declarations to dominate identity-based uses and reject non-canonical native procedure owners.
 
 ## Tranche 34d — closure
 

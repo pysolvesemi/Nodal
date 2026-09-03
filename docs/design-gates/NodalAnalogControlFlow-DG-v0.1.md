@@ -189,6 +189,8 @@ Initializer reads participate in branch-sensitive definite-assignment analysis
 only on reachable paths.
 - Control-flow owner identities are non-empty and canonical before construction or remapping.
 - A lexical scope authored before the first explicit control statement keeps the same semantic identity if the procedure later becomes structured.
+- Every variable reference is resolved against declarations visible at the authored position, even when static staging makes the containing block unreachable for dataflow.
+- Direct native procedures require canonical owner identities and declarations that dominate all identity-based reads.
 
 ## Branch-sensitive definite assignment
 

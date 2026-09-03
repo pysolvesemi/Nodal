@@ -192,6 +192,23 @@ bool isVisibleFrom(Block *useBlock, Block *declarationBlock) {
   return false;
 }
 
+bool isDeclaredBeforeStructuredUse(Operation *declaration, Operation *use) {
+  if (!declaration || !use)
+    return false;
+  Block *declarationBlock = declaration->getBlock();
+  Block *currentBlock = use->getBlock();
+  Operation *useAnchor = use;
+  while (currentBlock && currentBlock != declarationBlock) {
+    Operation *parent = currentBlock->getParentOp();
+    if (!parent)
+      return false;
+    useAnchor = parent;
+    currentBlock = parent->getBlock();
+  }
+  return currentBlock == declarationBlock && declaration != useAnchor &&
+         declaration->isBeforeInBlock(useAnchor);
+}
+
 LogicalResult verifyStringArray(Operation *operation, llvm::StringRef attributeName,
                                 llvm::StringRef code, llvm::StringRef label) {
   auto values = operation->getAttrOfType<ArrayAttr>(attributeName);
@@ -590,6 +607,7 @@ LogicalResult verifyStructuredProceduralBlock(Block &block, llvm::StringRef owne
 using StructuredInitializedSet = std::set<std::string>;
 
 struct StructuredVariableInfo {
+  Operation *declaration = nullptr;
   Block *declarationBlock = nullptr;
 };
 
@@ -696,7 +714,8 @@ LogicalResult collectStructuredVariables(Block &block, llvm::StringRef owner,
             &operation, "NODAL-ANALOG-034-014",
             "structured declaration order must be contiguous and authored");
       ++context.nextDeclarationOrder;
-      if (!context.variables.try_emplace(identity, StructuredVariableInfo{operation.getBlock()})
+      if (!context.variables
+               .try_emplace(identity, StructuredVariableInfo{&operation, operation.getBlock()})
                .second)
         return nodal::emitMappedFailure(&operation, "NODAL-ANALOG-034-014",
                                         llvm::Twine("duplicate structured variable identity '") +
@@ -735,6 +754,10 @@ LogicalResult requireStructuredReference(Operation *operation, llvm::StringRef i
     return nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-014",
                                     llvm::Twine("structured variable '") + identity +
                                         "' is outside its lexical declaration scope");
+  if (!isDeclaredBeforeStructuredUse(variable->second.declaration, operation))
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-014",
+                                    llvm::Twine("structured variable '") + identity +
+                                        "' must be declared before use");
   return success();
 }
 
@@ -790,6 +813,12 @@ FailureOr<std::string> structuredVariableIdentity(Operation *operation, Value va
     (void)nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-014",
                                    llvm::Twine("structured variable '") + identity +
                                        "' is outside its lexical declaration scope");
+    return failure();
+  }
+  if (!isDeclaredBeforeStructuredUse(variable->second.declaration, operation)) {
+    (void)nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-014",
+                                   llvm::Twine("structured variable '") + identity +
+                                       "' must be declared before use");
     return failure();
   }
   if (requireInitialized && initialized.find(identity.str()) == initialized.end()) {
@@ -1152,9 +1181,9 @@ LogicalResult verifyAnalogProcedure(Operation *operation) {
     return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-008",
                                     "analog procedural region requires exactly one body block");
   llvm::StringRef owner = textAttr(operation, "owner");
-  if (owner.trim().empty())
+  if (owner.trim().empty() || owner.trim() != owner)
     return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-009",
-                                    "analog procedural owner must be non-empty");
+                                    "analog procedural owner must be non-empty and canonical");
   bool hasStructuredControl = false;
   operation->walk([&](Operation *nested) {
     if (llvm::isa<nodal::AnalogIfOp, nodal::AnalogCaseOp, nodal::AnalogLoopOp, nodal::AnalogBreakOp,

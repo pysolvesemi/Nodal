@@ -636,6 +636,24 @@ add_test(
 )
 
 add_test(
+  NAME nodal.native.analog-control-flow-rejects-forward-reference
+  COMMAND "${CMAKE_COMMAND}"
+    "-DNODALC=$<TARGET_FILE:nodalc>"
+    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow-invalid-forward-reference.mlir"
+    "-DDIAGNOSTIC=NODAL-ANALOG-034-014"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
+)
+
+add_test(
+  NAME nodal.native.analog-control-flow-rejects-owner
+  COMMAND "${CMAKE_COMMAND}"
+    "-DNODALC=$<TARGET_FILE:nodalc>"
+    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow-invalid-owner.mlir"
+    "-DDIAGNOSTIC=NODAL-ANALOG-033-009"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
+)
+
+add_test(
   NAME nodal.native.analog-control-flow-rejects-case-label
   COMMAND "${CMAKE_COMMAND}"
     "-DNODALC=$<TARGET_FILE:nodalc>"

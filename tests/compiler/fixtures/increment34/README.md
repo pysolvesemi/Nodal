@@ -44,6 +44,8 @@ unreachable native regions still validate every variable reference for identity,
 ownership, and lexical visibility without emitting read-before-write errors.
 Control-flow snapshots require non-empty canonical owner identities. pre-control lexical scopes retain one shared recorder/structured identity when a later conditional, case, or loop converts the procedure to structured form.
 
+All source-semantic references are checked against the declaration set visible at their authored position, including statically unreachable blocks. Native identity inventories additionally require declarations to dominate their uses, and direct native procedures reject non-canonical owners.
+
 Solver
 construction, target legalization, and Verilog-A or Verilog-AMS
 procedural lowering remain deferred to their owning increments.

@@ -243,8 +243,17 @@ private[nodal] object AnalogControlFlowRuntime:
       initiallyInitialized: Set[String] = Set.empty
   ): Result =
     val identities = mutable.HashSet.empty[String]
-    val declarations = mutable.HashSet.empty[String]
-    validateBlock(root, identities, declarations, Vector.empty, isRoot = true)
+    val declarations = mutable.HashSet.from(initiallyInitialized)
+    initiallyInitialized.foreach: identity =>
+      validateVariable(identity, "initially initialized variable", root.identity)
+    validateBlock(
+      root,
+      identities,
+      declarations,
+      initiallyInitialized,
+      Vector.empty,
+      isRoot = true
+    )
     val flow = analyzeBlock(root, initiallyInitialized, 0, retainLocals = true)
     Result(
       flow.normal.getOrElse(Set.empty),
@@ -358,18 +367,42 @@ private[nodal] object AnalogControlFlowRuntime:
         Some(path)
       )
 
+  private def requireVisibleReferences(
+      references: Iterable[String],
+      visible: Set[String],
+      label: String,
+      path: String
+  ): Unit =
+    references.foreach: reference =>
+      validateVariable(reference, label, path)
+    val missing = references.filterNot(visible.contains).toVector.distinct.sorted
+    if missing.nonEmpty then
+      fail(
+        "NODAL-ANALOG-034-014",
+        s"$label references variables outside their declaration scope: ${missing.mkString(",")}",
+        Some(path)
+      )
+
   private def validateBlock(
       block: Block,
       identities: mutable.Set[String],
       declarations: mutable.Set[String],
+      visibleAtEntry: Set[String],
       loopStack: Vector[LoopStage],
       isRoot: scala.Boolean
   ): Unit =
     validateIdentity(block.identity, identities)
+    var visible = visibleAtEntry
     block.statements.foreach:
       case declaration: Statement.Declare =>
         validateIdentity(declaration.identity, identities)
         validateVariable(declaration.variable, "declaration variable", declaration.identity)
+        requireVisibleReferences(
+          declaration.initializerReads,
+          visible,
+          "declaration initializer",
+          declaration.identity
+        )
         if declarations.contains(declaration.variable) then
           fail(
             "NODAL-ANALOG-034-014",
@@ -389,17 +422,33 @@ private[nodal] object AnalogControlFlowRuntime:
             "nested declaration must be block-local",
             Some(declaration.identity)
           )
+        visible = visible + declaration.variable
       case assignment: Statement.Assign =>
         validateIdentity(assignment.identity, identities)
-        validateVariable(assignment.target, "control-flow assignment target", assignment.identity)
-        assignment.reads.foreach: read =>
-          validateVariable(read, "control-flow assignment read", assignment.identity)
+        requireVisibleReferences(
+          Vector(assignment.target) ++ assignment.reads.toVector,
+          visible,
+          "control-flow assignment",
+          assignment.identity
+        )
       case read: Statement.Read =>
         validateIdentity(read.identity, identities)
-        validateVariable(read.variable, "control-flow read target", read.identity)
+        requireVisibleReferences(
+          Vector(read.variable),
+          visible,
+          "control-flow read",
+          read.identity
+        )
       case scope: Statement.Scope =>
         validateIdentity(scope.identity, identities)
-        validateBlock(scope.body, identities, declarations, loopStack, isRoot = false)
+        validateBlock(
+          scope.body,
+          identities,
+          declarations,
+          visible,
+          loopStack,
+          isRoot = false
+        )
       case conditional: Statement.IfThenElse =>
         validateIdentity(conditional.identity, identities)
         if conditional.branches.isEmpty then
@@ -409,7 +458,14 @@ private[nodal] object AnalogControlFlowRuntime:
             Some(conditional.identity)
           )
         conditional.branches.zipWithIndex.foreach: (branch, index) =>
-          validateCondition(branch.condition, s"${conditional.identity}.condition_$index")
+          val conditionPath = s"${conditional.identity}.condition_$index"
+          validateCondition(branch.condition, conditionPath)
+          requireVisibleReferences(
+            branch.condition.reads,
+            visible,
+            "conditional condition",
+            conditionPath
+          )
           requireNonEmptyBlock(
             branch.body,
             "conditional branch",
@@ -419,6 +475,7 @@ private[nodal] object AnalogControlFlowRuntime:
             branch.body,
             identities,
             declarations,
+            visible,
             loopStack,
             isRoot = false
           )
@@ -428,12 +485,19 @@ private[nodal] object AnalogControlFlowRuntime:
             alternative,
             identities,
             declarations,
+            visible,
             loopStack,
             isRoot = false
           )
       case selection: Statement.CaseStatement =>
         validateIdentity(selection.identity, identities)
         validateSelector(selection.selector, selection.identity)
+        requireVisibleReferences(
+          selection.selector.reads,
+          visible,
+          "case selector",
+          selection.identity
+        )
         if selection.arms.isEmpty then
           fail(
             "NODAL-ANALOG-034-015",
@@ -465,13 +529,21 @@ private[nodal] object AnalogControlFlowRuntime:
             labels += key
         selection.arms.zipWithIndex.foreach: (arm, index) =>
           requireNonEmptyBlock(arm.body, "case arm", s"${selection.identity}.arm_$index")
-          validateBlock(arm.body, identities, declarations, loopStack, isRoot = false)
+          validateBlock(
+            arm.body,
+            identities,
+            declarations,
+            visible,
+            loopStack,
+            isRoot = false
+          )
         selection.default.foreach: alternative =>
           requireNonEmptyBlock(alternative, "case default arm", selection.identity)
           validateBlock(
             alternative,
             identities,
             declarations,
+            visible,
             loopStack,
             isRoot = false
           )
@@ -487,6 +559,12 @@ private[nodal] object AnalogControlFlowRuntime:
             "bounded loop requires a dimensionless integer bound",
             Some(loop.identity)
           )
+        requireVisibleReferences(
+          loop.boundReads,
+          visible,
+          "loop bound",
+          loop.identity
+        )
         if loop.minimumIterations < 0 ||
           loop.maximumIterations < 0 ||
           loop.minimumIterations > loop.maximumIterations
@@ -518,6 +596,7 @@ private[nodal] object AnalogControlFlowRuntime:
           loop.body,
           identities,
           declarations,
+          visible,
           loopStack :+ loop.stage,
           isRoot = false
         )

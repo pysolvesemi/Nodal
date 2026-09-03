@@ -25,6 +25,14 @@ object Increment34RuntimeCheck:
   private def assignment(identity: String, target: String): Statement.Assign =
     Statement.Assign(identity, target)
 
+  private def declaration(
+      identity: String,
+      variable: String,
+      initialized: Boolean = false,
+      local: Boolean = false
+  ): Statement.Declare =
+    Statement.Declare(identity, variable, initialized = initialized, local = local)
+
   def main(args: Array[String]): Unit =
     val report = args.headOption
       .map(value => Path.of(value))
@@ -34,6 +42,7 @@ object Increment34RuntimeCheck:
       Block(
         "conditional-root",
         Vector(
+          declaration("conditional-value-declaration", "value"),
           Statement.IfThenElse(
             "conditional",
             Vector(
@@ -60,6 +69,7 @@ object Increment34RuntimeCheck:
         Block(
           "missing-else-root",
           Vector(
+            declaration("missing-else-value-declaration", "value"),
             Statement.IfThenElse(
               "missing-else",
               Vector(
@@ -82,6 +92,7 @@ object Increment34RuntimeCheck:
       Block(
         "case-root",
         Vector(
+          declaration("case-value-declaration", "value"),
           Statement.CaseStatement(
             "case",
             Selector.runtimeInteger("mode"),
@@ -113,6 +124,7 @@ object Increment34RuntimeCheck:
         Block(
           "duplicate-case-root",
           Vector(
+            declaration("duplicate-case-value-declaration", "value"),
             Statement.CaseStatement(
               "duplicate-case",
               Selector.runtimeInteger("mode"),
@@ -142,6 +154,7 @@ object Increment34RuntimeCheck:
       Block(
         "guaranteed-loop-root",
         Vector(
+          declaration("guaranteed-loop-value-declaration", "value"),
           Statement.Loop(
             "guaranteed-loop",
             LoopStage.RuntimeBounded,
@@ -164,6 +177,7 @@ object Increment34RuntimeCheck:
         Block(
           "zero-trip-loop-root",
           Vector(
+            declaration("zero-trip-loop-value-declaration", "value"),
             Statement.Loop(
               "zero-trip-loop",
               LoopStage.RuntimeBounded,
@@ -185,6 +199,7 @@ object Increment34RuntimeCheck:
         Block(
           "continue-loop-root",
           Vector(
+            declaration("continue-loop-value-declaration", "value"),
             Statement.Loop(
               "continue-loop",
               LoopStage.RuntimeBounded,
@@ -234,6 +249,8 @@ object Increment34RuntimeCheck:
       Block(
         "static-root",
         Vector(
+          declaration("static-uninitialized-declaration", "uninitialized"),
+          declaration("static-value-declaration", "value"),
           Statement.IfThenElse(
             "static-if",
             Vector(
@@ -259,6 +276,63 @@ object Increment34RuntimeCheck:
       )
     )
     assert(staticSelection.definitelyInitialized.contains("value"))
+
+    expect("NODAL-ANALOG-034-014"):
+      AnalogControlFlowRuntime.analyze(
+        Block(
+          "unreachable-unknown-root",
+          Vector(
+            Statement.IfThenElse(
+              "unreachable-unknown-if",
+              Vector(
+                ConditionalBranch(
+                  Condition.static(false),
+                  Block(
+                    "unreachable-unknown-body",
+                    Vector(Statement.Read("unreachable-unknown-read", "missing"))
+                  )
+                )
+              ),
+              None
+            )
+          )
+        )
+      )
+
+    expect("NODAL-ANALOG-034-014"):
+      AnalogControlFlowRuntime.analyze(
+        Block(
+          "escaped-local-root",
+          Vector(
+            Statement.Scope(
+              "escaped-local-scope",
+              Block(
+                "escaped-local-body",
+                Vector(
+                  declaration(
+                    "escaped-local-declaration",
+                    "escaped-local",
+                    initialized = true,
+                    local = true
+                  )
+                )
+              )
+            ),
+            Statement.Read("escaped-local-read", "escaped-local")
+          )
+        )
+      )
+
+    expect("NODAL-ANALOG-034-014"):
+      AnalogControlFlowRuntime.analyze(
+        Block(
+          "forward-reference-root",
+          Vector(
+            Statement.Read("forward-reference-read", "future"),
+            declaration("forward-reference-declaration", "future")
+          )
+        )
+      )
 
     expect("NODAL-ANALOG-034-014"):
       AnalogControlFlowRuntime.analyze(
@@ -293,6 +367,9 @@ object Increment34RuntimeCheck:
       "duplicate_case=NODAL-ANALOG-034-006",
       "break_scope=NODAL-ANALOG-034-010",
       "continue_scope=NODAL-ANALOG-034-011",
-      "nested_nonlocal=NODAL-ANALOG-034-014"
+      "nested_nonlocal=NODAL-ANALOG-034-014",
+      "unreachable_unknown=NODAL-ANALOG-034-014",
+      "escaped_local=NODAL-ANALOG-034-014",
+      "forward_reference=NODAL-ANALOG-034-014"
     )
     Files.writeString(report, lines.mkString("", System.lineSeparator(), System.lineSeparator()))

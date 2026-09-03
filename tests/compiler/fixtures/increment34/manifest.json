@@ -66,7 +66,10 @@
     "nested_declaration_locality": true,
     "native_unreachable_structural_reference_validation": true,
     "canonical_control_owner_identity": true,
-    "pre_control_lexical_scope_alignment": true
+    "pre_control_lexical_scope_alignment": true,
+    "scala_structural_reference_visibility": true,
+    "native_declaration_before_reference": true,
+    "native_canonical_procedure_owner": true
   },
   "integration": {
     "public_construction_kernel": true,

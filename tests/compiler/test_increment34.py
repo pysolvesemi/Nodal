@@ -38,6 +38,8 @@ REQUIRED = (
     "core/compiler/test/IR/analog-control-flow-invalid-order.mlir",
     "core/compiler/test/IR/analog-control-flow-invalid-guard-read.mlir",
     "core/compiler/test/IR/analog-control-flow-invalid-unreachable-reference.mlir",
+    "core/compiler/test/IR/analog-control-flow-invalid-forward-reference.mlir",
+    "core/compiler/test/IR/analog-control-flow-invalid-owner.mlir",
     "core/compiler/test/IR/analog-control-flow-invalid-case-label.mlir",
     "core/compiler/test/IR/analog-control-flow-invalid-runtime-static-sentinel.mlir",
     "core/compiler/test/IR/analog-control-flow-invalid-else-static-sentinel.mlir",
@@ -587,6 +589,56 @@ class Increment34ContractTests(unittest.TestCase):
             path = root / "tests/compiler/fixtures/increment34/manifest.json"
             document = json.loads(path.read_text(encoding="utf-8"))
             document["semantics"]["pre_control_lexical_scope_alignment"] = False
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            self.assert_rejected(root, "semantic contract")
+
+    def test_scala_structural_reference_visibility_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/api/src/nodal/AnalogControlFlowRuntime.scala"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "private def requireVisibleReferences",
+                    "private def removedRequireVisibleReferences",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "Scala control-flow runtime is missing")
+
+    def test_native_declaration_order_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "isDeclaredBeforeStructuredUse",
+                    "removedIsDeclaredBeforeStructuredUse",
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "native structured verifier hardening is missing")
+
+    def test_native_owner_canonicality_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "analog procedural owner must be non-empty and canonical",
+                    "analog procedural owner must be non-empty",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "native structured verifier hardening is missing")
+
+    def test_final_reference_manifest_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "tests/compiler/fixtures/increment34/manifest.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["semantics"]["native_declaration_before_reference"] = False
             path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
             self.assert_rejected(root, "semantic contract")
 

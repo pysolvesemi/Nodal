@@ -72,6 +72,7 @@ def repository_files(root: Path) -> tuple[Path, ...]:
 def check_repository(root: Path, compile_witnesses: bool = False) -> None:
     manifest_path = "tests/compiler/fixtures/increment33/manifest.json"
     manifest = read_json(root, manifest_path)
+    increment34 = read_json(root, "tests/compiler/fixtures/increment34/manifest.json")
     require(manifest.get("schema") == 1, "NODAL-INC33-003: manifest schema must be 1")
     require(manifest.get("increment") == 33, "NODAL-INC33-004: manifest increment must be 33")
     status = manifest.get("status")
@@ -506,9 +507,14 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         "- [x] **Increment 33 — Analog variables and procedural assignment**"
     )
     increment34_open = "- [ ] **Increment 34 — Analog control flow**"
+    increment34_closed = "- [x] **Increment 34 — Analog control flow**"
     require(
         (increment33_open in roadmap) != (increment33_closed in roadmap),
         "NODAL-INC33-029: Increment 33 roadmap state is missing or ambiguous",
+    )
+    require(
+        (increment34_open in roadmap) != (increment34_closed in roadmap),
+        "NODAL-INC33-081: Increment 34 roadmap state is missing or ambiguous",
     )
     if status == "implementation-in-progress":
         require(
@@ -517,13 +523,52 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         )
     else:
         require(
-            "**Revision:** 1.44" in roadmap and increment33_closed in roadmap,
-            "NODAL-INC33-027: validated state requires roadmap revision 1.44 with Increment 33 closed",
+            increment33_closed in roadmap,
+            "NODAL-INC33-027: validated Increment 33 must remain checked",
         )
-        require(
-            increment34_open in roadmap,
-            "NODAL-INC33-029: Increment 34 must remain unchecked during Increment 33 closure",
-        )
+        successor_status = increment34.get("status")
+        if successor_status == "implementation-in-progress":
+            require(
+                "**Revision:** 1.44" in roadmap and increment34_open in roadmap,
+                "NODAL-INC33-081: open Increment 34 requires roadmap revision 1.44",
+            )
+        elif successor_status == "validated-analog-control-flow":
+            successor_validation = increment34.get("validation")
+            required_successor_evidence = (
+                "implementation_pull_request",
+                "accepted_head",
+                "exact_head_workflow_count",
+                "exact_head_core_ci_run",
+                "implementation_merge",
+                "post_merge_core_ci_run",
+                "exact_post_merge_validation_run",
+                "closure_pull_request",
+                "closure_validation_head",
+                "closure_validation_run",
+            )
+            require(
+                isinstance(successor_validation, dict)
+                and all(
+                    successor_validation.get(field)
+                    for field in required_successor_evidence
+                ),
+                "NODAL-INC33-082: validated Increment 34 lacks complete evidence",
+            )
+            require(
+                successor_validation.get("implementation_pull_request") == 109
+                and successor_validation.get("accepted_head")
+                == "207fd1b580e9428e9948cd4e4bd8f2060fde4b79"
+                and successor_validation.get("implementation_merge")
+                == "a9d3ec50799953c41e7b9cf1d8bd6a2c5c9afd49"
+                and successor_validation.get("closure_pull_request") == 111
+                and "**Revision:** 1.45" in roadmap
+                and increment34_closed in roadmap,
+                "NODAL-INC33-083: validated Increment 34 successor evidence is inconsistent",
+            )
+        else:
+            raise CheckFailure(
+                f"NODAL-INC33-084: unsupported Increment 34 successor status: {successor_status}"
+            )
         evidence = read_text(
             root,
             "docs/implementation/increment33-evidence-closure.md",

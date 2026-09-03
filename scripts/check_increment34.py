@@ -79,10 +79,11 @@ def check_repository(root: Path) -> None:
     predecessor = load_json(root, "tests/compiler/fixtures/increment33/manifest.json")
     manifest = load_json(root, "tests/compiler/fixtures/increment34/manifest.json")
 
+    increment34_open = "- [ ] **Increment 34 — Analog control flow**"
+    increment34_closed = "- [x] **Increment 34 — Analog control flow**"
     require(
-        "- [ ] **Increment 34 — Analog control flow**" in roadmap
-        and "- [x] **Increment 34 — Analog control flow**" not in roadmap,
-        "NODAL-INC34-004: Increment 34 must remain unchecked until evidence closure",
+        (increment34_open in roadmap) != (increment34_closed in roadmap),
+        "NODAL-INC34-004: Increment 34 roadmap state is missing or ambiguous",
     )
     predecessor_validation = predecessor.get("validation")
     required_predecessor_evidence = (
@@ -145,18 +146,30 @@ def check_repository(root: Path) -> None:
         "NODAL-INC34-007: Increment 34 is not pinned to the validated Increment 33 baseline",
     )
     require(
-        "**Revision:** 1.44" in roadmap
-        and "- [x] **Increment 33 — Analog variables and procedural assignment**"
-        in roadmap,
+        "- [x] **Increment 33 — Analog variables and procedural assignment**" in roadmap,
         "NODAL-INC34-007: roadmap does not contain the validated Increment 33 predecessor",
     )
+    status = manifest.get("status")
     require(
         manifest.get("schema") == 1
         and manifest.get("increment") == 34
-        and manifest.get("status") == "implementation-in-progress"
-        and manifest.get("tranche") == "34c-native-branch-sensitive-dataflow",
-        "NODAL-INC34-008: manifest identity or tranche is invalid",
+        and status
+        in {
+            "implementation-in-progress",
+            "validated-analog-control-flow",
+        },
+        "NODAL-INC34-008: manifest identity or status is invalid",
     )
+    if status == "implementation-in-progress":
+        require(
+            manifest.get("tranche") == "34c-native-branch-sensitive-dataflow",
+            "NODAL-INC34-008: open Increment 34 tranche is invalid",
+        )
+    else:
+        require(
+            manifest.get("tranche") == "34d-closure",
+            "NODAL-INC34-008: validated Increment 34 tranche is invalid",
+        )
 
     semantics = manifest.get("semantics")
     require(isinstance(semantics, dict), "NODAL-INC34-009: semantics must be an object")
@@ -263,7 +276,84 @@ def check_repository(root: Path) -> None:
         and "native-branch-sensitive-definite-assignment" not in deferred,
         "NODAL-INC34-015: completed and deferred integration boundaries are inconsistent",
     )
-    require(manifest.get("validation") is None, "NODAL-INC34-015: validation must remain null")
+    validation = manifest.get("validation")
+    if status == "implementation-in-progress":
+        require(
+            validation is None,
+            "NODAL-INC34-015: validation must remain null before evidence closure",
+        )
+        require(
+            "**Revision:** 1.44" in roadmap
+            and increment34_open in roadmap
+            and "**Status:** In progress" in implementation,
+            "NODAL-INC34-046: open state requires roadmap revision 1.44 and in-progress records",
+        )
+    else:
+        required_validation = (
+            "implementation_pull_request",
+            "accepted_head",
+            "exact_head_workflow_count",
+            "exact_head_core_ci_run",
+            "implementation_merge",
+            "post_merge_core_ci_run",
+            "exact_post_merge_validation_run",
+            "closure_pull_request",
+            "closure_validation_head",
+            "closure_validation_run",
+        )
+        require(
+            isinstance(validation, dict)
+            and all(validation.get(field) for field in required_validation),
+            "NODAL-INC34-047: validated manifest lacks complete evidence",
+        )
+        require(
+            validation.get("implementation_pull_request") == 109
+            and validation.get("accepted_head") == "207fd1b580e9428e9948cd4e4bd8f2060fde4b79"
+            and validation.get("exact_head_workflow_count") == 26
+            and validation.get("exact_head_core_ci_run") == 33732864482
+            and validation.get("implementation_merge") == "a9d3ec50799953c41e7b9cf1d8bd6a2c5c9afd49"
+            and validation.get("post_merge_core_ci_run") == 33758905273
+            and validation.get("exact_post_merge_validation_run")
+            == 33759112770
+            and validation.get("closure_pull_request") == 111
+            and isinstance(validation.get("closure_validation_head"), str)
+            and len(validation.get("closure_validation_head")) == 40
+            and all(
+                character in "0123456789abcdef"
+                for character in validation.get("closure_validation_head")
+            )
+            and isinstance(validation.get("closure_validation_run"), int)
+            and validation.get("closure_validation_run") > 0,
+            "NODAL-INC34-048: validated evidence does not match the accepted implementation",
+        )
+        require(
+            "**Revision:** 1.45" in roadmap
+            and increment34_closed in roadmap
+            and "**Status:** Validated" in implementation,
+            "NODAL-INC34-049: validated state requires roadmap revision 1.45 and closed records",
+        )
+        evidence = read_text(
+            root,
+            "docs/implementation/increment34-evidence-closure.md",
+        )
+        evidence_tokens = (
+            "**Implementation PR:** #109",
+            "**Accepted implementation head:** `207fd1b580e9428e9948cd4e4bd8f2060fde4b79`",
+            "**Exact-head workflow matrix:** 26 successful workflows",
+            "**Exact-head Core CI:** `33732864482`",
+            "**Implementation merge:** `a9d3ec50799953c41e7b9cf1d8bd6a2c5c9afd49`",
+            "**Post-merge Core CI:** `33758905273`",
+            "**Exact post-merge validation:** `33759112770`",
+            f"**Closure PR:** #{validation['closure_pull_request']}",
+            f"**Closure validation head:** `{validation['closure_validation_head']}`",
+            f"**Closure validation run:** `{validation['closure_validation_run']}`",
+        )
+        require_tokens(
+            evidence,
+            evidence_tokens,
+            "NODAL-INC34-050",
+            "evidence-closure record",
+        )
 
     require_tokens(
         gate,
@@ -284,7 +374,6 @@ def check_repository(root: Path) -> None:
     require_tokens(
         implementation,
         (
-            "**Status:** In progress",
             "Tranche 34a — source-semantic foundation",
             "Tranche 34b — public construction",
             "Tranche 34c — bridge and native IR",

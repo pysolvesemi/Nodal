@@ -1,7 +1,7 @@
 # Increment 34 — Analog control-flow implementation
 
-**Status:** In progress  
-**Branch:** `increment/34-analog-control-flow-v1`  
+**Status:** Validated
+**Branch:** `increment/34-analog-control-flow-v1`
 **Baseline:** validated Increment 33 implementation head
 `ea7f7da51e85ba275dac71db7823ba0223f8d4ac`, merged as `2e0ff291b8d6c0f6dcc4b4c8e27cc33984cff1b8` and closed by
 PR #110; synchronized `dev` head `d3efa5fe83f64b29dc9368f54ab7a1159d8ad71f`.
@@ -123,8 +123,8 @@ evidence and must be rerun.
   sequence.
 - [x] Add public positive and negative construction tests and a standalone
   construction witness.
-- [ ] Pass the exact-head Increment 34 workflow and all inherited workflows.
-- [ ] Complete review of the public-construction exact head.
+- [x] Pass the exact-head Increment 34 workflow and all inherited workflows.
+- [x] Complete review of the public-construction exact head.
 
 ## Tranche 34c — bridge and native IR
 
@@ -158,12 +158,12 @@ evidence and must be rerun.
 
 ## Tranche 34d — closure
 
-- [ ] Complete deterministic reproducibility serialization.
-- [ ] Run the full inherited workflow matrix on one exact head.
-- [ ] Perform a fresh review and repair all findings.
-- [ ] Merge after Increment 33 is closed.
-- [ ] Run post-merge Core CI and dedicated Increment 34 validation.
-- [ ] Record immutable evidence and mark the roadmap item complete in a separate
+- [x] Complete deterministic reproducibility serialization.
+- [x] Run the full inherited workflow matrix on one exact head.
+- [x] Perform a fresh review and repair all findings.
+- [x] Merge after Increment 33 is closed.
+- [x] Run post-merge Core CI and dedicated Increment 34 validation.
+- [x] Record immutable evidence and mark the roadmap item complete in a separate
   closure pull request.
 
 ## Current boundaries
@@ -173,14 +173,14 @@ through deterministic textual MLIR, first-class native regions, structural
 verification, stable diagnostics, direct positive and negative fixtures, and
 source-correlated native parse/print.
 
-It does not yet:
+The exact-head inherited workflow matrix, final fresh review, implementation
+merge, Core CI, and independent post-merge validation are complete. Immutable
+closure evidence is recorded by PR #111 from candidate head
+`da785a1fbb0d8381a83d9100e2318c553102efc8` and validation run `33761024228`.
 
-- complete the exact-head inherited workflow matrix and fresh review;
-- legalize or emit procedural target HDL;
-- form solver equations, residuals, or executable analysis schedules.
-
-Those items remain active Increment 34 work, not evidence gaps claimed as
-complete behavior.
+The implementation still does not legalize or emit procedural target HDL and
+does not form solver equations, residuals, or executable analysis schedules.
+Those capabilities remain assigned to later roadmap increments.
 
 ## Review focus
 

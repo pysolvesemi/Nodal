@@ -46,6 +46,7 @@ REQUIRED = (
     "core/compiler/test/IR/analog-control-flow-invalid-loop-static-sentinel.mlir",
     "docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md",
     "docs/implementation/increment34-analog-control-flow.md",
+    "docs/implementation/increment34-evidence-closure.md",
     "docs/roadmap/nodal-development-todo.md",
     "examples/continuousTimeApi/src/nodal/increment34fixture/Increment34ConstructionCheck.scala",
     "examples/continuousTimeApi/src/nodal/increment34fixture/Increment34RuntimeCheck.scala",
@@ -75,18 +76,85 @@ class Increment34ContractTests(unittest.TestCase):
     def test_repository_checkpoint_passes(self) -> None:
         CHECKER.check_repository(ROOT)
 
-    def test_premature_roadmap_closure_is_rejected(self) -> None:
+    def test_validated_roadmap_regression_is_rejected(self) -> None:
         temporary, root = self.fixture()
         with temporary:
             path = root / "docs/roadmap/nodal-development-todo.md"
             path.write_text(
                 path.read_text(encoding="utf-8").replace(
-                    "- [ ] **Increment 34 — Analog control flow**",
                     "- [x] **Increment 34 — Analog control flow**",
+                    "- [ ] **Increment 34 — Analog control flow**",
+                    1,
                 ),
                 encoding="utf-8",
             )
-            self.assert_rejected(root, "must remain unchecked")
+            self.assert_rejected(root, "validated state requires roadmap revision 1.45")
+
+    def test_open_state_remains_supported(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            manifest_path = root / "tests/compiler/fixtures/increment34/manifest.json"
+            document = json.loads(manifest_path.read_text(encoding="utf-8"))
+            document["status"] = "implementation-in-progress"
+            document["tranche"] = "34c-native-branch-sensitive-dataflow"
+            document["validation"] = None
+            manifest_path.write_text(
+                json.dumps(document, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            roadmap = root / "docs/roadmap/nodal-development-todo.md"
+            roadmap.write_text(
+                roadmap.read_text(encoding="utf-8")
+                .replace("**Revision:** 1.45", "**Revision:** 1.44", 1)
+                .replace(
+                    "- [x] **Increment 34 — Analog control flow**",
+                    "- [ ] **Increment 34 — Analog control flow**",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            implementation = root / "docs/implementation/increment34-analog-control-flow.md"
+            implementation.write_text(
+                implementation.read_text(encoding="utf-8").replace(
+                    "**Status:** Validated",
+                    "**Status:** In progress",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            CHECKER.check_repository(root)
+
+    def test_validated_closure_requires_complete_evidence(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "tests/compiler/fixtures/increment34/manifest.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["validation"]["closure_validation_run"] = None
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            self.assert_rejected(root, "validated manifest lacks complete evidence")
+
+    def test_validated_implementation_identity_is_locked(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "tests/compiler/fixtures/increment34/manifest.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["validation"]["accepted_head"] = "0" * 40
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            self.assert_rejected(root, "does not match the accepted implementation")
+
+    def test_evidence_record_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "docs/implementation/increment34-evidence-closure.md"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "**Implementation PR:** #109",
+                    "**Implementation PR:** #999",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "evidence-closure record is missing")
 
     def test_baseline_head_mutation_is_rejected(self) -> None:
         temporary, root = self.fixture()

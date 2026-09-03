@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "increment": 34,
-  "status": "implementation-in-progress",
+  "status": "validated-analog-control-flow",
   "baseline": {
     "stacked_on_increment": 33,
     "increment_33_head": "ea7f7da51e85ba275dac71db7823ba0223f8d4ac",
@@ -25,7 +25,7 @@
   "scala_witness": "examples/continuousTimeApi/src/nodal/increment34fixture/Increment34RuntimeCheck.scala",
   "public_construction_witness": "examples/continuousTimeApi/src/nodal/increment34fixture/Increment34ConstructionCheck.scala",
   "public_construction_tests": "core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala",
-  "tranche": "34c-native-branch-sensitive-dataflow",
+  "tranche": "34d-closure",
   "semantics": {
     "structured_statement_tree": true,
     "stable_control_identities": true,
@@ -95,7 +95,18 @@
     "verilog-a-lowering",
     "verilog-ams-lowering"
   ],
-  "validation": null,
+  "validation": {
+    "implementation_pull_request": 109,
+    "accepted_head": "207fd1b580e9428e9948cd4e4bd8f2060fde4b79",
+    "exact_head_workflow_count": 26,
+    "exact_head_core_ci_run": 33732864482,
+    "implementation_merge": "a9d3ec50799953c41e7b9cf1d8bd6a2c5c9afd49",
+    "post_merge_core_ci_run": 33758905273,
+    "exact_post_merge_validation_run": 33759112770,
+    "closure_pull_request": 111,
+    "closure_validation_head": "da785a1fbb0d8381a83d9100e2318c553102efc8",
+    "closure_validation_run": 33761024228
+  },
   "bridge_renderer": "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala",
   "bridge_tests": "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala",
   "native_ops": "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td",

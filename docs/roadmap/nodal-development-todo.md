@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.44
+**Revision:** 1.45
 **Created:** 2026-08-20
 **Updated:** 2026-09-03
 **Status:** Active roadmap
@@ -937,8 +937,10 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
 
   - Evidence: implementation PR [#102](https://github.com/pysolvesemi/Nodal/pull/102), accepted head [`ea7f7da5`](https://github.com/pysolvesemi/Nodal/commit/ea7f7da51e85ba275dac71db7823ba0223f8d4ac), dedicated boundary run [33592719238](https://github.com/pysolvesemi/Nodal/actions/runs/33592719238), merge commit [`2e0ff291`](https://github.com/pysolvesemi/Nodal/commit/2e0ff291b8d6c0f6dcc4b4c8e27cc33984cff1b8), post-merge Core CI run [33605996500](https://github.com/pysolvesemi/Nodal/actions/runs/33605996500), and exact post-merge validation run [33714669557](https://github.com/pysolvesemi/Nodal/actions/runs/33714669557).
 
-- [ ] **Increment 34 — Analog control flow**
+- [x] **Increment 34 — Analog control flow**
   - Implement conditionals, case, bounded loops, break/continue where supported, and static/runtime legality.
+
+  - Evidence: implementation PR [#109](https://github.com/pysolvesemi/Nodal/pull/109), accepted head [`207fd1b5`](https://github.com/pysolvesemi/Nodal/commit/207fd1b580e9428e9948cd4e4bd8f2060fde4b79), 26-workflow exact-head matrix, Core CI run [33732864482](https://github.com/pysolvesemi/Nodal/actions/runs/33732864482), merge commit [`a9d3ec50`](https://github.com/pysolvesemi/Nodal/commit/a9d3ec50799953c41e7b9cf1d8bd6a2c5c9afd49), post-merge Core CI run [33758905273](https://github.com/pysolvesemi/Nodal/actions/runs/33758905273), exact post-merge validation run [33759112770](https://github.com/pysolvesemi/Nodal/actions/runs/33759112770), and evidence-closure PR [#111](https://github.com/pysolvesemi/Nodal/pull/111) validated from [`da785a1f`](https://github.com/pysolvesemi/Nodal/commit/da785a1fbb0d8381a83d9100e2318c553102efc8) by run [33761024228](https://github.com/pysolvesemi/Nodal/actions/runs/33761024228).
 
 - [ ] **Increment 35 — Differential and integral operators**
   - Implement `ddt`, `idt`, initial conditions, context restrictions, and semantics-preserving simplification.

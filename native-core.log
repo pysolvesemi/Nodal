@@ -1,0 +1,657 @@
++ /usr/bin/python3 /home/runner/work/Nodal/Nodal/work/scripts/bootstrap_native_toolchain.py status --json --toolchain /home/runner/work/_temp/nodal-native-toolchain --require
++ cmake --preset native-release
+Preset CMake variables:
+
+  CMAKE_BUILD_TYPE="Release"
+  NODAL_ENABLE_TESTS="ON"
+
+-- The C compiler identification is GNU 13.3.0
+-- The CXX compiler identification is GNU 13.3.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found ZLIB: /usr/lib/x86_64-linux-gnu/libz.so (found version "1.3")
+-- Found LibXml2: /usr/lib/x86_64-linux-gnu/libxml2.so (found version "2.9.14")
+-- Nodal native lock: nodal-native-2026.08.20
+-- Nodal CIRCT release: firtool-1.154.0
+-- Nodal libstdc++ C++11 ABI: 1
+-- Using CIRCTConfig.cmake in: /home/runner/work/_temp/nodal-native-toolchain/lib/cmake/circt
+-- Using MLIRConfig.cmake in: /home/runner/work/_temp/nodal-native-toolchain/lib/cmake/mlir
+-- Using LLVMConfig.cmake in: /home/runner/work/_temp/nodal-native-toolchain/lib/cmake/llvm
+-- Linker detection: GNU ld
+-- Performing Test LLVM_USES_LIBSTDCXX
+-- Performing Test LLVM_USES_LIBSTDCXX - Success
+-- Performing Test LLVM_DEFAULT_TO_GLIBCXX_USE_CXX11_ABI
+-- Performing Test LLVM_DEFAULT_TO_GLIBCXX_USE_CXX11_ABI - Success
+-- Performing Test C_SUPPORTS_FPIC
+-- Performing Test C_SUPPORTS_FPIC - Success
+-- Performing Test CXX_SUPPORTS_FPIC
+-- Performing Test CXX_SUPPORTS_FPIC - Success
+-- Building with -fPIC
+-- Performing Test C_SUPPORTS_FNO_SEMANTIC_INTERPOSITION
+-- Performing Test C_SUPPORTS_FNO_SEMANTIC_INTERPOSITION - Success
+-- Performing Test CXX_SUPPORTS_FNO_SEMANTIC_INTERPOSITION
+-- Performing Test CXX_SUPPORTS_FNO_SEMANTIC_INTERPOSITION - Success
+-- Performing Test SUPPORTS_FVISIBILITY_INLINES_HIDDEN_FLAG
+-- Performing Test SUPPORTS_FVISIBILITY_INLINES_HIDDEN_FLAG - Success
+-- Performing Test CXX_SUPPORTS_SUGGEST_OVERRIDE_FLAG
+-- Performing Test CXX_SUPPORTS_SUGGEST_OVERRIDE_FLAG - Success
+-- Performing Test CXX_WSUGGEST_OVERRIDE_ALLOWS_ONLY_FINAL
+-- Performing Test CXX_WSUGGEST_OVERRIDE_ALLOWS_ONLY_FINAL - Success
+-- Performing Test C_WCOMMENT_ALLOWS_LINE_WRAP
+-- Performing Test C_WCOMMENT_ALLOWS_LINE_WRAP - Failed
+-- Performing Test C_SUPPORTS_CTAD_MAYBE_UNSUPPORTED_FLAG
+-- Performing Test C_SUPPORTS_CTAD_MAYBE_UNSUPPORTED_FLAG - Failed
+-- Performing Test CXX_SUPPORTS_CTAD_MAYBE_UNSUPPORTED_FLAG
+-- Performing Test CXX_SUPPORTS_CTAD_MAYBE_UNSUPPORTED_FLAG - Success
+-- Performing Test LINKER_SUPPORTS_COLOR_DIAGNOSTICS
+-- Performing Test LINKER_SUPPORTS_COLOR_DIAGNOSTICS - Failed
+Precompiled headers are disabled by default with GCC. Pass -DCMAKE_DISABLE_PRECOMPILE_HEADERS=OFF to override.
+-- Precompiled headers disabled.
+-- Looking for os_signpost_interval_begin
+-- Looking for os_signpost_interval_begin - not found
+-- Looking for flock
+-- Looking for flock - found
+-- Performing Test LLVM_LINKER_SUPPORTS_B_SYMBOLIC_FUNCTIONS
+-- Performing Test LLVM_LINKER_SUPPORTS_B_SYMBOLIC_FUNCTIONS - Success
+-- Configuring done (3.8s)
+-- Generating done (0.1s)
+-- Build files have been written to: /home/runner/work/Nodal/Nodal/work/out/native/release
++ cmake --build --preset native-release
+[1/47] Building NodalOps.cpp.inc...
+[2/47] Building NodalOps.h.inc...
+[3/47] Building NodalOpsDialect.h.inc...
+[4/47] Building NodalOpsTypes.cpp.inc...
+[5/47] Building NodalOpsDialect.cpp.inc...
+[6/47] Building NodalOpsTypes.h.inc...
+[7/47] Building CXX object core/compiler/lib/Support/CMakeFiles/NodalSupport.dir/Version.cpp.o
+[8/47] Building CXX object core/compiler/test/Unit/CMakeFiles/nodal-native-unit-tests.dir/VersionTest.cpp.o
+[9/47] Building CXX object core/compiler/lib/Support/CMakeFiles/NodalSupport.dir/DiagnosticSupport.cpp.o
+[10/47] Building CXX object core/compiler/lib/Dialect/Nodal/CMakeFiles/obj.NodalDialect.dir/NatureDiscipline.cpp.o
+[11/47] Building CXX object core/compiler/lib/Dialect/Nodal/CMakeFiles/obj.NodalDialect.dir/AnalogNumeric.cpp.o
+[12/47] Building CXX object core/compiler/lib/Dialect/Nodal/CMakeFiles/obj.NodalDialect.dir/ParameterModel.cpp.o
+[13/47] Building CXX object core/compiler/lib/Dialect/Nodal/CMakeFiles/obj.NodalDialect.dir/ConservativeConnectivity.cpp.o
+[14/47] Linking CXX static library core/compiler/lib/Support/libNodalSupport.a
+[15/47] Building CXX object core/compiler/lib/Dialect/Nodal/CMakeFiles/obj.NodalDialect.dir/PotentialFlowAccess.cpp.o
+[16/47] Building CXX object core/compiler/lib/Diagnostics/CMakeFiles/obj.NodalDiagnostics.dir/DiagnosticMapping.cpp.o
+[17/47] Building CXX object core/compiler/lib/Dialect/Nodal/CMakeFiles/obj.NodalDialect.dir/NodalTypes.cpp.o
+[18/47] Building CXX object core/compiler/lib/Backend/CMakeFiles/obj.NodalBackend.dir/Backend.cpp.o
+[19/47] Building CXX object core/compiler/tools/nodal-translate/CMakeFiles/nodal-translate.dir/nodal-translate.cpp.o
+[20/47] Building CXX object core/compiler/lib/Transforms/CMakeFiles/obj.NodalTransforms.dir/Passes.cpp.o
+[21/47] Building CXX object core/compiler/lib/Backend/CMakeFiles/obj.NodalBackend.dir/AnalogVerticalSlice.cpp.o
+[22/47] Building CXX object core/compiler/tools/nodalc/CMakeFiles/nodalc.dir/nodalc.cpp.o
+[23/47] Building CXX object core/compiler/test/Unit/CMakeFiles/nodal-dialect-unit-tests.dir/DialectTest.cpp.o
+[24/47] Building CXX object core/compiler/test/Unit/CMakeFiles/nodal-semantic-pipeline-unit-tests.dir/SemanticPipelineTest.cpp.o
+[25/47] Building CXX object core/compiler/test/Unit/CMakeFiles/nodal-core-model-unit-tests.dir/CoreModelTest.cpp.o
+[26/47] Building CXX object core/compiler/test/Unit/CMakeFiles/nodal-backend-unit-tests.dir/BackendTest.cpp.o
+[27/47] Building CXX object core/compiler/lib/Dialect/Nodal/CMakeFiles/obj.NodalDialect.dir/NodalDialect.cpp.o
+[28/47] Building CXX object core/compiler/test/Unit/CMakeFiles/nodal-analog-expression-unit-tests.dir/AnalogExpressionTest.cpp.o
+[29/47] Linking CXX executable core/compiler/test/Unit/nodal-native-unit-tests
+[30/47] Building CXX object core/compiler/test/Unit/CMakeFiles/nodal-nature-discipline-unit-tests.dir/NatureDisciplineTest.cpp.o
+[31/47] Building CXX object core/compiler/test/Unit/CMakeFiles/nodal-parameter-model-unit-tests.dir/ParameterModelTest.cpp.o
+[32/47] Building CXX object core/compiler/test/Unit/CMakeFiles/nodal-conservative-connectivity-unit-tests.dir/ConservativeConnectivityTest.cpp.o
+[33/47] Building CXX object core/compiler/lib/Dialect/Nodal/CMakeFiles/obj.NodalDialect.dir/NodalOps.cpp.o
+[34/47] Linking CXX static library lib/libNodalDialect.a
+[35/47] Linking CXX static library lib/libNodalDiagnostics.a
+[36/47] Linking CXX executable core/compiler/test/Unit/nodal-dialect-unit-tests
+[37/47] Linking CXX static library lib/libNodalTransforms.a
+[38/47] Linking CXX executable core/compiler/test/Unit/nodal-conservative-connectivity-unit-tests
+[39/47] Linking CXX executable core/compiler/test/Unit/nodal-nature-discipline-unit-tests
+[40/47] Linking CXX executable core/compiler/test/Unit/nodal-core-model-unit-tests
+[41/47] Linking CXX executable core/compiler/test/Unit/nodal-analog-expression-unit-tests
+[42/47] Linking CXX static library lib/libNodalBackend.a
+[43/47] Linking CXX executable bin/nodalc
+[44/47] Linking CXX executable core/compiler/test/Unit/nodal-parameter-model-unit-tests
+[45/47] Linking CXX executable core/compiler/test/Unit/nodal-semantic-pipeline-unit-tests
+[46/47] Linking CXX executable bin/nodal-translate
+[47/47] Linking CXX executable core/compiler/test/Unit/nodal-backend-unit-tests
++ ctest --preset native-release
+Test project /home/runner/work/Nodal/Nodal/work/out/native/release
+        Start   1: nodal.native.nodalc-version
+  1/112 Test   #1: nodal.native.nodalc-version ........................................   Passed    0.01 sec
+        Start   2: nodal.native.nodal-placeholder-roundtrip
+  2/112 Test   #2: nodal.native.nodal-placeholder-roundtrip ...........................   Passed    0.01 sec
+        Start   3: nodal.native.nodal-placeholder-generic
+  3/112 Test   #3: nodal.native.nodal-placeholder-generic .............................   Passed    0.01 sec
+        Start   4: nodal.native.nodal-placeholder-rejects-empty-label
+  4/112 Test   #4: nodal.native.nodal-placeholder-rejects-empty-label .................   Passed    0.01 sec
+        Start   5: nodal.native.core-model-roundtrip
+  5/112 Test   #5: nodal.native.core-model-roundtrip ..................................   Passed    0.01 sec
+        Start   6: nodal.native.core-model-generic
+  6/112 Test   #6: nodal.native.core-model-generic ....................................   Passed    0.01 sec
+        Start   7: nodal.native.core-model-rejects-width
+  7/112 Test   #7: nodal.native.core-model-rejects-width ..............................   Passed    0.01 sec
+        Start   8: nodal.native.core-model-rejects-net
+  8/112 Test   #8: nodal.native.core-model-rejects-net ................................   Passed    0.01 sec
+        Start   9: nodal.native.core-model-rejects-enum
+  9/112 Test   #9: nodal.native.core-model-rejects-enum ...............................   Passed    0.01 sec
+        Start  10: nodal.native.core-model-rejects-fsm
+ 10/112 Test  #10: nodal.native.core-model-rejects-fsm ................................   Passed    0.01 sec
+        Start  11: nodal.native.semantic-pipeline-fast
+ 11/112 Test  #11: nodal.native.semantic-pipeline-fast ................................   Passed    0.01 sec
+        Start  12: nodal.native.semantic-pipeline-default
+ 12/112 Test  #12: nodal.native.semantic-pipeline-default .............................   Passed    0.01 sec
+        Start  13: nodal.native.semantic-pipeline-release
+ 13/112 Test  #13: nodal.native.semantic-pipeline-release .............................   Passed    0.01 sec
+        Start  14: nodal.native.semantic-pipeline-rejects-invalid-stages
+ 14/112 Test  #14: nodal.native.semantic-pipeline-rejects-invalid-stages ..............   Passed    0.01 sec
+        Start  15: nodal.native.cross-layer-diagnostics-rejects-inventory
+ 15/112 Test  #15: nodal.native.cross-layer-diagnostics-rejects-inventory .............   Passed    0.01 sec
+        Start  16: nodal.native.cross-layer-diagnostics-rejects-operation
+ 16/112 Test  #16: nodal.native.cross-layer-diagnostics-rejects-operation .............   Passed    0.01 sec
+        Start  17: nodal.native.backend-translation-registration
+ 17/112 Test  #17: nodal.native.backend-translation-registration ......................   Passed    0.01 sec
+        Start  18: nodal.native.backend-verilog-a
+ 18/112 Test  #18: nodal.native.backend-verilog-a .....................................   Passed    0.01 sec
+        Start  19: nodal.native.backend-verilog-ams
+ 19/112 Test  #19: nodal.native.backend-verilog-ams ...................................   Passed    0.01 sec
+        Start  20: nodal.native.backend-rejects-invalid-config
+ 20/112 Test  #20: nodal.native.backend-rejects-invalid-config ........................   Passed    0.01 sec
+        Start  21: nodal.native.backend-rejects-unsupported-verilog-a
+ 21/112 Test  #21: nodal.native.backend-rejects-unsupported-verilog-a .................   Passed    0.01 sec
+        Start  22: nodal.native.analog-expression-roundtrip
+ 22/112 Test  #22: nodal.native.analog-expression-roundtrip ...........................   Passed    0.01 sec
+        Start  23: nodal.native.analog-expression-generic
+ 23/112 Test  #23: nodal.native.analog-expression-generic .............................   Passed    0.01 sec
+        Start  24: nodal.native.analog-expression-rejects-invalid-parameter
+ 24/112 Test  #24: nodal.native.analog-expression-rejects-invalid-parameter ...........   Passed    0.01 sec
+        Start  25: nodal.native.analog-expression-rejects-invalid-contribution
+ 25/112 Test  #25: nodal.native.analog-expression-rejects-invalid-contribution ........   Passed    0.01 sec
+        Start  26: nodal.native.rc-filter-vertical-slice
+ 26/112 Test  #26: nodal.native.rc-filter-vertical-slice ..............................   Passed    0.01 sec
+        Start  27: nodal.native.natures-disciplines-roundtrip
+ 27/112 Test  #27: nodal.native.natures-disciplines-roundtrip .........................   Passed    0.01 sec
+        Start  28: nodal.native.natures-disciplines-generic
+ 28/112 Test  #28: nodal.native.natures-disciplines-generic ...........................   Passed    0.01 sec
+        Start  29: nodal.native.natures-disciplines-rejects-tolerance
+ 29/112 Test  #29: nodal.native.natures-disciplines-rejects-tolerance .................   Passed    0.01 sec
+        Start  30: nodal.native.natures-disciplines-rejects-association
+ 30/112 Test  #30: nodal.native.natures-disciplines-rejects-association ...............   Passed    0.01 sec
+        Start  31: nodal.native.natures-disciplines-rejects-import-cycle
+ 31/112 Test  #31: nodal.native.natures-disciplines-rejects-import-cycle ..............   Passed    0.01 sec
+        Start  32: nodal.native.electrical-connectivity-roundtrip
+ 32/112 Test  #32: nodal.native.electrical-connectivity-roundtrip .....................   Passed    0.01 sec
+        Start  33: nodal.native.electrical-connectivity-generic
+ 33/112 Test  #33: nodal.native.electrical-connectivity-generic .......................   Passed    0.01 sec
+        Start  34: nodal.native.electrical-connectivity-rejects-discipline
+ 34/112 Test  #34: nodal.native.electrical-connectivity-rejects-discipline ............   Passed    0.01 sec
+        Start  35: nodal.native.electrical-connectivity-rejects-implicit
+ 35/112 Test  #35: nodal.native.electrical-connectivity-rejects-implicit ..............   Passed    0.01 sec
+        Start  36: nodal.native.electrical-connectivity-rejects-connection
+ 36/112 Test  #36: nodal.native.electrical-connectivity-rejects-connection ............   Passed    0.01 sec
+        Start  37: nodal.native.electrical-connectivity-rejects-reference
+ 37/112 Test  #37: nodal.native.electrical-connectivity-rejects-reference .............   Passed    0.01 sec
+        Start  38: nodal.native.electrical-connectivity-rejects-component
+ 38/112 Test  #38: nodal.native.electrical-connectivity-rejects-component .............   Passed    0.01 sec
+        Start  39: nodal.native.parameters-units-roundtrip
+ 39/112 Test  #39: nodal.native.parameters-units-roundtrip ............................   Passed    0.01 sec
+        Start  40: nodal.native.parameters-units-generic
+ 40/112 Test  #40: nodal.native.parameters-units-generic ..............................   Passed    0.01 sec
+        Start  41: nodal.native.parameters-units-rejects-unit
+ 41/112 Test  #41: nodal.native.parameters-units-rejects-unit .........................   Passed    0.01 sec
+        Start  42: nodal.native.parameters-units-rejects-constraint
+ 42/112 Test  #42: nodal.native.parameters-units-rejects-constraint ...................   Passed    0.01 sec
+        Start  43: nodal.native.parameters-units-rejects-envelope
+ 43/112 Test  #43: nodal.native.parameters-units-rejects-envelope .....................   Passed    0.01 sec
+        Start  44: nodal.native.parameters-units-rejects-dynamic
+ 44/112 Test  #44: nodal.native.parameters-units-rejects-dynamic ......................   Passed    0.01 sec
+        Start  45: nodal.native.parameters-units-rejects-override
+ 45/112 Test  #45: nodal.native.parameters-units-rejects-override .....................   Passed    0.01 sec
+        Start  46: nodal.native.parameters-units-rejects-cycle
+ 46/112 Test  #46: nodal.native.parameters-units-rejects-cycle ........................   Passed    0.01 sec
+        Start  47: nodal.native.parameter-lossless-rendering
+ 47/112 Test  #47: nodal.native.parameter-lossless-rendering ..........................   Passed    0.01 sec
+        Start  48: nodal.native.analog-numeric-typing
+ 48/112 Test  #48: nodal.native.analog-numeric-typing .................................   Passed    0.01 sec
+        Start  49: nodal.native.analog-numeric-rejects-type
+ 49/112 Test  #49: nodal.native.analog-numeric-rejects-type ...........................   Passed    0.01 sec
+        Start  50: nodal.native.analog-numeric-rejects-promotion
+ 50/112 Test  #50: nodal.native.analog-numeric-rejects-promotion ......................   Passed    0.01 sec
+        Start  51: nodal.native.analog-numeric-rejects-dimension
+ 51/112 Test  #51: nodal.native.analog-numeric-rejects-dimension ......................   Passed    0.01 sec
+        Start  52: nodal.native.analog-numeric-rejects-compare
+ 52/112 Test  #52: nodal.native.analog-numeric-rejects-compare ........................   Passed    0.01 sec
+        Start  53: nodal.native.analog-numeric-rejects-logic
+ 53/112 Test  #53: nodal.native.analog-numeric-rejects-logic ..........................   Passed    0.01 sec
+        Start  54: nodal.native.analog-numeric-rejects-select
+ 54/112 Test  #54: nodal.native.analog-numeric-rejects-select .........................   Passed    0.01 sec
+        Start  55: nodal.native.analog-numeric-rejects-divide
+ 55/112 Test  #55: nodal.native.analog-numeric-rejects-divide .........................   Passed    0.01 sec
+        Start  56: nodal.native.analog-numeric-backend
+ 56/112 Test  #56: nodal.native.analog-numeric-backend ................................   Passed    0.01 sec
+        Start  57: nodal.native.analog-numeric-select-promotion
+ 57/112 Test  #57: nodal.native.analog-numeric-select-promotion .......................   Passed    0.01 sec
+        Start  58: nodal.native.analog-numeric-parameter-scale
+ 58/112 Test  #58: nodal.native.analog-numeric-parameter-scale ........................   Passed    0.01 sec
+        Start  59: nodal.native.analog-numeric-rejects-dimension-overflow
+ 59/112 Test  #59: nodal.native.analog-numeric-rejects-dimension-overflow .............   Passed    0.01 sec
+        Start  60: nodal.native.analog-numeric-backend-fold-boundary
+ 60/112 Test  #60: nodal.native.analog-numeric-backend-fold-boundary ..................   Passed    0.01 sec
+        Start  61: nodal.native.potential-flow-access-normalize
+ 61/112 Test  #61: nodal.native.potential-flow-access-normalize .......................   Passed    0.01 sec
+        Start  62: nodal.native.potential-flow-access-reference
+ 62/112 Test  #62: nodal.native.potential-flow-access-reference .......................   Passed    0.01 sec
+        Start  63: nodal.native.potential-flow-access-rejects-form
+ 63/112 Test  #63: nodal.native.potential-flow-access-rejects-form ....................   Passed    0.01 sec
+        Start  64: nodal.native.potential-flow-access-rejects-discipline
+ 64/112 Test  #64: nodal.native.potential-flow-access-rejects-discipline ..............   Passed    0.01 sec
+        Start  65: nodal.native.potential-flow-access-rejects-nature
+ 65/112 Test  #65: nodal.native.potential-flow-access-rejects-nature ..................   Passed    0.01 sec
+        Start  66: nodal.native.potential-flow-access-rejects-function
+ 66/112 Test  #66: nodal.native.potential-flow-access-rejects-function ................   Passed    0.01 sec
+        Start  67: nodal.native.potential-flow-access-rejects-dimension
+ 67/112 Test  #67: nodal.native.potential-flow-access-rejects-dimension ...............   Passed    0.01 sec
+        Start  68: nodal.native.potential-flow-access-rejects-reference
+ 68/112 Test  #68: nodal.native.potential-flow-access-rejects-reference ...............   Passed    0.01 sec
+        Start  69: nodal.native.potential-flow-access-rejects-port
+ 69/112 Test  #69: nodal.native.potential-flow-access-rejects-port ....................   Passed    0.01 sec
+        Start  70: nodal.native.potential-flow-access-rejects-probe-kind
+ 70/112 Test  #70: nodal.native.potential-flow-access-rejects-probe-kind ..............   Passed    0.01 sec
+        Start  71: nodal.native.potential-flow-access-rejects-probe-provenance
+ 71/112 Test  #71: nodal.native.potential-flow-access-rejects-probe-provenance ........   Passed    0.01 sec
+        Start  72: nodal.native.potential-flow-access-backend-discipline
+ 72/112 Test  #72: nodal.native.potential-flow-access-backend-discipline ..............   Passed    0.01 sec
+        Start  73: nodal.native.potential-flow-access-backend-generic
+ 73/112 Test  #73: nodal.native.potential-flow-access-backend-generic .................   Passed    0.01 sec
+        Start  74: nodal.native.potential-flow-access-backend-port
+ 74/112 Test  #74: nodal.native.potential-flow-access-backend-port ....................   Passed    0.01 sec
+        Start  75: nodal.native.analog-procedural-roundtrip
+ 75/112 Test  #75: nodal.native.analog-procedural-roundtrip ...........................   Passed    0.01 sec
+        Start  76: nodal.native.analog-procedural-source-map-roundtrip
+ 76/112 Test  #76: nodal.native.analog-procedural-source-map-roundtrip ................   Passed    0.01 sec
+        Start  77: nodal.native.analog-procedural-rejects-read
+ 77/112 Test  #77: nodal.native.analog-procedural-rejects-read ........................   Passed    0.01 sec
+        Start  78: nodal.native.analog-procedural-rejects-order
+ 78/112 Test  #78: nodal.native.analog-procedural-rejects-order .......................   Passed    0.01 sec
+        Start  79: nodal.native.analog-procedural-rejects-owner
+ 79/112 Test  #79: nodal.native.analog-procedural-rejects-owner .......................   Passed    0.01 sec
+        Start  80: nodal.native.analog-procedural-rejects-type
+ 80/112 Test  #80: nodal.native.analog-procedural-rejects-type ........................   Passed    0.01 sec
+        Start  81: nodal.native.analog-procedural-rejects-dimension
+ 81/112 Test  #81: nodal.native.analog-procedural-rejects-dimension ...................   Passed    0.01 sec
+        Start  82: nodal.native.analog-procedural-rejects-guard
+ 82/112 Test  #82: nodal.native.analog-procedural-rejects-guard .......................   Passed    0.01 sec
+        Start  83: nodal.native.analog-procedural-rejects-analysis
+ 83/112 Test  #83: nodal.native.analog-procedural-rejects-analysis ....................   Passed    0.01 sec
+        Start  84: nodal.native.analog-procedural-rejects-nested
+ 84/112 Test  #84: nodal.native.analog-procedural-rejects-nested ......................   Passed    0.01 sec
+        Start  85: nodal.native.analog-procedural-rejects-variable-kind
+ 85/112 Test  #85: nodal.native.analog-procedural-rejects-variable-kind ...............   Passed    0.01 sec
+        Start  86: nodal.native.analog-procedural-rejects-multiple
+ 86/112 Test  #86: nodal.native.analog-procedural-rejects-multiple ....................   Passed    0.01 sec
+        Start  87: nodal.native.analog-control-flow-roundtrip
+ 87/112 Test  #87: nodal.native.analog-control-flow-roundtrip .........................   Passed    0.01 sec
+        Start  88: nodal.native.analog-control-flow-source-map-roundtrip
+ 88/112 Test  #88: nodal.native.analog-control-flow-source-map-roundtrip ..............   Passed    0.01 sec
+        Start  89: nodal.native.analog-control-flow-rejects-break
+ 89/112 Test  #89: nodal.native.analog-control-flow-rejects-break .....................   Passed    0.01 sec
+        Start  90: nodal.native.analog-control-flow-rejects-loop
+ 90/112 Test  #90: nodal.native.analog-control-flow-rejects-loop ......................   Passed    0.01 sec
+        Start  91: nodal.native.analog-control-flow-rejects-condition
+ 91/112 Test  #91: nodal.native.analog-control-flow-rejects-condition .................   Passed    0.01 sec
+        Start  92: nodal.native.analog-control-flow-rejects-case
+ 92/112 Test  #92: nodal.native.analog-control-flow-rejects-case ......................   Passed    0.01 sec
+        Start  93: nodal.native.analog-control-flow-rejects-missing-else
+ 93/112 Test  #93: nodal.native.analog-control-flow-rejects-missing-else ..............   Passed    0.01 sec
+        Start  94: nodal.native.analog-control-flow-rejects-missing-default
+ 94/112 Test  #94: nodal.native.analog-control-flow-rejects-missing-default ...........   Passed    0.01 sec
+        Start  95: nodal.native.analog-control-flow-rejects-zero-trip
+ 95/112 Test  #95: nodal.native.analog-control-flow-rejects-zero-trip .................   Passed    0.01 sec
+        Start  96: nodal.native.analog-control-flow-rejects-continue-path
+ 96/112 Test  #96: nodal.native.analog-control-flow-rejects-continue-path .............   Passed    0.01 sec
+        Start  97: nodal.native.analog-control-flow-rejects-duplicate-identity
+ 97/112 Test  #97: nodal.native.analog-control-flow-rejects-duplicate-identity ........   Passed    0.01 sec
+        Start  98: nodal.native.analog-control-flow-rejects-order
+ 98/112 Test  #98: nodal.native.analog-control-flow-rejects-order .....................   Passed    0.01 sec
+        Start  99: nodal.native.analog-control-flow-rejects-guard-read
+ 99/112 Test  #99: nodal.native.analog-control-flow-rejects-guard-read ................   Passed    0.01 sec
+        Start 100: nodal.native.analog-control-flow-rejects-case-label
+100/112 Test #100: nodal.native.analog-control-flow-rejects-case-label ................   Passed    0.01 sec
+        Start 101: nodal.native.analog-control-flow-rejects-runtime-static-sentinel
+101/112 Test #101: nodal.native.analog-control-flow-rejects-runtime-static-sentinel ...   Passed    0.01 sec
+        Start 102: nodal.native.analog-control-flow-rejects-else-static-sentinel
+102/112 Test #102: nodal.native.analog-control-flow-rejects-else-static-sentinel ......   Passed    0.01 sec
+        Start 103: nodal.native.analog-control-flow-rejects-loop-static-sentinel
+103/112 Test #103: nodal.native.analog-control-flow-rejects-loop-static-sentinel ......   Passed    0.01 sec
+        Start 104: nodal.native.version-unit
+104/112 Test #104: nodal.native.version-unit ..........................................   Passed    0.01 sec
+        Start 105: nodal.native.dialect-unit
+105/112 Test #105: nodal.native.dialect-unit ..........................................   Passed    0.00 sec
+        Start 106: nodal.native.core-model-unit
+106/112 Test #106: nodal.native.core-model-unit .......................................   Passed    0.00 sec
+        Start 107: nodal.native.semantic-pipeline-unit
+107/112 Test #107: nodal.native.semantic-pipeline-unit ................................   Passed    0.01 sec
+        Start 108: nodal.native.backend-unit
+108/112 Test #108: nodal.native.backend-unit ..........................................   Passed    0.01 sec
+        Start 109: nodal.native.analog-expression-unit
+109/112 Test #109: nodal.native.analog-expression-unit ................................   Passed    0.01 sec
+        Start 110: nodal.native.nature-discipline-unit
+110/112 Test #110: nodal.native.nature-discipline-unit ................................   Passed    0.01 sec
+        Start 111: nodal.native.conservative-connectivity-unit
+111/112 Test #111: nodal.native.conservative-connectivity-unit ........................   Passed    0.01 sec
+        Start 112: nodal.native.parameter-model-unit
+112/112 Test #112: nodal.native.parameter-model-unit ..................................   Passed    0.01 sec
+
+100% tests passed, 0 tests failed out of 112
+
+Total Test time (real) =   1.08 sec
++ cmake --build /home/runner/work/Nodal/Nodal/work/out/native/release --target check-nodal-native
+[0/1] cd /home/runner/work/Nodal/Nodal/work/out/native/release && /usr/local/bin/ctest --output-on-failure -C Release
+Test project /home/runner/work/Nodal/Nodal/work/out/native/release
+        Start   1: nodal.native.nodalc-version
+  1/112 Test   #1: nodal.native.nodalc-version ........................................   Passed    0.01 sec
+        Start   2: nodal.native.nodal-placeholder-roundtrip
+  2/112 Test   #2: nodal.native.nodal-placeholder-roundtrip ...........................   Passed    0.01 sec
+        Start   3: nodal.native.nodal-placeholder-generic
+  3/112 Test   #3: nodal.native.nodal-placeholder-generic .............................   Passed    0.01 sec
+        Start   4: nodal.native.nodal-placeholder-rejects-empty-label
+  4/112 Test   #4: nodal.native.nodal-placeholder-rejects-empty-label .................   Passed    0.01 sec
+        Start   5: nodal.native.core-model-roundtrip
+  5/112 Test   #5: nodal.native.core-model-roundtrip ..................................   Passed    0.01 sec
+        Start   6: nodal.native.core-model-generic
+  6/112 Test   #6: nodal.native.core-model-generic ....................................   Passed    0.01 sec
+        Start   7: nodal.native.core-model-rejects-width
+  7/112 Test   #7: nodal.native.core-model-rejects-width ..............................   Passed    0.01 sec
+        Start   8: nodal.native.core-model-rejects-net
+  8/112 Test   #8: nodal.native.core-model-rejects-net ................................   Passed    0.01 sec
+        Start   9: nodal.native.core-model-rejects-enum
+  9/112 Test   #9: nodal.native.core-model-rejects-enum ...............................   Passed    0.01 sec
+        Start  10: nodal.native.core-model-rejects-fsm
+ 10/112 Test  #10: nodal.native.core-model-rejects-fsm ................................   Passed    0.01 sec
+        Start  11: nodal.native.semantic-pipeline-fast
+ 11/112 Test  #11: nodal.native.semantic-pipeline-fast ................................   Passed    0.01 sec
+        Start  12: nodal.native.semantic-pipeline-default
+ 12/112 Test  #12: nodal.native.semantic-pipeline-default .............................   Passed    0.01 sec
+        Start  13: nodal.native.semantic-pipeline-release
+ 13/112 Test  #13: nodal.native.semantic-pipeline-release .............................   Passed    0.01 sec
+        Start  14: nodal.native.semantic-pipeline-rejects-invalid-stages
+ 14/112 Test  #14: nodal.native.semantic-pipeline-rejects-invalid-stages ..............   Passed    0.01 sec
+        Start  15: nodal.native.cross-layer-diagnostics-rejects-inventory
+ 15/112 Test  #15: nodal.native.cross-layer-diagnostics-rejects-inventory .............   Passed    0.01 sec
+        Start  16: nodal.native.cross-layer-diagnostics-rejects-operation
+ 16/112 Test  #16: nodal.native.cross-layer-diagnostics-rejects-operation .............   Passed    0.01 sec
+        Start  17: nodal.native.backend-translation-registration
+ 17/112 Test  #17: nodal.native.backend-translation-registration ......................   Passed    0.01 sec
+        Start  18: nodal.native.backend-verilog-a
+ 18/112 Test  #18: nodal.native.backend-verilog-a .....................................   Passed    0.01 sec
+        Start  19: nodal.native.backend-verilog-ams
+ 19/112 Test  #19: nodal.native.backend-verilog-ams ...................................   Passed    0.01 sec
+        Start  20: nodal.native.backend-rejects-invalid-config
+ 20/112 Test  #20: nodal.native.backend-rejects-invalid-config ........................   Passed    0.01 sec
+        Start  21: nodal.native.backend-rejects-unsupported-verilog-a
+ 21/112 Test  #21: nodal.native.backend-rejects-unsupported-verilog-a .................   Passed    0.01 sec
+        Start  22: nodal.native.analog-expression-roundtrip
+ 22/112 Test  #22: nodal.native.analog-expression-roundtrip ...........................   Passed    0.01 sec
+        Start  23: nodal.native.analog-expression-generic
+ 23/112 Test  #23: nodal.native.analog-expression-generic .............................   Passed    0.01 sec
+        Start  24: nodal.native.analog-expression-rejects-invalid-parameter
+ 24/112 Test  #24: nodal.native.analog-expression-rejects-invalid-parameter ...........   Passed    0.01 sec
+        Start  25: nodal.native.analog-expression-rejects-invalid-contribution
+ 25/112 Test  #25: nodal.native.analog-expression-rejects-invalid-contribution ........   Passed    0.01 sec
+        Start  26: nodal.native.rc-filter-vertical-slice
+ 26/112 Test  #26: nodal.native.rc-filter-vertical-slice ..............................   Passed    0.01 sec
+        Start  27: nodal.native.natures-disciplines-roundtrip
+ 27/112 Test  #27: nodal.native.natures-disciplines-roundtrip .........................   Passed    0.01 sec
+        Start  28: nodal.native.natures-disciplines-generic
+ 28/112 Test  #28: nodal.native.natures-disciplines-generic ...........................   Passed    0.01 sec
+        Start  29: nodal.native.natures-disciplines-rejects-tolerance
+ 29/112 Test  #29: nodal.native.natures-disciplines-rejects-tolerance .................   Passed    0.01 sec
+        Start  30: nodal.native.natures-disciplines-rejects-association
+ 30/112 Test  #30: nodal.native.natures-disciplines-rejects-association ...............   Passed    0.01 sec
+        Start  31: nodal.native.natures-disciplines-rejects-import-cycle
+ 31/112 Test  #31: nodal.native.natures-disciplines-rejects-import-cycle ..............   Passed    0.01 sec
+        Start  32: nodal.native.electrical-connectivity-roundtrip
+ 32/112 Test  #32: nodal.native.electrical-connectivity-roundtrip .....................   Passed    0.01 sec
+        Start  33: nodal.native.electrical-connectivity-generic
+ 33/112 Test  #33: nodal.native.electrical-connectivity-generic .......................   Passed    0.01 sec
+        Start  34: nodal.native.electrical-connectivity-rejects-discipline
+ 34/112 Test  #34: nodal.native.electrical-connectivity-rejects-discipline ............   Passed    0.01 sec
+        Start  35: nodal.native.electrical-connectivity-rejects-implicit
+ 35/112 Test  #35: nodal.native.electrical-connectivity-rejects-implicit ..............   Passed    0.01 sec
+        Start  36: nodal.native.electrical-connectivity-rejects-connection
+ 36/112 Test  #36: nodal.native.electrical-connectivity-rejects-connection ............   Passed    0.01 sec
+        Start  37: nodal.native.electrical-connectivity-rejects-reference
+ 37/112 Test  #37: nodal.native.electrical-connectivity-rejects-reference .............   Passed    0.01 sec
+        Start  38: nodal.native.electrical-connectivity-rejects-component
+ 38/112 Test  #38: nodal.native.electrical-connectivity-rejects-component .............   Passed    0.01 sec
+        Start  39: nodal.native.parameters-units-roundtrip
+ 39/112 Test  #39: nodal.native.parameters-units-roundtrip ............................   Passed    0.01 sec
+        Start  40: nodal.native.parameters-units-generic
+ 40/112 Test  #40: nodal.native.parameters-units-generic ..............................   Passed    0.01 sec
+        Start  41: nodal.native.parameters-units-rejects-unit
+ 41/112 Test  #41: nodal.native.parameters-units-rejects-unit .........................   Passed    0.01 sec
+        Start  42: nodal.native.parameters-units-rejects-constraint
+ 42/112 Test  #42: nodal.native.parameters-units-rejects-constraint ...................   Passed    0.01 sec
+        Start  43: nodal.native.parameters-units-rejects-envelope
+ 43/112 Test  #43: nodal.native.parameters-units-rejects-envelope .....................   Passed    0.01 sec
+        Start  44: nodal.native.parameters-units-rejects-dynamic
+ 44/112 Test  #44: nodal.native.parameters-units-rejects-dynamic ......................   Passed    0.01 sec
+        Start  45: nodal.native.parameters-units-rejects-override
+ 45/112 Test  #45: nodal.native.parameters-units-rejects-override .....................   Passed    0.01 sec
+        Start  46: nodal.native.parameters-units-rejects-cycle
+ 46/112 Test  #46: nodal.native.parameters-units-rejects-cycle ........................   Passed    0.01 sec
+        Start  47: nodal.native.parameter-lossless-rendering
+ 47/112 Test  #47: nodal.native.parameter-lossless-rendering ..........................   Passed    0.01 sec
+        Start  48: nodal.native.analog-numeric-typing
+ 48/112 Test  #48: nodal.native.analog-numeric-typing .................................   Passed    0.01 sec
+        Start  49: nodal.native.analog-numeric-rejects-type
+ 49/112 Test  #49: nodal.native.analog-numeric-rejects-type ...........................   Passed    0.01 sec
+        Start  50: nodal.native.analog-numeric-rejects-promotion
+ 50/112 Test  #50: nodal.native.analog-numeric-rejects-promotion ......................   Passed    0.01 sec
+        Start  51: nodal.native.analog-numeric-rejects-dimension
+ 51/112 Test  #51: nodal.native.analog-numeric-rejects-dimension ......................   Passed    0.01 sec
+        Start  52: nodal.native.analog-numeric-rejects-compare
+ 52/112 Test  #52: nodal.native.analog-numeric-rejects-compare ........................   Passed    0.01 sec
+        Start  53: nodal.native.analog-numeric-rejects-logic
+ 53/112 Test  #53: nodal.native.analog-numeric-rejects-logic ..........................   Passed    0.01 sec
+        Start  54: nodal.native.analog-numeric-rejects-select
+ 54/112 Test  #54: nodal.native.analog-numeric-rejects-select .........................   Passed    0.01 sec
+        Start  55: nodal.native.analog-numeric-rejects-divide
+ 55/112 Test  #55: nodal.native.analog-numeric-rejects-divide .........................   Passed    0.01 sec
+        Start  56: nodal.native.analog-numeric-backend
+ 56/112 Test  #56: nodal.native.analog-numeric-backend ................................   Passed    0.01 sec
+        Start  57: nodal.native.analog-numeric-select-promotion
+ 57/112 Test  #57: nodal.native.analog-numeric-select-promotion .......................   Passed    0.01 sec
+        Start  58: nodal.native.analog-numeric-parameter-scale
+ 58/112 Test  #58: nodal.native.analog-numeric-parameter-scale ........................   Passed    0.01 sec
+        Start  59: nodal.native.analog-numeric-rejects-dimension-overflow
+ 59/112 Test  #59: nodal.native.analog-numeric-rejects-dimension-overflow .............   Passed    0.01 sec
+        Start  60: nodal.native.analog-numeric-backend-fold-boundary
+ 60/112 Test  #60: nodal.native.analog-numeric-backend-fold-boundary ..................   Passed    0.01 sec
+        Start  61: nodal.native.potential-flow-access-normalize
+ 61/112 Test  #61: nodal.native.potential-flow-access-normalize .......................   Passed    0.01 sec
+        Start  62: nodal.native.potential-flow-access-reference
+ 62/112 Test  #62: nodal.native.potential-flow-access-reference .......................   Passed    0.01 sec
+        Start  63: nodal.native.potential-flow-access-rejects-form
+ 63/112 Test  #63: nodal.native.potential-flow-access-rejects-form ....................   Passed    0.01 sec
+        Start  64: nodal.native.potential-flow-access-rejects-discipline
+ 64/112 Test  #64: nodal.native.potential-flow-access-rejects-discipline ..............   Passed    0.01 sec
+        Start  65: nodal.native.potential-flow-access-rejects-nature
+ 65/112 Test  #65: nodal.native.potential-flow-access-rejects-nature ..................   Passed    0.01 sec
+        Start  66: nodal.native.potential-flow-access-rejects-function
+ 66/112 Test  #66: nodal.native.potential-flow-access-rejects-function ................   Passed    0.01 sec
+        Start  67: nodal.native.potential-flow-access-rejects-dimension
+ 67/112 Test  #67: nodal.native.potential-flow-access-rejects-dimension ...............   Passed    0.01 sec
+        Start  68: nodal.native.potential-flow-access-rejects-reference
+ 68/112 Test  #68: nodal.native.potential-flow-access-rejects-reference ...............   Passed    0.01 sec
+        Start  69: nodal.native.potential-flow-access-rejects-port
+ 69/112 Test  #69: nodal.native.potential-flow-access-rejects-port ....................   Passed    0.01 sec
+        Start  70: nodal.native.potential-flow-access-rejects-probe-kind
+ 70/112 Test  #70: nodal.native.potential-flow-access-rejects-probe-kind ..............   Passed    0.01 sec
+        Start  71: nodal.native.potential-flow-access-rejects-probe-provenance
+ 71/112 Test  #71: nodal.native.potential-flow-access-rejects-probe-provenance ........   Passed    0.01 sec
+        Start  72: nodal.native.potential-flow-access-backend-discipline
+ 72/112 Test  #72: nodal.native.potential-flow-access-backend-discipline ..............   Passed    0.01 sec
+        Start  73: nodal.native.potential-flow-access-backend-generic
+ 73/112 Test  #73: nodal.native.potential-flow-access-backend-generic .................   Passed    0.01 sec
+        Start  74: nodal.native.potential-flow-access-backend-port
+ 74/112 Test  #74: nodal.native.potential-flow-access-backend-port ....................   Passed    0.01 sec
+        Start  75: nodal.native.analog-procedural-roundtrip
+ 75/112 Test  #75: nodal.native.analog-procedural-roundtrip ...........................   Passed    0.01 sec
+        Start  76: nodal.native.analog-procedural-source-map-roundtrip
+ 76/112 Test  #76: nodal.native.analog-procedural-source-map-roundtrip ................   Passed    0.01 sec
+        Start  77: nodal.native.analog-procedural-rejects-read
+ 77/112 Test  #77: nodal.native.analog-procedural-rejects-read ........................   Passed    0.01 sec
+        Start  78: nodal.native.analog-procedural-rejects-order
+ 78/112 Test  #78: nodal.native.analog-procedural-rejects-order .......................   Passed    0.01 sec
+        Start  79: nodal.native.analog-procedural-rejects-owner
+ 79/112 Test  #79: nodal.native.analog-procedural-rejects-owner .......................   Passed    0.01 sec
+        Start  80: nodal.native.analog-procedural-rejects-type
+ 80/112 Test  #80: nodal.native.analog-procedural-rejects-type ........................   Passed    0.01 sec
+        Start  81: nodal.native.analog-procedural-rejects-dimension
+ 81/112 Test  #81: nodal.native.analog-procedural-rejects-dimension ...................   Passed    0.01 sec
+        Start  82: nodal.native.analog-procedural-rejects-guard
+ 82/112 Test  #82: nodal.native.analog-procedural-rejects-guard .......................   Passed    0.01 sec
+        Start  83: nodal.native.analog-procedural-rejects-analysis
+ 83/112 Test  #83: nodal.native.analog-procedural-rejects-analysis ....................   Passed    0.01 sec
+        Start  84: nodal.native.analog-procedural-rejects-nested
+ 84/112 Test  #84: nodal.native.analog-procedural-rejects-nested ......................   Passed    0.01 sec
+        Start  85: nodal.native.analog-procedural-rejects-variable-kind
+ 85/112 Test  #85: nodal.native.analog-procedural-rejects-variable-kind ...............   Passed    0.01 sec
+        Start  86: nodal.native.analog-procedural-rejects-multiple
+ 86/112 Test  #86: nodal.native.analog-procedural-rejects-multiple ....................   Passed    0.01 sec
+        Start  87: nodal.native.analog-control-flow-roundtrip
+ 87/112 Test  #87: nodal.native.analog-control-flow-roundtrip .........................   Passed    0.01 sec
+        Start  88: nodal.native.analog-control-flow-source-map-roundtrip
+ 88/112 Test  #88: nodal.native.analog-control-flow-source-map-roundtrip ..............   Passed    0.01 sec
+        Start  89: nodal.native.analog-control-flow-rejects-break
+ 89/112 Test  #89: nodal.native.analog-control-flow-rejects-break .....................   Passed    0.01 sec
+        Start  90: nodal.native.analog-control-flow-rejects-loop
+ 90/112 Test  #90: nodal.native.analog-control-flow-rejects-loop ......................   Passed    0.01 sec
+        Start  91: nodal.native.analog-control-flow-rejects-condition
+ 91/112 Test  #91: nodal.native.analog-control-flow-rejects-condition .................   Passed    0.01 sec
+        Start  92: nodal.native.analog-control-flow-rejects-case
+ 92/112 Test  #92: nodal.native.analog-control-flow-rejects-case ......................   Passed    0.01 sec
+        Start  93: nodal.native.analog-control-flow-rejects-missing-else
+ 93/112 Test  #93: nodal.native.analog-control-flow-rejects-missing-else ..............   Passed    0.01 sec
+        Start  94: nodal.native.analog-control-flow-rejects-missing-default
+ 94/112 Test  #94: nodal.native.analog-control-flow-rejects-missing-default ...........   Passed    0.01 sec
+        Start  95: nodal.native.analog-control-flow-rejects-zero-trip
+ 95/112 Test  #95: nodal.native.analog-control-flow-rejects-zero-trip .................   Passed    0.01 sec
+        Start  96: nodal.native.analog-control-flow-rejects-continue-path
+ 96/112 Test  #96: nodal.native.analog-control-flow-rejects-continue-path .............   Passed    0.01 sec
+        Start  97: nodal.native.analog-control-flow-rejects-duplicate-identity
+ 97/112 Test  #97: nodal.native.analog-control-flow-rejects-duplicate-identity ........   Passed    0.01 sec
+        Start  98: nodal.native.analog-control-flow-rejects-order
+ 98/112 Test  #98: nodal.native.analog-control-flow-rejects-order .....................   Passed    0.01 sec
+        Start  99: nodal.native.analog-control-flow-rejects-guard-read
+ 99/112 Test  #99: nodal.native.analog-control-flow-rejects-guard-read ................   Passed    0.01 sec
+        Start 100: nodal.native.analog-control-flow-rejects-case-label
+100/112 Test #100: nodal.native.analog-control-flow-rejects-case-label ................   Passed    0.01 sec
+        Start 101: nodal.native.analog-control-flow-rejects-runtime-static-sentinel
+101/112 Test #101: nodal.native.analog-control-flow-rejects-runtime-static-sentinel ...   Passed    0.01 sec
+        Start 102: nodal.native.analog-control-flow-rejects-else-static-sentinel
+102/112 Test #102: nodal.native.analog-control-flow-rejects-else-static-sentinel ......   Passed    0.01 sec
+        Start 103: nodal.native.analog-control-flow-rejects-loop-static-sentinel
+103/112 Test #103: nodal.native.analog-control-flow-rejects-loop-static-sentinel ......   Passed    0.01 sec
+        Start 104: nodal.native.version-unit
+104/112 Test #104: nodal.native.version-unit ..........................................   Passed    0.01 sec
+        Start 105: nodal.native.dialect-unit
+105/112 Test #105: nodal.native.dialect-unit ..........................................   Passed    0.00 sec
+        Start 106: nodal.native.core-model-unit
+106/112 Test #106: nodal.native.core-model-unit .......................................   Passed    0.00 sec
+        Start 107: nodal.native.semantic-pipeline-unit
+107/112 Test #107: nodal.native.semantic-pipeline-unit ................................   Passed    0.01 sec
+        Start 108: nodal.native.backend-unit
+108/112 Test #108: nodal.native.backend-unit ..........................................   Passed    0.01 sec
+        Start 109: nodal.native.analog-expression-unit
+109/112 Test #109: nodal.native.analog-expression-unit ................................   Passed    0.01 sec
+        Start 110: nodal.native.nature-discipline-unit
+110/112 Test #110: nodal.native.nature-discipline-unit ................................   Passed    0.01 sec
+        Start 111: nodal.native.conservative-connectivity-unit
+111/112 Test #111: nodal.native.conservative-connectivity-unit ........................   Passed    0.01 sec
+        Start 112: nodal.native.parameter-model-unit
+112/112 Test #112: nodal.native.parameter-model-unit ..................................   Passed    0.01 sec
+
+100% tests passed, 0 tests failed out of 112
+
+Total Test time (real) =   1.03 sec
++ /home/runner/work/Nodal/Nodal/work/mill -i core.scala.testkit.test.testOnly nodal.internal.testkit.ScalaToMlirBridgeTests
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::objectFieldOffset has been called by scala.runtime.LazyVals$ (file:/home/runner/.cache/coursier/v1/https/repo1.maven.org/maven2/org/scala-lang/scala-library/3.8.2/scala-library-3.8.2.jar)
+WARNING: Please consider reporting this to the maintainers of class scala.runtime.LazyVals$
+WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+/home/runner/.cache/nodal/mill/mill-1.1.7.sh cor...y nodal.internal.testkit.ScalaToMlirBridgeTests
+441] core.scala.testkit.test.testOnly
+441] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+441] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by scala.runtime.LazyVals$ (file:/home/runner/.cache/coursier/v1/https/repo1.maven.org/maven2/org/scala-lang/scala3-library_3/3.7.4/scala3-library_3-3.7.4.jar)
+441] WARNING: Please consider reporting this to the maintainers of class scala.runtime.LazyVals$
+441] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+441] Running Test Class nodal.internal.testkit.ScalaToMlirBridgeTests
+441] -------------------------------- Running Tests --------------------------------
+441] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.deterministic source-correlated textual MLIR [2m952ms[0m  
+441] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.analog procedural IR retains order, source locations, and serialization [2m584ms[0m  
+441] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.analog procedural rendering prefers authored order to provenance [2m127ms[0m  
+441] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.nested procedural scopes preserve declaration and assignment chronology [2m163ms[0m  
+441] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.initializing assignments precede dependent declarations independent of provenance [2m98ms[0m  
+441] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.structured analog control flow serializes without flattening [2m787ms[0m  
+441] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.snapshot insertion order does not affect the bridge [2m193ms[0m  
+441] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.unsupported exact type fails before process launch [2m175ms[0m  
+441] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.argv-safe process success, cleanup, and recovery [2m188ms[0m  
+441] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.timeout is distinct and leaves no partial accepted output [2m5185ms[0m  
+441] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.locked nodalc parses procedural bridge MLIR when configured [2m134ms[0m  
+441] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.locked nodalc parses and normalizes bridge MLIR when configured [2m188ms[0m  
+441] Tests: 12, Passed: 12, Failed: 0
+441/441, SUCCESS] /home/runner/.cache/nodal/mill/mill-1...ernal.testkit.ScalaToMlirBridgeTests 12s
++ /usr/bin/python3 /home/runner/work/Nodal/Nodal/work/scripts/bootstrap_lint_toolchain.py status --json --toolchain /home/runner/work/_temp/nodal-lint-toolchain
++ /usr/bin/python3 /home/runner/work/Nodal/Nodal/work/scripts/run_clang_tools.py tidy --toolchain /home/runner/work/_temp/nodal-lint-toolchain --build-dir /home/runner/work/Nodal/Nodal/work/out/native/release
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+173 warnings generated.
+Suppressed 173 warnings (164 in non-user code, 9 with check filters).
+Use -header-filter=.* or leave it as default to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+8 warnings generated.
+Suppressed 8 warnings (8 with check filters).
+clang-tidy waiver: core/compiler/lib/Dialect/Nodal/NodalTypes.cpp: clang-analyzer-core.StackAddressEscape (locked MLIR type-registration template false positive)
+clang-tidy checked 25 translation unit(s)

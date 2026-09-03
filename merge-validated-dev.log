@@ -1,0 +1,11 @@
+Merge made by the 'ort' strategy.
+ ...ent33-analog-variables-procedural-assignment.md | 15 ++--
+ .../implementation/increment33-evidence-closure.md | 28 +++++++
+ docs/roadmap/nodal-development-todo.md             |  8 +-
+ scripts/check_increment32.py                       | 43 ++++++++++-
+ scripts/check_increment33.py                       | 89 +++++++++++++++++++---
+ tests/compiler/fixtures/increment33/manifest.json  | 14 +++-
+ tests/compiler/test_increment32.py                 | 27 +++++--
+ tests/compiler/test_increment33.py                 | 44 ++++++++++-
+ 8 files changed, 236 insertions(+), 32 deletions(-)
+ create mode 100644 docs/implementation/increment33-evidence-closure.md

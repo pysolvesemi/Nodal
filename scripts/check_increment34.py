@@ -160,6 +160,15 @@ def check_repository(root: Path) -> None:
             f"NODAL-INC34-039: native hardening semantic {key!r} is not enabled",
         )
 
+    for key in (
+        "native_canonical_condition_sentinels",
+        "native_canonical_loop_sentinels",
+    ):
+        require(
+            semantics.get(key) is True,
+            f"NODAL-INC34-043: native staging semantic {key!r} is not enabled",
+        )
+
     integration = manifest.get("integration")
     require(isinstance(integration, dict), "NODAL-INC34-012: integration must be an object")
     for key in (
@@ -595,6 +604,25 @@ def check_repository(root: Path) -> None:
         "NODAL-INC34-042",
         "native structured hardening tests",
     )
+
+    require_tokens(
+        native_verifier,
+        (
+            "staticPresent.getValue() || staticValue.getValue()",
+            "staticPresent.getValue() || staticCount.getInt() != 0",
+        ),
+        "NODAL-INC34-044",
+        "native canonical staging sentinels",
+    )
+    for fixture in (
+        "runtime-static-sentinel",
+        "else-static-sentinel",
+        "loop-static-sentinel",
+    ):
+        require(
+            (root / f"core/compiler/test/IR/analog-control-flow-invalid-{fixture}.mlir").is_file(),
+            f"NODAL-INC34-045: missing staging sentinel fixture {fixture}",
+        )
 
     forbidden_names = {
         "_inc34_materializer.yml",

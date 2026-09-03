@@ -635,6 +635,26 @@ add_test(
     -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
 )
 
+foreach(_fixture IN ITEMS runtime-static-sentinel else-static-sentinel)
+  add_test(
+    NAME nodal.native.analog-control-flow-rejects-${_fixture}
+    COMMAND "${CMAKE_COMMAND}"
+      "-DNODALC=$<TARGET_FILE:nodalc>"
+      "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow-invalid-${_fixture}.mlir"
+      "-DDIAGNOSTIC=NODAL-ANALOG-034-003"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
+  )
+endforeach()
+
+add_test(
+  NAME nodal.native.analog-control-flow-rejects-loop-static-sentinel
+  COMMAND "${CMAKE_COMMAND}"
+    "-DNODALC=$<TARGET_FILE:nodalc>"
+    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow-invalid-loop-static-sentinel.mlir"
+    "-DDIAGNOSTIC=NODAL-ANALOG-034-008"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
+)
+
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
   DEPENDS

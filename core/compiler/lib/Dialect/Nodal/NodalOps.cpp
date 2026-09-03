@@ -1432,7 +1432,7 @@ LogicalResult nodal::AnalogIfArmOp::verify() {
   auto reads = getOperation()->getAttrOfType<ArrayAttr>("condition_reads");
   if (isElse.getValue()) {
     if (stage != "else" || !value.empty() || !kind.empty() || !dimension.empty() ||
-        !reads.empty() || staticPresent.getValue())
+        !reads.empty() || staticPresent.getValue() || staticValue.getValue())
       return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-003",
                                "else arm must not carry a condition or static value");
     return success();
@@ -1446,7 +1446,7 @@ LogicalResult nodal::AnalogIfArmOp::verify() {
     return emitMappedFailure(
         getOperation(), "NODAL-ANALOG-034-003",
         "static conditional arm requires a compile-time value without dynamic reads");
-  if (stage == "runtime" && staticPresent.getValue())
+  if (stage == "runtime" && (staticPresent.getValue() || staticValue.getValue()))
     return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-003",
                              "runtime conditional arm cannot carry a compile-time selected value");
   return success();
@@ -1594,7 +1594,7 @@ LogicalResult nodal::AnalogLoopOp::verify() {
           getOperation(), "NODAL-ANALOG-034-009",
           "static loop requires one exact non-negative compile-time trip count");
   } else {
-    if (maximumValue == 0 || staticPresent.getValue())
+    if (maximumValue == 0 || staticPresent.getValue() || staticCount.getInt() != 0)
       return emitMappedFailure(
           getOperation(), "NODAL-ANALOG-034-008",
           "runtime loop requires a positive finite maximum and no static trip count");

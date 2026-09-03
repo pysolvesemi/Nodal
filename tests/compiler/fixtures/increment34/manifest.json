@@ -54,7 +54,9 @@
     "native_procedure_wide_identity_uniqueness": true,
     "native_authored_order_verification": true,
     "native_guard_read_definite_assignment": true,
-    "native_canonical_case_labels": true
+    "native_canonical_case_labels": true,
+    "native_canonical_condition_sentinels": true,
+    "native_canonical_loop_sentinels": true
   },
   "integration": {
     "public_construction_kernel": true,

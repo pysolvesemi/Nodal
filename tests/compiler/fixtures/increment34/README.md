@@ -37,6 +37,7 @@ Native branch-sensitive definite-assignment now intersects all reachable
 normal, unmatched, `break`, and `continue` exits and rejects reachable reads
 after incomplete conditionals, cases, and zero-minimum loops. The native
 boundary also enforces procedure-wide operation identities, contiguous authored
-orders, assignment-guard dependencies, and canonical integer and Boolean case
-labels. Solver construction, target legalization, and Verilog-A or Verilog-AMS
+orders, assignment-guard dependencies, canonical integer and Boolean case labels,
+and canonical absent-value sentinels for runtime conditions and loops. Solver
+construction, target legalization, and Verilog-A or Verilog-AMS
 procedural lowering remain deferred to their owning increments.

@@ -38,6 +38,9 @@ REQUIRED = (
     "core/compiler/test/IR/analog-control-flow-invalid-order.mlir",
     "core/compiler/test/IR/analog-control-flow-invalid-guard-read.mlir",
     "core/compiler/test/IR/analog-control-flow-invalid-case-label.mlir",
+    "core/compiler/test/IR/analog-control-flow-invalid-runtime-static-sentinel.mlir",
+    "core/compiler/test/IR/analog-control-flow-invalid-else-static-sentinel.mlir",
+    "core/compiler/test/IR/analog-control-flow-invalid-loop-static-sentinel.mlir",
     "docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md",
     "docs/implementation/increment34-analog-control-flow.md",
     "docs/roadmap/nodal-development-todo.md",
@@ -441,6 +444,42 @@ class Increment34ContractTests(unittest.TestCase):
             document["semantics"]["native_guard_read_definite_assignment"] = False
             path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
             self.assert_rejected(root, "native hardening semantic")
+
+    def test_native_runtime_static_sentinel_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "staticPresent.getValue() || staticValue.getValue()",
+                    "staticPresent.getValue()",
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "native canonical staging sentinels is missing")
+
+    def test_native_loop_static_sentinel_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "staticPresent.getValue() || staticCount.getInt() != 0",
+                    "staticPresent.getValue()",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "native canonical staging sentinels is missing")
+
+    def test_native_staging_manifest_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "tests/compiler/fixtures/increment34/manifest.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["semantics"]["native_canonical_condition_sentinels"] = False
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            self.assert_rejected(root, "native staging semantic")
 
     def test_write_enabled_workflow_is_rejected(self) -> None:
         temporary, root = self.fixture()

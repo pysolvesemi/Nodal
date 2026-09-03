@@ -135,6 +135,8 @@ evidence and must be rerun.
   analysis.
 - [x] Reject non-canonical integer and Boolean case-label spellings at the
   compiler boundary.
+- [x] Reject hidden static values on runtime or else conditions and hidden
+  static trip counts on runtime loops.
 
 ## Tranche 34d — closure
 

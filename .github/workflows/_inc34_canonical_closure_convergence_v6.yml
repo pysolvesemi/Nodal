@@ -1,0 +1,38 @@
+name: Increment 34 Canonical Closure Convergence v6
+
+on:
+  push:
+    branches:
+      - automation/inc34-evidence-closure-controller-v1
+    paths:
+      - '.github/workflows/_inc34_canonical_closure_convergence_v6.yml'
+
+permissions:
+  actions: write
+  checks: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: increment-34-canonical-closure-v6
+  cancel-in-progress: false
+
+jobs:
+  converge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Check out canonical Increment 34 closure controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-evidence-closure-controller-v1
+          path: controller
+          fetch-depth: 1
+
+      - name: Materialize, reconcile, merge, and audit Increment 34
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash controller/.github/automation/inc34_canonical_closure_convergence_v6b.sh \
+            "${GITHUB_WORKSPACE}/controller" \
+            "${RUNNER_TEMP}/inc34-canonical-closure-v6"

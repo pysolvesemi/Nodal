@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "increment": 34,
+  "phase": "failed",
+  "detail": "locked Ruff executable was not found",
+  "workflow_run": 33769275633,
+  "controller_sha": "da58253bef789017cd30a79474985650150ccff7",
+  "recorded_at": "2026-09-03T14:51:50Z"
+}

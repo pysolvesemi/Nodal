@@ -2,8 +2,18 @@
 
 **Status:** In progress  
 **Branch:** `increment/34-analog-control-flow-v1`  
-**Baseline:** stacked on Increment 33 head
-`ea7f7da51e85ba275dac71db7823ba0223f8d4ac`
+**Baseline:** validated Increment 33 implementation head
+`ea7f7da51e85ba275dac71db7823ba0223f8d4ac`, merged as `2e0ff291b8d6c0f6dcc4b4c8e27cc33984cff1b8` and closed by
+PR #110; synchronized `dev` head `d3efa5fe83f64b29dc9368f54ab7a1159d8ad71f`.
+
+## Predecessor synchronization
+
+Increment 34 is validated against roadmap revision 1.44 and the completed
+Increment 33 evidence state. The predecessor record retains exact post-merge run
+`33714669557`, closure PR #110, closure validation head
+`4c9f285d387996b02d182279923c091dacdc5173`, and closure validation run
+`33716060831`. Increment 34 itself remains unchecked
+until its separate evidence closure.
 
 ## Objective
 

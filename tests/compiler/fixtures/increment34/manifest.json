@@ -5,8 +5,14 @@
   "baseline": {
     "stacked_on_increment": 33,
     "increment_33_head": "ea7f7da51e85ba275dac71db7823ba0223f8d4ac",
-    "increment_33_manifest": "implementation-in-progress",
-    "roadmap_revision": "1.43"
+    "increment_33_manifest": "validated-analog-procedural-assignment",
+    "increment_33_implementation_merge": "2e0ff291b8d6c0f6dcc4b4c8e27cc33984cff1b8",
+    "increment_33_exact_post_merge_validation_run": 33714669557,
+    "increment_33_closure_pr": 110,
+    "increment_33_closure_validation_head": "4c9f285d387996b02d182279923c091dacdc5173",
+    "increment_33_closure_validation_run": 33716060831,
+    "increment_33_dev_head": "d3efa5fe83f64b29dc9368f54ab7a1159d8ad71f",
+    "roadmap_revision": "1.44"
   },
   "design_gate": "docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md",
   "protected_scopes": [

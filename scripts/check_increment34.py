@@ -84,20 +84,71 @@ def check_repository(root: Path) -> None:
         and "- [x] **Increment 34 — Analog control flow**" not in roadmap,
         "NODAL-INC34-004: Increment 34 must remain unchecked until evidence closure",
     )
+    predecessor_validation = predecessor.get("validation")
+    required_predecessor_evidence = (
+        "implementation_pull_request",
+        "accepted_head",
+        "dedicated_boundary_workflow_run",
+        "implementation_merge",
+        "post_merge_core_ci_run",
+        "exact_post_merge_validation_run",
+        "closure_pull_request",
+        "closure_validation_head",
+        "closure_validation_run",
+    )
     require(
         predecessor.get("increment") == 33
-        and predecessor.get("status") == "implementation-in-progress",
-        "NODAL-INC34-005: stacked Increment 33 manifest is not the implementation baseline",
+        and predecessor.get("status")
+        == "validated-analog-procedural-assignment"
+        and isinstance(predecessor_validation, dict)
+        and all(
+            predecessor_validation.get(field)
+            for field in required_predecessor_evidence
+        ),
+        "NODAL-INC34-005: Increment 33 lacks validated predecessor evidence",
+    )
+    require(
+        predecessor_validation.get("implementation_pull_request") == 102
+        and predecessor_validation.get("accepted_head")
+        == "ea7f7da51e85ba275dac71db7823ba0223f8d4ac"
+        and predecessor_validation.get("implementation_merge")
+        == "2e0ff291b8d6c0f6dcc4b4c8e27cc33984cff1b8"
+        and predecessor_validation.get("exact_post_merge_validation_run")
+        == 33714669557
+        and predecessor_validation.get("closure_pull_request") == 110,
+        "NODAL-INC34-005: Increment 33 predecessor evidence does not match the accepted implementation",
     )
     baseline = manifest.get("baseline")
     require(isinstance(baseline, dict), "NODAL-INC34-006: baseline must be an object")
     require(
         baseline.get("stacked_on_increment") == 33
         and baseline.get("increment_33_head")
-        == "ea7f7da51e85ba275dac71db7823ba0223f8d4ac"
-        and baseline.get("increment_33_manifest") == "implementation-in-progress"
-        and baseline.get("roadmap_revision") == "1.43",
-        "NODAL-INC34-007: Increment 34 is not pinned to the accepted stacked baseline",
+        == predecessor_validation.get("accepted_head")
+        and baseline.get("increment_33_manifest") == predecessor.get("status")
+        and baseline.get("increment_33_implementation_merge")
+        == predecessor_validation.get("implementation_merge")
+        and baseline.get("increment_33_exact_post_merge_validation_run")
+        == predecessor_validation.get("exact_post_merge_validation_run")
+        and baseline.get("increment_33_closure_pr")
+        == predecessor_validation.get("closure_pull_request")
+        and baseline.get("increment_33_closure_validation_head")
+        == predecessor_validation.get("closure_validation_head")
+        and baseline.get("increment_33_closure_validation_run")
+        == predecessor_validation.get("closure_validation_run")
+        and isinstance(baseline.get("increment_33_dev_head"), str)
+        and len(baseline.get("increment_33_dev_head")) == 40
+        and all(
+            character in "0123456789abcdef"
+            for character in baseline.get("increment_33_dev_head")
+        )
+        and baseline.get("roadmap_revision") == "1.44",
+        "NODAL-INC34-007: Increment 34 is not pinned to the validated Increment 33 baseline",
+    )
+    require(
+        "**Revision:** 1.44" in roadmap
+        and "- [x] **Increment 33 — Analog variables and procedural assignment**"
+        in roadmap,
+        "NODAL-INC34-007: roadmap does not contain the validated Increment 33 predecessor",
     )
     require(
         manifest.get("schema") == 1

@@ -92,7 +92,40 @@ class Increment34ContractTests(unittest.TestCase):
             document = json.loads(path.read_text(encoding="utf-8"))
             document["baseline"]["increment_33_head"] = "0" * 40
             path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
-            self.assert_rejected(root, "accepted stacked baseline")
+            self.assert_rejected(root, "validated Increment 33 baseline")
+
+    def test_unvalidated_predecessor_manifest_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "tests/compiler/fixtures/increment33/manifest.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["status"] = "implementation-in-progress"
+            document["validation"] = None
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            self.assert_rejected(root, "lacks validated predecessor evidence")
+
+    def test_predecessor_closure_identity_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "tests/compiler/fixtures/increment34/manifest.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["baseline"]["increment_33_closure_pr"] = 999
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            self.assert_rejected(root, "validated Increment 33 baseline")
+
+    def test_predecessor_roadmap_regression_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "docs/roadmap/nodal-development-todo.md"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "- [x] **Increment 33 — Analog variables and procedural assignment**",
+                    "- [ ] **Increment 33 — Analog variables and procedural assignment**",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "roadmap does not contain the validated")
 
     def test_branch_intersection_mutation_is_rejected(self) -> None:
         temporary, root = self.fixture()

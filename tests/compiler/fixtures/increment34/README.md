@@ -41,3 +41,7 @@ orders, assignment-guard dependencies, canonical integer and Boolean case labels
 and canonical absent-value sentinels for runtime conditions and loops. Solver
 construction, target legalization, and Verilog-A or Verilog-AMS
 procedural lowering remain deferred to their owning increments.
+
+The Increment 34 checkpoint is pinned to the validated Increment 33 evidence
+state and roadmap revision 1.44. Increment 34 remains open until its own
+implementation merge, post-merge validation, and separate evidence closure.

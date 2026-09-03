@@ -46,3 +46,6 @@ jobs:
             "${GITHUB_WORKSPACE}/controller" \
             "${GITHUB_WORKSPACE}/work" \
             "${RUNNER_TEMP}/inc34-v8"
+
+      # The permanent workflow update is published separately through the
+      # repository connection so this token pushes only implementation files.

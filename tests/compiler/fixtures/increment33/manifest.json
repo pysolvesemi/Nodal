@@ -70,7 +70,7 @@
     "post_merge_core_ci_run": 33605996500,
     "exact_post_merge_validation_run": 33714669557,
     "closure_pull_request": 110,
-    "closure_validation_head": "2e0ff291b8d6c0f6dcc4b4c8e27cc33984cff1b8",
+    "closure_validation_head": "4c9f285d387996b02d182279923c091dacdc5173",
     "closure_validation_run": 33716060831
   }
 }

@@ -1,0 +1,44 @@
+name: Increment 34 Reference Order Review v14
+
+on:
+  push:
+    branches:
+      - automation/inc34-reference-order-review-v14
+    paths:
+      - '.github/workflows/_inc34_reference_order_review_v14.yml'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: increment-34-reference-order-review-v14
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out reference-order review controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-reference-order-review-v14
+          path: controller
+          fetch-depth: 1
+
+      - name: Check out current Increment 34 feature head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/34-analog-control-flow-v1
+          path: work
+          fetch-depth: 0
+
+      - name: Execute guarded reference-order and owner review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash controller/.github/automation/inc34_run_reference_order_review_v14b.sh \
+            "${GITHUB_WORKSPACE}/controller" \
+            "${GITHUB_WORKSPACE}/work" \
+            "${RUNNER_TEMP}/inc34-reference-order-review-v14"

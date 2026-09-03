@@ -1,0 +1,49 @@
+name: Increment 34 Evidence Closure v5
+
+on:
+  push:
+    branches:
+      - automation/inc34-evidence-closure-controller-v1
+    paths:
+      - '.github/workflows/_inc34_evidence_closure_v6.yml'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: increment-34-evidence-closure-v5
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    steps:
+      - name: Check out Increment 34 closure controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-evidence-closure-controller-v1
+          path: controller
+          fetch-depth: 1
+
+      - name: Check out current Increment 34 evidence branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/34-evidence-closure-v1
+          path: work
+          fetch-depth: 0
+
+      - name: Refresh canonical closure evidence and wording
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/111")
+          if [[ $(jq -r '.merged' <<< "${pr}") == true ]]; then
+            echo "PR #111 is already merged; v6 convergence will audit or repair it."
+            exit 0
+          fi
+          bash controller/.github/automation/inc34_run_evidence_closure_v6.sh \
+            "${GITHUB_WORKSPACE}/controller" \
+            "${GITHUB_WORKSPACE}/work" \
+            "${RUNNER_TEMP}/inc34-evidence-closure-v6"

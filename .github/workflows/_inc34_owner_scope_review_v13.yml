@@ -34,11 +34,11 @@ jobs:
           path: work
           fetch-depth: 0
 
-      - name: Execute guarded owner/scope review
+      - name: Execute corrected guarded owner/scope review
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          bash controller/.github/automation/inc34_run_owner_scope_review_v13.sh \
+          bash controller/.github/automation/inc34_run_owner_scope_review_v13b.sh \
             "${GITHUB_WORKSPACE}/controller" \
             "${GITHUB_WORKSPACE}/work" \
             "${RUNNER_TEMP}/inc34-owner-scope-v13"

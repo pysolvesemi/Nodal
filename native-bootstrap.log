@@ -1,0 +1,7 @@
++ /usr/bin/python3 /home/runner/work/Nodal/Nodal/work/scripts/bootstrap_native_toolchain.py install --mode prebuilt --prefix /home/runner/work/_temp/nodal-native-toolchain
+lock:   nodal-native-2026.08.20
+host:   linux-x86_64
+mode:   prebuilt
+prefix: /home/runner/work/_temp/nodal-native-toolchain
+asset:  circt-full-shared-linux-x64.tar.gz
+sha256: 2e3ed6051c43773b002c88c1172cb71f1430b71106835e6b4b5d5b631569fe28

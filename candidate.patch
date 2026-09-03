@@ -1,0 +1,380 @@
+diff --git a/core/compiler/lib/Dialect/Nodal/NodalOps.cpp b/core/compiler/lib/Dialect/Nodal/NodalOps.cpp
+index fc847e3..f22585d 100644
+--- a/core/compiler/lib/Dialect/Nodal/NodalOps.cpp
++++ b/core/compiler/lib/Dialect/Nodal/NodalOps.cpp
+@@ -159,6 +159,17 @@ bool proceduralKindsCompatible(llvm::StringRef source, llvm::StringRef destinati
+   return source == destination || (source == "integer" && destination == "real");
+ }
+ 
++bool isCanonicalStructuredCaseLabel(llvm::StringRef label, llvm::StringRef kind) {
++  if (kind == "boolean")
++    return label == "boolean:true" || label == "boolean:false";
++  if (kind != "integer" || !label.consume_front("integer:") || label.empty())
++    return false;
++  int64_t parsed = 0;
++  if (label.getAsInteger(10, parsed))
++    return false;
++  return label == std::to_string(parsed);
++}
++
+ bool isProceduralAncestor(Operation *operation) {
+   return operation && static_cast<bool>(operation->getParentOfType<nodal::AnalogProcedureOp>());
+ }
+@@ -584,6 +595,9 @@ struct StructuredVariableInfo {
+ 
+ struct StructuredDataflowContext {
+   llvm::StringMap<StructuredVariableInfo> variables;
++  llvm::StringSet<> operationIdentities;
++  int64_t nextDeclarationOrder = 0;
++  int64_t nextAssignmentOrder = 0;
+ };
+ 
+ struct StructuredFlow {
+@@ -627,9 +641,46 @@ void removeStructuredLocals(StructuredFlow &flow, const std::vector<std::string>
+     remove(state);
+ }
+ 
++bool isStructuredIdentityOperation(Operation *operation) {
++  return llvm::isa<nodal::AnalogVariableOp, nodal::AnalogVariableReadOp, nodal::AnalogAssignOp,
++                   nodal::AnalogScopeOp, nodal::AnalogIfOp, nodal::AnalogIfArmOp,
++                   nodal::AnalogCaseOp, nodal::AnalogCaseArmOp, nodal::AnalogLoopOp,
++                   nodal::AnalogBreakOp, nodal::AnalogContinueOp>(operation);
++}
++
++llvm::StringRef structuredOperationIdentity(Operation *operation) {
++  if (llvm::isa<nodal::AnalogVariableOp>(operation))
++    return textAttr(operation, "identity");
++  if (llvm::isa<nodal::AnalogVariableReadOp>(operation))
++    return textAttr(operation, "read_id");
++  if (llvm::isa<nodal::AnalogScopeOp>(operation))
++    return textAttr(operation, "scope_id");
++  if (llvm::isa<nodal::AnalogIfArmOp, nodal::AnalogCaseArmOp>(operation))
++    return textAttr(operation, "arm_id");
++  return textAttr(operation, "statement_id");
++}
++
++LogicalResult registerStructuredOperationIdentity(Operation *operation,
++                                                  StructuredDataflowContext &context) {
++  if (!isStructuredIdentityOperation(operation))
++    return success();
++  llvm::StringRef identity = structuredOperationIdentity(operation);
++  if (identity.trim().empty() || identity.trim() != identity)
++    return nodal::emitMappedFailure(
++        operation, "NODAL-ANALOG-034-001",
++        "structured operation identity must be non-empty and canonical");
++  if (!context.operationIdentities.insert(identity).second)
++    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-001",
++                                    llvm::Twine("duplicate structured operation identity '") +
++                                        identity + "'");
++  return success();
++}
++
+ LogicalResult collectStructuredVariables(Block &block, llvm::StringRef owner,
+                                          StructuredDataflowContext &context) {
+   for (Operation &operation : block) {
++    if (failed(registerStructuredOperationIdentity(&operation, context)))
++      return failure();
+     if (llvm::isa<nodal::AnalogVariableOp>(operation)) {
+       llvm::StringRef identity = textAttr(&operation, "identity");
+       if (identity.trim().empty())
+@@ -639,12 +690,26 @@ LogicalResult collectStructuredVariables(Block &block, llvm::StringRef owner,
+         return nodal::emitMappedFailure(
+             &operation, "NODAL-ANALOG-034-014",
+             "structured variable owner does not match the enclosing component");
++      auto declarationOrder = operation.getAttrOfType<IntegerAttr>("declaration_order");
++      if (!declarationOrder || declarationOrder.getInt() != context.nextDeclarationOrder)
++        return nodal::emitMappedFailure(
++            &operation, "NODAL-ANALOG-034-014",
++            "structured declaration order must be contiguous and authored");
++      ++context.nextDeclarationOrder;
+       if (!context.variables.try_emplace(identity, StructuredVariableInfo{operation.getBlock()})
+                .second)
+         return nodal::emitMappedFailure(&operation, "NODAL-ANALOG-034-014",
+                                         llvm::Twine("duplicate structured variable identity '") +
+                                             identity + "'");
+     }
++    if (llvm::isa<nodal::AnalogAssignOp>(operation)) {
++      auto authoredOrder = operation.getAttrOfType<IntegerAttr>("authored_order");
++      if (!authoredOrder || authoredOrder.getInt() != context.nextAssignmentOrder)
++        return nodal::emitMappedFailure(
++            &operation, "NODAL-ANALOG-034-014",
++            "structured assignment order must be contiguous and authored");
++      ++context.nextAssignmentOrder;
++    }
+     for (Region &region : operation.getRegions()) {
+       for (Block &nested : region) {
+         if (failed(collectStructuredVariables(nested, owner, context)))
+@@ -893,6 +958,8 @@ FailureOr<StructuredFlow> analyzeStructuredDataflowStatement(Operation *operatio
+ 
+   if (llvm::isa<nodal::AnalogAssignOp>(operation)) {
+     StructuredInitializedSet output = input;
++    if (failed(requireStructuredReads(operation, "guard_reads", input, context)))
++      return failure();
+     auto target = structuredVariableIdentity(operation, operation->getOperand(0), context,
+                                              /*requireInitialized=*/false, input);
+     if (failed(target))
+@@ -1413,7 +1480,7 @@ LogicalResult nodal::AnalogCaseOp::verify() {
+       return emitMappedFailure(
+           getOperation(), "NODAL-ANALOG-034-003",
+           "static case selector requires one exact value without dynamic reads");
+-    if (!staticValue.starts_with(kind.str() + ":"))
++    if (!isCanonicalStructuredCaseLabel(staticValue, kind))
+       return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-007",
+                                "static case selector value does not match selector kind");
+   } else if (!staticValue.empty()) {
+@@ -1452,7 +1519,7 @@ LogicalResult nodal::AnalogCaseOp::verify() {
+     seenOrdinary = true;
+     for (Attribute attribute : armLabels) {
+       auto label = llvm::dyn_cast<StringAttr>(attribute);
+-      if (!label || !label.getValue().starts_with(kind.str() + ":"))
++      if (!label || !isCanonicalStructuredCaseLabel(label.getValue(), kind))
+         return emitMappedFailure(&operation, "NODAL-ANALOG-034-007",
+                                  "case label kind does not match the selector");
+       if (!labels.insert(label.getValue()).second)
+diff --git a/core/compiler/test/CMakeLists.txt b/core/compiler/test/CMakeLists.txt
+index 130b113..a84771c 100644
+--- a/core/compiler/test/CMakeLists.txt
++++ b/core/compiler/test/CMakeLists.txt
+@@ -599,6 +599,42 @@ foreach(_fixture IN ITEMS missing-else missing-default zero-trip continue-path)
+   )
+ endforeach()
+ 
++add_test(
++  NAME nodal.native.analog-control-flow-rejects-duplicate-identity
++  COMMAND "${CMAKE_COMMAND}"
++    "-DNODALC=$<TARGET_FILE:nodalc>"
++    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow-invalid-duplicate-identity.mlir"
++    "-DDIAGNOSTIC=NODAL-ANALOG-034-001"
++    -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
++)
++
++add_test(
++  NAME nodal.native.analog-control-flow-rejects-order
++  COMMAND "${CMAKE_COMMAND}"
++    "-DNODALC=$<TARGET_FILE:nodalc>"
++    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow-invalid-order.mlir"
++    "-DDIAGNOSTIC=NODAL-ANALOG-034-014"
++    -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
++)
++
++add_test(
++  NAME nodal.native.analog-control-flow-rejects-guard-read
++  COMMAND "${CMAKE_COMMAND}"
++    "-DNODALC=$<TARGET_FILE:nodalc>"
++    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow-invalid-guard-read.mlir"
++    "-DDIAGNOSTIC=NODAL-ANALOG-034-004"
++    -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
++)
++
++add_test(
++  NAME nodal.native.analog-control-flow-rejects-case-label
++  COMMAND "${CMAKE_COMMAND}"
++    "-DNODALC=$<TARGET_FILE:nodalc>"
++    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow-invalid-case-label.mlir"
++    "-DDIAGNOSTIC=NODAL-ANALOG-034-007"
++    -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
++)
++
+ add_custom_target(check-nodal-native
+   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
+   DEPENDS
+diff --git a/docs/implementation/increment34-analog-control-flow.md b/docs/implementation/increment34-analog-control-flow.md
+index 114ae08..477089f 100644
+--- a/docs/implementation/increment34-analog-control-flow.md
++++ b/docs/implementation/increment34-analog-control-flow.md
+@@ -129,6 +129,12 @@ evidence and must be rerun.
+ - [x] Retain deterministic control-node and typed-expression inventories.
+ - [x] Implement native branch-sensitive definite-assignment dataflow over the
+   first-class regions, including unmatched selection and bounded-loop exits.
++- [x] Enforce procedure-wide native operation-identity uniqueness and contiguous
++  declaration and assignment order.
++- [x] Include assignment guard dependencies in native definite-assignment
++  analysis.
++- [x] Reject non-canonical integer and Boolean case-label spellings at the
++  compiler boundary.
+ 
+ ## Tranche 34d — closure
+ 
+diff --git a/scripts/check_increment34.py b/scripts/check_increment34.py
+index f737cba..92e876b 100755
+--- a/scripts/check_increment34.py
++++ b/scripts/check_increment34.py
+@@ -149,6 +149,17 @@ def check_repository(root: Path) -> None:
+         "NODAL-INC34-011: deferred control-flow semantics were enabled",
+     )
+ 
++    for key in (
++        "native_procedure_wide_identity_uniqueness",
++        "native_authored_order_verification",
++        "native_guard_read_definite_assignment",
++        "native_canonical_case_labels",
++    ):
++        require(
++            semantics.get(key) is True,
++            f"NODAL-INC34-039: native hardening semantic {key!r} is not enabled",
++        )
++
+     integration = manifest.get("integration")
+     require(isinstance(integration, dict), "NODAL-INC34-012: integration must be an object")
+     for key in (
+@@ -549,6 +560,42 @@ def check_repository(root: Path) -> None:
+         "native branch-sensitive dataflow tests",
+     )
+ 
++    require_tokens(
++        native_verifier,
++        (
++            "registerStructuredOperationIdentity",
++            "int64_t nextDeclarationOrder = 0",
++            "int64_t nextAssignmentOrder = 0",
++            '"guard_reads", input, context',
++            "isCanonicalStructuredCaseLabel",
++            "structured declaration order must be contiguous and authored",
++            "structured assignment order must be contiguous and authored",
++        ),
++        "NODAL-INC34-040",
++        "native structured verifier hardening",
++    )
++    for fixture in (
++        "duplicate-identity",
++        "order",
++        "guard-read",
++        "case-label",
++    ):
++        require(
++            (root / f"core/compiler/test/IR/analog-control-flow-invalid-{fixture}.mlir").is_file(),
++            f"NODAL-INC34-041: missing native hardening fixture {fixture}",
++        )
++    require_tokens(
++        native_cmake,
++        (
++            "analog-control-flow-rejects-duplicate-identity",
++            "analog-control-flow-rejects-order",
++            "analog-control-flow-rejects-guard-read",
++            "analog-control-flow-rejects-case-label",
++        ),
++        "NODAL-INC34-042",
++        "native structured hardening tests",
++    )
++
+     forbidden_names = {
+         "_inc34_materializer.yml",
+         "_increment34_materializer.yml",
+diff --git a/tests/compiler/fixtures/increment34/README.md b/tests/compiler/fixtures/increment34/README.md
+index e5ea077..cc83cd3 100644
+--- a/tests/compiler/fixtures/increment34/README.md
++++ b/tests/compiler/fixtures/increment34/README.md
+@@ -35,6 +35,8 @@ native parse and generic print.
+ 
+ Native branch-sensitive definite-assignment now intersects all reachable
+ normal, unmatched, `break`, and `continue` exits and rejects reachable reads
+-after incomplete conditionals, cases, and zero-minimum loops. Solver
+-construction, target legalization, and Verilog-A or Verilog-AMS procedural
+-lowering remain deferred to their owning increments.
++after incomplete conditionals, cases, and zero-minimum loops. The native
++boundary also enforces procedure-wide operation identities, contiguous authored
++orders, assignment-guard dependencies, and canonical integer and Boolean case
++labels. Solver construction, target legalization, and Verilog-A or Verilog-AMS
++procedural lowering remain deferred to their owning increments.
+diff --git a/tests/compiler/fixtures/increment34/manifest.json b/tests/compiler/fixtures/increment34/manifest.json
+index 00e11a0..f1961d7 100644
+--- a/tests/compiler/fixtures/increment34/manifest.json
++++ b/tests/compiler/fixtures/increment34/manifest.json
+@@ -50,7 +50,11 @@
+     "native_missing_else_intersection": true,
+     "native_missing_default_intersection": true,
+     "native_zero_trip_loop_conservative": true,
+-    "native_continue_exit_intersection": true
++    "native_continue_exit_intersection": true,
++    "native_procedure_wide_identity_uniqueness": true,
++    "native_authored_order_verification": true,
++    "native_guard_read_definite_assignment": true,
++    "native_canonical_case_labels": true
+   },
+   "integration": {
+     "public_construction_kernel": true,
+diff --git a/tests/compiler/test_increment34.py b/tests/compiler/test_increment34.py
+index 8f82150..b0db56a 100644
+--- a/tests/compiler/test_increment34.py
++++ b/tests/compiler/test_increment34.py
+@@ -34,6 +34,10 @@ REQUIRED = (
+     "core/compiler/test/IR/analog-control-flow-invalid-missing-default.mlir",
+     "core/compiler/test/IR/analog-control-flow-invalid-zero-trip.mlir",
+     "core/compiler/test/IR/analog-control-flow-invalid-continue-path.mlir",
++    "core/compiler/test/IR/analog-control-flow-invalid-duplicate-identity.mlir",
++    "core/compiler/test/IR/analog-control-flow-invalid-order.mlir",
++    "core/compiler/test/IR/analog-control-flow-invalid-guard-read.mlir",
++    "core/compiler/test/IR/analog-control-flow-invalid-case-label.mlir",
+     "docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md",
+     "docs/implementation/increment34-analog-control-flow.md",
+     "docs/roadmap/nodal-development-todo.md",
+@@ -375,6 +379,69 @@ class Increment34ContractTests(unittest.TestCase):
+             )
+             self.assert_rejected(root, "native branch-sensitive definite assignment is missing")
+ 
++    def test_native_global_identity_mutation_is_rejected(self) -> None:
++        temporary, root = self.fixture()
++        with temporary:
++            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
++            path.write_text(
++                path.read_text(encoding="utf-8").replace(
++                    "registerStructuredOperationIdentity",
++                    "removedRegisterStructuredOperationIdentity",
++                ),
++                encoding="utf-8",
++            )
++            self.assert_rejected(root, "native structured verifier hardening is missing")
++
++    def test_native_assignment_order_mutation_is_rejected(self) -> None:
++        temporary, root = self.fixture()
++        with temporary:
++            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
++            path.write_text(
++                path.read_text(encoding="utf-8").replace(
++                    "structured assignment order must be contiguous and authored",
++                    "removed structured assignment order validation",
++                    1,
++                ),
++                encoding="utf-8",
++            )
++            self.assert_rejected(root, "native structured verifier hardening is missing")
++
++    def test_native_guard_read_mutation_is_rejected(self) -> None:
++        temporary, root = self.fixture()
++        with temporary:
++            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
++            path.write_text(
++                path.read_text(encoding="utf-8").replace(
++                    '"guard_reads", input, context',
++                    '"removed_guard_reads", input, context',
++                    1,
++                ),
++                encoding="utf-8",
++            )
++            self.assert_rejected(root, "native structured verifier hardening is missing")
++
++    def test_native_case_label_canonicality_mutation_is_rejected(self) -> None:
++        temporary, root = self.fixture()
++        with temporary:
++            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
++            path.write_text(
++                path.read_text(encoding="utf-8").replace(
++                    "isCanonicalStructuredCaseLabel",
++                    "removedCanonicalStructuredCaseLabel",
++                ),
++                encoding="utf-8",
++            )
++            self.assert_rejected(root, "native structured verifier hardening is missing")
++
++    def test_native_hardening_manifest_mutation_is_rejected(self) -> None:
++        temporary, root = self.fixture()
++        with temporary:
++            path = root / "tests/compiler/fixtures/increment34/manifest.json"
++            document = json.loads(path.read_text(encoding="utf-8"))
++            document["semantics"]["native_guard_read_definite_assignment"] = False
++            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
++            self.assert_rejected(root, "native hardening semantic")
++
+     def test_write_enabled_workflow_is_rejected(self) -> None:
+         temporary, root = self.fixture()
+         with temporary:

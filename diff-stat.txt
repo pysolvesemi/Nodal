@@ -1,0 +1,8 @@
+ core/compiler/lib/Dialect/Nodal/NodalOps.cpp       | 71 +++++++++++++++++++++-
+ core/compiler/test/CMakeLists.txt                  | 36 +++++++++++
+ .../increment34-analog-control-flow.md             |  6 ++
+ scripts/check_increment34.py                       | 47 ++++++++++++++
+ tests/compiler/fixtures/increment34/README.md      |  8 ++-
+ tests/compiler/fixtures/increment34/manifest.json  |  6 +-
+ tests/compiler/test_increment34.py                 | 67 ++++++++++++++++++++
+ 7 files changed, 235 insertions(+), 6 deletions(-)

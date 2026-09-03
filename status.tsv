@@ -1,0 +1,17 @@
+patcher-compile	PASS	0
+apply-hardening	PASS	0
+native-bootstrap	PASS	0
+lint-bootstrap	PASS	0
+cpp-format	PASS	0
+checker-python	PASS	0
+increment33-contract	PASS	0
+increment34-contract	PASS	0
+increment34-mutations	PASS	0
+diff-check	PASS	0
+scala-core	PASS	0
+native-core	PASS	0
+runtime-witness	PASS	0
+construction-witness	PASS	0
+direct-hardening-diagnostics	PASS	0
+repository-style	PASS	0
+lease-guard	PASS	0

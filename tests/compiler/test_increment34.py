@@ -34,6 +34,10 @@ REQUIRED = (
     "core/compiler/test/IR/analog-control-flow-invalid-missing-default.mlir",
     "core/compiler/test/IR/analog-control-flow-invalid-zero-trip.mlir",
     "core/compiler/test/IR/analog-control-flow-invalid-continue-path.mlir",
+    "core/compiler/test/IR/analog-control-flow-invalid-duplicate-identity.mlir",
+    "core/compiler/test/IR/analog-control-flow-invalid-order.mlir",
+    "core/compiler/test/IR/analog-control-flow-invalid-guard-read.mlir",
+    "core/compiler/test/IR/analog-control-flow-invalid-case-label.mlir",
     "docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md",
     "docs/implementation/increment34-analog-control-flow.md",
     "docs/roadmap/nodal-development-todo.md",
@@ -374,6 +378,69 @@ class Increment34ContractTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assert_rejected(root, "native branch-sensitive definite assignment is missing")
+
+    def test_native_global_identity_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "registerStructuredOperationIdentity",
+                    "removedRegisterStructuredOperationIdentity",
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "native structured verifier hardening is missing")
+
+    def test_native_assignment_order_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "structured assignment order must be contiguous and authored",
+                    "removed structured assignment order validation",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "native structured verifier hardening is missing")
+
+    def test_native_guard_read_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    '"guard_reads", input, context',
+                    '"removed_guard_reads", input, context',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "native structured verifier hardening is missing")
+
+    def test_native_case_label_canonicality_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "isCanonicalStructuredCaseLabel",
+                    "removedCanonicalStructuredCaseLabel",
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "native structured verifier hardening is missing")
+
+    def test_native_hardening_manifest_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "tests/compiler/fixtures/increment34/manifest.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["semantics"]["native_guard_read_definite_assignment"] = False
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            self.assert_rejected(root, "native hardening semantic")
 
     def test_write_enabled_workflow_is_rejected(self) -> None:
         temporary, root = self.fixture()

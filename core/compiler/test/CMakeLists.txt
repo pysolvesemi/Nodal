@@ -599,6 +599,42 @@ foreach(_fixture IN ITEMS missing-else missing-default zero-trip continue-path)
   )
 endforeach()
 
+add_test(
+  NAME nodal.native.analog-control-flow-rejects-duplicate-identity
+  COMMAND "${CMAKE_COMMAND}"
+    "-DNODALC=$<TARGET_FILE:nodalc>"
+    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow-invalid-duplicate-identity.mlir"
+    "-DDIAGNOSTIC=NODAL-ANALOG-034-001"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
+)
+
+add_test(
+  NAME nodal.native.analog-control-flow-rejects-order
+  COMMAND "${CMAKE_COMMAND}"
+    "-DNODALC=$<TARGET_FILE:nodalc>"
+    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow-invalid-order.mlir"
+    "-DDIAGNOSTIC=NODAL-ANALOG-034-014"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
+)
+
+add_test(
+  NAME nodal.native.analog-control-flow-rejects-guard-read
+  COMMAND "${CMAKE_COMMAND}"
+    "-DNODALC=$<TARGET_FILE:nodalc>"
+    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow-invalid-guard-read.mlir"
+    "-DDIAGNOSTIC=NODAL-ANALOG-034-004"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
+)
+
+add_test(
+  NAME nodal.native.analog-control-flow-rejects-case-label
+  COMMAND "${CMAKE_COMMAND}"
+    "-DNODALC=$<TARGET_FILE:nodalc>"
+    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow-invalid-case-label.mlir"
+    "-DDIAGNOSTIC=NODAL-ANALOG-034-007"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
+)
+
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
   DEPENDS

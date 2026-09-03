@@ -149,6 +149,17 @@ def check_repository(root: Path) -> None:
         "NODAL-INC34-011: deferred control-flow semantics were enabled",
     )
 
+    for key in (
+        "native_procedure_wide_identity_uniqueness",
+        "native_authored_order_verification",
+        "native_guard_read_definite_assignment",
+        "native_canonical_case_labels",
+    ):
+        require(
+            semantics.get(key) is True,
+            f"NODAL-INC34-039: native hardening semantic {key!r} is not enabled",
+        )
+
     integration = manifest.get("integration")
     require(isinstance(integration, dict), "NODAL-INC34-012: integration must be an object")
     for key in (
@@ -547,6 +558,42 @@ def check_repository(root: Path) -> None:
         ),
         "NODAL-INC34-038",
         "native branch-sensitive dataflow tests",
+    )
+
+    require_tokens(
+        native_verifier,
+        (
+            "registerStructuredOperationIdentity",
+            "int64_t nextDeclarationOrder = 0",
+            "int64_t nextAssignmentOrder = 0",
+            '"guard_reads", input, context',
+            "isCanonicalStructuredCaseLabel",
+            "structured declaration order must be contiguous and authored",
+            "structured assignment order must be contiguous and authored",
+        ),
+        "NODAL-INC34-040",
+        "native structured verifier hardening",
+    )
+    for fixture in (
+        "duplicate-identity",
+        "order",
+        "guard-read",
+        "case-label",
+    ):
+        require(
+            (root / f"core/compiler/test/IR/analog-control-flow-invalid-{fixture}.mlir").is_file(),
+            f"NODAL-INC34-041: missing native hardening fixture {fixture}",
+        )
+    require_tokens(
+        native_cmake,
+        (
+            "analog-control-flow-rejects-duplicate-identity",
+            "analog-control-flow-rejects-order",
+            "analog-control-flow-rejects-guard-read",
+            "analog-control-flow-rejects-case-label",
+        ),
+        "NODAL-INC34-042",
+        "native structured hardening tests",
     )
 
     forbidden_names = {

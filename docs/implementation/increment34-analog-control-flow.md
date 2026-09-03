@@ -129,6 +129,12 @@ evidence and must be rerun.
 - [x] Retain deterministic control-node and typed-expression inventories.
 - [x] Implement native branch-sensitive definite-assignment dataflow over the
   first-class regions, including unmatched selection and bounded-loop exits.
+- [x] Enforce procedure-wide native operation-identity uniqueness and contiguous
+  declaration and assignment order.
+- [x] Include assignment guard dependencies in native definite-assignment
+  analysis.
+- [x] Reject non-canonical integer and Boolean case-label spellings at the
+  compiler boundary.
 
 ## Tranche 34d — closure
 

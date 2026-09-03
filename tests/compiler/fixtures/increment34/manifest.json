@@ -50,7 +50,11 @@
     "native_missing_else_intersection": true,
     "native_missing_default_intersection": true,
     "native_zero_trip_loop_conservative": true,
-    "native_continue_exit_intersection": true
+    "native_continue_exit_intersection": true,
+    "native_procedure_wide_identity_uniqueness": true,
+    "native_authored_order_verification": true,
+    "native_guard_read_definite_assignment": true,
+    "native_canonical_case_labels": true
   },
   "integration": {
     "public_construction_kernel": true,

@@ -159,6 +159,17 @@ bool proceduralKindsCompatible(llvm::StringRef source, llvm::StringRef destinati
   return source == destination || (source == "integer" && destination == "real");
 }
 
+bool isCanonicalStructuredCaseLabel(llvm::StringRef label, llvm::StringRef kind) {
+  if (kind == "boolean")
+    return label == "boolean:true" || label == "boolean:false";
+  if (kind != "integer" || !label.consume_front("integer:") || label.empty())
+    return false;
+  int64_t parsed = 0;
+  if (label.getAsInteger(10, parsed))
+    return false;
+  return label == std::to_string(parsed);
+}
+
 bool isProceduralAncestor(Operation *operation) {
   return operation && static_cast<bool>(operation->getParentOfType<nodal::AnalogProcedureOp>());
 }
@@ -584,6 +595,9 @@ struct StructuredVariableInfo {
 
 struct StructuredDataflowContext {
   llvm::StringMap<StructuredVariableInfo> variables;
+  llvm::StringSet<> operationIdentities;
+  int64_t nextDeclarationOrder = 0;
+  int64_t nextAssignmentOrder = 0;
 };
 
 struct StructuredFlow {
@@ -627,9 +641,46 @@ void removeStructuredLocals(StructuredFlow &flow, const std::vector<std::string>
     remove(state);
 }
 
+bool isStructuredIdentityOperation(Operation *operation) {
+  return llvm::isa<nodal::AnalogVariableOp, nodal::AnalogVariableReadOp, nodal::AnalogAssignOp,
+                   nodal::AnalogScopeOp, nodal::AnalogIfOp, nodal::AnalogIfArmOp,
+                   nodal::AnalogCaseOp, nodal::AnalogCaseArmOp, nodal::AnalogLoopOp,
+                   nodal::AnalogBreakOp, nodal::AnalogContinueOp>(operation);
+}
+
+llvm::StringRef structuredOperationIdentity(Operation *operation) {
+  if (llvm::isa<nodal::AnalogVariableOp>(operation))
+    return textAttr(operation, "identity");
+  if (llvm::isa<nodal::AnalogVariableReadOp>(operation))
+    return textAttr(operation, "read_id");
+  if (llvm::isa<nodal::AnalogScopeOp>(operation))
+    return textAttr(operation, "scope_id");
+  if (llvm::isa<nodal::AnalogIfArmOp, nodal::AnalogCaseArmOp>(operation))
+    return textAttr(operation, "arm_id");
+  return textAttr(operation, "statement_id");
+}
+
+LogicalResult registerStructuredOperationIdentity(Operation *operation,
+                                                  StructuredDataflowContext &context) {
+  if (!isStructuredIdentityOperation(operation))
+    return success();
+  llvm::StringRef identity = structuredOperationIdentity(operation);
+  if (identity.trim().empty() || identity.trim() != identity)
+    return nodal::emitMappedFailure(
+        operation, "NODAL-ANALOG-034-001",
+        "structured operation identity must be non-empty and canonical");
+  if (!context.operationIdentities.insert(identity).second)
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-001",
+                                    llvm::Twine("duplicate structured operation identity '") +
+                                        identity + "'");
+  return success();
+}
+
 LogicalResult collectStructuredVariables(Block &block, llvm::StringRef owner,
                                          StructuredDataflowContext &context) {
   for (Operation &operation : block) {
+    if (failed(registerStructuredOperationIdentity(&operation, context)))
+      return failure();
     if (llvm::isa<nodal::AnalogVariableOp>(operation)) {
       llvm::StringRef identity = textAttr(&operation, "identity");
       if (identity.trim().empty())
@@ -639,11 +690,25 @@ LogicalResult collectStructuredVariables(Block &block, llvm::StringRef owner,
         return nodal::emitMappedFailure(
             &operation, "NODAL-ANALOG-034-014",
             "structured variable owner does not match the enclosing component");
+      auto declarationOrder = operation.getAttrOfType<IntegerAttr>("declaration_order");
+      if (!declarationOrder || declarationOrder.getInt() != context.nextDeclarationOrder)
+        return nodal::emitMappedFailure(
+            &operation, "NODAL-ANALOG-034-014",
+            "structured declaration order must be contiguous and authored");
+      ++context.nextDeclarationOrder;
       if (!context.variables.try_emplace(identity, StructuredVariableInfo{operation.getBlock()})
                .second)
         return nodal::emitMappedFailure(&operation, "NODAL-ANALOG-034-014",
                                         llvm::Twine("duplicate structured variable identity '") +
                                             identity + "'");
+    }
+    if (llvm::isa<nodal::AnalogAssignOp>(operation)) {
+      auto authoredOrder = operation.getAttrOfType<IntegerAttr>("authored_order");
+      if (!authoredOrder || authoredOrder.getInt() != context.nextAssignmentOrder)
+        return nodal::emitMappedFailure(
+            &operation, "NODAL-ANALOG-034-014",
+            "structured assignment order must be contiguous and authored");
+      ++context.nextAssignmentOrder;
     }
     for (Region &region : operation.getRegions()) {
       for (Block &nested : region) {
@@ -893,6 +958,8 @@ FailureOr<StructuredFlow> analyzeStructuredDataflowStatement(Operation *operatio
 
   if (llvm::isa<nodal::AnalogAssignOp>(operation)) {
     StructuredInitializedSet output = input;
+    if (failed(requireStructuredReads(operation, "guard_reads", input, context)))
+      return failure();
     auto target = structuredVariableIdentity(operation, operation->getOperand(0), context,
                                              /*requireInitialized=*/false, input);
     if (failed(target))
@@ -1413,7 +1480,7 @@ LogicalResult nodal::AnalogCaseOp::verify() {
       return emitMappedFailure(
           getOperation(), "NODAL-ANALOG-034-003",
           "static case selector requires one exact value without dynamic reads");
-    if (!staticValue.starts_with(kind.str() + ":"))
+    if (!isCanonicalStructuredCaseLabel(staticValue, kind))
       return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-007",
                                "static case selector value does not match selector kind");
   } else if (!staticValue.empty()) {
@@ -1452,7 +1519,7 @@ LogicalResult nodal::AnalogCaseOp::verify() {
     seenOrdinary = true;
     for (Attribute attribute : armLabels) {
       auto label = llvm::dyn_cast<StringAttr>(attribute);
-      if (!label || !label.getValue().starts_with(kind.str() + ":"))
+      if (!label || !isCanonicalStructuredCaseLabel(label.getValue(), kind))
         return emitMappedFailure(&operation, "NODAL-ANALOG-034-007",
                                  "case label kind does not match the selector");
       if (!labels.insert(label.getValue()).second)

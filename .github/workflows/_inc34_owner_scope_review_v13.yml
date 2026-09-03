@@ -1,0 +1,44 @@
+name: Increment 34 Owner and Scope Review v13
+
+on:
+  push:
+    branches:
+      - automation/inc34-owner-scope-review-v13
+    paths:
+      - '.github/workflows/_inc34_owner_scope_review_v13.yml'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: increment-34-owner-scope-review-v13
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    steps:
+      - name: Check out owner/scope review controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-owner-scope-review-v13
+          path: controller
+          fetch-depth: 1
+
+      - name: Check out current Increment 34 feature head
+        uses: actions/checkout@v6
+        with:
+          ref: increment/34-analog-control-flow-v1
+          path: work
+          fetch-depth: 0
+
+      - name: Execute guarded owner/scope review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash controller/.github/automation/inc34_run_owner_scope_review_v13.sh \
+            "${GITHUB_WORKSPACE}/controller" \
+            "${GITHUB_WORKSPACE}/work" \
+            "${RUNNER_TEMP}/inc34-owner-scope-v13"

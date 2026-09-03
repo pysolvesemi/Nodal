@@ -1,0 +1,20 @@
++ /usr/bin/python3 /home/runner/work/Nodal/Nodal/work/scripts/bootstrap_lint_toolchain.py status --json --toolchain /home/runner/work/_temp/nodal-lint-toolchain --require
++ /usr/bin/python3 /home/runner/work/Nodal/Nodal/work/scripts/check_markdown.py
+Markdown check passed
++ /usr/bin/python3 /home/runner/work/Nodal/Nodal/work/scripts/check_package_visibility.py
+package visibility check passed
++ /usr/bin/python3 /home/runner/work/Nodal/Nodal/work/scripts/check_contribution_policy.py
+contribution policy check passed
++ /home/runner/work/Nodal/Nodal/work/mill mill.scalalib.scalafmt/checkFormatAll
+/home/runner/.cache/nodal/mill/mill-1.1.7.sh mill.scalalib.scalafmt/checkFormatAll
+29] mill.scalalib.scalafmt.ScalafmtModule/checkFormatAll Everything is formatted already
+29/29, SUCCESS] /home/runner/.cache/nodal/mill/mill-1.1.7.sh mill.scalalib.scalafmt/checkFormatAll
++ /home/runner/work/Nodal/Nodal/work/mill scalafix.check
+/home/runner/.cache/nodal/mill/mill-1.1.7.sh scalafix.check
+5] scalafix.check WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+5] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by scalafix.internal.reflect.ClasspathOps$ (file:/home/runner/.cache/coursier/v1/https/repo1.maven.org/maven2/ch/epfl/scala/scalafix-reflect_2.13.18/0.14.7/scalafix-reflect_2.13.18-0.14.7.jar)
+5] WARNING: Please consider reporting this to the maintainers of class scalafix.internal.reflect.ClasspathOps$
+5] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+5/5, SUCCESS] /home/runner/.cache/nodal/mill/mill-1.1.7.sh scalafix.check 5s
++ /usr/bin/python3 /home/runner/work/Nodal/Nodal/work/scripts/run_clang_tools.py format --check --toolchain /home/runner/work/_temp/nodal-lint-toolchain
+clang-format checked 39 file(s)

@@ -1,0 +1,11 @@
+ .../include/nodal/Dialect/Nodal/NodalOps.td        | 103 +++
+ core/compiler/lib/Dialect/Nodal/NodalOps.cpp       | 765 +++++++++++++++++++++
+ core/compiler/test/CMakeLists.txt                  |  48 ++
+ .../src/nodal/bridge/AnalogProceduralMlir.scala    | 497 ++++++++++++-
+ .../internal/testkit/ScalaToMlirBridgeTests.scala  |  48 ++
+ .../increment34-analog-control-flow.md             |  31 +-
+ scripts/check_increment34.py                       | 177 ++++-
+ tests/compiler/fixtures/increment34/README.md      |  16 +-
+ tests/compiler/fixtures/increment34/manifest.json  |  38 +-
+ tests/compiler/test_increment34.py                 |  85 ++-
+ 10 files changed, 1764 insertions(+), 44 deletions(-)

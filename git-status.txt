@@ -1,0 +1,20 @@
+## increment/34-analog-control-flow-v1...origin/increment/34-analog-control-flow-v1
+ M core/compiler/include/nodal/Dialect/Nodal/NodalOps.td
+ M core/compiler/lib/Dialect/Nodal/NodalOps.cpp
+ M core/compiler/test/CMakeLists.txt
+ M core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala
+ M core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala
+ M docs/implementation/increment34-analog-control-flow.md
+ M scripts/check_increment34.py
+ M tests/compiler/fixtures/increment34/README.md
+ M tests/compiler/fixtures/increment34/manifest.json
+ M tests/compiler/test_increment34.py
+?? core/compiler/test/IR/analog-control-flow-invalid-break.mlir
+?? core/compiler/test/IR/analog-control-flow-invalid-case.mlir
+?? core/compiler/test/IR/analog-control-flow-invalid-condition.mlir
+?? core/compiler/test/IR/analog-control-flow-invalid-continue-path.mlir
+?? core/compiler/test/IR/analog-control-flow-invalid-loop.mlir
+?? core/compiler/test/IR/analog-control-flow-invalid-missing-default.mlir
+?? core/compiler/test/IR/analog-control-flow-invalid-missing-else.mlir
+?? core/compiler/test/IR/analog-control-flow-invalid-zero-trip.mlir
+?? core/compiler/test/IR/analog-control-flow.mlir

@@ -1,0 +1,4 @@
+public_conditional_snapshots=1
+public_case_snapshots=1
+public_missing_else=NODAL-ANALOG-034-004
+flat_assignments=0

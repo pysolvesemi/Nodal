@@ -1,6 +1,6 @@
 # Increment 33 — Accepted-evidence closure
 
-**Status:** Evidence-stamped closure candidate
+**Status:** Validated evidence-closure candidate
 **Implementation PR:** #102
 **Accepted implementation head:** `ea7f7da51e85ba275dac71db7823ba0223f8d4ac`
 **Dedicated boundary workflow:** `33592719238`

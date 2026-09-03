@@ -1,0 +1,44 @@
+name: Increment 33 Evidence Closure 20260903
+
+on:
+  push:
+    branches:
+      - automation/inc33-evidence-controller-20260903
+    paths:
+      - '.github/workflows/_inc33_evidence_closure_20260903.yml'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: increment-33-evidence-closure-20260903
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    steps:
+      - name: Check out evidence controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc33-evidence-controller-20260903
+          path: controller
+          fetch-depth: 1
+
+      - name: Check out exact Increment 33 merge baseline
+        uses: actions/checkout@v6
+        with:
+          ref: 2e0ff291b8d6c0f6dcc4b4c8e27cc33984cff1b8
+          path: work
+          fetch-depth: 0
+
+      - name: Build and validate state-aware evidence closure
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash controller/.github/automation/inc33_run_evidence_closure.sh \
+            "${GITHUB_WORKSPACE}/controller" \
+            "${GITHUB_WORKSPACE}/work" \
+            "${RUNNER_TEMP}/inc33-evidence"

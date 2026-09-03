@@ -769,6 +769,109 @@ def Nodal_AnalogScopeOp : Nodal_Op<"analog_scope", [NoTerminator]> {
   let hasVerifier = 1;
 }
 
+
+def Nodal_AnalogIfOp : Nodal_Op<"analog_if", [NoTerminator]> {
+  let summary = "First-match structured analog conditional";
+  let arguments = (ins
+    StrAttr:$statement_id,
+    StrAttr:$owner,
+    DictionaryAttr:$metadata
+  );
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogIfArmOp
+    : Nodal_Op<"analog_if_arm", [HasParent<"AnalogIfOp">, NoTerminator]> {
+  let summary = "One retained arm of a structured analog conditional";
+  let arguments = (ins
+    StrAttr:$arm_id,
+    StrAttr:$owner,
+    BoolAttr:$is_else,
+    StrAttr:$stage,
+    StrAttr:$condition_value,
+    StrAttr:$condition_kind,
+    StrAttr:$condition_dimension,
+    ArrayAttr:$condition_reads,
+    BoolAttr:$static_value_present,
+    BoolAttr:$static_value,
+    DictionaryAttr:$metadata
+  );
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogCaseOp : Nodal_Op<"analog_case", [NoTerminator]> {
+  let summary = "Exact non-fall-through structured analog case selection";
+  let arguments = (ins
+    StrAttr:$statement_id,
+    StrAttr:$owner,
+    StrAttr:$selector_value,
+    StrAttr:$selector_kind,
+    StrAttr:$selector_dimension,
+    ArrayAttr:$selector_reads,
+    BoolAttr:$static_value_present,
+    StrAttr:$static_value,
+    DictionaryAttr:$metadata
+  );
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogCaseArmOp
+    : Nodal_Op<"analog_case_arm", [HasParent<"AnalogCaseOp">, NoTerminator]> {
+  let summary = "One exact non-fall-through analog case arm";
+  let arguments = (ins
+    StrAttr:$arm_id,
+    StrAttr:$owner,
+    BoolAttr:$is_default,
+    ArrayAttr:$labels,
+    DictionaryAttr:$metadata
+  );
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogLoopOp : Nodal_Op<"analog_loop", [NoTerminator]> {
+  let summary = "Exact static or finite runtime-bounded analog loop";
+  let arguments = (ins
+    StrAttr:$statement_id,
+    StrAttr:$owner,
+    StrAttr:$stage,
+    I64Attr:$minimum_iterations,
+    I64Attr:$maximum_iterations,
+    StrAttr:$bound_value,
+    StrAttr:$bound_kind,
+    StrAttr:$bound_dimension,
+    ArrayAttr:$bound_reads,
+    BoolAttr:$static_trip_count_present,
+    I64Attr:$static_trip_count,
+    DictionaryAttr:$metadata
+  );
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogBreakOp : Nodal_Op<"analog_break"> {
+  let summary = "Exit the nearest runtime-bounded analog loop";
+  let arguments = (ins
+    StrAttr:$statement_id,
+    StrAttr:$owner,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogContinueOp : Nodal_Op<"analog_continue"> {
+  let summary = "Continue the nearest runtime-bounded analog loop";
+  let arguments = (ins
+    StrAttr:$statement_id,
+    StrAttr:$owner,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
 def Nodal_AnalogVariableOp : Nodal_Op<"analog_variable"> {
   let summary = "Declaration of one typed analog procedural variable";
   let arguments = (ins

@@ -1,0 +1,140 @@
+name: Increment 34 Analog Control Flow
+
+on:
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - '.github/workflows/increment-34-analog-control-flow.yml'
+      - 'core/scala/api/src/nodal/AnalogControlFlowApi.scala'
+      - 'core/scala/api/src/nodal/AnalogControlFlowConstruction.scala'
+      - 'core/scala/api/src/nodal/AnalogControlFlowRuntime.scala'
+      - 'core/scala/api/src/nodal/AnalogProceduralConstruction.scala'
+      - 'core/scala/api/src/nodal/AnalogProceduralRuntime.scala'
+      - 'core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala'
+      - 'core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala'
+      - 'core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala'
+      - 'core/compiler/include/nodal/Dialect/Nodal/NodalOps.td'
+      - 'core/compiler/lib/Dialect/Nodal/NodalOps.cpp'
+      - 'core/compiler/test/CMakeLists.txt'
+      - 'core/compiler/test/IR/analog-control-flow*.mlir'
+      - 'docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md'
+      - 'docs/implementation/increment34-analog-control-flow.md'
+      - 'docs/roadmap/nodal-development-todo.md'
+      - 'examples/continuousTimeApi/src/nodal/increment34fixture/**'
+      - 'scripts/check_increment34.py'
+      - 'tests/compiler/fixtures/increment33/manifest.json'
+      - 'tests/compiler/fixtures/increment34/**'
+      - 'tests/compiler/test_increment34.py'
+  push:
+    branches:
+      - increment/34-analog-control-flow-v1
+
+permissions:
+  contents: read
+
+jobs:
+  increment-34-analog-control-flow:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate predecessor and Increment 34 contracts
+        run: |
+          python3 scripts/check_increment33.py
+          python3 scripts/check_increment34.py
+          python3 -m unittest discover -s tests/compiler -p 'test_increment34.py'
+
+      - name: Compile Scala API and tests
+        run: ./nodal core scala
+
+      - name: Execute source-semantic control-flow witness
+        shell: bash
+        run: |
+          report=/tmp/increment34-scala-witness.txt
+          for attempt in 1 2; do
+            rm -f "$report"
+            if ./mill -i examples.continuousTimeApi.runMain \
+              nodal.increment34fixture.Increment34RuntimeCheck \
+              "$report"; then
+              break
+            fi
+            if [ "$attempt" -eq 2 ]; then
+              exit 1
+            fi
+            echo 'Retrying Increment 34 Scala witness after a transient Mill subprocess failure.'
+          done
+          test -s "$report"
+          grep -F 'conditional_definite=true' "$report"
+          grep -F 'case_definite=true' "$report"
+          grep -F 'loop_definite=true' "$report"
+          grep -F 'static_definite=true' "$report"
+          grep -F 'missing_else=NODAL-ANALOG-034-004' "$report"
+          grep -F 'zero_trip=NODAL-ANALOG-034-004' "$report"
+          grep -F 'duplicate_case=NODAL-ANALOG-034-006' "$report"
+          grep -F 'break_scope=NODAL-ANALOG-034-010' "$report"
+          grep -F 'continue_scope=NODAL-ANALOG-034-011' "$report"
+
+      - name: Execute public construction witness
+        shell: bash
+        run: |
+          report=/tmp/increment34-construction-witness.txt
+          for attempt in 1 2; do
+            rm -f "$report"
+            if ./mill -i examples.continuousTimeApi.runMain \
+              nodal.increment34fixture.Increment34ConstructionCheck \
+              "$report"; then
+              break
+            fi
+            if [ "$attempt" -eq 2 ]; then
+              exit 1
+            fi
+            echo 'Retrying Increment 34 construction witness after a transient Mill failure.'
+          done
+          test -s "$report"
+          grep -F 'public_conditional_snapshots=1' "$report"
+          grep -F 'public_case_snapshots=1' "$report"
+          grep -F 'public_missing_else=NODAL-ANALOG-034-004' "$report"
+          grep -F 'flat_assignments=0' "$report"
+
+      - name: Build and validate structured native control flow
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          nodalc=$(find out -type f -name nodalc -perm -u+x | head -n 1)
+          test -n "${nodalc}"
+          "${nodalc}" \
+            --mlir-print-op-generic \
+            --mlir-print-debuginfo \
+            core/compiler/test/IR/analog-control-flow.mlir \
+            > "${RUNNER_TEMP}/increment34-structured.mlir"
+          grep -F '"nodal.analog_if"' "${RUNNER_TEMP}/increment34-structured.mlir"
+          grep -F '"nodal.analog_case"' "${RUNNER_TEMP}/increment34-structured.mlir"
+          grep -F '"nodal.analog_loop"' "${RUNNER_TEMP}/increment34-structured.mlir"
+          grep -F 'AnalogControlFlow.scala' "${RUNNER_TEMP}/increment34-structured.mlir"
+
+      - name: Check repository style and documentation
+        run: |
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          if ! ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"; then
+            ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources || true
+            git --no-pager diff -- \
+              core/scala/api/src/nodal/AnalogControlFlowApi.scala \
+              core/scala/api/src/nodal/AnalogProceduralConstruction.scala \
+              core/scala/api/src/nodal/AnalogProceduralRuntime.scala \
+              core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala
+            exit 1
+          fi
+          git diff --check

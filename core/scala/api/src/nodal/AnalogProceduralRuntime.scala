@@ -56,10 +56,33 @@ private[nodal] object AnalogProceduralRuntime:
       operationOrder: Int = -1
   )
 
+  /** Typed value retained for an operation nested in structured analog control flow.
+    *
+    * `identity` is the stable statement or loop identity from the structured tree. `role` makes the
+    * attachment explicit rather than requiring consumers to infer meaning from the identity name.
+    */
+  final case class ControlExpressionRecord(
+      identity: String,
+      role: String,
+      value: Value,
+      source: Option[Source]
+  ):
+    require(identity.nonEmpty, "control expression identity must be non-empty")
+    require(role.nonEmpty, "control expression role must be non-empty")
+
+  /** Canonical procedural program retained by the construction snapshot.
+    *
+    * Straight-line Increment 33 programs populate `assignments`. Structured Increment 34 programs
+    * populate `controlFlow` and deliberately leave `assignments` empty so runtime branches are not
+    * represented as one unconditional sequence. `controlExpressions` retains typed assignment and
+    * loop-bound values keyed by the stable identities in that tree.
+    */
   final case class Snapshot(
       owner: String,
       variables: Vector[VariableRecord],
-      assignments: Vector[AssignmentRecord]
+      assignments: Vector[AssignmentRecord],
+      controlFlow: Option[AnalogControlFlowConstruction.Snapshot] = None,
+      controlExpressions: Vector[ControlExpressionRecord] = Vector.empty
   )
 
   final case class Diagnostic(code: String, message: String, path: Option[String] = None):

@@ -1,0 +1,38 @@
+name: Increment 34 Authoritative Closure v7
+
+on:
+  push:
+    branches:
+      - automation/inc34-evidence-closure-controller-v1
+    paths:
+      - '.github/workflows/_inc34_authoritative_closure_v7.yml'
+
+permissions:
+  actions: write
+  checks: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: increment-34-authoritative-closure-v7
+  cancel-in-progress: false
+
+jobs:
+  close:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Check out authoritative Increment 34 closure controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-evidence-closure-controller-v1
+          path: controller
+          fetch-depth: 1
+
+      - name: Materialize, handshake, merge, and audit Increment 34
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash controller/.github/automation/inc34_authoritative_closure_v7.sh \
+            "${GITHUB_WORKSPACE}/controller" \
+            "${RUNNER_TEMP}/inc34-authoritative-closure-v7"

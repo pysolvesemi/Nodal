@@ -12,6 +12,12 @@ on:
       - 'core/scala/api/src/nodal/AnalogProceduralConstruction.scala'
       - 'core/scala/api/src/nodal/AnalogProceduralRuntime.scala'
       - 'core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala'
+      - 'core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala'
+      - 'core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala'
+      - 'core/compiler/include/nodal/Dialect/Nodal/NodalOps.td'
+      - 'core/compiler/lib/Dialect/Nodal/NodalOps.cpp'
+      - 'core/compiler/test/CMakeLists.txt'
+      - 'core/compiler/test/IR/analog-control-flow*.mlir'
       - 'docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md'
       - 'docs/implementation/increment34-analog-control-flow.md'
       - 'docs/roadmap/nodal-development-todo.md'
@@ -30,7 +36,7 @@ permissions:
 jobs:
   increment-34-analog-control-flow:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 70
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -94,6 +100,28 @@ jobs:
           grep -F 'public_case_snapshots=1' "$report"
           grep -F 'public_missing_else=NODAL-ANALOG-034-004' "$report"
           grep -F 'flat_assignments=0' "$report"
+
+      - name: Build and validate structured native control flow
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          nodalc=$(find out -type f -name nodalc -perm -u+x | head -n 1)
+          test -n "${nodalc}"
+          "${nodalc}" \
+            --mlir-print-op-generic \
+            --mlir-print-debuginfo \
+            core/compiler/test/IR/analog-control-flow.mlir \
+            > "${RUNNER_TEMP}/increment34-structured.mlir"
+          grep -F '"nodal.analog_if"' "${RUNNER_TEMP}/increment34-structured.mlir"
+          grep -F '"nodal.analog_case"' "${RUNNER_TEMP}/increment34-structured.mlir"
+          grep -F '"nodal.analog_loop"' "${RUNNER_TEMP}/increment34-structured.mlir"
+          grep -F 'AnalogControlFlow.scala' "${RUNNER_TEMP}/increment34-structured.mlir"
 
       - name: Check repository style and documentation
         run: |

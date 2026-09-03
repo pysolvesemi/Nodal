@@ -1,0 +1,44 @@
+name: Increment 34 Evidence Closure v1
+
+on:
+  push:
+    branches:
+      - automation/inc34-evidence-closure-controller-v1
+    paths:
+      - '.github/workflows/_inc34_evidence_closure_v1.yml'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: increment-34-evidence-closure-v1
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Check out Increment 34 closure controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-evidence-closure-controller-v1
+          path: controller
+          fetch-depth: 1
+
+      - name: Check out current Increment 34 evidence branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/34-evidence-closure-v1
+          path: work
+          fetch-depth: 0
+
+      - name: Materialize, validate, and publish evidence closure
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash controller/.github/automation/inc34_run_evidence_closure_v1.sh \
+            "${GITHUB_WORKSPACE}/controller" \
+            "${GITHUB_WORKSPACE}/work" \
+            "${RUNNER_TEMP}/inc34-evidence-closure-v1"

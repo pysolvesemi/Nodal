@@ -1,0 +1,31 @@
+name: Increment 34 Quiesce Obsolete Closure Controllers v3
+
+on:
+  push:
+    branches:
+      - automation/inc34-evidence-closure-controller-v1
+    paths:
+      - '.github/workflows/_inc34_quiesce_obsolete_closure_v3.yml'
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  quiesce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out closure controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-evidence-closure-controller-v1
+          path: controller
+          fetch-depth: 1
+
+      - name: Cancel every superseded Increment 34 closure writer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash controller/.github/automation/inc34_quiesce_obsolete_closure_v3.sh

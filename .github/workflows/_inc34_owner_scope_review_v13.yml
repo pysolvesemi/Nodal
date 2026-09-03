@@ -42,3 +42,5 @@ jobs:
             "${GITHUB_WORKSPACE}/controller" \
             "${GITHUB_WORKSPACE}/work" \
             "${RUNNER_TEMP}/inc34-owner-scope-v13"
+
+      # Re-run after repairing the current design-gate documentation anchor.

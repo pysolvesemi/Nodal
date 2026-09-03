@@ -1,0 +1,38 @@
+name: Increment 34 Converge Closure v4
+
+on:
+  push:
+    branches:
+      - automation/inc34-evidence-closure-controller-v1
+    paths:
+      - '.github/workflows/_inc34_converge_closure_v4.yml'
+
+permissions:
+  actions: read
+  checks: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: increment-34-converge-closure-v4
+  cancel-in-progress: false
+
+jobs:
+  converge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Check out Increment 34 closure controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-evidence-closure-controller-v1
+          path: controller
+          fetch-depth: 1
+
+      - name: Converge, merge, and audit Increment 34 closure
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash controller/.github/automation/inc34_converge_closure_v4.sh \
+            "${GITHUB_WORKSPACE}/controller" \
+            "${RUNNER_TEMP}/inc34-converge-closure-v4"

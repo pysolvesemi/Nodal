@@ -6,6 +6,7 @@ on:
       - automation/inc33-evidence-controller-20260903
     paths:
       - '.github/workflows/_inc33_evidence_closure_20260903.yml'
+      - '.github/automation/inc33_closure_generator_repair.py'
 
 permissions:
   contents: write
@@ -34,6 +35,9 @@ jobs:
           path: work
           fetch-depth: 0
 
+      - name: Repair state-aware successor mutation generator
+        run: python3 controller/.github/automation/inc33_closure_generator_repair.py
+
       - name: Build and validate state-aware evidence closure
         env:
           GH_TOKEN: ${{ github.token }}
@@ -42,6 +46,3 @@ jobs:
             "${GITHUB_WORKSPACE}/controller" \
             "${GITHUB_WORKSPACE}/work" \
             "${RUNNER_TEMP}/inc33-evidence"
-
-      # PR #110 is allocated through the repository connection; this rerun
-      # stamps that stable identity into the immutable closure evidence.

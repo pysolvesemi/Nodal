@@ -1,0 +1,38 @@
+name: Increment 34 Finalize Closure v1b
+
+on:
+  push:
+    branches:
+      - automation/inc34-evidence-closure-controller-v1
+    paths:
+      - '.github/workflows/_inc34_finalize_closure_v1b.yml'
+
+permissions:
+  actions: read
+  checks: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: increment-34-evidence-closure-v1b
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: Check out Increment 34 closure controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-evidence-closure-controller-v1
+          path: controller
+          fetch-depth: 1
+
+      - name: Recover materialization if needed, merge, and validate final dev
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash controller/.github/automation/inc34_finalize_closure_v1b.sh \
+            "${GITHUB_WORKSPACE}/controller" \
+            "${RUNNER_TEMP}/inc34-final-closure-v1b"

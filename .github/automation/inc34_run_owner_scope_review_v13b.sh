@@ -18,12 +18,17 @@ destination = Path(sys.argv[2])
 text = source.read_text(encoding="utf-8")
 text = text.replace(
     "Solver execution and target lowering remain deferred.",
-    "Solver\\nconstruction, target legalization, and Verilog-A or Verilog-AMS\\nprocedural lowering remain deferred to their owning increments.",
+    "Solver\nconstruction, target legalization, and Verilog-A or Verilog-AMS\nprocedural lowering remain deferred to their owning increments.",
     1,
 )
 text = text.replace(
-    "- Control identities are unique within the procedure and remain stable through serialization.\\n",
-    "Initializer reads participate in branch-sensitive definite-assignment analysis\\nonly on reachable paths.\\n",
+    "- Control identities are unique within the procedure and remain stable through serialization.\n",
+    "Initializer reads participate in branch-sensitive definite-assignment analysis\nonly on reachable paths.\n",
+    1,
+)
+text = text.replace(
+    "Pre-control lexical scopes retain one shared recorder/structured identity",
+    "pre-control lexical scopes retain one shared recorder/structured identity",
     1,
 )
 text = text.replace(

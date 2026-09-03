@@ -1,0 +1,11 @@
+## increment/34-analog-control-flow-v1...origin/increment/34-analog-control-flow-v1
+ M core/compiler/lib/Dialect/Nodal/NodalOps.cpp
+ M core/compiler/test/CMakeLists.txt
+ M docs/implementation/increment34-analog-control-flow.md
+ M scripts/check_increment34.py
+ M tests/compiler/fixtures/increment34/README.md
+ M tests/compiler/fixtures/increment34/manifest.json
+ M tests/compiler/test_increment34.py
+?? core/compiler/test/IR/analog-control-flow-invalid-else-static-sentinel.mlir
+?? core/compiler/test/IR/analog-control-flow-invalid-loop-static-sentinel.mlir
+?? core/compiler/test/IR/analog-control-flow-invalid-runtime-static-sentinel.mlir

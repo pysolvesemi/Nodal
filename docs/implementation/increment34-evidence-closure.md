@@ -9,7 +9,7 @@
 **Post-merge Core CI:** `33758905273`
 **Exact post-merge validation:** `33759112770`
 **Closure PR:** #111
-**Closure validation head:** `da785a1fbb0d8381a83d9100e2318c553102efc8`
+**Closure validation head:** `b59ed10f423d4a66e7e47d66ec764b7ff22531e7`
 **Closure validation run:** `33761024228`
 
 This evidence-only change closes Increment 34 after its public construction,
@@ -21,6 +21,10 @@ The accepted implementation retains structured conditionals, exact
 non-fall-through case selection, exact static loops, finite runtime-bounded
 loops, nearest-loop `break` and `continue`, lexical scope, branch-sensitive
 definite assignment, stable ownership, and deterministic serialization.
+
+The controller validated and published closure candidate
+`b59ed10f423d4a66e7e47d66ec764b7ff22531e7`. This owner-authored follow-up
+records that exact candidate and triggers the final closure pull-request matrix.
 
 Residual/DAE construction, solver execution, target legalization, and
 Verilog-A/Verilog-AMS procedural lowering remain assigned to later increments.

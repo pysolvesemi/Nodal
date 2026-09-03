@@ -104,7 +104,7 @@
     "post_merge_core_ci_run": 33758905273,
     "exact_post_merge_validation_run": 33759112770,
     "closure_pull_request": 111,
-    "closure_validation_head": "da785a1fbb0d8381a83d9100e2318c553102efc8",
+    "closure_validation_head": "b59ed10f423d4a66e7e47d66ec764b7ff22531e7",
     "closure_validation_run": 33761024228
   },
   "bridge_renderer": "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala",

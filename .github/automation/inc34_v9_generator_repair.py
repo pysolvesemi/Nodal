@@ -28,8 +28,9 @@ def main() -> int:
                     "int64_t removedNextAssignmentOrder = 0;",
                     1,
 ''',
-        '''                    "int64_t nextAssignmentOrder = 0;",
-                    "int64_t removedNextAssignmentOrder = 0;",
+        '''                    "structured assignment order must be contiguous and authored",
+                    "removed structured assignment order validation",
+                    1,
 ''',
         "structured assignment-order mutation",
     )

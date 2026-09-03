@@ -1,0 +1,71 @@
+name: Increment 34 Evidence Closure v5
+
+on:
+  push:
+    branches:
+      - automation/inc34-evidence-closure-controller-v1
+    paths:
+      - '.github/workflows/_inc34_evidence_closure_v5.yml'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: increment-34-evidence-closure-v5
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 190
+    steps:
+      - name: Check out Increment 34 closure controller
+        uses: actions/checkout@v6
+        with:
+          ref: automation/inc34-evidence-closure-controller-v1
+          path: controller
+          fetch-depth: 1
+
+      - name: Check out current Increment 34 evidence branch
+        uses: actions/checkout@v6
+        with:
+          ref: increment/34-evidence-closure-v1
+          path: work
+          fetch-depth: 0
+
+      - name: Materialize canonical documentation-consistent closure
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/111")
+          if [[ $(jq -r '.merged' <<< "${pr}") == true ]]; then
+            echo "PR #111 is already merged; finalizer will audit or repair the merged state."
+            exit 0
+          fi
+          head=$(jq -r '.head.sha' <<< "${pr}")
+          draft=$(jq -r '.draft' <<< "${pr}")
+          dedicated=0
+          docs_complete=false
+          if [[ ${head} != da785a1fbb0d8381a83d9100e2318c553102efc8 ]]; then
+            dedicated=$(gh api \
+              "repos/${GITHUB_REPOSITORY}/contents/tests/compiler/fixtures/increment34/manifest.json?ref=${head}" \
+              --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d \
+              | jq -r '.validation.dedicated_boundary_workflow_run // 0' || true)
+            if gh api \
+              "repos/${GITHUB_REPOSITORY}/contents/docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md?ref=${head}" \
+              --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d \
+              | grep -Fq 'The completed Increment 34 implementation retains'; then
+              docs_complete=true
+            fi
+          fi
+          if [[ ${head} != da785a1fbb0d8381a83d9100e2318c553102efc8 && \
+                ${draft} == false && ${dedicated} == 33732868285 && \
+                ${docs_complete} == true ]]; then
+            echo "Canonical documentation-consistent closure is already published: ${head}"
+            exit 0
+          fi
+          bash controller/.github/automation/inc34_run_evidence_closure_v5.sh \
+            "${GITHUB_WORKSPACE}/controller" \
+            "${GITHUB_WORKSPACE}/work" \
+            "${RUNNER_TEMP}/inc34-evidence-closure-v5"

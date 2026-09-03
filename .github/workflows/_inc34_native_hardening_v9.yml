@@ -8,6 +8,7 @@ on:
       - '.github/workflows/_inc34_native_hardening_v9.yml'
       - '.github/automation/inc34_native_hardening_v9.py'
       - '.github/automation/inc34_run_native_hardening_v9.sh'
+      - '.github/automation/inc34_v9_generator_repair.py'
 
 permissions:
   contents: write
@@ -35,6 +36,9 @@ jobs:
           ref: increment/34-analog-control-flow-v1
           path: work
           fetch-depth: 0
+
+      - name: Repair generated mutation-test source
+        run: python3 controller/.github/automation/inc34_v9_generator_repair.py
 
       - name: Execute guarded fresh-review hardening
         env:

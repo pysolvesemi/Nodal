@@ -1,0 +1,220 @@
++ /home/runner/work/Nodal/Nodal/work/mill __.compile
+/home/runner/.cache/nodal/mill/mill-1.1.7.sh __.compile
+919] core.integrations.compile
+919] compiling 1 Scala source to out/core/integrations/compile.dest/classes ...
+918] core.scala.api.compile
+918] compiling 14 Scala sources to out/core/scala/api/compile.dest/classes ...
+919] done compiling
+918] done compiling
+947] examples.publicApiV03External.compile
+947] compiling 1 Scala source to out/examples/publicApiV03External/compile.dest/classes ...
+946] examples.interfacePipelineExternal.compile
+946] compiling 1 Scala source to out/examples/interfacePipelineExternal/compile.dest/classes ...
+948] examples.continuousTimeExternal.compile
+948] compiling 1 Scala source to out/examples/continuousTimeExternal/compile.dest/classes ...
+949] examples.publicApiV03Migration.compile
+949] compiling 1 Scala source to out/examples/publicApiV03Migration/compile.dest/classes ...
+949] done compiling
+950] examples.coreSemanticsExternal.compile
+950] compiling 1 Scala source to out/examples/coreSemanticsExternal/compile.dest/classes ...
+947] done compiling
+948] done compiling
+946] done compiling
+953] examples.externalLibrary.compile
+953] compiling 2 Scala sources to out/examples/externalLibrary/compile.dest/classes ...
+954] core.scala.frontend.compile
+954] compiling 1 Scala source to out/core/scala/frontend/compile.dest/classes ...
+959] examples.publicApiV03.compile
+959] compiling 1 Scala source to out/examples/publicApiV03/compile.dest/classes ...
+954] done compiling
+953] done compiling
+962] examples.continuousTimeApi.compile
+962] compiling 5 Scala sources to out/examples/continuousTimeApi/compile.dest/classes ...
+963] examples.interfacePipelineApi.compile
+963] compiling 1 Scala source to out/examples/interfacePipelineApi/compile.dest/classes ...
+950] done compiling
+970] core.scala.bridge.compile
+970] compiling 7 Scala sources to out/core/scala/bridge/compile.dest/classes ...
+959] done compiling
+971] examples.clockResetApi.compile
+971] compiling 4 Scala sources to out/examples/clockResetApi/compile.dest/classes ...
+963] done compiling
+972] examples.coreSemanticsApi.compile
+972] compiling 1 Scala source to out/examples/coreSemanticsApi/compile.dest/classes ...
+972] done compiling
+973] examples.publicApiCandidates.compile
+973] compiling 3 Scala sources to out/examples/publicApiCandidates/compile.dest/classes ...
+971] done compiling
+962] done compiling
+973] done compiling
+970] done compiling
+976] core.scala.sim.compile
+976] compiling 1 Scala source to out/core/scala/sim/compile.dest/classes ...
+976] done compiling
+979] core.scala.cli.compile
+979] compiling 1 Scala source to out/core/scala/cli/compile.dest/classes ...
+979] done compiling
+982] core.scala.testkit.compile
+982] compiling 1 Scala source to out/core/scala/testkit/compile.dest/classes ...
+982] done compiling
+985] core.scala.testkit.test.compile
+985] compiling 12 Scala sources to out/core/scala/testkit/test/compile.dest/classes ...
+985] done compiling
+985/985, SUCCESS] /home/runner/.cache/nodal/mill/mill-1.1.7.sh __.compile 30s
++ /home/runner/work/Nodal/Nodal/work/mill core.scala.testkit.test
+/home/runner/.cache/nodal/mill/mill-1.1.7.sh core.scala.testkit.test
+441-3] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+441-3] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by scala.runtime.LazyVals$ (file:/home/runner/.cache/coursier/v1/https/repo1.maven.org/maven2/org/scala-lang/scala3-library_3/3.7.4/scala3-library_3-3.7.4.jar)
+441-3] WARNING: Please consider reporting this to the maintainers of class scala.runtime.LazyVals$
+441-3] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+441-0] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+441-0] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by scala.runtime.LazyVals$ (file:/home/runner/.cache/coursier/v1/https/repo1.maven.org/maven2/org/scala-lang/scala3-library_3/3.7.4/scala3-library_3-3.7.4.jar)
+441-0] WARNING: Please consider reporting this to the maintainers of class scala.runtime.LazyVals$
+441-0] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+441-1] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+441-1] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by scala.runtime.LazyVals$ (file:/home/runner/.cache/coursier/v1/https/repo1.maven.org/maven2/org/scala-lang/scala3-library_3/3.7.4/scala3-library_3-3.7.4.jar)
+441-1] WARNING: Please consider reporting this to the maintainers of class scala.runtime.LazyVals$
+441-1] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+441-2] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+441-2] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by scala.runtime.LazyVals$ (file:/home/runner/.cache/coursier/v1/https/repo1.maven.org/maven2/org/scala-lang/scala3-library_3/3.7.4/scala3-library_3-3.7.4.jar)
+441-2] WARNING: Please consider reporting this to the maintainers of class scala.runtime.LazyVals$
+441-2] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+441-0] Running Test Class nodal.internal.testkit.AnalogProceduralConstructionTests
+441-0] -------------------------------- Running Tests --------------------------------
+441-1] Running Test Class nodal.internal.testkit.ReproducibilityContractTests
+441-1] -------------------------------- Running Tests --------------------------------
+441-3] Running Test Class nodal.internal.testkit.AnalogEquationConstructionTests
+441-2] Running Test Class nodal.internal.testkit.SemanticOriginTests
+441-3] -------------------------------- Running Tests --------------------------------
+441-2] -------------------------------- Running Tests --------------------------------
+441-1] [32m+[39m nodal.internal.testkit.ReproducibilityContractTests.construction failures use declared result channel [2m1047ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.public variable and assignment APIs retain authored order [2m1490ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.public uninitialized variable read is rejected [2m305ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.public assignment dimension mismatch is rejected [2m243ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.public dimensionless assignment to a voltage variable is rejected [2m224ms[0m  
+441-3] [32m+[39m nodal.internal.testkit.AnalogEquationConstructionTests.public APIs populate the construction-session recorder [2m2049ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.public compound dimensionless assignment to a voltage variable is rejected [2m290ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.public incompatible compound dimensions are rejected without read fallback [2m123ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.ReproducibilityContractTests.canonical artifacts survive repeated construction and valid traversal orders [2m1471ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.public nested incompatible compound dimensions remain unknown [2m117ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.public comparison rejects incompatible operand dimensions through Boolean logic [2m355ms[0m  
+441-3] [32m+[39m nodal.internal.testkit.AnalogEquationConstructionTests.contribution grouping is independent of public source order [2m668ms[0m  
+441-2] [32m+[39m nodal.internal.testkit.SemanticOriginTests.semantic names replace traversal-counter-only names [2m2651ms[0m  
+441-3] [32m+[39m nodal.internal.testkit.AnalogEquationConstructionTests.equation outside a region is rejected [2m46ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.ReproducibilityContractTests.manifest retains deterministic inventories and empty-or-explicit reports [2m499ms[0m  
+441-3] [32m+[39m nodal.internal.testkit.AnalogEquationConstructionTests.overlapping public semantic regions are rejected [2m61ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.ReproducibilityContractTests.verified MLIR HDL and manifest are byte-identical across work directories [2m18ms[0m  
+441-3] [32m+[39m nodal.internal.testkit.AnalogEquationConstructionTests.public equation dimensions are validated [2m49ms[0m  
+441-1] Running Test Class nodal.bootstrap.testkit.BootstrapSmokeTests
+441-1] -------------------------------- Running Tests --------------------------------
+441-1] [32m+[39m nodal.bootstrap.testkit.BootstrapSmokeTests.module graph [2m12ms[0m  
+441-1] [32m+[39m nodal.bootstrap.testkit.BootstrapSmokeTests.deterministic textual boundary [2m2ms[0m  
+441-1] [32m+[39m nodal.bootstrap.testkit.BootstrapSmokeTests.managed JDK [2m0ms[0m  
+441-1] Running Test Class nodal.internal.testkit.AnalogControlFlowConstructionTests
+441-1] -------------------------------- Running Tests --------------------------------
+441-0] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.public Boolean comparison assignment retains result type and dimension [2m262ms[0m  
+441-3] [32m+[39m nodal.internal.testkit.AnalogEquationConstructionTests.procedural assignment is rejected in a declarative region [2m110ms[0m  
+441-3] [32m+[39m nodal.internal.testkit.AnalogEquationConstructionTests.non-access contribution target is rejected [2m71ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.multiple top-level analogProcedure regions are rejected [2m121ms[0m  
+441-3] -------------------------------- Running Tests --------------------------------
+441-3] Running Test Class nodal.internal.testkit.ConstructionKernelTests
+441-0] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.public compound voltage assignment retains its physical dimension [2m120ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.public assignment outside analogProcedure is rejected [2m109ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.AnalogControlFlowConstructionTests.public conditional retains branches and establishes definite assignment [2m596ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.child procedural snapshot resolves to its authored instance path [2m221ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.AnalogProceduralConstructionTests.public cross-component variable assignment is rejected [2m160ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.AnalogControlFlowConstructionTests.public conditional missing else preserves the unmatched incoming path [2m191ms[0m  
+441-0]441-0]  Running Test Class nodal.internal.testkit.CrossLayerDiagnosticTests
+-------------------------------- Running Tests --------------------------------
+441-0] [32m+[39m nodal.internal.testkit.CrossLayerDiagnosticTests.native stable code and mapped context survive process normalization [2m15ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.CrossLayerDiagnosticTests.parser and pass failures receive distinct fallback families [2m9ms[0m  
+441-2] [32m+[39m nodal.internal.testkit.SemanticOriginTests.expression source maps survive inlined origins [2m1090ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.CrossLayerDiagnosticTests.native compiler client preserves mapped native diagnostics [2m74ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.CrossLayerDiagnosticTests.unclassified external failure retains Increment 20 process contract [2m10ms[0m  
+441-0] Running Test Class nodal.internal.testkit.RcVerticalSliceTests
+441-0] -------------------------------- Running Tests --------------------------------
+441-3] [32m+[39m nodal.internal.testkit.ConstructionKernelTests.deterministic hierarchy, domains, shapes, interfaces and topology [2m798ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.AnalogControlFlowConstructionTests.public case with default establishes definite assignment [2m259ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.AnalogControlFlowConstructionTests.public case without default preserves the unmatched incoming path [2m160ms[0m  
+441-3] [32m+[39m nodal.internal.testkit.ConstructionKernelTests.public emit publishes construction classification and logical ABI [2m309ms[0m  
+441-2] [32m+[39m nodal.internal.testkit.SemanticOriginTests.generated infrastructure names cover required categories [2m397ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.AnalogControlFlowConstructionTests.static false branch remains retained but does not read on a reachable path [2m165ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.RcVerticalSliceTests.Scala RC lowers deterministically to typed analog MLIR [2m474ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.RcVerticalSliceTests.Scala RC compiles through nodalc to exact Verilog-A [2m22ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.RcVerticalSliceTests.unsupported analog operator fails before native launch [2m66ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.AnalogControlFlowConstructionTests.runtime loop with a guaranteed iteration establishes initialization [2m153ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.RcVerticalSliceTests.single-ended RC branch is rejected explicitly [2m71ms[0m  
+441-2] [32m+[39m nodal.internal.testkit.SemanticOriginTests.origin graph records parents and sink affinity [2m289ms[0m  
+441-0] Running Test Class nodal.internal.testkit.ScalaToMlirBridgeTests
+441-0] -------------------------------- Running Tests --------------------------------
+441-3] [32m+[39m nodal.internal.testkit.ConstructionKernelTests.unbound root requirement is rejected transactionally [2m362ms[0m  
+441-2] [32m+[39m nodal.internal.testkit.SemanticOriginTests.same-basename source files use owner context [2m108ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.AnalogControlFlowConstructionTests.zero-minimum runtime loop does not establish initialization [2m144ms[0m  
+441-2] Tests: 5, Passed: 5, Failed: 0
+441-3] [32m+[39m nodal.internal.testkit.ConstructionKernelTests.unqualified multi-domain state is rejected [2m139ms[0m  
+441-3] [32m+[39m nodal.internal.testkit.ConstructionKernelTests.exported interface roles must be complete [2m42ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.AnalogControlFlowConstructionTests.continue path participates in conservative loop exit intersection [2m181ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.AnalogControlFlowConstructionTests.break after assignment preserves the assigned exit state [2m255ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.AnalogControlFlowConstructionTests.break is rejected in an exact static loop [2m57ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.AnalogControlFlowConstructionTests.branch-local declaration remains nested in the structured tree [2m221ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.deterministic source-correlated textual MLIR [2m830ms[0m  
+441-3] [32m+[39m nodal.internal.testkit.ConstructionKernelTests.parallel elaborations do not share mutable construction state [2m714ms[0m  
+441-3] Tests: 13, Passed: 13, Failed: 0
+441-1] [32m+[39m nodal.internal.testkit.AnalogControlFlowConstructionTests.lexical scope before first control retains one aligned semantic path [2m206ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.AnalogControlFlowConstructionTests.control-flow owners are non-empty and canonical [2m120ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.AnalogControlFlowConstructionTests.child control-flow snapshot resolves to the authored instance path [2m144ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.analog procedural IR retains order, source locations, and serialization [2m521ms[0m  
+441-1] [32m+[39m nodal.internal.testkit.AnalogControlFlowConstructionTests.structured branch assignment rejects a foreign component variable [2m100ms[0m  
+441-1] Tests: 22, Passed: 22, Failed: 0
+441-0] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.analog procedural rendering prefers authored order to provenance [2m104ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.nested procedural scopes preserve declaration and assignment chronology [2m93ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.initializing assignments precede dependent declarations independent of provenance [2m56ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.structured analog control flow serializes without flattening [2m569ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.snapshot insertion order does not affect the bridge [2m150ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.unsupported exact type fails before process launch [2m134ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.argv-safe process success, cleanup, and recovery [2m140ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.timeout is distinct and leaves no partial accepted output [2m5144ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.locked nodalc parses procedural bridge MLIR when configured [2m0ms[0m  
+441-0] [32m+[39m nodal.internal.testkit.ScalaToMlirBridgeTests.locked nodalc parses and normalizes bridge MLIR when configured [2m0ms[0m  
+441-0] ----------------------------------- Results -----------------------------------
+441-0] - nodal.internal.testkit.ScalaToMlirBridgeTests [2m7741ms[0m
+441-0]   [32m+[39m deterministic source-correlated textual MLIR [2m830ms[0m  
+441-0]   [32m+[39m analog procedural IR retains order, source locations, and serialization [2m521ms[0m  
+441-0]   [32m+[39m analog procedural rendering prefers authored order to provenance [2m104ms[0m  
+441-0]   [32m+[39m nested procedural scopes preserve declaration and assignment chronology [2m93ms[0m  
+441-0]   [32m+[39m initializing assignments precede dependent declarations independent of provenance [2m56ms[0m  
+441-0]   [32m+[39m structured analog control flow serializes without flattening [2m569ms[0m  
+441-0]   [32m+[39m snapshot insertion order does not affect the bridge [2m150ms[0m  
+441-0]   [32m+[39m unsupported exact type fails before process launch [2m134ms[0m  
+441-0]   [32m+[39m argv-safe process success, cleanup, and recovery [2m140ms[0m  
+441-0]   [32m+[39m timeout is distinct and leaves no partial accepted output [2m5144ms[0m  
+441-0]   [32m+[39m locked nodalc parses procedural bridge MLIR when configured [2m0ms[0m  
+441-0]   [32m+[39m locked nodalc parses and normalizes bridge MLIR when configured [2m0ms[0m  
+441-0] - nodal.internal.testkit.RcVerticalSliceTests [2m633ms[0m
+441-0]   [32m+[39m Scala RC lowers deterministically to typed analog MLIR [2m474ms[0m  
+441-0]   [32m+[39m Scala RC compiles through nodalc to exact Verilog-A [2m22ms[0m  
+441-0]   [32m+[39m unsupported analog operator fails before native launch [2m66ms[0m  
+441-0]   [32m+[39m single-ended RC branch is rejected explicitly [2m71ms[0m  
+441-0] - nodal.internal.testkit.CrossLayerDiagnosticTests [2m108ms[0m
+441-0]   [32m+[39m native stable code and mapped context survive process normalization [2m15ms[0m  
+441-0]   [32m+[39m parser and pass failures receive distinct fallback families [2m9ms[0m  
+441-0]   [32m+[39m native compiler client preserves mapped native diagnostics [2m74ms[0m  
+441-0]   [32m+[39m unclassified external failure retains Increment 20 process contract [2m10ms[0m  
+441-0] - nodal.internal.testkit.AnalogProceduralConstructionTests [2m4140ms[0m
+441-0]   [32m+[39m public variable and assignment APIs retain authored order [2m1490ms[0m  
+441-0]   [32m+[39m public uninitialized variable read is rejected [2m305ms[0m  
+441-0]   [32m+[39m public assignment dimension mismatch is rejected [2m243ms[0m  
+441-0]   [32m+[39m public dimensionless assignment to a voltage variable is rejected [2m224ms[0m  
+441-0]   [32m+[39m public compound dimensionless assignment to a voltage variable is rejected [2m290ms[0m  
+441-0]   [32m+[39m public incompatible compound dimensions are rejected without read fallback [2m123ms[0m  
+441-0]   [32m+[39m public nested incompatible compound dimensions remain unknown [2m117ms[0m  
+441-0]   [32m+[39m public comparison rejects incompatible operand dimensions through Boolean logic [2m355ms[0m  
+441-0]   [32m+[39m public Boolean comparison assignment retains result type and dimension [2m262ms[0m  
+441-0]   [32m+[39m multiple top-level analogProcedure regions are rejected [2m121ms[0m  
+441-0]   [32m+[39m public compound voltage assignment retains its physical dimension [2m120ms[0m  
+441-0]   [32m+[39m public assignment outside analogProcedure is rejected [2m109ms[0m  
+441-0]   [32m+[39m child procedural snapshot resolves to its authored instance path [2m221ms[0m  
+441-0]   [32m+[39m public cross-component variable assignment is rejected [2m160ms[0m  
+441-0] 
+441-0] Tests: 34, Passed: 34, Failed: 0
+441/441, SUCCESS] /home/runner/.cache/nodal/mill/mill-1.1.7.sh core.scala.testkit.test 15s

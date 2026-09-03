@@ -1,0 +1,1 @@
+core/compiler/test/IR/analog-control-flow-invalid-unreachable-reference.mlir:13:13: error: NODAL-ANALOG-034-014: structured control flow references unknown variable 'ControlTop.procedure.missing' [semantic-path=ControlTop.statement_0] [hierarchy-path=ControlTop] [source-range=core/compiler/test/IR/analog-control-flow-invalid-unreachable-reference.mlir:13:13-13:13]

@@ -1,0 +1,2 @@
+    "native_unreachable_structural_reference_validation": true
+    "nested_declaration_locality": true,

@@ -22,6 +22,11 @@ text = text.replace(
     1,
 )
 text = text.replace(
+    "- Control identities are unique within the procedure and remain stable through serialization.\\n",
+    "Initializer reads participate in branch-sensitive definite-assignment analysis\\nonly on reachable paths.\\n",
+    1,
+)
+text = text.replace(
     '"empty_owner=NODAL-ANALOG-034-001"',
     '"empty_owner="',
     1,

@@ -83,6 +83,29 @@ final class BridgeProceduralInitializerDependency extends Module:
     val sink: Variable[Real] = variable(Real, source)
     source := sink
 
+final class BridgeStructuredProceduralTop extends Module:
+  val select: Variable[Bool] = variable(Bool, false.B)
+  val mode: Variable[Integer] = variable(Integer, 0.integer)
+  val iterations: Variable[Integer] = variable(Integer, 1.integer)
+  val value: Variable[Real] = variable(Real)
+  val sink: Variable[Real] = variable(Real, 0.0.real)
+
+  analogProcedure:
+    analogCase(mode):
+      analogCaseArm(0):
+        value := 1.0.real
+      analogCaseDefault:
+        value := 2.0.real
+    analogLoop(iterations, maximumIterations = 4, minimumIterations = 1):
+      analogConditional:
+        analogWhen(select):
+          value := 3.0.real
+          analogContinue()
+        analogOtherwise:
+          value := 4.0.real
+          analogBreak()
+    sink := value
+
 object ScalaToMlirBridgeTests extends TestSuite:
   private def workDirectory(): Path =
     Files.createTempDirectory("nodal-bridge-test-")
@@ -286,6 +309,31 @@ object ScalaToMlirBridgeTests extends TestSuite:
             .asInstanceOf[NativeCompilerSuccess]
           assert(success.normalizedMlir.contains("operation_order"))
         finally delete(directory)
+
+    test("structured analog control flow serializes without flattening"):
+      val first = ScalaToMlirBridge.lower(new BridgeStructuredProceduralTop)
+      val second = ScalaToMlirBridge.lower(new BridgeStructuredProceduralTop)
+
+      assert(first == second)
+      assert(first.text.contains("\"nodal.analog_if\""))
+      assert(first.text.contains("\"nodal.analog_if_arm\""))
+      assert(first.text.contains("\"nodal.analog_case\""))
+      assert(first.text.contains("\"nodal.analog_case_arm\""))
+      assert(first.text.contains("\"nodal.analog_loop\""))
+      assert(first.text.contains("\"nodal.analog_break\""))
+      assert(first.text.contains("\"nodal.analog_continue\""))
+      assert(first.text.contains("static_trip_count_present"))
+      assert(first.text.contains("minimum_iterations = 1 : i64"))
+      assert(first.text.contains("maximum_iterations = 4 : i64"))
+      assert(first.text.contains("nodal.bridge.analog_procedural"))
+      assert(first.text.contains("semantic_path = \"BridgeStructuredProceduralTop.case_"))
+      assert(first.text.contains("semantic_path = \"BridgeStructuredProceduralTop.loop_"))
+      val snapshot = ConstructionKernel.inspect(new BridgeStructuredProceduralTop)
+      val program = snapshot.analogProcedural.head
+      assert(program.assignments.isEmpty)
+      assert(program.controlFlow.nonEmpty)
+      assert(program.controlExpressions.exists(_.role == "assignment-value"))
+      assert(program.controlExpressions.exists(_.role == "loop-bound"))
 
     test("snapshot insertion order does not affect the bridge"):
       val snapshot = ConstructionKernel.inspect(new BridgeTop)

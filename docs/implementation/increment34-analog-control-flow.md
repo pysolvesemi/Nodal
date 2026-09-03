@@ -119,12 +119,16 @@ evidence and must be rerun.
 ## Tranche 34c — bridge and native IR
 
 - [x] Add the control-flow tree to the canonical `ConstructionSnapshot`.
-- [ ] Add first-class Nodal conditional, case, loop, break, continue, scope, and
+- [x] Add first-class Nodal conditional, case, loop, break, continue, scope, and
   declaration operations and regions.
-- [ ] Serialize the Scala statement tree without flattening branches.
-- [ ] Implement native structural and branch-sensitive verifiers.
-- [ ] Add direct-MLIR positive and negative fixtures.
-- [ ] Preserve complete source-map coverage through parse and print.
+- [x] Serialize the Scala statement tree without flattening branches.
+- [x] Implement native structural verifiers and stable compiler-boundary
+  diagnostics.
+- [x] Add direct-MLIR positive and negative fixtures.
+- [x] Preserve structured source-map coverage through native parse and print.
+- [x] Retain deterministic control-node and typed-expression inventories.
+- [x] Implement native branch-sensitive definite-assignment dataflow over the
+  first-class regions, including unmatched selection and bounded-loop exits.
 
 ## Tranche 34d — closure
 
@@ -138,15 +142,16 @@ evidence and must be rerun.
 
 ## Current boundaries
 
-The canonical construction checkpoint does not yet:
+The structured compiler-IR checkpoint now preserves the canonical Scala tree
+through deterministic textual MLIR, first-class native regions, structural
+verification, stable diagnostics, direct positive and negative fixtures, and
+source-correlated native parse/print.
 
-- expose structured control flow through Scala-to-MLIR serialization;
-- add first-class `nodal.analog_if`, `nodal.analog_case`,
-  `nodal.analog_loop`, `nodal.analog_break`, or
-  `nodal.analog_continue` operations;
-- add native compiler verifiers or direct-MLIR fixtures;
-- serialize complete control-flow source maps or reproducibility evidence;
-- legalize or emit procedural target HDL.
+It does not yet:
+
+- complete the exact-head inherited workflow matrix and fresh review;
+- legalize or emit procedural target HDL;
+- form solver equations, residuals, or executable analysis schedules.
 
 Those items remain active Increment 34 work, not evidence gaps claimed as
 complete behavior.

@@ -551,6 +551,54 @@ add_test(
     -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
 )
 
+
+add_test(
+  NAME nodal.native.analog-control-flow-roundtrip
+  COMMAND nodalc
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow.mlir"
+)
+set_tests_properties(
+  nodal.native.analog-control-flow-roundtrip
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal[.]analog_loop"
+)
+
+add_test(
+  NAME nodal.native.analog-control-flow-source-map-roundtrip
+  COMMAND nodalc
+    --mlir-print-op-generic
+    --mlir-print-debuginfo
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow.mlir"
+)
+set_tests_properties(
+  nodal.native.analog-control-flow-source-map-roundtrip
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "AnalogControlFlow[.]scala"
+)
+
+foreach(_fixture IN ITEMS break loop condition case)
+  add_test(
+    NAME nodal.native.analog-control-flow-rejects-${_fixture}
+    COMMAND "${CMAKE_COMMAND}"
+      "-DNODALC=$<TARGET_FILE:nodalc>"
+      "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow-invalid-${_fixture}.mlir"
+      "-DDIAGNOSTIC=NODAL-ANALOG-034-"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
+  )
+endforeach()
+
+
+foreach(_fixture IN ITEMS missing-else missing-default zero-trip continue-path)
+  add_test(
+    NAME nodal.native.analog-control-flow-rejects-${_fixture}
+    COMMAND "${CMAKE_COMMAND}"
+      "-DNODALC=$<TARGET_FILE:nodalc>"
+      "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow-invalid-${_fixture}.mlir"
+      "-DDIAGNOSTIC=NODAL-ANALOG-034-004"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
+  )
+endforeach()
+
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
   DEPENDS

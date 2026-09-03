@@ -24,6 +24,16 @@ REQUIRED = (
     "core/scala/api/src/nodal/AnalogProceduralConstruction.scala",
     "core/scala/api/src/nodal/AnalogProceduralRuntime.scala",
     "core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala",
+    "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala",
+    "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala",
+    "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td",
+    "core/compiler/lib/Dialect/Nodal/NodalOps.cpp",
+    "core/compiler/test/CMakeLists.txt",
+    "core/compiler/test/IR/analog-control-flow.mlir",
+    "core/compiler/test/IR/analog-control-flow-invalid-missing-else.mlir",
+    "core/compiler/test/IR/analog-control-flow-invalid-missing-default.mlir",
+    "core/compiler/test/IR/analog-control-flow-invalid-zero-trip.mlir",
+    "core/compiler/test/IR/analog-control-flow-invalid-continue-path.mlir",
     "docs/design-gates/NodalAnalogControlFlow-DG-v0.1.md",
     "docs/implementation/increment34-analog-control-flow.md",
     "docs/roadmap/nodal-development-todo.md",
@@ -288,9 +298,82 @@ class Increment34ContractTests(unittest.TestCase):
         with temporary:
             path = root / "tests/compiler/fixtures/increment34/manifest.json"
             document = json.loads(path.read_text(encoding="utf-8"))
-            document["integration"]["first_class_compiler_ir"] = True
+            document["integration"]["target_lowering"] = True
             path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
             self.assert_rejected(root, "must not be claimed complete")
+
+
+    def test_structured_bridge_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    '"nodal.analog_if"',
+                    '"nodal.removed_analog_if"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "structured Scala-to-MLIR bridge is missing")
+
+    def test_native_control_op_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    'Nodal_Op<"analog_loop"',
+                    'Nodal_Op<"removed_analog_loop"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "first-class native control-flow operations is missing")
+
+    def test_native_verifier_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "LogicalResult nodal::AnalogBreakOp::verify()",
+                    "LogicalResult nodal::RemovedAnalogBreakOp::verify()",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "native structured control-flow verification is missing")
+
+
+
+    def test_native_dataflow_manifest_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "tests/compiler/fixtures/increment34/manifest.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["integration"][
+                "native_branch_sensitive_definite_assignment"
+            ] = False
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            self.assert_rejected(
+                root,
+                "completed integration 'native_branch_sensitive_definite_assignment' is not recorded",
+            )
+
+    def test_native_branch_intersection_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "body->continues.begin()",
+                    "body->breaks.begin()",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "native branch-sensitive definite assignment is missing")
 
     def test_write_enabled_workflow_is_rejected(self) -> None:
         temporary, root = self.fixture()

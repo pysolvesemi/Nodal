@@ -60,6 +60,22 @@ def check_repository(root: Path) -> None:
     )
     readme = read_text(root, "tests/compiler/fixtures/increment34/README.md")
     workflow = read_text(root, ".github/workflows/increment-34-analog-control-flow.yml")
+    bridge = read_text(
+        root, "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala"
+    )
+    bridge_tests = read_text(
+        root, "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala"
+    )
+    native_ops = read_text(
+        root, "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td"
+    )
+    native_verifier = read_text(
+        root, "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
+    )
+    native_cmake = read_text(root, "core/compiler/test/CMakeLists.txt")
+    native_fixture = read_text(
+        root, "core/compiler/test/IR/analog-control-flow.mlir"
+    )
     predecessor = load_json(root, "tests/compiler/fixtures/increment33/manifest.json")
     manifest = load_json(root, "tests/compiler/fixtures/increment34/manifest.json")
 
@@ -87,7 +103,7 @@ def check_repository(root: Path) -> None:
         manifest.get("schema") == 1
         and manifest.get("increment") == 34
         and manifest.get("status") == "implementation-in-progress"
-        and manifest.get("tranche") == "34c-canonical-snapshot",
+        and manifest.get("tranche") == "34c-native-branch-sensitive-dataflow",
         "NODAL-INC34-008: manifest identity or tranche is invalid",
     )
 
@@ -115,6 +131,13 @@ def check_repository(root: Path) -> None:
         "block_local_declarations",
         "unbounded_loop_rejection",
         "structured_flattening_prohibited",
+        "typed_control_expression_payloads",
+        "structured_ir_regions",
+        "structured_source_map_entries",
+        "native_continue_exit_intersection",
+        "native_zero_trip_loop_conservative",
+        "native_missing_default_intersection",
+        "native_missing_else_intersection",
     ):
         require(
             semantics.get(key) is True,
@@ -133,18 +156,19 @@ def check_repository(root: Path) -> None:
         "owner_remapped_source_snapshot",
         "increment33_flat_snapshot_separation",
         "canonical_construction_snapshot",
-    ):
-        require(
-            integration.get(key) is True,
-            f"NODAL-INC34-013: completed integration {key!r} is not recorded",
-        )
-    for key in (
         "scala_to_mlir",
         "first_class_compiler_ir",
         "native_ir_verification",
         "compiler_boundary_diagnostics",
         "source_map_roundtrip",
         "authoritative_serialization",
+        "native_branch_sensitive_definite_assignment",
+    ):
+        require(
+            integration.get(key) is True,
+            f"NODAL-INC34-013: completed integration {key!r} is not recorded",
+        )
+    for key in (
         "target_lowering",
     ):
         require(
@@ -155,8 +179,10 @@ def check_repository(root: Path) -> None:
     require(isinstance(deferred, list), "NODAL-INC34-015: deferred must be a list")
     require(
         "canonical-construction-snapshot" not in deferred
-        and "scala-to-mlir-control-flow" in deferred
-        and "native-control-flow-ir" in deferred,
+        and "scala-to-mlir-control-flow" not in deferred
+        and "native-control-flow-ir" not in deferred
+        and "source-map-roundtrip" not in deferred
+        and "native-branch-sensitive-definite-assignment" not in deferred,
         "NODAL-INC34-015: completed and deferred integration boundaries are inconsistent",
     )
     require(manifest.get("validation") is None, "NODAL-INC34-015: validation must remain null")
@@ -383,11 +409,144 @@ def check_repository(root: Path) -> None:
             "nodal.increment34fixture.Increment34RuntimeCheck",
             "nodal.increment34fixture.Increment34ConstructionCheck",
             "./nodal core scala",
+            "Build and validate structured native control flow",
+            "./nodal core native",
+            "analog-control-flow.mlir",
             "./nodal style check",
             "contents: read",
         ),
         "NODAL-INC34-028",
         "permanent workflow",
+    )
+
+
+    require_tokens(
+        bridge,
+        (
+            "private def structuredInventory",
+            "private def structuredSourceMapEntries",
+            "private def renderStructuredProgram",
+            '"nodal.analog_if"',
+            '"nodal.analog_if_arm"',
+            '"nodal.analog_case"',
+            '"nodal.analog_case_arm"',
+            '"nodal.analog_loop"',
+            '"nodal.analog_break"',
+            '"nodal.analog_continue"',
+            'expression.identity == value.identity',
+            'expression.role == "assignment-value"',
+        ),
+        "NODAL-INC34-030",
+        "structured Scala-to-MLIR bridge",
+    )
+    require_tokens(
+        bridge_tests,
+        (
+            "BridgeStructuredProceduralTop",
+            "structured analog control flow serializes without flattening",
+            'first.text.contains("\\"nodal.analog_if\\"")',
+            'first.text.contains("\\"nodal.analog_case\\"")',
+            'first.text.contains("\\"nodal.analog_loop\\"")',
+            "program.assignments.isEmpty",
+            "program.controlFlow.nonEmpty",
+        ),
+        "NODAL-INC34-031",
+        "structured bridge tests",
+    )
+    require_tokens(
+        native_ops,
+        (
+            'Nodal_Op<"analog_if"',
+            'Nodal_Op<"analog_if_arm"',
+            'Nodal_Op<"analog_case"',
+            'Nodal_Op<"analog_case_arm"',
+            'Nodal_Op<"analog_loop"',
+            'Nodal_Op<"analog_break"',
+            'Nodal_Op<"analog_continue"',
+        ),
+        "NODAL-INC34-032",
+        "first-class native control-flow operations",
+    )
+    require_tokens(
+        native_verifier,
+        (
+            "verifyStructuredProceduralBlock",
+            "LogicalResult nodal::AnalogIfOp::verify()",
+            "LogicalResult nodal::AnalogCaseOp::verify()",
+            "LogicalResult nodal::AnalogLoopOp::verify()",
+            "LogicalResult nodal::AnalogBreakOp::verify()",
+            "LogicalResult nodal::AnalogContinueOp::verify()",
+            '"NODAL-ANALOG-034-002"',
+            '"NODAL-ANALOG-034-006"',
+            '"NODAL-ANALOG-034-008"',
+            '"NODAL-ANALOG-034-010"',
+            '"NODAL-ANALOG-034-011"',
+        ),
+        "NODAL-INC34-033",
+        "native structured control-flow verification",
+    )
+    require_tokens(
+        native_cmake,
+        (
+            "nodal.native.analog-control-flow-roundtrip",
+            "nodal.native.analog-control-flow-source-map-roundtrip",
+            "analog-control-flow-invalid-${_fixture}.mlir",
+        ),
+        "NODAL-INC34-034",
+        "native structured control-flow tests",
+    )
+    require_tokens(
+        native_fixture,
+        (
+            '"nodal.analog_if"',
+            '"nodal.analog_if_arm"',
+            '"nodal.analog_case"',
+            '"nodal.analog_case_arm"',
+            '"nodal.analog_loop"',
+            '"nodal.analog_break"',
+            '"nodal.analog_continue"',
+            "AnalogControlFlow.scala",
+        ),
+        "NODAL-INC34-035",
+        "native structured control-flow fixture",
+    )
+
+
+    require_tokens(
+        native_verifier,
+        (
+            "verifyStructuredDefiniteAssignment",
+            "analyzeStructuredIf",
+            "analyzeStructuredCase",
+            "analyzeStructuredLoop",
+            "intersectStructuredStates",
+            '"NODAL-ANALOG-034-004"',
+            "body->continues.begin()",
+            "minimum.getInt() == 0",
+            "unmatchedReachable",
+        ),
+        "NODAL-INC34-036",
+        "native branch-sensitive definite assignment",
+    )
+    for fixture in (
+        "missing-else",
+        "missing-default",
+        "zero-trip",
+        "continue-path",
+    ):
+        require(
+            (root / f"core/compiler/test/IR/analog-control-flow-invalid-{fixture}.mlir").is_file(),
+            f"NODAL-INC34-037: missing native dataflow fixture {fixture}",
+        )
+    require_tokens(
+        native_cmake,
+        (
+            "NAME nodal.native.analog-control-flow-rejects-${_fixture}",
+            "foreach(_fixture IN ITEMS missing-else missing-default zero-trip continue-path)",
+            "NODAL-ANALOG-034-004",
+        ),
+        "NODAL-INC34-038",
+        "native branch-sensitive dataflow tests",
     )
 
     forbidden_names = {

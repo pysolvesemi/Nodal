@@ -19,7 +19,7 @@
   "scala_witness": "examples/continuousTimeApi/src/nodal/increment34fixture/Increment34RuntimeCheck.scala",
   "public_construction_witness": "examples/continuousTimeApi/src/nodal/increment34fixture/Increment34ConstructionCheck.scala",
   "public_construction_tests": "core/scala/testkit/test/src/nodal/AnalogControlFlowConstructionTests.scala",
-  "tranche": "34c-canonical-snapshot",
+  "tranche": "34c-native-branch-sensitive-dataflow",
   "semantics": {
     "structured_statement_tree": true,
     "stable_control_identities": true,
@@ -44,29 +44,30 @@
     "structured_flattening_prohibited": true,
     "typed_control_expression_payloads": true,
     "case_fallthrough": false,
-    "labeled_loop_exit": false
+    "labeled_loop_exit": false,
+    "structured_ir_regions": true,
+    "structured_source_map_entries": true,
+    "native_missing_else_intersection": true,
+    "native_missing_default_intersection": true,
+    "native_zero_trip_loop_conservative": true,
+    "native_continue_exit_intersection": true
   },
   "integration": {
     "public_construction_kernel": true,
     "owner_remapped_source_snapshot": true,
     "increment33_flat_snapshot_separation": true,
     "canonical_construction_snapshot": true,
-    "scala_to_mlir": false,
-    "first_class_compiler_ir": false,
-    "native_ir_verification": false,
-    "compiler_boundary_diagnostics": false,
-    "source_map_roundtrip": false,
-    "authoritative_serialization": false,
-    "target_lowering": false
+    "scala_to_mlir": true,
+    "first_class_compiler_ir": true,
+    "native_ir_verification": true,
+    "compiler_boundary_diagnostics": true,
+    "source_map_roundtrip": true,
+    "authoritative_serialization": true,
+    "target_lowering": false,
+    "native_branch_sensitive_definite_assignment": true
   },
   "stable_diagnostic_prefix": "NODAL-ANALOG-034-",
   "deferred": [
-    "scala-to-mlir-control-flow",
-    "native-control-flow-ir",
-    "native-control-flow-verification",
-    "compiler-boundary-control-flow-diagnostics",
-    "source-map-roundtrip",
-    "reproducibility-serialization",
     "labeled-loop-exits",
     "case-patterns-and-ranges",
     "residual-dae-construction",
@@ -75,5 +76,10 @@
     "verilog-a-lowering",
     "verilog-ams-lowering"
   ],
-  "validation": null
+  "validation": null,
+  "bridge_renderer": "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala",
+  "bridge_tests": "core/scala/testkit/test/src/nodal/internal/testkit/ScalaToMlirBridgeTests.scala",
+  "native_ops": "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td",
+  "native_verifier": "core/compiler/lib/Dialect/Nodal/NodalOps.cpp",
+  "native_fixture": "core/compiler/test/IR/analog-control-flow.mlir"
 }

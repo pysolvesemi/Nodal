@@ -19,8 +19,11 @@
 #include "llvm/ADT/StringSet.h"
 
 #include <initializer_list>
+#include <iterator>
 #include <optional>
+#include <set>
 #include <string>
+#include <vector>
 
 using namespace mlir;
 
@@ -489,6 +492,490 @@ LogicalResult verifyProceduralBlock(Block &block, ProceduralVerificationState &s
   return success();
 }
 
+LogicalResult verifyStructuredProceduralBlock(Block &block, llvm::StringRef owner) {
+  for (Operation &operation : block) {
+    if (llvm::isa<nodal::AnalogVariableOp, nodal::AnalogVariableReadOp, nodal::AnalogAssignOp,
+                  nodal::AnalogBreakOp, nodal::AnalogContinueOp>(operation)) {
+      if (textAttr(&operation, "owner") != owner)
+        return nodal::emitMappedFailure(
+            &operation, "NODAL-ANALOG-034-014",
+            "structured procedural operation owner does not match the enclosing component");
+      continue;
+    }
+
+    if (auto scope = llvm::dyn_cast<nodal::AnalogScopeOp>(&operation)) {
+      if (textAttr(&operation, "owner") != owner)
+        return nodal::emitMappedFailure(
+            &operation, "NODAL-ANALOG-034-014",
+            "structured lexical scope owner does not match the enclosing component");
+      if (failed(
+              verifyStructuredProceduralBlock(scope.getOperation()->getRegion(0).front(), owner)))
+        return failure();
+      continue;
+    }
+
+    if (auto conditional = llvm::dyn_cast<nodal::AnalogIfOp>(&operation)) {
+      if (textAttr(&operation, "owner") != owner)
+        return nodal::emitMappedFailure(
+            &operation, "NODAL-ANALOG-034-014",
+            "structured conditional owner does not match the enclosing component");
+      for (Operation &nested : conditional.getOperation()->getRegion(0).front()) {
+        auto arm = llvm::dyn_cast<nodal::AnalogIfArmOp>(&nested);
+        if (!arm)
+          return nodal::emitMappedFailure(
+              &nested, "NODAL-ANALOG-034-015",
+              "analog conditional body may contain only analog_if_arm operations");
+        if (failed(
+                verifyStructuredProceduralBlock(arm.getOperation()->getRegion(0).front(), owner)))
+          return failure();
+      }
+      continue;
+    }
+
+    if (auto selection = llvm::dyn_cast<nodal::AnalogCaseOp>(&operation)) {
+      if (textAttr(&operation, "owner") != owner)
+        return nodal::emitMappedFailure(
+            &operation, "NODAL-ANALOG-034-014",
+            "structured case owner does not match the enclosing component");
+      for (Operation &nested : selection.getOperation()->getRegion(0).front()) {
+        auto arm = llvm::dyn_cast<nodal::AnalogCaseArmOp>(&nested);
+        if (!arm)
+          return nodal::emitMappedFailure(
+              &nested, "NODAL-ANALOG-034-015",
+              "analog case body may contain only analog_case_arm operations");
+        if (failed(
+                verifyStructuredProceduralBlock(arm.getOperation()->getRegion(0).front(), owner)))
+          return failure();
+      }
+      continue;
+    }
+
+    if (auto loop = llvm::dyn_cast<nodal::AnalogLoopOp>(&operation)) {
+      if (textAttr(&operation, "owner") != owner)
+        return nodal::emitMappedFailure(
+            &operation, "NODAL-ANALOG-034-014",
+            "structured loop owner does not match the enclosing component");
+      if (failed(verifyStructuredProceduralBlock(loop.getOperation()->getRegion(0).front(), owner)))
+        return failure();
+      continue;
+    }
+
+    if (llvm::isa<nodal::AnalogIfArmOp, nodal::AnalogCaseArmOp>(operation))
+      return nodal::emitMappedFailure(
+          &operation, "NODAL-ANALOG-034-015",
+          "analog control-flow arm must be nested directly under its owning selection");
+
+    if (llvm::isa<nodal::AnalogProcedureOp>(operation))
+      return nodal::emitMappedFailure(&operation, "NODAL-ANALOG-033-018",
+                                      "nested analog procedural regions are not supported");
+
+    return nodal::emitMappedFailure(
+        &operation, "NODAL-ANALOG-034-014",
+        "operation is not legal in structured analog procedural control flow");
+  }
+  return success();
+}
+
+using StructuredInitializedSet = std::set<std::string>;
+
+struct StructuredVariableInfo {
+  Block *declarationBlock = nullptr;
+};
+
+struct StructuredDataflowContext {
+  llvm::StringMap<StructuredVariableInfo> variables;
+};
+
+struct StructuredFlow {
+  std::optional<StructuredInitializedSet> normal;
+  std::vector<StructuredInitializedSet> breaks;
+  std::vector<StructuredInitializedSet> continues;
+};
+
+std::optional<StructuredInitializedSet>
+intersectStructuredStates(const std::vector<StructuredInitializedSet> &states) {
+  if (states.empty())
+    return std::nullopt;
+  StructuredInitializedSet result = states.front();
+  for (auto state = std::next(states.begin()); state != states.end(); ++state) {
+    for (auto value = result.begin(); value != result.end();) {
+      if (state->find(*value) == state->end())
+        value = result.erase(value);
+      else
+        ++value;
+    }
+  }
+  return result;
+}
+
+void appendStructuredEscapes(StructuredFlow &destination, const StructuredFlow &source) {
+  destination.breaks.insert(destination.breaks.end(), source.breaks.begin(), source.breaks.end());
+  destination.continues.insert(destination.continues.end(), source.continues.begin(),
+                               source.continues.end());
+}
+
+void removeStructuredLocals(StructuredFlow &flow, const std::vector<std::string> &locals) {
+  auto remove = [&](StructuredInitializedSet &state) {
+    for (const std::string &identity : locals)
+      state.erase(identity);
+  };
+  if (flow.normal)
+    remove(*flow.normal);
+  for (StructuredInitializedSet &state : flow.breaks)
+    remove(state);
+  for (StructuredInitializedSet &state : flow.continues)
+    remove(state);
+}
+
+LogicalResult collectStructuredVariables(Block &block, llvm::StringRef owner,
+                                         StructuredDataflowContext &context) {
+  for (Operation &operation : block) {
+    if (llvm::isa<nodal::AnalogVariableOp>(operation)) {
+      llvm::StringRef identity = textAttr(&operation, "identity");
+      if (identity.trim().empty())
+        return nodal::emitMappedFailure(&operation, "NODAL-ANALOG-034-014",
+                                        "structured variable identity must be non-empty");
+      if (textAttr(&operation, "owner") != owner)
+        return nodal::emitMappedFailure(
+            &operation, "NODAL-ANALOG-034-014",
+            "structured variable owner does not match the enclosing component");
+      if (!context.variables.try_emplace(identity, StructuredVariableInfo{operation.getBlock()})
+               .second)
+        return nodal::emitMappedFailure(&operation, "NODAL-ANALOG-034-014",
+                                        llvm::Twine("duplicate structured variable identity '") +
+                                            identity + "'");
+    }
+    for (Region &region : operation.getRegions()) {
+      for (Block &nested : region) {
+        if (failed(collectStructuredVariables(nested, owner, context)))
+          return failure();
+      }
+    }
+  }
+  return success();
+}
+
+LogicalResult requireStructuredRead(Operation *operation, llvm::StringRef identity,
+                                    const StructuredInitializedSet &initialized,
+                                    const StructuredDataflowContext &context) {
+  auto variable = context.variables.find(identity);
+  if (variable == context.variables.end())
+    return nodal::emitMappedFailure(
+        operation, "NODAL-ANALOG-034-014",
+        llvm::Twine("structured control flow references unknown variable '") + identity + "'");
+  if (!isVisibleFrom(operation->getBlock(), variable->second.declarationBlock))
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-014",
+                                    llvm::Twine("structured variable '") + identity +
+                                        "' is outside its lexical declaration scope");
+  if (initialized.find(identity.str()) == initialized.end())
+    return nodal::emitMappedFailure(
+        operation, "NODAL-ANALOG-034-004",
+        llvm::Twine("procedural variable '") + identity +
+            "' is read before definite initialization on this control-flow path");
+  return success();
+}
+
+LogicalResult requireStructuredReads(Operation *operation, llvm::StringRef attributeName,
+                                     const StructuredInitializedSet &initialized,
+                                     const StructuredDataflowContext &context) {
+  auto reads = operation->getAttrOfType<ArrayAttr>(attributeName);
+  if (!reads)
+    return nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-014",
+                                    llvm::Twine("missing structured read inventory '") +
+                                        attributeName + "'");
+  for (Attribute attribute : reads) {
+    auto identity = llvm::dyn_cast<StringAttr>(attribute);
+    if (!identity || identity.getValue().trim().empty())
+      return nodal::emitMappedFailure(
+          operation, "NODAL-ANALOG-034-014",
+          "structured read inventory entries must be non-empty identities");
+    if (failed(requireStructuredRead(operation, identity.getValue(), initialized, context)))
+      return failure();
+  }
+  return success();
+}
+
+FailureOr<std::string> structuredVariableIdentity(Operation *operation, Value value,
+                                                  const StructuredDataflowContext &context,
+                                                  bool requireInitialized,
+                                                  const StructuredInitializedSet &initialized) {
+  auto declaration = value.getDefiningOp<nodal::AnalogVariableOp>();
+  if (!declaration) {
+    (void)nodal::emitMappedFailure(
+        operation, "NODAL-ANALOG-034-014",
+        "structured procedural variable operand must resolve to an analog_variable");
+    return failure();
+  }
+  llvm::StringRef identity = textAttr(declaration.getOperation(), "identity");
+  auto variable = context.variables.find(identity);
+  if (variable == context.variables.end())
+    return failure();
+  if (!isVisibleFrom(operation->getBlock(), variable->second.declarationBlock)) {
+    (void)nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-014",
+                                   llvm::Twine("structured variable '") + identity +
+                                       "' is outside its lexical declaration scope");
+    return failure();
+  }
+  if (requireInitialized && initialized.find(identity.str()) == initialized.end()) {
+    (void)nodal::emitMappedFailure(
+        operation, "NODAL-ANALOG-034-004",
+        llvm::Twine("procedural variable '") + identity +
+            "' is read before definite initialization on this control-flow path");
+    return failure();
+  }
+  return identity.str();
+}
+
+FailureOr<StructuredFlow> analyzeStructuredDataflowBlock(Block &block,
+                                                         const StructuredInitializedSet &input,
+                                                         StructuredDataflowContext &context,
+                                                         bool retainLocals);
+
+FailureOr<StructuredFlow> analyzeStructuredIf(nodal::AnalogIfOp conditional,
+                                              const StructuredInitializedSet &input,
+                                              StructuredDataflowContext &context) {
+  StructuredFlow result;
+  std::vector<StructuredInitializedSet> normalStates;
+  bool unmatchedReachable = true;
+
+  for (Operation &operation : conditional.getOperation()->getRegion(0).front()) {
+    auto arm = llvm::cast<nodal::AnalogIfArmOp>(&operation);
+    auto isElse = operation.getAttrOfType<BoolAttr>("is_else");
+    bool reachable = unmatchedReachable;
+    if (isElse.getValue()) {
+      unmatchedReachable = false;
+    } else {
+      llvm::StringRef stage = textAttr(&operation, "stage");
+      if (stage == "static") {
+        auto value = operation.getAttrOfType<BoolAttr>("static_value");
+        reachable = unmatchedReachable && value.getValue();
+        if (value.getValue())
+          unmatchedReachable = false;
+      } else {
+        reachable = unmatchedReachable;
+      }
+    }
+
+    if (!reachable)
+      continue;
+    if (!isElse.getValue() &&
+        failed(requireStructuredReads(&operation, "condition_reads", input, context)))
+      return failure();
+    auto branch =
+        analyzeStructuredDataflowBlock(arm.getOperation()->getRegion(0).front(), input, context,
+                                       /*retainLocals=*/false);
+    if (failed(branch))
+      return failure();
+    if (branch->normal)
+      normalStates.push_back(*branch->normal);
+    appendStructuredEscapes(result, *branch);
+  }
+
+  if (unmatchedReachable)
+    normalStates.push_back(input);
+  result.normal = intersectStructuredStates(normalStates);
+  return result;
+}
+
+FailureOr<StructuredFlow> analyzeStructuredCase(nodal::AnalogCaseOp selection,
+                                                const StructuredInitializedSet &input,
+                                                StructuredDataflowContext &context) {
+  if (failed(requireStructuredReads(selection.getOperation(), "selector_reads", input, context)))
+    return failure();
+
+  StructuredFlow result;
+  std::vector<StructuredInitializedSet> normalStates;
+  auto staticPresent = selection.getOperation()->getAttrOfType<BoolAttr>("static_value_present");
+  llvm::StringRef staticValue = textAttr(selection.getOperation(), "static_value");
+  Operation *defaultArm = nullptr;
+
+  if (staticPresent.getValue()) {
+    Operation *selected = nullptr;
+    for (Operation &operation : selection.getOperation()->getRegion(0).front()) {
+      auto isDefault = operation.getAttrOfType<BoolAttr>("is_default");
+      if (isDefault.getValue()) {
+        defaultArm = &operation;
+        continue;
+      }
+      auto labels = operation.getAttrOfType<ArrayAttr>("labels");
+      for (Attribute attribute : labels) {
+        if (llvm::cast<StringAttr>(attribute).getValue() == staticValue) {
+          selected = &operation;
+          break;
+        }
+      }
+      if (selected)
+        break;
+    }
+    Operation *reachable = selected ? selected : defaultArm;
+    if (!reachable) {
+      result.normal = input;
+      return result;
+    }
+    auto branch = analyzeStructuredDataflowBlock(reachable->getRegion(0).front(), input, context,
+                                                 /*retainLocals=*/false);
+    if (failed(branch))
+      return failure();
+    return *branch;
+  }
+
+  bool hasDefault = false;
+  for (Operation &operation : selection.getOperation()->getRegion(0).front()) {
+    auto arm = llvm::cast<nodal::AnalogCaseArmOp>(&operation);
+    if (operation.getAttrOfType<BoolAttr>("is_default").getValue())
+      hasDefault = true;
+    auto branch =
+        analyzeStructuredDataflowBlock(arm.getOperation()->getRegion(0).front(), input, context,
+                                       /*retainLocals=*/false);
+    if (failed(branch))
+      return failure();
+    if (branch->normal)
+      normalStates.push_back(*branch->normal);
+    appendStructuredEscapes(result, *branch);
+  }
+  if (!hasDefault)
+    normalStates.push_back(input);
+  result.normal = intersectStructuredStates(normalStates);
+  return result;
+}
+
+FailureOr<StructuredFlow> analyzeStructuredLoop(nodal::AnalogLoopOp loop,
+                                                const StructuredInitializedSet &input,
+                                                StructuredDataflowContext &context) {
+  if (failed(requireStructuredReads(loop.getOperation(), "bound_reads", input, context)))
+    return failure();
+
+  llvm::StringRef stage = textAttr(loop.getOperation(), "stage");
+  auto minimum = loop.getOperation()->getAttrOfType<IntegerAttr>("minimum_iterations");
+  auto staticCount = loop.getOperation()->getAttrOfType<IntegerAttr>("static_trip_count");
+  if (stage == "static" && staticCount.getInt() == 0)
+    return StructuredFlow{input, {}, {}};
+
+  auto body =
+      analyzeStructuredDataflowBlock(loop.getOperation()->getRegion(0).front(), input, context,
+                                     /*retainLocals=*/false);
+  if (failed(body))
+    return failure();
+
+  std::vector<StructuredInitializedSet> exits;
+  if (minimum.getInt() == 0)
+    exits.push_back(input);
+  if (body->normal)
+    exits.push_back(*body->normal);
+  exits.insert(exits.end(), body->breaks.begin(), body->breaks.end());
+  exits.insert(exits.end(), body->continues.begin(), body->continues.end());
+
+  StructuredFlow result;
+  result.normal = intersectStructuredStates(exits);
+  return result;
+}
+
+FailureOr<StructuredFlow> analyzeStructuredDataflowStatement(Operation *operation,
+                                                             const StructuredInitializedSet &input,
+                                                             StructuredDataflowContext &context) {
+  if (llvm::isa<nodal::AnalogVariableOp>(operation)) {
+    StructuredInitializedSet output = input;
+    if (failed(requireStructuredReads(operation, "initializer_reads", input, context)))
+      return failure();
+    llvm::StringRef identity = textAttr(operation, "identity");
+    if (operation->getAttrOfType<BoolAttr>("initialized").getValue())
+      output.insert(identity.str());
+    return StructuredFlow{output, {}, {}};
+  }
+
+  if (llvm::isa<nodal::AnalogVariableReadOp>(operation)) {
+    auto identity = structuredVariableIdentity(operation, operation->getOperand(0), context,
+                                               /*requireInitialized=*/true, input);
+    if (failed(identity))
+      return failure();
+    return StructuredFlow{input, {}, {}};
+  }
+
+  if (llvm::isa<nodal::AnalogAssignOp>(operation)) {
+    StructuredInitializedSet output = input;
+    auto target = structuredVariableIdentity(operation, operation->getOperand(0), context,
+                                             /*requireInitialized=*/false, input);
+    if (failed(target))
+      return failure();
+    for (Value value : operation->getOperands().drop_front()) {
+      auto read = value.getDefiningOp<nodal::AnalogVariableReadOp>();
+      if (!read) {
+        (void)nodal::emitMappedFailure(
+            operation, "NODAL-ANALOG-034-014",
+            "structured assignment operands must be explicit variable reads");
+        return failure();
+      }
+      auto identity =
+          structuredVariableIdentity(operation, read.getOperation()->getOperand(0), context,
+                                     /*requireInitialized=*/true, input);
+      if (failed(identity))
+        return failure();
+    }
+    output.insert(*target);
+    return StructuredFlow{output, {}, {}};
+  }
+
+  if (auto scope = llvm::dyn_cast<nodal::AnalogScopeOp>(operation))
+    return analyzeStructuredDataflowBlock(scope.getOperation()->getRegion(0).front(), input,
+                                          context,
+                                          /*retainLocals=*/false);
+  if (auto conditional = llvm::dyn_cast<nodal::AnalogIfOp>(operation))
+    return analyzeStructuredIf(conditional, input, context);
+  if (auto selection = llvm::dyn_cast<nodal::AnalogCaseOp>(operation))
+    return analyzeStructuredCase(selection, input, context);
+  if (auto loop = llvm::dyn_cast<nodal::AnalogLoopOp>(operation))
+    return analyzeStructuredLoop(loop, input, context);
+  if (llvm::isa<nodal::AnalogBreakOp>(operation))
+    return StructuredFlow{std::nullopt, {input}, {}};
+  if (llvm::isa<nodal::AnalogContinueOp>(operation))
+    return StructuredFlow{std::nullopt, {}, {input}};
+
+  (void)nodal::emitMappedFailure(
+      operation, "NODAL-ANALOG-034-014",
+      "unsupported operation reached structured definite-assignment analysis");
+  return failure();
+}
+
+FailureOr<StructuredFlow> analyzeStructuredDataflowBlock(Block &block,
+                                                         const StructuredInitializedSet &input,
+                                                         StructuredDataflowContext &context,
+                                                         bool retainLocals) {
+  StructuredFlow flow{input, {}, {}};
+  std::vector<std::string> locals;
+  for (Operation &operation : block) {
+    if (llvm::isa<nodal::AnalogVariableOp>(operation))
+      locals.push_back(textAttr(&operation, "identity").str());
+    if (!flow.normal)
+      continue;
+    auto statement = analyzeStructuredDataflowStatement(&operation, *flow.normal, context);
+    if (failed(statement))
+      return failure();
+    appendStructuredEscapes(flow, *statement);
+    flow.normal = statement->normal;
+  }
+  if (!retainLocals)
+    removeStructuredLocals(flow, locals);
+  return flow;
+}
+
+LogicalResult verifyStructuredDefiniteAssignment(Operation *procedure, llvm::StringRef owner) {
+  StructuredDataflowContext context;
+  Block &body = procedure->getRegion(0).front();
+  if (failed(collectStructuredVariables(body, owner, context)))
+    return failure();
+  auto flow = analyzeStructuredDataflowBlock(body, StructuredInitializedSet{}, context,
+                                             /*retainLocals=*/true);
+  if (failed(flow))
+    return failure();
+  if (!flow->breaks.empty())
+    return nodal::emitMappedFailure(procedure, "NODAL-ANALOG-034-010",
+                                    "break escaped the nearest runtime-bounded analog loop");
+  if (!flow->continues.empty())
+    return nodal::emitMappedFailure(procedure, "NODAL-ANALOG-034-011",
+                                    "continue escaped the nearest runtime-bounded analog loop");
+  return success();
+}
+
 LogicalResult verifySingleTopLevelProcedurePerModule(Operation *module) {
   bool seenProcedure = false;
   Operation *duplicateProcedure = nullptr;
@@ -515,6 +1002,18 @@ LogicalResult verifyAnalogProcedure(Operation *operation) {
   if (owner.trim().empty())
     return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-009",
                                     "analog procedural owner must be non-empty");
+  bool hasStructuredControl = false;
+  operation->walk([&](Operation *nested) {
+    if (llvm::isa<nodal::AnalogIfOp, nodal::AnalogCaseOp, nodal::AnalogLoopOp, nodal::AnalogBreakOp,
+                  nodal::AnalogContinueOp>(nested))
+      hasStructuredControl = true;
+  });
+  if (hasStructuredControl) {
+    if (failed(verifyStructuredProceduralBlock(operation->getRegion(0).front(), owner)))
+      return failure();
+    return verifyStructuredDefiniteAssignment(operation, owner);
+  }
+
   ProceduralVerificationState state;
   state.owner = owner;
   return verifyProceduralBlock(operation->getRegion(0).front(), state);
@@ -793,6 +1292,272 @@ LogicalResult nodal::AnalogScopeOp::verify() {
     return emitMappedFailure(getOperation(), "NODAL-ANALOG-033-016",
                              "procedural lexical scope identity must be non-empty");
   return requireText(getOperation(), "owner", "procedural lexical scope owner");
+}
+
+LogicalResult nodal::AnalogIfOp::verify() {
+  if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-034-014",
+                                       "structured analog conditional")))
+    return failure();
+  if (failed(requireText(getOperation(), "statement_id", "conditional statement identity")) ||
+      failed(requireText(getOperation(), "owner", "conditional owner")) ||
+      failed(requireSingleBlock(getOperation())))
+    return failure();
+
+  llvm::StringSet<> armIds;
+  bool seenConditionalArm = false;
+  bool seenElse = false;
+  for (Operation &operation : getOperation()->getRegion(0).front()) {
+    auto arm = llvm::dyn_cast<nodal::AnalogIfArmOp>(&operation);
+    if (!arm)
+      return emitMappedFailure(&operation, "NODAL-ANALOG-034-015",
+                               "analog_if body may contain only analog_if_arm operations");
+    if (textAttr(&operation, "owner") != textAttr(getOperation(), "owner"))
+      return emitMappedFailure(&operation, "NODAL-ANALOG-034-014",
+                               "conditional arm owner does not match its parent");
+    llvm::StringRef armId = textAttr(&operation, "arm_id");
+    if (armId.trim().empty() || !armIds.insert(armId).second)
+      return emitMappedFailure(&operation, "NODAL-ANALOG-034-001",
+                               "conditional arm identity must be non-empty and unique");
+    const bool isElse = operation.getAttrOfType<BoolAttr>("is_else").getValue();
+    if (isElse) {
+      if (seenElse)
+        return emitMappedFailure(&operation, "NODAL-ANALOG-034-015",
+                                 "analog conditional permits only one else arm");
+      seenElse = true;
+    } else {
+      if (seenElse)
+        return emitMappedFailure(&operation, "NODAL-ANALOG-034-015",
+                                 "conditional arm cannot follow the else arm");
+      seenConditionalArm = true;
+    }
+  }
+  if (!seenConditionalArm)
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-015",
+                             "analog conditional requires at least one condition arm");
+  return success();
+}
+
+LogicalResult nodal::AnalogIfArmOp::verify() {
+  if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-034-014",
+                                       "analog conditional arm")) ||
+      failed(requireSingleBlock(getOperation())) ||
+      failed(requireText(getOperation(), "arm_id", "conditional arm identity")) ||
+      failed(requireText(getOperation(), "owner", "conditional arm owner")))
+    return failure();
+  if (getOperation()->getRegion(0).front().empty())
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-015",
+                             "conditional arm must contain at least one statement");
+  if (failed(verifyStringArray(getOperation(), "condition_reads", "NODAL-ANALOG-034-002",
+                               "condition read")))
+    return failure();
+
+  auto isElse = getOperation()->getAttrOfType<BoolAttr>("is_else");
+  auto staticPresent = getOperation()->getAttrOfType<BoolAttr>("static_value_present");
+  auto staticValue = getOperation()->getAttrOfType<BoolAttr>("static_value");
+  if (!isElse || !staticPresent || !staticValue)
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-003",
+                             "conditional arm requires explicit staging metadata");
+
+  const llvm::StringRef stage = textAttr(getOperation(), "stage");
+  const llvm::StringRef value = textAttr(getOperation(), "condition_value");
+  const llvm::StringRef kind = textAttr(getOperation(), "condition_kind");
+  const llvm::StringRef dimension = textAttr(getOperation(), "condition_dimension");
+  auto reads = getOperation()->getAttrOfType<ArrayAttr>("condition_reads");
+  if (isElse.getValue()) {
+    if (stage != "else" || !value.empty() || !kind.empty() || !dimension.empty() ||
+        !reads.empty() || staticPresent.getValue())
+      return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-003",
+                               "else arm must not carry a condition or static value");
+    return success();
+  }
+
+  if (!oneOf(stage, {"static", "runtime"}) || value.trim().empty() || kind != "boolean" ||
+      dimension != "1")
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-002",
+                             "conditional arm requires a dimensionless Boolean condition");
+  if (stage == "static" && (!staticPresent.getValue() || !reads.empty()))
+    return emitMappedFailure(
+        getOperation(), "NODAL-ANALOG-034-003",
+        "static conditional arm requires a compile-time value without dynamic reads");
+  if (stage == "runtime" && staticPresent.getValue())
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-003",
+                             "runtime conditional arm cannot carry a compile-time selected value");
+  return success();
+}
+
+LogicalResult nodal::AnalogCaseOp::verify() {
+  if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-034-014",
+                                       "structured analog case")) ||
+      failed(requireText(getOperation(), "statement_id", "case statement identity")) ||
+      failed(requireText(getOperation(), "owner", "case owner")) ||
+      failed(requireSingleBlock(getOperation())) ||
+      failed(verifyStringArray(getOperation(), "selector_reads", "NODAL-ANALOG-034-005",
+                               "case selector read")))
+    return failure();
+
+  const llvm::StringRef kind = textAttr(getOperation(), "selector_kind");
+  const llvm::StringRef dimension = textAttr(getOperation(), "selector_dimension");
+  if (!oneOf(kind, {"integer", "boolean"}) || dimension != "1" ||
+      textAttr(getOperation(), "selector_value").trim().empty())
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-005",
+                             "case selector must be a dimensionless integer or Boolean value");
+
+  auto staticPresent = getOperation()->getAttrOfType<BoolAttr>("static_value_present");
+  auto reads = getOperation()->getAttrOfType<ArrayAttr>("selector_reads");
+  const llvm::StringRef staticValue = textAttr(getOperation(), "static_value");
+  if (!staticPresent)
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-003",
+                             "case selector requires explicit staging metadata");
+  if (staticPresent.getValue()) {
+    if (staticValue.empty() || !reads.empty())
+      return emitMappedFailure(
+          getOperation(), "NODAL-ANALOG-034-003",
+          "static case selector requires one exact value without dynamic reads");
+    if (!staticValue.starts_with(kind.str() + ":"))
+      return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-007",
+                               "static case selector value does not match selector kind");
+  } else if (!staticValue.empty()) {
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-003",
+                             "runtime case selector cannot carry a static value");
+  }
+
+  llvm::StringSet<> armIds;
+  llvm::StringSet<> labels;
+  bool seenOrdinary = false;
+  bool seenDefault = false;
+  for (Operation &operation : getOperation()->getRegion(0).front()) {
+    auto arm = llvm::dyn_cast<nodal::AnalogCaseArmOp>(&operation);
+    if (!arm)
+      return emitMappedFailure(&operation, "NODAL-ANALOG-034-015",
+                               "analog_case body may contain only analog_case_arm operations");
+    if (textAttr(&operation, "owner") != textAttr(getOperation(), "owner"))
+      return emitMappedFailure(&operation, "NODAL-ANALOG-034-014",
+                               "case arm owner does not match its parent");
+    llvm::StringRef armId = textAttr(&operation, "arm_id");
+    if (armId.trim().empty() || !armIds.insert(armId).second)
+      return emitMappedFailure(&operation, "NODAL-ANALOG-034-001",
+                               "case arm identity must be non-empty and unique");
+    auto isDefault = operation.getAttrOfType<BoolAttr>("is_default");
+    auto armLabels = operation.getAttrOfType<ArrayAttr>("labels");
+    if (isDefault.getValue()) {
+      if (seenDefault || !armLabels.empty())
+        return emitMappedFailure(&operation, "NODAL-ANALOG-034-015",
+                                 "case permits one label-free default arm");
+      seenDefault = true;
+      continue;
+    }
+    if (seenDefault)
+      return emitMappedFailure(&operation, "NODAL-ANALOG-034-015",
+                               "case arm cannot follow the default arm");
+    seenOrdinary = true;
+    for (Attribute attribute : armLabels) {
+      auto label = llvm::dyn_cast<StringAttr>(attribute);
+      if (!label || !label.getValue().starts_with(kind.str() + ":"))
+        return emitMappedFailure(&operation, "NODAL-ANALOG-034-007",
+                                 "case label kind does not match the selector");
+      if (!labels.insert(label.getValue()).second)
+        return emitMappedFailure(&operation, "NODAL-ANALOG-034-006", "duplicate case label");
+    }
+  }
+  if (!seenOrdinary)
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-015",
+                             "analog case requires at least one labeled arm");
+  return success();
+}
+
+LogicalResult nodal::AnalogCaseArmOp::verify() {
+  if (failed(
+          requireProceduralAncestor(getOperation(), "NODAL-ANALOG-034-014", "analog case arm")) ||
+      failed(requireSingleBlock(getOperation())) ||
+      failed(requireText(getOperation(), "arm_id", "case arm identity")) ||
+      failed(requireText(getOperation(), "owner", "case arm owner")) ||
+      failed(verifyStringArray(getOperation(), "labels", "NODAL-ANALOG-034-007", "case label")))
+    return failure();
+  if (getOperation()->getRegion(0).front().empty())
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-015",
+                             "case arm must contain at least one statement");
+  auto isDefault = getOperation()->getAttrOfType<BoolAttr>("is_default");
+  auto labels = getOperation()->getAttrOfType<ArrayAttr>("labels");
+  if (!isDefault)
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-015",
+                             "case arm requires explicit default metadata");
+  if (isDefault.getValue() != labels.empty())
+    return emitMappedFailure(
+        getOperation(), "NODAL-ANALOG-034-015",
+        "default case arm must be label-free and ordinary arms require labels");
+  return success();
+}
+
+LogicalResult nodal::AnalogLoopOp::verify() {
+  if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-034-014",
+                                       "structured analog loop")) ||
+      failed(requireSingleBlock(getOperation())) ||
+      failed(requireText(getOperation(), "statement_id", "loop statement identity")) ||
+      failed(requireText(getOperation(), "owner", "loop owner")) ||
+      failed(requireText(getOperation(), "bound_value", "loop bound value")) ||
+      failed(verifyStringArray(getOperation(), "bound_reads", "NODAL-ANALOG-034-008",
+                               "loop bound read")))
+    return failure();
+  if (getOperation()->getRegion(0).front().empty())
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-015",
+                             "analog loop body must contain at least one statement");
+
+  const llvm::StringRef stage = textAttr(getOperation(), "stage");
+  const llvm::StringRef kind = textAttr(getOperation(), "bound_kind");
+  const llvm::StringRef dimension = textAttr(getOperation(), "bound_dimension");
+  auto minimum = getOperation()->getAttrOfType<IntegerAttr>("minimum_iterations");
+  auto maximum = getOperation()->getAttrOfType<IntegerAttr>("maximum_iterations");
+  auto staticPresent = getOperation()->getAttrOfType<BoolAttr>("static_trip_count_present");
+  auto staticCount = getOperation()->getAttrOfType<IntegerAttr>("static_trip_count");
+  auto reads = getOperation()->getAttrOfType<ArrayAttr>("bound_reads");
+  if (!oneOf(stage, {"static", "runtime"}) || kind != "integer" || dimension != "1" || !minimum ||
+      !maximum || !staticPresent || !staticCount)
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-008",
+                             "loop requires a dimensionless integer finite envelope");
+  const int64_t minimumValue = minimum.getInt();
+  const int64_t maximumValue = maximum.getInt();
+  if (minimumValue < 0 || maximumValue < minimumValue)
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-008",
+                             "loop envelope must be finite, ordered, and non-negative");
+
+  if (stage == "static") {
+    if (!staticPresent.getValue() || staticCount.getInt() != minimumValue ||
+        minimumValue != maximumValue || !reads.empty())
+      return emitMappedFailure(
+          getOperation(), "NODAL-ANALOG-034-009",
+          "static loop requires one exact non-negative compile-time trip count");
+  } else {
+    if (maximumValue == 0 || staticPresent.getValue())
+      return emitMappedFailure(
+          getOperation(), "NODAL-ANALOG-034-008",
+          "runtime loop requires a positive finite maximum and no static trip count");
+  }
+  return success();
+}
+
+LogicalResult nodal::AnalogBreakOp::verify() {
+  if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-034-010", "analog break")) ||
+      failed(requireText(getOperation(), "statement_id", "break statement identity")) ||
+      failed(requireText(getOperation(), "owner", "break owner")))
+    return failure();
+  auto loop = getOperation()->getParentOfType<nodal::AnalogLoopOp>();
+  if (!loop || textAttr(loop.getOperation(), "stage") != "runtime")
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-010",
+                             "break is legal only in the nearest runtime-bounded analog loop");
+  return success();
+}
+
+LogicalResult nodal::AnalogContinueOp::verify() {
+  if (failed(
+          requireProceduralAncestor(getOperation(), "NODAL-ANALOG-034-011", "analog continue")) ||
+      failed(requireText(getOperation(), "statement_id", "continue statement identity")) ||
+      failed(requireText(getOperation(), "owner", "continue owner")))
+    return failure();
+  auto loop = getOperation()->getParentOfType<nodal::AnalogLoopOp>();
+  if (!loop || textAttr(loop.getOperation(), "stage") != "runtime")
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-034-011",
+                             "continue is legal only in the nearest runtime-bounded analog loop");
+  return success();
 }
 
 LogicalResult nodal::AnalogVariableOp::verify() {

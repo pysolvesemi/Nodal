@@ -25,6 +25,16 @@ The source-semantic runtime and executable witnesses prove:
 - structured assignments are not published as a false flat Increment 33
   assignment sequence.
 
-The checkpoint intentionally does not add canonical construction-snapshot
-serialization, native MLIR control-flow operations, a solver, or Verilog-A and
-Verilog-AMS lowering. Those remain active tranches of Increment 34.
+The structured compiler-IR checkpoint additionally proves that the canonical
+tree is serialized without flattening into first-class `nodal.analog_if`,
+`nodal.analog_case`, `nodal.analog_loop`, `nodal.analog_break`, and
+`nodal.analog_continue` operations; native structural diagnostics reject
+invalid condition dimensions, duplicate labels, unbounded loops, and loop
+exits outside the nearest runtime-bounded loop; and source locations survive
+native parse and generic print.
+
+Native branch-sensitive definite-assignment now intersects all reachable
+normal, unmatched, `break`, and `continue` exits and rejects reachable reads
+after incomplete conditionals, cases, and zero-minimum loops. Solver
+construction, target legalization, and Verilog-A or Verilog-AMS procedural
+lowering remain deferred to their owning increments.

@@ -44,6 +44,7 @@ REQUIRED = (
     "tests/compiler/fixtures/increment33/README.md",
     "tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp",
     "tests/compiler/fixtures/increment33/manifest.json",
+    "tests/compiler/fixtures/increment34/manifest.json",
 )
 
 
@@ -79,20 +80,17 @@ class Increment33ContractTests(unittest.TestCase):
             )
             path = root / "docs/roadmap/nodal-development-todo.md"
             path.write_text(
-                path.read_text(encoding="utf-8")
-                .replace("**Revision:** 1.44", "**Revision:** 1.43", 1)
-                .replace(
-                    "- [x] **Increment 33 — Analog variables and procedural assignment**",
-                    "- [ ] **Increment 33 — Analog variables and procedural assignment**",
-                )
-                .replace(
-                    "- [ ] **Increment 33 — Analog variables and procedural assignment**",
-                    "- [x] **Increment 33 — Analog variables and procedural assignment**",
+                path.read_text(encoding="utf-8").replace(
+                    "**Revision:** 1.45",
+                    "**Revision:** 1.43",
                     1,
                 ),
                 encoding="utf-8",
             )
-            self.assert_rejected(root, "implementation state requires roadmap revision 1.43")
+            self.assert_rejected(
+                root,
+                "implementation state requires roadmap revision 1.43",
+            )
 
     def test_validated_closure_requires_complete_evidence(self) -> None:
         temporary, root = self.fixture()
@@ -103,19 +101,56 @@ class Increment33ContractTests(unittest.TestCase):
             path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
             self.assert_rejected(root, "validated manifest lacks complete evidence")
 
-    def test_validated_closure_keeps_increment34_open(self) -> None:
+    def test_validated_successor_requires_checked_roadmap(self) -> None:
         temporary, root = self.fixture()
         with temporary:
             path = root / "docs/roadmap/nodal-development-todo.md"
             path.write_text(
                 path.read_text(encoding="utf-8").replace(
-                    "- [ ] **Increment 34 — Analog control flow**",
                     "- [x] **Increment 34 — Analog control flow**",
+                    "- [ ] **Increment 34 — Analog control flow**",
                     1,
                 ),
                 encoding="utf-8",
             )
-            self.assert_rejected(root, "Increment 34 must remain unchecked")
+            self.assert_rejected(
+                root,
+                "validated Increment 34 successor evidence is inconsistent",
+            )
+
+    def test_validated_successor_requires_complete_evidence(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "tests/compiler/fixtures/increment34/manifest.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["validation"]["closure_validation_run"] = None
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            self.assert_rejected(root, "validated Increment 34 lacks complete evidence")
+
+    def test_open_successor_state_remains_supported(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            manifest_path = root / "tests/compiler/fixtures/increment34/manifest.json"
+            document = json.loads(manifest_path.read_text(encoding="utf-8"))
+            document["status"] = "implementation-in-progress"
+            document["tranche"] = "34c-native-branch-sensitive-dataflow"
+            document["validation"] = None
+            manifest_path.write_text(
+                json.dumps(document, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            roadmap = root / "docs/roadmap/nodal-development-todo.md"
+            roadmap.write_text(
+                roadmap.read_text(encoding="utf-8")
+                .replace("**Revision:** 1.45", "**Revision:** 1.44", 1)
+                .replace(
+                    "- [x] **Increment 34 — Analog control flow**",
+                    "- [ ] **Increment 34 — Analog control flow**",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            CHECKER.check_repository(root)
 
     def test_assignment_order_mutation_is_rejected(self) -> None:
         temporary, root = self.fixture()

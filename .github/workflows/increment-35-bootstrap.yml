@@ -21,9 +21,10 @@ jobs:
       - name: Materialize staged source patch
         shell: bash
         run: |
-          cat scripts/bootstrap_increment35.part* > /tmp/bootstrap_increment35.py
-          python3 -m py_compile /tmp/bootstrap_increment35.py
-          python3 /tmp/bootstrap_increment35.py
+          cat scripts/bootstrap_increment35.part* > scripts/bootstrap_increment35.py
+          python3 -m py_compile scripts/bootstrap_increment35.py
+          python3 scripts/bootstrap_increment35.py
+          rm -f scripts/bootstrap_increment35.py
 
       - name: Commit materialized implementation
         shell: bash

@@ -26,6 +26,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/_inc35_closure_materializer.py")
+          text = path.read_text(encoding="utf-8")
+          old = 'Path(path_text).write_text(base64.b64decode(payload).decode("utf-8"), encoding="utf-8")'
+          new = 'Path(path_text).write_text(base64.b64decode(payload + "=" * (-len(payload) % 4)).decode("utf-8"), encoding="utf-8")'
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one base64 decoder, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
           python3 scripts/_inc35_closure_materializer.py
           rm scripts/_inc35_closure_materializer.py
           rm .github/workflows/increment-35-closure-materializer.yml

@@ -14,3 +14,9 @@ The candidate also makes the validated Increment 33 checker aware of the Increme
 The completed matrix verified the Increment 33 and Increment 34 successor-aware predecessor contracts together with the Increment 35 open/candidate/validated transition model, including mutation tests for premature, incomplete, or forged closure evidence.
 
 Residual/DAE construction, solver execution, event composition, explicit state reset or reinitialization, inverse-operator cancellation, operator distribution, analysis-specific AC/noise lowering, and full Verilog-AMS lowering remain deferred.
+
+## Final recorded-evidence validation
+
+**Status:** Exact-head pull-request matrix requested
+
+This owner-authored update requests the final exact-head workflow matrix after the validated candidate identity and run were written into the manifest, implementation record, evidence record, and roadmap. No evidence identity is changed by this request, and no writable or temporary workflow remains in the branch.

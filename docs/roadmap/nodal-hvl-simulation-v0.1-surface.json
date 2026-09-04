@@ -1,0 +1,231 @@
+{
+  "schemaVersion": "0.1",
+  "document": "nodal-hvl-simulation-v0.1-plan.md",
+  "status": "normative-dependent-track-roadmap-target",
+  "updated": "2026-09-04",
+  "foundationBarrier": {
+    "required": true,
+    "rule": "No implementation item in this plan may start until every Foundation increment is complete.",
+    "researchAllowedWhileBlocked": true,
+    "minimalFoundationValidation": [
+      "OpenVAF-compatible Verilog-A compile validation",
+      "OSDI loading",
+      "ngspice smoke simulation",
+      "minimal typed result checking"
+    ]
+  },
+  "primaryExecutionModel": {
+    "authoring": "Nodal HVL in Scala",
+    "runtimeOwner": "Nodal",
+    "dutExecutionOwner": "selected external simulator adapter",
+    "generatedTestbenchRequired": false,
+    "generatedProjectionRole": "optional interoperability and delivery output"
+  },
+  "capabilityClasses": {
+    "live": {
+      "id": "nodal.hvl.live",
+      "default": true,
+      "staticallyCapturable": false,
+      "allowsOrdinaryScala": true,
+      "allowsHostReferenceModels": true,
+      "allowsDeclaredExternalArtifacts": true,
+      "requiresStableSemanticOperations": true,
+      "projectionFailureInvalidatesLiveExecution": false,
+      "replayRule": "Exact replay is claimed only when seeds, values, external inputs and required artifacts are retained."
+    },
+    "portable": {
+      "id": "nodal.hvl.portable",
+      "default": false,
+      "staticallyCapturable": true,
+      "samePublicLanguage": true,
+      "requiresVerificationSemanticIr": true,
+      "operationClassifications": [
+        "embedded",
+        "precomputed-replay",
+        "companion-runtime-required",
+        "unsupported"
+      ],
+      "projections": [
+        "deterministic-replay-sidecars",
+        "standalone-verilog-testbench",
+        "standalone-verilog-ams-testbench",
+        "open-ams-harness",
+        "digital-uvm",
+        "uvm-ms"
+      ],
+      "silentOmissionAllowed": false
+    }
+  },
+  "bindingRules": [
+    "Live Nodal HVL is the richer default execution capability.",
+    "Portable Nodal HVL is an explicit structured subset of the same public language.",
+    "A live test may call portable components.",
+    "A portable component may call only portable operations, deterministic precomputable helpers or declared companion-runtime services.",
+    "A requested projection may reject a live-only test without invalidating that test for live execution.",
+    "Generated backend limitations must never remove or weaken a live API operation.",
+    "Portability is checked against a selected target profile, not represented by one universal Boolean.",
+    "Diagnostics identify the first non-portable operation, source location, required capability and legal execution modes."
+  ],
+  "semanticLayers": {
+    "commonVerificationModel": [
+      "types",
+      "logical-interface-identities",
+      "register-identities",
+      "transactions",
+      "drivers",
+      "monitors",
+      "scoreboards",
+      "checks",
+      "coverage",
+      "measurements",
+      "seeds",
+      "failures",
+      "source-maps",
+      "normalized-results"
+    ],
+    "liveMaterialization": "Dynamic host interpretation plus semantic command, event and result traces.",
+    "portableMaterialization": "Complete static Verification Semantic IR before projection.",
+    "generatedLanguageIrs": [
+      "Procedural HDL Testbench IR",
+      "verification-SystemVerilog IR",
+      "solver-facing analog/equation IR",
+      "compiled simulator execution plan"
+    ]
+  },
+  "workstreams": [
+    {
+      "id": "LIVE",
+      "name": "Common live Nodal HVL runtime",
+      "blockedBy": [
+        "foundation.complete"
+      ],
+      "increments": [
+        "LIVE-01",
+        "LIVE-02",
+        "LIVE-03",
+        "LIVE-04",
+        "LIVE-05",
+        "LIVE-06",
+        "LIVE-07",
+        "LIVE-08"
+      ],
+      "releaseGate": "LIVE-08"
+    },
+    {
+      "id": "ANA",
+      "name": "Analog live HVL simulation",
+      "blockedBy": [
+        "foundation.complete",
+        "LIVE-01",
+        "LIVE-02",
+        "LIVE-03",
+        "LIVE-04",
+        "LIVE-05",
+        "LIVE-06"
+      ],
+      "increments": [
+        "ANA-01",
+        "ANA-02",
+        "ANA-03",
+        "ANA-04",
+        "ANA-05",
+        "ANA-06",
+        "ANA-07",
+        "ANA-08",
+        "ANA-09"
+      ],
+      "openSourceReleaseGate": "ANA-09",
+      "commercialProfilesOptional": true
+    },
+    {
+      "id": "MS",
+      "name": "Mixed-signal live HVL simulation",
+      "blockedBy": [
+        "foundation.complete",
+        "LIVE-08",
+        "ANA-07",
+        "digital-live.required-slice"
+      ],
+      "increments": [
+        "MS-01",
+        "MS-02",
+        "MS-03",
+        "MS-04",
+        "MS-05",
+        "MS-06",
+        "MS-07",
+        "MS-08",
+        "MS-09"
+      ],
+      "openSourceReleaseGate": "MS-09",
+      "commercialProfilesOptional": true
+    },
+    {
+      "id": "PORT",
+      "name": "Portable and capturable projections",
+      "blockedBy": [
+        "foundation.complete",
+        "LIVE-01"
+      ],
+      "increments": [
+        "PORT-01",
+        "PORT-02",
+        "PORT-03",
+        "PORT-04",
+        "PORT-05",
+        "PORT-06",
+        "PORT-07",
+        "PORT-08",
+        "PORT-09",
+        "PORT-10"
+      ],
+      "requiredForLiveRelease": false,
+      "releaseGate": "PORT-10"
+    }
+  ],
+  "releaseRules": [
+    "Analog live simulation may release before mixed-signal and portable projection completion.",
+    "Mixed-signal live simulation may release before portable projection and commercial profile completion.",
+    "Commercial live adapters are deferred optional profiles and do not block open-source live releases.",
+    "Portable projections never redefine the live HVL feature set.",
+    "A user may use only live Nodal HVL indefinitely."
+  ],
+  "existingUmbrellaMapping": {
+    "LIVE": [
+      "Foundation-147",
+      "Foundation-148",
+      "Foundation-149",
+      "Digital-Verification-1-through-5",
+      "Digital-Verification-12"
+    ],
+    "ANA": [
+      "Foundation-47-through-53",
+      "AMS-Verification-1-through-4",
+      "AMS-Verification-12"
+    ],
+    "MS": [
+      "Foundation-mixed-domain-semantics",
+      "Digital-Verification-1",
+      "AMS-Verification-1",
+      "AMS-Verification-2",
+      "AMS-Verification-5",
+      "AMS-Verification-9-through-12"
+    ],
+    "PORT": [
+      "Foundation-147",
+      "Foundation-149",
+      "Foundation-152",
+      "Digital-Verification-6-through-10",
+      "AMS-Verification-6-through-10",
+      "AMS-Verification-12"
+    ]
+  },
+  "nonGoals": [
+    "Require generated Verilog-AMS or UVM-MS for ordinary Nodal simulation.",
+    "Translate arbitrary Scala bytecode or host object graphs into portable verification IR.",
+    "Claim complete open-source Verilog-AMS support from Verilog-A parsing or partitioned co-simulation.",
+    "Make one simulator callback order, random engine, waveform format or command language part of Nodal semantics.",
+    "Silently omit unsupported verification intent.",
+    "Build a native analog solver merely to avoid external simulators in the initial release."
+  ]
+}

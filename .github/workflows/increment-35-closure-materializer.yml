@@ -35,7 +35,14 @@ jobs:
           new = 'Path(path_text).write_text(base64.b64decode(payload + "=" * (-len(payload) % 4)).decode("utf-8"), encoding="utf-8")'
           if text.count(old) != 1:
               raise SystemExit(f"expected one base64 decoder, found {text.count(old)}")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          text = text.replace(old, new, 1)
+          lines = text.splitlines()
+          prefix = 'write_b64("docs/implementation/increment35-differential-integral-operators.md",'
+          matching = [index for index, line in enumerate(lines) if line.startswith(prefix)]
+          if len(matching) != 1:
+              raise SystemExit(f"expected one corrupt document payload, found {len(matching)}")
+          del lines[matching[0]]
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
           python3 scripts/_inc35_closure_materializer.py
           rm scripts/_inc35_closure_materializer.py

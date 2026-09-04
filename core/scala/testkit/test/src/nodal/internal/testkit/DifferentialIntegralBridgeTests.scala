@@ -6,7 +6,7 @@ import utest.*
 
 object DifferentialIntegralBridgeTests extends TestSuite:
   val tests: Tests = Tests:
-    test("bridge emits deterministic first-class differential and integral operations"):
+    test("bridge emits deterministic first-class legacy operators"):
       val first = ScalaToMlirBridge.lower(new DifferentialIntegralLegacyTop)
       val second = ScalaToMlirBridge.lower(new DifferentialIntegralLegacyTop)
 
@@ -30,14 +30,17 @@ object DifferentialIntegralBridgeTests extends TestSuite:
       assert(first.text.contains("\"transient\""))
       assert(first.text.contains("DifferentialIntegralConstructionTests.scala"))
 
-    test("bridge retains equation and contribution operator contexts"):
+    test("bridge inventory retains equation and contribution contexts"):
       val equation = ScalaToMlirBridge.lower(new DifferentialIntegralEquationTop)
       val contribution = ScalaToMlirBridge.lower(new DifferentialIntegralContributionTop)
 
       assert(equation.text.contains("context = \"equation\""))
       assert(contribution.text.contains("context = \"contribution\""))
-      assert(equation.text.contains("\"nodal.analog_ddt\""))
-      assert(equation.text.contains("\"nodal.analog_idt\""))
+      assert(equation.text.contains("operation = \"analog_ddt\""))
+      assert(equation.text.contains("operation = \"analog_idt\""))
+      assert(contribution.text.contains("operation = \"analog_ddt\""))
+      assert(contribution.text.contains("operation = \"analog_idt\""))
+      assert(equation.text.contains("nodal.bridge.continuous_operators"))
       assert(contribution.text.contains("nodal.bridge.continuous_operators"))
 
     test("bridge retains a typed non-zero integral initial condition"):

@@ -1,0 +1,54 @@
+name: Increment 35 Pinned C++ Formatter
+
+on:
+  push:
+    branches:
+      - increment/35-differential-integral-operators-v1
+    paths:
+      - '.github/workflows/increment-35-cpp-format.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  format-increment-35-cpp:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned lint toolchain
+        run: |
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Apply and verify clang-format 22.1.8
+        shell: bash
+        run: |
+          python3 scripts/run_clang_tools.py format \
+            --fix \
+            --toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          mapfile -t changed < <(git diff --name-only)
+          printf 'formatted file: %s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq 2
+          printf '%s\n' "${changed[@]}" | grep -Fx \
+            'core/compiler/lib/Backend/AnalogVerticalSlice.cpp'
+          printf '%s\n' "${changed[@]}" | grep -Fx \
+            'core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp'
+          python3 scripts/run_clang_tools.py format \
+            --check \
+            --toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Commit source-only formatting repair
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            core/compiler/lib/Backend/AnalogVerticalSlice.cpp \
+            core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp
+          git commit -m 'Format Increment 35 native implementation'
+          git push origin HEAD:increment/35-differential-integral-operators-v1

@@ -40,42 +40,42 @@ jobs:
               path.parent.mkdir(parents=True, exist_ok=True)
               path.write_text(content, encoding="utf-8")
 
-          def replace_once(relative: str, old: str, new: str) -> None:
+          def replace_literal(relative: str, old: str, new: str) -> None:
               text = read(relative)
-              count = text.count(old)
-              if count != 1:
+              if text.count(old) != 1:
                   raise RuntimeError(
-                      f"{relative}: expected one replacement anchor, found {count}: {old!r}"
+                      f"{relative}: expected one literal anchor, found {text.count(old)}: {old!r}"
                   )
               write(relative, text.replace(old, new, 1))
 
           def replace_between(relative: str, start: str, end: str, replacement: str) -> None:
               text = read(relative)
               first = text.find(start)
-              if first < 0:
-                  raise RuntimeError(f"{relative}: missing start marker {start!r}")
-              second = text.find(end, first + len(start))
-              if second < 0:
-                  raise RuntimeError(f"{relative}: missing end marker {end!r}")
+              second = text.find(end, first + len(start)) if first >= 0 else -1
+              if first < 0 or second < 0:
+                  raise RuntimeError(
+                      f"{relative}: missing section marker: start={start!r}, end={end!r}"
+                  )
               if text.find(start, first + 1) >= 0:
-                  raise RuntimeError(f"{relative}: duplicate start marker {start!r}")
+                  raise RuntimeError(f"{relative}: duplicate section marker {start!r}")
               write(relative, text[:first] + replacement + text[second:])
 
           analog_numeric = "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp"
-          owner_anchor = '''  if (!operatorId || operatorId.getValue().trim().empty() || !owner ||
-              owner.getValue().trim().empty())
-            return emitMappedFailure(operation, "NODAL-ANALOG-035-002",
-                                     "continuous-time operator identity and owner must be non-empty");
-          '''
-          owner_replacement = owner_anchor + '''  const llvm::StringRef operatorIdentity = operatorId.getValue();
+          text = read(analog_numeric)
+          owner_marker = '"continuous-time operator identity and owner must be non-empty");'
+          if text.count(owner_marker) != 1:
+              raise RuntimeError("continuous operator owner diagnostic marker is not unique")
+          owner_end = text.index(owner_marker) + len(owner_marker)
+          owner_check = '''
+            const llvm::StringRef operatorIdentity = operatorId.getValue();
             const llvm::StringRef ownerIdentity = owner.getValue();
             if (!operatorIdentity.starts_with(ownerIdentity) ||
                 !operatorIdentity.drop_front(ownerIdentity.size()).starts_with("."))
               return emitMappedFailure(
                   operation, "NODAL-ANALOG-035-002",
-                  "continuous-time operator identity must be owned by its declared owner");
-          '''
-          replace_once(analog_numeric, owner_anchor, owner_replacement)
+                  "continuous-time operator identity must be owned by its declared owner");'''
+          text = text[:owner_end] + owner_check + text[owner_end:]
+          write(analog_numeric, text)
 
           verify_ddt = '''LogicalResult verifyDdt(Operation *operation) {
             const bool contracted =
@@ -145,13 +145,7 @@ jobs:
               verify_ddt,
           )
 
-          model_prefix = '''LogicalResult verifyAnalogNumericModel(mlir::ModuleOp module) {
-            LogicalResult result = success();
-            module.walk([&](Operation *operation) {
-              if (failed(result))
-                return;
-          '''
-          model_replacement = '''LogicalResult verifyAnalogNumericModel(mlir::ModuleOp module) {
+          verify_model = '''LogicalResult verifyAnalogNumericModel(mlir::ModuleOp module) {
             LogicalResult result = success();
             llvm::StringSet<> continuousOperatorIds;
             llvm::StringSet<> continuousStateIds;
@@ -181,62 +175,54 @@ jobs:
                   }
                 }
               }
-          '''
-          replace_once(analog_numeric, model_prefix, model_replacement)
+              for (Type type : operation->getOperandTypes()) {
+                if (auto quantity = llvm::dyn_cast<QuantityType>(type)) {
+                  if (!isCanonicalDimensionSignature(quantity.getDimension())) {
+                    result = emitMappedFailure(operation, "NODAL-ANALOG-DIMENSION-001",
+                                               "operand quantity has a non-canonical dimension");
+                    return;
+                  }
+                }
+              }
+              for (Type type : operation->getResultTypes()) {
+                if (auto quantity = llvm::dyn_cast<QuantityType>(type)) {
+                  if (!isCanonicalDimensionSignature(quantity.getDimension())) {
+                    result = emitMappedFailure(operation, "NODAL-ANALOG-DIMENSION-001",
+                                               "result quantity has a non-canonical dimension");
+                    return;
+                  }
+                }
+              }
+              result = verifyAnalogNumericOperation(operation);
+            });
+            return result;
+          }
 
-          replace_once(
+          '''
+          replace_between(
+              analog_numeric,
+              "LogicalResult verifyAnalogNumericModel(mlir::ModuleOp module) {",
+              "LogicalResult foldAnalogNumericConstants(mlir::ModuleOp module) {",
+              verify_model,
+          )
+
+          replace_literal(
               "core/compiler/lib/Backend/AnalogVerticalSlice.cpp",
-              '    "nodal.analog_ddt",\n    "nodal.contribute",\n',
-              '    "nodal.analog_ddt",\n    "nodal.analog_idt",\n    "nodal.contribute",\n',
+              '"nodal.analog_ddt",\n    "nodal.contribute",',
+              '"nodal.analog_ddt",\n    "nodal.analog_idt",\n    "nodal.contribute",',
           )
 
           checker = "scripts/check_increment35.py"
-          replace_once(
+          replace_literal(
               checker,
               '            "current*time",\n',
               '            "inputDimension.multiply(AnalogDimension.Time)",\n',
           )
-          replace_once(
+          replace_literal(
               checker,
-              '''        ('name == "nodal.analog_idt"', 'llvm::Twine("idt(")', "nodal.simplified"),
-          ''',
-              '''        ('name == "nodal.analog_idt"', '"nodal.analog_idt",', 'llvm::Twine("idt(")', "nodal.simplified"),
-          ''',
+              '(\'name == "nodal.analog_idt"\', \'llvm::Twine("idt(")\', "nodal.simplified"),',
+              '(\'name == "nodal.analog_idt"\', \'"nodal.analog_idt",\', \'llvm::Twine("idt(")\', "nodal.simplified"),',
           )
-          manifest_anchor = '''    manifest = load_json(root, "tests/compiler/fixtures/increment35/manifest.json")
-
-          '''
-          manifest_replacement = manifest_anchor + '''    catalog = load_json(root, "core/compiler/diagnostics-v0.1.json")
-            expected_diagnostics = [f"NODAL-ANALOG-035-{index:03d}" for index in range(1, 9)]
-            require(
-                manifest.get("diagnostics") == expected_diagnostics,
-                "NODAL-INC35-007: Increment 35 diagnostic inventory is incomplete",
-            )
-            require(
-                catalog.get("families", {}).get("analog-differential-integral")
-                == expected_diagnostics
-                and "NODAL-ANALOG-035-" in catalog.get("preserved_prefixes", []),
-                "NODAL-INC35-007: native diagnostic catalog lacks Increment 35",
-            )
-            temporary_files = (
-                ".github/workflows/increment-35-bootstrap.yml",
-                "scripts/bootstrap_increment35.part00",
-                "scripts/bootstrap_increment35.part01",
-                "scripts/bootstrap_increment35.part02",
-                "scripts/bootstrap_increment35.part03",
-                "scripts/bootstrap_increment35.part04",
-                "scripts/bootstrap_increment35.part05",
-                "scripts/bootstrap_increment35.part06",
-                "tests/compiler/fixtures/increment35/bootstrap-revision.txt",
-            )
-            for relative in temporary_files:
-                require(
-                    not (root / relative).exists(),
-                    f"NODAL-INC35-005: temporary bootstrap artifact remains: {relative}",
-                )
-
-          '''
-          replace_once(checker, manifest_anchor, manifest_replacement)
 
           manifest_path = root / "tests/compiler/fixtures/increment35/manifest.json"
           manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -253,15 +239,10 @@ jobs:
               catalog["preserved_prefixes"].append("NODAL-ANALOG-035-")
           catalog_path.write_text(json.dumps(catalog, indent=2) + "\n", encoding="utf-8")
 
-          replace_once(
+          replace_literal(
               ".github/workflows/increment-35-differential-integral-operators.yml",
-              '''          python3 scripts/check_increment34.py
-                    python3 scripts/check_increment35.py
-          ''',
-              '''          python3 scripts/check_increment24.py
-                    python3 scripts/check_increment34.py
-                    python3 scripts/check_increment35.py
-          ''',
+              "          python3 scripts/check_increment34.py\n          python3 scripts/check_increment35.py\n",
+              "          python3 scripts/check_increment24.py\n          python3 scripts/check_increment34.py\n          python3 scripts/check_increment35.py\n",
           )
 
           for relative in (

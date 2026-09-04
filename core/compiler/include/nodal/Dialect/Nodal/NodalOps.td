@@ -1001,7 +1001,38 @@ def Nodal_AnalogSelectOp : Nodal_Op<"analog_select", [HasParent<"AnalogOp">]> {
 
 def Nodal_AnalogDdtOp : Nodal_Op<"analog_ddt", [HasParent<"AnalogOp">]> {
   let summary = "Continuous-time derivative of a typed analog expression";
-  let arguments = (ins AnyType:$input, DictionaryAttr:$metadata);
+  let arguments = (ins
+    AnyType:$input,
+    OptionalAttr<StrAttr>:$operator_contract,
+    OptionalAttr<StrAttr>:$operator_id,
+    OptionalAttr<StrAttr>:$owner,
+    OptionalAttr<StrAttr>:$context,
+    OptionalAttr<StrAttr>:$input_dimension,
+    OptionalAttr<StrAttr>:$result_dimension,
+    OptionalAttr<StrAttr>:$initialization,
+    OptionalAttr<ArrayAttr>:$analyses,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogIdtOp : Nodal_Op<"analog_idt", [HasParent<"AnalogOp">]> {
+  let summary = "State-owning continuous-time integral of a typed analog expression";
+  let arguments = (ins
+    Variadic<AnyType>:$inputs,
+    OptionalAttr<StrAttr>:$operator_contract,
+    OptionalAttr<StrAttr>:$operator_id,
+    OptionalAttr<StrAttr>:$owner,
+    OptionalAttr<StrAttr>:$context,
+    OptionalAttr<StrAttr>:$input_dimension,
+    OptionalAttr<StrAttr>:$result_dimension,
+    OptionalAttr<StrAttr>:$state_id,
+    OptionalAttr<StrAttr>:$initialization,
+    OptionalAttr<StrAttr>:$initial_dimension,
+    OptionalAttr<ArrayAttr>:$analyses,
+    DictionaryAttr:$metadata
+  );
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }

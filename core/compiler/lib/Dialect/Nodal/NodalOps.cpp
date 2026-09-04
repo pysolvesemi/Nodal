@@ -1452,7 +1452,7 @@ LogicalResult nodal::AnalogOp::verify() {
     if (!llvm::isa<nodal::RealLiteralOp, nodal::AnalogIntegerLiteralOp, nodal::ParameterRefOp,
                    nodal::AnalogAddOp, nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp,
                    nodal::AnalogNegOp, nodal::AnalogCompareOp, nodal::AnalogLogicOp,
-                   nodal::AnalogSelectOp, nodal::AnalogDdtOp, nodal::AccessOp,
+                   nodal::AnalogSelectOp, nodal::AnalogDdtOp, nodal::AnalogIdtOp, nodal::AccessOp,
                    nodal::TerminalAccessOp, nodal::PortFlowAccessOp, nodal::ContributeOp,
                    nodal::AnalogProcedureOp>(operation))
       return operation.emitOpError(
@@ -1836,6 +1836,9 @@ LogicalResult nodal::AnalogSelectOp::verify() {
   return nodal::verifyAnalogNumericOperation(getOperation());
 }
 LogicalResult nodal::AnalogDdtOp::verify() {
+  return nodal::verifyAnalogNumericOperation(getOperation());
+}
+LogicalResult nodal::AnalogIdtOp::verify() {
   return nodal::verifyAnalogNumericOperation(getOperation());
 }
 LogicalResult nodal::ContributeOp::verify() {

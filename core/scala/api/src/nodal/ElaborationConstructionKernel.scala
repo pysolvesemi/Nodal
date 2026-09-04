@@ -119,6 +119,21 @@ private[nodal] final case class KernelAnalogRegionSnapshot(
     contributions: Vector[KernelAnalogContributionSnapshot]
 )
 
+private[nodal] final case class KernelContinuousOperatorSnapshot(
+    path: String,
+    operation: String,
+    owner: String,
+    context: String,
+    input: String,
+    initialCondition: Option[String],
+    inputDimension: String,
+    resultDimension: String,
+    stateId: Option[String],
+    initialization: String,
+    analyses: Vector[String],
+    source: Option[SourceSpan]
+)
+
 private[nodal] final case class KernelWaiverSnapshot(
     kind: String,
     id: String,
@@ -141,6 +156,7 @@ private[nodal] final case class ConstructionSnapshot(
     generatedNames: Vector[KernelGeneratedNameSnapshot] = Vector.empty,
     sourceMap: Vector[SourceMapEntry] = Vector.empty,
     analogRegions: Vector[KernelAnalogRegionSnapshot] = Vector.empty,
+    continuousOperators: Vector[KernelContinuousOperatorSnapshot] = Vector.empty,
     analogSemantics: AnalogEquationRuntime.Snapshot =
       AnalogEquationRuntime.Snapshot(Vector.empty, Vector.empty),
     analogProcedural: Vector[AnalogProceduralRuntime.Snapshot] = Vector.empty,
@@ -199,6 +215,16 @@ private final case class AnalogSemanticContext(
     kind: AnalogEquationRuntime.RegionKind
 )
 
+private final case class ContinuousOperatorRecord(
+    reference: ExpressionRef,
+    operation: String,
+    input: Expr[Real],
+    initialCondition: Option[Expr[Real]],
+    context: String,
+    inputDimension: AnalogDimension,
+    resultDimension: AnalogDimension
+)
+
 private final case class AnalogDimension(
     powers: Map[String, Int],
     isZero: Boolean = false,
@@ -239,6 +265,16 @@ private final case class AnalogDimension(
     else if other.isZero then copy(isZero = isZero || other.isZero)
     else if powers == other.powers then copy(isZero = isZero && other.isZero)
     else AnalogDimension.Unknown
+
+  def signature: String =
+    if isUnknown then "unknown"
+    else if powers.isEmpty then "1"
+    else
+      powers.toVector
+        .sortBy(_._1)
+        .map: (name, exponent) =>
+          if exponent == 1 then name else s"$name^$exponent"
+        .mkString("*")
 
   def canonical: String =
     if isUnknown then "unknown"
@@ -292,6 +328,8 @@ private final class ConstructionSession(val options: EmitOptions):
   private val analogStack: mutable.ArrayBuffer[AnalogRegionRecord] = mutable.ArrayBuffer.empty
   private val analogSemanticRecorder = new AnalogEquationRuntime.Recorder
   private var analogSemanticContext: Option[AnalogSemanticContext] = None
+  private val continuousOperators: mutable.ArrayBuffer[ContinuousOperatorRecord] =
+    mutable.ArrayBuffer.empty
   private val semanticOrigin = new SemanticOriginBuilder
   private var semanticResult: Option[SemanticOriginResult] = None
 
@@ -374,17 +412,119 @@ private final class ConstructionSession(val options: EmitOptions):
       explicitName
     )
 
-  def registerExpression(value: AnyRef): Unit = moduleStack.lastOption.foreach: module =>
-    val reference = ExpressionRef(module.handle, module.expressionCount)
-    module.expressionCount += 1
-    expressionIds.put(value, reference)
-    val operands = value match
-      case expression: KernelExpr[?] =>
-        expressionValues.update(reference, expression)
-        analogStack.lastOption.foreach(_.expressions += reference)
-        expression.operands
-      case _ => Vector.empty
-    semanticOrigin.captureExpression(module.handle, reference.index, value, operands)
+  private def captureExpression(value: AnyRef): Option[ExpressionRef] =
+    moduleStack.lastOption.map: module =>
+      val reference = ExpressionRef(module.handle, module.expressionCount)
+      module.expressionCount += 1
+      expressionIds.put(value, reference)
+      val operands = value match
+        case expression: KernelExpr[?] =>
+          expressionValues.update(reference, expression)
+          analogStack.lastOption.foreach(_.expressions += reference)
+          expression.operands
+        case _ => Vector.empty
+      semanticOrigin.captureExpression(module.handle, reference.index, value, operands)
+      reference
+
+  def registerExpression(value: AnyRef): Unit =
+    val _ = captureExpression(value)
+
+  def registerContinuousOperator(
+      value: KernelExpr[Real],
+      operation: String,
+      input: Expr[Real],
+      initialValue: Option[Expr[Real]]
+  ): Unit =
+    val module = currentModule
+    val context = analogSemanticContext match
+      case Some(candidate) if candidate.module != module.handle =>
+        fail(
+          "NODAL-ANALOG-035-001",
+          "continuous-time operator context belongs to another Module",
+          Some(provisionalModulePath(module.handle))
+        )
+      case Some(candidate) =>
+        candidate.kind match
+          case AnalogEquationRuntime.RegionKind.Equation => "equation"
+          case AnalogEquationRuntime.RegionKind.Contribution => "contribution"
+          case AnalogEquationRuntime.RegionKind.InitialEquation =>
+            fail(
+              "NODAL-ANALOG-035-001",
+              "ddt and idt are not legal in initial-equation regions",
+              Some(provisionalModulePath(module.handle))
+            )
+          case AnalogEquationRuntime.RegionKind.Procedural =>
+            fail(
+              "NODAL-ANALOG-035-001",
+              "ddt and idt are not legal in analog procedural regions",
+              Some(provisionalModulePath(module.handle))
+            )
+      case None if analogStack.lastOption.exists(_.module == module.handle) =>
+        "legacy-analog"
+      case None =>
+        fail(
+          "NODAL-ANALOG-035-001",
+          "ddt and idt require an equation, contribution, or legacy analog region",
+          Some(provisionalModulePath(module.handle))
+        )
+
+    if operation != "analog_ddt" && operation != "analog_idt" then
+      fail(
+        "NODAL-ANALOG-035-002",
+        s"unsupported continuous-time operator '$operation'",
+        Some(provisionalModulePath(module.handle))
+      )
+    if operation == "analog_ddt" && initialValue.nonEmpty then
+      fail(
+        "NODAL-ANALOG-035-002",
+        "ddt does not own an initial condition",
+        Some(provisionalModulePath(module.handle))
+      )
+
+    val inputDimension = inferAnalogDimension(input)
+    if inputDimension.isUnknown then
+      fail(
+        "NODAL-ANALOG-035-003",
+        s"$operation input requires a known real physical dimension",
+        pathOf(input)
+      )
+    val resultDimension =
+      if operation == "analog_ddt" then inputDimension.divide(AnalogDimension.Time)
+      else inputDimension.multiply(AnalogDimension.Time)
+    if resultDimension.isUnknown then
+      fail(
+        "NODAL-ANALOG-035-003",
+        s"$operation result dimension could not be canonicalized",
+        pathOf(input)
+      )
+
+    initialValue.foreach: initial =>
+      val initialDimension = inferAnalogDimension(initial)
+      val compatible =
+        initialDimension.isZero ||
+          (!initialDimension.isUnknown && initialDimension.powers == resultDimension.powers)
+      if !compatible then
+        fail(
+          "NODAL-ANALOG-035-004",
+          s"idt initial condition dimension ${initialDimension.signature} does not match result dimension ${resultDimension.signature}",
+          pathOf(initial).orElse(pathOf(input))
+        )
+
+    val reference = captureExpression(value).getOrElse(
+      fail(
+        "NODAL-ANALOG-035-002",
+        "continuous-time operator has no active construction owner"
+      )
+    )
+    continuousOperators += ContinuousOperatorRecord(
+      reference,
+      operation,
+      input,
+      initialValue,
+      context,
+      inputDimension,
+      resultDimension
+    )
 
   def attachInstance(instance: AnyRef, childModule: Module): Unit =
     if !moduleIds.containsKey(childModule) then
@@ -777,6 +917,10 @@ private final class ConstructionSession(val options: EmitOptions):
             case Some("analog_ddt") =>
               expression.operands.headOption.map(inferAnalogDimension)
                 .map(_.divide(AnalogDimension.Time))
+                .getOrElse(AnalogDimension.Unknown)
+            case Some("analog_idt") =>
+              expression.operands.headOption.map(inferAnalogDimension)
+                .map(_.multiply(AnalogDimension.Time))
                 .getOrElse(AnalogDimension.Unknown)
             case Some("potential_access") | Some("candidate-branch-potential") =>
               accessDimension(expression.operands, potential = true)
@@ -1620,6 +1764,56 @@ private final class ConstructionSession(val options: EmitOptions):
             )
     .sortBy(waiver => (waiver.semanticPath, waiver.id))
 
+  private def continuousOperatorSnapshots(
+      sourceMap: Vector[SourceMapEntry]
+  ): Vector[KernelContinuousOperatorSnapshot] =
+    val sourceByPath = sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
+    val allAnalyses = Vector(
+      "ac",
+      "dc",
+      "initialization",
+      "noise",
+      "operating-point",
+      "transient"
+    )
+    continuousOperators.toVector.map: record =>
+      val path = expressionPath(record.reference)
+      val owner = modulePath(record.reference.module)
+      val stateId =
+        if record.operation == "analog_idt" then Some(s"$path.state") else None
+      val initialization =
+        if record.operation == "analog_ddt" then "none"
+        else if record.initialCondition.nonEmpty then "fixed"
+        else "solver-selected"
+      KernelContinuousOperatorSnapshot(
+        path = path,
+        operation = record.operation,
+        owner = owner,
+        context = record.context,
+        input = pathOf(record.input).getOrElse(
+          fail(
+            "NODAL-ANALOG-035-002",
+            "continuous-time operator input has no semantic path",
+            Some(path)
+          )
+        ),
+        initialCondition = record.initialCondition.map: initial =>
+          pathOf(initial).getOrElse(
+            fail(
+              "NODAL-ANALOG-035-002",
+              "idt initial condition has no semantic path",
+              Some(path)
+            )
+          ),
+        inputDimension = record.inputDimension.signature,
+        resultDimension = record.resultDimension.signature,
+        stateId = stateId,
+        initialization = initialization,
+        analyses = allAnalyses,
+        source = sourceByPath.get(path)
+      )
+    .sortBy(_.path)
+
   private def analogSnapshots(): Vector[KernelAnalogRegionSnapshot] =
     analogRegions.toVector.sortBy(region => (modulePath(region.module), region.ordinal)).map:
       region =>
@@ -1632,14 +1826,17 @@ private final class ConstructionSession(val options: EmitOptions):
               Some(expressionPath(reference))
             )
           )
-          val operandPaths = expression.operands.toVector.map: operand =>
-            pathOf(operand).getOrElse(
-              fail(
-                "NODAL-ANALOG-SNAPSHOT-002",
-                s"analog expression operand '${renderAny(operand, reference.module)}' has no semantic path",
-                Some(expressionPath(reference))
-              )
-            )
+          val operandPaths =
+            if expression.literal.nonEmpty then Vector.empty
+            else
+              expression.operands.toVector.map: operand =>
+                pathOf(operand).getOrElse(
+                  fail(
+                    "NODAL-ANALOG-SNAPSHOT-002",
+                    s"analog expression operand '${renderAny(operand, reference.module)}' has no semantic path",
+                    Some(expressionPath(reference))
+                  )
+                )
           KernelAnalogExpressionSnapshot(
             expressionPath(reference),
             expression.operation.getOrElse("unsupported_generic"),
@@ -1688,7 +1885,8 @@ private final class ConstructionSession(val options: EmitOptions):
       "conservative-terminal",
       "analog-signal"
     )
-    val analog = kinds.exists(analogKinds.contains)
+    val analog =
+      kinds.exists(analogKinds.contains) || snapshot.continuousOperators.nonEmpty
     val digital = (kinds -- analogKinds).nonEmpty || snapshot.interfaceAbi.nonEmpty ||
       snapshot.resolvedNets.nonEmpty
     (digital, analog) match
@@ -1723,6 +1921,7 @@ private final class ConstructionSession(val options: EmitOptions):
       generatedNames = semantic.generatedNames,
       sourceMap = semantic.sourceMap,
       analogRegions = analogSnapshots(),
+      continuousOperators = continuousOperatorSnapshots(semantic.sourceMap),
       analogSemantics = analogSemanticRecorder.snapshot,
       analogProcedural = AnalogProceduralConstruction.snapshots(module =>
         modulePath(moduleHandle(module))
@@ -1802,6 +2001,16 @@ private[nodal] object ConstructionKernel:
   )
 
   def expression(value: AnyRef): Unit = active.foreach(_.registerExpression(value))
+
+  def continuousOperator(
+      value: KernelExpr[Real],
+      operation: String,
+      input: Expr[Real],
+      initialValue: Option[Expr[Real]]
+  ): Unit =
+    active.foreach(
+      _.registerContinuousOperator(value, operation, input, initialValue)
+    )
 
   def attachInstance(instance: Instance[? <: Module], child: Module): Unit =
     active.foreach(_.attachInstance(instance, child))

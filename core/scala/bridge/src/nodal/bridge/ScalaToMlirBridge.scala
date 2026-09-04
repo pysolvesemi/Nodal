@@ -141,6 +141,7 @@ private[nodal] object ScalaToMlirBridge:
         "nodal.bridge.topology" -> topologyInventory,
         "nodal.bridge.source_map" -> sourceMapInventory,
         "nodal.bridge.analog_semantics" -> analogSemanticInventory,
+        "nodal.bridge.continuous_operators" -> continuousOperatorInventory,
         "nodal.bridge.analog_procedural" -> AnalogProceduralMlir.inventory(snapshot),
         "nodal.target.profile" -> quoted(targetProfile),
         "nodal.backend.profile" -> quoted(backendProfile),
@@ -180,6 +181,7 @@ ${indent(body, 2)}
         "digital-inout"
       )
       val analog = snapshot.analogRegions.nonEmpty ||
+        snapshot.continuousOperators.nonEmpty ||
         snapshot.analogSemantics.equations.nonEmpty ||
         snapshot.analogSemantics.contributions.nonEmpty ||
         snapshot.analogProcedural.nonEmpty ||
@@ -236,6 +238,29 @@ ${indent(body, 2)}
           )
       array(equations ++ contributions)
 
+    private def continuousOperatorInventory: String =
+      array(
+        snapshot.continuousOperators.sortBy(_.path).map: operator =>
+          dictionary(
+            Vector(
+              "path" -> quoted(operator.path),
+              "operation" -> quoted(operator.operation),
+              "owner" -> quoted(operator.owner),
+              "context" -> quoted(operator.context),
+              "input" -> quoted(operator.input),
+              "initial_condition" -> quoted(operator.initialCondition.getOrElse("")),
+              "input_dimension" -> quoted(operator.inputDimension),
+              "result_dimension" -> quoted(operator.resultDimension),
+              "state_id" -> quoted(operator.stateId.getOrElse("")),
+              "initialization" -> quoted(operator.initialization),
+              "analyses" -> array(operator.analyses.map(quoted)),
+              "source_file" -> quoted(operator.source.map(_.path).getOrElse("")),
+              "source_line" -> integer(operator.source.map(_.line).getOrElse(0)),
+              "source_column" -> integer(operator.source.map(_.column).getOrElse(0))
+            )
+          )
+      )
+
     private def backendProfile: String = backend match
       case Backend.VerilogA => "verilog-a"
       case Backend.VerilogAMS => "verilog-ams"
@@ -283,6 +308,16 @@ ${indent(body, 2)}
         snapshot.sourceMap.map(_.semanticPath),
         "NODAL-BRIDGE-010",
         "source-map semantic path"
+      )
+      requireUnique(
+        snapshot.continuousOperators.map(_.path),
+        "NODAL-ANALOG-035-002",
+        "continuous-time operator identity"
+      )
+      requireUnique(
+        snapshot.continuousOperators.flatMap(_.stateId),
+        "NODAL-ANALOG-035-005",
+        "integral state identity"
       )
       if !moduleSymbols.contains(snapshot.root) then
         fail(
@@ -575,6 +610,42 @@ ${indent(body, 2)}
     ): Vector[KernelAnalogRegionSnapshot] =
       snapshot.analogRegions.filter(_.module == module.path).sortBy(_.path)
 
+    private def continuousOperator(
+        path: String,
+        expectedOperation: String
+    ): KernelContinuousOperatorSnapshot =
+      snapshot.continuousOperators.find(_.path == path) match
+        case Some(value) if value.operation == expectedOperation => value
+        case Some(value) =>
+          fail(
+            "NODAL-ANALOG-035-002",
+            s"continuous-time operator '$path' has operation '${value.operation}', expected '$expectedOperation'",
+            Some(path)
+          )
+        case None =>
+          fail(
+            "NODAL-ANALOG-035-002",
+            s"continuous-time operator '$path' has no semantic contract",
+            Some(path)
+          )
+
+    private def continuousOperatorAttributes(
+        value: KernelContinuousOperatorSnapshot
+    ): Vector[(String, String)] =
+      Vector(
+        "operator_contract" -> quoted("increment35"),
+        "operator_id" -> quoted(value.path),
+        "owner" -> quoted(value.owner),
+        "context" -> quoted(value.context),
+        "input_dimension" -> quoted(value.inputDimension),
+        "result_dimension" -> quoted(value.resultDimension),
+        "initialization" -> quoted(value.initialization),
+        "analyses" -> array(value.analyses.map(quoted))
+      ) ++ value.stateId.toVector.map(state => "state_id" -> quoted(state)) ++
+        value.initialCondition.toVector.map(_ =>
+          "initial_dimension" -> quoted(value.resultDimension)
+        )
+
     private def renderAnalogRegion(
         region: KernelAnalogRegionSnapshot,
         regionIndex: Int,
@@ -695,13 +766,31 @@ ${indent(body, 2)}
             if expression.operands.size != 1 then
               fail("NODAL-RC-ARITY-001", "ddt operation has invalid arity", Some(expression.path))
             val input = operand(expression.operands.head)
+            val contract = continuousOperator(expression.path, "analog_ddt")
             lines += operation(
               "nodal.analog_ddt",
               results = Vector(result),
               operands = Vector(input._1),
               operandTypes = Vector(input._2),
               resultTypes = Vector("f64"),
-              attributes = Vector("metadata" -> metadata),
+              attributes =
+                continuousOperatorAttributes(contract) :+ ("metadata" -> metadata),
+              semanticPath = expression.path
+            )
+            values.update(expression.path, result -> "f64")
+          case "analog_idt" =>
+            if expression.operands.size != 1 && expression.operands.size != 2 then
+              fail("NODAL-RC-ARITY-001", "idt operation has invalid arity", Some(expression.path))
+            val inputs = expression.operands.map(operand)
+            val contract = continuousOperator(expression.path, "analog_idt")
+            lines += operation(
+              "nodal.analog_idt",
+              results = Vector(result),
+              operands = inputs.map(_._1),
+              operandTypes = inputs.map(_._2),
+              resultTypes = Vector("f64"),
+              attributes =
+                continuousOperatorAttributes(contract) :+ ("metadata" -> metadata),
               semanticPath = expression.path
             )
             values.update(expression.path, result -> "f64")

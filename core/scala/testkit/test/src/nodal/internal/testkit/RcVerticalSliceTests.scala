@@ -19,12 +19,12 @@ final class RcFilter extends Module:
     val voltage = V(p, n)
     I(p, n) <+ (voltage / R) + (C * ddt(voltage))
 
-final class UnsupportedRcIntegral extends Module:
+final class UnsupportedRcOperation extends Module:
   val p = inout(Electrical)
   val n = inout(Electrical)
 
   analog:
-    I(p, n) <+ idt(V(p, n))
+    I(p, n) <+ -V(p, n)
 
 final class UnsupportedSingleEndedRc extends Module:
   val p = inout(Electrical)
@@ -112,7 +112,7 @@ object RcVerticalSliceTests extends TestSuite:
         case _ => assert(true)
 
     test("unsupported analog operator fails before native launch"):
-      val failure = bridgeFailure(new UnsupportedRcIntegral)
+      val failure = bridgeFailure(new UnsupportedRcOperation)
       assert(failure.diagnostic.code == "NODAL-RC-OPERATION-001")
 
     test("single-ended RC branch is rejected explicitly"):

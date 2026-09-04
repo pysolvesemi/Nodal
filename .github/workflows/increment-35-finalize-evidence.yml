@@ -24,6 +24,23 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/_increment35_finalize_evidence.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/compiler/test_increment33.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''                "Increment 35 closure candidate evidence is inconsistent",
+          '''
+          new = '''                (
+                              "Increment 35 closure candidate evidence is inconsistent"
+                              if document.get("status") == "evidence-closure-candidate"
+                              else "validated Increment 35 evidence is inconsistent"
+                          ),
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one dual-state mutation assertion, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
           python3 -m py_compile \
             scripts/check_increment33.py \
             scripts/check_increment34.py \

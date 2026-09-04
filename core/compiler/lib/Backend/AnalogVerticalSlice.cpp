@@ -267,19 +267,13 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
   } else if (name == "nodal.analog_ddt") {
     if (operation->getNumOperands() != 1)
       return failure();
-    auto simplified =
-        operation->getAttrOfType<BoolAttr>("nodal.simplified");
-    auto rule =
-        operation->getAttrOfType<StringAttr>("nodal.simplification_rule");
-    auto provenance =
-        operation->getAttrOfType<StringAttr>(
-            "nodal.simplification_provenance");
-    auto value =
-        operation->getAttrOfType<FloatAttr>("nodal.simplified_value");
+    auto simplified = operation->getAttrOfType<BoolAttr>("nodal.simplified");
+    auto rule = operation->getAttrOfType<StringAttr>("nodal.simplification_rule");
+    auto provenance = operation->getAttrOfType<StringAttr>("nodal.simplification_provenance");
+    auto value = operation->getAttrOfType<FloatAttr>("nodal.simplified_value");
     if (simplified && simplified.getValue() && rule &&
         rule.getValue() == "ddt-time-invariant-zero" && provenance &&
-        provenance.getValue() == "increment35" && value &&
-        value.getValueAsDouble() == 0.0) {
+        provenance.getValue() == "increment35" && value && value.getValueAsDouble() == 0.0) {
       rendered = formatReal(0.0);
     } else {
       auto input = renderExpression(operation->getOperand(0), state);
@@ -288,8 +282,7 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
       rendered = (llvm::Twine("ddt(") + *input + ")").str();
     }
   } else if (name == "nodal.analog_idt") {
-    if (operation->getNumOperands() != 1 &&
-        operation->getNumOperands() != 2)
+    if (operation->getNumOperands() != 1 && operation->getNumOperands() != 2)
       return failure();
     auto input = renderExpression(operation->getOperand(0), state);
     if (failed(input))

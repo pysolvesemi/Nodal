@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from __future_ import annotations
+from __future__ import annotations
 
 import argparse
 import json
@@ -41,8 +41,13 @@ def load_json(root: Path, relative: str) -> dict[str, Any]:
     try:
         value = json.loads(read_text(root, relative))
     except json.JSONDecodeError as error:
-        raise CheckFailure(f"NODAL-INC35-002: invalid JSON in {relative}: {error}") from error
-    require(isinstance(value, dict), f"NODAL-INC35-003: {relative} must contain an object")
+        raise CheckFailure(
+            f"NODAL-INC35-002: invalid JSON in {relative}: {error}"
+        ) from error
+    require(
+        isinstance(value, dict),
+        f"NODAL-INC35-003: {relative} must contain an object",
+    )
     return value
 
 
@@ -56,7 +61,7 @@ def valid_sha(value: object) -> bool:
         isinstance(value, str)
         and len(value) == 40
         and all(character in "0123456789abcdef" for character in value)
-     )
+    )
 
 
 def require_accepted_implementation(validation: object) -> dict[str, Any]:
@@ -96,7 +101,9 @@ def require_accepted_implementation(validation: object) -> dict[str, Any]:
 
 def check_repository(root: Path) -> None:
     roadmap = read_text(root, "docs/roadmap/nodal-development-todo.md")
-    predecessor = load_json(root, "tests/compiler/fixtures/increment34/manifest.json")
+    predecessor = load_json(
+        root, "tests/compiler/fixtures/increment34/manifest.json"
+    )
     manifest = load_json(root, "tests/compiler/fixtures/increment35/manifest.json")
     implementation = read_text(
         root, "docs/implementation/increment35-differential-integral-operators.md"
@@ -123,7 +130,8 @@ def check_repository(root: Path) -> None:
         == "207fd1b580e9428e9948cd4e4bd8f2060fde4b79"
         and predecessor_validation.get("implementation_merge")
         == "a9d3ec507f9953c41e7b9cf1d8bd6a2c5c9afd49"
-        and predecessor_validation.get("exact_post_merge_validation_run") == 33759112770
+        and predecessor_validation.get("exact_post_merge_validation_run")
+        == 33759112770
         and predecessor_validation.get("closure_pull_request") == 111
         and predecessor_validation.get("closure_validation_head")
         == "b59ed10f423d4a66e7e47d66ec764b7ff22531e7"
@@ -141,7 +149,8 @@ def check_repository(root: Path) -> None:
     validation = manifest.get("validation")
     if status == OPEN_STATUS:
         require(
-            manifest.get("tranche") == "35a-differential-integral-operator-contract"
+            manifest.get("tranche")
+            == "35a-differential-integral-operator-contract"
             and validation is None,
             "NODAL-INC35-007: open Increment 35 manifest state is invalid",
         )
@@ -165,17 +174,19 @@ def check_repository(root: Path) -> None:
             and "**Status:** Closure candidate" in implementation,
             "NODAL-INC35-019: closure candidate requires revision 1.46 and closed candidate records",
         )
-        evidence = read_text(root, "docs/implementation/increment35-evidence-closure.md")
+        evidence = read_text(
+            root, "docs/implementation/increment35-evidence-closure.md"
+        )
         require_tokens(
             evidence,
             (
                 "**Status:** Closure candidate awaiting exact-head validation",
                 "**Implementation PR:** #113",
-                f**Accepted implementation head:** `{ACCEPTED_HEAD}`",
+                f"**Accepted implementation head:** `{ACCEPTED_HEAD}`",
                 "**Exact-head workflow matrix:** 25 successful workflows",
                 f"**Exact-head Core CI:** `{EXACT_HEAD_CORE_CI_RUN}`",
                 f"**Implementation merge:** `{IMPLEMENTATION_MERGE}`",
-                f**Post-merge Core CI:** `{POST_MERGE_CORE_CI_RUN}`",
+                f"**Post-merge Core CI:** `{POST_MERGE_CORE_CI_RUN}`",
                 f"**Exact post-merge validation:** `{EXACT_POST_MERGE_VALIDATION_RUN}`",
                 "**Closure PR:** #114",
                 "**Closure validation head:** pending",
@@ -198,21 +209,23 @@ def check_repository(root: Path) -> None:
             and "**Status:** Validated" in implementation,
             "NODAL-INC35-021: validated state requires roadmap revision 1.46 and closed records",
         )
-        evidence = read_text(root, "docs/implementation/increment35-evidence-closure.md")
+        evidence = read_text(
+            root, "docs/implementation/increment35-evidence-closure.md"
+        )
         require_tokens(
             evidence,
             (
                 "**Status:** Validated evidence closure",
-                "**Implementation PR:* #113",
+                "**Implementation PR:** #113",
                 f"**Accepted implementation head:** `{ACCEPTED_HEAD}`",
                 "**Exact-head workflow matrix:** 25 successful workflows",
                 f"**Exact-head Core CI:** `{EXACT_HEAD_CORE_CI_RUN}`",
-                f**Implementation merge:** `{IMPLEMENTATION_MERGE}`",
+                f"**Implementation merge:** `{IMPLEMENTATION_MERGE}`",
                 f"**Post-merge Core CI:** `{POST_MERGE_CORE_CI_RUN}`",
-                f**Exact post-merge validation:** `{EXACT_POST_MERGE_VALIDATION_RUN}`",
-                "**Closure PR:* #114",
+                f"**Exact post-merge validation:** `{EXACT_POST_MERGE_VALIDATION_RUN}`",
+                "**Closure PR:** #114",
                 f"**Closure validation head:** `{accepted['closure_validation_head']}`",
-                f*"*Closure validation run:** `{accepted['closure_validation_run']}`",
+                f"**Closure validation run:** `{accepted['closure_validation_run']}`",
             ),
             "validated evidence-closure record",
         )
@@ -221,7 +234,8 @@ def check_repository(root: Path) -> None:
     require(
         isinstance(baseline, dict)
         and baseline.get("stacked_on_increment") == 34
-        and baseline.get("increment_34_head") == predecessor_validation.get("accepted_head")
+        and baseline.get("increment_34_head")
+        == predecessor_validation.get("accepted_head")
         and baseline.get("increment_34_manifest") == predecessor.get("status")
         and baseline.get("increment_34_implementation_merge")
         == predecessor_validation.get("implementation_merge")
@@ -254,13 +268,21 @@ def check_repository(root: Path) -> None:
         "ddt_time_invariant_zero_annotation",
         "ddt_authored_operation_retained",
         "idt_folding_prohibited",
+        "legacy_ddt_diagnostic_compatibility",
+        "native_operator_identity_uniqueness",
+        "operator_identity_owner_qualified",
+        "contribution_context_retained",
+        "typed_nonzero_initial_condition",
+        "exact_analysis_inventory",
+        "deterministic_unique_state_identity",
     ):
         require(
             isinstance(semantics, dict) and semantics.get(key) is True,
             f"NODAL-INC35-009: semantic contract {key!r} is not enabled",
         )
     require(
-        semantics.get("inverse_operator_cancellation") is False
+        isinstance(semantics, dict)
+        and semantics.get("inverse_operator_cancellation") is False
         and semantics.get("operator_distribution") is False,
         "NODAL-INC35-010: unsafe algebraic transforms were enabled",
     )
@@ -277,13 +299,16 @@ def check_repository(root: Path) -> None:
         "compiler_boundary_diagnostics",
         "constant_pass_integration",
         "verilog_a_vertical_slice",
+        "bootstrap_scaffolding_removed",
+        "hardening_regressions",
     ):
         require(
             isinstance(integration, dict) and integration.get(key) is True,
             f"NODAL-INC35-011: integration contract {key!r} is not enabled",
         )
     require(
-        integration.get("full_dae_solver_lowering") is False,
+        isinstance(integration, dict)
+        and integration.get("full_dae_solver_lowering") is False,
         "NODAL-INC35-012: full DAE solver lowering must remain deferred",
     )
 
@@ -298,9 +323,14 @@ def check_repository(root: Path) -> None:
         ),
         "public differential/integral API",
     )
-    require("unsupported_idt" not in public_api, "NODAL-INC35-013: the idt placeholder remains")
+    require(
+        "unsupported_idt" not in public_api,
+        "NODAL-INC35-013: the idt placeholder remains",
+    )
 
-    construction = read_text(root, "core/scala/api/src/nodal/ElaborationConstructionKernel.scala")
+    construction = read_text(
+        root, "core/scala/api/src/nodal/ElaborationConstructionKernel.scala"
+    )
     require_tokens(
         construction,
         (
@@ -316,14 +346,16 @@ def check_repository(root: Path) -> None:
         "construction kernel",
     )
 
-    bridge = read_text(root, "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala")
+    bridge = read_text(
+        root, "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala"
+    )
     require_tokens(
         bridge,
         (
             "nodal.bridge.continuous_operators",
-            'operator_contract" -> quoted("increment35")',
-            '".nodal.analog_idt"',
-            ''state_id" -> quoted',
+            '"operator_contract" -> quoted("increment35")',
+            '"nodal.analog_idt"',
+            '"state_id" -> quoted',
             "continuousOperatorAttributes",
         ),
         "Scala-to-MLIR bridge",
@@ -366,7 +398,7 @@ def check_repository(root: Path) -> None:
         (
             'name == "nodal.analog_idt"',
             '"nodal.analog_idt",',
-            'llvm::Twime("idt(")',
+            'llvm::Twine("idt(")',
             "nodal.simplified",
         ),
         "Verilog-A vertical slice",
@@ -386,15 +418,20 @@ def check_repository(root: Path) -> None:
         "core/compiler/test/IR/analog-differential-integral-invalid-idt-fold.mlir",
         "docs/design-gates/NodalDifferentialIntegralOperators-DG-v0.1.md",
         "docs/implementation/increment35-differential-integral-operators.md",
+        "docs/implementation/increment35-evidence-closure.md",
         "tests/compiler/fixtures/increment35/README.md",
         "tests/compiler/test_increment35.py",
-     )
+    )
     for relative in required_files:
         read_text(root, relative)
 
     cmake = read_text(root, "core/compiler/test/CMakeLists.txt")
-    workflow = read_text(root, ".github/workflows/increment-35-differential-integral-operators.yml")
-    gate = read_text(root, "docs/design-gates/NodalDifferentialIntegralOperators-DG-v0.1.md")
+    workflow = read_text(
+        root, ".github/workflows/increment-35-differential-integral-operators.yml"
+    )
+    gate = read_text(
+        root, "docs/design-gates/NodalDifferentialIntegralOperators-DG-v0.1.md"
+    )
     require_tokens(
         cmake,
         (
@@ -439,7 +476,9 @@ def check_repository(root: Path) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate Increment 35 repository contracts")
+    parser = argparse.ArgumentParser(
+        description="Validate Increment 35 repository contracts"
+    )
     parser.add_argument("--root", type=Path, default=ROOT)
     arguments = parser.parse_args()
     try:

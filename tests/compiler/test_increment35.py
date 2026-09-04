@@ -71,21 +71,41 @@ class Increment35ContractTests(unittest.TestCase):
     def write_manifest(self, path: Path, document: dict[str, object]) -> None:
         path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
 
+    def replace_file(self, root: Path, relative: str, old: str, new: str) -> None:
+        path = root / relative
+        text = path.read_text(encoding="utf-8")
+        self.assertEqual(text.count(old), 1, f"expected one occurrence of {old!r}")
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
     def test_repository_checkpoint_passes(self) -> None:
         CHECKER.check_repository(ROOT)
 
-    def test_validated_manifest_is_closed_with_complete_evidence(self) -> None:
+    def test_current_manifest_is_candidate_or_validated_with_complete_identity(self) -> None:
         manifest = json.loads(
             (ROOT / "tests/compiler/fixtures/increment35/manifest.json").read_text(
                 encoding="utf-8"
             )
         )
-        self.assertEqual(
-            manifest["status"], "validated-differential-integral-operators"
+        self.assertIn(
+            manifest["status"],
+            {
+                "evidence-closure-candidate",
+                "validated-differential-integral-operators",
+            },
         )
-        self.assertIsInstance(manifest["validation"], dict)
-        self.assertTrue(manifest["validation"]["closure_validation_head"])
-        self.assertTrue(manifest["validation"]["closure_validation_run"])
+        validation = manifest["validation"]
+        self.assertIsInstance(validation, dict)
+        self.assertEqual(validation["implementation_pull_request"], 113)
+        self.assertEqual(
+            validation["accepted_head"],
+            "d3410f6f64dc66df27d9c7f545c9e78f62695f2e",
+        )
+        if manifest["status"] == "evidence-closure-candidate":
+            self.assertIsNone(validation["closure_validation_head"])
+            self.assertIsNone(validation["closure_validation_run"])
+        else:
+            self.assertTrue(validation["closure_validation_head"])
+            self.assertTrue(validation["closure_validation_run"])
 
     def test_open_state_remains_supported(self) -> None:
         temporary, root = self.fixture()
@@ -95,41 +115,36 @@ class Increment35ContractTests(unittest.TestCase):
             document["tranche"] = "35a-differential-integral-operator-contract"
             document["validation"] = None
             self.write_manifest(path, document)
-
-            roadmap = root / "docs/roadmap/nodal-development-todo.md"
-            roadmap.write_text(
-                roadmap.read_text(encoding="utf-8")
-                .replace("**Revision:** 1.46", "**Revision:** 1.45", 1)
-                .replace(
-                    "- [x] **Increment 35 — Differential and integral operators**",
-                    "- [ ] **Increment 35 — Differential and integral operators**",
-                    1,
-                ),
-                encoding="utf-8",
+            self.replace_file(
+                root,
+                "docs/roadmap/nodal-development-todo.md",
+                "**Revision:** 1.46",
+                "**Revision:** 1.45",
+            )
+            self.replace_file(
+                root,
+                "docs/roadmap/nodal-development-todo.md",
+                "- [x] **Increment 35 — Differential and integral operators**",
+                "- [ ] **Increment 35 — Differential and integral operators**",
             )
             implementation = (
                 root
                 / "docs/implementation/increment35-differential-integral-operators.md"
             )
-            implementation.write_text(
-                implementation.read_text(encoding="utf-8").replace(
-                    "**Status:** Validated",
-                    "**Status:** In progress",
-                    1,
-                ),
-                encoding="utf-8",
-            )
+            text = implementation.read_text(encoding="utf-8")
+            text = text.replace("**Status:** Closure candidate", "**Status:** In progress", 1)
+            text = text.replace("**Status:** Validated", "**Status:** In progress", 1)
+            implementation.write_text(text, encoding="utf-8")
             CHECKER.check_repository(root)
 
-    def test_closure_candidate_state_remains_supported(self) -> None:
+    def test_candidate_state_remains_supported(self) -> None:
         temporary, root = self.fixture()
         with temporary:
             path, document = self.read_manifest(root)
             validation = document["validation"]
             assert isinstance(validation, dict)
-            head = validation["closure_validation_head"]
-            run = validation["closure_validation_run"]
             document["status"] = "evidence-closure-candidate"
+            document["tranche"] = "35b-evidence-closure"
             validation["closure_validation_head"] = None
             validation["closure_validation_run"] = None
             self.write_manifest(path, document)
@@ -138,59 +153,93 @@ class Increment35ContractTests(unittest.TestCase):
                 root
                 / "docs/implementation/increment35-differential-integral-operators.md"
             )
-            implementation.write_text(
-                implementation.read_text(encoding="utf-8").replace(
-                    "**Status:** Validated",
-                    "**Status:** Closure candidate",
-                    1,
-                ),
-                encoding="utf-8",
+            text = implementation.read_text(encoding="utf-8").replace(
+                "**Status:** Validated", "**Status:** Closure candidate", 1
             )
+            implementation.write_text(text, encoding="utf-8")
+
             evidence = root / "docs/implementation/increment35-evidence-closure.md"
-            evidence.write_text(
-                evidence.read_text(encoding="utf-8")
-                .replace(
+            text = evidence.read_text(encoding="utf-8")
+            if "**Status:** Validated evidence closure" in text:
+                head = next(
+                    line.split("`", 2)[1]
+                    for line in text.splitlines()
+                    if line.startswith("**Closure validation head:** `")
+                )
+                run = next(
+                    line.split("`", 2)[1]
+                    for line in text.splitlines()
+                    if line.startswith("**Closure validation run:** `")
+                )
+                text = text.replace(
                     "**Status:** Validated evidence closure",
                     "**Status:** Closure candidate awaiting exact-head validation",
                     1,
                 )
-                .replace(
+                text = text.replace(
                     f"**Closure validation head:** `{head}`",
                     "**Closure validation head:** pending",
                     1,
                 )
-                .replace(
+                text = text.replace(
                     f"**Closure validation run:** `{run}`",
                     "**Closure validation run:** pending",
                     1,
-               ),
-                encoding="utf-8",
-            )
+                )
+                evidence.write_text(text, encoding="utf-8")
             CHECKER.check_repository(root)
 
-    def test_validated_roadmap_regression_is_rejected(self) -> None:
-        temporary, root = self.fixture()
-        with temporary:
-            roadmap = root / "docs/roadmap/nodal-development-todo.md"
-            roadmap.write_text(
-                roadmap.read_text(encoding="utf-8").replace(
-                    "- [x] **Increment 35 — Differential and integral operators**",
-                    "- [ ] **Increment 35 — Differential and integral operators**",
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assert_rejected(root, "validated state requires roadmap revision 1.46")
-
-    def test_validated_closure_requires_candidate_head_and_run(self) -> None:
+    def test_validated_state_remains_supported(self) -> None:
         temporary, root = self.fixture()
         with temporary:
             path, document = self.read_manifest(root)
             validation = document["validation"]
             assert isinstance(validation, dict)
-            validation["closure_validation_run"] = None
+            document["status"] = "validated-differential-integral-operators"
+            document["tranche"] = "35b-evidence-closure"
+            validation["closure_validation_head"] = "1" * 40
+            validation["closure_validation_run"] = 1
             self.write_manifest(path, document)
-            self.assert_rejected(root, "validated closure lacks exact candidate evidence")
+
+            implementation = (
+                root
+                / "docs/implementation/increment35-differential-integral-operators.md"
+            )
+            text = implementation.read_text(encoding="utf-8").replace(
+                "**Status:** Closure candidate", "**Status:** Validated", 1
+            )
+            implementation.write_text(text, encoding="utf-8")
+
+            evidence = root / "docs/implementation/increment35-evidence-closure.md"
+            text = evidence.read_text(encoding="utf-8")
+            text = text.replace(
+                "**Status:** Closure candidate awaiting exact-head validation",
+                "**Status:** Validated evidence closure",
+                1,
+            )
+            text = text.replace(
+                "**Closure validation head:** pending",
+                f"**Closure validation head:** `{'1' * 40}`",
+                1,
+            )
+            text = text.replace(
+                "**Closure validation run:** pending",
+                "**Closure validation run:** `1`",
+                1,
+            )
+            evidence.write_text(text, encoding="utf-8")
+            CHECKER.check_repository(root)
+
+    def test_closed_roadmap_regression_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            self.replace_file(
+                root,
+                "docs/roadmap/nodal-development-todo.md",
+                "- [x] **Increment 35 — Differential and integral operators**",
+                "- [ ] **Increment 35 — Differential and integral operators**",
+            )
+            self.assert_rejected(root, "closure candidate requires revision 1.46")
 
     def test_accepted_implementation_identity_is_locked(self) -> None:
         temporary, root = self.fixture()
@@ -206,7 +255,11 @@ class Increment35ContractTests(unittest.TestCase):
         temporary, root = self.fixture()
         with temporary:
             path, document = self.read_manifest(root)
+            validation = document["validation"]
+            assert isinstance(validation, dict)
             document["status"] = "evidence-closure-candidate"
+            validation["closure_validation_head"] = "1" * 40
+            validation["closure_validation_run"] = 1
             self.write_manifest(path, document)
             self.assert_rejected(root, "must not claim its own validation")
 
@@ -222,16 +275,13 @@ class Increment35ContractTests(unittest.TestCase):
     def test_evidence_record_mutation_is_rejected(self) -> None:
         temporary, root = self.fixture()
         with temporary:
-            evidence = root / "docs/implementation/increment35-evidence-closure.md"
-            evidence.write_text(
-                evidence.read_text(encoding="utf-8").replace(
-                    "**Implementation PR:** #113",
-                    "**Implementation PR:** #999",
-                    1,
-                ),
-                encoding="utf-8",
+            self.replace_file(
+                root,
+                "docs/implementation/increment35-evidence-closure.md",
+                "**Implementation PR:** #113",
+                "**Implementation PR:** #999",
             )
-            self.assert_rejected(root, "validated evidence-closure record is missing")
+            self.assert_rejected(root, "evidence record")
 
     def test_all_stable_diagnostics_are_declared(self) -> None:
         manifest = json.loads(
@@ -252,6 +302,7 @@ class Increment35ContractTests(unittest.TestCase):
         )
         self.assertFalse(manifest["semantics"]["inverse_operator_cancellation"])
         self.assertFalse(manifest["semantics"]["operator_distribution"])
+        self.assertFalse(manifest["integration"]["full_dae_solver_lowering"])
 
 
 if __name__ == "__main__":

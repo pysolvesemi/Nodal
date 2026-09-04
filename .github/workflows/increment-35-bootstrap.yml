@@ -5,7 +5,7 @@ on:
     branches:
       - increment/35-differential-integral-operators-v1
     paths:
-      - 'scripts/apply_increment35_repair.py'
+      - 'scripts/increment35-repair.trigger'
 
 permissions:
   contents: write
@@ -28,6 +28,7 @@ jobs:
             exit 0
           fi
           python3 scripts/apply_increment35_repair.py
+          rm -f scripts/increment35-repair.trigger
           python3 scripts/check_increment24.py
           python3 scripts/check_increment34.py
           python3 scripts/check_increment35.py

@@ -1,0 +1,46 @@
+name: Increment 35 evidence materializer
+
+"on":
+  push:
+    branches:
+      - increment/35-evidence-closure-v1
+    paths:
+      - .github/workflows/increment-35-finalize-evidence.yml
+      - scripts/_increment35_finalize_evidence.py
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Record validated candidate evidence and retire materializer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/_increment35_finalize_evidence.py
+          python3 -m py_compile \
+            scripts/check_increment33.py \
+            scripts/check_increment34.py \
+            scripts/check_increment35.py \
+            tests/compiler/test_increment33.py \
+            tests/compiler/test_increment34.py \
+            tests/compiler/test_increment35.py
+          rm scripts/_increment35_finalize_evidence.py
+          rm .github/workflows/increment-35-finalize-evidence.yml
+          python3 scripts/check_increment33.py
+          python3 scripts/check_increment34.py
+          python3 scripts/check_increment35.py
+          python3 -m unittest discover -s tests/compiler -p 'test_increment33.py'
+          python3 -m unittest discover -s tests/compiler -p 'test_increment34.py'
+          python3 -m unittest discover -s tests/compiler -p 'test_increment35.py'
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "docs(increment35): record validated closure candidate"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

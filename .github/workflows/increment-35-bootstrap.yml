@@ -1,0 +1,49 @@
+name: Increment 35 Bootstrap Source Patch
+
+on:
+  push:
+    branches:
+      - increment/35-differential-integral-operators-v1
+
+permissions:
+  contents: write
+
+jobs:
+  materialize-increment-35-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Materialize staged source patch
+        shell: bash
+        run: |
+          cat scripts/bootstrap_increment35.part* > /tmp/bootstrap_increment35.py
+          python3 -m py_compile /tmp/bootstrap_increment35.py
+          python3 /tmp/bootstrap_increment35.py
+
+      - name: Commit materialized implementation
+        shell: bash
+        run: |
+          if git diff --quiet && git diff --cached --quiet && \
+             test -z "$(git ls-files --others --exclude-standard)"; then
+            echo 'Increment 35 source patch is already materialized.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            core/scala/api/src/nodal/CandidateApi.scala \
+            core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+            core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala \
+            core/compiler/include/nodal/Dialect/Nodal/NodalOps.td \
+            core/compiler/lib/Dialect/Nodal/NodalOps.cpp \
+            core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp \
+            core/compiler/lib/Backend/AnalogVerticalSlice.cpp \
+            core/compiler/test/CMakeLists.txt \
+            tests/compiler/fixtures/increment35/bootstrap-revision.txt
+          git commit -m 'Implement Increment 35 operator semantics'
+          git push origin HEAD:increment/35-differential-integral-operators-v1

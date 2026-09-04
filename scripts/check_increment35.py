@@ -129,7 +129,7 @@ def check_repository(root: Path) -> None:
         and predecessor_validation.get("accepted_head")
         == "207fd1b580e9428e9948cd4e4bd8f2060fde4b79"
         and predecessor_validation.get("implementation_merge")
-        == "a9d3ec507f9953c41e7b9cf1d8bd6a2c5c9afd49"
+        == "a9d3ec50799953c41e7b9cf1d8bd6a2c5c9afd49"
         and predecessor_validation.get("exact_post_merge_validation_run")
         == 33759112770
         and predecessor_validation.get("closure_pull_request") == 111

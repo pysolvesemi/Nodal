@@ -6,44 +6,44 @@ import utest.*
 
 final class DifferentialIntegralLegacyTop extends Module:
   analog:
-    val derivative = ddt(2.0.V)
-    val fixedIntegral = idt(1.0.A, 0.0.real)
-    val solverIntegral = idt(2.0.A)
+    val _ = ddt(2.0.V)
+    val _ = idt(1.0.A, 0.0.real)
+    val _ = idt(2.0.A)
 
 final class DifferentialIntegralEquationTop extends Module:
   equations:
-    val derivative = ddt(1.0.V)
-    val integral = idt(1.0.A)
+    val _ = ddt(1.0.V)
+    val _ = idt(1.0.A)
 
 final class DifferentialIntegralContributionTop extends Module:
   contributions:
-    val derivative = ddt(1.0.V)
-    val integral = idt(1.0.A)
+    val _ = ddt(1.0.V)
+    val _ = idt(1.0.A)
 
 final class DifferentialIntegralTypedInitialTop extends Module:
   analog:
     val initialCharge = 2.0.A * 3.0.s
-    val integral = idt(1.0.A, initialCharge)
+    val _ = idt(1.0.A, initialCharge)
 
 final class DifferentialIntegralMultipleStateTop extends Module:
   analog:
-    val first = idt(1.0.A)
-    val second = idt(2.0.A, 0.0.real)
+    val _ = idt(1.0.A)
+    val _ = idt(2.0.A, 0.0.real)
 
 final class DifferentialOutsideRegion extends Module:
   val invalid = ddt(1.0.V)
 
 final class IntegralInitialEquationRegion extends Module:
   initialEquations:
-    val invalid = idt(1.0.A)
+    val _ = idt(1.0.A)
 
 final class DifferentialProceduralRegion extends Module:
   analogProcedure:
-    val invalid = ddt(1.0.V)
+    val _ = ddt(1.0.V)
 
 final class IntegralInitialConditionMismatch extends Module:
   analog:
-    val invalid = idt(1.0.A, 1.0.V)
+    val _ = idt(1.0.A, 1.0.V)
 
 object DifferentialIntegralConstructionTests extends TestSuite:
   private val ExpectedAnalyses = Vector(

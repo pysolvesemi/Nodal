@@ -7,44 +7,44 @@ import nodal.internal.bridge.ScalaToMlirBridge
 
 final class Increment35LegacyFixture extends Module:
   analog:
-    val derivative = ddt(2.0.V)
-    val fixedIntegral = idt(1.0.A, 0.0.real)
-    val solverIntegral = idt(2.0.A)
+    val _ = ddt(2.0.V)
+    val _ = idt(1.0.A, 0.0.real)
+    val _ = idt(2.0.A)
 
 final class Increment35EquationFixture extends Module:
   equations:
-    val derivative = ddt(1.0.V)
-    val integral = idt(1.0.A)
+    val _ = ddt(1.0.V)
+    val _ = idt(1.0.A)
 
 final class Increment35ContributionFixture extends Module:
   contributions:
-    val derivative = ddt(1.0.V)
-    val integral = idt(1.0.A)
+    val _ = ddt(1.0.V)
+    val _ = idt(1.0.A)
 
 final class Increment35TypedInitialFixture extends Module:
   analog:
     val initialCharge = 2.0.A * 3.0.s
-    val integral = idt(1.0.A, initialCharge)
+    val _ = idt(1.0.A, initialCharge)
 
 final class Increment35MultipleStateFixture extends Module:
   analog:
-    val first = idt(1.0.A)
-    val second = idt(2.0.A, 0.0.real)
+    val _ = idt(1.0.A)
+    val _ = idt(2.0.A, 0.0.real)
 
 final class Increment35OutsideFixture extends Module:
   val invalid = idt(1.0.A)
 
 final class Increment35InitialFixture extends Module:
   initialEquations:
-    val invalid = ddt(1.0.V)
+    val _ = ddt(1.0.V)
 
 final class Increment35ProceduralFixture extends Module:
   analogProcedure:
-    val invalid = idt(1.0.A)
+    val _ = idt(1.0.A)
 
 final class Increment35MismatchFixture extends Module:
   analog:
-    val invalid = idt(1.0.A, 1.0.V)
+    val _ = idt(1.0.A, 1.0.V)
 
 object Increment35ConstructionCheck:
   private val ExpectedAnalyses = Vector(

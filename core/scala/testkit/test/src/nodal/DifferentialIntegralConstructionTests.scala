@@ -68,8 +68,13 @@ object DifferentialIntegralConstructionTests extends TestSuite:
     test("ddt and idt retain complete source semantics"):
       val snapshot = ConstructionKernel.inspect(new DifferentialIntegralLegacyTop)
       val operators = snapshot.continuousOperators
+      val literals = snapshot.analogRegions.flatMap(_.expressions).filter(_.literal.nonEmpty)
 
       assert(operators.size == 3)
+      assert(literals.nonEmpty)
+      assert(literals.forall(_.operands.isEmpty))
+      assert(literals.exists(value => value.literal.contains("2.0") && value.unit.contains("V")))
+      assert(literals.exists(value => value.literal.contains("1.0") && value.unit.contains("A")))
       val derivative = operators.find(_.operation == "analog_ddt").get
       val integrals = operators.filter(_.operation == "analog_idt")
       val fixed = integrals.find(_.initialization == "fixed").get

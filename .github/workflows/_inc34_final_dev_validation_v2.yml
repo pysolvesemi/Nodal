@@ -108,7 +108,9 @@ jobs:
           closure_section = implementation.split("## Tranche 34d — closure", 1)[1]
           closure_section = closure_section.split("## Current boundaries", 1)[0]
           assert "- [ ]" not in closure_section
-          assert "b59ed10f423d4a66e7e47d66ec764b7ff22531e7" in closure_section
+          current_boundaries = implementation.split("## Current boundaries", 1)[1]
+          current_boundaries = current_boundaries.split("## Review focus", 1)[0]
+          assert "b59ed10f423d4a66e7e47d66ec764b7ff22531e7" in current_boundaries
 
           assert re.fullmatch(r"[0-9a-f]{40}", validation["accepted_head"])
           print("Increment 34 immutable closure evidence is coherent.")

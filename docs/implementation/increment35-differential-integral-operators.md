@@ -1,6 +1,6 @@
 # Increment 35 — Differential and integral operators
 
-**Status:** Closure candidate  
+**Status:** Validated  
 **Roadmap baseline:** revision 1.46  
 **Predecessor:** validated Increment 34  
 **Implementation PR:** #113  
@@ -45,4 +45,4 @@ Semantic equation and contribution contexts preserve continuous operators in the
 
 ## Closure state
 
-Implementation and exact post-merge validation are complete. Draft closure PR #114 advances the roadmap and manifest through a separately checked closure-candidate state. The candidate deliberately leaves its own validation head and run unset until that exact pull-request head passes the complete workflow matrix.
+Implementation, exact post-merge validation, and closure-candidate validation are complete. Closure PR #114 candidate `39915b984707f0396777cc69030dfec29aa2befe` passed the dedicated Increment 35 validation run `33916159555` and aggregate Core CI run `33916159534`. The final recorded-evidence head remains subject to the complete exact-head workflow matrix before merge.

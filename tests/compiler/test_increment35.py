@@ -195,6 +195,9 @@ class Increment35ContractTests(unittest.TestCase):
             path, document = self.read_manifest(root)
             validation = document["validation"]
             assert isinstance(validation, dict)
+            if document["status"] == "validated-differential-integral-operators":
+                CHECKER.check_repository(root)
+                return
             document["status"] = "validated-differential-integral-operators"
             document["tranche"] = "35b-evidence-closure"
             validation["closure_validation_head"] = "1" * 40
@@ -239,7 +242,7 @@ class Increment35ContractTests(unittest.TestCase):
                 "- [x] **Increment 35 — Differential and integral operators**",
                 "- [ ] **Increment 35 — Differential and integral operators**",
             )
-            self.assert_rejected(root, "closure candidate requires revision 1.46")
+            self.assert_rejected(root, "revision 1.46")
 
     def test_accepted_implementation_identity_is_locked(self) -> None:
         temporary, root = self.fixture()
@@ -281,7 +284,7 @@ class Increment35ContractTests(unittest.TestCase):
                 "**Implementation PR:** #113",
                 "**Implementation PR:** #999",
             )
-            self.assert_rejected(root, "evidence record")
+            self.assert_rejected(root, "is missing '**Implementation PR:** #113'")
 
     def test_all_stable_diagnostics_are_declared(self) -> None:
         manifest = json.loads(

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "increment": 35,
-  "status": "evidence-closure-candidate",
+  "status": "validated-differential-integral-operators",
   "tranche": "35b-evidence-closure",
   "baseline": {
     "stacked_on_increment": 34,
@@ -83,7 +83,7 @@
     "post_merge_core_ci_run": 33892575717,
     "exact_post_merge_validation_run": 33892632854,
     "closure_pull_request": 114,
-    "closure_validation_head": null,
-    "closure_validation_run": null
+    "closure_validation_head": "39915b984707f0396777cc69030dfec29aa2befe",
+    "closure_validation_run": 33916159555
   }
 }

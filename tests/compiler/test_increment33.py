@@ -176,7 +176,11 @@ class Increment33ContractTests(unittest.TestCase):
             path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
             self.assert_rejected(
                 root,
-                "Increment 35 closure candidate evidence is inconsistent",
+                (
+                    "Increment 35 closure candidate evidence is inconsistent"
+                    if document.get("status") == "evidence-closure-candidate"
+                    else "validated Increment 35 evidence is inconsistent"
+                ),
             )
 
     def test_assignment_order_mutation_is_rejected(self) -> None:

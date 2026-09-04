@@ -1,0 +1,66 @@
+name: Increment 35 one-shot literal snapshot repair
+
+on:
+  push:
+    branches:
+      - increment/35-differential-integral-operators-v1
+    paths:
+      - .github/workflows/increment-35-one-shot-repair.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: increment-35-one-shot-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Apply exact source repair and retire this workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("core/scala/api/src/nodal/ElaborationConstructionKernel.scala")
+          text = path.read_text()
+          old = '''          val operandPaths = expression.operands.toVector.map: operand =>
+            pathOf(operand).getOrElse(
+              fail(
+                "NODAL-ANALOG-SNAPSHOT-002",
+                s"analog expression operand '${renderAny(operand, reference.module)}' has no semantic path",
+                Some(expressionPath(reference))
+              )
+            )
+'''
+          new = '''          val operandPaths =
+            if expression.literal.nonEmpty then Vector.empty
+            else
+              expression.operands.toVector.map: operand =>
+                pathOf(operand).getOrElse(
+                  fail(
+                    "NODAL-ANALOG-SNAPSHOT-002",
+                    s"analog expression operand '${renderAny(operand, reference.module)}' has no semantic path",
+                    Some(expressionPath(reference))
+                  )
+                )
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected exactly one literal snapshot block, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+          rm .github/workflows/increment-35-one-shot-repair.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+                  .github/workflows/increment-35-one-shot-repair.yml
+          git commit -m "fix(increment35): separate literal payloads from expression operands"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

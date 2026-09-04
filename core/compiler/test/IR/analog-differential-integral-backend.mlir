@@ -16,9 +16,8 @@ module attributes {
       %zero = "nodal.real_literal"() <{metadata = {}, value = 0.0 : f64}> : () -> !nodal.quantity<"real", "1">
       %integral = "nodal.analog_idt"(%one, %zero) <{analyses = ["transient"], context = "contribution", initial_dimension = "time", initialization = "fixed", input_dimension = "1", metadata = {identity = "integral"}, operator_contract = "increment35", operator_id = "DifferentialIntegralBackend.integral", owner = "DifferentialIntegralBackend", result_dimension = "time", state_id = "DifferentialIntegralBackend.integral.state"}> : (!nodal.quantity<"real", "1">, !nodal.quantity<"real", "1">) -> !nodal.quantity<"real", "time">
       "nodal.contribute"(%branch, %integral) <{kind = "flow", metadata = {}}> : (!nodal.branch<"electrical">, !nodal.quantity<"real", "time">) -> ()
-      %charge = "nodal.real_literal"() <{metadata = {}, value = 2.0 : f64}> : () -> !nodal.quantity<"real", "current*time">
-      %derivative = "nodal.analog_ddt"(%charge) <{analyses = ["transient"], context = "contribution", initialization = "none", input_dimension = "current*time", metadata = {identity = "derivative"}, operator_contract = "increment35", operator_id = "DifferentialIntegralBackend.derivative", owner = "DifferentialIntegralBackend", result_dimension = "current"}> : (!nodal.quantity<"real", "current*time">) -> !nodal.quantity<"real", "current">
-      "nodal.contribute"(%branch, %derivative) <{kind = "flow", metadata = {}}> : (!nodal.branch<"electrical">, !nodal.quantity<"real", "current">) -> ()
+      %derivative = "nodal.analog_ddt"(%integral) <{analyses = ["transient"], context = "contribution", initialization = "none", input_dimension = "time", metadata = {identity = "derivative"}, operator_contract = "increment35", operator_id = "DifferentialIntegralBackend.derivative", owner = "DifferentialIntegralBackend", result_dimension = "1"}> : (!nodal.quantity<"real", "time">) -> !nodal.quantity<"real", "1">
+      "nodal.contribute"(%branch, %derivative) <{kind = "flow", metadata = {}}> : (!nodal.branch<"electrical">, !nodal.quantity<"real", "1">) -> ()
     }) : () -> ()
   }) : () -> ()
 }

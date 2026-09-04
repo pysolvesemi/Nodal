@@ -71,6 +71,13 @@ class Increment35HardeningTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, verifier)
 
+    def test_idt_is_legal_in_all_analog_region_classifiers(self) -> None:
+        operations = self.text("core/compiler/lib/Dialect/Nodal/NodalOps.cpp")
+        passes = self.text("core/compiler/lib/Transforms/Passes.cpp")
+
+        self.assertIn("nodal::AnalogIdtOp", operations)
+        self.assertGreaterEqual(passes.count('name == "nodal.analog_idt"'), 2)
+
     def test_hardened_native_fixtures_are_present(self) -> None:
         fixtures = (
             "analog-differential-integral-invalid-contract.mlir",

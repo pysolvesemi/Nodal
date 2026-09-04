@@ -27,89 +27,65 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          def replace_once(path: Path, old: str, new: str) -> None:
-              text = path.read_text(encoding="utf-8")
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{path}: expected one replacement, found {count}")
-              path.write_text(text.replace(old, new, 1), encoding="utf-8")
-
           increment33 = Path("tests/compiler/test_increment33.py")
-          replace_once(
-              increment33,
-              '''                "Increment 35 closure candidate evidence is inconsistent",
-          ''',
-              '''                (
-                              "Increment 35 closure candidate evidence is inconsistent"
-                              if document.get("status") == "evidence-closure-candidate"
-                              else "validated Increment 35 evidence is inconsistent"
-                          ),
-          ''',
-          )
+          lines = increment33.read_text(encoding="utf-8").splitlines(keepends=True)
+          old = '                "Increment 35 closure candidate evidence is inconsistent",\n'
+          matches = [index for index, line in enumerate(lines) if line == old]
+          if len(matches) != 1:
+              raise SystemExit(f"Increment 33 dual-state assertion matches: {len(matches)}")
+          index = matches[0]
+          lines[index:index + 1] = [
+              "                (\n",
+              '                    "Increment 35 closure candidate evidence is inconsistent"\n',
+              '                    if document.get("status") == "evidence-closure-candidate"\n',
+              '                    else "validated Increment 35 evidence is inconsistent"\n',
+              "                ),\n",
+          ]
+          increment33.write_text("".join(lines), encoding="utf-8")
 
           increment35 = Path("tests/compiler/test_increment35.py")
-          replace_once(
-              increment35,
-              '''            validation = document["validation"]
-                      assert isinstance(validation, dict)
-                      document["status"] = "validated-differential-integral-operators"
-          ''',
-              '''            validation = document["validation"]
-                      assert isinstance(validation, dict)
-                      if document["status"] == "validated-differential-integral-operators":
-                          CHECKER.check_repository(root)
-                          return
-                      document["status"] = "validated-differential-integral-operators"
-          ''',
+          lines = increment35.read_text(encoding="utf-8").splitlines(keepends=True)
+
+          def bounds(method: str) -> tuple[int, int]:
+              marker = f"    def {method}("
+              starts = [index for index, line in enumerate(lines) if line.startswith(marker)]
+              if len(starts) != 1:
+                  raise SystemExit(f"{method} definitions: {len(starts)}")
+              start = starts[0]
+              end = next(
+                  (index for index in range(start + 1, len(lines)) if lines[index].startswith("    def ")),
+                  len(lines),
+              )
+              return start, end
+
+          start, end = bounds("test_validated_state_remains_supported")
+          status_line = '            document["status"] = "validated-differential-integral-operators"\n'
+          matches = [index for index in range(start, end) if lines[index] == status_line]
+          if len(matches) != 1:
+              raise SystemExit(f"validated-state status assignments: {len(matches)}")
+          index = matches[0]
+          lines[index:index] = [
+              '            if document["status"] == "validated-differential-integral-operators":\n',
+              "                CHECKER.check_repository(root)\n",
+              "                return\n",
+          ]
+
+          start, end = bounds("test_closed_roadmap_regression_is_rejected")
+          old = '            self.assert_rejected(root, "closure candidate requires revision 1.46")\n'
+          matches = [index for index in range(start, end) if lines[index] == old]
+          if len(matches) != 1:
+              raise SystemExit(f"closed-roadmap assertions: {len(matches)}")
+          lines[matches[0]] = '            self.assert_rejected(root, "revision 1.46")\n'
+
+          start, end = bounds("test_evidence_record_mutation_is_rejected")
+          old = '            self.assert_rejected(root, "evidence record")\n'
+          matches = [index for index in range(start, end) if lines[index] == old]
+          if len(matches) != 1:
+              raise SystemExit(f"evidence-record assertions: {len(matches)}")
+          lines[matches[0]] = (
+              '            self.assert_rejected(root, "is missing \'**Implementation PR:** #113\'")\n'
           )
-          replace_once(
-              increment35,
-              '''    def test_closed_roadmap_regression_is_rejected(self) -> None:
-                      temporary, root = self.fixture()
-                      with temporary:
-                          self.replace_file(
-          ''',
-              '''    def test_closed_roadmap_regression_is_rejected(self) -> None:
-                      temporary, root = self.fixture()
-                      with temporary:
-                          _, document = self.read_manifest(root)
-                          expected = (
-                              "closure candidate requires revision 1.46"
-                              if document["status"] == "evidence-closure-candidate"
-                              else "validated state requires roadmap revision 1.46"
-                          )
-                          self.replace_file(
-          ''',
-          )
-          replace_once(
-              increment35,
-              '            self.assert_rejected(root, "closure candidate requires revision 1.46")\n',
-              '            self.assert_rejected(root, expected)\n',
-          )
-          replace_once(
-              increment35,
-              '''    def test_evidence_record_mutation_is_rejected(self) -> None:
-                      temporary, root = self.fixture()
-                      with temporary:
-                          self.replace_file(
-          ''',
-              '''    def test_evidence_record_mutation_is_rejected(self) -> None:
-                      temporary, root = self.fixture()
-                      with temporary:
-                          _, document = self.read_manifest(root)
-                          expected = (
-                              "evidence record"
-                              if document["status"] == "evidence-closure-candidate"
-                              else "validated evidence-closure record"
-                          )
-                          self.replace_file(
-          ''',
-          )
-          replace_once(
-              increment35,
-              '            self.assert_rejected(root, "evidence record")\n',
-              '            self.assert_rejected(root, expected)\n',
-          )
+          increment35.write_text("".join(lines), encoding="utf-8")
           PY
           python3 -m py_compile \
             scripts/check_increment33.py \

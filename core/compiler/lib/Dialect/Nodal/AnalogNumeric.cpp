@@ -684,6 +684,13 @@ LogicalResult verifyContinuousContract(Operation *operation, bool stateful,
       owner.getValue().trim().empty())
     return emitMappedFailure(operation, "NODAL-ANALOG-035-002",
                              "continuous-time operator identity and owner must be non-empty");
+  const llvm::StringRef operatorIdentity = operatorId.getValue();
+  const llvm::StringRef ownerIdentity = owner.getValue();
+  if (!operatorIdentity.starts_with(ownerIdentity) ||
+      !operatorIdentity.drop_front(ownerIdentity.size()).starts_with("."))
+    return emitMappedFailure(
+        operation, "NODAL-ANALOG-035-002",
+        "continuous-time operator identity must be owned by its declared owner");
   if (!context ||
       (context.getValue() != "legacy-analog" &&
        context.getValue() != "equation" &&
@@ -967,9 +974,32 @@ LogicalResult verifySelect(Operation *operation) {
 }
 
 LogicalResult verifyDdt(Operation *operation) {
+  const bool contracted =
+      static_cast<bool>(operation->getAttrOfType<StringAttr>("operator_contract"));
   if (operation->getNumOperands() != 1 || operation->getNumResults() != 1)
-    return emitMappedFailure(operation, "NODAL-ANALOG-035-002",
-                             "ddt requires one input and one result");
+    return emitMappedFailure(
+        operation,
+        contracted ? llvm::StringRef("NODAL-ANALOG-035-002")
+                   : llvm::StringRef("NODAL-ANALOG-DDT-001"),
+        "ddt requires one input and one result");
+
+  if (!contracted) {
+    if (operation->getOperand(0).getType().isF64() &&
+        operation->getResult(0).getType().isF64())
+      return success();
+    auto input = getAnalogNumericTypeInfo(operation->getOperand(0).getType());
+    if (failed(input) || input->kind != AnalogNumericKind::Real)
+      return emitMappedFailure(operation, "NODAL-ANALOG-DDT-001",
+                               "typed ddt requires a real quantity input");
+    auto dimension = combineAnalogDimensions(input->dimension, "time", true);
+    if (failed(dimension) ||
+        !semanticTypeMatches(operation->getResult(0).getType(),
+                             AnalogNumericKind::Real, *dimension))
+      return emitMappedFailure(operation, "NODAL-ANALOG-DDT-001",
+                               "ddt result must subtract one time exponent");
+    return success();
+  }
+
   auto input = getAnalogNumericTypeInfo(operation->getOperand(0).getType());
   auto result = getAnalogNumericTypeInfo(operation->getResult(0).getType());
   if (failed(input) || failed(result) ||
@@ -981,19 +1011,16 @@ LogicalResult verifyDdt(Operation *operation) {
   std::string inputDimension = input->dimension;
   std::string resultDimension;
   if (input->legacyF64 && result->legacyF64) {
-    if (!operation->getAttr("operator_contract"))
-      return success();
     inputDimension = textAttr(operation, "input_dimension").str();
     resultDimension = textAttr(operation, "result_dimension").str();
-    auto dimension =
-        combineAnalogDimensions(inputDimension, "time", true);
+    auto dimension = combineAnalogDimensions(inputDimension, "time", true);
     if (failed(dimension) || resultDimension != *dimension)
       return emitMappedFailure(operation, "NODAL-ANALOG-035-003",
                                "ddt result must subtract one time exponent");
   } else {
     if (input->legacyF64 || result->legacyF64)
       return emitMappedFailure(operation, "NODAL-ANALOG-035-003",
-                               "ddt cannot mix legacy f64 and typed quantity values");
+                               "contracted ddt cannot mix legacy f64 and typed quantities");
     auto dimension = combineAnalogDimensions(input->dimension, "time", true);
     if (failed(dimension) || result->dimension != *dimension)
       return emitMappedFailure(operation, "NODAL-ANALOG-035-003",
@@ -1200,9 +1227,34 @@ LogicalResult verifyAnalogNumericOperation(Operation *operation) {
 
 LogicalResult verifyAnalogNumericModel(mlir::ModuleOp module) {
   LogicalResult result = success();
+  llvm::StringSet<> continuousOperatorIds;
+  llvm::StringSet<> continuousStateIds;
   module.walk([&](Operation *operation) {
     if (failed(result))
       return;
+    const llvm::StringRef operationName = operation->getName().getStringRef();
+    if ((operationName == "nodal.analog_ddt" ||
+         operationName == "nodal.analog_idt") &&
+        operation->getAttr("operator_contract")) {
+      if (auto operatorId = operation->getAttrOfType<StringAttr>("operator_id")) {
+        if (!operatorId.getValue().trim().empty() &&
+            !continuousOperatorIds.insert(operatorId.getValue()).second) {
+          result = emitMappedFailure(
+              operation, "NODAL-ANALOG-035-002",
+              "continuous-time operator identity must be unique");
+          return;
+        }
+      }
+      if (auto stateId = operation->getAttrOfType<StringAttr>("state_id")) {
+        if (!stateId.getValue().trim().empty() &&
+            !continuousStateIds.insert(stateId.getValue()).second) {
+          result = emitMappedFailure(
+              operation, "NODAL-ANALOG-035-005",
+              "integral state identity must be unique");
+          return;
+        }
+      }
+    }
     for (Type type : operation->getOperandTypes()) {
       if (auto quantity = llvm::dyn_cast<QuantityType>(type)) {
         if (!isCanonicalDimensionSignature(quantity.getDimension())) {

@@ -167,7 +167,7 @@ def check_repository(root: Path) -> None:
             "def registerContinuousOperator",
             "NODAL-ANALOG-035-001",
             "NODAL-ANALOG-035-004",
-            "current*time",
+            "inputDimension.multiply(AnalogDimension.Time)",
             'Some(s"$path.state")',
             "continuousOperators = continuousOperatorSnapshots",
         ),
@@ -221,7 +221,7 @@ def check_repository(root: Path) -> None:
     )
     require_tokens(
         backend,
-        ('name == "nodal.analog_idt"', 'llvm::Twine("idt(")', "nodal.simplified"),
+        ('name == "nodal.analog_idt"', '"nodal.analog_idt",', 'llvm::Twine("idt(")', "nodal.simplified"),
         "Verilog-A vertical slice",
     )
 

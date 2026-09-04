@@ -172,6 +172,16 @@
       "NODAL-ANALOG-033-018",
       "NODAL-ANALOG-033-019",
       "NODAL-ANALOG-033-020"
+    ],
+    "analog-differential-integral": [
+      "NODAL-ANALOG-035-001",
+      "NODAL-ANALOG-035-002",
+      "NODAL-ANALOG-035-003",
+      "NODAL-ANALOG-035-004",
+      "NODAL-ANALOG-035-005",
+      "NODAL-ANALOG-035-006",
+      "NODAL-ANALOG-035-007",
+      "NODAL-ANALOG-035-008"
     ]
   },
   "preserved_prefixes": [
@@ -208,6 +218,7 @@
     "NODAL-BACKEND-QUANTITY-",
     "NODAL-ACCESS-",
     "NODAL-PROBE-",
-    "NODAL-ANALOG-033-"
+    "NODAL-ANALOG-033-",
+    "NODAL-ANALOG-035-"
   ]
 }

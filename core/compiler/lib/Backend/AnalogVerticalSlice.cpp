@@ -65,6 +65,7 @@ constexpr llvm::StringLiteral kSupportedOperations[] = {
     "nodal.analog_logic",
     "nodal.analog_select",
     "nodal.analog_ddt",
+    "nodal.analog_idt",
     "nodal.contribute",
 };
 

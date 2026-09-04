@@ -30,7 +30,9 @@
     "ddt_authored_operation_retained": true,
     "idt_folding_prohibited": true,
     "inverse_operator_cancellation": false,
-    "operator_distribution": false
+    "operator_distribution": false,
+    "legacy_ddt_diagnostic_compatibility": true,
+    "native_operator_identity_uniqueness": true
   },
   "integration": {
     "public_scala_api": true,
@@ -43,7 +45,8 @@
     "compiler_boundary_diagnostics": true,
     "constant_pass_integration": true,
     "verilog_a_vertical_slice": true,
-    "full_dae_solver_lowering": false
+    "full_dae_solver_lowering": false,
+    "bootstrap_scaffolding_removed": true
   },
   "diagnostics": [
     "NODAL-ANALOG-035-001",

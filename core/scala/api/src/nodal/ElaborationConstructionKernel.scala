@@ -1826,14 +1826,17 @@ private final class ConstructionSession(val options: EmitOptions):
               Some(expressionPath(reference))
             )
           )
-          val operandPaths = expression.operands.toVector.map: operand =>
-            pathOf(operand).getOrElse(
-              fail(
-                "NODAL-ANALOG-SNAPSHOT-002",
-                s"analog expression operand '${renderAny(operand, reference.module)}' has no semantic path",
-                Some(expressionPath(reference))
-              )
-            )
+          val operandPaths =
+            if expression.literal.nonEmpty then Vector.empty
+            else
+              expression.operands.toVector.map: operand =>
+                pathOf(operand).getOrElse(
+                  fail(
+                    "NODAL-ANALOG-SNAPSHOT-002",
+                    s"analog expression operand '${renderAny(operand, reference.module)}' has no semantic path",
+                    Some(expressionPath(reference))
+                  )
+                )
           KernelAnalogExpressionSnapshot(
             expressionPath(reference),
             expression.operation.getOrElse("unsupported_generic"),

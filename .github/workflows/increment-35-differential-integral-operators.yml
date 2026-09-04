@@ -1,0 +1,154 @@
+name: Increment 35 Differential and Integral Operators
+
+on:
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - '.github/workflows/increment-35-differential-integral-operators.yml'
+      - 'core/scala/api/src/nodal/CandidateApi.scala'
+      - 'core/scala/api/src/nodal/ElaborationConstructionKernel.scala'
+      - 'core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala'
+      - 'core/scala/testkit/test/src/nodal/DifferentialIntegralConstructionTests.scala'
+      - 'core/scala/testkit/test/src/nodal/internal/testkit/DifferentialIntegralBridgeTests.scala'
+      - 'core/compiler/include/nodal/Dialect/Nodal/NodalOps.td'
+      - 'core/compiler/lib/Dialect/Nodal/NodalOps.cpp'
+      - 'core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp'
+      - 'core/compiler/lib/Backend/AnalogVerticalSlice.cpp'
+      - 'core/compiler/test/CMakeLists.txt'
+      - 'core/compiler/test/IR/analog-differential-integral*.mlir'
+      - 'docs/design-gates/NodalDifferentialIntegralOperators-DG-v0.1.md'
+      - 'docs/implementation/increment35-differential-integral-operators.md'
+      - 'docs/roadmap/nodal-development-todo.md'
+      - 'examples/continuousTimeApi/src/nodal/increment35fixture/**'
+      - 'scripts/check_increment35.py'
+      - 'tests/compiler/fixtures/increment34/manifest.json'
+      - 'tests/compiler/fixtures/increment35/**'
+      - 'tests/compiler/test_increment35.py'
+  push:
+    branches:
+      - increment/35-differential-integral-operators-v1
+
+permissions:
+  contents: read
+
+jobs:
+  increment-35-differential-integral-operators:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate predecessor and Increment 35 contracts
+        run: |
+          python3 scripts/check_increment34.py
+          python3 scripts/check_increment35.py
+          python3 -m unittest discover -s tests/compiler -p 'test_increment35.py'
+
+      - name: Compile Scala API and focused construction tests
+        run: |
+          # The full Scala gate compiles and executes DifferentialIntegralConstructionTests
+          # and DifferentialIntegralBridgeTests with the rest of the source-semantic suite.
+          ./nodal core scala
+
+      - name: Execute Increment 35 source-semantic witness
+        shell: bash
+        run: |
+          report=/tmp/increment35-construction-witness.txt
+          for attempt in 1 2; do
+            rm -f "$report"
+            if ./mill -i examples.continuousTimeApi.runMain \
+              nodal.increment35fixture.Increment35ConstructionCheck \
+              "$report"; then
+              break
+            fi
+            if [ "$attempt" -eq 2 ]; then
+              exit 1
+            fi
+            echo 'Retrying Increment 35 construction witness after a transient Mill failure.'
+          done
+          test -s "$report"
+          grep -F 'operator_count=3' "$report"
+          grep -F 'ddt_result_dimension=time^-1*voltage' "$report"
+          grep -F 'idt_fixed_initialization=fixed' "$report"
+          grep -F 'idt_solver_initialization=solver-selected' "$report"
+          grep -F 'equation_context=true' "$report"
+          grep -F 'outside_context=NODAL-ANALOG-035-001' "$report"
+          grep -F 'initial_context=NODAL-ANALOG-035-001' "$report"
+          grep -F 'procedural_context=NODAL-ANALOG-035-001' "$report"
+          grep -F 'initial_mismatch=NODAL-ANALOG-035-004' "$report"
+          grep -F 'bridge_has_idt=true' "$report"
+
+      - name: Build native compiler and execute operator matrix
+        shell: bash
+        run: |
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+          nodalc=$(find out -type f -name nodalc -perm -u+x | head -n 1)
+          nodal_translate=$(find out -type f -name nodal-translate -perm -u+x | head -n 1)
+          test -n "$nodalc"
+          test -n "$nodal_translate"
+
+          "$nodalc" \
+            '--pass-pipeline=builtin.module(nodal-fold-analog-constants,nodal-verify-analog-numeric)' \
+            core/compiler/test/IR/analog-differential-integral.mlir \
+            > "${RUNNER_TEMP}/increment35-native.mlir"
+          grep -F 'nodal.analog_ddt' "${RUNNER_TEMP}/increment35-native.mlir"
+          grep -F 'nodal.analog_idt' "${RUNNER_TEMP}/increment35-native.mlir"
+          grep -F 'nodal.simplification_rule = "ddt-time-invariant-zero"' \
+            "${RUNNER_TEMP}/increment35-native.mlir"
+          grep -F 'state_id = "DifferentialIntegral.fixed.state"' \
+            "${RUNNER_TEMP}/increment35-native.mlir"
+
+          check_invalid() {
+            fixture=$1
+            diagnostic=$2
+            output="${RUNNER_TEMP}/${fixture}.log"
+            if "$nodalc" "core/compiler/test/IR/analog-differential-integral-invalid-${fixture}.mlir" \
+              >"$output" 2>&1; then
+              cat "$output"
+              echo "Expected ${fixture} fixture to fail"
+              exit 1
+            fi
+            cat "$output"
+            grep -F "$diagnostic" "$output"
+          }
+          check_invalid context NODAL-ANALOG-035-001
+          check_invalid initial NODAL-ANALOG-035-004
+          check_invalid state NODAL-ANALOG-035-005
+          check_invalid simplification NODAL-ANALOG-035-007
+          check_invalid idt-fold NODAL-ANALOG-035-008
+
+          "$nodal_translate" \
+            --nodal-to-verilog-a \
+            core/compiler/test/IR/analog-differential-integral-backend.mlir \
+            > "${RUNNER_TEMP}/increment35-backend.va"
+          grep -F 'idt(' "${RUNNER_TEMP}/increment35-backend.va"
+
+      - name: Check repository style and documentation
+        run: |
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          if ! ./nodal style check \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"; then
+            ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources || true
+            git --no-pager diff -- \
+              core/scala/api/src/nodal/CandidateApi.scala \
+              core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
+              core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala \
+              core/scala/testkit/test/src/nodal/DifferentialIntegralConstructionTests.scala \
+              core/scala/testkit/test/src/nodal/internal/testkit/DifferentialIntegralBridgeTests.scala \
+              examples/continuousTimeApi/src/nodal/increment35fixture/Increment35ConstructionCheck.scala
+            exit 1
+          fi
+          git diff --check

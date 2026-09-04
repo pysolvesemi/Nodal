@@ -45,6 +45,7 @@ REQUIRED = (
     "tests/compiler/fixtures/increment33/analog_procedural_runtime_test.cpp",
     "tests/compiler/fixtures/increment33/manifest.json",
     "tests/compiler/fixtures/increment34/manifest.json",
+    "tests/compiler/fixtures/increment35/manifest.json",
 )
 
 
@@ -81,7 +82,7 @@ class Increment33ContractTests(unittest.TestCase):
             path = root / "docs/roadmap/nodal-development-todo.md"
             path.write_text(
                 path.read_text(encoding="utf-8").replace(
-                    "**Revision:** 1.45",
+                    "**Revision:** 1.46",
                     "**Revision:** 1.43",
                     1,
                 ),
@@ -139,18 +140,44 @@ class Increment33ContractTests(unittest.TestCase):
                 json.dumps(document, indent=2) + "\n",
                 encoding="utf-8",
             )
+            increment35_path = root / "tests/compiler/fixtures/increment35/manifest.json"
+            increment35 = json.loads(increment35_path.read_text(encoding="utf-8"))
+            increment35["status"] = "implementation-in-progress"
+            increment35["tranche"] = "35a-differential-integral-operator-contract"
+            increment35["validation"] = None
+            increment35_path.write_text(
+                json.dumps(increment35, indent=2) + "\n",
+                encoding="utf-8",
+            )
             roadmap = root / "docs/roadmap/nodal-development-todo.md"
             roadmap.write_text(
                 roadmap.read_text(encoding="utf-8")
-                .replace("**Revision:** 1.45", "**Revision:** 1.44", 1)
+                .replace("**Revision:** 1.46", "**Revision:** 1.44", 1)
                 .replace(
                     "- [x] **Increment 34 — Analog control flow**",
                     "- [ ] **Increment 34 — Analog control flow**",
+                    1,
+                )
+                .replace(
+                    "- [x] **Increment 35 — Differential and integral operators**",
+                    "- [ ] **Increment 35 — Differential and integral operators**",
                     1,
                 ),
                 encoding="utf-8",
             )
             CHECKER.check_repository(root)
+
+    def test_increment35_successor_identity_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "tests/compiler/fixtures/increment35/manifest.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["validation"]["accepted_head"] = "0" * 40
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            self.assert_rejected(
+                root,
+                "Increment 35 closure candidate evidence is inconsistent",
+            )
 
     def test_assignment_order_mutation_is_rejected(self) -> None:
         temporary, root = self.fixture()

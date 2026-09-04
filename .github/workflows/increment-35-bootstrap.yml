@@ -12,7 +12,6 @@ permissions:
 
 jobs:
   apply-source-repair:
-    if: ${{ hashFiles('scripts/apply_increment35_repair.py') != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
@@ -21,19 +20,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply audited source repair
-        run: python3 scripts/apply_increment35_repair.py
-
-      - name: Validate repaired source tree
+      - name: Apply, validate, and commit source-only repair
+        shell: bash
         run: |
+          if [ ! -f scripts/apply_increment35_repair.py ]; then
+            echo 'Increment 35 source repair already consumed.'
+            exit 0
+          fi
+          python3 scripts/apply_increment35_repair.py
           python3 scripts/check_increment24.py
           python3 scripts/check_increment34.py
           python3 scripts/check_increment35.py
           python3 -m unittest discover -s tests/compiler -p 'test_increment35.py'
           git diff --check
-
-      - name: Commit source-only repair
-        run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A

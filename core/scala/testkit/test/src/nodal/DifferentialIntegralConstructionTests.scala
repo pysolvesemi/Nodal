@@ -65,7 +65,7 @@ object DifferentialIntegralConstructionTests extends TestSuite:
       .code
 
   val tests: Tests = Tests:
-    test("ddt and idt retain dimensions, state, initialization, analyses, owner, and source"):
+    test("ddt and idt retain complete source semantics"):
       val snapshot = ConstructionKernel.inspect(new DifferentialIntegralLegacyTop)
       val operators = snapshot.continuousOperators
 

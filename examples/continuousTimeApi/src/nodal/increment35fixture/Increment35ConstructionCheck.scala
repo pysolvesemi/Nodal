@@ -96,6 +96,17 @@ object Increment35ConstructionCheck:
     val derivative = legacy.continuousOperators.find(_.operation == "analog_ddt").get
     val typed = typedInitial.continuousOperators.find(_.operation == "analog_idt").get
     val bridge = ScalaToMlirBridge.lower(new Increment35LegacyFixture)
+    val analysisInventoryExact =
+      legacy.continuousOperators.forall(_.analyses == ExpectedAnalyses)
+    val ownerQualified =
+      legacy.continuousOperators.forall(value => value.path.startsWith(s"${value.owner}."))
+    val equationContext = equation.continuousOperators.forall(_.context == "equation")
+    val contributionContext =
+      contribution.continuousOperators.forall(_.context == "contribution")
+    val stateIdsUnique = firstStates.distinct.size == firstStates.size
+    val stateIdsStable = firstStates == secondStates
+    val operatorPathsStable =
+      legacy.continuousOperators.map(_.path) == replay.continuousOperators.map(_.path)
 
     val lines = Vector(
       s"operator_count=${legacy.continuousOperators.size}",
@@ -103,14 +114,14 @@ object Increment35ConstructionCheck:
       s"idt_fixed_state=${fixed.stateId.getOrElse("")}",
       s"idt_fixed_initialization=${fixed.initialization}",
       s"idt_solver_initialization=${solver.initialization}",
-      s"analysis_inventory_exact=${legacy.continuousOperators.forall(_.analyses == ExpectedAnalyses)}",
-      s"owner_qualified=${legacy.continuousOperators.forall(value => value.path.startsWith(s"${value.owner}."))}",
-      s"equation_context=${equation.continuousOperators.forall(_.context == "equation")}",
-      s"contribution_context=${contribution.continuousOperators.forall(_.context == "contribution")}",
+      s"analysis_inventory_exact=$analysisInventoryExact",
+      s"owner_qualified=$ownerQualified",
+      s"equation_context=$equationContext",
+      s"contribution_context=$contributionContext",
       s"typed_initial_dimension=${typed.resultDimension}",
-      s"state_ids_unique=${firstStates.distinct.size == firstStates.size}",
-      s"state_ids_stable=${firstStates == secondStates}",
-      s"operator_paths_stable=${legacy.continuousOperators.map(_.path) == replay.continuousOperators.map(_.path)}",
+      s"state_ids_unique=$stateIdsUnique",
+      s"state_ids_stable=$stateIdsStable",
+      s"operator_paths_stable=$operatorPathsStable",
       s"outside_context=${failureCode(new Increment35OutsideFixture)}",
       s"initial_context=${failureCode(new Increment35InitialFixture)}",
       s"procedural_context=${failureCode(new Increment35ProceduralFixture)}",

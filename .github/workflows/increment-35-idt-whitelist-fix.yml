@@ -1,0 +1,116 @@
+name: Increment 35 IDT Whitelist Repair
+
+on:
+  push:
+    branches:
+      - increment/35-differential-integral-operators-v1
+    paths:
+      - '.github/workflows/increment-35-idt-whitelist-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair-idt-whitelists:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Add idt to all analog-region classifiers
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path: Path, old: str, new: str, expected: int) -> None:
+              text = path.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != expected:
+                  raise RuntimeError(
+                      f'{path}: expected {expected} replacement(s), found {count}: {old!r}'
+                  )
+              path.write_text(text.replace(old, new), encoding='utf-8')
+
+          ops = Path('core/compiler/lib/Dialect/Nodal/NodalOps.cpp')
+          replace_exact(
+              ops,
+              'nodal::AnalogSelectOp, nodal::AnalogDdtOp, nodal::AccessOp,',
+              'nodal::AnalogSelectOp, nodal::AnalogDdtOp, nodal::AnalogIdtOp, nodal::AccessOp,',
+              1,
+          )
+
+          passes = Path('core/compiler/lib/Transforms/Passes.cpp')
+          replace_exact(
+              passes,
+              'name == "nodal.analog_select" || name == "nodal.analog_ddt" || name == "nodal.contribute"',
+              'name == "nodal.analog_select" || name == "nodal.analog_ddt" ||\n'
+              '          name == "nodal.analog_idt" || name == "nodal.contribute"',
+              2,
+          )
+
+          hardening = Path('tests/compiler/test_increment35_hardening.py')
+          marker = '''    def test_hardened_native_fixtures_are_present(self) -> None:\n'''
+          method = '''    def test_idt_is_legal_in_all_analog_region_classifiers(self) -> None:\n        operations = self.text("core/compiler/lib/Dialect/Nodal/NodalOps.cpp")\n        passes = self.text("core/compiler/lib/Transforms/Passes.cpp")\n\n        self.assertIn("nodal::AnalogIdtOp", operations)\n        self.assertGreaterEqual(passes.count('name == "nodal.analog_idt"'), 2)\n\n'''
+          text = hardening.read_text(encoding='utf-8')
+          if text.count(marker) != 1:
+              raise RuntimeError('hardening test insertion marker is missing or ambiguous')
+          hardening.write_text(text.replace(marker, method + marker, 1), encoding='utf-8')
+          PY
+
+      - name: Apply pinned C++ formatting
+        run: |
+          ./nodal style bootstrap \
+            --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          python3 scripts/run_clang_tools.py format \
+            --fix \
+            --toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          python3 scripts/run_clang_tools.py format \
+            --check \
+            --toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Validate repository and native Increment 35 subset
+        shell: bash
+        run: |
+          mapfile -t changed < <(git diff --name-only)
+          printf 'changed file: %s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq 3
+          printf '%s\n' "${changed[@]}" | grep -Fx \
+            'core/compiler/lib/Dialect/Nodal/NodalOps.cpp'
+          printf '%s\n' "${changed[@]}" | grep -Fx \
+            'core/compiler/lib/Transforms/Passes.cpp'
+          printf '%s\n' "${changed[@]}" | grep -Fx \
+            'tests/compiler/test_increment35_hardening.py'
+
+          python3 scripts/check_increment24.py
+          python3 scripts/check_increment34.py
+          python3 scripts/check_increment35.py
+          python3 -m unittest discover -s tests/compiler -p 'test_increment35*.py'
+
+          ./nodal bootstrap \
+            --mode prebuilt \
+            --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          build_dir=$(find out -type f -name CTestTestfile.cmake -printf '%h\n' | head -n 1)
+          test -n "$build_dir"
+          ctest --test-dir "$build_dir" \
+            --output-on-failure \
+            -R 'analog-differential-integral'
+          git diff --check
+
+      - name: Commit permanent source repair
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            core/compiler/lib/Dialect/Nodal/NodalOps.cpp \
+            core/compiler/lib/Transforms/Passes.cpp \
+            tests/compiler/test_increment35_hardening.py
+          git commit -m 'Authorize idt across analog-region semantic gates'
+          git push origin HEAD:increment/35-differential-integral-operators-v1

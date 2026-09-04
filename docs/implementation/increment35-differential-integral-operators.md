@@ -10,9 +10,11 @@ This tranche replaces the public `idt` placeholder and routes both `ddt` and `id
 
 The construction snapshot now records operator identity, owner, context, input and result dimensions, optional initial-condition path, stable integration-state identity, initialization policy, analysis applicability, and source span. The Scala-to-MLIR bridge serializes the same inventory and emits first-class `nodal.analog_ddt` and `nodal.analog_idt` operations for the executable legacy analog vertical slice.
 
-The native dialect adds `nodal.analog_idt` and independently verifies the Increment 35 contract. The existing analog constant pass may annotate a contracted `ddt` as zero only when its input is compiler-proven time invariant. It retains the authored operation and its semantic identity. The pass removes no `idt` operation, and the verifier rejects any fold or simplification metadata attached to `idt`.
+The native dialect adds `nodal.analog_idt` and independently verifies the Increment 35 contract. Contracted operator identities must be owner-qualified and unique, and every `idt` state identity is derived from and owned by its operator. Older uncontracted `ddt` IR preserves the Increment 24 `NODAL-ANALOG-DDT-001` type-verification contract.
 
-The Verilog-A vertical slice renders `idt(input)` and `idt(input, initial)` and may render a verified simplified `ddt` as `0.0`.
+The existing analog constant pass may annotate a contracted `ddt` as zero only when its input is compiler-proven time invariant. It retains the authored operation and its semantic identity. The pass removes no `idt` operation, and the verifier rejects any fold or simplification metadata attached to `idt`.
+
+The Verilog-A vertical slice explicitly accepts both operations and renders `ddt(input)`, `idt(input)`, and `idt(input, initial)`. A verified simplified derivative may render as `0.0` while its authored source-semantic operation remains in IR.
 
 ## Source semantics
 
@@ -22,14 +24,15 @@ The Verilog-A vertical slice renders `idt(input)` and `idt(input, initial)` and 
 - Exact numeric zero is accepted as a dimension-polymorphic initial condition and recorded with the integral result dimension.
 - Operators are legal in equations, contributions, and the legacy analog region only.
 - Initial-equation, procedural, and out-of-region use is rejected.
+- The bridge records the exact canonical six-analysis inventory.
 
 ## Verification matrix
 
-Scala tests cover construction snapshots, source correlation, context restrictions, state identity, fixed and solver-selected initialization, dimensional mismatch, and deterministic bridge serialization.
+Scala tests cover construction snapshots, source correlation, equation and contribution contexts, owner qualification, exact analysis applicability, deterministic unique state identities, fixed and solver-selected initialization, a typed non-zero initial condition, dimensional mismatch, and deterministic bridge serialization.
 
-Native tests cover typed differential and integral dimensions, time-invariant derivative annotation, preservation of stateful integrals, Verilog-A rendering, and stable rejection diagnostics for illegal context, invalid initial condition, invalid state identity, forged simplification, and attempted `idt` folding.
+Native tests cover typed differential and integral dimensions, time-invariant derivative annotation, preservation of stateful integrals, Verilog-A rendering, legacy `ddt` compatibility, and stable rejection diagnostics for illegal context, missing or invalid contracts, owner mismatch, invalid dimensions, invalid analyses, invalid initial conditions, invalid state identity, duplicate operator identity, forged simplification, and attempted `idt` folding.
 
-A dedicated Increment 35 workflow runs the repository contract checker, focused Scala tests, the full Scala build, native compiler tests, invalid-diagnostic fixtures, and formatting checks.
+A dedicated read-only Increment 35 workflow runs the Increment 24 compatibility checker, the validated Increment 34 predecessor checker, the Increment 35 repository and hardening tests, the full Scala build, the source-semantic witness, native compiler tests, invalid-diagnostic fixtures, backend rendering, and formatting checks. Temporary bootstrap workflows, staging fragments, repair scripts, and triggers are prohibited on the accepted head.
 
 ## Honest boundary
 

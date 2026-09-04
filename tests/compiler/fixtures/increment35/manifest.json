@@ -32,7 +32,12 @@
     "inverse_operator_cancellation": false,
     "operator_distribution": false,
     "legacy_ddt_diagnostic_compatibility": true,
-    "native_operator_identity_uniqueness": true
+    "native_operator_identity_uniqueness": true,
+    "operator_identity_owner_qualified": true,
+    "contribution_context_retained": true,
+    "typed_nonzero_initial_condition": true,
+    "exact_analysis_inventory": true,
+    "deterministic_unique_state_identity": true
   },
   "integration": {
     "public_scala_api": true,
@@ -46,7 +51,8 @@
     "constant_pass_integration": true,
     "verilog_a_vertical_slice": true,
     "full_dae_solver_lowering": false,
-    "bootstrap_scaffolding_removed": true
+    "bootstrap_scaffolding_removed": true,
+    "hardening_regressions": true
   },
   "diagnostics": [
     "NODAL-ANALOG-035-001",

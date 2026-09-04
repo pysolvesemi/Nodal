@@ -16,6 +16,21 @@ final class Increment35EquationFixture extends Module:
     val derivative = ddt(1.0.V)
     val integral = idt(1.0.A)
 
+final class Increment35ContributionFixture extends Module:
+  contributions:
+    val derivative = ddt(1.0.V)
+    val integral = idt(1.0.A)
+
+final class Increment35TypedInitialFixture extends Module:
+  analog:
+    val initialCharge = 2.0.A * 3.0.s
+    val integral = idt(1.0.A, initialCharge)
+
+final class Increment35MultipleStateFixture extends Module:
+  analog:
+    val first = idt(1.0.A)
+    val second = idt(2.0.A, 0.0.real)
+
 final class Increment35OutsideFixture extends Module:
   val invalid = idt(1.0.A)
 
@@ -32,6 +47,15 @@ final class Increment35MismatchFixture extends Module:
     val invalid = idt(1.0.A, 1.0.V)
 
 object Increment35ConstructionCheck:
+  private val ExpectedAnalyses = Vector(
+    "ac",
+    "dc",
+    "initialization",
+    "noise",
+    "operating-point",
+    "transient"
+  )
+
   private def failureCode(top: => Module): String =
     scala.util
       .Try(ConstructionKernel.inspect(top))
@@ -47,7 +71,18 @@ object Increment35ConstructionCheck:
       .getOrElse(Path.of("/tmp/increment35-construction-check.txt"))
 
     val legacy = ConstructionKernel.inspect(new Increment35LegacyFixture)
+    val replay = ConstructionKernel.inspect(new Increment35LegacyFixture)
     val equation = ConstructionKernel.inspect(new Increment35EquationFixture)
+    val contribution = ConstructionKernel.inspect(new Increment35ContributionFixture)
+    val typedInitial = ConstructionKernel.inspect(new Increment35TypedInitialFixture)
+    val firstStates = ConstructionKernel
+      .inspect(new Increment35MultipleStateFixture)
+      .continuousOperators
+      .flatMap(_.stateId)
+    val secondStates = ConstructionKernel
+      .inspect(new Increment35MultipleStateFixture)
+      .continuousOperators
+      .flatMap(_.stateId)
     val fixed = legacy.continuousOperators
       .find(operator =>
         operator.operation == "analog_idt" && operator.initialization == "fixed"
@@ -59,6 +94,7 @@ object Increment35ConstructionCheck:
       )
       .get
     val derivative = legacy.continuousOperators.find(_.operation == "analog_ddt").get
+    val typed = typedInitial.continuousOperators.find(_.operation == "analog_idt").get
     val bridge = ScalaToMlirBridge.lower(new Increment35LegacyFixture)
 
     val lines = Vector(
@@ -67,7 +103,14 @@ object Increment35ConstructionCheck:
       s"idt_fixed_state=${fixed.stateId.getOrElse("")}",
       s"idt_fixed_initialization=${fixed.initialization}",
       s"idt_solver_initialization=${solver.initialization}",
+      s"analysis_inventory_exact=${legacy.continuousOperators.forall(_.analyses == ExpectedAnalyses)}",
+      s"owner_qualified=${legacy.continuousOperators.forall(value => value.path.startsWith(s"${value.owner}."))}",
       s"equation_context=${equation.continuousOperators.forall(_.context == "equation")}",
+      s"contribution_context=${contribution.continuousOperators.forall(_.context == "contribution")}",
+      s"typed_initial_dimension=${typed.resultDimension}",
+      s"state_ids_unique=${firstStates.distinct.size == firstStates.size}",
+      s"state_ids_stable=${firstStates == secondStates}",
+      s"operator_paths_stable=${legacy.continuousOperators.map(_.path) == replay.continuousOperators.map(_.path)}",
       s"outside_context=${failureCode(new Increment35OutsideFixture)}",
       s"initial_context=${failureCode(new Increment35InitialFixture)}",
       s"procedural_context=${failureCode(new Increment35ProceduralFixture)}",

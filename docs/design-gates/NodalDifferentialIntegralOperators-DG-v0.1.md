@@ -26,7 +26,7 @@ For input dimension `D`:
 - a non-zero `idt` initial condition must have the result dimension;
 - exact numeric zero is dimension-polymorphic at the source boundary and is canonicalized to the result dimension.
 
-Unknown or incompatible dimensions are rejected before lowering. The native verifier independently checks canonical exponent signatures.
+Unknown or incompatible dimensions are rejected before lowering. The native verifier independently checks canonical exponent signatures. The positive matrix includes a typed non-zero initial condition, not only the dimension-polymorphic zero compatibility case.
 
 ## Legal contexts
 
@@ -36,14 +36,14 @@ The operators are legal only in declarative continuous-time regions:
 - `contributions {}`;
 - the legacy `analog {}` compatibility region.
 
-They are rejected outside a continuous-time region, in `initialEquations {}`, and in `analogProcedure {}`. This prevents hidden dynamic state from entering initialization-only or ordered procedural semantics.
+They are rejected outside a continuous-time region, in `initialEquations {}`, and in `analogProcedure {}`. Equation and contribution contexts remain distinguishable in the construction snapshot and bridge inventory. This prevents hidden dynamic state from entering initialization-only or ordered procedural semantics.
 
-## State and initialization
+## State, identity, and initialization
 
-Every `idt` operation carries:
+Every contracted operator carries an owner-qualified stable `operator_id`. Operator identities are unique in the verified model. Every `idt` operation additionally carries:
 
-- a stable `operator_id`;
 - exactly one derived `state_id`, equal to `<operator_id>.state`;
+- a state identity that is unique and deterministic across repeated elaboration;
 - `initialization = "fixed"` with two operands, or `"solver-selected"` with one operand;
 - an `initial_dimension` only for fixed initialization.
 
@@ -51,7 +51,7 @@ No implicit zero is invented for the one-operand form. `ddt` carries `initializa
 
 ## Analysis applicability
 
-The source bridge records an explicit canonical analysis set: initialization, operating point, DC, transient, AC, and noise. Native IR requires supported unique analysis names and transient applicability. Analysis-specific solver lowering remains deferred.
+The source bridge records the exact canonical analysis set: initialization, operating point, DC, transient, AC, and noise. Native IR requires supported unique analysis names and transient applicability. Analysis-specific solver lowering remains deferred.
 
 ## Simplification
 
@@ -68,7 +68,22 @@ Dynamic inputs and forged annotations are rejected. `idt` is stateful and may ne
 
 ## Native IR contract
 
-`nodal.analog_ddt` and `nodal.analog_idt` carry a versioned `operator_contract = "increment35"`, identity, owner, legal context, input and result dimensions, initialization policy, analyses, and source-correlated bridge inventory. Older accepted `ddt` IR without the versioned contract keeps its legacy type-only verification behavior.
+`nodal.analog_ddt` and `nodal.analog_idt` carry a versioned `operator_contract = "increment35"`, identity, owner, legal context, input and result dimensions, initialization policy, analyses, and source-correlated bridge inventory.
+
+Older accepted `nodal.analog_ddt` IR without the versioned contract keeps its Increment 24 type-only verification behavior and the `NODAL-ANALOG-DDT-001` diagnostic contract. Contracted operators use the Increment 35 diagnostic family. Backend capability checking explicitly recognizes both first-class operations.
+
+## Required evidence
+
+Acceptance requires:
+
+- Scala construction tests for legacy, equation, and contribution contexts;
+- typed non-zero and exact-zero integral initialization tests;
+- exact analysis inventory, owner qualification, source-map, and deterministic state-identity checks;
+- native positive and negative fixtures for contract, owner, dimension, analysis, state, initialization, and simplification rules;
+- module-wide duplicate operator-identity rejection;
+- legacy `ddt` diagnostic compatibility;
+- deterministic bridge serialization and Verilog-A rendering;
+- absence of writable or one-shot bootstrap workflows and staging fragments on the accepted head.
 
 ## Stable diagnostics
 

@@ -11,6 +11,7 @@ on:
       - 'core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala'
       - 'core/scala/testkit/test/src/nodal/DifferentialIntegralConstructionTests.scala'
       - 'core/scala/testkit/test/src/nodal/internal/testkit/DifferentialIntegralBridgeTests.scala'
+      - 'core/compiler/diagnostics-v0.1.json'
       - 'core/compiler/include/nodal/Dialect/Nodal/NodalOps.td'
       - 'core/compiler/lib/Dialect/Nodal/NodalOps.cpp'
       - 'core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp'
@@ -24,7 +25,7 @@ on:
       - 'scripts/check_increment35.py'
       - 'tests/compiler/fixtures/increment34/manifest.json'
       - 'tests/compiler/fixtures/increment35/**'
-      - 'tests/compiler/test_increment35.py'
+      - 'tests/compiler/test_increment35*.py'
   push:
     branches:
       - increment/35-differential-integral-operators-v1
@@ -44,14 +45,15 @@ jobs:
 
       - name: Validate predecessor and Increment 35 contracts
         run: |
+          python3 scripts/check_increment24.py
           python3 scripts/check_increment34.py
           python3 scripts/check_increment35.py
-          python3 -m unittest discover -s tests/compiler -p 'test_increment35.py'
+          python3 -m unittest discover -s tests/compiler -p 'test_increment35*.py'
 
       - name: Compile Scala API and focused construction tests
         run: |
           # The full Scala gate compiles and executes DifferentialIntegralConstructionTests
-          # and DifferentialIntegralBridgeTests with the rest of the source-semantic suite.
+          # and DifferentialIntegralBridgeTests with the source-semantic suite.
           ./nodal core scala
 
       - name: Execute Increment 35 source-semantic witness
@@ -75,7 +77,14 @@ jobs:
           grep -F 'ddt_result_dimension=time^-1*voltage' "$report"
           grep -F 'idt_fixed_initialization=fixed' "$report"
           grep -F 'idt_solver_initialization=solver-selected' "$report"
+          grep -F 'analysis_inventory_exact=true' "$report"
+          grep -F 'owner_qualified=true' "$report"
           grep -F 'equation_context=true' "$report"
+          grep -F 'contribution_context=true' "$report"
+          grep -F 'typed_initial_dimension=current*time' "$report"
+          grep -F 'state_ids_unique=true' "$report"
+          grep -F 'state_ids_stable=true' "$report"
+          grep -F 'operator_paths_stable=true' "$report"
           grep -F 'outside_context=NODAL-ANALOG-035-001' "$report"
           grep -F 'initial_context=NODAL-ANALOG-035-001' "$report"
           grep -F 'procedural_context=NODAL-ANALOG-035-001' "$report"
@@ -114,7 +123,8 @@ jobs:
             fixture=$1
             diagnostic=$2
             output="${RUNNER_TEMP}/${fixture}.log"
-            if "$nodalc" "core/compiler/test/IR/analog-differential-integral-invalid-${fixture}.mlir" \
+            if "$nodalc" \
+              "core/compiler/test/IR/analog-differential-integral-invalid-${fixture}.mlir" \
               >"$output" 2>&1; then
               cat "$output"
               echo "Expected ${fixture} fixture to fail"
@@ -124,15 +134,37 @@ jobs:
             grep -F "$diagnostic" "$output"
           }
           check_invalid context NODAL-ANALOG-035-001
+          check_invalid contract NODAL-ANALOG-035-002
+          check_invalid owner NODAL-ANALOG-035-002
+          check_invalid dimension NODAL-ANALOG-035-003
+          check_invalid analysis NODAL-ANALOG-035-006
           check_invalid initial NODAL-ANALOG-035-004
           check_invalid state NODAL-ANALOG-035-005
           check_invalid simplification NODAL-ANALOG-035-007
           check_invalid idt-fold NODAL-ANALOG-035-008
 
+          check_invalid_with_pipeline() {
+            fixture=$1
+            diagnostic=$2
+            output="${RUNNER_TEMP}/${fixture}.log"
+            if "$nodalc" \
+              '--pass-pipeline=builtin.module(nodal-verify-analog-numeric)' \
+              "core/compiler/test/IR/analog-differential-integral-invalid-${fixture}.mlir" \
+              >"$output" 2>&1; then
+              cat "$output"
+              echo "Expected ${fixture} fixture to fail"
+              exit 1
+            fi
+            cat "$output"
+            grep -F "$diagnostic" "$output"
+          }
+          check_invalid_with_pipeline duplicate-identity NODAL-ANALOG-035-002
+
           "$nodal_translate" \
             --nodal-to-verilog-a \
             core/compiler/test/IR/analog-differential-integral-backend.mlir \
             > "${RUNNER_TEMP}/increment35-backend.va"
+          grep -F 'ddt(' "${RUNNER_TEMP}/increment35-backend.va"
           grep -F 'idt(' "${RUNNER_TEMP}/increment35-backend.va"
 
       - name: Check repository style and documentation

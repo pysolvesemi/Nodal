@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "repository": "pysolvesemi/Nodal",
+  "workflow_name": "Increment 34 Final Dev Validation v3",
+  "workflow_run": 33848426457,
+  "workflow_id": 349972587,
+  "controller_branch": "automation/inc34-final-dev-validation-v3",
+  "controller_head": "7775375985925ebcbedd9a83afde21a0295faf41",
+  "validated_ref": "dev",
+  "validated_sha": "4c669a514e1fca42a254c4d842c8e1ad999e0e88",
+  "status": "completed",
+  "conclusion": "success",
+  "started_at": "2026-09-04T07:22:32Z",
+  "completed_at": "2026-09-04T07:31:13Z",
+  "job": {
+    "id": 100945504166,
+    "name": "validate-final-dev",
+    "conclusion": "success",
+    "gates": {
+      "checkout_exact_final_dev": "success",
+      "verify_identity_and_ancestry": "success",
+      "validate_closure_evidence": "success",
+      "contracts_and_mutations": "success",
+      "scala_api_and_testkit": "success",
+      "semantic_witnesses": "success",
+      "toolchain_bootstrap": "success",
+      "native_compiler_boundary": "success",
+      "repository_style_and_clean_state": "success"
+    }
+  },
+  "supersedes_failed_validator_run": 33794971949
+}

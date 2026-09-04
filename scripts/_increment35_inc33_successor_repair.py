@@ -1,0 +1,269 @@
+from pathlib import Path
+
+
+def replace_once(path: Path, old: str, new: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{path}: expected one replacement, found {count}")
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+checker = Path("scripts/check_increment33.py")
+replace_once(
+    checker,
+    '    increment34 = read_json(root, "tests/compiler/fixtures/increment34/manifest.json")\n',
+    '    increment34 = read_json(root, "tests/compiler/fixtures/increment34/manifest.json")\n'
+    '    increment35 = read_json(root, "tests/compiler/fixtures/increment35/manifest.json")\n',
+)
+replace_once(
+    checker,
+    '    increment34_open = "- [ ] **Increment 34 — Analog control flow**"\n'
+    '    increment34_closed = "- [x] **Increment 34 — Analog control flow**"\n',
+    '    increment34_open = "- [ ] **Increment 34 — Analog control flow**"\n'
+    '    increment34_closed = "- [x] **Increment 34 — Analog control flow**"\n'
+    '    increment35_open = "- [ ] **Increment 35 — Differential and integral operators**"\n'
+    '    increment35_closed = "- [x] **Increment 35 — Differential and integral operators**"\n',
+)
+replace_once(
+    checker,
+    '    require(\n'
+    '        (increment34_open in roadmap) != (increment34_closed in roadmap),\n'
+    '        "NODAL-INC33-081: Increment 34 roadmap state is missing or ambiguous",\n'
+    '    )\n',
+    '    require(\n'
+    '        (increment34_open in roadmap) != (increment34_closed in roadmap),\n'
+    '        "NODAL-INC33-081: Increment 34 roadmap state is missing or ambiguous",\n'
+    '    )\n'
+    '    require(\n'
+    '        (increment35_open in roadmap) != (increment35_closed in roadmap),\n'
+    '        "NODAL-INC33-085: Increment 35 roadmap state is missing or ambiguous",\n'
+    '    )\n',
+)
+
+text = checker.read_text(encoding="utf-8")
+start = text.index('        successor_status = increment34.get("status")\n')
+end = text.index('        evidence = read_text(\n', start)
+replacement = '''        successor_status = increment34.get("status")
+        increment35_status = increment35.get("status")
+        if successor_status == "implementation-in-progress":
+            require(
+                increment34.get("validation") is None
+                and increment35_status == "implementation-in-progress"
+                and increment35.get("validation") is None
+                and "**Revision:** 1.44" in roadmap
+                and increment34_open in roadmap
+                and increment35_open in roadmap,
+                "NODAL-INC33-081: open Increment 34 requires roadmap revision 1.44 and no closed successor",
+            )
+        elif successor_status == "validated-analog-control-flow":
+            successor_validation = increment34.get("validation")
+            required_successor_evidence = (
+                "implementation_pull_request",
+                "accepted_head",
+                "exact_head_workflow_count",
+                "exact_head_core_ci_run",
+                "implementation_merge",
+                "post_merge_core_ci_run",
+                "exact_post_merge_validation_run",
+                "closure_pull_request",
+                "closure_validation_head",
+                "closure_validation_run",
+            )
+            require(
+                isinstance(successor_validation, dict)
+                and all(
+                    successor_validation.get(field)
+                    for field in required_successor_evidence
+                ),
+                "NODAL-INC33-082: validated Increment 34 lacks complete evidence",
+            )
+            require(
+                successor_validation.get("implementation_pull_request") == 109
+                and successor_validation.get("accepted_head")
+                == "207fd1b580e9428e9948cd4e4bd8f2060fde4b79"
+                and successor_validation.get("implementation_merge")
+                == "a9d3ec50799953c41e7b9cf1d8bd6a2c5c9afd49"
+                and successor_validation.get("closure_pull_request") == 111
+                and increment34_closed in roadmap,
+                "NODAL-INC33-083: validated Increment 34 successor evidence is inconsistent",
+            )
+
+            increment35_validation = increment35.get("validation")
+            if increment35_status == "implementation-in-progress":
+                require(
+                    increment35.get("tranche")
+                    == "35a-differential-integral-operator-contract"
+                    and increment35_validation is None
+                    and "**Revision:** 1.45" in roadmap
+                    and increment35_open in roadmap,
+                    "NODAL-INC33-086: open Increment 35 requires roadmap revision 1.45",
+                )
+            elif increment35_status == "evidence-closure-candidate":
+                required_increment35_evidence = (
+                    "implementation_pull_request",
+                    "accepted_head",
+                    "exact_head_workflow_count",
+                    "exact_head_core_ci_run",
+                    "implementation_merge",
+                    "post_merge_core_ci_run",
+                    "exact_post_merge_validation_run",
+                    "closure_pull_request",
+                )
+                require(
+                    isinstance(increment35_validation, dict)
+                    and all(
+                        increment35_validation.get(field)
+                        for field in required_increment35_evidence
+                    )
+                    and increment35_validation.get("closure_validation_head") is None
+                    and increment35_validation.get("closure_validation_run") is None,
+                    "NODAL-INC33-087: Increment 35 closure candidate evidence is incomplete",
+                )
+                require(
+                    increment35_validation.get("implementation_pull_request") == 113
+                    and increment35_validation.get("accepted_head")
+                    == "d3410f6f64dc66df27d9c7f545c9e78f62695f2e"
+                    and increment35_validation.get("exact_head_workflow_count") == 25
+                    and increment35_validation.get("exact_head_core_ci_run") == 33890457304
+                    and increment35_validation.get("implementation_merge")
+                    == "7763e1524f31e4c2c41b11acb200670c360f0fde"
+                    and increment35_validation.get("post_merge_core_ci_run") == 33892575717
+                    and increment35_validation.get("exact_post_merge_validation_run")
+                    == 33892632854
+                    and increment35_validation.get("closure_pull_request") == 114
+                    and "**Revision:** 1.46" in roadmap
+                    and increment35_closed in roadmap,
+                    "NODAL-INC33-088: Increment 35 closure candidate evidence is inconsistent",
+                )
+            elif increment35_status == "validated-differential-integral-operators":
+                required_increment35_evidence = (
+                    "implementation_pull_request",
+                    "accepted_head",
+                    "exact_head_workflow_count",
+                    "exact_head_core_ci_run",
+                    "implementation_merge",
+                    "post_merge_core_ci_run",
+                    "exact_post_merge_validation_run",
+                    "closure_pull_request",
+                    "closure_validation_head",
+                    "closure_validation_run",
+                )
+                require(
+                    isinstance(increment35_validation, dict)
+                    and all(
+                        increment35_validation.get(field)
+                        for field in required_increment35_evidence
+                    ),
+                    "NODAL-INC33-089: validated Increment 35 lacks complete evidence",
+                )
+                closure_head = increment35_validation.get("closure_validation_head")
+                closure_run = increment35_validation.get("closure_validation_run")
+                require(
+                    increment35_validation.get("implementation_pull_request") == 113
+                    and increment35_validation.get("accepted_head")
+                    == "d3410f6f64dc66df27d9c7f545c9e78f62695f2e"
+                    and increment35_validation.get("exact_head_workflow_count") == 25
+                    and increment35_validation.get("exact_head_core_ci_run") == 33890457304
+                    and increment35_validation.get("implementation_merge")
+                    == "7763e1524f31e4c2c41b11acb200670c360f0fde"
+                    and increment35_validation.get("post_merge_core_ci_run") == 33892575717
+                    and increment35_validation.get("exact_post_merge_validation_run")
+                    == 33892632854
+                    and increment35_validation.get("closure_pull_request") == 114
+                    and isinstance(closure_head, str)
+                    and len(closure_head) == 40
+                    and all(character in "0123456789abcdef" for character in closure_head)
+                    and isinstance(closure_run, int)
+                    and closure_run > 0
+                    and "**Revision:** 1.46" in roadmap
+                    and increment35_closed in roadmap,
+                    "NODAL-INC33-090: validated Increment 35 evidence is inconsistent",
+                )
+            else:
+                raise CheckFailure(
+                    f"NODAL-INC33-091: unsupported Increment 35 successor status: {increment35_status}"
+                )
+        else:
+            raise CheckFailure(
+                f"NODAL-INC33-084: unsupported Increment 34 successor status: {successor_status}"
+            )
+'''
+checker.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+
+tests = Path("tests/compiler/test_increment33.py")
+replace_once(
+    tests,
+    '    "tests/compiler/fixtures/increment34/manifest.json",\n)\n',
+    '    "tests/compiler/fixtures/increment34/manifest.json",\n'
+    '    "tests/compiler/fixtures/increment35/manifest.json",\n)\n',
+)
+replace_once(
+    tests,
+    '                    "**Revision:** 1.45",\n                    "**Revision:** 1.43",\n',
+    '                    "**Revision:** 1.46",\n                    "**Revision:** 1.43",\n',
+)
+
+test_text = tests.read_text(encoding="utf-8")
+method_start = test_text.index(
+    '    def test_open_successor_state_remains_supported(self) -> None:\n'
+)
+method_end = test_text.index(
+    '    def test_assignment_order_mutation_is_rejected', method_start
+)
+method = '''    def test_open_successor_state_remains_supported(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            manifest_path = root / "tests/compiler/fixtures/increment34/manifest.json"
+            document = json.loads(manifest_path.read_text(encoding="utf-8"))
+            document["status"] = "implementation-in-progress"
+            document["tranche"] = "34c-native-branch-sensitive-dataflow"
+            document["validation"] = None
+            manifest_path.write_text(
+                json.dumps(document, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            increment35_path = root / "tests/compiler/fixtures/increment35/manifest.json"
+            increment35 = json.loads(increment35_path.read_text(encoding="utf-8"))
+            increment35["status"] = "implementation-in-progress"
+            increment35["tranche"] = "35a-differential-integral-operator-contract"
+            increment35["validation"] = None
+            increment35_path.write_text(
+                json.dumps(increment35, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            roadmap = root / "docs/roadmap/nodal-development-todo.md"
+            roadmap.write_text(
+                roadmap.read_text(encoding="utf-8")
+                .replace("**Revision:** 1.46", "**Revision:** 1.44", 1)
+                .replace(
+                    "- [x] **Increment 34 — Analog control flow**",
+                    "- [ ] **Increment 34 — Analog control flow**",
+                    1,
+                )
+                .replace(
+                    "- [x] **Increment 35 — Differential and integral operators**",
+                    "- [ ] **Increment 35 — Differential and integral operators**",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            CHECKER.check_repository(root)
+
+    def test_increment35_successor_identity_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "tests/compiler/fixtures/increment35/manifest.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["validation"]["accepted_head"] = "0" * 40
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            self.assert_rejected(
+                root,
+                "Increment 35 closure candidate evidence is inconsistent",
+            )
+
+'''
+tests.write_text(
+    test_text[:method_start] + method + test_text[method_end:],
+    encoding="utf-8",
+)

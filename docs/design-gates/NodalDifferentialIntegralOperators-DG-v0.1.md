@@ -1,7 +1,8 @@
 # Nodal differential and integral operators design gate v0.1
 
 **Increment:** 35  
-**Status:** Implementation in progress
+**Status:** Approved  
+**Scope:** public-api
 
 ## Purpose
 
@@ -101,3 +102,7 @@ Acceptance requires:
 ## Deferred boundary
 
 Increment 35 does not implement inverse `ddt`/`idt` cancellation, operator distribution, event composition, state reset/reinitialization, residual DAE assembly, numerical solver execution, analysis-specific AC/noise lowering, or full Verilog-AMS lowering.
+
+## Approval evidence
+
+Approved by the project owner through the standing approval for Nodal increments and the explicit request to implement and continue Increment 35.

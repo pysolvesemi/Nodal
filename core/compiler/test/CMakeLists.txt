@@ -682,6 +682,53 @@ add_test(
     -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
 )
 
+add_test(
+  NAME nodal.native.analog-differential-integral-roundtrip
+  COMMAND nodalc
+    "--pass-pipeline=builtin.module(nodal-fold-analog-constants,nodal-verify-analog-numeric)"
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-differential-integral.mlir"
+)
+set_tests_properties(
+  nodal.native.analog-differential-integral-roundtrip
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal[.]simplification_rule"
+)
+
+add_test(
+  NAME nodal.native.analog-differential-integral-retains-idt
+  COMMAND nodalc
+    "--pass-pipeline=builtin.module(nodal-fold-analog-constants,nodal-verify-analog-numeric)"
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-differential-integral.mlir"
+)
+set_tests_properties(
+  nodal.native.analog-differential-integral-retains-idt
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "nodal[.]analog_idt"
+)
+
+add_test(
+  NAME nodal.native.analog-differential-integral-backend
+  COMMAND nodal-translate
+    --nodal-to-verilog-a
+    "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-differential-integral-backend.mlir"
+)
+set_tests_properties(
+  nodal.native.analog-differential-integral-backend
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "idt[(]"
+)
+
+foreach(_fixture IN ITEMS context initial state simplification idt-fold)
+  add_test(
+    NAME nodal.native.analog-differential-integral-rejects-${_fixture}
+    COMMAND "${CMAKE_COMMAND}"
+      "-DNODALC=$<TARGET_FILE:nodalc>"
+      "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-differential-integral-invalid-${_fixture}.mlir"
+      "-DDIAGNOSTIC=NODAL-ANALOG-035-"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
+  )
+endforeach()
+
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
   DEPENDS

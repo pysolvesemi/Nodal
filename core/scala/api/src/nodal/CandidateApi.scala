@@ -470,13 +470,13 @@ def I[D <: Discipline](positive: Node[D], negative: Node[D]): Expr[Real] =
   CandidateRuntime.analogExpr("flow_access", positive, negative)
 
 def ddt(value: Expr[Real]): Expr[Real] =
-  CandidateRuntime.analogExpr("analog_ddt", value)
+  CandidateRuntime.continuousOperator("analog_ddt", value, None)
 
 def idt(value: Expr[Real]): Expr[Real] =
-  CandidateRuntime.analogExpr("unsupported_idt", value)
+  CandidateRuntime.continuousOperator("analog_idt", value, None)
 
 def idt(value: Expr[Real], initialValue: Expr[Real]): Expr[Real] =
-  CandidateRuntime.analogExpr("unsupported_idt", value, initialValue)
+  CandidateRuntime.continuousOperator("analog_idt", value, Some(initialValue))
 
 def cross(value: Expr[Real], edge: Edge = Edge.Either): Event =
   CandidateRuntime.event(value, edge)
@@ -702,6 +702,23 @@ private[nodal] object CandidateRuntime:
       operation = Some(operation)
     )
     ConstructionKernel.expression(expression)
+    expression
+
+  def continuousOperator(
+      operation: String,
+      input: Expr[Real],
+      initialValue: Option[Expr[Real]]
+  ): Expr[Real] =
+    val expression = new KernelExpr[Real](
+      input +: initialValue.toVector,
+      operation = Some(operation)
+    )
+    ConstructionKernel.continuousOperator(
+      expression,
+      operation,
+      input,
+      initialValue
+    )
     expression
 
   def analogBlock(body: => Unit): Unit =

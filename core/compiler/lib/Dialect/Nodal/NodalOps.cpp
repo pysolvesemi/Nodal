@@ -1838,6 +1838,9 @@ LogicalResult nodal::AnalogSelectOp::verify() {
 LogicalResult nodal::AnalogDdtOp::verify() {
   return nodal::verifyAnalogNumericOperation(getOperation());
 }
+LogicalResult nodal::AnalogIdtOp::verify() {
+  return nodal::verifyAnalogNumericOperation(getOperation());
+}
 LogicalResult nodal::ContributeOp::verify() {
   return nodal::verifyAnalogNumericOperation(getOperation());
 }

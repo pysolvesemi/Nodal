@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "increment": 35,
+  "status": "implementation-in-progress",
+  "tranche": "35a-differential-integral-operator-contract",
+  "baseline": {
+    "stacked_on_increment": 34,
+    "increment_34_head": "207fd1b580e9428e9948cd4e4bd8f2060fde4b79",
+    "increment_34_manifest": "validated-analog-control-flow",
+    "increment_34_implementation_merge": "a9d3ec50799953c41e7b9cf1d8bd6a2c5c9afd49",
+    "increment_34_exact_post_merge_validation_run": 33759112770,
+    "increment_34_closure_pr": 111,
+    "increment_34_closure_validation_head": "b59ed10f423d4a66e7e47d66ec764b7ff22531e7",
+    "increment_34_closure_validation_run": 33761024228,
+    "increment_34_dev_head": "4c669a514e1fca42a254c4d842c8e1ad999e0e88",
+    "roadmap_revision": "1.45"
+  },
+  "semantics": {
+    "ddt_subtracts_time_dimension": true,
+    "idt_adds_time_dimension": true,
+    "idt_owns_stable_state": true,
+    "fixed_initial_condition": true,
+    "solver_selected_initial_condition": true,
+    "dimension_polymorphic_exact_zero_initial": true,
+    "declarative_context_only": true,
+    "initial_equation_context_rejected": true,
+    "procedural_context_rejected": true,
+    "analysis_applicability_explicit": true,
+    "ddt_time_invariant_zero_annotation": true,
+    "ddt_authored_operation_retained": true,
+    "idt_folding_prohibited": true,
+    "inverse_operator_cancellation": false,
+    "operator_distribution": false
+  },
+  "integration": {
+    "public_scala_api": true,
+    "construction_snapshot": true,
+    "source_map": true,
+    "scala_to_mlir_inventory": true,
+    "first_class_ddt_ir": true,
+    "first_class_idt_ir": true,
+    "native_ir_verification": true,
+    "compiler_boundary_diagnostics": true,
+    "constant_pass_integration": true,
+    "verilog_a_vertical_slice": true,
+    "full_dae_solver_lowering": false
+  },
+  "diagnostics": [
+    "NODAL-ANALOG-035-001",
+    "NODAL-ANALOG-035-002",
+    "NODAL-ANALOG-035-003",
+    "NODAL-ANALOG-035-004",
+    "NODAL-ANALOG-035-005",
+    "NODAL-ANALOG-035-006",
+    "NODAL-ANALOG-035-007",
+    "NODAL-ANALOG-035-008"
+  ],
+  "deferred": [
+    "inverse-ddt-idt-cancellation",
+    "operator-distribution-and-reassociation",
+    "event-operator-composition",
+    "explicit-state-reset-and-reinitialization",
+    "residual-dae-construction",
+    "solver-execution",
+    "analysis-specific-ac-noise-lowering",
+    "full-verilog-ams-lowering"
+  ],
+  "validation": null
+}

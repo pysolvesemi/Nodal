@@ -27,19 +27,89 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("tests/compiler/test_increment33.py")
-          text = path.read_text(encoding="utf-8")
-          old = '''                "Increment 35 closure candidate evidence is inconsistent",
-          '''
-          new = '''                (
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement, found {count}")
+              path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          increment33 = Path("tests/compiler/test_increment33.py")
+          replace_once(
+              increment33,
+              '''                "Increment 35 closure candidate evidence is inconsistent",
+          ''',
+              '''                (
                               "Increment 35 closure candidate evidence is inconsistent"
                               if document.get("status") == "evidence-closure-candidate"
                               else "validated Increment 35 evidence is inconsistent"
                           ),
-          '''
-          if text.count(old) != 1:
-              raise SystemExit(f"expected one dual-state mutation assertion, found {text.count(old)}")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          ''',
+          )
+
+          increment35 = Path("tests/compiler/test_increment35.py")
+          replace_once(
+              increment35,
+              '''            validation = document["validation"]
+                      assert isinstance(validation, dict)
+                      document["status"] = "validated-differential-integral-operators"
+          ''',
+              '''            validation = document["validation"]
+                      assert isinstance(validation, dict)
+                      if document["status"] == "validated-differential-integral-operators":
+                          CHECKER.check_repository(root)
+                          return
+                      document["status"] = "validated-differential-integral-operators"
+          ''',
+          )
+          replace_once(
+              increment35,
+              '''    def test_closed_roadmap_regression_is_rejected(self) -> None:
+                      temporary, root = self.fixture()
+                      with temporary:
+                          self.replace_file(
+          ''',
+              '''    def test_closed_roadmap_regression_is_rejected(self) -> None:
+                      temporary, root = self.fixture()
+                      with temporary:
+                          _, document = self.read_manifest(root)
+                          expected = (
+                              "closure candidate requires revision 1.46"
+                              if document["status"] == "evidence-closure-candidate"
+                              else "validated state requires roadmap revision 1.46"
+                          )
+                          self.replace_file(
+          ''',
+          )
+          replace_once(
+              increment35,
+              '            self.assert_rejected(root, "closure candidate requires revision 1.46")\n',
+              '            self.assert_rejected(root, expected)\n',
+          )
+          replace_once(
+              increment35,
+              '''    def test_evidence_record_mutation_is_rejected(self) -> None:
+                      temporary, root = self.fixture()
+                      with temporary:
+                          self.replace_file(
+          ''',
+              '''    def test_evidence_record_mutation_is_rejected(self) -> None:
+                      temporary, root = self.fixture()
+                      with temporary:
+                          _, document = self.read_manifest(root)
+                          expected = (
+                              "evidence record"
+                              if document["status"] == "evidence-closure-candidate"
+                              else "validated evidence-closure record"
+                          )
+                          self.replace_file(
+          ''',
+          )
+          replace_once(
+              increment35,
+              '            self.assert_rejected(root, "evidence record")\n',
+              '            self.assert_rejected(root, expected)\n',
+          )
           PY
           python3 -m py_compile \
             scripts/check_increment33.py \

@@ -1,4 +1,4 @@
-name: Increment 35 Bootstrap Source Patch
+name: Increment 35 Audited Repair
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  materialize-increment-35-source:
+  repair-and-retire-bootstrap:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -18,33 +18,821 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Materialize staged source patch
+      - name: Apply audited semantic and validation repairs
         shell: bash
         run: |
-          cat scripts/bootstrap_increment35.part* > scripts/bootstrap_increment35.py
-          python3 -m py_compile scripts/bootstrap_increment35.py
-          python3 scripts/bootstrap_increment35.py
-          rm -f scripts/bootstrap_increment35.py
+          python3 - <<'PY'
+          from __future__ import annotations
 
-      - name: Commit materialized implementation
+          import json
+          from pathlib import Path
+
+          root = Path.cwd()
+
+          def read(relative: str) -> str:
+              path = root / relative
+              if not path.is_file():
+                  raise RuntimeError(f"missing required file: {relative}")
+              return path.read_text(encoding="utf-8")
+
+          def write(relative: str, content: str) -> None:
+              path = root / relative
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text(content, encoding="utf-8")
+
+          def replace_once(relative: str, old: str, new: str) -> None:
+              text = read(relative)
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(
+                      f"{relative}: expected one replacement anchor, found {count}\n--- anchor ---\n{old}"
+                  )
+              write(relative, text.replace(old, new))
+
+          analog_numeric = "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp"
+          replace_once(
+              analog_numeric,
+              '''  if (!operatorId || operatorId.getValue().trim().empty() || !owner ||
+              owner.getValue().trim().empty())
+            return emitMappedFailure(operation, "NODAL-ANALOG-035-002",
+                                     "continuous-time operator identity and owner must be non-empty");
+          if (!context ||
+          ''',
+              '''  if (!operatorId || operatorId.getValue().trim().empty() || !owner ||
+              owner.getValue().trim().empty())
+            return emitMappedFailure(operation, "NODAL-ANALOG-035-002",
+                                     "continuous-time operator identity and owner must be non-empty");
+          const llvm::StringRef operatorIdentity = operatorId.getValue();
+          const llvm::StringRef ownerIdentity = owner.getValue();
+          if (!operatorIdentity.starts_with(ownerIdentity) ||
+              !operatorIdentity.drop_front(ownerIdentity.size()).starts_with("."))
+            return emitMappedFailure(operation, "NODAL-ANALOG-035-002",
+                                     "continuous-time operator identity must be owned by its declared owner");
+          if (!context ||
+          ''',
+          )
+
+          replace_once(
+              analog_numeric,
+              '''LogicalResult verifyDdt(Operation *operation) {
+            if (operation->getNumOperands() != 1 || operation->getNumResults() != 1)
+              return emitMappedFailure(operation, "NODAL-ANALOG-035-002",
+                                       "ddt requires one input and one result");
+            auto input = getAnalogNumericTypeInfo(operation->getOperand(0).getType());
+            auto result = getAnalogNumericTypeInfo(operation->getResult(0).getType());
+            if (failed(input) || failed(result) ||
+                input->kind != AnalogNumericKind::Real ||
+                result->kind != AnalogNumericKind::Real)
+              return emitMappedFailure(operation, "NODAL-ANALOG-035-003",
+                                       "ddt requires real quantity input and result");
+
+            std::string inputDimension = input->dimension;
+            std::string resultDimension;
+            if (input->legacyF64 && result->legacyF64) {
+              if (!operation->getAttr("operator_contract"))
+                return success();
+              inputDimension = textAttr(operation, "input_dimension").str();
+              resultDimension = textAttr(operation, "result_dimension").str();
+              auto dimension =
+                  combineAnalogDimensions(inputDimension, "time", true);
+              if (failed(dimension) || resultDimension != *dimension)
+                return emitMappedFailure(operation, "NODAL-ANALOG-035-003",
+                                         "ddt result must subtract one time exponent");
+            } else {
+              if (input->legacyF64 || result->legacyF64)
+                return emitMappedFailure(operation, "NODAL-ANALOG-035-003",
+                                         "ddt cannot mix legacy f64 and typed quantity values");
+              auto dimension = combineAnalogDimensions(input->dimension, "time", true);
+              if (failed(dimension) || result->dimension != *dimension)
+                return emitMappedFailure(operation, "NODAL-ANALOG-035-003",
+                                         "ddt result must subtract one time exponent");
+              resultDimension = *dimension;
+            }
+            if (failed(verifyContinuousContract(operation, false, inputDimension,
+                                                resultDimension)))
+              return failure();
+            return verifyDdtSimplification(operation, resultDimension);
+          }
+          ''',
+              '''LogicalResult verifyDdt(Operation *operation) {
+            const bool contracted =
+                static_cast<bool>(operation->getAttrOfType<StringAttr>("operator_contract"));
+            if (operation->getNumOperands() != 1 || operation->getNumResults() != 1)
+              return emitMappedFailure(
+                  operation,
+                  contracted ? llvm::StringRef("NODAL-ANALOG-035-002")
+                             : llvm::StringRef("NODAL-ANALOG-DDT-001"),
+                  "ddt requires one input and one result");
+
+            if (!contracted) {
+              if (operation->getOperand(0).getType().isF64() &&
+                  operation->getResult(0).getType().isF64())
+                return success();
+              auto input = getAnalogNumericTypeInfo(operation->getOperand(0).getType());
+              if (failed(input) || input->kind != AnalogNumericKind::Real)
+                return emitMappedFailure(operation, "NODAL-ANALOG-DDT-001",
+                                         "typed ddt requires a real quantity input");
+              auto dimension = combineAnalogDimensions(input->dimension, "time", true);
+              if (failed(dimension) ||
+                  !semanticTypeMatches(operation->getResult(0).getType(),
+                                       AnalogNumericKind::Real, *dimension))
+                return emitMappedFailure(operation, "NODAL-ANALOG-DDT-001",
+                                         "ddt result must subtract one time exponent");
+              return success();
+            }
+
+            auto input = getAnalogNumericTypeInfo(operation->getOperand(0).getType());
+            auto result = getAnalogNumericTypeInfo(operation->getResult(0).getType());
+            if (failed(input) || failed(result) ||
+                input->kind != AnalogNumericKind::Real ||
+                result->kind != AnalogNumericKind::Real)
+              return emitMappedFailure(operation, "NODAL-ANALOG-035-003",
+                                       "ddt requires real quantity input and result");
+
+            std::string inputDimension = input->dimension;
+            std::string resultDimension;
+            if (input->legacyF64 && result->legacyF64) {
+              inputDimension = textAttr(operation, "input_dimension").str();
+              resultDimension = textAttr(operation, "result_dimension").str();
+              auto dimension =
+                  combineAnalogDimensions(inputDimension, "time", true);
+              if (failed(dimension) || resultDimension != *dimension)
+                return emitMappedFailure(operation, "NODAL-ANALOG-035-003",
+                                         "ddt result must subtract one time exponent");
+            } else {
+              if (input->legacyF64 || result->legacyF64)
+                return emitMappedFailure(operation, "NODAL-ANALOG-035-003",
+                                         "contracted ddt cannot mix legacy f64 and typed quantities");
+              auto dimension = combineAnalogDimensions(input->dimension, "time", true);
+              if (failed(dimension) || result->dimension != *dimension)
+                return emitMappedFailure(operation, "NODAL-ANALOG-035-003",
+                                         "ddt result must subtract one time exponent");
+              resultDimension = *dimension;
+            }
+            if (failed(verifyContinuousContract(operation, false, inputDimension,
+                                                resultDimension)))
+              return failure();
+            return verifyDdtSimplification(operation, resultDimension);
+          }
+          ''',
+          )
+
+          replace_once(
+              analog_numeric,
+              '''LogicalResult verifyAnalogNumericModel(mlir::ModuleOp module) {
+            LogicalResult result = success();
+            module.walk([&](Operation *operation) {
+              if (failed(result))
+                return;
+              for (Type type : operation->getOperandTypes()) {
+          ''',
+              '''LogicalResult verifyAnalogNumericModel(mlir::ModuleOp module) {
+            LogicalResult result = success();
+            llvm::StringSet<> continuousOperatorIds;
+            llvm::StringSet<> continuousStateIds;
+            module.walk([&](Operation *operation) {
+              if (failed(result))
+                return;
+              const llvm::StringRef operationName = operation->getName().getStringRef();
+              if ((operationName == "nodal.analog_ddt" ||
+                   operationName == "nodal.analog_idt") &&
+                  operation->getAttr("operator_contract")) {
+                if (auto operatorId = operation->getAttrOfType<StringAttr>("operator_id")) {
+                  if (!operatorId.getValue().trim().empty() &&
+                      !continuousOperatorIds.insert(operatorId.getValue()).second) {
+                    result = emitMappedFailure(
+                        operation, "NODAL-ANALOG-035-002",
+                        "continuous-time operator identity must be unique");
+                    return;
+                  }
+                }
+                if (auto stateId = operation->getAttrOfType<StringAttr>("state_id")) {
+                  if (!stateId.getValue().trim().empty() &&
+                      !continuousStateIds.insert(stateId.getValue()).second) {
+                    result = emitMappedFailure(
+                        operation, "NODAL-ANALOG-035-005",
+                        "integral state identity must be unique");
+                    return;
+                  }
+                }
+              }
+              for (Type type : operation->getOperandTypes()) {
+          ''',
+          )
+
+          replace_once(
+              "core/compiler/lib/Backend/AnalogVerticalSlice.cpp",
+              '''    "nodal.analog_ddt",
+              "nodal.contribute",
+          ''',
+              '''    "nodal.analog_ddt",
+              "nodal.analog_idt",
+              "nodal.contribute",
+          ''',
+          )
+
+          checker = "scripts/check_increment35.py"
+          replace_once(
+              checker,
+              '''    manifest = load_json(root, "tests/compiler/fixtures/increment35/manifest.json")
+
+              require(
+          ''',
+              '''    manifest = load_json(root, "tests/compiler/fixtures/increment35/manifest.json")
+              catalog = load_json(root, "core/compiler/diagnostics-v0.1.json")
+
+              temporary_files = (
+                  ".github/workflows/increment-35-bootstrap.yml",
+                  "scripts/bootstrap_increment35.part00",
+                  "scripts/bootstrap_increment35.part01",
+                  "scripts/bootstrap_increment35.part02",
+                  "scripts/bootstrap_increment35.part03",
+                  "scripts/bootstrap_increment35.part04",
+                  "scripts/bootstrap_increment35.part05",
+                  "scripts/bootstrap_increment35.part06",
+                  "tests/compiler/fixtures/increment35/bootstrap-revision.txt",
+              )
+              for relative in temporary_files:
+                  require(
+                      not (root / relative).exists(),
+                      f"NODAL-INC35-005: temporary bootstrap artifact remains: {relative}",
+                  )
+
+              require(
+          ''',
+          )
+          replace_once(
+              checker,
+              '''        "idt_folding_prohibited",
+              ):
+          ''',
+              '''        "idt_folding_prohibited",
+                  "legacy_ddt_diagnostic_compatibility",
+                  "native_operator_identity_uniqueness",
+              ):
+          ''',
+          )
+          replace_once(
+              checker,
+              '''        "verilog_a_vertical_slice",
+              ):
+          ''',
+              '''        "verilog_a_vertical_slice",
+                  "bootstrap_scaffolding_removed",
+              ):
+          ''',
+          )
+          replace_once(
+              checker,
+              '''            "NODAL-ANALOG-035-008",
+                  ),
+          ''',
+              '''            "NODAL-ANALOG-035-008",
+                      "NODAL-ANALOG-DDT-001",
+                      "continuousOperatorIds",
+                      "continuousStateIds",
+                  ),
+          ''',
+          )
+          replace_once(
+              checker,
+              '''            "current*time",
+          ''',
+              '''            "inputDimension.multiply(AnalogDimension.Time)",
+          ''',
+          )
+          replace_once(
+              checker,
+              '''        ('name == "nodal.analog_idt"', 'llvm::Twine("idt(")', "nodal.simplified"),
+          ''',
+              '''        ('name == "nodal.analog_idt"', '"nodal.analog_idt",', 'llvm::Twine("idt(")', "nodal.simplified"),
+          ''',
+          )
+          replace_once(
+              checker,
+              '''        "core/compiler/test/IR/analog-differential-integral-invalid-context.mlir",
+          ''',
+              '''        "core/compiler/test/IR/analog-differential-integral-invalid-context.mlir",
+                  "core/compiler/test/IR/analog-differential-integral-invalid-contract.mlir",
+                  "core/compiler/test/IR/analog-differential-integral-invalid-dimension.mlir",
+                  "core/compiler/test/IR/analog-differential-integral-invalid-analysis.mlir",
+                  "core/compiler/test/IR/analog-differential-integral-invalid-duplicate-identity.mlir",
+          ''',
+          )
+          replace_once(
+              checker,
+              '''            "NODAL-ANALOG-035-008",
+                  ),
+                  "dedicated Increment 35 workflow",
+          ''',
+              '''            "NODAL-ANALOG-035-008",
+                      "check_invalid contract NODAL-ANALOG-035-002",
+                      "check_invalid dimension NODAL-ANALOG-035-003",
+                      "check_invalid analysis NODAL-ANALOG-035-006",
+                      "check_invalid_with_pipeline duplicate-identity NODAL-ANALOG-035-002",
+                  ),
+                  "dedicated Increment 35 workflow",
+          ''',
+          )
+          replace_once(
+              checker,
+              '''    require(
+                  manifest.get("schema") == 1
+          ''',
+              '''    expected_diagnostics = [f"NODAL-ANALOG-035-{index:03d}" for index in range(1, 9)]
+              require(
+                  manifest.get("diagnostics") == expected_diagnostics,
+                  "NODAL-INC35-007: Increment 35 diagnostic inventory is incomplete",
+              )
+              families = catalog.get("families")
+              require(
+                  isinstance(families, dict)
+                  and families.get("analog-differential-integral") == expected_diagnostics
+                  and "NODAL-ANALOG-035-" in catalog.get("preserved_prefixes", []),
+                  "NODAL-INC35-007: native diagnostic catalog lacks Increment 35",
+              )
+
+              require(
+                  manifest.get("schema") == 1
+          ''',
+          )
+
+          manifest_path = root / "tests/compiler/fixtures/increment35/manifest.json"
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          manifest["semantics"]["legacy_ddt_diagnostic_compatibility"] = True
+          manifest["semantics"]["native_operator_identity_uniqueness"] = True
+          manifest["integration"]["bootstrap_scaffolding_removed"] = True
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+          catalog_path = root / "core/compiler/diagnostics-v0.1.json"
+          catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+          diagnostics = [f"NODAL-ANALOG-035-{index:03d}" for index in range(1, 9)]
+          catalog["families"]["analog-differential-integral"] = diagnostics
+          if "NODAL-ANALOG-035-" not in catalog["preserved_prefixes"]:
+              catalog["preserved_prefixes"].append("NODAL-ANALOG-035-")
+          catalog_path.write_text(json.dumps(catalog, indent=2) + "\n", encoding="utf-8")
+
+          write(
+              "core/scala/testkit/test/src/nodal/DifferentialIntegralConstructionTests.scala",
+              '''package nodal.internal.testkit
+
+          import nodal.*
+
+          import utest.*
+
+          final class DifferentialIntegralLegacyTop extends Module:
+            analog:
+              val derivative = ddt(2.0.V)
+              val fixedIntegral = idt(1.0.A, 0.0.real)
+              val solverIntegral = idt(2.0.A)
+
+          final class DifferentialIntegralEquationTop extends Module:
+            equations:
+              val derivative = ddt(1.0.V)
+              val integral = idt(1.0.A)
+
+          final class DifferentialIntegralContributionTop extends Module:
+            contributions:
+              val derivative = ddt(1.0.V)
+              val integral = idt(1.0.A)
+
+          final class DifferentialIntegralTypedInitialTop extends Module:
+            analog:
+              val initialCharge = 2.0.A * 3.0.s
+              val integral = idt(1.0.A, initialCharge)
+
+          final class DifferentialIntegralMultipleStateTop extends Module:
+            analog:
+              val first = idt(1.0.A)
+              val second = idt(2.0.A, 0.0.real)
+
+          final class DifferentialOutsideRegion extends Module:
+            val invalid = ddt(1.0.V)
+
+          final class IntegralInitialEquationRegion extends Module:
+            initialEquations:
+              val invalid = idt(1.0.A)
+
+          final class DifferentialProceduralRegion extends Module:
+            analogProcedure:
+              val invalid = ddt(1.0.V)
+
+          final class IntegralInitialConditionMismatch extends Module:
+            analog:
+              val invalid = idt(1.0.A, 1.0.V)
+
+          object DifferentialIntegralConstructionTests extends TestSuite:
+            private val expectedAnalyses = Vector(
+              "ac",
+              "dc",
+              "initialization",
+              "noise",
+              "operating-point",
+              "transient"
+            )
+
+            private def failureCode(top: => Module): String =
+              scala.util
+                .Try(ConstructionKernel.inspect(top))
+                .failed
+                .get
+                .asInstanceOf[ConstructionException]
+                .diagnostic
+                .code
+
+            val tests: Tests = Tests:
+              test("ddt and idt record dimensions, state, initialization, analyses, ownership, and source"):
+                val snapshot = ConstructionKernel.inspect(new DifferentialIntegralLegacyTop)
+                val operators = snapshot.continuousOperators
+
+                assert(operators.size == 3)
+                val derivative = operators.find(_.operation == "analog_ddt").get
+                val integrals = operators.filter(_.operation == "analog_idt")
+                val fixed = integrals.find(_.initialization == "fixed").get
+                val solver = integrals.find(_.initialization == "solver-selected").get
+
+                assert(derivative.context == "legacy-analog")
+                assert(derivative.inputDimension == "voltage")
+                assert(derivative.resultDimension == "time^-1*voltage")
+                assert(derivative.stateId.isEmpty)
+                assert(derivative.initialization == "none")
+                assert(fixed.inputDimension == "current")
+                assert(fixed.resultDimension == "current*time")
+                assert(fixed.initialCondition.nonEmpty)
+                assert(fixed.stateId.contains(s"${fixed.path}.state"))
+                assert(solver.stateId.contains(s"${solver.path}.state"))
+                assert(solver.initialCondition.isEmpty)
+                assert(operators.forall(_.analyses == expectedAnalyses))
+                assert(operators.forall(operator => operator.path.startsWith(s"${operator.owner}.")))
+                assert(operators.forall(_.source.nonEmpty))
+
+              test("equation and contribution regions retain distinct declarative contexts"):
+                val equations =
+                  ConstructionKernel.inspect(new DifferentialIntegralEquationTop).continuousOperators
+                val contributions =
+                  ConstructionKernel.inspect(new DifferentialIntegralContributionTop).continuousOperators
+
+                assert(equations.size == 2)
+                assert(equations.forall(_.context == "equation"))
+                assert(contributions.size == 2)
+                assert(contributions.forall(_.context == "contribution"))
+                assert(equations.map(_.operation).toSet == Set("analog_ddt", "analog_idt"))
+                assert(contributions.map(_.operation).toSet == Set("analog_ddt", "analog_idt"))
+
+              test("typed non-zero integral initial condition matches the integrated dimension"):
+                val operator = ConstructionKernel
+                  .inspect(new DifferentialIntegralTypedInitialTop)
+                  .continuousOperators
+                  .find(_.operation == "analog_idt")
+                  .get
+                assert(operator.initialization == "fixed")
+                assert(operator.inputDimension == "current")
+                assert(operator.resultDimension == "current*time")
+                assert(operator.initialCondition.nonEmpty)
+
+              test("integral state identities are unique and deterministic"):
+                val first = ConstructionKernel
+                  .inspect(new DifferentialIntegralMultipleStateTop)
+                  .continuousOperators
+                  .filter(_.operation == "analog_idt")
+                val second = ConstructionKernel
+                  .inspect(new DifferentialIntegralMultipleStateTop)
+                  .continuousOperators
+                  .filter(_.operation == "analog_idt")
+                val firstStates = first.flatMap(_.stateId)
+                val secondStates = second.flatMap(_.stateId)
+                assert(firstStates.size == 2)
+                assert(firstStates.distinct.size == firstStates.size)
+                assert(firstStates == secondStates)
+
+              test("continuous operators outside declarative analog regions are rejected"):
+                assert(failureCode(new DifferentialOutsideRegion) == "NODAL-ANALOG-035-001")
+
+              test("continuous operators are rejected in initial-equation regions"):
+                assert(failureCode(new IntegralInitialEquationRegion) == "NODAL-ANALOG-035-001")
+
+              test("continuous operators are rejected in procedural regions"):
+                assert(failureCode(new DifferentialProceduralRegion) == "NODAL-ANALOG-035-001")
+
+              test("idt initial condition dimension must match its integral result"):
+                assert(failureCode(new IntegralInitialConditionMismatch) == "NODAL-ANALOG-035-004")
+          ''',
+          )
+
+          write(
+              "examples/continuousTimeApi/src/nodal/increment35fixture/Increment35ConstructionCheck.scala",
+              '''package nodal.increment35fixture
+
+          import java.nio.file.{Files, Path}
+
+          import nodal.*
+          import nodal.internal.bridge.ScalaToMlirBridge
+
+          final class Increment35LegacyFixture extends Module:
+            analog:
+              val derivative = ddt(2.0.V)
+              val fixedIntegral = idt(1.0.A, 0.0.real)
+              val solverIntegral = idt(2.0.A)
+
+          final class Increment35EquationFixture extends Module:
+            equations:
+              val derivative = ddt(1.0.V)
+              val integral = idt(1.0.A)
+
+          final class Increment35ContributionFixture extends Module:
+            contributions:
+              val derivative = ddt(1.0.V)
+              val integral = idt(1.0.A)
+
+          final class Increment35TypedInitialFixture extends Module:
+            analog:
+              val initialCharge = 2.0.A * 3.0.s
+              val integral = idt(1.0.A, initialCharge)
+
+          final class Increment35MultipleStateFixture extends Module:
+            analog:
+              val first = idt(1.0.A)
+              val second = idt(2.0.A, 0.0.real)
+
+          final class Increment35OutsideFixture extends Module:
+            val invalid = idt(1.0.A)
+
+          final class Increment35InitialFixture extends Module:
+            initialEquations:
+              val invalid = ddt(1.0.V)
+
+          final class Increment35ProceduralFixture extends Module:
+            analogProcedure:
+              val invalid = idt(1.0.A)
+
+          final class Increment35MismatchFixture extends Module:
+            analog:
+              val invalid = idt(1.0.A, 1.0.V)
+
+          object Increment35ConstructionCheck:
+            private def failureCode(top: => Module): String =
+              scala.util
+                .Try(ConstructionKernel.inspect(top))
+                .failed
+                .get
+                .asInstanceOf[ConstructionException]
+                .diagnostic
+                .code
+
+            def main(args: Array[String]): Unit =
+              val report = args.headOption
+                .map(Path.of(_))
+                .getOrElse(Path.of("/tmp/increment35-construction-check.txt"))
+
+              val legacy = ConstructionKernel.inspect(new Increment35LegacyFixture)
+              val replay = ConstructionKernel.inspect(new Increment35LegacyFixture)
+              val equation = ConstructionKernel.inspect(new Increment35EquationFixture)
+              val contribution = ConstructionKernel.inspect(new Increment35ContributionFixture)
+              val typedInitial = ConstructionKernel.inspect(new Increment35TypedInitialFixture)
+              val firstStates = ConstructionKernel
+                .inspect(new Increment35MultipleStateFixture)
+                .continuousOperators
+                .flatMap(_.stateId)
+              val secondStates = ConstructionKernel
+                .inspect(new Increment35MultipleStateFixture)
+                .continuousOperators
+                .flatMap(_.stateId)
+              val fixed = legacy.continuousOperators
+                .find(operator =>
+                  operator.operation == "analog_idt" && operator.initialization == "fixed"
+                )
+                .get
+              val solver = legacy.continuousOperators
+                .find(operator =>
+                  operator.operation == "analog_idt" && operator.initialization == "solver-selected"
+                )
+                .get
+              val derivative = legacy.continuousOperators.find(_.operation == "analog_ddt").get
+              val typed = typedInitial.continuousOperators.find(_.operation == "analog_idt").get
+              val bridge = ScalaToMlirBridge.lower(new Increment35LegacyFixture)
+
+              val lines = Vector(
+                s"operator_count=${legacy.continuousOperators.size}",
+                s"ddt_result_dimension=${derivative.resultDimension}",
+                s"idt_fixed_state=${fixed.stateId.getOrElse("")}",
+                s"idt_fixed_initialization=${fixed.initialization}",
+                s"idt_solver_initialization=${solver.initialization}",
+                s"equation_context=${equation.continuousOperators.forall(_.context == "equation")}",
+                s"contribution_context=${contribution.continuousOperators.forall(_.context == "contribution")}",
+                s"typed_initial_dimension=${typed.resultDimension}",
+                s"state_ids_unique=${firstStates.distinct.size == firstStates.size}",
+                s"state_ids_stable=${firstStates == secondStates}",
+                s"operator_paths_stable=${legacy.continuousOperators.map(_.path) == replay.continuousOperators.map(_.path)}",
+                s"outside_context=${failureCode(new Increment35OutsideFixture)}",
+                s"initial_context=${failureCode(new Increment35InitialFixture)}",
+                s"procedural_context=${failureCode(new Increment35ProceduralFixture)}",
+                s"initial_mismatch=${failureCode(new Increment35MismatchFixture)}",
+                s"bridge_has_idt=${bridge.text.contains("\"nodal.analog_idt\"")}"
+              )
+              Files.writeString(
+                report,
+                lines.mkString("", System.lineSeparator(), System.lineSeparator())
+              )
+          ''',
+          )
+
+          write(
+              "core/compiler/test/IR/analog-differential-integral-invalid-contract.mlir",
+              '''module attributes { nodal.target.profile = "analog" } {
+            "nodal.module"() <{metadata = {}, sym_name = "InvalidContract"}> ({
+            ^bb0:
+              "nodal.analog"() <{metadata = {}}> ({
+              ^bb0:
+                %input = "nodal.real_literal"() <{metadata = {}, value = 1.0 : f64}> : () -> !nodal.quantity<"real", "1">
+                %bad = "nodal.analog_idt"(%input) <{analyses = ["transient"], context = "equation", initialization = "solver-selected", input_dimension = "1", metadata = {}, operator_id = "InvalidContract.bad", owner = "InvalidContract", result_dimension = "time", state_id = "InvalidContract.bad.state"}> : (!nodal.quantity<"real", "1">) -> !nodal.quantity<"real", "time">
+              }) : () -> ()
+            }) : () -> ()
+          }
+          ''',
+          )
+          write(
+              "core/compiler/test/IR/analog-differential-integral-invalid-dimension.mlir",
+              '''module attributes { nodal.target.profile = "analog" } {
+            "nodal.module"() <{metadata = {}, sym_name = "InvalidDimension"}> ({
+            ^bb0:
+              "nodal.analog"() <{metadata = {}}> ({
+              ^bb0:
+                %input = "nodal.real_literal"() <{metadata = {}, value = 1.0 : f64}> : () -> !nodal.quantity<"real", "current">
+                %bad = "nodal.analog_ddt"(%input) <{analyses = ["transient"], context = "equation", initialization = "none", input_dimension = "current", metadata = {}, operator_contract = "increment35", operator_id = "InvalidDimension.bad", owner = "InvalidDimension", result_dimension = "voltage"}> : (!nodal.quantity<"real", "current">) -> !nodal.quantity<"real", "voltage">
+              }) : () -> ()
+            }) : () -> ()
+          }
+          ''',
+          )
+          write(
+              "core/compiler/test/IR/analog-differential-integral-invalid-analysis.mlir",
+              '''module attributes { nodal.target.profile = "analog" } {
+            "nodal.module"() <{metadata = {}, sym_name = "InvalidAnalysis"}> ({
+            ^bb0:
+              "nodal.analog"() <{metadata = {}}> ({
+              ^bb0:
+                %input = "nodal.real_literal"() <{metadata = {}, value = 1.0 : f64}> : () -> !nodal.quantity<"real", "1">
+                %bad = "nodal.analog_ddt"(%input) <{analyses = ["dc"], context = "equation", initialization = "none", input_dimension = "1", metadata = {}, operator_contract = "increment35", operator_id = "InvalidAnalysis.bad", owner = "InvalidAnalysis", result_dimension = "time^-1"}> : (!nodal.quantity<"real", "1">) -> !nodal.quantity<"real", "time^-1">
+              }) : () -> ()
+            }) : () -> ()
+          }
+          ''',
+          )
+          write(
+              "core/compiler/test/IR/analog-differential-integral-invalid-duplicate-identity.mlir",
+              '''module attributes { nodal.target.profile = "analog" } {
+            "nodal.module"() <{metadata = {}, sym_name = "DuplicateIdentity"}> ({
+            ^bb0:
+              "nodal.analog"() <{metadata = {}}> ({
+              ^bb0:
+                %one = "nodal.real_literal"() <{metadata = {}, value = 1.0 : f64}> : () -> !nodal.quantity<"real", "1">
+                %two = "nodal.real_literal"() <{metadata = {}, value = 2.0 : f64}> : () -> !nodal.quantity<"real", "1">
+                %first = "nodal.analog_ddt"(%one) <{analyses = ["transient"], context = "equation", initialization = "none", input_dimension = "1", metadata = {}, operator_contract = "increment35", operator_id = "DuplicateIdentity.same", owner = "DuplicateIdentity", result_dimension = "time^-1"}> : (!nodal.quantity<"real", "1">) -> !nodal.quantity<"real", "time^-1">
+                %second = "nodal.analog_ddt"(%two) <{analyses = ["transient"], context = "equation", initialization = "none", input_dimension = "1", metadata = {}, operator_contract = "increment35", operator_id = "DuplicateIdentity.same", owner = "DuplicateIdentity", result_dimension = "time^-1"}> : (!nodal.quantity<"real", "1">) -> !nodal.quantity<"real", "time^-1">
+              }) : () -> ()
+            }) : () -> ()
+          }
+          ''',
+          )
+
+          replace_once(
+              "core/compiler/test/CMakeLists.txt",
+              '''foreach(_fixture IN ITEMS context initial state simplification idt-fold)
+          ''',
+              '''foreach(_fixture IN ITEMS context contract dimension analysis initial state simplification idt-fold)
+          ''',
+          )
+          replace_once(
+              "core/compiler/test/CMakeLists.txt",
+              '''endforeach()
+
+          add_custom_target(check-nodal-native
+          ''',
+              '''endforeach()
+
+          add_test(
+            NAME nodal.native.analog-differential-integral-rejects-duplicate-identity
+            COMMAND nodalc
+              "--pass-pipeline=builtin.module(nodal-verify-analog-numeric)"
+              "${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-differential-integral-invalid-duplicate-identity.mlir"
+          )
+          set_tests_properties(
+            nodal.native.analog-differential-integral-rejects-duplicate-identity
+            PROPERTIES
+              WILL_FAIL TRUE
+          )
+
+          add_custom_target(check-nodal-native
+          ''',
+          )
+
+          workflow = ".github/workflows/increment-35-differential-integral-operators.yml"
+          replace_once(
+              workflow,
+              '''          grep -F 'equation_context=true' "$report"
+          ''',
+              '''          grep -F 'equation_context=true' "$report"
+                    grep -F 'contribution_context=true' "$report"
+                    grep -F 'typed_initial_dimension=current*time' "$report"
+                    grep -F 'state_ids_unique=true' "$report"
+                    grep -F 'state_ids_stable=true' "$report"
+                    grep -F 'operator_paths_stable=true' "$report"
+          ''',
+          )
+          replace_once(
+              workflow,
+              '''          check_invalid context NODAL-ANALOG-035-001
+                    check_invalid initial NODAL-ANALOG-035-004
+          ''',
+              '''          check_invalid context NODAL-ANALOG-035-001
+                    check_invalid contract NODAL-ANALOG-035-002
+                    check_invalid dimension NODAL-ANALOG-035-003
+                    check_invalid analysis NODAL-ANALOG-035-006
+                    check_invalid initial NODAL-ANALOG-035-004
+          ''',
+          )
+          replace_once(
+              workflow,
+              '''          check_invalid idt-fold NODAL-ANALOG-035-008
+
+                    "$nodal_translate" \\
+          ''',
+              '''          check_invalid idt-fold NODAL-ANALOG-035-008
+
+                    check_invalid_with_pipeline() {
+                      fixture=$1
+                      diagnostic=$2
+                      output="${RUNNER_TEMP}/${fixture}.log"
+                      if "$nodalc" \\
+                        '--pass-pipeline=builtin.module(nodal-verify-analog-numeric)' \\
+                        "core/compiler/test/IR/analog-differential-integral-invalid-${fixture}.mlir" \\
+                        >"$output" 2>&1; then
+                        cat "$output"
+                        echo "Expected ${fixture} fixture to fail"
+                        exit 1
+                      fi
+                      cat "$output"
+                      grep -F "$diagnostic" "$output"
+                    }
+                    check_invalid_with_pipeline duplicate-identity NODAL-ANALOG-035-002
+
+                    "$nodal_translate" \\
+          ''',
+          )
+
+          replace_once(
+              "docs/design-gates/NodalDifferentialIntegralOperators-DG-v0.1.md",
+              '''- `operator_id` and `state_id` are stable semantic identities, not generated backend names.
+          ''',
+              '''- `operator_id` and `state_id` are stable semantic identities, not generated backend names.
+          - Contracted operator identities are owner-qualified and unique; every `idt` state identity is unique.
+          - Legacy uncontracted `nodal.analog_ddt` retains the Increment 24 `NODAL-ANALOG-DDT-001` diagnostic contract.
+          ''',
+          )
+          replace_once(
+              "docs/implementation/increment35-differential-integral-operators.md",
+              '''The implementation is intentionally additive. It retains the accepted `ddt` source spelling,
+          replaces both `idt` placeholders, and does not authorize cancellation, distribution, or
+          hidden state.
+          ''',
+              '''The implementation is intentionally additive. It retains the accepted `ddt` source spelling,
+          replaces both `idt` placeholders, and does not authorize cancellation, distribution, or
+          hidden state. Legacy uncontracted `ddt` IR preserves the Increment 24
+          `NODAL-ANALOG-DDT-001` diagnostic contract, while Increment 35 contracted operators use
+          owner-qualified unique identities and unique `idt` state identities.
+          ''',
+          )
+
+          for relative in (
+              ".github/workflows/increment-35-bootstrap.yml",
+              "scripts/bootstrap_increment35.part00",
+              "scripts/bootstrap_increment35.part01",
+              "scripts/bootstrap_increment35.part02",
+              "scripts/bootstrap_increment35.part03",
+              "scripts/bootstrap_increment35.part04",
+              "scripts/bootstrap_increment35.part05",
+              "scripts/bootstrap_increment35.part06",
+              "tests/compiler/fixtures/increment35/bootstrap-revision.txt",
+          ):
+              path = root / relative
+              if path.exists():
+                  path.unlink()
+          PY
+
+      - name: Validate repaired repository contract
         shell: bash
         run: |
-          if git diff --quiet && git diff --cached --quiet && \
-             test -z "$(git ls-files --others --exclude-standard)"; then
-            echo 'Increment 35 source patch is already materialized.'
-            exit 0
-          fi
+          python3 scripts/check_increment34.py
+          python3 scripts/check_increment35.py
+          python3 -m unittest discover -s tests/compiler -p 'test_increment35.py'
+          git diff --check
+          test ! -e .github/workflows/increment-35-bootstrap.yml
+
+      - name: Commit permanent Increment 35 implementation
+        shell: bash
+        run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            core/scala/api/src/nodal/CandidateApi.scala \
-            core/scala/api/src/nodal/ElaborationConstructionKernel.scala \
-            core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala \
-            core/compiler/include/nodal/Dialect/Nodal/NodalOps.td \
-            core/compiler/lib/Dialect/Nodal/NodalOps.cpp \
-            core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp \
-            core/compiler/lib/Backend/AnalogVerticalSlice.cpp \
-            core/compiler/test/CMakeLists.txt \
-            tests/compiler/fixtures/increment35/bootstrap-revision.txt
-          git commit -m 'Implement Increment 35 operator semantics'
+          git add -A
+          git commit -m 'Harden Increment 35 operator semantics and remove bootstrap scaffolding'
           git push origin HEAD:increment/35-differential-integral-operators-v1

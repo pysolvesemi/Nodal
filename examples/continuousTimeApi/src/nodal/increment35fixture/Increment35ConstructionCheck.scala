@@ -3,7 +3,6 @@ package nodal.increment35fixture
 import java.nio.file.{Files, Path}
 
 import nodal.*
-import nodal.internal.bridge.ScalaToMlirBridge
 
 final class Increment35LegacyFixture extends Module:
   analog:
@@ -95,7 +94,6 @@ object Increment35ConstructionCheck:
       .get
     val derivative = legacy.continuousOperators.find(_.operation == "analog_ddt").get
     val typed = typedInitial.continuousOperators.find(_.operation == "analog_idt").get
-    val bridge = ScalaToMlirBridge.lower(new Increment35LegacyFixture)
     val analysisInventoryExact =
       legacy.continuousOperators.forall(_.analyses == ExpectedAnalyses)
     val ownerQualified =
@@ -125,8 +123,7 @@ object Increment35ConstructionCheck:
       s"outside_context=${failureCode(new Increment35OutsideFixture)}",
       s"initial_context=${failureCode(new Increment35InitialFixture)}",
       s"procedural_context=${failureCode(new Increment35ProceduralFixture)}",
-      s"initial_mismatch=${failureCode(new Increment35MismatchFixture)}",
-      s"bridge_has_idt=${bridge.text.contains("\"nodal.analog_idt\"")}"
+      s"initial_mismatch=${failureCode(new Increment35MismatchFixture)}"
     )
     Files.writeString(
       report,

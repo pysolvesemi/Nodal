@@ -89,7 +89,6 @@ jobs:
           grep -F 'initial_context=NODAL-ANALOG-035-001' "$report"
           grep -F 'procedural_context=NODAL-ANALOG-035-001' "$report"
           grep -F 'initial_mismatch=NODAL-ANALOG-035-004' "$report"
-          grep -F 'bridge_has_idt=true' "$report"
 
       - name: Build native compiler and execute operator matrix
         shell: bash

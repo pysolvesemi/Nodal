@@ -1,0 +1,187 @@
+  auto input = getAnalogNumericTypeInfo(operation->getOperand(0).getType());
+  auto result = getAnalogNumericTypeInfo(operation->getResult(0).getType());
+  if (failed(input) || failed(result) ||
+      input->kind != AnalogNumericKind::Real ||
+      result->kind != AnalogNumericKind::Real)
+    return emitMappedFailure(operation, "NODAL-ANALOG-035-003",
+                             "idt requires real quantity input and result");
+
+  std::string inputDimension = input->dimension;
+  std::string resultDimension;
+  if (input->legacyF64 && result->legacyF64) {
+    inputDimension = textAttr(operation, "input_dimension").str();
+    resultDimension = textAttr(operation, "result_dimension").str();
+    auto dimension =
+        combineAnalogDimensions(inputDimension, "time", false);
+    if (failed(dimension) || resultDimension != *dimension)
+      return emitMappedFailure(operation, "NODAL-ANALOG-035-003",
+                               "idt result must add one time exponent");
+  } else {
+    if (input->legacyF64 || result->legacyF64)
+      return emitMappedFailure(operation, "NODAL-ANALOG-035-003",
+                               "idt cannot mix legacy f64 and typed quantity values");
+    auto dimension = combineAnalogDimensions(input->dimension, "time", false);
+    if (failed(dimension) || result->dimension != *dimension)
+      return emitMappedFailure(operation, "NODAL-ANALOG-035-003",
+                               "idt result must add one time exponent");
+    resultDimension = *dimension;
+  }
+
+  if (operation->getNumOperands() == 2) {
+    auto initial =
+        getAnalogNumericTypeInfo(operation->getOperand(1).getType());
+    bool polymorphicZero = false;
+    if (Operation *definition = operation->getOperand(1).getDefiningOp()) {
+      auto literal = definition->getAttrOfType<FloatAttr>("value");
+      polymorphicZero =
+          definition->getName().getStringRef() == "nodal.real_literal" &&
+          literal && literal.getValueAsDouble() == 0.0;
+    }
+    if (failed(initial) || initial->kind != AnalogNumericKind::Real ||
+        (!polymorphicZero &&
+         (initial->legacyF64 != result->legacyF64 ||
+          (!result->legacyF64 &&
+           initial->dimension != resultDimension))))
+      return emitMappedFailure(operation, "NODAL-ANALOG-035-004",
+                               "idt initial condition must match the integral result dimension");
+  }
+
+  return verifyContinuousContract(operation, true, inputDimension,
+                                  resultDimension);
+}
+
+LogicalResult verifyAccess(Operation *operation) {
+''',
+    )
+    replace_once(
+        "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp",
+        '''  if (name == "nodal.analog_ddt")
+    return verifyDdt(operation);
+  if (name == "nodal.access")
+''',
+        '''  if (name == "nodal.analog_ddt")
+    return verifyDdt(operation);
+  if (name == "nodal.analog_idt")
+    return verifyIdt(operation);
+  if (name == "nodal.access")
+''',
+    )
+    replace_once(
+        "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp",
+        '''  module.walk([&](Operation *operation) {
+    if (failed(result))
+      return;
+    if (!isFoldCandidate(operation) || operation->getNumResults() != 1) {
+      clearFoldAttributes(operation);
+      return;
+    }
+
+    EvaluationResult evaluated = evaluateValue(operation->getResult(0), true);
+''',
+        '''  module.walk([&](Operation *operation) {
+    if (failed(result))
+      return;
+    llvm::StringRef name = operation->getName().getStringRef();
+    if (name == "nodal.analog_ddt") {
+      clearFoldAttributes(operation);
+      clearContinuousSimplificationAttributes(operation);
+      auto contract =
+          operation->getAttrOfType<StringAttr>("operator_contract");
+      if (!contract || contract.getValue() != "increment35" ||
+          operation->getNumOperands() != 1 ||
+          operation->getNumResults() != 1)
+        return;
+      EvaluationResult input =
+          evaluateValue(operation->getOperand(0), true);
+      if (input.status == EvaluationStatus::Error) {
+        result = failure();
+        return;
+      }
+      if (input.status != EvaluationStatus::Constant)
+        return;
+      auto resultInformation =
+          getAnalogNumericTypeInfo(operation->getResult(0).getType());
+      if (failed(resultInformation)) {
+        result = emitMappedFailure(
+            operation, "NODAL-ANALOG-035-007",
+            "ddt simplification requires a typed numeric result");
+        return;
+      }
+      MLIRContext *context = operation->getContext();
+      operation->setAttr("nodal.simplified", BoolAttr::get(context, true));
+      operation->setAttr(
+          "nodal.simplification_rule",
+          StringAttr::get(context, "ddt-time-invariant-zero"));
+      llvm::StringRef simplifiedDimension =
+          resultInformation->legacyF64
+              ? textAttr(operation, "result_dimension")
+              : llvm::StringRef(resultInformation->dimension);
+      operation->setAttr(
+          "nodal.simplified_dimension",
+          StringAttr::get(context, simplifiedDimension));
+      operation->setAttr(
+          "nodal.simplification_provenance",
+          StringAttr::get(context, "increment35"));
+      operation->setAttr(
+          "nodal.simplified_value",
+          FloatAttr::get(Float64Type::get(context), 0.0));
+      return;
+    }
+    if (name == "nodal.analog_idt") {
+      clearFoldAttributes(operation);
+      clearContinuousSimplificationAttributes(operation);
+      return;
+    }
+    clearContinuousSimplificationAttributes(operation);
+    if (!isFoldCandidate(operation) || operation->getNumResults() != 1) {
+      clearFoldAttributes(operation);
+      return;
+    }
+
+    EvaluationResult evaluated = evaluateValue(operation->getResult(0), true);
+''',
+    )
+
+    replace_once(
+        "core/compiler/lib/Backend/AnalogVerticalSlice.cpp",
+        '''  } else if (name == "nodal.analog_ddt") {
+    if (operation->getNumOperands() != 1)
+      return failure();
+    auto input = renderExpression(operation->getOperand(0), state);
+    if (failed(input))
+      return failure();
+    rendered = (llvm::Twine("ddt(") + *input + ")").str();
+  } else if (name == "nodal.analog_neg") {
+''',
+        '''  } else if (name == "nodal.analog_ddt") {
+    if (operation->getNumOperands() != 1)
+      return failure();
+    auto simplified =
+        operation->getAttrOfType<BoolAttr>("nodal.simplified");
+    auto rule =
+        operation->getAttrOfType<StringAttr>("nodal.simplification_rule");
+    auto provenance =
+        operation->getAttrOfType<StringAttr>(
+            "nodal.simplification_provenance");
+    auto value =
+        operation->getAttrOfType<FloatAttr>("nodal.simplified_value");
+    if (simplified && simplified.getValue() && rule &&
+        rule.getValue() == "ddt-time-invariant-zero" && provenance &&
+        provenance.getValue() == "increment35" && value &&
+        value.getValueAsDouble() == 0.0) {
+      rendered = formatReal(0.0);
+    } else {
+      auto input = renderExpression(operation->getOperand(0), state);
+      if (failed(input))
+        return failure();
+      rendered = (llvm::Twine("ddt(") + *input + ")").str();
+    }
+  } else if (name == "nodal.analog_idt") {
+    if (operation->getNumOperands() != 1 &&
+        operation->getNumOperands() != 2)
+      return failure();
+    auto input = renderExpression(operation->getOperand(0), state);
+    if (failed(input))
+      return failure();
+    rendered = (llvm::Twine("idt(") + *input).str();
+    if (operation->getNumOperands() == 2) {

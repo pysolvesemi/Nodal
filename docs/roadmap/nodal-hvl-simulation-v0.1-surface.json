@@ -1,8 +1,8 @@
 {
-  "schemaVersion": "0.1",
+  "schemaVersion": "0.2",
   "document": "nodal-hvl-simulation-v0.1-plan.md",
   "status": "normative-dependent-track-roadmap-target",
-  "updated": "2026-09-04",
+  "updated": "2026-09-05",
   "foundationBarrier": {
     "required": true,
     "rule": "No implementation item in this plan may start until every Foundation increment is complete.",
@@ -21,62 +21,159 @@
     "generatedTestbenchRequired": false,
     "generatedProjectionRole": "optional interoperability and delivery output"
   },
-  "capabilityClasses": {
-    "live": {
-      "id": "nodal.hvl.live",
-      "default": true,
-      "staticallyCapturable": false,
-      "allowsOrdinaryScala": true,
-      "allowsHostReferenceModels": true,
-      "allowsDeclaredExternalArtifacts": true,
-      "requiresStableSemanticOperations": true,
-      "projectionFailureInvalidatesLiveExecution": false,
-      "replayRule": "Exact replay is claimed only when seeds, values, external inputs and required artifacts are retained."
+  "capabilityAxes": {
+    "executionClass": {
+      "live": {
+        "id": "nodal.hvl.live",
+        "default": true,
+        "staticallyCapturable": false,
+        "allowsOrdinaryScala": true,
+        "allowsHostReferenceModels": true,
+        "allowsDeclaredExternalArtifacts": true,
+        "requiresStableSemanticOperations": true,
+        "projectionFailureInvalidatesLiveExecution": false,
+        "replayRule": "Exact replay is claimed only when seeds, values, external inputs and required artifacts are retained."
+      },
+      "portable": {
+        "id": "nodal.hvl.portable",
+        "default": false,
+        "staticallyCapturable": true,
+        "samePublicLanguage": true,
+        "requiresVerificationSemanticIr": true,
+        "operationClassifications": [
+          "embedded",
+          "precomputed-replay",
+          "companion-runtime-required",
+          "unsupported"
+        ],
+        "silentOmissionAllowed": false
+      }
     },
-    "portable": {
-      "id": "nodal.hvl.portable",
-      "default": false,
-      "staticallyCapturable": true,
-      "samePublicLanguage": true,
-      "requiresVerificationSemanticIr": true,
-      "operationClassifications": [
-        "embedded",
-        "precomputed-replay",
-        "companion-runtime-required",
-        "unsupported"
-      ],
-      "projections": [
-        "deterministic-replay-sidecars",
-        "standalone-verilog-testbench",
-        "standalone-verilog-ams-testbench",
-        "open-ams-harness",
-        "digital-uvm",
-        "uvm-ms"
-      ],
-      "silentOmissionAllowed": false
+    "projectionProfile": {
+      "portableCore": {
+        "id": "nodal.hvl.portable.core",
+        "targetNeutral": true,
+        "generatedLanguageIr": null
+      },
+      "verilogTb": {
+        "id": "nodal.hvl.projection.verilog_tb",
+        "inheritsFrom": [],
+        "requires": [
+          "nodal.hvl.portable.core"
+        ],
+        "generatedLanguageIr": "Procedural HDL Testbench IR",
+        "implementationModel": "module-task-process",
+        "releaseGate": "VTB-07"
+      },
+      "uvm": {
+        "id": "nodal.hvl.projection.uvm",
+        "inheritsFrom": [],
+        "requires": [
+          "nodal.hvl.portable.core"
+        ],
+        "generatedLanguageIr": "Verification SystemVerilog IR",
+        "implementationModel": "class-object-component-methodology",
+        "releaseGate": "UVM-09"
+      },
+      "verilogAmsTb": {
+        "id": "nodal.hvl.projection.verilog_ams_tb",
+        "inheritsFrom": [],
+        "requires": [
+          "nodal.hvl.portable.core",
+          "nodal.hvl.portable.ams"
+        ],
+        "generatedLanguageIr": "Procedural HDL Testbench IR with AMS profile"
+      },
+      "openAmsHarness": {
+        "id": "nodal.hvl.projection.open_ams_harness",
+        "inheritsFrom": [],
+        "requires": [
+          "nodal.hvl.portable.core",
+          "nodal.hvl.portable.ams"
+        ],
+        "generatedLanguageIr": "Open AMS harness execution plan"
+      },
+      "uvmMs": {
+        "id": "nodal.hvl.projection.uvm_ms",
+        "inheritsFrom": [],
+        "requires": [
+          "nodal.hvl.portable.core",
+          "nodal.hvl.portable.ams",
+          "nodal.hvl.projection.uvm"
+        ],
+        "generatedLanguageIr": "Verification SystemVerilog IR with UVM-MS profile"
+      }
     }
   },
   "bindingRules": [
     "Live Nodal HVL is the richer default execution capability.",
     "Portable Nodal HVL is an explicit structured subset of the same public language.",
+    "Projection eligibility is a capability set, not one universal Boolean.",
+    "Verilog-TB and UVM are independent sibling profiles and neither inherits from the other.",
     "A live test may call portable components.",
-    "A portable component may call only portable operations, deterministic precomputable helpers or declared companion-runtime services.",
-    "A requested projection may reject a live-only test without invalidating that test for live execution.",
+    "A portable component may call Portable Core operations, compatible profile operations, deterministic precomputable helpers or declared companion-runtime services.",
+    "A requested projection may reject a live-only or incompatible-profile test without invalidating that test for live execution.",
     "Generated backend limitations must never remove or weaken a live API operation.",
-    "Portability is checked against a selected target profile, not represented by one universal Boolean.",
-    "Diagnostics identify the first non-portable operation, source location, required capability and legal execution modes."
+    "A package may support Verilog-TB, UVM, both or neither.",
+    "Diagnostics identify the first incompatible operation, source location, required capability and legal modes."
   ],
+  "libraryLayers": {
+    "commonSemanticLibrary": {
+      "mayContain": [
+        "transaction-schemas",
+        "protocol-rules",
+        "logical-endpoint-bindings",
+        "stimulus-intent",
+        "monitor-intent",
+        "scoreboard-rules",
+        "checks",
+        "coverage-intent",
+        "replay-contracts",
+        "stable-identities"
+      ],
+      "mayDependOnProfileLibraries": false
+    },
+    "verilogTbProjectionLibrary": {
+      "mayDependOn": [
+        "common-semantic-library"
+      ],
+      "owns": [
+        "module-task-process-realization",
+        "static-storage-policy",
+        "file-replay-policy",
+        "procedural-bfm-structure",
+        "standalone-reporting"
+      ]
+    },
+    "uvmProjectionLibrary": {
+      "mayDependOn": [
+        "common-semantic-library"
+      ],
+      "owns": [
+        "object-component-mapping",
+        "hierarchy",
+        "sequences-sequencers",
+        "tlm",
+        "phases-objections",
+        "factory-configuration",
+        "virtual-interfaces",
+        "coverage-reporting",
+        "ral"
+      ]
+    },
+    "universalTargetImplementationClassAllowed": false
+  },
   "semanticLayers": {
     "commonVerificationModel": [
       "types",
       "logical-interface-identities",
       "register-identities",
       "transactions",
-      "drivers",
-      "monitors",
-      "scoreboards",
+      "stimulus-intent",
+      "monitor-intent",
+      "scoreboard-rules",
       "checks",
-      "coverage",
+      "coverage-intent",
       "measurements",
       "seeds",
       "failures",
@@ -84,13 +181,23 @@
       "normalized-results"
     ],
     "liveMaterialization": "Dynamic host interpretation plus semantic command, event and result traces.",
-    "portableMaterialization": "Complete static Verification Semantic IR before projection.",
-    "generatedLanguageIrs": [
-      "Procedural HDL Testbench IR",
-      "verification-SystemVerilog IR",
-      "solver-facing analog/equation IR",
-      "compiled simulator execution plan"
-    ]
+    "portableMaterialization": "Complete static Portable Core Verification Semantic IR before projection.",
+    "profileExtensions": [
+      "verilog-tb namespaced operations",
+      "uvm namespaced operations",
+      "ams generated-profile operations"
+    ],
+    "generatedLanguageIrs": {
+      "verilogTb": "Procedural HDL Testbench IR",
+      "uvm": "Verification SystemVerilog IR",
+      "verilogAmsTb": "Procedural HDL Testbench IR with AMS profile",
+      "openAmsHarness": "Open AMS harness execution plan",
+      "uvmMs": "Verification SystemVerilog IR with UVM-MS profile"
+    },
+    "crossLoweringAllowed": {
+      "uvmToProceduralHdlTbIr": false,
+      "verilogTbToVerificationSystemVerilogIr": false
+    }
   },
   "workstreams": [
     {
@@ -161,33 +268,106 @@
       "commercialProfilesOptional": true
     },
     {
-      "id": "PORT",
-      "name": "Portable and capturable projections",
+      "id": "CAP",
+      "name": "Common portable capture",
       "blockedBy": [
         "foundation.complete",
         "LIVE-01"
       ],
       "increments": [
-        "PORT-01",
-        "PORT-02",
-        "PORT-03",
-        "PORT-04",
-        "PORT-05",
-        "PORT-06",
-        "PORT-07",
-        "PORT-08",
-        "PORT-09",
-        "PORT-10"
+        "CAP-01",
+        "CAP-02",
+        "CAP-03",
+        "CAP-04",
+        "CAP-05"
       ],
       "requiredForLiveRelease": false,
-      "releaseGate": "PORT-10"
+      "releaseGate": "CAP-05"
+    },
+    {
+      "id": "VTB",
+      "name": "Generated procedural Verilog testbench",
+      "blockedBy": [
+        "foundation.complete",
+        "CAP-05"
+      ],
+      "increments": [
+        "VTB-01",
+        "VTB-02",
+        "VTB-03",
+        "VTB-04",
+        "VTB-05",
+        "VTB-06",
+        "VTB-07"
+      ],
+      "requiresUvm": false,
+      "releaseGate": "VTB-07"
+    },
+    {
+      "id": "UVM",
+      "name": "Generated digital UVM",
+      "blockedBy": [
+        "foundation.complete",
+        "CAP-05"
+      ],
+      "increments": [
+        "UVM-01",
+        "UVM-02",
+        "UVM-03",
+        "UVM-04",
+        "UVM-05",
+        "UVM-06",
+        "UVM-07",
+        "UVM-08",
+        "UVM-09"
+      ],
+      "requiresVerilogTb": false,
+      "releaseGate": "UVM-09"
+    },
+    {
+      "id": "AMSP",
+      "name": "Generated analog and mixed-signal profiles",
+      "blockedBy": [
+        "foundation.complete",
+        "CAP-05",
+        "analog-mixed-signal.portable-semantics"
+      ],
+      "increments": [
+        "AMSP-01",
+        "AMSP-02",
+        "AMSP-03",
+        "AMSP-04",
+        "AMSP-05",
+        "AMSP-06",
+        "AMSP-07"
+      ],
+      "releaseGate": "AMSP-07"
+    },
+    {
+      "id": "XPAR",
+      "name": "Cross-projection common-subset parity",
+      "blockedBy": [
+        "CAP-05",
+        "applicable-profile-release-gates"
+      ],
+      "increments": [
+        "XPAR-01",
+        "XPAR-02",
+        "XPAR-03",
+        "XPAR-04",
+        "XPAR-05"
+      ],
+      "comparisonDomain": "explicit common semantic intersection",
+      "releaseGate": "XPAR-05"
     }
   ],
   "releaseRules": [
-    "Analog live simulation may release before mixed-signal and portable projection completion.",
-    "Mixed-signal live simulation may release before portable projection and commercial profile completion.",
-    "Commercial live adapters are deferred optional profiles and do not block open-source live releases.",
-    "Portable projections never redefine the live HVL feature set.",
+    "Analog live simulation may release before mixed-signal and generated projection completion.",
+    "Mixed-signal live simulation may release before generated projection and commercial profile completion.",
+    "Portable Core may release before any generated profile.",
+    "Verilog-TB and UVM release independently and neither is a prerequisite for the other.",
+    "Commercial live adapters and generated commercial profiles are deferred optional profiles.",
+    "Cross-projection parity compares only profile intersections and never redefines a profile feature set.",
     "A user may use only live Nodal HVL indefinitely."
   ],
   "existingUmbrellaMapping": {
@@ -211,21 +391,69 @@
       "AMS-Verification-5",
       "AMS-Verification-9-through-12"
     ],
-    "PORT": [
+    "CAP": [
       "Foundation-147",
+      "Foundation-152",
+      "Digital-Verification-2-through-6",
+      "Digital-Verification-8",
+      "Digital-Verification-10",
+      "Digital-Verification-12",
+      "AMS-Verification-2-through-8",
+      "AMS-Verification-10",
+      "AMS-Verification-12"
+    ],
+    "VTB": [
+      "Foundation-152",
+      "Digital-Verification-6",
+      "Digital-Verification-7",
+      "Digital-Verification-11",
+      "Digital-Verification-12"
+    ],
+    "UVM": [
+      "Foundation-149",
+      "Digital-Verification-8",
+      "Digital-Verification-9",
+      "Digital-Verification-11",
+      "Digital-Verification-12"
+    ],
+    "AMSP": [
       "Foundation-149",
       "Foundation-152",
-      "Digital-Verification-6-through-10",
-      "AMS-Verification-6-through-10",
+      "AMS-Verification-6-through-9",
+      "AMS-Verification-11",
+      "AMS-Verification-12"
+    ],
+    "XPAR": [
+      "Digital-Verification-10",
+      "Digital-Verification-12",
+      "AMS-Verification-10",
       "AMS-Verification-12"
     ]
   },
   "nonGoals": [
-    "Require generated Verilog-AMS or UVM-MS for ordinary Nodal simulation.",
+    "Require generated Verilog-AMS, UVM or UVM-MS for ordinary Nodal simulation.",
     "Translate arbitrary Scala bytecode or host object graphs into portable verification IR.",
     "Claim complete open-source Verilog-AMS support from Verilog-A parsing or partitioned co-simulation.",
     "Make one simulator callback order, random engine, waveform format or command language part of Nodal semantics.",
     "Silently omit unsupported verification intent.",
-    "Build a native analog solver merely to avoid external simulators in the initial release."
-  ]
+    "Build a native analog solver merely to avoid external simulators in the initial release.",
+    "Make UVM inherit from Verilog-TB.",
+    "Use one common target-implementation class for Verilog-TB and UVM.",
+    "Emulate UVM methodology in procedural Verilog to preserve a universal capability claim.",
+    "Require every common VIP to support every generated profile."
+  ],
+  "legacyAliases": {
+    "PORT": {
+      "expandsTo": [
+        "CAP",
+        "VTB",
+        "UVM",
+        "AMSP",
+        "XPAR"
+      ],
+      "isCapabilityClass": false,
+      "isReleaseGate": false,
+      "newClosureEvidenceMayUseAlias": false
+    }
+  }
 }

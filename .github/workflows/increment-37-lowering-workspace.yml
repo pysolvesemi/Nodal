@@ -1,0 +1,25 @@
+name: Increment 37 Lowering Workspace
+on:
+  push:
+    branches: [increment/37-lowering-validation]
+    paths: ['.github/workflows/increment-37-lowering-workspace.yml']
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: |
+          git archive --format=tar.gz HEAD > "${RUNNER_TEMP}/source.tar.gz"
+          git rev-parse HEAD > "${RUNNER_TEMP}/head.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: increment37-current-source
+          path: |
+            ${{ runner.temp }}/source.tar.gz
+            ${{ runner.temp }}/head.txt
+          retention-days: 1

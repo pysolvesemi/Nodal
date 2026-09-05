@@ -1,0 +1,60 @@
+name: Increment 36 Time and Waveform Operators
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - '.github/workflows/increment-36-time-waveform-operators.yml'
+      - 'core/**'
+      - 'examples/continuousTimeApi/**'
+      - 'scripts/check_increment36.py'
+      - 'tests/compiler/**'
+      - 'docs/design-gates/NodalTimeWaveformOperators-DG-v0.1.md'
+      - 'docs/implementation/increment36*.md'
+      - 'docs/roadmap/nodal-development-todo.md'
+  push:
+    branches: [increment/36-time-waveform-operators-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  increment-36-time-waveform-operators:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Validate predecessor and waveform contracts
+        run: |
+          python3 scripts/check_increment35.py
+          python3 scripts/check_increment36.py
+          python3 -m unittest discover -s tests/compiler -p 'test_increment36*.py'
+      - name: Compile and execute Scala contracts
+        run: ./nodal core scala
+      - name: Emit deterministic public-source waveform witness
+        run: |
+          ./mill -i examples.continuousTimeApi.runMain \
+            nodal.increment36fixture.Increment36ConstructionCheck \
+            "${RUNNER_TEMP}/increment36-source.mlir"
+      - name: Build compiler and execute native and source-to-backend matrices
+        shell: bash
+        run: |
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          nodalc=$(find out -type f -name nodalc -perm -u+x | head -n 1)
+          translate=$(find out -type f -name nodal-translate -perm -u+x | head -n 1)
+          test -n "$nodalc" && test -n "$translate"
+          python3 tests/compiler/fixtures/increment36/run_native_matrix.py \
+            --nodalc "$nodalc" --translate "$translate" \
+            --source "${RUNNER_TEMP}/increment36-source.mlir"
+      - name: Check style and documentation
+        run: |
+          ./nodal style check --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          python3 scripts/check_markdown.py
+          git diff --check

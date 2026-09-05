@@ -1,0 +1,96 @@
+name: Increment 36 Integration Repair
+on:
+  push:
+    branches: [automation/increment36-integration-repair]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      head: ${{ steps.publish.outputs.head }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: increment/36-time-waveform-operators-v1
+          fetch-depth: 0
+      - name: Apply reviewed integration changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git rev-parse HEAD)" = de82c2ecf507ab1084fabfdcfd92c4e109fa5361
+          gh api repos/pysolvesemi/Nodal/git/blobs/82e8b258d97e02e36c9c4b3b1481c1311d85cfb2 --jq .content | base64 -d > /tmp/fix.py
+          python3 /tmp/fix.py
+          git add -N core/scala/testkit/test/src/nodal/internal/testkit/Increment36MlirCheck.scala
+          git diff -- . ':!.github/workflows/*' > /tmp/repair.patch
+          echo 'ef0246192f54d53ca03015155ed3cfa1000b0a6c6302a01a3902ce75110f4018  /tmp/repair.patch' | sha256sum -c -
+          python3 scripts/check_increment36.py
+      - name: Format and publish
+        id: publish
+        run: |
+          ./nodal style bootstrap --prefix "$RUNNER_TEMP/lint"
+          ./nodal style fix --lint-toolchain "$RUNNER_TEMP/lint"
+          git diff --exit-code -- .github/workflows
+          git diff --check
+          git add build.mill core docs examples scripts/check_increment36.py tests/compiler
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Increment 36 — Fix external witness and typed native fixture integration'
+          git push origin HEAD:refs/heads/increment/36-time-waveform-operators-v1
+          echo "head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git archive --format=tar.gz HEAD > /tmp/source.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: increment36-repaired-source
+          path: /tmp/source.tar.gz
+          retention-days: 3
+  scala:
+    needs: prepare
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.head }}
+      - name: Compiled Scala and public-source emission
+        shell: bash
+        run: |
+          set -o pipefail
+          ./nodal core scala 2>&1 | tee /tmp/scala.log
+          ./mill -i examples.continuousTimeApi.runMain nodal.increment36fixture.Increment36ConstructionCheck /tmp/construction.txt 2>&1 | tee /tmp/construction.log
+          ./mill -i core.scala.testkit.test.runMain nodal.internal.testkit.Increment36MlirCheck /tmp/source.mlir 2>&1 | tee /tmp/source.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: increment36-scala-validation
+          path: |
+            /tmp/*.log
+            /tmp/source.mlir
+            /tmp/construction.txt
+          retention-days: 3
+  native:
+    needs: prepare
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.head }}
+      - name: Native compiler and matrix
+        shell: bash
+        run: |
+          set -o pipefail
+          ./nodal bootstrap --mode prebuilt --prefix "$RUNNER_TEMP/native"
+          ./nodal style bootstrap --prefix "$RUNNER_TEMP/lint"
+          ./nodal core native --toolchain "$RUNNER_TEMP/native" --lint-toolchain "$RUNNER_TEMP/lint" 2>&1 | tee /tmp/native.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: increment36-native-validation
+          path: /tmp/native.log
+          retention-days: 3

@@ -56,6 +56,8 @@ jobs:
 
       - name: Validate contracts, style, and online provenance
         run: |
+          python3 scripts/check_hvl_roadmap.py
+          python3 scripts/test_hvl_roadmap.py
           ./nodal check \
             --contracts-only \
             --online-toolchain \

@@ -6,6 +6,10 @@
 - **Related:** [ADR 0025](0025-generated-procedural-hdl-testbench-projections.md)
 - **Scope:** Native Nodal HVL execution, Verification Semantic IR runtime, Verilator, Icarus Verilog, generated C++ models, stable C ABI, JVM native binding, VVP, VPI, shared-memory/IPC transport, scheduling barriers, caching, capability negotiation, and cross-backend parity
 
+## Capability clarification — 2026-09-05
+
+[ADR 0027](0027-hvl-execution-projection-capability-contract.md) defines live versus captured execution and independent generated-profile eligibility. Live host-side Scala does not require complete static capture. Captured common semantics and typed profile extensions are callable in live execution only when their required operations have qualified live implementations. UVM-only and Verilog-TB-only extensions are not automatically supported by native adapters. The adapter architectures below remain unchanged; this clarification does not close Foundation 148 or implement a simulator adapter.
+
 ## Context
 
 ADR 0023 established that Nodal HVL and the Verification Semantic IR remain canonical while simulator adapters execute the DUT. The existing roadmap selected Verilator as the primary fast native digital adapter and Icarus as an independent event-driven adapter, but it did not freeze how either simulator connects to the Nodal runtime.
@@ -23,7 +27,7 @@ That ambiguity could lead to incompatible implementations, such as:
 
 Nodal adopts the binding rule:
 
-> **The Nodal native verification runtime executes canonical Verification Semantic IR. Verilator supplies a compiled C++ DUT model behind a stable generated C ABI, while Icarus supplies an external event-driven VVP simulation behind a versioned VPI and shared-memory/IPC adapter. Neither simulator defines Nodal HVL semantics.**
+> **The Nodal native verification runtime executes live host-side HVL and qualified captured components, preserving common semantic identities without requiring all ordinary Scala to become static IR. Verilator supplies a compiled C++ DUT model behind a stable generated C ABI, while Icarus supplies an external event-driven VVP simulation behind a versioned VPI and shared-memory/IPC adapter. Neither simulator defines Nodal HVL semantics.**
 
 The exact public HVL syntax and exact implementation APIs remain deferred to Foundation Increment 148 and the Digital Verification track.
 
@@ -169,7 +173,7 @@ These are separate projections with separate manifests, cache keys, capabilities
 
 ## Cross-backend parity
 
-Where a test declares compatible capabilities, the same Nodal HVL environment must be runnable through:
+Compare the common semantic intersection of each explicitly qualified pair among these modes; no test is required to support every mode merely because it is capturable:
 
 - native Verilator;
 - native Icarus;
@@ -211,7 +215,7 @@ Foundation does not implement the complete HVL runtime, Verilator wrapper, JVM n
 - Shared-memory/VPI isolates Icarus as a simulator process and follows a proven integration model.
 - Model caching amortizes Verilator compilation across many tests.
 - Native and standalone Verilog-testbench flows remain clearly distinct.
-- The same Nodal HVL environment can produce cross-backend evidence.
+- The same Nodal HVL environment can produce cross-backend evidence for its qualified common semantics.
 
 ### Costs
 

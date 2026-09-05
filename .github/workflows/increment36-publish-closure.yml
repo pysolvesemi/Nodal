@@ -1,0 +1,72 @@
+name: Increment 36 Publish Reviewed Closure
+on:
+  push:
+    branches: [automation/increment36-publish-closure-20260905]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: aa93bc7e9eb6df51162a486452b185025b77207a
+          fetch-depth: 0
+      - name: Require exact successful post-merge evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for run in 33951187187 33951187157; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" > /tmp/run-$run.json
+          done
+          python3 - <<'PY'
+          import json
+          for run, name in ((33951187187, 'Core CI'), (33951187157, 'Increment 36 Time and Waveform Operators')):
+              with open(f'/tmp/run-{run}.json') as stream:
+                  result = json.load(stream)
+              assert result['id'] == run and result['name'] == name
+              assert result['head_sha'] == 'aa93bc7e9eb6df51162a486452b185025b77207a'
+              assert result['event'] == 'push' and result['head_branch'] == 'dev'
+              assert result['status'] == 'completed' and result['conclusion'] == 'success', result
+          PY
+      - name: Apply only the locally reviewed closure patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^{tree})" = 9930a1ce13983097d9273f427d2f848dd0e7d74f
+          test "$(git ls-remote origin refs/heads/dev | cut -f1)" = aa93bc7e9eb6df51162a486452b185025b77207a
+          gh api "repos/$GITHUB_REPOSITORY/git/blobs/e84212cfdbf6f7bbe2098c3290e686020018b119" --jq .content | base64 -d > /tmp/closure.patch.xz
+          python3 - <<'PY'
+          import hashlib, lzma
+          from pathlib import Path
+          patch = lzma.decompress(Path('/tmp/closure.patch.xz').read_bytes())
+          assert hashlib.sha256(patch).hexdigest() == '8d257f0724d1a45ece0d54aa166df78a546850fe2b8f55e0bd0589d3769079f6'
+          Path('/tmp/closure.patch').write_bytes(patch)
+          PY
+          git apply --check /tmp/closure.patch
+          git apply --index /tmp/closure.patch
+          test "$(git write-tree)" = ea3e7515104775cbe03ebf812897e43d2d923b8a
+          for n in 33 34 35 36; do python3 scripts/check_increment$n.py; done
+          python3 -m unittest discover -s tests/compiler
+          python3 scripts/check_hvl_roadmap.py
+          python3 scripts/test_hvl_roadmap.py
+          python3 scripts/check_markdown.py
+          git diff --cached --check
+          branch=increment/36-evidence-closure-v1
+          test -z "$(git ls-remote origin refs/heads/$branch)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Increment 36 — Prepare separately validated accepted-evidence closure'
+          git push origin HEAD:refs/heads/$branch
+          git rev-parse HEAD > /tmp/increment36-closure-head.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: increment36-closure-publication
+          path: /tmp/increment36-closure-head.txt
+          retention-days: 3

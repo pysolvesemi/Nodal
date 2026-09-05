@@ -1,30 +1,59 @@
-name: Increment 35 review integration qualification
+name: Increment 35 canonical identity qualification
 on:
   push:
     branches: [automation/inc35-review-publication-20260905]
-    paths: ['_inc35_review_integrate.py', '.github/workflows/inc35-review-publication.yml']
+    paths: ['_inc35_review_identity.py', '.github/workflows/inc35-review-publication.yml']
 permissions:
   contents: write
 concurrency:
   group: inc35-review-publication
   cancel-in-progress: false
 jobs:
-  qualify-integration:
+  qualify-identity:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Merge accepted dev without losing the reviewed fixes
+      - name: Apply the canonical identity review correction
         shell: bash
         run: |
           set -euo pipefail
-          cp _inc35_review_integrate.py "${RUNNER_TEMP}/inc35-review-integrate.py"
+          cp _inc35_review_identity.py "${RUNNER_TEMP}/inc35-review-identity.py"
+          git switch -c increment/35-review-hardening fabc3f96d357901a7612d5641c8c98f493946f2c
+          python3 "${RUNNER_TEMP}/inc35-review-identity.py"
+          git add core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp tests/compiler/fixtures/increment35/run_review_matrix.py docs/implementation/increment35-review-hardening.md
+          git diff --cached --check
+      - name: Install locked native tools and format the correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          formatter=$(find "${RUNNER_TEMP}/nodal-lint-toolchain" -type f -name clang-format -perm -u+x | head -n 1)
+          test -n "$formatter"
+          "$formatter" -i core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp
+          git add core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp
+      - name: Compile and run the full native and bridge regression suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./nodal core native --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          python3 scripts/check_markdown.py
+          git diff --check
+          test -z "$(git diff --name-only)"
+      - name: Publish the tested three-file correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          test -z "$(git diff --cached --name-only -- .github)"
+          test ! -e _inc35_review_identity.py
+          test ! -e .github/workflows/inc35-review-publication.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git switch -c increment/35-review-hardening 8c7aeb524fb3e427f43148e0acb8a00e2d0eac27
-          python3 "${RUNNER_TEMP}/inc35-review-integrate.py"
-          git commit -m 'merge(dev): retain Increment 36 closure with Increment 35 review fixes'
+          git commit -m 'fix(increment35): reject noncanonical continuous owner identities'
           git push origin HEAD:refs/heads/increment/35-review-hardening
-          printf 'qualified_integration_head=%s\nqualified_integration_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})"
+          printf 'qualified_identity_head=%s\nqualified_identity_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})"

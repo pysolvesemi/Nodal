@@ -261,7 +261,11 @@ LogicalResult verifyTimeWaveformOperation(Operation *op) {
   for (unsigned i = 0; i < count; ++i) {
     const bool timing = effect || (!slew && i > 0);
     const bool rate = slew && i > 0;
-    auto number = getAnalogConstantRealValue(op->getOperand(i));
+    auto constant = getAnalogConstantRealValue(op->getOperand(i));
+    if (failed(constant))
+      return emitMappedFailure(op, "NODAL-ANALOG-036-004",
+                               "waveform argument has invalid constant arithmetic");
+    auto number = *constant;
     std::string expected = dimensions[i];
     if (timing)
       expected = "time";

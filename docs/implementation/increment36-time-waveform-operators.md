@@ -27,7 +27,9 @@ The backend materializes each stateful operator once into a collision-free real 
 
 The public example depends only on the public API. A compiler-side test harness imports the separately compiled example and performs bridge emission; the bridge is not exposed through the example's dependencies. The typed native fixture uses unit-bound parameter references rather than illegal dimensioned real literals.
 
-The native matrix exercises every diagnostic family through both ordinary parsing/verification and the constant-folding/canonicalization/common-subexpression pipeline. It additionally checks deterministic repeated optimization, exact before/after emission, shared-state references, unused-state retention, effect-only retention, and authored-name collisions. The workflow feeds the actual Scala-emitted MLIR to the compiled native tools; handwritten IR alone is not sufficient evidence.
+The native matrix exercises all ten supported filter arities, rejects invalid constant arithmetic without treating it as an unknown runtime value, and exercises every diagnostic family through both ordinary parsing/verification and the constant-folding/canonicalization/common-subexpression pipeline. It additionally checks deterministic repeated optimization, exact before/after emission, shared-state references, unused-state retention, effect-only retention, and authored-name collisions. The workflow feeds the actual Scala-emitted MLIR to the compiled native tools; handwritten IR alone is not sufficient evidence.
+
+The backend structural output check recognizes generated waveform declarations, one assignment per state, and step-request tasks. It checks call arity and balanced arguments and rejects malformed targets. This structural gate is not a general Verilog-A parser or a numerical simulation result. The prior RC unsupported-operation fixture now uses an unsupported conversion; unary negation has a positive regression because signed waveform rates require it.
 
 ## Closure policy
 

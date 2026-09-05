@@ -1167,11 +1167,13 @@ FailureOr<AnalogNumericTypeInfo> getAnalogNumericTypeInfo(Type type) {
   return failure();
 }
 
-std::optional<double> getAnalogConstantRealValue(Value value) {
+FailureOr<std::optional<double>> getAnalogConstantRealValue(Value value) {
   EvaluationResult result = evaluateValue(value, false);
+  if (result.status == EvaluationStatus::Error)
+    return failure();
   if (result.status == EvaluationStatus::Constant && result.value.kind == AnalogNumericKind::Real)
-    return result.value.real;
-  return std::nullopt;
+    return std::optional<double>{result.value.real};
+  return std::optional<double>{};
 }
 
 LogicalResult verifyAnalogNumericOperation(Operation *operation) {

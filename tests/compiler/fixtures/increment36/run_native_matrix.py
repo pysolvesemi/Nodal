@@ -69,7 +69,57 @@ def mutations(text: str) -> list[tuple[str, str, str]]:
     add("dynamic-maximum", "%delayed =", '%limited, %changing, %seconds', '%limited, %changing, %changing', 7)
     add("analyses", "%smoothed =", '"ac", "dc", "initialization", "noise", "operating-point", "transient"', '"transient"', 8)
     add("effect-analysis", '"nodal.analog_bound_step"', 'analyses = ["transient"]', 'analyses = ["dc"]', 8)
+    # Constant overflow and division by zero must not masquerade as dynamic input.
+    for label, expression in (
+        ("constant-overflow", '      %first = "nodal.analog_mul"(%seconds, %huge) {metadata = {}} : (!nodal.quantity<"real", "time">, !nodal.quantity<"real", "1">) -> !nodal.quantity<"real", "time">\n'
+         '      %bad = "nodal.analog_mul"(%first, %huge) {metadata = {}} : (!nodal.quantity<"real", "time">, !nodal.quantity<"real", "1">) -> !nodal.quantity<"real", "time">\n'),
+        ("constant-zero-division", '      %bad = "nodal.analog_div"(%seconds, %number_zero) {metadata = {}} : (!nodal.quantity<"real", "time">, !nodal.quantity<"real", "1">) -> !nodal.quantity<"real", "time">\n'),
+    ):
+        definitions = ('      %huge = "nodal.real_literal"() {value = 1.0e308 : f64, metadata = {}} : () -> !nodal.quantity<"real", "1">\n'
+                       '      %number_zero = "nodal.real_literal"() {value = 0.0 : f64, metadata = {}} : () -> !nodal.quantity<"real", "1">\n')
+        mutated = text.replace('      "nodal.analog_bound_step"', definitions + expression + '      "nodal.analog_bound_step"')
+        mutated = change(mutated, '"nodal.analog_bound_step"', '(%zero)', '(%bad)')
+        cases.append((label, mutated, "NODAL-ANALOG-036-004"))
     return cases
+
+
+def arity_variants(text: str) -> list[tuple[str, int, str]]:
+    variants = []
+    for function, marker, counts in (("transition", "%smoothed =", range(1, 6)),
+                                      ("slew", "%limited =", range(1, 4)),
+                                      ("absdelay", "%delayed =", range(2, 4))):
+        original = next(line for line in text.splitlines() if marker in line)
+        operands = re.search(r'"nodal\.analog_\w+"\(([^)]*)\)', original).group(1).split(", ")
+        dimensions = re.search(r'operand_dimensions = \[([^]]*)\]', original).group(1).split(", ")
+        types = re.search(r' : \((.*)\) -> ', original).group(1).split(">, ")
+        types = [value if value.endswith(">") else value + ">" for value in types]
+        for count in counts:
+            line = re.sub(r'("nodal\.analog_\w+"\()[^)]*(\))',
+                          lambda match: match[1] + ", ".join(operands[:count]) + match[2], original)
+            line = re.sub(r'operand_dimensions = \[[^]]*\]',
+                          'operand_dimensions = [' + ", ".join(dimensions[:count]) + ']', line)
+            line = re.sub(r' : \(.*\) -> ', ' : (' + ", ".join(types[:count]) + ') -> ', line)
+            fixture = text.replace(original, line)
+            if function == "slew" and count == 1:
+                fixture = change(fixture, marker, 'output_continuity = "continuous"', 'output_continuity = "unknown"')
+                fixture = change(fixture, '%delayed =', 'input_continuity = "continuous"', 'input_continuity = "unknown"')
+            variants.append((function, count, fixture))
+    return variants
+
+
+def call_arity(text: str, function: str) -> int:
+    start = text.index(function + "(") + len(function) + 1
+    count, depth = 1, 0
+    for char in text[start:]:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            if depth == 0:
+                return count
+            depth -= 1
+        elif char == "," and depth == 0:
+            count += 1
+    raise AssertionError("unterminated waveform call")
 
 
 def assert_backend(text: str, source: bool = False) -> None:
@@ -108,6 +158,19 @@ def run(nodalc: str, translate: str, source: Path | None = None) -> int:
         assert_backend(after)
         if before != after:
             raise AssertionError("pure-constant optimization altered waveform emission")
+        # Each supported omitted-argument form must survive native optimization
+        # and emission with exactly its authored argument count.
+        for function, count, fixture in arity_variants(authored):
+            optional = directory / f"arity-{function}-{count}.mlir"
+            optional.write_text(fixture, encoding="utf-8")
+            normalized = invoke([nodalc, PIPELINE, str(optional)])
+            normalized_path = directory / f"arity-{function}-{count}-optimized.mlir"
+            normalized_path.write_text(normalized, encoding="utf-8")
+            original_output = invoke([translate, "--nodal-to-verilog-a", str(optional)])
+            normalized_output = invoke([translate, "--nodal-to-verilog-a", str(normalized_path)])
+            if original_output != normalized_output or call_arity(original_output, function) != count:
+                raise AssertionError(f"optional arguments changed for {function}/{count}")
+            assert_backend(original_output)
         cases = mutations(authored)
         for label, fixture, diagnostic in cases:
             invalid = directory / f"invalid-{label}.mlir"
@@ -131,7 +194,7 @@ def run(nodalc: str, translate: str, source: Path | None = None) -> int:
         if source is not None:
             invoke([nodalc, PIPELINE, str(source)])
             assert_backend(invoke([translate, "--nodal-to-verilog-a", str(source)]), source=True)
-        print(f"Increment 36 native matrix: PASS ({len(cases)} negative cases, two verifier paths)")
+        print(f"Increment 36 native matrix: PASS ({len(cases)} negative cases, two verifier paths, 10 optional-arity cases)")
         return 0
 
 

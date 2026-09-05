@@ -39,7 +39,8 @@ mlir::FailureOr<std::string> combineAnalogDimensions(llvm::StringRef lhs, llvm::
 mlir::FailureOr<AnalogNumericTypeInfo> getAnalogNumericTypeInfo(mlir::Type type);
 
 /// Evaluate only compiler-proven constants, never symbolic parameter defaults.
-std::optional<double> getAnalogConstantRealValue(mlir::Value value);
+/// Invalid constant arithmetic is a failure, not an unknown dynamic value.
+mlir::FailureOr<std::optional<double>> getAnalogConstantRealValue(mlir::Value value);
 
 /// Verify one source-semantic analog numeric operation.
 mlir::LogicalResult verifyAnalogNumericOperation(mlir::Operation *operation);

@@ -960,6 +960,52 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
     return true;
   };
 
+  // Recognize only emitted waveform calls, retaining arity and balanced arguments.
+  // This is the existing structural reparse gate, not a general Verilog-A parser.
+  auto validWaveformCall = [](llvm::StringRef call, bool effect) {
+    size_t open = call.find('(');
+    if (open == llvm::StringRef::npos || !call.ends_with(")"))
+      return false;
+    llvm::StringRef function = call.take_front(open);
+    unsigned minimum = 1, maximum = 1;
+    if (effect) {
+      if (function != "$bound_step")
+        return false;
+    } else if (function == "transition")
+      maximum = 5;
+    else if (function == "slew")
+      maximum = 3;
+    else if (function == "absdelay") {
+      minimum = 2;
+      maximum = 3;
+    } else
+      return false;
+    auto arguments = call.drop_front(open + 1).drop_back();
+    unsigned count = 1, depth = 0;
+    size_t start = 0;
+    for (size_t index = 0; index < arguments.size(); ++index) {
+      char c = arguments[index];
+      if (c == ';' || c == '{' || c == '}')
+        return false;
+      if (c == '(')
+        ++depth;
+      else if (c == ')') {
+        if (!depth)
+          return false;
+        --depth;
+      } else if (c == ',' && !depth) {
+        if (arguments.slice(start, index).trim().empty())
+          return false;
+        start = index + 1;
+        ++count;
+      }
+    }
+    return !depth && !arguments.drop_front(start).trim().empty() && count >= minimum &&
+           count <= maximum;
+  };
+  llvm::StringSet<> realNames;
+  llvm::StringSet<> assignedRealNames;
+
   llvm::SmallVector<llvm::StringRef, 64> lines;
   candidate.split(lines, '\n', -1, true);
   bool insideModule = false;
@@ -981,6 +1027,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       }
       if (!validIdentifierList(declaration))
         return failure();
+      realNames.clear();
+      assignedRealNames.clear();
       insideModule = true;
       sawModule = true;
       continue;
@@ -1000,13 +1048,32 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       continue;
     }
     if (line == "endmodule") {
-      if (insideAnalog)
+      if (insideAnalog || assignedRealNames.size() != realNames.size())
         return failure();
       insideModule = false;
       continue;
     }
     if (insideAnalog) {
-      if (!line.ends_with(";") || !line.contains("<+"))
+      if (!line.ends_with(";"))
+        return failure();
+      if (line.contains("<+"))
+        continue;
+      auto statement = line.drop_back().trim();
+      if (validWaveformCall(statement, true))
+        continue;
+      size_t equals = statement.find(" = ");
+      if (equals == llvm::StringRef::npos)
+        return failure();
+      auto destination = statement.take_front(equals).trim();
+      if (!realNames.contains(destination) || !assignedRealNames.insert(destination).second ||
+          !validWaveformCall(statement.drop_front(equals + 3).trim(), false))
+        return failure();
+      continue;
+    }
+    if (line.starts_with("real ") && line.ends_with(";")) {
+      auto identifier = line.drop_front(5).drop_back().trim();
+      if (identifier.contains(',') || !validIdentifierList(identifier) ||
+          !realNames.insert(identifier).second)
         return failure();
       continue;
     }

@@ -3,6 +3,7 @@
 #include "circt/Dialect/HW/HWDialect.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Parser/Parser.h"
+#include "nodal/Backend/AnalogVerticalSlice.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 
 #include "llvm/ADT/StringRef.h"
@@ -145,6 +146,29 @@ int main() {
   const size_t zeta = first.find("module Zeta;");
   if (alpha == std::string::npos || zeta == std::string::npos || alpha >= zeta)
     return fail("module output is not sorted by semantic name");
+
+  auto configuration = nodal::resolveBackendConfiguration(*analog, nodal::BackendKind::VerilogA);
+  if (mlir::failed(configuration))
+    return fail("could not resolve waveform reparse configuration");
+  const std::string waveformTarget =
+      "module Waveform;\nreal w;\nanalog begin\nw = transition(1, 0, 1e-9);\n"
+      "$bound_step(0);\nend\nendmodule\n";
+  if (mlir::failed(nodal::reparseBackendTarget(waveformTarget, *configuration)))
+    return fail("waveform declarations, assignments, or effect task did not reparse");
+  for (llvm::StringRef invalid :
+       {"module M;\nreal w;\nanalog begin\nx = transition(1);\nend\nendmodule\n",
+        "module M;\nreal w;\nanalog begin\nw = transition();\nend\nendmodule\n",
+        "module M;\nreal w;\nanalog begin\nw = absdelay(1);\nend\nendmodule\n",
+        "module M;\nreal w;\nanalog begin\nw = slew(1, 2, 3, 4);\nend\nendmodule\n",
+        "module M;\nreal w;\nanalog begin\nw = transition((1);\nend\nendmodule\n",
+        "module M;\nreal w;\nanalog begin\nw = other(1);\nend\nendmodule\n",
+        "module M;\nreal w;\nanalog begin\nw = slew(1);\nw = slew(2);\nend\nendmodule\n",
+        "module M;\nreal w;\nreal w;\nanalog begin\nw = slew(1);\nend\nendmodule\n",
+        "module M;\nanalog begin\n$bound_step();\nend\nendmodule\n",
+        "module M;\nanalog begin\n$bound_step(1, 2);\nend\nendmodule\n"}) {
+    if (mlir::succeeded(nodal::reparseBackendTarget(invalid, *configuration)))
+      return fail("malformed waveform target passed structural reparsing");
+  }
 
   auto reserved = parse(context, kReservedModule);
   if (!reserved)

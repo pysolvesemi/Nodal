@@ -44,9 +44,9 @@ publish no partial output.
 
 Qualification uses the repository commands, including `./nodal core scala`,
 `./nodal core native`, and `./nodal check --online-toolchain --base-ref origin/dev`.
-The follow-up is not fully closed until its exact-head checks, review and
-post-merge validation succeed. Existing green historical runs do not qualify
-these new changes.
+Acceptance requires successful exact-head checks, independent review and
+post-merge validation. Existing green historical runs do not qualify these new
+changes.
 
 ## Qualification record
 
@@ -66,10 +66,18 @@ resolved only the Increment 33/34 checker conflicts, retained the exact closure
 pins in all three checkers, and passed 284 compiler Python tests, 42 HVL roadmap
 tests, predecessor checks, Markdown and contribution-policy checks. Published
 integration head: `dfaaf8c7f8135226fcc9eb836d0ea272619bd447`; tree:
-`2107aacf22b2b155262278b93c0e4e90d02c0da0`.
+`2107aacf22b2b155262278b93c0e4e90d02c0da0`. Runtime/compiler corrections and the
+native matrix remained byte-identical during that integration.
 
-The runtime/compiler corrections and new native matrix remained byte-identical
-during integration. No publication helper or workflow is included in the PR.
-The final recorded-evidence commit still requires its own PR checks and review;
-its merge and post-merge results are tracked in PR #122 rather than claimed here
-in advance.
+Canonical identity qualification run [33954999502](https://github.com/pysolvesemi/Nodal/actions/runs/33954999502)
+addressed the additional canonical-text review finding and published head
+`09d5fc52bb82e48c90281fc0bebc72662b2241e5`, tree
+`69b8a1b0013c3023044db7d056cc5357d3656088`. The locked native build, all 125 CTest
+tests including the expanded ownership matrix, 12 Scala-to-native bridge tests,
+284 compiler Python tests, Markdown checks, and pinned formatting and
+clang-tidy checks passed. The focused Increment 35 Python suite passed 22 tests.
+
+No publication helper or workflow is included in the PR. The final
+recorded-evidence head requires its own PR checks and independent review.
+PR #122 records the accepted head, merge and exact post-merge validation;
+historical Increment 35 acceptance records remain unchanged.

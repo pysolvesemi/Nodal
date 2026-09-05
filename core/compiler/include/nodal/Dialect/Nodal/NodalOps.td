@@ -758,6 +758,13 @@ def Nodal_AnalogProcedureOp
   let hasVerifier = 1;
 }
 
+def Nodal_AnalogHeldReadOp : Nodal_Op<"analog_held_read", [HasParent<"AnalogOp">]> {
+  let summary = "Continuous read of independently proven event-held real storage";
+  let arguments = (ins StrAttr:$variable, StrAttr:$owner, DictionaryAttr:$metadata);
+  let results = (outs F64:$result);
+  let hasVerifier = 1;
+}
+
 // No Pure trait: an unused monitor must retain timestep/history effects.
 class Nodal_AnalogEventOp<string mnemonic> : Nodal_Op<mnemonic> {
   let summary = "Source-semantic analog event monitor or analysis lifecycle event";

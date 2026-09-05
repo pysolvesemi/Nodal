@@ -1492,9 +1492,9 @@ LogicalResult nodal::AnalogOp::verify() {
                    nodal::AnalogNegOp, nodal::AnalogCompareOp, nodal::AnalogLogicOp,
                    nodal::AnalogSelectOp, nodal::AnalogDdtOp, nodal::AnalogIdtOp,
                    nodal::AnalogTransitionOp, nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp,
-                   nodal::AnalogAbstimeOp, nodal::AnalogBoundStepOp, nodal::AccessOp,
-                   nodal::TerminalAccessOp, nodal::PortFlowAccessOp, nodal::ContributeOp,
-                   nodal::AnalogProcedureOp>(operation))
+                   nodal::AnalogAbstimeOp, nodal::AnalogBoundStepOp, nodal::AnalogHeldReadOp,
+                   nodal::AccessOp, nodal::TerminalAccessOp, nodal::PortFlowAccessOp,
+                   nodal::ContributeOp, nodal::AnalogProcedureOp>(operation))
       return operation.emitOpError(
           "NODAL-ANALOG-REGION-002: operation is not legal in the analog numeric region");
   }
@@ -1515,7 +1515,11 @@ LogicalResult nodal::AnalogBoundStepOp::verify() {
   return verifyTimeWaveformOperation(getOperation());
 }
 
-LogicalResult nodal::AnalogProcedureOp::verify() { return verifyAnalogProcedure(getOperation()); }
+LogicalResult nodal::AnalogProcedureOp::verify() {
+  if (failed(verifyAnalogProcedure(getOperation())))
+    return failure();
+  return verifyAnalogEventProcedure(getOperation());
+}
 
 LogicalResult nodal::AnalogScopeOp::verify() {
   if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-033-008",
@@ -2046,3 +2050,5 @@ LogicalResult nodal::AnalogInitialStepOp::verify() { return verifyAnalogEventOpe
 LogicalResult nodal::AnalogFinalStepOp::verify() { return verifyAnalogEventOperation(*this); }
 LogicalResult nodal::AnalogEventOrOp::verify() { return verifyAnalogEventOperation(*this); }
 LogicalResult nodal::AnalogOnOp::verify() { return verifyAnalogEventOperation(*this); }
+
+LogicalResult nodal::AnalogHeldReadOp::verify() { return verifyAnalogHeldRead(getOperation()); }

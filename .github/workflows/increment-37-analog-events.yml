@@ -77,7 +77,12 @@ jobs:
           "$nodalc" \
             '--pass-pipeline=builtin.module(nodal-fold-analog-constants,canonicalize,cse,nodal-verify-analog-numeric)' \
             "${RUNNER_TEMP}/increment37-source.mlir" > "${RUNNER_TEMP}/increment37-normalized.mlir"
-          sha256sum "${RUNNER_TEMP}"/increment37-*.mlir
+          for source in "${RUNNER_TEMP}/increment37-source.mlir" \
+              "${RUNNER_TEMP}/increment37-source.mlir.held.mlir" \
+              "${RUNNER_TEMP}/increment37-source.mlir.controlled.mlir"; do
+            "$translate" --nodal-to-verilog-a "$source" > "${source}.va"
+          done
+          sha256sum "${RUNNER_TEMP}"/increment37-*.mlir "${RUNNER_TEMP}"/increment37-*.va
       - name: Check style and documentation
         run: |
           ./nodal style check --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
@@ -90,4 +95,5 @@ jobs:
           name: increment37-source-witness-${{ github.sha }}
           path: |
             ${{ runner.temp }}/increment37-*.mlir
+            ${{ runner.temp }}/increment37-*.va
           retention-days: 14

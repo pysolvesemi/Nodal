@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute native event semantic checks; no numerical or target-lowering claim."""
+"""Execute native event semantic checks; including event-target emission; no numerical simulation claim."""
 from __future__ import annotations
 
 import argparse
@@ -21,8 +21,8 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def expected_backend_diagnostic(text: str, target: str) -> str:
-    """Check profile routing before the unsupported procedural-lowering boundary."""
+def expected_backend_diagnostic(text: str, target: str) -> str | None:
+    """Check profile routing before event-target lowering."""
     profiles = re.findall(r'\bnodal\.backend\.profile\s*=\s*"([^"]+)"', text)
     require(len(profiles) <= 1, "fixture contains multiple requested backend profiles")
     requested = profiles[0] if profiles else None
@@ -31,7 +31,7 @@ def expected_backend_diagnostic(text: str, target: str) -> str:
     require(requested is None or requested in targets.values(), f"unrecognized fixture profile: {requested}")
     if requested is not None and requested != targets[target]:
         return "NODAL-BACKEND-PROFILE-002"
-    return "NODAL-BACKEND-CAPABILITY-001"
+    return None
 
 
 def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
@@ -52,6 +52,14 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
         ("analysis", 'analyses = ["dc", "tran"]', 'analyses = ["tran", "tran"]', "037-008"),
         ("grammar", 'value = "1.0 V"', 'value = "foreign_expression()"', "037-009"),
     ]
+    cases += [
+        ("rhs-injection", 'metadata = {value = "1.0"}',
+         'metadata = {value = "foreign_call()"}', "037-010"),
+        ("rhs-dimension-forgery", 'metadata = {value = "1.0"}',
+         'metadata = {value = "1.0 V"}', "037-010"),
+        ("rhs-read-inventory", 'metadata = {value = "1.0"}',
+         'metadata = {value = "EventTop.held"}', "037-010"),
+    ]
     alternatives = baseline.splitlines()
     or_line = next(line for line in alternatives if '"nodal.analog_event_or"' in line)
     cases.append(("single-operand-or", or_line,
@@ -66,7 +74,11 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
         directory = Path(temp)
         valid = directory / "valid.mlir"
         valid.write_text(baseline, encoding="utf-8")
-        for input_path in [valid] + ([source] if source else []):
+        inputs = [valid, ROOT / "core/compiler/test/IR/analog-events-held.mlir"]
+        if source:
+            inputs += [source, Path(str(source) + ".held.mlir"), Path(str(source) + ".controlled.mlir")]
+            require(all(path.is_file() for path in inputs), "missing public-source companion witness")
+        for input_path in inputs:
             plain = invoke(nodalc, input_path)
             require(plain.returncode == 0, plain.stderr)
             optimized = invoke(nodalc, input_path, PIPELINE)
@@ -82,10 +94,51 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
             for target in ("--nodal-to-verilog-a", "--nodal-to-verilog-ams"):
                 backend = invoke(translate, input_path, target)
                 expected = expected_backend_diagnostic(input_path.read_text(encoding="utf-8"), target)
-                require(backend.returncode != 0 and expected in backend.stderr,
-                        f"{target}: expected {expected} without partial output: {backend.stderr}")
-                require(not backend.stdout.strip(), "capability rejection published partial HDL")
+                if expected:
+                    require(backend.returncode != 0 and expected in backend.stderr,
+                            f"{target}: expected {expected}: {backend.stderr}")
+                    require(not backend.stdout.strip(), "rejection published partial HDL")
+                else:
+                    require(backend.returncode == 0, backend.stderr)
+                    require("@(" in backend.stdout, "event statements were lost in target emission")
+                    if input_path == valid:
+                        require("@(cross(" in backend.stdout and "@(final_step" in backend.stdout,
+                                "primitive event statements were lost")
+                    if '"nodal.analog_held_read"' in plain.stdout:
+                        require("transition(event_" in backend.stdout, "held read did not feed the continuous filter")
+                        require(backend.stdout.count("  analog begin\n") == 1,
+                                "held updates and continuous evaluation have multiple target processes")
+                        require(backend.stdout.index("@(") < backend.stdout.index(" = transition("),
+                                "continuous filter evaluation precedes event updates")
+                    after = invoke(translate, normalized, target)
+                    require(after.returncode == 0, after.stderr)
+                    require(backend.stdout == after.stdout,
+                            "optimization changed the accepted event target")
+                    require(" or " in backend.stdout and "begin : event_" in backend.stdout,
+                            "composition or controlled statements were not emitted")
             count += 5
+        held_text = (ROOT / "core/compiler/test/IR/analog-events-held.mlir").read_text()
+        for label, old, new in [
+            ("held-owner", 'variable = "EventTop.held", owner = "EventTop"', 'variable = "EventTop.held", owner = "Other"'),
+            ("held-binding", 'variable = "EventTop.held"', 'variable = "EventTop.missing"'),
+        ]:
+            invalid = directory / f"{label}.mlir"
+            require(old in held_text, f"missing held proof mutation anchor: {label}")
+            invalid.write_text(held_text.replace(old, new, 1))
+            for pipeline in [(), (PIPELINE,)]:
+                result = invoke(nodalc, invalid, *pipeline)
+                require(result.returncode != 0 and "NODAL-ANALOG-037-009" in result.stderr,
+                        "forged held-storage proof accepted: " + result.stderr)
+                count += 1
+        ordinary = directory / "ordinary.mlir"
+        ordinary.write_text((ROOT / "core/compiler/test/IR/analog-procedural.mlir").read_text().replace(
+            "module {", 'module attributes {nodal.target.profile = "analog"} {', 1))
+        for target in ("--nodal-to-verilog-a", "--nodal-to-verilog-ams"):
+            result = invoke(translate, ordinary, target)
+            require(result.returncode != 0 and "NODAL-BACKEND-CAPABILITY-001" in result.stderr,
+                    "ordinary procedures accidentally bypassed the capability gate: " + result.stderr)
+            require(not result.stdout.strip(), "unsupported procedure published partial HDL")
+            count += 1
         for label, old, new, diagnostic in cases:
             require(old in baseline, f"missing mutation anchor {label}")
             invalid = directory / f"{label}.mlir"
@@ -95,7 +148,7 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
                 require(result.returncode != 0 and f"NODAL-ANALOG-{diagnostic}" in result.stderr,
                         f"{label} failed to diagnose {diagnostic}: {result.stderr}")
                 count += 1
-    print(f"Increment 37 native matrix: {count} checks passed (target lowering remains gated)")
+    print(f"Increment 37 native matrix: {count} checks passed (event target structural acceptance)")
     return count
 
 

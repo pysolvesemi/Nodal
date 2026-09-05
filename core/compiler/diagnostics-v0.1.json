@@ -202,7 +202,9 @@
       "NODAL-ANALOG-037-006",
       "NODAL-ANALOG-037-007",
       "NODAL-ANALOG-037-008",
-      "NODAL-ANALOG-037-009"
+      "NODAL-ANALOG-037-009",
+      "NODAL-ANALOG-037-010",
+      "NODAL-BACKEND-EVENT-001"
     ]
   },
   "preserved_prefixes": [

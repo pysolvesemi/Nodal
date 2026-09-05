@@ -50,6 +50,56 @@ final class AnalogEventSource extends Module:
     on(finalStep("tran")):
       ()
 
+  // Persistent sampled storage may feed a continuously evaluated filter.
+  analog:
+    V(positive, negative) <+ transition(held, 0.0.ns, 1.0.ns)
+
+final class AnalogSampleHoldSource extends Module:
+  val sampleIn = inout(Electrical)
+  val sampleOut = inout(Electrical)
+  val ground = inout(Electrical)
+  val initialVoltage = param(0.25.V)
+  val samplePeriod = param(2.0.ns)
+  val held = variable(Real, initialVoltage)
+  analogProcedure:
+    on(initialStep or timer(0.0.ns, samplePeriod)):
+      held := V(sampleIn, ground)
+  analog:
+    V(sampleOut, ground) <+ transition(held, 0.0.ns, 0.5.ns)
+
+final class AnalogControlledEventsSource extends Module:
+  val positive = inout(Electrical)
+  val negative = inout(Electrical)
+  val trips = param(2.integer)
+  val choose = variable(Integer, 1.integer)
+  val active = variable(Bool, true.B)
+  val held = variable(Real, 0.0.V)
+  analogProcedure:
+    on(initialStep or timer(0.0.ns, 1.0.ns)):
+      analogCase(choose):
+        analogCaseArm(0, 1):
+          held := 1.0.V
+        analogCaseDefault:
+          held := 0.0.V
+      analogLoop(trips, maximumIterations = 4):
+        analogConditional:
+          analogWhen(active):
+            analogContinue()
+          analogOtherwise:
+            held := 0.5.V
+        analogBreak()
+      analogRepeat(2):
+        held := 0.25.V
+    analogConditional:
+      analogStaticWhen(true):
+        on(cross(V(positive, negative), Edge.Rising)):
+          held := 1.0.V
+      analogOtherwise:
+        on(initialStep):
+          held := 0.0.V
+  analog:
+    V(positive, negative) <+ transition(held, 0.0.ns, 0.5.ns)
+
 object Increment37ConstructionCheck:
   def main(arguments: Array[String]): Unit =
     require(arguments.isEmpty, "this public witness does not accept arguments")

@@ -25,13 +25,13 @@ class Increment37ContractTests(unittest.TestCase):
     def test_profileless_fixture_checks_both_capability_boundaries(self) -> None:
         for target in ("--nodal-to-verilog-a", "--nodal-to-verilog-ams"):
             self.assertEqual(MATRIX.expected_backend_diagnostic("module {}", target),
-                             "NODAL-BACKEND-CAPABILITY-001")
+                             None)
 
     def test_matching_profile_reaches_capability_boundary(self) -> None:
         for profile in ("verilog-a", "verilog-ams"):
             text = f'module attributes {{nodal.backend.profile = "{profile}"}} {{}}'
             self.assertEqual(MATRIX.expected_backend_diagnostic(text, f"--nodal-to-{profile}"),
-                             "NODAL-BACKEND-CAPABILITY-001")
+                             None)
 
     def test_mismatched_profile_is_not_misreported_as_capability_failure(self) -> None:
         for profile, target in (("verilog-a", "--nodal-to-verilog-ams"),

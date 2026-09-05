@@ -10,6 +10,7 @@
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/Support/Regex.h"
 
 #include <cerrno>
 #include <cmath>
@@ -34,7 +35,8 @@ llvm::StringRef field(DictionaryAttr attrs, llvm::StringRef key) {
   return {};
 }
 LogicalResult reject(Operation *op, unsigned number, llvm::StringRef message) {
-  std::string code = "NODAL-ANALOG-037-00" + std::to_string(number);
+  std::string suffix = std::to_string(number);
+  std::string code = "NODAL-ANALOG-037-" + std::string(3 - suffix.size(), '0') + suffix;
   return emitMappedFailure(op, code, message);
 }
 bool identifier(llvm::StringRef value) {
@@ -63,12 +65,7 @@ std::string semanticPath(Operation *op) {
       return path.getValue().str();
   return {};
 }
-struct Expression {
-  std::string kind;
-  std::string dimension;
-  std::optional<double> constant;
-  std::set<std::string> reads;
-};
+using Expression = AnalogSourceExpression;
 
 // Parse the canonical source expression grammar, NOT HDL text. This boundary
 // independently derives dimensions, reads and constants from actual declarations.
@@ -81,6 +78,8 @@ public:
   FailureOr<Expression> parse(llvm::StringRef input, unsigned depth = 0) {
     if (depth > 128 || input.empty() || input != input.trim())
       return failure();
+    if (input == "true" || input == "false")
+      return Expression{"boolean", "1", input == "true" ? 1.0 : 0.0, {}, "literal", input.str()};
     std::string storage = input.str();
     char *end = nullptr;
     errno = 0;
@@ -94,9 +93,17 @@ public:
           return failure();
         }
         auto numeric = input.take_front(static_cast<size_t>(end - storage.c_str()));
+        if (!llvm::Regex("^[+-]?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$").match(numeric))
+          return failure();
         bool real = numeric.contains('.') || numeric.contains('e') || numeric.contains('E') ||
                     !tail.empty();
-        return Expression{real ? "real" : "integer", *dimension, value, {}};
+        if (!real) {
+          int64_t integer = 0;
+          if (numeric.getAsInteger(10, integer))
+            return failure();
+        }
+        return Expression{
+            real ? "real" : "integer", *dimension, value, {}, "literal", numeric.str()};
       }
     }
     size_t open = input.find('(');
@@ -127,6 +134,7 @@ public:
     if (function == "potential_access" || function == "flow_access") {
       if (pieces.empty() || pieces.size() > 2)
         return failure();
+      std::vector<Expression> terminals;
       for (auto piece : pieces) {
         Operation *terminal = declaration(piece);
         if (!terminal || !llvm::isa<TerminalOp, NodeOp>(terminal) || terminal->getNumResults() != 1)
@@ -134,50 +142,91 @@ public:
         auto type = llvm::dyn_cast<TerminalType>(terminal->getResult(0).getType());
         if (!type || type.getDiscipline() != "electrical")
           return failure();
+        terminals.push_back(
+            Expression{"terminal", "", std::nullopt, {}, "reference", "", terminal});
       }
-      return Expression{
-          "real", function == "potential_access" ? "voltage" : "current", std::nullopt, {}};
+      return Expression{"real",         function == "potential_access" ? "voltage" : "current",
+                        std::nullopt,   {},
+                        function.str(), "",
+                        nullptr,        std::move(terminals)};
     }
-    if (pieces.empty() || pieces.size() > 2)
+    if (pieces.empty() || pieces.size() > 3)
       return failure();
-    auto left = parse(pieces[0], depth + 1);
-    if (failed(left) || left->kind != "real")
-      return failure();
-    if (function == "analog_neg" && pieces.size() == 1) {
-      if (left->constant)
-        left->constant = -*left->constant;
-      return *left;
+    std::vector<Expression> args;
+    std::set<std::string> reads;
+    for (auto piece : pieces) {
+      auto child = parse(piece, depth + 1);
+      if (failed(child))
+        return failure();
+      reads.insert(child->reads.begin(), child->reads.end());
+      args.push_back(*child);
     }
-    if (pieces.size() != 2)
-      return failure();
-    auto right = parse(pieces[1], depth + 1);
-    if (failed(right) || right->kind != "real")
-      return failure();
-    Expression result{"real", left->dimension, std::nullopt, left->reads};
-    result.reads.insert(right->reads.begin(), right->reads.end());
-    if (function == "analog_add" || function == "analog_sub") {
-      if (left->dimension != right->dimension)
+    const auto &left = args[0];
+    Expression result{left.kind, left.dimension, std::nullopt, reads, function.str(),
+                      "",        nullptr,        args};
+    if (function == "analog_select" && args.size() == 3) {
+      if (left.kind != "boolean" || left.dimension != "1" || args[1].kind != args[2].kind ||
+          args[1].dimension != args[2].dimension)
         return failure();
-      if (left->constant && right->constant)
-        result.constant = function == "analog_add" ? *left->constant + *right->constant
-                                                   : *left->constant - *right->constant;
-    } else if (function == "analog_mul" || function == "analog_div") {
-      auto dimension =
-          combineAnalogDimensions(left->dimension, right->dimension, function == "analog_div");
-      if (failed(dimension))
+      result.kind = args[1].kind;
+      result.dimension = args[1].dimension;
+      if (left.constant)
+        result.constant = args[*left.constant != 0.0 ? 1 : 2].constant;
+    } else if (function == "bool_not" && args.size() == 1 && left.kind == "boolean") {
+      if (left.constant)
+        result.constant = *left.constant == 0.0 ? 1.0 : 0.0;
+    } else if (function == "analog_neg" && args.size() == 1 && left.kind == "real") {
+      if (left.constant)
+        result.constant = -*left.constant;
+    } else if (args.size() == 2) {
+      const auto &right = args[1];
+      if ((function == "bool_and" || function == "bool_or") && left.kind == "boolean" &&
+          right.kind == "boolean") {
+        if (left.constant && right.constant)
+          result.constant = function == "bool_and"
+                                ? (*left.constant != 0.0 && *right.constant != 0.0)
+                                : (*left.constant != 0.0 || *right.constant != 0.0);
+      } else if (left.kind == "real" && right.kind == "real") {
+        if (function == "analog_add" || function == "analog_sub") {
+          if (left.dimension != right.dimension)
+            return failure();
+          if (left.constant && right.constant)
+            result.constant = function == "analog_add" ? *left.constant + *right.constant
+                                                       : *left.constant - *right.constant;
+        } else if (function == "analog_mul" || function == "analog_div") {
+          auto dimension =
+              combineAnalogDimensions(left.dimension, right.dimension, function == "analog_div");
+          if (failed(dimension))
+            return failure();
+          result.dimension = *dimension;
+          if (function == "analog_div" && right.constant && *right.constant == 0.0) {
+            (void)reject(operation, 4, "source expression has a provably zero divisor");
+            return failure();
+          }
+          if (left.constant && right.constant)
+            result.constant = function == "analog_mul" ? *left.constant * *right.constant
+                                                       : *left.constant / *right.constant;
+        } else if (function == "real_gt" || function == "real_ge" || function == "real_lt" ||
+                   function == "real_le") {
+          if (left.dimension != right.dimension)
+            return failure();
+          result.kind = "boolean";
+          result.dimension = "1";
+          if (left.constant && right.constant) {
+            const double a = *left.constant, b = *right.constant;
+            result.constant = function == "real_gt"   ? a > b
+                              : function == "real_ge" ? a >= b
+                              : function == "real_lt" ? a < b
+                                                      : a <= b;
+          }
+        } else
+          return failure();
+      } else
         return failure();
-      result.dimension = *dimension;
-      if (function == "analog_div" && right->constant && *right->constant == 0.0) {
-        (void)reject(operation, 4, "event expression has a provably zero divisor");
-        return failure();
-      }
-      if (left->constant && right->constant)
-        result.constant = function == "analog_mul" ? *left->constant * *right->constant
-                                                   : *left->constant / *right->constant;
     } else
       return failure();
     if (result.constant && !std::isfinite(*result.constant)) {
-      (void)reject(operation, 4, "event constant arithmetic must remain finite");
+      (void)reject(operation, 4, "source constant arithmetic must remain finite");
       return failure();
     }
     return result;
@@ -213,8 +262,13 @@ private:
       auto type = llvm::dyn_cast<VariableType>(variable->getResult(0).getType());
       if (!type)
         return failure();
-      return Expression{
-          type.getKind().str(), type.getDimension().str(), std::nullopt, {path.str()}};
+      return Expression{type.getKind().str(),
+                        type.getDimension().str(),
+                        std::nullopt,
+                        {path.str()},
+                        "reference",
+                        "",
+                        decl};
     }
     if (llvm::isa<ParameterOp>(decl)) {
       auto dimension = unitDimension(getParameterUnitSymbol(decl));
@@ -242,7 +296,7 @@ private:
       }
       if (!dimension)
         return failure();
-      return Expression{kind.str(), *dimension, std::nullopt, {}};
+      return Expression{kind.str(), *dimension, std::nullopt, {}, "reference", "", decl};
     }
     return failure();
   }
@@ -292,6 +346,194 @@ LogicalResult context(Operation *op) {
 }
 } // namespace
 
+FailureOr<AnalogSourceExpression> parseAnalogSourceExpression(Operation *context,
+                                                              llvm::StringRef source) {
+  return ExpressionParser(context).parse(source);
+}
+
+bool isStaticAnalogSourceExpression(const AnalogSourceExpression &value) {
+  if (value.operation == "literal")
+    return true;
+  if (value.operation == "reference")
+    return value.declaration && llvm::isa<ParameterOp>(value.declaration);
+  if (value.operation == "potential_access" || value.operation == "flow_access")
+    return false;
+  return !value.operands.empty() && llvm::all_of(value.operands, isStaticAnalogSourceExpression);
+}
+
+FailureOr<Operation *> resolveAnalogHeldVariable(Operation *op) {
+  auto module = op->getParentOfType<nodal::ModuleOp>();
+  if (!module || !llvm::isa<AnalogOp>(op->getParentOp()))
+    return failure();
+  std::string owner = semanticPath(module.getOperation());
+  if (owner.empty())
+    owner = text(module, "sym_name").str();
+  if (text(op, "owner") != owner)
+    return failure();
+  Operation *variable = nullptr;
+  unsigned matches = 0;
+  module.walk([&](AnalogVariableOp declaration) {
+    if (declaration->getParentOfType<nodal::ModuleOp>() == module &&
+        text(declaration, "identity") == text(op, "variable")) {
+      variable = declaration.getOperation();
+      ++matches;
+    }
+  });
+  if (matches != 1 || !llvm::isa<AnalogProcedureOp>(variable->getParentOp()) ||
+      text(variable, "owner") != text(op, "owner"))
+    return failure();
+  auto type = llvm::dyn_cast<VariableType>(variable->getResult(0).getType());
+  auto initialized = variable->getAttrOfType<BoolAttr>("initialized");
+  if (!type || type.getKind() != "real" || !initialized || !initialized.getValue())
+    return failure();
+  auto initial = parseAnalogSourceExpression(variable, text(variable, "initializer_value"));
+  auto initialReads = variable->getAttrOfType<ArrayAttr>("initializer_reads");
+  if (failed(initial) || !isStaticAnalogSourceExpression(*initial) || !initial->reads.empty() ||
+      !initialReads || !initialReads.empty() || initial->dimension != type.getDimension() ||
+      initial->kind != text(variable, "initializer_kind") ||
+      initial->dimension != text(variable, "initializer_dimension"))
+    return failure();
+  bool valid = true;
+  unsigned writes = 0;
+  for (Operation *user : variable->getResult(0).getUsers()) {
+    if (llvm::isa<AnalogVariableReadOp>(user))
+      continue;
+    if (!llvm::isa<AnalogAssignOp>(user) || user->getOperand(0).getDefiningOp() != variable ||
+        !user->getParentOfType<AnalogOnOp>()) {
+      valid = false;
+      continue;
+    }
+    ++writes;
+  }
+  return valid && writes ? FailureOr<Operation *>(variable) : FailureOr<Operation *>(failure());
+}
+
+LogicalResult verifyAnalogHeldRead(Operation *op) {
+  if (op->getNumResults() != 1 || !op->getResult(0).getType().isF64() ||
+      failed(resolveAnalogHeldVariable(op)))
+    return reject(
+        op, 9,
+        "continuous variable read requires initialized, root-local, event-only real storage");
+  return success();
+}
+
+bool hasAnalogEvents(Operation *op) {
+  bool found = false;
+  op->walk([&](Operation *child) {
+    found |= llvm::isa<AnalogOnOp>(child) || isAnalogEventExpression(child);
+  });
+  return found;
+}
+
+// The older procedural model retains source expression strings. Before they can
+// cross the event backend boundary, independently bind and type every payload.
+LogicalResult verifyAnalogEventProcedure(Operation *procedure) {
+  if (!hasAnalogEvents(procedure))
+    return success();
+  LogicalResult result = success();
+  procedure->walk([&](Operation *op) {
+    if (failed(result))
+      return;
+    llvm::StringRef source, kind, dimension;
+    ArrayAttr inventory;
+    std::optional<double> claimedStatic;
+    std::set<std::string> operandReads;
+    bool assignment = false;
+    if (llvm::isa<AnalogVariableOp>(op)) {
+      auto initialized = op->getAttrOfType<BoolAttr>("initialized");
+      if (!initialized) {
+        result = reject(op, 10, "missing initialized flag");
+        return;
+      }
+      if (!initialized.getValue())
+        return;
+      source = text(op, "initializer_value");
+      kind = text(op, "initializer_kind");
+      dimension = text(op, "initializer_dimension");
+      inventory = op->getAttrOfType<ArrayAttr>("initializer_reads");
+    } else if (llvm::isa<AnalogAssignOp>(op)) {
+      auto metadata = op->getAttrOfType<DictionaryAttr>("metadata");
+      source = metadata ? field(metadata, "value") : llvm::StringRef();
+      kind = text(op, "value_kind");
+      dimension = text(op, "value_dimension");
+      assignment = true;
+      for (auto value : op->getOperands().drop_front()) {
+        auto read = value.getDefiningOp<AnalogVariableReadOp>();
+        auto variable =
+            read ? read->getOperand(0).getDefiningOp<AnalogVariableOp>() : AnalogVariableOp();
+        if (!variable || !operandReads.insert(text(variable, "identity").str()).second) {
+          result = reject(op, 10, "assignment reads must bind unique variable-read operations");
+          return;
+        }
+      }
+    } else if (llvm::isa<AnalogIfArmOp>(op)) {
+      auto otherwise = op->getAttrOfType<BoolAttr>("is_else");
+      if (!otherwise) {
+        result = reject(op, 10, "missing condition arm kind");
+        return;
+      }
+      if (otherwise.getValue())
+        return;
+      source = text(op, "condition_value");
+      kind = text(op, "condition_kind");
+      dimension = text(op, "condition_dimension");
+      inventory = op->getAttrOfType<ArrayAttr>("condition_reads");
+      if (text(op, "stage") == "static") {
+        auto value = op->getAttrOfType<BoolAttr>("static_value");
+        if (!value) {
+          result = reject(op, 10, "missing static condition proof");
+          return;
+        }
+        claimedStatic = value.getValue() ? 1.0 : 0.0;
+      }
+    } else if (llvm::isa<AnalogCaseOp>(op)) {
+      source = text(op, "selector_value");
+      kind = text(op, "selector_kind");
+      dimension = text(op, "selector_dimension");
+      inventory = op->getAttrOfType<ArrayAttr>("selector_reads");
+    } else if (llvm::isa<AnalogLoopOp>(op)) {
+      source = text(op, "bound_value");
+      kind = text(op, "bound_kind");
+      dimension = text(op, "bound_dimension");
+      inventory = op->getAttrOfType<ArrayAttr>("bound_reads");
+      if (text(op, "stage") == "static") {
+        auto value = op->getAttrOfType<IntegerAttr>("static_trip_count");
+        if (!value) {
+          result = reject(op, 10, "missing static loop proof");
+          return;
+        }
+        claimedStatic = value.getInt();
+      }
+    } else
+      return;
+    auto expression = parseAnalogSourceExpression(op, source);
+    if (failed(expression) || expression->kind != kind || expression->dimension != dimension) {
+      result = reject(op, 10, "procedural source expression does not match its scalar contract");
+      return;
+    }
+    if (llvm::isa<AnalogCaseOp>(op) && !op->getAttrOfType<BoolAttr>("static_value_present")) {
+      result = reject(op, 10, "missing static selector flag");
+      return;
+    }
+    if (llvm::isa<AnalogCaseOp>(op) &&
+        op->getAttrOfType<BoolAttr>("static_value_present").getValue()) {
+      auto claimed = text(op, "static_value");
+      auto label = claimed.split(':');
+      auto literal = parseAnalogSourceExpression(op, label.second);
+      if (label.first != expression->kind || failed(literal) || !expression->constant ||
+          literal->constant != expression->constant) {
+        result = reject(op, 10, "static case selector differs from its source expression");
+        return;
+      }
+    }
+    auto reads = assignment ? FailureOr<std::set<std::string>>(operandReads) : strings(inventory);
+    if (failed(reads) || *reads != expression->reads ||
+        (claimedStatic && expression->constant != claimedStatic))
+      result = reject(op, 10, "procedural expression reads or static value were forged");
+  });
+  return result;
+}
+
 bool isAnalogEventExpression(Operation *op) {
   return llvm::isa<AnalogCrossOp, AnalogAboveOp, AnalogTimerOp, AnalogInitialStepOp,
                    AnalogFinalStepOp, AnalogEventOrOp>(op);
@@ -312,6 +554,33 @@ LogicalResult verifyAnalogEventOperation(Operation *op) {
         !event->isBeforeInBlock(op) || text(event, "owner") != owner)
       return reject(op, 5, "event control requires a dominating local analog event expression");
     return success();
+  }
+  if (!op->getResult(0).use_empty() && !op->getResult(0).hasOneUse())
+    return reject(op, 2, "an analog event occurrence must have one owning use");
+  if (op->getResult(0).hasOneUse()) {
+    Operation *consumer = *op->getResult(0).getUsers().begin();
+    std::set<Operation *> seen;
+    while (llvm::isa<AnalogEventOrOp>(consumer) && consumer->getNumResults() == 1 &&
+           consumer->getResult(0).hasOneUse() && seen.insert(consumer).second)
+      consumer = *consumer->getResult(0).getUsers().begin();
+    if (consumer->getBlock() != op->getBlock() || !op->isBeforeInBlock(consumer))
+      return reject(op, 5, "event consumer must follow its occurrence in the same block");
+    auto inventory = op->getAttrOfType<ArrayAttr>("event_reads");
+    if (inventory && !inventory.empty()) {
+      auto observed = strings(inventory);
+      if (failed(observed))
+        return reject(op, 5, "invalid event read inventory");
+      bool changed = false;
+      for (Operation *between = op->getNextNode(); between != consumer;
+           between = between->getNextNode())
+        between->walk([&](AnalogAssignOp assignment) {
+          if (assignment->getNumOperands())
+            if (auto variable = assignment->getOperand(0).getDefiningOp<AnalogVariableOp>())
+              changed |= observed->count(text(variable, "identity").str()) != 0;
+        });
+      if (changed)
+        return reject(op, 5, "event expression cannot move across a write to observed storage");
+    }
   }
   if (text(op, "contract") != "increment37" ||
       (!text(op, "name").empty() && !identifier(text(op, "name"))))

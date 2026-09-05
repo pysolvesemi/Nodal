@@ -43,6 +43,30 @@ private[nodal] object AnalogControlFlowConstruction:
         case other => other
       copy(root = block(root))
 
+    def mapRendered(transform: String => String): Snapshot =
+      def block(value: Block): Block = value.copy(statements = value.statements.map(statement))
+      def statement(value: Statement): Statement = value match
+        case event: Statement.EventControl =>
+          event.copy(event = event.event.remap(identity, transform), body = block(event.body))
+        case scope: Statement.Scope => scope.copy(body = block(scope.body))
+        case conditional: Statement.IfThenElse => conditional.copy(
+            branches = conditional.branches.map(branch =>
+              branch.copy(
+                condition = branch.condition.copy(rendered = transform(branch.condition.rendered)),
+                body = block(branch.body)
+              )
+            ),
+            otherwise = conditional.otherwise.map(block)
+          )
+        case selection: Statement.CaseStatement => selection.copy(
+            selector = selection.selector.copy(rendered = transform(selection.selector.rendered)),
+            arms = selection.arms.map(arm => arm.copy(body = block(arm.body))),
+            default = selection.default.map(block)
+          )
+        case loop: Statement.Loop => loop.copy(body = block(loop.body))
+        case other => other
+      copy(root = block(root))
+
     def remapOwner(newOwner: String): Snapshot =
       val currentOwner = requireCanonicalOwner(owner, "control-flow source owner")
       val canonical = requireCanonicalOwner(newOwner, "control-flow destination owner")

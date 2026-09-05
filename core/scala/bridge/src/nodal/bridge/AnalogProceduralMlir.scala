@@ -581,7 +581,8 @@ private[nodal] object AnalogProceduralMlir:
                 "owner" -> quoted(program.owner),
                 "is_else" -> boolean(false),
                 "stage" -> quoted(condition.stage.toString.toLowerCase),
-                "condition_value" -> quoted(condition.rendered),
+                "condition_value" ->
+                  quoted(condition.staticValue.map(_.toString).getOrElse(condition.rendered)),
                 "condition_kind" -> quoted(condition.valueType.kind.label),
                 "condition_dimension" -> quoted(
                   canonicalDimension(condition.valueType.dimension)
@@ -664,7 +665,9 @@ private[nodal] object AnalogProceduralMlir:
               attributes = Vector(
                 "statement_id" -> quoted(selection.identity),
                 "owner" -> quoted(program.owner),
-                "selector_value" -> quoted(selector.rendered),
+                "selector_value" -> quoted(selector.staticValue.map(value =>
+                  label(value).split(":", 2).last
+                ).getOrElse(selector.rendered)),
                 "selector_kind" -> quoted(selector.kind.label),
                 "selector_dimension" -> quoted(canonicalDimension(selector.dimension)),
                 "selector_reads" -> array(selector.reads.toVector.sorted.map(quoted)),
@@ -948,7 +951,11 @@ private[nodal] object AnalogProceduralMlir:
         "initializer_reads" -> array(
           initializer.toVector.flatMap(_.reads).map(value => quoted(value.identity))
         ),
-        "metadata" -> metadata(record.variable.identity, record.source)
+        "metadata" -> metadata(
+          record.variable.identity,
+          record.source,
+          record.authoredPath.toVector.map(path => "authored_path" -> quoted(path))
+        )
       ),
       source = record.source
     )

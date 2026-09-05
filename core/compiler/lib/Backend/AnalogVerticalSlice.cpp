@@ -3,8 +3,11 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/SymbolTable.h"
+#include "nodal/Backend/AnalogEventBackend.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
+#include "nodal/Dialect/Nodal/AnalogEvents.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
+#include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
@@ -125,6 +128,7 @@ struct ModuleRenderState {
   llvm::DenseMap<Value, std::string> expressions;
   llvm::DenseMap<Value, std::string> waveformNames;
   llvm::StringMap<std::string> parameters;
+  AnalogEventRenderState eventState;
 };
 
 FailureOr<std::string> renderBranch(Value value, ModuleRenderState &state, llvm::StringRef access) {
@@ -200,6 +204,15 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
     return failure();
   llvm::StringRef name = operation->getName().getStringRef();
   std::string rendered;
+  if (name == "nodal.analog_held_read") {
+    auto variable = resolveAnalogHeldVariable(operation);
+    if (failed(variable))
+      return failure();
+    auto found = state.eventState.names.find(*variable);
+    if (found == state.eventState.names.end())
+      return failure();
+    return found->second;
+  }
 
   if (auto folded = renderFoldedExpression(operation)) {
     rendered = *folded;
@@ -603,11 +616,13 @@ FailureOr<std::string> legacyParameterInitializer(Operation *parameter) {
   return failure();
 }
 
-LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::raw_ostream &output) {
+LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::raw_ostream &output,
+                           bool wrapped = true, bool skipProcedures = false) {
   Region &region = analog->getRegion(0);
   if (!llvm::hasSingleElement(region))
     return failure();
-  output << "  analog begin\n";
+  if (wrapped)
+    output << "  analog begin\n";
   for (Operation &operation : region.front()) {
     llvm::StringRef name = operation.getName().getStringRef();
     if (nodal::isStatefulWaveformOperation(&operation) || name == "nodal.analog_bound_step") {
@@ -634,6 +649,13 @@ LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::ra
       }
       continue;
     }
+    if (name == "nodal.analog_procedure") {
+      if (skipProcedures)
+        continue;
+      if (failed(renderAnalogEventProcedure(&operation, state.eventState, output)))
+        return failure();
+      continue;
+    }
     if (name != "nodal.contribute")
       continue;
     if (operation.getNumOperands() != 2)
@@ -649,7 +671,8 @@ LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::ra
                                "could not render RC contribution expression");
     output << "    " << *target << " <+ " << *value << ";\n";
   }
-  output << "  end\n";
+  if (wrapped)
+    output << "  end\n";
   return success();
 }
 
@@ -774,6 +797,10 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
     output << "\n";
   }
 
+  if (hasAnalogEvents(definition) &&
+      failed(prepareAnalogEventBackend(definition, state.eventState, output)))
+    return failure();
+
   // Reserve every authored identifier before assigning deterministic private names.
   llvm::StringSet<> reservedNames;
   definition->walk([&](Operation *op) {
@@ -798,9 +825,28 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
   if ((!ports.empty() || !nodes.empty() || !namedBranches.empty() || !parameters.empty()) &&
       !analogs.empty())
     output << "\n";
-  for (Operation *analog : analogs) {
-    if (failed(renderAnalog(analog, state, output)))
+  llvm::SmallVector<Operation *> procedures;
+  for (Operation *analog : analogs)
+    for (Operation &op : analog->getRegion(0).front())
+      if (llvm::isa<AnalogProcedureOp>(&op))
+        procedures.push_back(&op);
+  if (!procedures.empty()) {
+    if (procedures.size() != 1)
+      return emitMappedFailure(definition, "NODAL-BACKEND-EVENT-001",
+                               "one source procedure is required for ordered event updates");
+    // Execute the single procedure before continuous reads and filter evaluations.
+    // Separate target processes would make sample/hold output depend on scheduler order.
+    output << "  analog begin\n";
+    if (failed(renderAnalogEventProcedure(procedures.front(), state.eventState, output)))
       return failure();
+    for (Operation *analog : analogs)
+      if (failed(renderAnalog(analog, state, output, false, true)))
+        return failure();
+    output << "  end\n";
+  } else {
+    for (Operation *analog : analogs)
+      if (failed(renderAnalog(analog, state, output)))
+        return failure();
   }
   output << "endmodule\n";
   return success();
@@ -832,7 +878,7 @@ bool validIdentifierList(llvm::StringRef value) {
 
 } // namespace
 
-LogicalResult verifyBackendOperations(ModuleOp module, const BackendProfile &profile) {
+LogicalResult verifyBackendOperations(mlir::ModuleOp module, const BackendProfile &profile) {
   if (failed(normalizePotentialFlowAccess(module)))
     return failure();
   if (failed(verifyAnalogQuantityErasure(module)))
@@ -842,8 +888,20 @@ LogicalResult verifyBackendOperations(ModuleOp module, const BackendProfile &pro
     if (failed(result) || operation == module.getOperation())
       return;
     llvm::StringRef name = operation->getName().getStringRef();
-    if (llvm::is_contained(kSupportedOperations, name))
+    if (llvm::is_contained(kSupportedOperations, name) || name == "nodal.analog_held_read")
       return;
+    auto procedure = llvm::dyn_cast<nodal::AnalogProcedureOp>(operation);
+    if (!procedure)
+      procedure = operation->getParentOfType<nodal::AnalogProcedureOp>();
+    if (procedure && hasAnalogEvents(procedure)) {
+      if (llvm::isa<nodal::AnalogProcedureOp, nodal::AnalogVariableOp, nodal::AnalogVariableReadOp,
+                    nodal::AnalogAssignOp, nodal::AnalogScopeOp, nodal::AnalogIfOp,
+                    nodal::AnalogIfArmOp, nodal::AnalogCaseOp, nodal::AnalogCaseArmOp,
+                    nodal::AnalogLoopOp, nodal::AnalogBreakOp, nodal::AnalogContinueOp,
+                    nodal::AnalogOnOp>(operation) ||
+          isAnalogEventExpression(operation))
+        return;
+    }
     result = emitMappedFailure(operation, "NODAL-BACKEND-CAPABILITY-001",
                                llvm::Twine("operation '") + name +
                                    "' is not yet supported by profile '" + profile.id + "'");
@@ -1006,14 +1064,18 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
   };
   llvm::StringSet<> realNames;
   llvm::StringSet<> assignedRealNames;
+  llvm::StringSet<> eventNames;
+  auto identifierEventDeclaration = [&](llvm::StringRef name) {
+    return !name.contains(',') && validIdentifierList(name) && eventNames.insert(name).second;
+  };
 
   llvm::SmallVector<llvm::StringRef, 64> lines;
   candidate.split(lines, '\n', -1, true);
   bool insideModule = false;
   bool insideAnalog = false;
   bool sawModule = false;
-  for (llvm::StringRef raw : lines) {
-    llvm::StringRef line = raw.trim();
+  for (size_t lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
+    llvm::StringRef line = lines[lineIndex].trim();
     if (line.empty() || line.starts_with("/*") || line.starts_with("*") ||
         line.starts_with("`include "))
       continue;
@@ -1030,6 +1092,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
         return failure();
       realNames.clear();
       assignedRealNames.clear();
+      eventNames.clear();
       insideModule = true;
       sawModule = true;
       continue;
@@ -1055,6 +1118,19 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       continue;
     }
     if (insideAnalog) {
+      if (line.starts_with("begin : event_")) {
+        std::string remaining;
+        for (size_t i = lineIndex; i < lines.size(); ++i)
+          remaining += lines[i].str() + "\n";
+        auto consumed = reparseAnalogEventBlock(remaining);
+        if (failed(consumed) || !*consumed)
+          return failure();
+        size_t count = llvm::count(llvm::StringRef(remaining).take_front(*consumed), '\n');
+        if (!count)
+          return failure();
+        lineIndex += count - 1;
+        continue;
+      }
       if (!line.ends_with(";"))
         return failure();
       if (line.contains("<+"))
@@ -1069,6 +1145,21 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       if (!realNames.contains(destination) || !assignedRealNames.insert(destination).second ||
           !validWaveformCall(statement.drop_front(equals + 3).trim(), false))
         return failure();
+      continue;
+    }
+    if ((line.starts_with("real event_") || line.starts_with("integer event_") ||
+         line.starts_with("genvar event_")) &&
+        line.ends_with(";")) {
+      auto declaration = line.drop_front(line.find(' ') + 1).drop_back();
+      auto parts = declaration.split(" = ");
+      if (!identifierEventDeclaration(parts.first))
+        return failure();
+      if (!parts.second.empty()) {
+        std::string check = "begin\n" + parts.first.str() + " = " + parts.second.str() + ";\nend\n";
+        auto consumed = reparseAnalogEventBlock(check);
+        if (failed(consumed) || *consumed != check.size())
+          return failure();
+      }
       continue;
     }
     if (line.starts_with("real ") && line.ends_with(";")) {

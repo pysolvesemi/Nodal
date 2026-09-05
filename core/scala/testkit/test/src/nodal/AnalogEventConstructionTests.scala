@@ -1,7 +1,7 @@
 package nodal.internal.testkit
 
 import nodal.*
-import nodal.increment37fixture.AnalogEventSource
+import nodal.increment37fixture.{AnalogEventSource, AnalogSampleHoldSource}
 import utest.*
 
 final class AnalogEventBodySource(body: () => Unit) extends Module:
@@ -43,6 +43,26 @@ final class AnalogEventIllegalContribution extends Module:
     on(initialStep):
       V(p, n) <+ 1.0.V
 
+final class AnalogContinuousWriteNotHeld extends Module:
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+  val held = variable(Real, 0.0.V)
+  analogProcedure:
+    on(timer(0.0.ns, 1.0.ns)):
+      held := 1.0.V
+    held := V(p, n)
+  analog:
+    V(p, n) <+ transition(held)
+
+final class AnalogPrematureHeldRead extends Module:
+  val p = inout(Electrical)
+  val held = variable(Real, 0.0.V)
+  analog:
+    V(p) <+ transition(held)
+  analogProcedure:
+    on(initialStep):
+      held := 1.0.V
+
 object AnalogEventConstructionTests extends TestSuite:
   private def failure(top: => Module): String =
     scala.util.Try(ConstructionKernel.inspect(top)).failed.get.getMessage
@@ -51,6 +71,21 @@ object AnalogEventConstructionTests extends TestSuite:
     assert(failure(new AnalogEventBodySource(() => body)).contains(code))
 
   val tests: Tests = Tests:
+    test("sample-and-hold captures authored variable and terminal bindings"):
+      val source = ConstructionKernel.inspect(new AnalogSampleHoldSource)
+      val record = source.analogProcedural.head.variables.head
+      assert(record.authoredPath.contains("AnalogSampleHoldSource.held"))
+      assert(record.initializer.get.rendered == "AnalogSampleHoldSource.initialVoltage")
+      assert(source.analogProcedural.head.controlExpressions.exists(
+        _.value.rendered ==
+          "potential_access(AnalogSampleHoldSource.sampleIn,AnalogSampleHoldSource.ground)"
+      ))
+      assert(source.waveformOperators.exists(_.operation == "analog_transition"))
+
+    test("continuous writes and premature reads cannot claim held continuity"):
+      assert(failure(new AnalogContinuousWriteNotHeld).contains("NODAL-ANALOG-036-"))
+      assert(failure(new AnalogPrematureHeldRead).contains("NODAL-ANALOG-036-"))
+
     test("public event-only designs are classified as analog"):
       val report = Nodal.emit(new AnalogEventBodySource(() => on(initialStep) { () })).report
       assert(report.designKind == DesignKind.AnalogOnly, report.digitalProfile.isEmpty)

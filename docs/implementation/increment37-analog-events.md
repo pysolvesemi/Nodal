@@ -21,10 +21,50 @@ The public witness is `nodal.increment37fixture.Increment37ConstructionCheck`. T
 
 Validation status is recorded separately from implementation. A CI workflow or a test filename is not evidence that its run passed. No numerical event scheduler, simulation, or target equivalence result is claimed.
 
+## Event-target lowering tranche
+
+The candidate backend lowers event-containing procedures to native analog event statements,
+ordered blocking assignments, conditionals, case selection, and bounded procedural loops.
+Root variables with static initializers become persistent module variables; lexical
+initializers execute at their authored location. Explicit variable reads are materialized
+at their read locations, so a later write cannot change an earlier captured value.
+Canonical source expressions are parsed, bound and typed before rendering; source strings
+are never pasted into HDL. Empty and unused event monitors are retained.
+
+Runtime loop bounds are evaluated once and checked against the declared finite envelope.
+An invalid bound reports `NODAL-ANALOG-034-008` and terminates the simulation before the
+body can run. Break/continue use private flags scoped to the nearest loop, not silent
+clamping or unbounded iteration. Event monitors inside structural loops still require
+separate per-iteration state legalization and currently fail at the target boundary.
+Ordinary event-free procedural lowering remains separately gated.
+
+The target gate parses the emitted procedural grammar, including event arities,
+lifecycle filters, nesting, expressions and allowed system tasks. This is structural
+acceptance, not a general Verilog-A parser, numerical simulation, or solver proof.
+Validation of this tranche must be recorded against its exact published head.
+
 ## Work still required for Increment 37 closure
 
-- Complete supported event-held variable continuity and `transition` integration.
-- Implement controlled-statement Verilog-A lowering and structural target checks without dropping or hoisting event-only work. The current backend still rejects these procedural regions, as it did for Increments 33 and 34.
+- Qualify the new event-controlled target lowering and complete structural-loop monitor state legalization.
 - Complete the native and source-to-target corner-case matrix, exact-head review and CI, implementation merge, post-merge checks, and separate immutable evidence closure.
 
 The roadmap checkbox remains open. Simulator execution, full Verilog-AMS digital processes, and co-simulation scheduling are outside this increment's foundation implementation.
+
+## Held-storage and target acceptance continuation
+
+The restored candidate's held-storage API and bridge are integrated with the checked expression
+AST and ordered-read emitter. `nodal.analog_held_read` resolves exactly one initialized root-local
+real variable in the same module and proves that all writes are event-controlled. A variable
+initializer may depend on a parameter but not on another mutable variable or terminal sample.
+The source API requires the procedure to be complete before a continuous held read.
+
+Sampling, continuous `transition` evaluation, and contributions share one analog target process.
+The filter is not executed in the event body. Captured procedural reads are materialized at their
+original positions, so a later write cannot change an earlier read's value. Monitor expressions
+cannot move past an intervening write to observed storage. Static monitor loops use `genvar`;
+bounded runtime loops validate the authored envelope instead of truncating or clamping a count.
+
+The acceptance matrix now requires the separately compiled sample/hold and structured-control
+source witnesses as well as all event arities. It checks both native parse/optimization paths,
+held ownership failures, deterministic before/after target text, malformed target rejection,
+and predecessor capability failures. Numerical solver execution is still not claimed.

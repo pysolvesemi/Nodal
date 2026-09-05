@@ -583,6 +583,8 @@ private final class ConstructionSession(val options: EmitOptions):
     if waveformStatic(value) then "constant"
     else
       value match
+        case variable: Variable[?] if AnalogProceduralConstruction.isEventHeldVariable(variable) =>
+          "piecewise-constant"
         case expression: KernelExpr[?] => expression.operation match
             case Some("analog_transition") => "continuous"
             case Some("analog_slew") if expression.operands.size > 1 => "continuous"

@@ -30,7 +30,7 @@ Acceptance requires positive and negative construction and native tests, actual 
 
 ## Implementation boundary
 
-The initial tranche provides source construction, source-semantic native IR, independent event-argument verification, and procedural dataflow checks. It deliberately retains the existing backend capability rejection for procedural regions. Event-held continuity integration with `transition`, final target lowering, the target acceptance matrix, and evidence closure remain outstanding work for Increment 37; they are not moved to a later increment by this gate.
+The initial tranche provides source construction, source-semantic native IR, independent event-argument verification, and procedural dataflow checks. The lowering tranche accepts event-containing procedures only, with static persistent root initializers, ordered captured reads, and checked runtime loop envelopes. Event-held real storage is accepted only after a completed source procedure proves a root-local static initializer and exclusively event-controlled writes; native verification independently repeats that proof. Event updates, `transition`, and continuous contributions are emitted in one ordered analog process. Static monitor loops use `genvar` so each elaborated occurrence has its own history. Ordinary event-free procedures, legacy analysis-restricted writes, and unsupported expressions still fail closed. Complete target qualification and evidence closure remain outstanding work for Increment 37; they are not moved to a later increment by this gate.
 
 ## Deferred work
 

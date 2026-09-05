@@ -74,6 +74,32 @@ def main() -> int:
             empty = edit_operator(source, operator, lambda line: re.sub(r'operator_id = "[^"]+"', 'operator_id = "DifferentialIntegralBackend."', line))
             execute(f"empty-identity-{operator}", empty, "NODAL-ANALOG-035-002")
 
+        malformed_paths = (
+            ("leading-space", " Top.child"),
+            ("trailing-space", "Top.child "),
+            ("tab", r"Top.\09child"),
+            ("newline", r"Top.\0Achild"),
+            ("nul", r"Top.\00child"),
+            ("del", r"Top.\7Fchild"),
+        )
+        for label, path in malformed_paths:
+            malformed = semantic.replace('"Top.child"', f'"{path}"')
+            malformed = malformed.replace('"Top.child.', f'"{path}.')
+            execute(f"noncanonical-owner-{label}", malformed, "NODAL-ANALOG-035-002")
+        for operator in ("ddt", "idt"):
+            for label, suffix in (("padding", "value "), ("control", r"value\01")):
+                identity = "DifferentialIntegralBackend." + suffix
+                def bad_identity(line):
+                    # A callable replacement preserves MLIR backslash escapes.
+                    line = re.sub(r'operator_id = "[^"]+"', lambda _: f'operator_id = "{identity}"', line)
+                    return re.sub(r'state_id = "[^"]+"', lambda _: f'state_id = "{identity}.state"', line)
+                execute(f"noncanonical-id-{operator}-{label}", edit_operator(source, operator, bad_identity), "NODAL-ANALOG-035-002")
+        for value in ('""', '" "', '7 : i64'):
+            malformed = semantic.replace('semantic_path = "Top.child"', f'semantic_path = {value}')
+            execute(f"invalid-path-{count}", malformed, "NODAL-ANALOG-035-002")
+        unicode_owner = semantic.replace("Top.child", "Top.\u0394")
+        execute("utf8-owner", unicode_owner)
+
         annotations = (
             'nodal.simplified = true, nodal.simplification_rule = "ddt-time-invariant-zero", '
             'nodal.simplification_provenance = "increment35", nodal.simplified_dimension = "1", '

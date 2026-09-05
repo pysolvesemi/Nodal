@@ -16,7 +16,11 @@ Increment 35 operator contract.
 Differential and integral operator ownership is checked against the nearest
 `nodal.module`: its canonical `metadata.semantic_path`, when present, otherwise
 its symbol name. An owner-qualified operator ID alone is insufficient. Empty
-operator suffixes and invalid canonical owner paths are rejected.
+operator suffixes and invalid canonical owner paths are rejected. The canonical
+text rule matches the existing potential/flow source-path contract: no leading
+or trailing whitespace, ASCII control characters, NUL or DEL. UTF-8 identities
+remain supported. The rule applies to the module identity, declared owner and
+operator ID, so coordinated malformed values cannot validate one another.
 
 The Increment 33, 34 and 35 checkers pin the accepted Increment 35 closure to
 head `39915b984707f0396777cc69030dfec29aa2befe` and run `33916159555`.
@@ -33,7 +37,10 @@ numeric-verification pipeline and direct Verilog-A backend. Cases cover typed
 and legacy-f64 dynamic derivatives with full or partial forged annotations,
 valid uncontracted derivatives, incorrect component owners, canonical semantic
 paths, empty operator suffixes, and preservation of the approved constant
-simplification. Failed backend checks must publish no partial output.
+simplification. Additional cases reject matching whitespace-padded and
+control-containing owner/path pairs, malformed path attributes and noncanonical
+operator IDs, while accepting a valid UTF-8 owner. Failed backend checks must
+publish no partial output.
 
 Qualification uses the repository commands, including `./nodal core scala`,
 `./nodal core native`, and `./nodal check --online-toolchain --base-ref origin/dev`.

@@ -6,6 +6,12 @@
 **Parent verification architecture:** [ADR 0023](../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md)  
 **Parent roadmap:** [`dependent-productivity-and-verification-tracks-v0.1-plan.md`](dependent-productivity-and-verification-tracks-v0.1-plan.md)
 
+## Capability clarification — 2026-09-05
+
+[ADR 0027](../architecture/0027-hvl-execution-projection-capability-contract.md) and the [HVL capability plan](nodal-hvl-simulation-v0.1-plan.md) define independent live eligibility and generated-profile capabilities. Ordinary live Scala does not need complete static capture. Captured common semantics plus typed profile extensions execute live only when every required operation has a qualified live implementation. Generated-only UVM or VTB extensions are not automatically native-runtime operations.
+
+Live, CAP, VTB and UVM have independent release gates. Parity covers the qualified common semantic intersection for each selected pair; aggregate parity or commercial-profile completion cannot block an independent live or VTB release. This clarification preserves all deferred implementation states and the adapter architectures below.
+
 ## Purpose
 
 The existing roadmap correctly identifies Verilator as the primary fast native simulator and Icarus as an independent event-driven simulator. This plan freezes the missing implementation boundaries so later work does not confuse their fundamentally different execution models.
@@ -16,7 +22,8 @@ This plan does **not** add another Foundation increment. It refines unchecked **
 
 ```text
                          +-----------------------------+
-                         | Nodal HVL / Verification IR |
+                         | Nodal live HVL / qualified  |
+                         | captured components         |
                          +--------------+--------------+
                                         |
                               Nodal native runtime
@@ -79,7 +86,7 @@ Foundation remains architecture-only. It does not implement the runtime, native 
 
 ### Digital Verification Increment 1 — Nodal HVL native digital simulation vertical slice
 
-Implementation must include both native adapters from one Verification Semantic IR runtime:
+Implementation must include both native adapters under one Nodal-owned live runtime, with shared semantic identities and qualified support for captured components:
 
 - [ ] **Nodal native runtime vertical slice**
   - Implement deterministic processes/time, clocks/resets, waits, cancellation, timeout, typed endpoint access, failures, waves, seed/replay, and normalized results.
@@ -113,7 +120,7 @@ Rename the interpretation, not necessarily the stored title, to **standalone ope
 
 ### Native, standalone Verilog-testbench, and UVM semantic parity
 
-Parity must run the same applicable Nodal HVL environment through four explicit modes:
+Parity compares the explicit common semantic intersection for each qualified pair among these modes. Capturability alone does not require one environment to support all four:
 
 1. native Verilator;
 2. native Icarus;
@@ -134,7 +141,7 @@ A backend unsupported result must never be reported as parity success.
 
 ## Digital Verification Increment 12 refinement
 
-The release gate must benchmark and publish separately:
+The independent release gates must benchmark and publish separately:
 
 - Verilator code-generation, C++ compilation/link, cold-cache build, warm-cache reuse, native-call batching, evaluation throughput, and memory usage;
 - Icarus compile, VVP startup, VPI/shared-memory or IPC latency, event throughput, four-state transport volume, process cleanup, and memory usage;
@@ -167,6 +174,7 @@ This roadmap clarification is complete when ADR 0026, this normative plan, the d
 - Icarus external-VVP/VPI/shared-memory-or-IPC architecture;
 - Nodal-versus-simulator scheduler ownership;
 - the distinction between native Icarus and standalone Verilog-testbench modes;
-- cache, manifest, failure, and parity contracts.
+- cache, manifest, failure, and common-subset parity contracts;
+- independent live eligibility and generated-profile release gates from ADR 0027.
 
 No implementation checkbox is completed by this documentation change.

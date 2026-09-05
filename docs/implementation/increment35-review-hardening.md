@@ -40,3 +40,29 @@ Qualification uses the repository commands, including `./nodal core scala`,
 The follow-up is not fully closed until its exact-head checks, review and
 post-merge validation succeed. Existing green historical runs do not qualify
 these new changes.
+
+## Qualification record
+
+Follow-up PR: [#122](https://github.com/pysolvesemi/Nodal/pull/122).
+
+Source qualification run [33953597456](https://github.com/pysolvesemi/Nodal/actions/runs/33953597456)
+passed the full locked-toolchain repository gate before publishing source head
+`8c7aeb524fb3e427f43148e0acb8a00e2d0eac27`, tree
+`612c1b042c8ca1d631869eb8beed1f973cbab2bb`. This included full Scala compilation
+and tests, 270 compiler Python tests, 125 native CTest tests, 12 bridge tests
+against the built compiler, and pinned formatting and clang-tidy checks.
+
+Integration qualification run [33954466863](https://github.com/pysolvesemi/Nodal/actions/runs/33954466863)
+preserved accepted `dev` commit `f6e11c5b3f92ee43b4a6d4fc6af21d478249b961`,
+including Increment 36 closure and the latest HVL dependency guidance. It
+resolved only the Increment 33/34 checker conflicts, retained the exact closure
+pins in all three checkers, and passed 284 compiler Python tests, 42 HVL roadmap
+tests, predecessor checks, Markdown and contribution-policy checks. Published
+integration head: `dfaaf8c7f8135226fcc9eb836d0ea272619bd447`; tree:
+`2107aacf22b2b155262278b93c0e4e90d02c0da0`.
+
+The runtime/compiler corrections and new native matrix remained byte-identical
+during integration. No publication helper or workflow is included in the PR.
+The final recorded-evidence commit still requires its own PR checks and review;
+its merge and post-merge results are tracked in PR #122 rather than claimed here
+in advance.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -159,6 +160,11 @@ def main() -> None:
     parser.add_argument("--source", type=Path)
     args = parser.parse_args()
     run(args.nodalc.resolve(), args.translate.resolve(), args.source.resolve() if args.source else None)
+    review = [sys.executable, str(Path(__file__).with_name("run_review_matrix.py")),
+              "--nodalc", str(args.nodalc.resolve()), "--translate", str(args.translate.resolve())]
+    if args.source:
+        review += ["--source", str(args.source.resolve())]
+    subprocess.run(review, check=True, timeout=300)
 
 
 if __name__ == "__main__":

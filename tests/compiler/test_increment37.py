@@ -22,6 +22,11 @@ class Increment37ContractTests(unittest.TestCase):
     def test_repository(self) -> None:
         CHECK.check_repository(ROOT)
 
+    def test_lowering_review_is_required(self) -> None:
+        self.assertIn("tests/compiler/fixtures/increment37/run_review_matrix.py", CHECK.REQUIRED)
+        matrix = (ROOT / "tests/compiler/fixtures/increment37/run_native_matrix.py").read_text()
+        self.assertIn('subprocess.run(review, check=True', matrix)
+
     def test_profileless_fixture_checks_both_capability_boundaries(self) -> None:
         for target in ("--nodal-to-verilog-a", "--nodal-to-verilog-ams"):
             self.assertEqual(MATRIX.expected_backend_diagnostic("module {}", target),

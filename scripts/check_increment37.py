@@ -17,6 +17,10 @@ REQUIRED = (
     "core/compiler/test/IR/analog-events.mlir",
     "examples/continuousTimeApi/src/nodal/increment37fixture/Increment37ConstructionCheck.scala",
     "tests/compiler/fixtures/increment37/run_native_matrix.py",
+    "tests/compiler/fixtures/increment37/run_review_matrix.py",
+    "core/compiler/lib/Backend/AnalogEventBackend.cpp",
+    "core/compiler/lib/Backend/AnalogEventReparse.cpp",
+    "core/compiler/test/IR/analog-events-held.mlir",
     "docs/design-gates/NodalAnalogEvents-DG-v0.1.md",
     "docs/implementation/increment37-analog-events.md",
     ".github/workflows/increment-37-analog-events.yml",
@@ -40,6 +44,8 @@ def check_repository(root: Path = ROOT) -> None:
         if required not in native:
             raise AssertionError(f"NODAL-INC37: missing independent native check {required}")
     matrix = (root / "tests/compiler/fixtures/increment37/run_native_matrix.py").read_text()
+    if 'run_review_matrix.py' not in matrix or 'subprocess.run(review, check=True' not in matrix:
+        raise AssertionError("NODAL-INC37: missing mandatory lowering review matrix")
     if "NODAL-BACKEND-CAPABILITY-001" not in matrix or "PIPELINE" not in matrix:
         raise AssertionError("NODAL-INC37: missing optimizer or fail-closed backend gate")
 

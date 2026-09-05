@@ -1,0 +1,22 @@
+name: Increment 36 Source Snapshot
+on:
+  push:
+    branches: [automation/increment36-source-snapshot]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 99a4c379758489206a72fdbd883d7f89feecf520
+          fetch-depth: 1
+      - name: Archive exact accepted predecessor
+        run: git archive --format=tar.gz HEAD > /tmp/nodal-source.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nodal-inc36-source
+          path: /tmp/nodal-source.tar.gz
+          retention-days: 1

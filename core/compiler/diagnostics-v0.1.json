@@ -192,6 +192,17 @@
       "NODAL-ANALOG-036-006",
       "NODAL-ANALOG-036-007",
       "NODAL-ANALOG-036-008"
+    ],
+    "analog-events": [
+      "NODAL-ANALOG-037-001",
+      "NODAL-ANALOG-037-002",
+      "NODAL-ANALOG-037-003",
+      "NODAL-ANALOG-037-004",
+      "NODAL-ANALOG-037-005",
+      "NODAL-ANALOG-037-006",
+      "NODAL-ANALOG-037-007",
+      "NODAL-ANALOG-037-008",
+      "NODAL-ANALOG-037-009"
     ]
   },
   "preserved_prefixes": [
@@ -229,6 +240,7 @@
     "NODAL-ACCESS-",
     "NODAL-PROBE-",
     "NODAL-ANALOG-033-",
-    "NODAL-ANALOG-035-"
+    "NODAL-ANALOG-035-",
+    "NODAL-ANALOG-037-"
   ]
 }

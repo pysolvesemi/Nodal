@@ -77,6 +77,13 @@ private[nodal] object AnalogProceduralMlir:
           variables ++ assignments ++ structuredInventory(program)
     )
 
+  private def eventSources(
+      event: AnalogEventRuntime.Expression,
+      path: String
+  ): Vector[(String, Option[AnalogProceduralRuntime.Source])] =
+    Vector(path -> event.source) ++ event.alternatives.zipWithIndex.flatMap: (child, index) =>
+      eventSources(child, s"$path.alternative_$index")
+
   private def structuredInventory(
       program: AnalogProceduralRuntime.Snapshot
   ): Vector[String] =
@@ -105,6 +112,11 @@ private[nodal] object AnalogProceduralMlir:
             add("control_assignment", value.identity, value.source)
           case value: AnalogControlFlowRuntime.Statement.Read =>
             add("control_read", value.identity, value.source)
+          case value: AnalogControlFlowRuntime.Statement.EventControl =>
+            add("control_event", value.identity, value.source)
+            eventSources(value.event, s"${value.identity}.event").foreach: (path, source) =>
+              add("event_expression", path, source)
+            visitBlock(value.body)
           case value: AnalogControlFlowRuntime.Statement.Scope =>
             add("control_scope", value.identity, value.source)
             visitBlock(value.body)
@@ -226,6 +238,11 @@ private[nodal] object AnalogProceduralMlir:
                   add(s"${value.identity}.read_$index", expression.source.orElse(value.source))
           case value: AnalogControlFlowRuntime.Statement.Read =>
             add(value.identity, value.source)
+          case value: AnalogControlFlowRuntime.Statement.EventControl =>
+            add(value.identity, value.source)
+            eventSources(value.event, s"${value.identity}.event").foreach: (path, source) =>
+              add(path, source)
+            visitBlock(value.body)
           case value: AnalogControlFlowRuntime.Statement.Scope =>
             add(value.identity, value.source)
             visitBlock(value.body)
@@ -353,6 +370,7 @@ private[nodal] object AnalogProceduralMlir:
       .mapValues(_.head)
       .toMap
     var readSerial = 0
+    var eventSerial = 0
     var authoredAssignmentOrder = 0
 
     def expression(
@@ -401,6 +419,50 @@ private[nodal] object AnalogProceduralMlir:
         values += result
         types += resultType
       (lines.toVector, values.toVector, types.toVector)
+
+    def renderEvent(event: AnalogEventRuntime.Expression, path: String): (Vector[String], String) =
+      val nested = event.alternatives.zipWithIndex.map: (child, index) =>
+        renderEvent(child, s"$path.alternative_$index")
+      val result = s"%procedural_${programIndex}_event_$eventSerial"
+      eventSerial += 1
+      val attrs = Vector(
+        "event_id" -> quoted(path),
+        "owner" -> quoted(program.owner),
+        "contract" -> quoted(AnalogEventContract.Version),
+        "name" -> quoted(event.name),
+        "metadata" -> metadata(path, event.source)
+      )
+      val primitive = if event.operation == "analog_event_or" then
+        operation(
+          "nodal.analog_event_or",
+          results = Vector(result),
+          operands = nested.map(_._2),
+          operandTypes = nested.map(_ => "!nodal.analog_event"),
+          resultTypes = Vector("!nodal.analog_event"),
+          attributes = attrs,
+          source = event.source
+        )
+      else
+        val arguments = event.arguments.map: argument =>
+          dictionary(Vector(
+            "slot" -> integer(argument.slot),
+            "value" -> quoted(argument.value.rendered),
+            "kind" -> quoted(argument.value.valueType.kind.label),
+            "dimension" -> quoted(canonicalDimension(argument.value.valueType.dimension)),
+            "reads" -> array(argument.value.reads.map(read => quoted(read.identity)))
+          ))
+        operation(
+          s"nodal.${event.operation}",
+          results = Vector(result),
+          resultTypes = Vector("!nodal.analog_event"),
+          attributes = attrs ++ Vector(
+            "arguments" -> array(arguments),
+            "analyses" -> array(event.analyses.map(quoted)),
+            "event_reads" -> array(event.reads.toVector.sorted.map(quoted))
+          ),
+          source = event.source
+        )
+      (nested.flatMap(_._1) :+ primitive, result)
 
     def renderBlock(block: AnalogControlFlowRuntime.Block): String =
       block.statements.flatMap:
@@ -478,6 +540,21 @@ private[nodal] object AnalogProceduralMlir:
               ),
               source = read.source
             )
+          )
+
+        case event: AnalogControlFlowRuntime.Statement.EventControl =>
+          val (expressions, handle) = renderEvent(event.event, s"${event.identity}.event")
+          expressions :+ operation(
+            "nodal.analog_on",
+            operands = Vector(handle),
+            operandTypes = Vector("!nodal.analog_event"),
+            attributes = Vector(
+              "statement_id" -> quoted(event.identity),
+              "owner" -> quoted(program.owner),
+              "metadata" -> metadata(event.identity, event.source)
+            ),
+            regions = Vector("^bb0:\n" + renderBlock(event.body)),
+            source = event.source
           )
 
         case scope: AnalogControlFlowRuntime.Statement.Scope =>

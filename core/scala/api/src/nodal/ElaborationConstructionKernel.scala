@@ -565,7 +565,7 @@ private final class ConstructionSession(val options: EmitOptions):
         expression.operands.forall(waveformStatic))
     case _ => false
 
-  private def waveformConstant(value: Any): Option[Double] = value match
+  def waveformConstant(value: Any): Option[Double] = value match
     case expression: KernelExpr[?] =>
       expression.literal.filter(_.kind == "real").flatMap(_.value.toDoubleOption).orElse:
         expression.operands.map(waveformConstant) match
@@ -1364,7 +1364,7 @@ private final class ConstructionSession(val options: EmitOptions):
       .flatMap(_.instancePaths.get(parent -> ordinal))
       .getOrElse(s"${modulePath(parent)}.instance_$ordinal")
 
-  private def pathOf(value: Any): Option[String] = value match
+  def pathOf(value: Any): Option[String] = value match
     case reference: AnyRef =>
       Option(declarationIds.get(reference))
         .map(declarationPath)
@@ -2109,8 +2109,12 @@ private final class ConstructionSession(val options: EmitOptions):
     )
     val analog =
       kinds.exists(analogKinds.contains) || snapshot.continuousOperators.nonEmpty ||
-        snapshot.waveformOperators.nonEmpty
-    val digital = (kinds -- analogKinds).nonEmpty || snapshot.interfaceAbi.nonEmpty ||
+        snapshot.waveformOperators.nonEmpty || snapshot.analogRegions.nonEmpty ||
+        snapshot.analogProcedural.nonEmpty || snapshot.analogSemantics.equations.nonEmpty ||
+        snapshot.analogSemantics.contributions.nonEmpty
+    val storageKinds = if analog then Set("parameter", "variable") else Set.empty[String]
+    val digital = (kinds -- analogKinds -- storageKinds).nonEmpty ||
+      snapshot.interfaceAbi.nonEmpty ||
       snapshot.resolvedNets.nonEmpty
     (digital, analog) match
       case (true, true) => DesignKind.MixedSignal
@@ -2210,6 +2214,13 @@ private[nodal] object ConstructionKernel:
 
   def analogDimension(value: Any): Option[String] =
     active.map(_.inferAnalogDimension(value).canonical)
+
+  def analogReferencePath(value: Any): Option[String] = active.flatMap(_.pathOf(value))
+
+  def analogEventConstant(value: Any): Option[Double] = value match
+    case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
+      expression.literal.flatMap(_.value.toDoubleOption)
+    case _ => active.flatMap(_.waveformConstant(value))
   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
     active.foreach(_.registerDomain(domain, kind))
 

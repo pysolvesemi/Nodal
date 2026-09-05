@@ -952,6 +952,7 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
 
 - [ ] **Increment 37 — Analog events**
   - Implement `cross`, `above`, `timer`, initial/final step, event composition, tolerances, and controlled statements.
+  - Implementation started on `increment/37-analog-events`; see [the implementation and remaining closure work](../implementation/increment37-analog-events.md). Source/native event contracts do not yet constitute target-lowering or event-held-continuity acceptance.
 
 - [ ] **Increment 38 — Mathematical and simulator functions**
   - Add a versioned registry with type/arity checking, constant evaluation, analysis queries, and backend spelling.

@@ -24,6 +24,25 @@ private[nodal] object AnalogControlFlowConstruction:
       root: Block,
       analysis: Result
   ):
+    def mapEvents(transform: AnalogEventRuntime.Expression => AnalogEventRuntime.Expression)
+        : Snapshot =
+      def block(value: Block): Block = value.copy(statements = value.statements.map(statement))
+      def statement(value: Statement): Statement = value match
+        case event: Statement.EventControl =>
+          event.copy(event = transform(event.event), body = block(event.body))
+        case scope: Statement.Scope => scope.copy(body = block(scope.body))
+        case conditional: Statement.IfThenElse => conditional.copy(
+            branches = conditional.branches.map(branch => branch.copy(body = block(branch.body))),
+            otherwise = conditional.otherwise.map(block)
+          )
+        case selection: Statement.CaseStatement => selection.copy(
+            arms = selection.arms.map(arm => arm.copy(body = block(arm.body))),
+            default = selection.default.map(block)
+          )
+        case loop: Statement.Loop => loop.copy(body = block(loop.body))
+        case other => other
+      copy(root = block(root))
+
     def remapOwner(newOwner: String): Snapshot =
       val currentOwner = requireCanonicalOwner(owner, "control-flow source owner")
       val canonical = requireCanonicalOwner(newOwner, "control-flow destination owner")
@@ -92,6 +111,12 @@ private[nodal] object AnalogControlFlowConstruction:
           read.copy(
             identity = remapPath(read.identity),
             variable = remapPath(read.variable)
+          )
+        case event: Statement.EventControl =>
+          event.copy(
+            identity = remapPath(event.identity),
+            event = event.event.remap(remapPath, remapRendered),
+            body = remapBlock(event.body)
           )
         case scope: Statement.Scope =>
           scope.copy(
@@ -223,6 +248,17 @@ private[nodal] object AnalogControlFlowConstruction:
     def appendAssignment(statement: Statement.Assign): Unit = append(statement)
 
     def appendRead(statement: Statement.Read): Unit = append(statement)
+
+    def eventControl[A](
+        event: AnalogEventRuntime.Expression,
+        source: Option[AnalogProceduralRuntime.Source]
+    )(body: String => A): A =
+      requireStatementPosition()
+      structured = true
+      val identity = nextIdentity("event")
+      val (block, result) = captureBlock(s"$identity.body", source)(body)
+      append(Statement.EventControl(identity, event, block, source))
+      result
 
     def lexicalScope[A](
         source: Option[AnalogProceduralRuntime.Source],

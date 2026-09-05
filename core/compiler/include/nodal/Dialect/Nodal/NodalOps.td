@@ -758,6 +758,38 @@ def Nodal_AnalogProcedureOp
   let hasVerifier = 1;
 }
 
+// No Pure trait: an unused monitor must retain timestep/history effects.
+class Nodal_AnalogEventOp<string mnemonic> : Nodal_Op<mnemonic> {
+  let summary = "Source-semantic analog event monitor or analysis lifecycle event";
+  let arguments = (ins StrAttr:$event_id, StrAttr:$owner, StrAttr:$contract,
+    StrAttr:$name, ArrayAttr:$arguments, ArrayAttr:$analyses,
+    ArrayAttr:$event_reads, DictionaryAttr:$metadata);
+  let results = (outs Nodal_AnalogEventType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_AnalogCrossOp : Nodal_AnalogEventOp<"analog_cross">;
+def Nodal_AnalogAboveOp : Nodal_AnalogEventOp<"analog_above">;
+def Nodal_AnalogTimerOp : Nodal_AnalogEventOp<"analog_timer">;
+def Nodal_AnalogInitialStepOp : Nodal_AnalogEventOp<"analog_initial_step">;
+def Nodal_AnalogFinalStepOp : Nodal_AnalogEventOp<"analog_final_step">;
+
+def Nodal_AnalogEventOrOp : Nodal_Op<"analog_event_or"> {
+  let summary = "Any-of event composition with one controlled body evaluation";
+  let arguments = (ins Variadic<Nodal_AnalogEventType>:$events,
+    StrAttr:$event_id, StrAttr:$owner, StrAttr:$contract, StrAttr:$name,
+    DictionaryAttr:$metadata);
+  let results = (outs Nodal_AnalogEventType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogOnOp : Nodal_Op<"analog_on", [NoTerminator]> {
+  let summary = "Nonblocking analog event-controlled statement region";
+  let arguments = (ins Nodal_AnalogEventType:$event,
+    StrAttr:$statement_id, StrAttr:$owner, DictionaryAttr:$metadata);
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+}
+
 def Nodal_AnalogScopeOp : Nodal_Op<"analog_scope", [NoTerminator]> {
   let summary = "Lexical scope nested inside an analog procedural region";
   let arguments = (ins

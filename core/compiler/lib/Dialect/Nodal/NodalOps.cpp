@@ -5,6 +5,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Support/LogicalResult.h"
 #include "nodal/Diagnostics/DiagnosticSupport.h"
+#include "nodal/Dialect/Nodal/AnalogEvents.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
@@ -523,6 +524,14 @@ LogicalResult verifyProceduralBlock(Block &block, ProceduralVerificationState &s
 
 LogicalResult verifyStructuredProceduralBlock(Block &block, llvm::StringRef owner) {
   for (Operation &operation : block) {
+    if (nodal::isAnalogEventExpression(&operation) || llvm::isa<nodal::AnalogOnOp>(operation)) {
+      if (failed(nodal::verifyAnalogEventOperation(&operation)))
+        return failure();
+      if (llvm::isa<nodal::AnalogOnOp>(operation) &&
+          failed(verifyStructuredProceduralBlock(operation.getRegion(0).front(), owner)))
+        return failure();
+      continue;
+    }
     if (llvm::isa<nodal::AnalogVariableOp, nodal::AnalogVariableReadOp, nodal::AnalogAssignOp,
                   nodal::AnalogBreakOp, nodal::AnalogContinueOp>(operation)) {
       if (textAttr(&operation, "owner") != owner)
@@ -661,6 +670,8 @@ void removeStructuredLocals(StructuredFlow &flow, const std::vector<std::string>
 }
 
 bool isStructuredIdentityOperation(Operation *operation) {
+  if (nodal::isAnalogEventExpression(operation) || llvm::isa<nodal::AnalogOnOp>(operation))
+    return true;
   return llvm::isa<nodal::AnalogVariableOp, nodal::AnalogVariableReadOp, nodal::AnalogAssignOp,
                    nodal::AnalogScopeOp, nodal::AnalogIfOp, nodal::AnalogIfArmOp,
                    nodal::AnalogCaseOp, nodal::AnalogCaseArmOp, nodal::AnalogLoopOp,
@@ -668,6 +679,8 @@ bool isStructuredIdentityOperation(Operation *operation) {
 }
 
 llvm::StringRef structuredOperationIdentity(Operation *operation) {
+  if (nodal::isAnalogEventExpression(operation))
+    return textAttr(operation, "event_id");
   if (llvm::isa<nodal::AnalogVariableOp>(operation))
     return textAttr(operation, "identity");
   if (llvm::isa<nodal::AnalogVariableReadOp>(operation))
@@ -865,6 +878,9 @@ LogicalResult verifyStructuredReferences(Block &block, const StructuredDataflowC
       inventory = "selector_reads";
     else if (llvm::isa<nodal::AnalogLoopOp>(operation))
       inventory = "bound_reads";
+    else if (nodal::isAnalogEventExpression(&operation) &&
+             !llvm::isa<nodal::AnalogEventOrOp>(operation))
+      inventory = "event_reads";
 
     if (!inventory.empty() &&
         failed(verifyStructuredReferenceInventory(&operation, inventory, context)))
@@ -1096,6 +1112,26 @@ FailureOr<StructuredFlow> analyzeStructuredDataflowStatement(Operation *operatio
     return StructuredFlow{output, {}, {}};
   }
 
+  if (nodal::isAnalogEventExpression(operation)) {
+    if (!llvm::isa<nodal::AnalogEventOrOp>(operation) &&
+        failed(requireStructuredReads(operation, "event_reads", input, context)))
+      return failure();
+    return StructuredFlow{input, {}, {}};
+  }
+  if (llvm::isa<nodal::AnalogOnOp>(operation)) {
+    auto body = analyzeStructuredDataflowBlock(operation->getRegion(0).front(), input, context,
+                                               /*retainLocals=*/false);
+    if (failed(body))
+      return failure();
+    if (!body->breaks.empty() || !body->continues.empty()) {
+      (void)nodal::emitMappedFailure(operation, "NODAL-ANALOG-037-007",
+                                     "loop control cannot escape an event body");
+      return failure();
+    }
+    // An event is not guaranteed to fire; body writes do not initialize following code.
+    return StructuredFlow{input, {}, {}};
+  }
+
   if (auto scope = llvm::dyn_cast<nodal::AnalogScopeOp>(operation))
     return analyzeStructuredDataflowBlock(scope.getOperation()->getRegion(0).front(), input,
                                           context,
@@ -1188,7 +1224,8 @@ LogicalResult verifyAnalogProcedure(Operation *operation) {
   bool hasStructuredControl = false;
   operation->walk([&](Operation *nested) {
     if (llvm::isa<nodal::AnalogIfOp, nodal::AnalogCaseOp, nodal::AnalogLoopOp, nodal::AnalogBreakOp,
-                  nodal::AnalogContinueOp>(nested))
+                  nodal::AnalogContinueOp, nodal::AnalogOnOp>(nested) ||
+        nodal::isAnalogEventExpression(nested))
       hasStructuredControl = true;
   });
   if (hasStructuredControl) {
@@ -2001,3 +2038,11 @@ LogicalResult nodal::FsmCompletionOp::verify() {
     return emitOpError("requires distinct completion endpoints");
   return requireText(getOperation(), "kind", "completion kind");
 }
+
+LogicalResult nodal::AnalogCrossOp::verify() { return verifyAnalogEventOperation(*this); }
+LogicalResult nodal::AnalogAboveOp::verify() { return verifyAnalogEventOperation(*this); }
+LogicalResult nodal::AnalogTimerOp::verify() { return verifyAnalogEventOperation(*this); }
+LogicalResult nodal::AnalogInitialStepOp::verify() { return verifyAnalogEventOperation(*this); }
+LogicalResult nodal::AnalogFinalStepOp::verify() { return verifyAnalogEventOperation(*this); }
+LogicalResult nodal::AnalogEventOrOp::verify() { return verifyAnalogEventOperation(*this); }
+LogicalResult nodal::AnalogOnOp::verify() { return verifyAnalogEventOperation(*this); }

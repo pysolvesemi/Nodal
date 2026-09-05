@@ -1455,6 +1455,20 @@ This dependent track begins only after the Increment 133 equation/component chec
   - Add parameter matrices, hierarchy and repeated-instance tests, source-to-HDL traceability, cross-simulator capability reports, semantic versioning, compatibility metadata, and package/release evidence.
   - Keep Modelica-style stream connectors, fluid mixing, full redeclaration semantics, automatic high-index DAE reduction, and production compact-model coverage deferred.
 
+## Capability consistency contract — revision 0.3
+
+[ADR 0027](../architecture/0027-hvl-execution-projection-capability-contract.md) amends the earlier single-source wording. The detailed [HVL plan](nodal-hvl-simulation-v0.1-plan.md) and its [machine-readable surface](nodal-hvl-simulation-v0.1-surface.json) define the same contract.
+
+- Execution class (`live` or `capturable`) and generated-profile eligibility are independent. Capturable does not mean universally projectable.
+- A captured program contains common Verification Semantic IR **plus declared typed profile-extension operations**, all with serialization, verification, source locations, capability requirements and stable identities. Portable Core itself stays target-neutral.
+- A live test may call a captured component only when every required operation has a qualified live implementation. UVM-only or Verilog-TB-only operations are not automatically live-executable.
+- Generated-profile limitations must never restrict otherwise-supported live Nodal HVL. Live is the richer ordinary Scala experience, not a required emulator or strict superset of every target-specific methodology.
+- Verilog-TB and UVM are sibling profiles with separate extension libraries, generated-language IRs, validators and release gates. Neither depends on or lowers through the other. Common libraries never import profile implementation libraries.
+- Share common test intent; permit explicit profile-specific wrappers and packages. A package may support live only, VTB only, UVM only, several modes, or no runnable mode yet. Every claimed mode needs positive evidence; unsupported/inapplicable is never counted as passed.
+- Compare only the declared common semantic intersection. UVM factory/phases/TLM and VTB module/task extensions are separately tested, not flattened into a lowest common denominator.
+- `CAP`, `VTB`, `UVM`, `AMSP`, and `XPAR` are the current workstreams. `PORT` is a historical alias only. Numbering is ownership, not an implicit sequence of dependencies.
+- Full verification/runtime/generator/VIP implementation remains blocked by the complete Foundation barrier. This roadmap refinement does not close Foundation 147, 148 or 149 or revise historical Increment 152 acceptance evidence.
+
 ## Phase 10 — Foundation comments, FPGA-readiness, and HVL verification-readiness
 
 Detailed rationale and dependent-track plans are in [`dependent-productivity-and-verification-tracks-v0.1-plan.md`](dependent-productivity-and-verification-tracks-v0.1-plan.md). Verification backend ownership is defined by [ADR 0023](../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md), and direct procedural HDL testbench projections are defined by [ADR 0025](../architecture/0025-generated-procedural-hdl-testbench-projections.md). Foundation reserves only the architecture/public seams needed for future native verification, procedural Verilog/Verilog-AMS testbench, UVM, and UVM-MS work; dependent-track implementations remain outside Foundation.
@@ -1476,16 +1490,20 @@ Detailed rationale and dependent-track plans are in [`dependent-productivity-and
 - [ ] **Foundation Increment 147 — Nodal HVL Verification Semantic IR and public API architecture gate**
   - Freeze target-neutral tests/scenarios, transactions, processes/events/time, drivers/monitors/agents, scoreboards/reference models, constrained stimulus, deterministic replay, functional coverage, properties/checks, register bindings, reusable VIP packaging, and AMS verification extensions.
   - Bind verification endpoints to logical Interface/Register identities rather than generated HDL hierarchy strings.
+  - Apply ADR 0027 and the revision 0.3 capability contract: execution eligibility is independent of projection eligibility; capture the complete common-plus-typed-extension program without requiring arbitrary live Scala capture.
+  - Freeze compile-positive/negative candidates for live-only, VTB-only, UVM-only and shared components, including live calls to unsupported generated-only extensions. Retain this architecture gate as incomplete until its actual acceptance evidence exists.
 
 - [ ] **Foundation Increment 148 — Native verification runtime and generated-SystemVerilog IR readiness**
   - Freeze the native Nodal verification scheduler/runtime contract independently of UVM and the simulator-adapter boundary needed for direct Verilator/Icarus and future open mixed-signal execution.
   - Define a verification-SystemVerilog IR sufficient for generated UVM/VIP classes, interfaces/virtual interfaces, clocking blocks, dynamic containers, processes/events/mailboxes/semaphores, constraints/randomization, covergroups, properties, and DPI/VPI shims.
   - Do not implement complete HVL runtime or UVM generation in Foundation.
+  - Keep otherwise-supported live Scala execution independent of generated-profile limits. A profile-specific operation is live-callable only through an explicitly qualified live implementation; do not require a universal UVM emulator.
 
 - [ ] **Foundation Increment 149 — UVM/UVM-MS projection and vendor-profile architecture readiness**
   - Accept ADR 0023 and freeze Verification Semantic IR -> UVM/UVM-MS projections while keeping `nodal sim` independent of generated UVM.
   - Freeze UVM component/TLM/factory/config/phase/objection/RAL mappings, UVM-MS structural/class bridge identities, vendor-neutral common source, and thin VCS/Questa/Xcelium profile seams.
   - Confine unavoidable vendor `ifdef`s to generated adapter/include units; do not scatter them through common VIP logic.
+  - Freeze independent UVM/UVM-MS extension namespaces, typed extension serialization/verifiers, per-profile applicability and simulator qualification. Never route UVM through Procedural HDL Testbench IR or make VTB completion a UVM prerequisite.
 
 - [x] **Foundation Increment 152 — Direct procedural HDL testbench projection architecture readiness**
   - Accept ADR 0025 and freeze a Procedural HDL Testbench IR lowering seam beneath the canonical Verification Semantic IR; it is generated-language IR, not a second authoring model.
@@ -1567,7 +1585,7 @@ See [`dependent-productivity-and-verification-tracks-v0.1-plan.md`](dependent-pr
 
 ## Digital Verification Track — blocked by Foundation; numbering restarts
 
-Nodal HVL is canonical. Native/open-source execution, generated procedural Verilog testbenches, and generated UVM are sibling projections of one Verification Semantic IR; no generated backend is the simulation foundation.
+Live Nodal HVL is the primary host-side execution path and does not require complete static capture of ordinary Scala. Capturable common semantics plus declared typed profile extensions support only their qualified modes. Verilog-TB and UVM are independent sibling profiles with separate libraries, generated IRs and release gates; neither defines or restricts otherwise-supported live execution.
 
 - [ ] **Digital Verification Increment 1 — Nodal HVL native digital simulation vertical slice**
 - [ ] **Digital Verification Increment 2 — Scenarios, sequences, constrained stimulus, and replay**
@@ -1575,12 +1593,25 @@ Nodal HVL is canonical. Native/open-source execution, generated procedural Veril
 - [ ] **Digital Verification Increment 4 — Functional coverage and verification reporting**
 - [ ] **Digital Verification Increment 5 — Properties, protocol checks, and register-model verification**
 - [ ] **Digital Verification Increment 6 — Portable Verilog testbench generation**
+  - Ownership: CAP-01 through CAP-05 and VTB-01 through VTB-03; use the independent VTB capability set, library and generated-language IR. No UVM implementation prerequisite.
+
 - [ ] **Digital Verification Increment 7 — Open-source Verilog testbench execution and qualification**
+  - Ownership: VTB-04 through VTB-07. Close the VTB release independently of UVM, AMSP and aggregate XPAR completion.
+
 - [ ] **Digital Verification Increment 8 — Verification SystemVerilog and digital UVM generation**
+  - Ownership: UVM-01 through UVM-06 after CAP-05, not after VTB. Capture explicit UVM-only extensions with separate typed operations and library boundaries.
+
 - [ ] **Digital Verification Increment 9 — Commercial simulator profiles**
+  - Ownership: UVM-07 for generated methodology qualification; direct commercial live adapters remain separate. Require an actual qualified simulator for an executable UVM claim, not every vendor family.
+
 - [ ] **Digital Verification Increment 10 — Native, Verilog-testbench, and UVM semantic parity**
+  - Ownership: XPAR-01 through XPAR-03 and XPAR-05. Compare only qualified common semantic intersections; generated-only methodology behavior is not a live or sibling-profile parity requirement.
+
 - [ ] **Digital Verification Increment 11 — Reusable digital VIP qualification**
+  - Ownership: VTB-06 and UVM-08 in their independent lanes. Common semantic VIP must not import either profile library; profile-specific wrappers and single-profile packages are valid.
+
 - [ ] **Digital Verification Increment 12 — Scale, performance, compatibility, and verification release gate**
+  - Ownership: LIVE-08, CAP-05, VTB-07, UVM-09 and applicable XPAR gates. Track independent releases; aggregate track completion is not a release prerequisite for an individual lane.
 
 ## Analog/Mixed-Signal Verification Track — blocked by Foundation; numbering restarts
 

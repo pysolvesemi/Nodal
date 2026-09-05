@@ -1,10 +1,10 @@
-# Nodal HVL live simulation and projection capability v0.2 plan
+# Nodal HVL live simulation and projection capability v0.3 plan
 
-**Status:** Normative dependent-track roadmap target  
-**Revision:** 0.2  
-**Updated:** 2026-09-05  
-**Foundation:** the main Nodal incremental roadmap  
-**Umbrella tracks:** Digital Verification and Analog/Mixed-Signal Verification  
+**Status:** Normative dependent-track roadmap target
+**Revision:** 0.3
+**Updated:** 2026-09-05
+**Foundation:** the main Nodal incremental roadmap
+**Umbrella tracks:** Digital Verification and Analog/Mixed-Signal Verification
 **Architecture:** [ADR 0023](../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md), [ADR 0025](../architecture/0025-generated-procedural-hdl-testbench-projections.md), and [ADR 0026](../architecture/0026-native-digital-simulator-adapter-architecture.md)
 
 ## Purpose
@@ -18,6 +18,20 @@ This revision also freezes a second distinction:
 > **Portable capture is one common semantic foundation, but generated Verilog testbenches and generated UVM are independent sibling capability profiles. They have separate public extensions, separate lowering IRs, separate implementation libraries, separate conformance suites, and separate release gates.**
 
 UVM is not modeled as a subclass or superset of the Verilog-testbench profile. A universal library class that pretends a Verilog module/task BFM and a UVM object/component hierarchy are the same implementation object is prohibited.
+
+## Capability consistency contract — revision 0.3
+
+[ADR 0027](../architecture/0027-hvl-execution-projection-capability-contract.md) amends the earlier single-source wording. The detailed [HVL plan](nodal-hvl-simulation-v0.1-plan.md) and its [machine-readable surface](nodal-hvl-simulation-v0.1-surface.json) define the same contract.
+
+- Execution class (`live` or `capturable`) and generated-profile eligibility are independent. Capturable does not mean universally projectable.
+- A captured program contains common Verification Semantic IR **plus declared typed profile-extension operations**, all with serialization, verification, source locations, capability requirements and stable identities. Portable Core itself stays target-neutral.
+- A live test may call a captured component only when every required operation has a qualified live implementation. UVM-only or Verilog-TB-only operations are not automatically live-executable.
+- Generated-profile limitations must never restrict otherwise-supported live Nodal HVL. Live is the richer ordinary Scala experience, not a required emulator or strict superset of every target-specific methodology.
+- Verilog-TB and UVM are sibling profiles with separate extension libraries, generated-language IRs, validators and release gates. Neither depends on or lowers through the other. Common libraries never import profile implementation libraries.
+- Share common test intent; permit explicit profile-specific wrappers and packages. A package may support live only, VTB only, UVM only, several modes, or no runnable mode yet. Every claimed mode needs positive evidence; unsupported/inapplicable is never counted as passed.
+- Compare only the declared common semantic intersection. UVM factory/phases/TLM and VTB module/task extensions are separately tested, not flattened into a lowest common denominator.
+- `CAP`, `VTB`, `UVM`, `AMSP`, and `XPAR` are the current workstreams. `PORT` is a historical alias only. Numbering is ownership, not an implicit sequence of dependencies.
+- Full verification/runtime/generator/VIP implementation remains blocked by the complete Foundation barrier. This roadmap refinement does not close Foundation 147, 148 or 149 or revise historical Increment 152 acceptance evidence.
 
 ## Global dependency rule
 
@@ -160,9 +174,9 @@ The binding rules are:
 
 1. Live Nodal HVL remains the richer default experience.
 2. Portable/capturable Nodal HVL is opt-in at a test, package, component, scenario, sequence, or explicit region boundary; exact source syntax is frozen by the Foundation public API gate.
-3. A live test may call portable components.
+3. A live test may call portable components only when all required common and profile operations have qualified live implementations.
 4. A portable component may call only Portable Core operations, compatible profile extensions, deterministic precomputable helpers, or explicitly declared companion-runtime services.
-5. Requesting a projection may reject a live-only or incompatible-profile test, but that rejection must not make the test invalid for live execution.
+5. Projection rejection never invalidates an otherwise-supported live test. A generated-only profile extension does not itself establish live eligibility.
 6. Generated backend limitations must never remove an operation from the live API or change live runtime semantics.
 7. Projection eligibility is a capability set, not one universal Boolean and not an inheritance hierarchy.
 8. A package may support Verilog-TB, UVM, both, or neither.
@@ -195,7 +209,7 @@ The common library must not depend on either profile library. A profile library 
 
 Nodal retains one common verification semantic foundation with explicit profile boundaries:
 
-- Portable Core behavior is fully materialized as target-neutral Verification Semantic IR before projection.
+- The complete captured program is common Verification Semantic IR plus declared typed profile-extension operations. Every selected operation is serialized and verified before projection; Portable Core alone does not contain UVM or Verilog-TB methodology mechanisms.
 - Live host control may be interpreted dynamically, while each Nodal-visible operation, transaction, check, measurement, coverage sample, and result uses common semantic schemas and stable identities and is recorded in the runtime trace.
 - Arbitrary Scala control flow, object graphs, or external-library internals are not reconstructed as fake portable IR.
 - A trace of one live execution is evidence or replay input, not proof that the original host program is generally portable.
@@ -358,10 +372,13 @@ CAP is the only shared generated-projection foundation. It captures target-neutr
 - [ ] **CAP-02 — Complete common Verification Semantic IR capture**
   - Capture supported tests, scenarios, sequences, process structure, transactions, endpoint bindings, stimulus/monitor intent, checks, scoreboards, coverage intent, configuration, seeds, and source identities with deterministic serialization and round trips.
   - Keep UVM methodology objects and Verilog module/task realization out of Portable Core.
+  - Capture profile-extension types, operands, effects, symbol references and control flow as first-class namespaced operations; preserve unknown extensions for inspection but reject execution/lowering without a matching versioned verifier and implementation.
+  - Cover extension serialization, round trips, source maps, dependency/effect checks and unsupported-profile diagnostics. No opaque Scala callbacks or raw generated-code strings substitute for captured semantics.
 
 - [ ] **CAP-03 — Precomputed replay and companion-runtime lowering**
   - Generate deterministic stimulus, expected-result, reference-model, and measurement sidecars.
   - Distinguish standalone versus runtime-assisted profiles and retain all provenance.
+  - Precompute only behavior independent of future DUT observations, or explicitly selected replay artifacts. A trace from one run is not an equivalent replacement for a reactive test across other DUT behaviors; runtime-assisted output must declare its companion dependency.
 
 - [ ] **CAP-04 — Common identity, source-map, result, and package contracts**
   - Freeze stable transaction/check/coverage/failure identities, logical Interface/Register binding, normalized result schemas, source maps, capability manifests, package dependencies, and common-library ABI.
@@ -434,6 +451,7 @@ UVM is an independent class/methodology profile. It does not lower through or in
 - [ ] **UVM-07 — Commercial simulator profiles**
   - Qualify thin VCS-family, Questa-family, and Xcelium-family UVM profiles for compile/elaboration/run, UVM reference-library selection, DPI/VPI, waves, coverage, reporting, and known compatibility workarounds.
   - Keep common generated UVM source identical wherever standards support it and confine unavoidable vendor `ifdef`s to adapter packages/includes.
+  - Qualify at least one selected capable simulator and locked reference library before claiming an executable UVM release. Additional vendor profiles are optional; lack of such qualification leaves UVM release open, but cannot block live or VTB release. No open-source UVM support is assumed from parsing alone.
 
 - [ ] **UVM-08 — Reusable generated UVM VIP qualification**
   - Generate reusable standards-oriented UVM VIP from representative common semantic VIP.
@@ -474,6 +492,7 @@ AMSP preserves generated AMS interoperability as independent profiles rather tha
 - [ ] **AMSP-07 — Generated AMS release gate**
   - Exercise mixed hierarchy, analog/digital bridges, measurements, PVT, replay, source maps, tool capability rejection, external consumers, and profile-specific scale.
   - Publish separate Verilog-AMS-testbench, open-harness, and UVM-MS capability and limitations matrices.
+  - Close each profile independently through `release.verilog-ams-tb`, `release.open-ams-harness`, and `release.uvm-ms` below. This checkbox is aggregate completion, not a prerequisite for any individual profile release.
 
 ### XPAR — Cross-projection parity
 
@@ -494,6 +513,7 @@ XPAR compares only the explicitly shared semantic subset. Target-specific method
 - [ ] **XPAR-04 — AMS projection parity**
   - Compare eligible common AMS semantics across live/open execution, open harness, generated Verilog-AMS, and UVM-MS within declared tolerances.
   - Classify solver, scheduling, connect, bridge, real-net, and unsupported-feature differences.
+  - Qualify each selected pair independently through `evidence.parity.open-ams`, `evidence.parity.verilog-ams`, and `evidence.parity.uvm-ms`. Aggregate XPAR completion cannot delay an individual profile release.
 
 - [ ] **XPAR-05 — Cross-projection release gate**
   - Publish profile-pair applicability, common-subset coverage, exclusions, parity results, failure classifications, and source-level correlation.
@@ -541,9 +561,59 @@ Binding release rules:
 - MS may release after LIVE, required digital-live support, ANA prerequisites, and its own open-source gate even when generated profiles and commercial profiles remain incomplete.
 - CAP may release without VTB, UVM, or AMSP completion.
 - VTB and UVM release independently; neither is a prerequisite or implementation base for the other.
-- Commercial live adapters and generated commercial profiles are deferred optional profiles and do not block open-source live or VTB releases.
+- Commercial breadth is deferred and cannot block open-source live, VTB or open-harness releases. An executable UVM, Verilog-AMS-TB or UVM-MS release still requires an actual qualified simulator for that profile; source emission alone is insufficient.
 - XPAR compares only profile intersections and does not define the feature set of any profile.
 - A user may use only live Nodal HVL indefinitely without accepting portable capture or generated projections.
+
+## Resolved dependency and independent release ledger
+
+The JSON surface contains the complete dependency graph. Every reference resolves to a work item, a bound external Foundation/digital contract, a profile-specific evidence gate, or a release. Dependencies are explicit AND edges, never implicit numeric ordering. Every implementation and release remains deferred; checking this graph does not open Foundation or qualify a simulator.
+
+External bindings: `foundation.complete` is the complete Foundation barrier in the main roadmap; `digital-live.required-slice` is Digital Verification Increment 1 plus LIVE-08; `foundation.ams.semantics` is the Foundation barrier including analog/interface/equation contracts 128-129, 134-142 and 152. No unresolved 'applicable profiles' placeholder is an acceptance gate.
+
+### Profile-specific evidence gates
+
+An evidence gate can close independently of its umbrella owner. Owner names allocate scope, not prerequisite edges. Accepted evidence must include exact design/test/tool/library versions, commands, artifacts, results, exclusions and source identities. Rendering, missing tools and skipped runs cannot satisfy a gate.
+
+| Evidence ID | Owner | Prerequisites | Required evidence |
+| --- | --- | --- | --- |
+| `evidence.verilog-ams-tool` | AMSP-05 | AMSP-02 | Actual selected Verilog-AMS simulator compile/elaborate/run, locked tool profile and wave/result evidence; no UVM-MS requirement. |
+| `evidence.uvm-ms-tool` | AMSP-05 | AMSP-04 | Actual selected UVM-MS simulator compile/elaborate/run and locked methodology/library profile; no procedural-AMS requirement. |
+| `evidence.open-ams-tool` | AMSP-03 | AMSP-03 | Open harness compile/load/co-simulation run, bridge/timing checks, replay and normalized waves/results. |
+| `evidence.verilog-ams-vip` | AMSP-06 | evidence.verilog-ams-tool | External consumer VIP reuse and profile-specific scale/conformance for Verilog-AMS TB. |
+| `evidence.open-ams-vip` | AMSP-06 | evidence.open-ams-tool | External consumer reuse and profile-specific scale/conformance for the open AMS harness. |
+| `evidence.uvm-ms-vip` | AMSP-06 | evidence.uvm-ms-tool | External consumer VIP reuse and profile-specific scale/conformance for UVM-MS. |
+| `evidence.parity.open-ams` | XPAR-04 | XPAR-01, MS-09, release.open-ams-harness | Qualified common-subset live/open-harness comparison with explicit exclusions and tolerance evidence. |
+| `evidence.parity.verilog-ams` | XPAR-04 | XPAR-01, MS-09, release.verilog-ams-tb | Qualified common-subset live/Verilog-AMS-TB comparison with explicit exclusions and tolerance evidence. |
+| `evidence.parity.uvm-ms` | XPAR-04 | XPAR-01, MS-09, release.uvm-ms | Qualified common-subset live/UVM-MS comparison with explicit exclusions and tolerance evidence. |
+
+### Release gates
+
+Each non-aggregate release closes independently after its listed prerequisites. Additional commercial/vendor breadth and aggregate completion are not implicit prerequisites.
+
+| Release ID | Prerequisites | Kind |
+| --- | --- | --- |
+| `release.live` | LIVE-08 | Independent |
+| `release.analog-live` | ANA-09 | Independent |
+| `release.mixed-live` | MS-09 | Independent |
+| `release.capture` | CAP-05 | Independent |
+| `release.vtb` | VTB-07 | Independent |
+| `release.uvm` | UVM-09 | Independent |
+| `release.verilog-ams-tb` | AMSP-02, evidence.verilog-ams-tool, evidence.verilog-ams-vip | Independent |
+| `release.open-ams-harness` | AMSP-03, evidence.open-ams-tool, evidence.open-ams-vip | Independent |
+| `release.uvm-ms` | AMSP-04, evidence.uvm-ms-tool, evidence.uvm-ms-vip | Independent |
+| `release.parity-vtb` | XPAR-02 | Independent |
+| `release.parity-uvm` | XPAR-03 | Independent |
+| `release.parity-open-ams` | evidence.parity.open-ams | Independent |
+| `release.parity-verilog-ams` | evidence.parity.verilog-ams | Independent |
+| `release.parity-uvm-ms` | evidence.parity.uvm-ms | Independent |
+| `release.ams-aggregate` | AMSP-07 | Aggregate only |
+| `release.parity-aggregate` | XPAR-05 | Aggregate only |
+| `release.all-qualification` | LIVE-08, ANA-09, ANA-08, MS-09, MS-07, MS-08, CAP-05, VTB-07, UVM-09, AMSP-07, XPAR-05 | Aggregate only |
+
+### Documentation acceptance versus feature acceptance
+
+Run `python3 scripts/check_hvl_roadmap.py` and `python3 scripts/test_hvl_roadmap.py`. These validate dependency resolution, acyclicity, profile independence, capture/eligibility invariants and synchronized roadmap references. The positive/negative capability examples in ADR 0027 remain future compiler/runtime conformance obligations, not implemented HVL fixtures.
 
 ## Mapping to existing umbrella increments
 
@@ -583,7 +653,7 @@ This plan is complete only when:
 4. no UVM lowering passes through Procedural HDL Testbench IR and no VTB lowering passes through Verification SystemVerilog IR;
 5. common semantic libraries have no dependency on profile libraries;
 6. a package can truthfully support VTB, UVM, both, or neither;
-7. live simulation remains strictly richer than or equal to every generated projection rather than being limited by them;
+7. generated-profile limitations never restrict otherwise-supported live execution, while generated-only extensions require separate live qualification;
 8. analog live simulation has an independently qualified open-source release;
 9. mixed-signal live simulation has an independently qualified open-source release;
 10. commercial live and generated profiles remain optional, thin, and capability-declared;

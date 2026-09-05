@@ -4,9 +4,13 @@
 - **Date:** 2026-08-23
 - **Scope:** Hardware verification language, verification IR, simulation runtime, constrained stimulus, transactions, agents, drivers, monitors, scoreboards, coverage, assertions, reusable VIP, UVM, UVM-MS, vendor profiles, source maps, and cross-backend parity
 
+## Amendment — execution and projection eligibility (2026-09-05)
+
+[ADR 0027](0027-hvl-execution-projection-capability-contract.md) is authoritative for execution classes, complete common-plus-extension capture, sibling profile libraries/IRs, live eligibility, pairwise parity and independent release gates. Earlier single-source statements below apply to qualified shared semantics, not arbitrary Scala or every target-specific methodology. Historical acceptance and Increment 152 closure evidence remain intact; the amendment does not claim Foundation 147-149 implementation or acceptance is complete.
+
 ## Context
 
-Nodal intends to reduce verification effort as aggressively as it reduces RTL/AMS construction effort. Users should be able to author one verification environment in Scala/Nodal, run it directly with open-source simulation where possible, and later generate industry-standard UVM or UVM-MS environments without rewriting the testbench.
+Nodal intends to reduce verification effort as aggressively as it reduces RTL/AMS construction effort. Users should be able to reuse common verification intent across qualified live and generated modes. Ordinary live Scala need not be capturable, and explicit UVM/UVM-MS-only extensions or wrappers do not imply native execution or procedural-Verilog eligibility.
 
 Making UVM itself the canonical semantic model would create several problems:
 
@@ -22,7 +26,7 @@ At the same time, generated UVM must be structurally idiomatic and reusable with
 
 Nodal adopts the binding rule:
 
-> **Author verification once in Nodal HVL, preserve it in a target-neutral Verification IR, execute it through the native simulation runtime or project it to UVM/UVM-MS through capability-checked backends.**
+> **Share verification intent in Nodal HVL. Run live code directly, or capture common semantics plus declared typed profile extensions and select only qualified execution/projection profiles.**
 
 The exact public Scala API is frozen in a later Foundation increment. This ADR freezes semantic ownership and backend boundaries.
 
@@ -54,7 +58,7 @@ The IR does not encode UVM class names, macro spellings, simulator command lines
 
 ### Native simulation projection
 
-`nodal sim` executes the Verification IR through the Nodal simulation runtime. Verification logic remains in the Scala/JVM-side runtime or another Nodal-owned runtime and directly controls/observes the compiled DUT through versioned simulator adapters.
+`nodal sim` executes live host-side Nodal HVL through the Nodal runtime; qualified captured components may also execute through that runtime. Arbitrary Scala control does not require complete static IR capture, and generated-only operations require separate live qualification. Verification logic remains in the Scala/JVM-side runtime or another Nodal-owned runtime and directly controls/observes the compiled DUT through versioned simulator adapters.
 
 The initial digital adapters may target Verilator and Icarus without requiring UVM support in those tools. Mixed-signal native execution may coordinate Verilog-A/Verilog-AMS/open-model adapters, ngspice/OpenVAF-compatible paths, and digital simulators according to declared capabilities.
 
@@ -246,7 +250,7 @@ Rejected because it would make ordinary Nodal simulation dependent on simulators
 
 ### Maintain separate native and UVM testbenches
 
-Rejected because behavior would drift and defeat the single-source verification goal.
+Independent copies of shared test intent are discouraged because behavior can drift. This does not prohibit explicit profile-specific wrappers, library implementations or generated-only packages; ADR 0027 requires those boundaries rather than a universal implementation class.
 
 ### Put vendor `ifdef`s throughout generated testbench logic
 

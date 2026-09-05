@@ -5,6 +5,10 @@
 - **Extends:** [ADR 0023](0023-unified-hvl-native-sim-uvm-uvmms-architecture.md)
 - **Scope:** Nodal HVL, Verification Semantic IR, generated Verilog testbenches, generated Verilog-AMS testbenches, open-source simulator profiles, UVM/UVM-MS coexistence, deterministic replay, source maps, capability negotiation, and cross-backend parity
 
+## Amendment — execution and projection eligibility (2026-09-05)
+
+[ADR 0027](0027-hvl-execution-projection-capability-contract.md) is authoritative for execution classes, complete common-plus-extension capture, sibling profile libraries/IRs, live eligibility, pairwise parity and independent release gates. Earlier single-source statements below apply to qualified shared semantics, not arbitrary Scala or every target-specific methodology. Historical acceptance and Increment 152 closure evidence remain intact; the amendment does not claim Foundation 147-149 implementation or acceptance is complete.
+
 ## Context
 
 ADR 0023 established one canonical Nodal Verification Semantic IR with two sibling execution directions:
@@ -63,7 +67,7 @@ Consequently, Nodal may generate a standards-oriented Verilog-AMS testbench arti
 
 Nodal adopts the binding rule:
 
-> **Author verification once in Nodal HVL, preserve it in the canonical Verification Semantic IR, and select among native execution, capability-limited procedural HDL testbench generation, UVM generation, or UVM-MS generation without changing semantic ownership.**
+> **Share qualified verification intent through common Verification Semantic IR plus declared typed profile extensions; select live, procedural HDL, UVM or UVM-MS only where every required operation is supported. Capturable does not mean universally portable.**
 
 ADR 0023 remains authoritative. This ADR adds direct procedural HDL testbench projections as siblings of the native and UVM/UVM-MS projections.
 
@@ -233,7 +237,7 @@ Those implementations remain in the independently numbered Digital Verification 
 
 ### Maintain separate Nodal, Verilog, and UVM testbench sources
 
-Rejected because test intent, scoreboards, coverage, and protocol behavior would drift.
+Independent duplicate implementations of common test intent, scoreboards, coverage and protocol rules are discouraged. Separate qualified profile extensions and implementation libraries are permitted and required where module-based and class-based semantics differ; see ADR 0027.
 
 ### Treat plain Verilog as the canonical verification model
 

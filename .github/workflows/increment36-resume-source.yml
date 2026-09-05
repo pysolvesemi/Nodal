@@ -12,15 +12,16 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: f4eb8593aad5af4ce4898649106344755c0eaed6
-      - name: Bundle exact source histories
+          ref: b11dd8c285dd7ffed2ad75b6439771367aa2470e
+      - name: Bundle exact published closure and merged implementation
         run: |
-          git update-ref refs/heads/recovery-implementation f4eb8593aad5af4ce4898649106344755c0eaed6
-          git update-ref refs/heads/recovery-dev 4d7783e9505d1263e7ff236e07e6ea1392ffceba
-          git bundle create /tmp/nodal36-recovery.bundle refs/heads/recovery-implementation refs/heads/recovery-dev
-          git bundle verify /tmp/nodal36-recovery.bundle
+          test "$(git rev-parse HEAD^{tree})" = db0076513dd1cc1e157b4ba41c9131e8da97adb4
+          git update-ref refs/heads/recovery-closure b11dd8c285dd7ffed2ad75b6439771367aa2470e
+          git update-ref refs/heads/recovery-dev aa93bc7e9eb6df51162a486452b185025b77207a
+          git bundle create /tmp/nodal36-closure.bundle refs/heads/recovery-closure refs/heads/recovery-dev
+          git bundle verify /tmp/nodal36-closure.bundle
       - uses: actions/upload-artifact@v4
         with:
-          name: nodal36-recovery-history
-          path: /tmp/nodal36-recovery.bundle
+          name: nodal36-closure-history
+          path: /tmp/nodal36-closure.bundle
           retention-days: 3

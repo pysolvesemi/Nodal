@@ -1,0 +1,42 @@
+name: HVL roadmap consistency materialization
+on:
+  push:
+    branches: [increment/147-hvl-roadmap-consistency]
+    paths:
+      - .github/workflows/hvl-roadmap-materialize.yml
+      - scripts/materialize_hvl_roadmap_consistency.py
+permissions:
+  contents: write
+concurrency:
+  group: hvl-roadmap-materialization
+  cancel-in-progress: false
+jobs:
+  materialize:
+    if: github.repository == 'pysolvesemi/Nodal' && github.ref_name == 'increment/147-hvl-roadmap-consistency'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: increment/147-hvl-roadmap-consistency
+          fetch-depth: 0
+      - name: Materialize exact-input documentation changes
+        run: |
+          python3 -m py_compile scripts/materialize_hvl_roadmap_consistency.py scripts/check_hvl_roadmap.py scripts/test_hvl_roadmap.py
+          python3 scripts/materialize_hvl_roadmap_consistency.py
+          python3 scripts/check_hvl_roadmap.py
+          python3 scripts/test_hvl_roadmap.py
+          python3 scripts/check_markdown.py
+          git diff --check
+      - name: Commit only approved documentation changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/roadmap/nodal-hvl-simulation-v0.1-plan.md docs/roadmap/nodal-hvl-simulation-v0.1-surface.json docs/roadmap/nodal-development-todo.md docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md docs/architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md docs/architecture/0025-generated-procedural-hdl-testbench-projections.md docs/architecture/0027-hvl-execution-projection-capability-contract.md docs/design-gates/NodalHvlCapabilityConsistency-DG-v0.1.md
+          git rm scripts/materialize_hvl_roadmap_consistency.py
+          git diff --cached --check
+          git commit -m 'docs(increment147): reconcile HVL capability contracts and release dependencies'
+          git push origin HEAD:increment/147-hvl-roadmap-consistency
+          git rev-parse HEAD
+          git diff origin/dev...HEAD --stat
+          echo 'Roadmap checker, 25 mutation/consistency tests, Markdown links and diff checks passed.' >> "$GITHUB_STEP_SUMMARY"

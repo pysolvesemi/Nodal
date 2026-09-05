@@ -28,7 +28,7 @@ jobs:
         with:
           path: ~/.cache/nodal/downloads
           key: nodal-native-download-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
-      - name: Apply exact hash-checked candidate and review fixes
+      - name: Apply exact source and review patches
         id: apply
         env:
           GH_TOKEN: ${{ github.token }}
@@ -38,6 +38,7 @@ jobs:
           patches = [
               (['bcc9728521ed831cc462020323f45e81187e94fd', '2077ad4461ed7f12bc93d4f728b8355041fe1665', 'f559fed1f8ebdba179d0f08990f5a593ec96f4be'], 79642, '91ef9cc7e45f1d99515aee699b6116e19237856943e80dacb3b8644e3ec25913'),
               (['6b537ae45542a1f8648b99ac5b6c6649b551b682'], 16505, 'ba256d01890a6cb4f42c9e4b133673015c8b48d8997f1d23b582ec74d166e68f'),
+              (['3f362e4975716245f3b740e5b5ab3f0fd77aaa10'], 22005, 'a2f59724acf7366a06f396873f15ab98e6ad2f7135c60dc00e11a748c2bc3300'),
           ]
           for chunks, size, digest in patches:
               data = b''.join(base64.b64decode(json.loads(subprocess.check_output(['gh', 'api', f'repos/pysolvesemi/Nodal/git/blobs/{sha}']))['content']) for sha in chunks)
@@ -80,14 +81,16 @@ jobs:
           compilers = [p for p in pathlib.Path('out').rglob('nodalc') if p.is_file() and os.access(p, os.X_OK)]
           translators = [p for p in pathlib.Path('out').rglob('nodal-translate') if p.is_file() and os.access(p, os.X_OK)]
           if compilers and translators:
-              args = ['python3', 'tests/compiler/fixtures/increment37/run_native_matrix.py', '--nodalc', str(compilers[0].resolve()), '--translate', str(translators[0].resolve())]
-              if source.exists(): args += ['--source', str(source)]
+              args = ['python3', 'tests/compiler/fixtures/increment37/run_native_matrix.py', '--nodalc', str(compilers[0].resolve()), '--translate', str(translators[0].resolve()), '--source', str(source)]
               run('matrix', args)
-              for item in out.glob('*.mlir'):
+              for item in [source, pathlib.Path(str(source) + '.held.mlir'), pathlib.Path(str(source) + '.controlled.mlir')]:
                   proc = subprocess.run([str(translators[0].resolve()), '--nodal-to-verilog-a', str(item)], text=True, capture_output=True)
                   (out / (item.name + '.va')).write_text(proc.stdout)
                   (out / (item.name + '.stderr')).write_text(proc.stderr)
                   results[item.name] = proc.returncode
+              (out / 'results.json').write_text(json.dumps(results, indent=2))
+          else:
+              results['missing-native-tools'] = 1
               (out / 'results.json').write_text(json.dumps(results, indent=2))
           run('style', ['./nodal', 'style', 'check', '--lint-toolchain', str(lint)])
           run('markdown', ['python3', 'scripts/check_markdown.py'])
@@ -131,6 +134,9 @@ jobs:
                   if dep.is_file(): shutil.copy2(dep, kit / dep.name)
           if list(kit.iterdir()):
               with tarfile.open(out / 'native-kit.tar.gz', 'w:gz') as archive: archive.add(kit, arcname='native-kit')
+          native = pathlib.Path(os.environ['RUNNER_TEMP']) / 'native'
+          if native.exists():
+              with tarfile.open(out / 'native-toolchain.tar.gz', 'w:gz') as archive: archive.add(native, arcname='native')
           PY
       - uses: actions/upload-artifact@v4
         if: always()

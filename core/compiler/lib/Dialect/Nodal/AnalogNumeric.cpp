@@ -681,8 +681,27 @@ LogicalResult verifyContinuousContract(Operation *operation, bool stateful,
                              "continuous-time operator identity and owner must be non-empty");
   const llvm::StringRef operatorIdentity = operatorId.getValue();
   const llvm::StringRef ownerIdentity = owner.getValue();
+  Operation *module = operation->getParentOp();
+  while (module && !isNamed(module, "nodal.module"))
+    module = module->getParentOp();
+  llvm::StringRef actualOwner = module ? textAttr(module, "sym_name") : llvm::StringRef();
+  if (module) {
+    if (auto metadata = module->getAttrOfType<DictionaryAttr>("metadata")) {
+      if (Attribute path = metadata.get("semantic_path")) {
+        auto semanticPath = llvm::dyn_cast<StringAttr>(path);
+        if (!semanticPath || semanticPath.getValue().trim().empty())
+          return emitMappedFailure(operation, "NODAL-ANALOG-035-002",
+                                   "continuous-time enclosing module has an invalid semantic path");
+        actualOwner = semanticPath.getValue();
+      }
+    }
+  }
+  if (actualOwner.empty() || ownerIdentity != actualOwner)
+    return emitMappedFailure(operation, "NODAL-ANALOG-035-002",
+                             "continuous-time operator owner must match its enclosing module");
   if (!operatorIdentity.starts_with(ownerIdentity) ||
-      !operatorIdentity.drop_front(ownerIdentity.size()).starts_with("."))
+      !operatorIdentity.drop_front(ownerIdentity.size()).starts_with(".") ||
+      operatorIdentity.size() <= ownerIdentity.size() + 1)
     return emitMappedFailure(
         operation, "NODAL-ANALOG-035-002",
         "continuous-time operator identity must be owned by its declared owner");
@@ -967,6 +986,10 @@ LogicalResult verifyDdt(Operation *operation) {
                              "ddt requires one input and one result");
 
   if (!contracted) {
+    // Legacy type compatibility must not authorize unverified simplification.
+    if (hasAnyAttribute(operation, kContinuousSimplificationAttributes))
+      return emitMappedFailure(operation, "NODAL-ANALOG-035-007",
+                               "ddt simplification requires the Increment 35 operator contract");
     if (operation->getOperand(0).getType().isF64() && operation->getResult(0).getType().isF64())
       return success();
     auto input = getAnalogNumericTypeInfo(operation->getOperand(0).getType());

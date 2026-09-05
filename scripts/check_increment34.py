@@ -9,6 +9,11 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 
 
+# Immutable accepted Increment 35 closure, not values supplied by the manifest.
+INCREMENT35_CLOSURE_HEAD = "39915b984707f0396777cc69030dfec29aa2befe"
+INCREMENT35_CLOSURE_RUN = 33916159555
+
+
 class CheckFailure(RuntimeError):
     pass
 
@@ -425,6 +430,8 @@ def check_repository(root: Path) -> None:
                 )
                 and isinstance(successor_validation.get("closure_validation_run"), int)
                 and successor_validation.get("closure_validation_run") > 0
+                and successor_validation.get("closure_validation_head") == INCREMENT35_CLOSURE_HEAD
+                and successor_validation.get("closure_validation_run") == INCREMENT35_CLOSURE_RUN
                 and "**Revision:** 1.46" in roadmap
                 and increment35_closed in roadmap,
                 "NODAL-INC34-056: validated Increment 35 successor evidence is inconsistent",

@@ -8,6 +8,7 @@
 
 #include "llvm/ADT/StringRef.h"
 
+#include <optional>
 #include <string>
 
 namespace nodal {
@@ -36,6 +37,10 @@ mlir::FailureOr<std::string> combineAnalogDimensions(llvm::StringRef lhs, llvm::
 
 /// Classify a Nodal quantity, legacy dimensionless f64, or Boolean i1 value.
 mlir::FailureOr<AnalogNumericTypeInfo> getAnalogNumericTypeInfo(mlir::Type type);
+
+/// Evaluate only compiler-proven constants, never symbolic parameter defaults.
+/// Invalid constant arithmetic is a failure, not an unknown dynamic value.
+mlir::FailureOr<std::optional<double>> getAnalogConstantRealValue(mlir::Value value);
 
 /// Verify one source-semantic analog numeric operation.
 mlir::LogicalResult verifyAnalogNumericOperation(mlir::Operation *operation);

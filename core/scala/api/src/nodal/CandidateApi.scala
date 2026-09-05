@@ -453,9 +453,11 @@ enum Edge:
 
 def analog(body: => Unit): Unit = CandidateRuntime.analogBlock(body)
 
-def initial(body: => Unit): Unit = CandidateRuntime.block(body)
+def initial(body: => Unit): Unit =
+  ConstructionKernel.waveformForbidden(CandidateRuntime.block(body))
 
-def on(event: Event)(body: => Unit): Unit = CandidateRuntime.block(event, body)
+def on(event: Event)(body: => Unit): Unit =
+  ConstructionKernel.waveformForbidden(CandidateRuntime.block(event, body))
 
 def V[D <: Discipline](node: Node[D]): Expr[Real] =
   CandidateRuntime.analogExpr("potential_access", node)
@@ -486,12 +488,52 @@ def timer(start: Expr[Real]): Event = CandidateRuntime.event(start)
 def timer(start: Expr[Real], period: Expr[Real]): Event =
   CandidateRuntime.event(start, period)
 
+/** Smooth a piecewise-constant input. Omitted timing arguments retain target defaults. */
+def transition(value: Expr[Real]): Expr[Real] =
+  CandidateRuntime.waveformOperator("analog_transition", Vector(value))
+def transition(value: Expr[Real], delay: Expr[Real]): Expr[Real] =
+  CandidateRuntime.waveformOperator("analog_transition", Vector(value, delay))
+def transition(value: Expr[Real], delay: Expr[Real], rise: Expr[Real]): Expr[Real] =
+  CandidateRuntime.waveformOperator("analog_transition", Vector(value, delay, rise))
 def transition(
     value: Expr[Real],
     delay: Expr[Real],
     rise: Expr[Real],
     fall: Expr[Real]
-): Expr[Real] = CandidateRuntime.expr(value, delay, rise, fall)
+): Expr[Real] =
+  CandidateRuntime.waveformOperator("analog_transition", Vector(value, delay, rise, fall))
+def transition(
+    value: Expr[Real],
+    delay: Expr[Real],
+    rise: Expr[Real],
+    fall: Expr[Real],
+    timeTolerance: Expr[Real]
+): Expr[Real] =
+  CandidateRuntime.waveformOperator(
+    "analog_transition",
+    Vector(value, delay, rise, fall, timeTolerance)
+  )
+
+/** Rate-limit a waveform; limits have the input dimension divided by time. */
+def slew(value: Expr[Real]): Expr[Real] =
+  CandidateRuntime.waveformOperator("analog_slew", Vector(value))
+def slew(value: Expr[Real], positiveRate: Expr[Real]): Expr[Real] =
+  CandidateRuntime.waveformOperator("analog_slew", Vector(value, positiveRate))
+def slew(value: Expr[Real], positiveRate: Expr[Real], negativeRate: Expr[Real]): Expr[Real] =
+  CandidateRuntime.waveformOperator("analog_slew", Vector(value, positiveRate, negativeRate))
+
+/** Transport delay; a supplied constant maximum enables time-varying delay. */
+def absdelay(value: Expr[Real], delay: Expr[Real]): Expr[Real] =
+  CandidateRuntime.waveformOperator("analog_absdelay", Vector(value, delay))
+def absdelay(value: Expr[Real], delay: Expr[Real], maximumDelay: Expr[Real]): Expr[Real] =
+  CandidateRuntime.waveformOperator("analog_absdelay", Vector(value, delay, maximumDelay))
+
+/** Current analog simulation time in seconds, lowered to $abstime. */
+def abstime: Expr[Real] = CandidateRuntime.waveformOperator("analog_abstime", Vector.empty)
+
+/** Bound the next transient step. This is an effect, not a real-valued expression. */
+def boundStep(maximumStep: Expr[Real]): Unit =
+  val _ = CandidateRuntime.waveformOperator("analog_bound_step", Vector(maximumStep))
 
 def toUInt(value: Expr[Real], width: Int): Expr[UInt] =
   CandidateRuntime.expr(value, width)
@@ -513,7 +555,7 @@ extension (left: Expr[Real])
     CandidateRuntime.analogExpr("analog_mul", left, right)
   def /(right: Expr[Real]): Expr[Real] =
     CandidateRuntime.analogExpr("analog_div", left, right)
-  def unary_- : Expr[Real] = CandidateRuntime.expr(left)
+  def unary_- : Expr[Real] = CandidateRuntime.analogExpr("analog_neg", left)
   def >(right: Expr[Real]): Expr[Bool] =
     CandidateRuntime.booleanExpr("real_gt", left, right)
   def >=(right: Expr[Real]): Expr[Bool] =
@@ -721,6 +763,11 @@ private[nodal] object CandidateRuntime:
     )
     expression
 
+  def waveformOperator(operation: String, inputs: Vector[Expr[Real]]): Expr[Real] =
+    val expression = new KernelExpr[Real](inputs, operation = Some(operation))
+    ConstructionKernel.waveformOperator(expression, operation, inputs)
+    expression
+
   def analogBlock(body: => Unit): Unit =
     ConstructionKernel.analogBlock(body)
 
@@ -802,12 +849,12 @@ private[nodal] object CandidateRuntime:
   def block(body: => Unit): Unit =
     ConstructionKernel.operation("block")
     AnalogProceduralConstruction.lexicalScope:
-      ConstructionKernel.block(body)
+      ConstructionKernel.waveformForbidden(ConstructionKernel.block(body))
 
   def block(event: Event, body: => Unit): Unit =
     ConstructionKernel.operation("event-block", event)
     AnalogProceduralConstruction.lexicalScope:
-      ConstructionKernel.block(body)
+      ConstructionKernel.waveformForbidden(ConstructionKernel.block(body))
 
   def event(values: Any*): Event =
     ConstructionKernel.operation("event", values*)

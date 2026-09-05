@@ -1037,6 +1037,110 @@ def Nodal_AnalogIdtOp : Nodal_Op<"analog_idt", [HasParent<"AnalogOp">]> {
   let hasVerifier = 1;
 }
 
+// No Pure trait: history, time observation, and step-bound effects must survive DCE.
+def Nodal_AnalogTransitionOp : Nodal_Op<"analog_transition", [HasParent<"AnalogOp">]> {
+  let summary = "Source-semantic Increment 36 analog_transition operator";
+  let arguments = (ins
+    Variadic<AnyType>:$inputs,
+    OptionalAttr<StrAttr>:$operator_contract,
+    OptionalAttr<StrAttr>:$operator_id,
+    OptionalAttr<StrAttr>:$owner,
+    OptionalAttr<StrAttr>:$context,
+    OptionalAttr<ArrayAttr>:$operand_dimensions,
+    OptionalAttr<StrAttr>:$result_dimension,
+    OptionalAttr<StrAttr>:$input_continuity,
+    OptionalAttr<StrAttr>:$output_continuity,
+    OptionalAttr<StrAttr>:$state_id,
+    OptionalAttr<ArrayAttr>:$analyses,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+// No Pure trait: history, time observation, and step-bound effects must survive DCE.
+def Nodal_AnalogSlewOp : Nodal_Op<"analog_slew", [HasParent<"AnalogOp">]> {
+  let summary = "Source-semantic Increment 36 analog_slew operator";
+  let arguments = (ins
+    Variadic<AnyType>:$inputs,
+    OptionalAttr<StrAttr>:$operator_contract,
+    OptionalAttr<StrAttr>:$operator_id,
+    OptionalAttr<StrAttr>:$owner,
+    OptionalAttr<StrAttr>:$context,
+    OptionalAttr<ArrayAttr>:$operand_dimensions,
+    OptionalAttr<StrAttr>:$result_dimension,
+    OptionalAttr<StrAttr>:$input_continuity,
+    OptionalAttr<StrAttr>:$output_continuity,
+    OptionalAttr<StrAttr>:$state_id,
+    OptionalAttr<ArrayAttr>:$analyses,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+// No Pure trait: history, time observation, and step-bound effects must survive DCE.
+def Nodal_AnalogAbsdelayOp : Nodal_Op<"analog_absdelay", [HasParent<"AnalogOp">]> {
+  let summary = "Source-semantic Increment 36 analog_absdelay operator";
+  let arguments = (ins
+    Variadic<AnyType>:$inputs,
+    OptionalAttr<StrAttr>:$operator_contract,
+    OptionalAttr<StrAttr>:$operator_id,
+    OptionalAttr<StrAttr>:$owner,
+    OptionalAttr<StrAttr>:$context,
+    OptionalAttr<ArrayAttr>:$operand_dimensions,
+    OptionalAttr<StrAttr>:$result_dimension,
+    OptionalAttr<StrAttr>:$input_continuity,
+    OptionalAttr<StrAttr>:$output_continuity,
+    OptionalAttr<StrAttr>:$state_id,
+    OptionalAttr<ArrayAttr>:$analyses,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+// No Pure trait: history, time observation, and step-bound effects must survive DCE.
+def Nodal_AnalogAbstimeOp : Nodal_Op<"analog_abstime", [HasParent<"AnalogOp">]> {
+  let summary = "Source-semantic Increment 36 analog_abstime operator";
+  let arguments = (ins
+    Variadic<AnyType>:$inputs,
+    OptionalAttr<StrAttr>:$operator_contract,
+    OptionalAttr<StrAttr>:$operator_id,
+    OptionalAttr<StrAttr>:$owner,
+    OptionalAttr<StrAttr>:$context,
+    OptionalAttr<ArrayAttr>:$operand_dimensions,
+    OptionalAttr<StrAttr>:$result_dimension,
+    OptionalAttr<StrAttr>:$input_continuity,
+    OptionalAttr<StrAttr>:$output_continuity,
+    OptionalAttr<StrAttr>:$state_id,
+    OptionalAttr<ArrayAttr>:$analyses,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+// No Pure trait: history, time observation, and step-bound effects must survive DCE.
+def Nodal_AnalogBoundStepOp : Nodal_Op<"analog_bound_step", [HasParent<"AnalogOp">]> {
+  let summary = "Source-semantic Increment 36 analog_bound_step operator";
+  let arguments = (ins
+    Variadic<AnyType>:$inputs,
+    OptionalAttr<StrAttr>:$operator_contract,
+    OptionalAttr<StrAttr>:$operator_id,
+    OptionalAttr<StrAttr>:$owner,
+    OptionalAttr<StrAttr>:$context,
+    OptionalAttr<ArrayAttr>:$operand_dimensions,
+    OptionalAttr<StrAttr>:$result_dimension,
+    OptionalAttr<StrAttr>:$input_continuity,
+    OptionalAttr<StrAttr>:$output_continuity,
+    OptionalAttr<StrAttr>:$state_id,
+    OptionalAttr<ArrayAttr>:$analyses,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
 def Nodal_ContributeOp : Nodal_Op<"contribute", [HasParent<"AnalogOp">]> {
   let summary = "Potential or flow contribution to a conservative branch";
   let arguments = (ins

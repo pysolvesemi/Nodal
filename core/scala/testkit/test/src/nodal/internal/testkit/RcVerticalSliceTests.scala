@@ -24,6 +24,15 @@ final class UnsupportedRcOperation extends Module:
   val n = inout(Electrical)
 
   analog:
+    // Keep a generic candidate node unsupported at the bridge boundary.
+    // Unary negation now has a first-class analog operation.
+    I(p, n) <+ CandidateRuntime.expr[Real](V(p, n))
+
+final class NegatedRcOperation extends Module:
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+
+  analog:
     I(p, n) <+ -V(p, n)
 
 final class UnsupportedSingleEndedRc extends Module:
@@ -110,6 +119,10 @@ object RcVerticalSliceTests extends TestSuite:
             assert(result.mlir.contains("nodal.pipeline.normalized"))
           finally delete(directory)
         case _ => assert(true)
+
+    test("real unary negation is supported for signed waveform rates"):
+      val result = ScalaToMlirBridge.lower(new NegatedRcOperation)
+      assert(result.text.contains("nodal.analog_neg"))
 
     test("unsupported analog operator fails before native launch"):
       val failure = bridgeFailure(new UnsupportedRcOperation)

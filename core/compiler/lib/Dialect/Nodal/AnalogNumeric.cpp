@@ -7,6 +7,7 @@
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
+#include "nodal/Dialect/Nodal/TimeWaveform.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseSet.h"
@@ -1166,7 +1167,18 @@ FailureOr<AnalogNumericTypeInfo> getAnalogNumericTypeInfo(Type type) {
   return failure();
 }
 
+FailureOr<std::optional<double>> getAnalogConstantRealValue(Value value) {
+  EvaluationResult result = evaluateValue(value, false);
+  if (result.status == EvaluationStatus::Error)
+    return failure();
+  if (result.status == EvaluationStatus::Constant && result.value.kind == AnalogNumericKind::Real)
+    return std::optional<double>{result.value.real};
+  return std::optional<double>{};
+}
+
 LogicalResult verifyAnalogNumericOperation(Operation *operation) {
+  if (isTimeWaveformOperation(operation))
+    return verifyTimeWaveformOperation(operation);
   llvm::StringRef name = operation->getName().getStringRef();
   if (name == "nodal.real_literal")
     return verifyRealLiteral(operation);

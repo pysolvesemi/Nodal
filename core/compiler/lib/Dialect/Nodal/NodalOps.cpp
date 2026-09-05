@@ -9,6 +9,7 @@
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
+#include "nodal/Dialect/Nodal/TimeWaveform.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
@@ -1452,13 +1453,29 @@ LogicalResult nodal::AnalogOp::verify() {
     if (!llvm::isa<nodal::RealLiteralOp, nodal::AnalogIntegerLiteralOp, nodal::ParameterRefOp,
                    nodal::AnalogAddOp, nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp,
                    nodal::AnalogNegOp, nodal::AnalogCompareOp, nodal::AnalogLogicOp,
-                   nodal::AnalogSelectOp, nodal::AnalogDdtOp, nodal::AnalogIdtOp, nodal::AccessOp,
+                   nodal::AnalogSelectOp, nodal::AnalogDdtOp, nodal::AnalogIdtOp,
+                   nodal::AnalogTransitionOp, nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp,
+                   nodal::AnalogAbstimeOp, nodal::AnalogBoundStepOp, nodal::AccessOp,
                    nodal::TerminalAccessOp, nodal::PortFlowAccessOp, nodal::ContributeOp,
                    nodal::AnalogProcedureOp>(operation))
       return operation.emitOpError(
           "NODAL-ANALOG-REGION-002: operation is not legal in the analog numeric region");
   }
   return success();
+}
+
+LogicalResult nodal::AnalogTransitionOp::verify() {
+  return verifyTimeWaveformOperation(getOperation());
+}
+LogicalResult nodal::AnalogSlewOp::verify() { return verifyTimeWaveformOperation(getOperation()); }
+LogicalResult nodal::AnalogAbsdelayOp::verify() {
+  return verifyTimeWaveformOperation(getOperation());
+}
+LogicalResult nodal::AnalogAbstimeOp::verify() {
+  return verifyTimeWaveformOperation(getOperation());
+}
+LogicalResult nodal::AnalogBoundStepOp::verify() {
+  return verifyTimeWaveformOperation(getOperation());
 }
 
 LogicalResult nodal::AnalogProcedureOp::verify() { return verifyAnalogProcedure(getOperation()); }

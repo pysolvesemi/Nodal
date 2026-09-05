@@ -182,6 +182,16 @@
       "NODAL-ANALOG-035-006",
       "NODAL-ANALOG-035-007",
       "NODAL-ANALOG-035-008"
+    ],
+    "time-waveform": [
+      "NODAL-ANALOG-036-001",
+      "NODAL-ANALOG-036-002",
+      "NODAL-ANALOG-036-003",
+      "NODAL-ANALOG-036-004",
+      "NODAL-ANALOG-036-005",
+      "NODAL-ANALOG-036-006",
+      "NODAL-ANALOG-036-007",
+      "NODAL-ANALOG-036-008"
     ]
   },
   "preserved_prefixes": [

@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "increment": 36,
+  "status": "implementation-in-progress",
+  "baseline": {
+    "increment": 35,
+    "status": "validated-differential-integral-operators",
+    "accepted_head": "d3410f6f64dc66df27d9c7f545c9e78f62695f2e",
+    "closure_pull_request": 114,
+    "closure_merge": "99a4c379758489206a72fdbd883d7f89feecf520",
+    "roadmap_revision": "1.46"
+  },
+  "operators": {
+    "transition": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "slew": [
+      1,
+      2,
+      3
+    ],
+    "absdelay": [
+      2,
+      3
+    ],
+    "abstime": [
+      0
+    ],
+    "bound_step": [
+      1
+    ]
+  },
+  "semantics": {
+    "canonical_seconds": true,
+    "rates_are_input_per_time": true,
+    "exact_argument_omission": true,
+    "continuity_verified": true,
+    "native_definition_dimension_check": true,
+    "stable_unique_history_state": true,
+    "single_backend_evaluation": true,
+    "bound_step_is_effect": true,
+    "zero_step_retained": true,
+    "dynamic_delay_retained": true,
+    "constant_maximum_delay": true,
+    "no_stateful_folding": true,
+    "source_maps": true,
+    "exact_analysis_inventory": true
+  },
+  "diagnostics": [
+    "NODAL-ANALOG-036-001",
+    "NODAL-ANALOG-036-002",
+    "NODAL-ANALOG-036-003",
+    "NODAL-ANALOG-036-004",
+    "NODAL-ANALOG-036-005",
+    "NODAL-ANALOG-036-006",
+    "NODAL-ANALOG-036-007",
+    "NODAL-ANALOG-036-008"
+  ],
+  "deferred": [
+    "numerical-solver-execution",
+    "event-held-variable-continuity",
+    "procedural-waveform-composition",
+    "residual-dae-lowering",
+    "analysis-specific-ac-noise-lowering",
+    "full-verilog-ams-lowering"
+  ],
+  "validation": null
+}

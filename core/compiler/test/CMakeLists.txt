@@ -1,3 +1,5 @@
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
 add_subdirectory(Unit)
 
 add_test(
@@ -728,6 +730,14 @@ foreach(_fixture IN ITEMS context initial state simplification idt-fold)
       -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
   )
 endforeach()
+
+add_test(
+  NAME nodal.native.analog-time-waveform-matrix
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment36/run_native_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --translate "$<TARGET_FILE:nodal-translate>"
+)
 
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"

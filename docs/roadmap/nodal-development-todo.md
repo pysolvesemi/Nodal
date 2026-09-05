@@ -947,6 +947,7 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Evidence: implementation PR [#113](https://github.com/pysolvesemi/Nodal/pull/113), accepted head [`d3410f6f`](https://github.com/pysolvesemi/Nodal/commit/d3410f6f64dc66df27d9c7f545c9e78f62695f2e), 25-workflow exact-head matrix, Core CI run [33890457304](https://github.com/pysolvesemi/Nodal/actions/runs/33890457304), merge commit [`7763e152`](https://github.com/pysolvesemi/Nodal/commit/7763e1524f31e4c2c41b11acb200670c360f0fde), post-merge Core CI run [33892575717](https://github.com/pysolvesemi/Nodal/actions/runs/33892575717), exact post-merge validation run [33892632854](https://github.com/pysolvesemi/Nodal/actions/runs/33892632854), and evidence-closure PR [#114](https://github.com/pysolvesemi/Nodal/pull/114) validated from [`39915b98`](https://github.com/pysolvesemi/Nodal/commit/39915b984707f0396777cc69030dfec29aa2befe) by dedicated run [33916159555](https://github.com/pysolvesemi/Nodal/actions/runs/33916159555) and Core CI run [33916159534](https://github.com/pysolvesemi/Nodal/actions/runs/33916159534).
 
 - [ ] **Increment 36 — Time and waveform operators**
+  - In progress: source contracts, first-class native operators, effect-safe Verilog-A emission, and executable validation; see [implementation record](../implementation/increment36-time-waveform-operators.md).
   - Implement `transition`, `slew`, `absdelay`, `$abstime`, `$bound_step`, units, continuity, and diagnostics.
 
 - [ ] **Increment 37 — Analog events**

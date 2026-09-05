@@ -1,0 +1,98 @@
+name: Increment 36 Time and Waveform Operators
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - '.github/workflows/increment-36-time-waveform-operators.yml'
+      - 'build.mill'
+      - 'core/**'
+      - 'examples/continuousTimeApi/**'
+      - 'scripts/check_increment36.py'
+      - 'tests/compiler/**'
+      - 'docs/design-gates/NodalTimeWaveformOperators-DG-v0.1.md'
+      - 'docs/implementation/increment36*.md'
+      - 'docs/roadmap/nodal-development-todo.md'
+  push:
+    branches: [dev, increment/36-time-waveform-operators-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: increment-36-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  increment-36-time-waveform-operators:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Restore pinned Scala dependency caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-scala-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', '.scalafmt.conf', '.scalafix.conf', 'toolchains/lock.json', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-scala-${{ runner.os }}-
+      - name: Restore locked native download cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
+      - name: Validate predecessor and waveform contracts
+        run: |
+          python3 scripts/check_increment35.py
+          python3 scripts/check_increment36.py
+          python3 -m unittest discover -s tests/compiler -p 'test_increment36*.py'
+      - name: Compile and execute Scala contracts
+        run: ./nodal core scala
+      - name: Emit deterministic public-source waveform witness
+        run: |
+          ./mill -i examples.continuousTimeApi.runMain \
+            nodal.increment36fixture.Increment36ConstructionCheck \
+            "${RUNNER_TEMP}/increment36-construction.txt"
+          ./mill -i core.scala.testkit.test.runMain \
+            nodal.internal.testkit.Increment36MlirCheck \
+            "${RUNNER_TEMP}/increment36-source.mlir"
+      - name: Build compiler and execute native and source-to-backend matrices
+        shell: bash
+        run: |
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          ./nodal core native \
+            --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
+            --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          nodalc=$(find out -type f -name nodalc -perm -u+x | head -n 1)
+          translate=$(find out -type f -name nodal-translate -perm -u+x | head -n 1)
+          test -n "$nodalc" && test -n "$translate"
+          python3 tests/compiler/fixtures/increment36/run_native_matrix.py \
+            --nodalc "$nodalc" --translate "$translate" \
+            --source "${RUNNER_TEMP}/increment36-source.mlir"
+          "$nodalc" \
+            '--pass-pipeline=builtin.module(nodal-fold-analog-constants,canonicalize,cse,nodal-verify-analog-numeric)' \
+            "${RUNNER_TEMP}/increment36-source.mlir" > "${RUNNER_TEMP}/increment36-normalized.mlir"
+          "$translate" --nodal-to-verilog-a \
+            "${RUNNER_TEMP}/increment36-source.mlir" > "${RUNNER_TEMP}/increment36-source.va"
+          sha256sum "${RUNNER_TEMP}"/increment36-*.mlir "${RUNNER_TEMP}/increment36-source.va"
+      - name: Check style and documentation
+        run: |
+          ./nodal style check --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+          python3 scripts/check_markdown.py
+          git diff --check
+      - name: Retain source-to-backend witnesses
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: increment36-source-witness-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/increment36-construction.txt
+            ${{ runner.temp }}/increment36-*.mlir
+            ${{ runner.temp }}/increment36-source.va
+          retention-days: 14

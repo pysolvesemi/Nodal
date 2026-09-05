@@ -1,20 +1,23 @@
 # Increment 35 — Differential and integral operators
 
-**Status:** In progress  
-**Roadmap baseline:** revision 1.45  
-**Predecessor:** validated Increment 34
+**Status:** Validated  
+**Roadmap baseline:** revision 1.46  
+**Predecessor:** validated Increment 34  
+**Implementation PR:** #113  
+**Accepted implementation head:** `d3410f6f64dc66df27d9c7f545c9e78f62695f2e`  
+**Implementation merge:** `7763e1524f31e4c2c41b11acb200670c360f0fde`
 
 ## Implemented tranche
 
 This tranche replaces the public `idt` placeholder and routes both `ddt` and `idt` through one continuous-operator construction path.
 
-The construction snapshot now records operator identity, owner, context, input and result dimensions, optional initial-condition path, stable integration-state identity, initialization policy, analysis applicability, and source span. The Scala-to-MLIR bridge serializes the same inventory and emits first-class `nodal.analog_ddt` and `nodal.analog_idt` operations for the executable legacy analog vertical slice.
+The construction snapshot records operator identity, owner, context, input and result dimensions, optional initial-condition path, stable integration-state identity, initialization policy, analysis applicability, and source span. The Scala-to-MLIR bridge serializes the same inventory and emits first-class `nodal.analog_ddt` and `nodal.analog_idt` operations for the executable legacy analog vertical slice.
 
 The native dialect adds `nodal.analog_idt` and independently verifies the Increment 35 contract. Contracted operator identities must be owner-qualified and unique, and every `idt` state identity is derived from and owned by its operator. Older uncontracted `ddt` IR preserves the Increment 24 `NODAL-ANALOG-DDT-001` type-verification contract.
 
-The existing analog constant pass may annotate a contracted `ddt` as zero only when its input is compiler-proven time invariant. It retains the authored operation and its semantic identity. The pass removes no `idt` operation, and the verifier rejects any fold or simplification metadata attached to `idt`.
+The analog constant pass may annotate a contracted `ddt` as zero only when its input is compiler-proven time invariant. It retains the authored operation and semantic identity. The pass removes no `idt` operation, and the verifier rejects fold or simplification metadata attached to `idt`.
 
-The Verilog-A vertical slice explicitly accepts both operations and renders `ddt(input)`, `idt(input)`, and `idt(input, initial)`. A verified simplified derivative may render as `0.0` while its authored source-semantic operation remains in IR.
+The Verilog-A vertical slice accepts both operations and renders `ddt(input)`, `idt(input)`, and `idt(input, initial)`. A verified simplified derivative may render as `0.0` while its authored source-semantic operation remains in IR.
 
 ## Source semantics
 
@@ -28,16 +31,18 @@ The Verilog-A vertical slice explicitly accepts both operations and renders `ddt
 
 ## Verification matrix
 
-Scala tests cover construction snapshots, source correlation, equation and contribution contexts, owner qualification, exact analysis applicability, deterministic unique state identities, fixed and solver-selected initialization, a typed non-zero initial condition, dimensional mismatch, and deterministic bridge serialization.
+Scala tests cover construction snapshots, inline literal payloads, source correlation, equation and contribution contexts, owner qualification, exact analysis applicability, deterministic unique state identities, fixed and solver-selected initialization, a typed non-zero initial condition, dimensional mismatch, and deterministic bridge serialization.
 
-Native tests cover typed differential and integral dimensions, time-invariant derivative annotation, preservation of stateful integrals, Verilog-A rendering, legacy `ddt` compatibility, and stable rejection diagnostics for illegal context, missing or invalid contracts, owner mismatch, invalid dimensions, invalid analyses, invalid initial conditions, invalid state identity, duplicate operator identity, forged simplification, and attempted `idt` folding.
+Native tests cover typed differential and integral dimensions, time-invariant derivative annotation, preservation of stateful integrals, compositional `ddt(idt(...))` Verilog-A rendering, legacy `ddt` compatibility, and stable rejection diagnostics for illegal context, missing or invalid contracts, owner mismatch, invalid dimensions, invalid analyses, invalid initial conditions, invalid state identity, duplicate operator identity, forged simplification, and attempted `idt` folding.
 
-A dedicated read-only Increment 35 workflow runs the Increment 24 compatibility checker, the validated Increment 34 predecessor checker, the Increment 35 repository and hardening tests, the full Scala build, the source-semantic witness, native compiler tests, invalid-diagnostic fixtures, backend rendering, and formatting checks. Temporary bootstrap workflows, staging fragments, repair scripts, and triggers are prohibited on the accepted head.
+The accepted implementation head passed 25 pull-request workflows, including Core CI run `33890457304` and the dedicated Increment 35 matrix. Merge commit `7763e1524f31e4c2c41b11acb200670c360f0fde` then passed post-merge Core CI run `33892575717` and independent exact post-merge Increment 35 validation run `33892632854`.
+
+A dedicated read-only Increment 35 workflow runs the Increment 24 compatibility checker, the validated Increment 34 predecessor checker, the Increment 35 repository and hardening tests, the full Scala build, the source-semantic witness, native compiler tests, invalid-diagnostic fixtures, backend rendering, and formatting checks. Temporary bootstrap workflows, staging fragments, repair scripts, and triggers are prohibited on accepted and closure-candidate heads.
 
 ## Honest boundary
 
-Semantic equation and contribution contexts preserve continuous operators in the canonical construction and bridge inventories. First-class executable native operations are currently emitted by the established legacy analog vertical slice; full declarative residual-DAE lowering remains a later increment. Numerical solver behavior, state reset/reinitialization, event composition, and AC/noise-specific lowering are also deferred.
+Semantic equation and contribution contexts preserve continuous operators in the canonical construction and bridge inventories. First-class executable native operations are currently emitted by the established legacy analog vertical slice; full declarative residual-DAE lowering remains a later increment. Numerical solver behavior, state reset/reinitialization, event composition, inverse-operator cancellation, operator distribution, AC/noise-specific lowering, and full Verilog-AMS lowering are deferred.
 
 ## Closure state
 
-The roadmap item and manifest remain open. They must not be marked validated until the implementation PR is merged, exact post-merge validation succeeds, and a separate evidence-closure PR records immutable run and commit identities.
+Implementation, exact post-merge validation, and closure-candidate validation are complete. Closure PR #114 candidate `39915b984707f0396777cc69030dfec29aa2befe` passed the dedicated Increment 35 validation run `33916159555` and aggregate Core CI run `33916159534`. The final recorded-evidence head remains subject to the complete exact-head workflow matrix before merge.

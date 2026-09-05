@@ -1,8 +1,8 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.45
+**Revision:** 1.46
 **Created:** 2026-08-20
-**Updated:** 2026-09-03
+**Updated:** 2026-09-04
 **Status:** Active roadmap
 **Primary language target:** Verilog-AMS 2023
 **Analog-only compatibility target:** Verilog-A
@@ -942,8 +942,9 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
 
   - Evidence: implementation PR [#109](https://github.com/pysolvesemi/Nodal/pull/109), accepted head [`207fd1b5`](https://github.com/pysolvesemi/Nodal/commit/207fd1b580e9428e9948cd4e4bd8f2060fde4b79), 26-workflow exact-head matrix, Core CI run [33732864482](https://github.com/pysolvesemi/Nodal/actions/runs/33732864482), merge commit [`a9d3ec50`](https://github.com/pysolvesemi/Nodal/commit/a9d3ec50799953c41e7b9cf1d8bd6a2c5c9afd49), post-merge Core CI run [33758905273](https://github.com/pysolvesemi/Nodal/actions/runs/33758905273), exact post-merge validation run [33759112770](https://github.com/pysolvesemi/Nodal/actions/runs/33759112770), and evidence-closure PR [#111](https://github.com/pysolvesemi/Nodal/pull/111) validated from [`b59ed10f`](https://github.com/pysolvesemi/Nodal/commit/b59ed10f423d4a66e7e47d66ec764b7ff22531e7) by run [33761024228](https://github.com/pysolvesemi/Nodal/actions/runs/33761024228).
 
-- [ ] **Increment 35 — Differential and integral operators**
+- [x] **Increment 35 — Differential and integral operators**
   - Implement `ddt`, `idt`, initial conditions, context restrictions, and semantics-preserving simplification.
+  - Evidence: implementation PR [#113](https://github.com/pysolvesemi/Nodal/pull/113), accepted head [`d3410f6f`](https://github.com/pysolvesemi/Nodal/commit/d3410f6f64dc66df27d9c7f545c9e78f62695f2e), 25-workflow exact-head matrix, Core CI run [33890457304](https://github.com/pysolvesemi/Nodal/actions/runs/33890457304), merge commit [`7763e152`](https://github.com/pysolvesemi/Nodal/commit/7763e1524f31e4c2c41b11acb200670c360f0fde), post-merge Core CI run [33892575717](https://github.com/pysolvesemi/Nodal/actions/runs/33892575717), exact post-merge validation run [33892632854](https://github.com/pysolvesemi/Nodal/actions/runs/33892632854), and evidence-closure PR [#114](https://github.com/pysolvesemi/Nodal/pull/114) validated from [`39915b98`](https://github.com/pysolvesemi/Nodal/commit/39915b984707f0396777cc69030dfec29aa2befe) by dedicated run [33916159555](https://github.com/pysolvesemi/Nodal/actions/runs/33916159555) and Core CI run [33916159534](https://github.com/pysolvesemi/Nodal/actions/runs/33916159534).
 
 - [ ] **Increment 36 — Time and waveform operators**
   - Implement `transition`, `slew`, `absdelay`, `$abstime`, `$bound_step`, units, continuity, and diagnostics.

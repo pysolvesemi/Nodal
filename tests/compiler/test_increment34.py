@@ -54,6 +54,7 @@ REQUIRED = (
     "tests/compiler/fixtures/increment33/manifest.json",
     "tests/compiler/fixtures/increment34/README.md",
     "tests/compiler/fixtures/increment34/manifest.json",
+    "tests/compiler/fixtures/increment35/manifest.json",
 )
 
 
@@ -88,7 +89,7 @@ class Increment34ContractTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            self.assert_rejected(root, "validated state requires roadmap revision 1.45")
+            self.assert_rejected(root, "validated Increment 34 must remain checked")
 
     def test_open_state_remains_supported(self) -> None:
         temporary, root = self.fixture()
@@ -105,10 +106,15 @@ class Increment34ContractTests(unittest.TestCase):
             roadmap = root / "docs/roadmap/nodal-development-todo.md"
             roadmap.write_text(
                 roadmap.read_text(encoding="utf-8")
-                .replace("**Revision:** 1.45", "**Revision:** 1.44", 1)
+                .replace("**Revision:** 1.46", "**Revision:** 1.44", 1)
                 .replace(
                     "- [x] **Increment 34 — Analog control flow**",
                     "- [ ] **Increment 34 — Analog control flow**",
+                    1,
+                )
+                .replace(
+                    "- [x] **Increment 35 — Differential and integral operators**",
+                    "- [ ] **Increment 35 — Differential and integral operators**",
                     1,
                 ),
                 encoding="utf-8",
@@ -731,6 +737,37 @@ class Increment34ContractTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"runtime cache")
             CHECKER.check_repository(root)
+
+    def test_open_increment35_successor_remains_supported(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "tests/compiler/fixtures/increment35/manifest.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["status"] = "implementation-in-progress"
+            document["tranche"] = "35a-differential-integral-operator-contract"
+            document["validation"] = None
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            roadmap = root / "docs/roadmap/nodal-development-todo.md"
+            roadmap.write_text(
+                roadmap.read_text(encoding="utf-8")
+                .replace("**Revision:** 1.46", "**Revision:** 1.45", 1)
+                .replace(
+                    "- [x] **Increment 35 — Differential and integral operators**",
+                    "- [ ] **Increment 35 — Differential and integral operators**",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            CHECKER.check_repository(root)
+
+    def test_increment35_successor_identity_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "tests/compiler/fixtures/increment35/manifest.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["validation"]["accepted_head"] = "0" * 40
+            path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            self.assert_rejected(root, "Increment 35")
 
 
 if __name__ == "__main__":

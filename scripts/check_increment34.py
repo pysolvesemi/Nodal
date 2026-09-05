@@ -78,12 +78,19 @@ def check_repository(root: Path) -> None:
     )
     predecessor = load_json(root, "tests/compiler/fixtures/increment33/manifest.json")
     manifest = load_json(root, "tests/compiler/fixtures/increment34/manifest.json")
+    successor = load_json(root, "tests/compiler/fixtures/increment35/manifest.json")
 
     increment34_open = "- [ ] **Increment 34 — Analog control flow**"
     increment34_closed = "- [x] **Increment 34 — Analog control flow**"
+    increment35_open = "- [ ] **Increment 35 — Differential and integral operators**"
+    increment35_closed = "- [x] **Increment 35 — Differential and integral operators**"
     require(
         (increment34_open in roadmap) != (increment34_closed in roadmap),
         "NODAL-INC34-004: Increment 34 roadmap state is missing or ambiguous",
+    )
+    require(
+        (increment35_open in roadmap) != (increment35_closed in roadmap),
+        "NODAL-INC34-051: Increment 35 roadmap state is missing or ambiguous",
     )
     predecessor_validation = predecessor.get("validation")
     required_predecessor_evidence = (
@@ -285,8 +292,9 @@ def check_repository(root: Path) -> None:
         require(
             "**Revision:** 1.44" in roadmap
             and increment34_open in roadmap
+            and increment35_open in roadmap
             and "**Status:** In progress" in implementation,
-            "NODAL-INC34-046: open state requires roadmap revision 1.44 and in-progress records",
+            "NODAL-INC34-046: open state requires roadmap revision 1.44 and open successor records",
         )
     else:
         required_validation = (
@@ -327,11 +335,104 @@ def check_repository(root: Path) -> None:
             "NODAL-INC34-048: validated evidence does not match the accepted implementation",
         )
         require(
-            "**Revision:** 1.45" in roadmap
-            and increment34_closed in roadmap
-            and "**Status:** Validated" in implementation,
-            "NODAL-INC34-049: validated state requires roadmap revision 1.45 and closed records",
+            increment34_closed in roadmap and "**Status:** Validated" in implementation,
+            "NODAL-INC34-049: validated Increment 34 must remain checked",
         )
+        successor_status = successor.get("status")
+        successor_validation = successor.get("validation")
+        if successor_status == "implementation-in-progress":
+            require(
+                successor_validation is None
+                and "**Revision:** 1.45" in roadmap
+                and increment35_open in roadmap,
+                "NODAL-INC34-052: open Increment 35 requires roadmap revision 1.45",
+            )
+        elif successor_status == "evidence-closure-candidate":
+            required_successor_evidence = (
+                "implementation_pull_request",
+                "accepted_head",
+                "exact_head_workflow_count",
+                "exact_head_core_ci_run",
+                "implementation_merge",
+                "post_merge_core_ci_run",
+                "exact_post_merge_validation_run",
+                "closure_pull_request",
+            )
+            require(
+                isinstance(successor_validation, dict)
+                and all(
+                    successor_validation.get(field)
+                    for field in required_successor_evidence
+                )
+                and successor_validation.get("closure_validation_head") is None
+                and successor_validation.get("closure_validation_run") is None,
+                "NODAL-INC34-053: Increment 35 closure candidate evidence is incomplete",
+            )
+            require(
+                successor_validation.get("implementation_pull_request") == 113
+                and successor_validation.get("accepted_head")
+                == "d3410f6f64dc66df27d9c7f545c9e78f62695f2e"
+                and successor_validation.get("exact_head_workflow_count") == 25
+                and successor_validation.get("exact_head_core_ci_run") == 33890457304
+                and successor_validation.get("implementation_merge")
+                == "7763e1524f31e4c2c41b11acb200670c360f0fde"
+                and successor_validation.get("post_merge_core_ci_run") == 33892575717
+                and successor_validation.get("exact_post_merge_validation_run")
+                == 33892632854
+                and successor_validation.get("closure_pull_request") == 114
+                and "**Revision:** 1.46" in roadmap
+                and increment35_closed in roadmap,
+                "NODAL-INC34-054: Increment 35 closure candidate is inconsistent",
+            )
+        elif successor_status == "validated-differential-integral-operators":
+            required_successor_evidence = (
+                "implementation_pull_request",
+                "accepted_head",
+                "exact_head_workflow_count",
+                "exact_head_core_ci_run",
+                "implementation_merge",
+                "post_merge_core_ci_run",
+                "exact_post_merge_validation_run",
+                "closure_pull_request",
+                "closure_validation_head",
+                "closure_validation_run",
+            )
+            require(
+                isinstance(successor_validation, dict)
+                and all(
+                    successor_validation.get(field)
+                    for field in required_successor_evidence
+                ),
+                "NODAL-INC34-055: validated Increment 35 lacks complete evidence",
+            )
+            require(
+                successor_validation.get("implementation_pull_request") == 113
+                and successor_validation.get("accepted_head")
+                == "d3410f6f64dc66df27d9c7f545c9e78f62695f2e"
+                and successor_validation.get("exact_head_workflow_count") == 25
+                and successor_validation.get("exact_head_core_ci_run") == 33890457304
+                and successor_validation.get("implementation_merge")
+                == "7763e1524f31e4c2c41b11acb200670c360f0fde"
+                and successor_validation.get("post_merge_core_ci_run") == 33892575717
+                and successor_validation.get("exact_post_merge_validation_run")
+                == 33892632854
+                and successor_validation.get("closure_pull_request") == 114
+                and isinstance(successor_validation.get("closure_validation_head"), str)
+                and len(successor_validation.get("closure_validation_head")) == 40
+                and all(
+                    character in "0123456789abcdef"
+                    for character in successor_validation.get("closure_validation_head")
+                )
+                and isinstance(successor_validation.get("closure_validation_run"), int)
+                and successor_validation.get("closure_validation_run") > 0
+                and "**Revision:** 1.46" in roadmap
+                and increment35_closed in roadmap,
+                "NODAL-INC34-056: validated Increment 35 successor evidence is inconsistent",
+            )
+        else:
+            raise CheckFailure(
+                f"NODAL-INC34-057: unsupported Increment 35 successor status: {successor_status}"
+            )
         evidence = read_text(
             root,
             "docs/implementation/increment34-evidence-closure.md",

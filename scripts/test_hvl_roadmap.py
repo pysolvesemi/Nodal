@@ -12,6 +12,13 @@ import unittest
 from check_hvl_roadmap import DOCUMENTS, ROOT, load_surface, unique_object, validate_surface
 
 
+def copy_documents(root: Path) -> None:
+    for path in DOCUMENTS:
+        destination = root / path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / path, destination)
+
+
 class HvlRoadmapTests(unittest.TestCase):
     def setUp(self):
         self.data = copy.deepcopy(load_surface())
@@ -119,10 +126,7 @@ class HvlRoadmapTests(unittest.TestCase):
     def test_misplaced_umbrella_ownership(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for path in DOCUMENTS:
-                destination = root / path
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(ROOT / path, destination)
+            copy_documents(root)
             todo = root / 'docs/roadmap/nodal-development-todo.md'
             text = todo.read_text()
             note = next(line for line in text.splitlines() if line.startswith('  - Ownership: CAP-01'))
@@ -133,6 +137,48 @@ class HvlRoadmapTests(unittest.TestCase):
             todo.write_text('\n'.join(lines) + '\n')
             errors = validate_surface(self.data, root)
             self.assertTrue(any('NODAL-HVL-014:' in error for error in errors), errors)
+
+    def test_floating_ownership_after_section_separator(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            copy_documents(root)
+            plan = root / 'docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md'
+            text = plan.read_text()
+            note = next(line for line in text.splitlines() if line.startswith('  - Ownership: LIVE-08'))
+            plan.write_text(text.replace(note, '---\n' + note, 1))
+            errors = validate_surface(self.data, root)
+            self.assertTrue(any('NODAL-HVL-014:' in error for error in errors), errors)
+
+    def test_missing_profile_release_binding(self):
+        del self.data['profileReleaseGates']['nodal.hvl.projection.uvm']
+        self.rejected('006')
+
+    def test_remapped_profile_release_binding(self):
+        self.data['profileReleaseGates']['nodal.hvl.projection.uvm'] = 'release.vtb'
+        self.rejected('006')
+
+    def test_parity_vtb_excludes_uvm(self):
+        self.data['dependencyNodes']['release.parity-vtb']['requires'].append('UVM-09')
+        self.rejected('010')
+
+    def test_parity_vtb_excludes_aggregate(self):
+        self.data['dependencyNodes']['release.parity-vtb']['requires'].append('release.parity-aggregate')
+        self.rejected('010')
+
+    def test_every_pairwise_parity_release_is_independent(self):
+        original = copy.deepcopy(self.data)
+        cases = [
+            ('release.parity-vtb', 'AMSP-03'),
+            ('release.parity-uvm', 'VTB-07'),
+            ('release.parity-open-ams', 'AMSP-04'),
+            ('release.parity-verilog-ams', 'AMSP-03'),
+            ('release.parity-uvm-ms', 'AMSP-02'),
+        ]
+        for gate, unrelated in cases:
+            with self.subTest(gate=gate, unrelated=unrelated):
+                self.data = copy.deepcopy(original)
+                self.data['dependencyNodes'][gate]['requires'].append(unrelated)
+                self.rejected('010')
 
     def test_duplicate_json_keys_rejected(self):
         with self.assertRaises(ValueError):

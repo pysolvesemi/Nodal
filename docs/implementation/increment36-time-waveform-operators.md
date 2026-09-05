@@ -1,6 +1,6 @@
 # Increment 36 — Time and waveform operators
 
-**Status:** Implementation in progress; not evidence-closed.  
+**Status:** Validated
 **Baseline:** Increment 35 closure merge `99a4c379758489206a72fdbd883d7f89feecf520` (PR #114).  
 **Design gate:** [NodalTimeWaveformOperators-DG-v0.1](../design-gates/NodalTimeWaveformOperators-DG-v0.1.md).
 
@@ -33,7 +33,7 @@ The backend structural output check recognizes generated waveform declarations, 
 
 ## Closure policy
 
-The manifest remains `implementation-in-progress` with null validation evidence, and the roadmap checkbox remains open. Local checks, remote compilation, an open PR, and even pre-merge green CI are not interchangeable with accepted merge evidence. Implementation acceptance, exact post-merge validation, and the separate evidence-closure update must be recorded before completion is claimed.
+The implementation merge and exact post-merge Core CI and Increment 36 validation are complete. The manifest records the immutable accepted head, the complete 26-workflow matrix, and the exact implementation merge and post-merge runs. See the [accepted-evidence record](increment36-evidence-closure.md). The separate evidence-closure PR remains subject to its own Core CI before merge; no self-validation or numerical solver result is claimed.
 
 ## Deferred work
 

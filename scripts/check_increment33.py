@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -67,6 +68,16 @@ def repository_files(root: Path) -> tuple[Path, ...]:
         for path in root.rglob("*")
         if path.is_file() and "__pycache__" not in path.parts
     )
+
+
+def accepted_roadmap_revision(roadmap: str) -> bool:
+    """A validated predecessor remains valid in later roadmap revisions.
+
+    Open/candidate states still require their exact historical revision. The
+    active increment independently validates its own completion and evidence.
+    """
+    versions = re.findall(r"^\*\*Revision:\*\* ([0-9]+)\.([0-9]+)$", roadmap, re.M)
+    return len(versions) == 1 and tuple(map(int, versions[0])) >= (1, 46)
 
 
 def check_repository(root: Path, compile_witnesses: bool = False) -> None:
@@ -665,7 +676,7 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
                     and all(character in "0123456789abcdef" for character in closure_head)
                     and isinstance(closure_run, int)
                     and closure_run > 0
-                    and "**Revision:** 1.46" in roadmap
+                    and accepted_roadmap_revision(roadmap)
                     and increment35_closed in roadmap,
                     "NODAL-INC33-090: validated Increment 35 evidence is inconsistent",
                 )

@@ -62,6 +62,18 @@ class CiBaselineCheckTests(unittest.TestCase):
             [],
         )
 
+    def test_online_provenance_requires_workflow_token(self) -> None:
+        for replacement in ("", "GH_TOKEN: ${{ github.token }}", "GITHUB_TOKEN: anonymous"):
+            with self.subTest(replacement=replacement):
+                temporary, root = self.temporary_repository()
+                with temporary:
+                    path = root / ".github/workflows/ci.yml"
+                    source = path.read_text(encoding="utf-8")
+                    token = "GITHUB_TOKEN: ${{ github.token }}"
+                    self.assertEqual(source.count(token), 1)
+                    path.write_text(source.replace(token, replacement, 1), encoding="utf-8")
+                    self.assertIn("NODAL-CI-008", self.problem_codes(root))
+
     def test_rejects_generated_output_cache(
         self,
     ) -> None:

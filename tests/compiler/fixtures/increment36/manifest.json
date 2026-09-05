@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "increment": 36,
-  "status": "implementation-in-progress",
+  "status": "validated-time-waveform-operators",
   "baseline": {
     "increment": 35,
     "status": "validated-differential-integral-operators",
@@ -68,5 +68,61 @@
     "analysis-specific-ac-noise-lowering",
     "full-verilog-ams-lowering"
   ],
-  "validation": null
+  "validation": {
+    "implementation_pull_request": 118,
+    "accepted_head": "cf0d4504b5463eaad574edd08bd32ccd1ec74e78",
+    "accepted_tree": "9930a1ce13983097d9273f427d2f848dd0e7d74f",
+    "tested_pr_merge": "9672c630c61c93a15fc7d0f12103adcd6f53e932",
+    "exact_head_workflows": {
+      "Core CI": 33949981981,
+      "Increment 13 Core Semantic Candidates": 33949981929,
+      "Increment 14 Pipeline and Interface Candidates": 33949982003,
+      "Increment 15 Unified Public API Freeze": 33949982002,
+      "Increment 16 Elaboration Construction Kernel": 33949982008,
+      "Increment 17 Source Origin Naming": 33949982000,
+      "Increment 18 MLIR Dialect Skeleton": 33949982025,
+      "Increment 19 Core MLIR Model": 33949982005,
+      "Increment 20 Scala-to-MLIR Bridge": 33949982015,
+      "Increment 21 Native Semantic Pipeline": 33949982048,
+      "Increment 22 Cross-Layer Diagnostics": 33949982125,
+      "Increment 23 Backend Framework": 33949982006,
+      "Increment 24 Minimal Analog IR": 33949981999,
+      "Increment 25 RC Filter Vertical Slice": 33949982165,
+      "Increment 26 Reproducibility Contract": 33949982077,
+      "Increment 27 Natures and Disciplines": 33949981983,
+      "Increment 28 Electrical Conservative Connectivity": 33949981982,
+      "Increment 29 Parameters Constants Ranges and Units": 33949982072,
+      "Increment 30 Analog Numeric Types and Expression Typing": 33949982014,
+      "Increment 31 Potential and Flow Access": 33949981992,
+      "Increment 32 Equation and Contribution Semantics": 33949981948,
+      "Increment 33 Analog Procedural Assignment": 33949982062,
+      "Increment 34 Analog Control Flow": 33949982151,
+      "Increment 35 Differential and Integral Operators": 33949982081,
+      "Increment 36 Time and Waveform Operators": 33949981997,
+      "Increment 133 Analog Semantic API": 33949981994
+    },
+    "branch_push_core_ci_run": 33949978757,
+    "implementation_merge": "aa93bc7e9eb6df51162a486452b185025b77207a",
+    "post_merge_core_ci_run": 33951187187,
+    "post_merge_increment36_run": 33951187157,
+    "source_witness_sha256": {
+      "increment36-construction.txt": "8de8309b115aa60d4f7d7c17eadf1741b4ce4272610b8d7e790f1c7da9b96d58",
+      "increment36-source.mlir": "c5df9e5942f9cbc786d5c19aaf0db9845877cde4acffd5e301fab9d42a79d4b0",
+      "increment36-normalized.mlir": "1567e69e82077ed0837662562f541a5fb8f7e5e78d9700ce1f4783f282563daa",
+      "increment36-source.va": "a9176acf3b14f1a1fb29880d5aef4a7a9a096241deacf4ea0a07e8733cf4c1b7"
+    },
+    "post_merge_witness_matches_accepted": true,
+    "witness_artifacts": {
+      "accepted_pull_request": {
+        "run_id": 33949981997,
+        "artifact_id": 9964612196,
+        "archive_sha256": "ec4ee130090c02c3a2ddd87e7f7e3ae94008b047314ce25e629221e60eba04c9"
+      },
+      "post_merge": {
+        "run_id": 33951187157,
+        "artifact_id": 9965012668,
+        "archive_sha256": "be57479b50ba624af7d28628fad51fa7e7c790583db94c1557f1a895ef592785"
+      }
+    }
+  }
 }

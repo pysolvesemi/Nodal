@@ -1,4 +1,4 @@
-name: Increment 36 Publish Reviewed Closure
+name: Increment 36 Publish Accepted Evidence
 on:
   push:
     branches: [automation/increment36-publish-closure-20260905]
@@ -8,65 +8,83 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
           ref: aa93bc7e9eb6df51162a486452b185025b77207a
           fetch-depth: 0
-      - name: Require exact successful post-merge evidence
+      - name: Apply only the inspected closure patch
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          for run in 33951187187 33951187157; do
-            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" > /tmp/run-$run.json
-          done
-          python3 - <<'PY'
-          import json
-          for run, name in ((33951187187, 'Core CI'), (33951187157, 'Increment 36 Time and Waveform Operators')):
-              with open(f'/tmp/run-{run}.json') as stream:
-                  result = json.load(stream)
-              assert result['id'] == run and result['name'] == name
-              assert result['head_sha'] == 'aa93bc7e9eb6df51162a486452b185025b77207a'
-              assert result['event'] == 'push' and result['head_branch'] == 'dev'
-              assert result['status'] == 'completed' and result['conclusion'] == 'success', result
-          PY
-      - name: Apply only the locally reviewed closure patch
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
+          branch=increment/36-evidence-closure-v1
+          test "$(git rev-parse HEAD)" = aa93bc7e9eb6df51162a486452b185025b77207a
           test "$(git rev-parse HEAD^{tree})" = 9930a1ce13983097d9273f427d2f848dd0e7d74f
-          test "$(git ls-remote origin refs/heads/dev | cut -f1)" = aa93bc7e9eb6df51162a486452b185025b77207a
-          gh api "repos/$GITHUB_REPOSITORY/git/blobs/e84212cfdbf6f7bbe2098c3290e686020018b119" --jq .content | base64 -d > /tmp/closure.patch.xz
-          python3 - <<'PY'
-          import hashlib, lzma
+          test "$(git ls-remote origin refs/heads/$branch | cut -f1)" = aa93bc7e9eb6df51162a486452b185025b77207a
+          git show "$GITHUB_SHA:increment36-evidence-closure.patch.xz.b64" > /tmp/closure.b64
+          python3 - <<'PYCODE'
+          import base64, hashlib, json, lzma, os, urllib.request
           from pathlib import Path
-          patch = lzma.decompress(Path('/tmp/closure.patch.xz').read_bytes())
-          assert hashlib.sha256(patch).hexdigest() == '8d257f0724d1a45ece0d54aa166df78a546850fe2b8f55e0bd0589d3769079f6'
+          patch = lzma.decompress(base64.b64decode(Path('/tmp/closure.b64').read_text(), validate=False))
+          assert hashlib.sha256(patch).hexdigest() == 'cdc0387df4c6b1f860082da658e36b32b4b583dbefa5f8d271b0f89b7aba7eca', 'patch digest differs'
           Path('/tmp/closure.patch').write_bytes(patch)
-          PY
+          PYCODE
           git apply --check /tmp/closure.patch
-          git apply --index /tmp/closure.patch
-          test "$(git write-tree)" = ea3e7515104775cbe03ebf812897e43d2d923b8a
-          for n in 33 34 35 36; do python3 scripts/check_increment$n.py; done
-          python3 -m unittest discover -s tests/compiler
+          git apply /tmp/closure.patch
+          python3 - <<'PYCODE'
+          import json, os, urllib.request
+          from pathlib import Path
+          api = 'https://api.github.com/repos/pysolvesemi/Nodal/'
+          headers = {'Authorization': 'Bearer '+os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'}
+          def get(path):
+              request = urllib.request.Request(api+path, headers=headers)
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+          e = json.loads(Path('docs/implementation/increment36-accepted-evidence.json').read_text())
+          pr = get('pulls/118')
+          assert pr['merged'] and pr['merge_commit_sha'] == e['implementation_merge']
+          assert pr['head']['sha'] == e['accepted_head'] and pr['base']['ref'] == 'dev'
+          for ref in (e['accepted_head'], e['implementation_merge']):
+              assert get('git/commits/'+ref)['tree']['sha'] == '9930a1ce13983097d9273f427d2f848dd0e7d74f'
+          assert len(e['exact_head_workflows']) == 26
+          for name, identity in e['exact_head_workflows'].items():
+              run = get('actions/runs/'+str(identity))
+              assert run['name'] == name and run['event'] == 'pull_request'
+              assert run['head_sha'] == e['accepted_head']
+              assert run['status'] == 'completed' and run['conclusion'] == 'success'
+          for field, name in (('post_merge_core_ci_run', 'Core CI'),
+                              ('post_merge_increment36_run', 'Increment 36 Time and Waveform Operators')):
+              run = get('actions/runs/'+str(e[field]))
+              assert run['name'] == name and run['event'] == 'push' and run['head_branch'] == 'dev'
+              assert run['head_sha'] == e['implementation_merge']
+              assert run['status'] == 'completed' and run['conclusion'] == 'success'
+          print('Confirmed 26 accepted-head runs and both exact post-merge runs against GitHub.')
+          PYCODE
+          python3 scripts/check_increment33.py
+          python3 scripts/check_increment34.py
+          python3 scripts/check_increment35.py
+          python3 scripts/check_increment36.py
           python3 scripts/check_hvl_roadmap.py
           python3 scripts/test_hvl_roadmap.py
+          for suite in api architecture build ci compiler developer lint toolchain; do
+            python3 -m unittest discover -s "tests/$suite"
+          done
           python3 scripts/check_markdown.py
+          git diff --check
+          git add -A
+          test "$(git write-tree)" = db0076513dd1cc1e157b4ba41c9131e8da97adb4
           git diff --cached --check
-          branch=increment/36-evidence-closure-v1
-          test -z "$(git ls-remote origin refs/heads/$branch)"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'Increment 36 — Prepare separately validated accepted-evidence closure'
+          git commit -m 'Increment 36 — Record verified implementation and post-merge evidence'
           git push origin HEAD:refs/heads/$branch
-          git rev-parse HEAD > /tmp/increment36-closure-head.txt
+          git rev-parse HEAD > /tmp/increment36-closure-identity.txt
+          git rev-parse HEAD^{tree} >> /tmp/increment36-closure-identity.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: increment36-closure-publication
-          path: /tmp/increment36-closure-head.txt
-          retention-days: 3
+          name: increment36-closure-identity
+          path: /tmp/increment36-closure-identity.txt
+          retention-days: 14

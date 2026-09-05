@@ -50,6 +50,9 @@ jobs:
               target.write_bytes(patch)
               subprocess.run(['git', 'apply', '--check', str(target)], check=True)
               subprocess.run(['git', 'apply', str(target)], check=True)
+          correction = lzma.decompress(base64.b64decode((root / 'review2.xz.b64').read_text().strip(), validate=True))
+          assert len(correction) == 3548 and hashlib.sha256(correction).hexdigest() == 'faa8b30c3d35e609d0ba23f4d0f0699c1a6c15b90aac7397c93dfa1e2b9663be'
+          (pathlib.Path(os.environ['RUNNER_TEMP']) / 'review2.patch').write_bytes(correction)
           shutil.rmtree(root)
           for name in ['increment-37-workspace.yml', 'increment-37-import.yml']:
               pathlib.Path('.github/workflows', name).unlink()
@@ -81,6 +84,12 @@ jobs:
           run('scalafmt', ['./mill', '-i', 'mill.scalalib.scalafmt/reformatAll'])
           run('scalafix', ['./mill', '-i', 'scalafix.fix'])
           run('clang-format', ['python3', 'scripts/run_clang_tools.py', 'format', '--fix', '--toolchain', str(lint)])
+          correction = str(pathlib.Path(os.environ['RUNNER_TEMP']) / 'review2.patch')
+          subprocess.run(['git', 'apply', '--check', correction], check=True)
+          subprocess.run(['git', 'apply', correction], check=True)
+          run('corrected-scalafmt', ['./mill', '-i', 'mill.scalalib.scalafmt/reformatAll'])
+          run('corrected-scalafix', ['./mill', '-i', 'scalafix.fix'])
+          run('policy', ['python3', 'scripts/check_increment37.py'])
           run('scala', ['./nodal', 'core', 'scala'])
           run('python', ['python3', '-m', 'unittest', 'discover', '-s', 'tests/compiler', '-p', 'test_*.py'])
           run('native-bootstrap', ['./nodal', 'bootstrap', '--mode', 'prebuilt', '--prefix', str(native)])
@@ -89,11 +98,11 @@ jobs:
           run('source', ['./mill', '-i', 'core.scala.testkit.test.runMain', 'nodal.internal.testkit.Increment37MlirCheck', str(source)])
           compilers = [p for p in pathlib.Path('out').rglob('nodalc') if p.is_file() and os.access(p, os.X_OK)]
           translators = [p for p in pathlib.Path('out').rglob('nodal-translate') if p.is_file() and os.access(p, os.X_OK)]
-          if compilers and translators:
-              args = ['python3', 'tests/compiler/fixtures/increment37/run_native_matrix.py', '--nodalc', str(compilers[0].resolve()), '--translate', str(translators[0].resolve())]
-              if source.exists():
-                  args += ['--source', str(source)]
-              run('event-matrix', args)
+          if compilers and translators and source.exists():
+              run('event-matrix', ['python3', 'tests/compiler/fixtures/increment37/run_native_matrix.py', '--nodalc', str(compilers[0].resolve()), '--translate', str(translators[0].resolve()), '--source', str(source)])
+          else:
+              results['event-matrix'] = 99
+              (output / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
           run('style', ['./nodal', 'style', 'check', '--lint-toolchain', str(lint)])
           run('markdown', ['python3', 'scripts/check_markdown.py'])
           run('whitespace', ['git', 'diff', '--check'])
@@ -129,8 +138,6 @@ jobs:
                   workflows.append(entry)
               else:
                   entries.append(entry)
-          # Workflow edits are retained for the connected GitHub tool to publish;
-          # this contents-only Actions token is not used for workflow writes.
           (output / 'workflow-entries.json').write_text(json.dumps(workflows, indent=2) + '\n')
           record = {'parent_sha': head, 'validated_tree_sha': tree, 'run_id': os.environ['GITHUB_RUN_ID']}
           (output / 'candidate.json').write_text(json.dumps(record, indent=2) + '\n')
@@ -179,5 +186,6 @@ jobs:
           import json, os, pathlib
           results = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'increment37-candidate/results.json').read_text())
           print(json.dumps(results, indent=2))
-          assert results and all(value == 0 for value in results.values()), 'Candidate has outstanding failures; do not merge'
+          required = {'policy', 'scala', 'python', 'native', 'source', 'event-matrix', 'style', 'markdown', 'whitespace', 'corrected-scalafmt', 'corrected-scalafix'}
+          assert required <= results.keys() and all(value == 0 for value in results.values()), 'Candidate has outstanding failures; do not merge'
           PY

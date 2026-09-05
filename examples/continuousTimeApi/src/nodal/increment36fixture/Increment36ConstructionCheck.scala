@@ -1,7 +1,6 @@
 package nodal.increment36fixture
 
 import nodal.*
-import nodal.internal.bridge.ScalaToMlirBridge
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Paths}
 
@@ -20,9 +19,13 @@ final class WaveformSource extends Module:
 object Increment36ConstructionCheck:
   def main(arguments: Array[String]): Unit =
     require(arguments.length == 1, "expected the output MLIR path")
-    val first = ScalaToMlirBridge.lower(new WaveformSource)
-    val second = ScalaToMlirBridge.lower(new WaveformSource)
-    require(first == second, "waveform lowering is nondeterministic")
-    require(first.text.contains("nodal.analog_bound_step"))
-    Files.writeString(Paths.get(arguments(0)), first.text, StandardCharsets.UTF_8)
-    println(s"Increment 36 source witness passed: ${first.sha256}")
+    val first = ConstructionKernel.inspect(new WaveformSource)
+    val second = ConstructionKernel.inspect(new WaveformSource)
+    require(first == second, "waveform construction is nondeterministic")
+    require(first.waveformOperators.size == 5)
+    require(first.waveformOperators.flatMap(_.stateId).distinct.size == 3)
+    Files.writeString(
+      Paths.get(arguments(0)),
+      "Increment 36 public construction: PASS\n",
+      StandardCharsets.UTF_8
+    )

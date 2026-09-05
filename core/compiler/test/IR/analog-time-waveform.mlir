@@ -5,16 +5,24 @@ module attributes {
   nodal.backend.shaped_layout = "scalar-or-flat",
   nodal.target.profile = "analog"
 } {
+  "nodal.unit"() <{dimension = "voltage", metadata = {}, native_suffix = "", scale = 1.0 : f64, sym_name = "Volt", symbol = "V"}> : () -> ()
+  "nodal.unit"() <{dimension = "time", metadata = {}, native_suffix = "", scale = 1.0 : f64, sym_name = "Second", symbol = "s"}> : () -> ()
+  "nodal.unit"() <{dimension = "time^-1*voltage", metadata = {}, native_suffix = "", scale = 1.0 : f64, sym_name = "VoltPerSecond", symbol = "V_per_s"}> : () -> ()
   "nodal.module"() ({
+    "nodal.parameter"() <{classification = "ordinary", default_value = 1.0 : f64, metadata = {}, parameter_kind = "real", sym_name = "LEVEL", type = f64, unit = @Volt, variability = "fixed"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = 1.0e-9 : f64, metadata = {}, parameter_kind = "real", sym_name = "DELAY", type = f64, unit = @Second, variability = "fixed"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = 0.0 : f64, metadata = {}, parameter_kind = "real", sym_name = "ZERO", type = f64, unit = @Second, variability = "fixed"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = 1.0e9 : f64, metadata = {}, parameter_kind = "real", sym_name = "RISE", type = f64, unit = @VoltPerSecond, variability = "fixed"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = -1.0e9 : f64, metadata = {}, parameter_kind = "real", sym_name = "FALL", type = f64, unit = @VoltPerSecond, variability = "fixed"}> : () -> ()
     %p = "nodal.terminal"() {name = "p", metadata = {declaration_kind = "analog-inout"}} : () -> !nodal.terminal<"electrical">
     %n = "nodal.terminal"() {name = "n", metadata = {declaration_kind = "analog-inout"}} : () -> !nodal.terminal<"electrical">
     %b = "nodal.branch"(%p, %n) {metadata = {}} : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
     "nodal.analog"() ({
-      %level = "nodal.real_literal"() {value = 1.0 : f64, metadata = {}} : () -> !nodal.quantity<"real", "voltage">
-      %seconds = "nodal.real_literal"() {value = 1.0e-9 : f64, metadata = {}} : () -> !nodal.quantity<"real", "time">
-      %zero = "nodal.real_literal"() {value = 0.0 : f64, metadata = {}} : () -> !nodal.quantity<"real", "time">
-      %up = "nodal.real_literal"() {value = 1.0e9 : f64, metadata = {}} : () -> !nodal.quantity<"real", "time^-1*voltage">
-      %down = "nodal.real_literal"() {value = -1.0e9 : f64, metadata = {}} : () -> !nodal.quantity<"real", "time^-1*voltage">
+      %level = "nodal.parameter_ref"() <{metadata = {}, parameter = @LEVEL}> : () -> !nodal.quantity<"real", "voltage">
+      %seconds = "nodal.parameter_ref"() <{metadata = {}, parameter = @DELAY}> : () -> !nodal.quantity<"real", "time">
+      %zero = "nodal.parameter_ref"() <{metadata = {}, parameter = @ZERO}> : () -> !nodal.quantity<"real", "time">
+      %up = "nodal.parameter_ref"() <{metadata = {}, parameter = @RISE}> : () -> !nodal.quantity<"real", "time^-1*voltage">
+      %down = "nodal.parameter_ref"() <{metadata = {}, parameter = @FALL}> : () -> !nodal.quantity<"real", "time^-1*voltage">
       %input = "nodal.access"(%b) {kind = "potential", metadata = {}} : (!nodal.branch<"electrical">) -> !nodal.quantity<"real", "voltage">
       %smoothed = "nodal.analog_transition"(%level, %zero, %seconds, %seconds, %zero) {operator_contract = "increment36", operator_id = "Waveform.smoothed", owner = "Waveform", context = "legacy-analog", operand_dimensions = ["voltage", "time", "time", "time", "time"], result_dimension = "voltage", input_continuity = "constant", output_continuity = "continuous", analyses = ["ac", "dc", "initialization", "noise", "operating-point", "transient"], state_id = "Waveform.smoothed.state", metadata = {}} : (!nodal.quantity<"real", "voltage">, !nodal.quantity<"real", "time">, !nodal.quantity<"real", "time">, !nodal.quantity<"real", "time">, !nodal.quantity<"real", "time">) -> !nodal.quantity<"real", "voltage">
       %limited = "nodal.analog_slew"(%input, %up, %down) {operator_contract = "increment36", operator_id = "Waveform.limited", owner = "Waveform", context = "legacy-analog", operand_dimensions = ["voltage", "time^-1*voltage", "time^-1*voltage"], result_dimension = "voltage", input_continuity = "unknown", output_continuity = "continuous", analyses = ["ac", "dc", "initialization", "noise", "operating-point", "transient"], state_id = "Waveform.limited.state", metadata = {}} : (!nodal.quantity<"real", "voltage">, !nodal.quantity<"real", "time^-1*voltage">, !nodal.quantity<"real", "time^-1*voltage">) -> !nodal.quantity<"real", "voltage">

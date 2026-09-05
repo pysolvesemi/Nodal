@@ -93,6 +93,7 @@ object core extends Module:
       def moduleDeps = Seq(cli, sim, bridge, frontend, api)
 
       object test extends ScalaTests:
+        override def moduleDeps = super.moduleDeps ++ Seq(examples.continuousTimeApi)
         def mvnDeps = Seq(mvn"com.lihaoyi::utest:0.9.1")
         def testFramework = "utest.runner.Framework"
 

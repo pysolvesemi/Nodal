@@ -8,6 +8,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = (
+    "build.mill",
+    "core/scala/testkit/test/src/nodal/internal/testkit/Increment36MlirCheck.scala",
     "core/scala/api/src/nodal/CandidateApi.scala",
     "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",
     "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala",
@@ -78,6 +80,10 @@ def check_repository(root: Path) -> None:
     require("contents: read" in workflow and "contents: write" not in workflow, "permanent workflow must be read-only")
     for command in ("./nodal core scala", "./nodal core native", "run_native_matrix.py", "--source", "check_increment35.py"):
         require(command in workflow, f"validation workflow missing {command}")
+    example = texts["examples/continuousTimeApi/src/nodal/increment36fixture/Increment36ConstructionCheck.scala"]
+    require("nodal.internal" not in example, "public example depends on compiler internals")
+    require("core.scala.testkit.test.runMain" in workflow and "Increment36MlirCheck" in workflow,
+            "separate compiler-side source witness missing")
     require("numerical-solver-execution" in manifest["deferred"], "solver boundary removed")
     require("full-verilog-ams-lowering" in manifest["deferred"], "full AMS boundary removed")
 

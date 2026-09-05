@@ -50,9 +50,9 @@ def mutations(text: str) -> list[tuple[str, str, str]]:
     add("duplicate-identity", "%limited =", 'operator_id = "Waveform.limited"', 'operator_id = "Waveform.smoothed"', 2)
     add("dimension-inventory", "%smoothed =", '"voltage", "time", "time", "time", "time"', '"voltage", "voltage", "time", "time", "time"', 3)
     add("result-dimension", "%smoothed =", 'result_dimension = "voltage"', 'result_dimension = "current"', 3)
-    add("negative-time", "%seconds =", '1.0e-9', '-1.0e-9', 4)
-    add("zero-positive-rate", "%up =", '1.0e9', '0.0', 4)
-    add("positive-negative-rate", "%down =", '-1.0e9', '1.0e9', 4)
+    add("negative-time", 'sym_name = "DELAY"', '1.0e-9', '-1.0e-9', 4)
+    add("zero-positive-rate", 'sym_name = "RISE"', '1.0e9', '0.0', 4)
+    add("positive-negative-rate", 'sym_name = "FALL"', '-1.0e9', '1.0e9', 4)
     add("zero-absdelay", "%delayed =", '%limited, %changing, %seconds', '%limited, %zero, %seconds', 4)
     add("input-continuity", "%smoothed =", 'input_continuity = "constant"', 'input_continuity = "piecewise-constant"', 5)
     add("output-continuity", "%delayed =", 'output_continuity = "unknown"', 'output_continuity = "continuous"', 5)
@@ -85,7 +85,7 @@ def assert_backend(text: str, source: bool = False) -> None:
     shared = transition_assignment.group(1)
     if f"({shared} + {shared})" not in text:
         raise AssertionError(f"repeated source uses did not share state: {text}")
-    if not source and "$bound_step(0);" not in text:
+    if not source and "$bound_step(ZERO);" not in text:
         raise AssertionError("zero step request was changed instead of retaining target semantics")
 
 

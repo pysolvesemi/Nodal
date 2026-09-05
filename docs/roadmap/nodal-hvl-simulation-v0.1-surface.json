@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "0.2",
+  "schemaVersion": "0.3",
   "document": "nodal-hvl-simulation-v0.1-plan.md",
   "status": "normative-dependent-track-roadmap-target",
   "updated": "2026-09-05",
@@ -32,7 +32,9 @@
         "allowsDeclaredExternalArtifacts": true,
         "requiresStableSemanticOperations": true,
         "projectionFailureInvalidatesLiveExecution": false,
-        "replayRule": "Exact replay is claimed only when seeds, values, external inputs and required artifacts are retained."
+        "replayRule": "Exact replay is claimed only when seeds, values, external inputs and required artifacts are retained.",
+        "requiresQualifiedImplementationForEveryOperation": true,
+        "automaticallySupportsGeneratedOnlyExtensions": false
       },
       "portable": {
         "id": "nodal.hvl.portable",
@@ -46,7 +48,8 @@
           "companion-runtime-required",
           "unsupported"
         ],
-        "silentOmissionAllowed": false
+        "silentOmissionAllowed": false,
+        "captureIncludesTypedProfileExtensions": true
       }
     },
     "projectionProfile": {
@@ -110,9 +113,9 @@
     "Portable Nodal HVL is an explicit structured subset of the same public language.",
     "Projection eligibility is a capability set, not one universal Boolean.",
     "Verilog-TB and UVM are independent sibling profiles and neither inherits from the other.",
-    "A live test may call portable components.",
+    "A live test may call captured components only when all required operations have qualified live implementations.",
     "A portable component may call Portable Core operations, compatible profile operations, deterministic precomputable helpers or declared companion-runtime services.",
-    "A requested projection may reject a live-only or incompatible-profile test without invalidating that test for live execution.",
+    "Projection rejection never invalidates otherwise-supported live execution; generated-only extensions do not imply live eligibility.",
     "Generated backend limitations must never remove or weaken a live API operation.",
     "A package may support Verilog-TB, UVM, both or neither.",
     "Diagnostics identify the first incompatible operation, source location, required capability and legal modes."
@@ -181,7 +184,7 @@
       "normalized-results"
     ],
     "liveMaterialization": "Dynamic host interpretation plus semantic command, event and result traces.",
-    "portableMaterialization": "Complete static Portable Core Verification Semantic IR before projection.",
+    "portableMaterialization": "Complete common Verification Semantic IR plus declared typed profile-extension operations before projection.",
     "profileExtensions": [
       "verilog-tb namespaced operations",
       "uvm namespaced operations",
@@ -197,7 +200,18 @@
     "crossLoweringAllowed": {
       "uvmToProceduralHdlTbIr": false,
       "verilogTbToVerificationSystemVerilogIr": false
-    }
+    },
+    "profileExtensionContract": [
+      "versioned-operation-id",
+      "typed-operands-results",
+      "symbol-references",
+      "effects-and-scheduling",
+      "source-span",
+      "stable-identity",
+      "verifier",
+      "serialization-roundtrip",
+      "qualified-mode-implementation"
+    ]
   },
   "workstreams": [
     {
@@ -329,8 +343,7 @@
       "name": "Generated analog and mixed-signal profiles",
       "blockedBy": [
         "foundation.complete",
-        "CAP-05",
-        "analog-mixed-signal.portable-semantics"
+        "CAP-05"
       ],
       "increments": [
         "AMSP-01",
@@ -341,14 +354,20 @@
         "AMSP-06",
         "AMSP-07"
       ],
-      "releaseGate": "AMSP-07"
+      "releaseGate": "AMSP-07",
+      "profileReleaseGates": [
+        "release.verilog-ams-tb",
+        "release.open-ams-harness",
+        "release.uvm-ms"
+      ],
+      "aggregateOnly": true
     },
     {
       "id": "XPAR",
       "name": "Cross-projection common-subset parity",
       "blockedBy": [
-        "CAP-05",
-        "applicable-profile-release-gates"
+        "foundation.complete",
+        "CAP-05"
       ],
       "increments": [
         "XPAR-01",
@@ -358,7 +377,8 @@
         "XPAR-05"
       ],
       "comparisonDomain": "explicit common semantic intersection",
-      "releaseGate": "XPAR-05"
+      "releaseGate": "XPAR-05",
+      "aggregateOnly": true
     }
   ],
   "releaseRules": [
@@ -366,7 +386,7 @@
     "Mixed-signal live simulation may release before generated projection and commercial profile completion.",
     "Portable Core may release before any generated profile.",
     "Verilog-TB and UVM release independently and neither is a prerequisite for the other.",
-    "Commercial live adapters and generated commercial profiles are deferred optional profiles.",
+    "Additional commercial profiles are optional and never block open live, VTB or open-harness release; executable generated profiles require at least one actual qualified simulator.",
     "Cross-projection parity compares only profile intersections and never redefines a profile feature set.",
     "A user may use only live Nodal HVL indefinitely."
   ],
@@ -455,5 +475,925 @@
       "isReleaseGate": false,
       "newClosureEvidenceMayUseAlias": false
     }
-  }
+  },
+  "normativeArchitecture": "docs/architecture/0027-hvl-execution-projection-capability-contract.md",
+  "capabilityDefinitions": {
+    "nodal.hvl.live": {
+      "kind": "execution",
+      "requires": []
+    },
+    "nodal.hvl.portable": {
+      "kind": "execution",
+      "requires": []
+    },
+    "nodal.hvl.portable.core": {
+      "kind": "profile",
+      "requires": []
+    },
+    "nodal.hvl.projection.verilog_tb": {
+      "kind": "profile",
+      "requires": [
+        "nodal.hvl.portable.core"
+      ]
+    },
+    "nodal.hvl.projection.uvm": {
+      "kind": "profile",
+      "requires": [
+        "nodal.hvl.portable.core"
+      ]
+    },
+    "nodal.hvl.projection.verilog_ams_tb": {
+      "kind": "profile",
+      "requires": [
+        "nodal.hvl.portable.core",
+        "nodal.hvl.portable.ams"
+      ]
+    },
+    "nodal.hvl.projection.open_ams_harness": {
+      "kind": "profile",
+      "requires": [
+        "nodal.hvl.portable.core",
+        "nodal.hvl.portable.ams"
+      ]
+    },
+    "nodal.hvl.projection.uvm_ms": {
+      "kind": "profile",
+      "requires": [
+        "nodal.hvl.portable.core",
+        "nodal.hvl.portable.ams",
+        "nodal.hvl.projection.uvm"
+      ]
+    },
+    "nodal.hvl.portable.ams": {
+      "kind": "semantic-extension",
+      "requires": [
+        "nodal.hvl.portable.core"
+      ],
+      "provider": "AMSP-01"
+    }
+  },
+  "dependencyNodes": {
+    "foundation.complete": {
+      "kind": "external-barrier",
+      "source": "docs/roadmap/nodal-development-todo.md",
+      "anchor": "## Foundation completion barrier",
+      "requires": [],
+      "rule": "Every Foundation increment, including later additions, must be accepted with evidence; this metadata never opens the barrier."
+    },
+    "digital-live.required-slice": {
+      "kind": "external-increment",
+      "source": "docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md",
+      "anchor": "**Digital Verification Increment 1 \u2014",
+      "requires": [
+        "foundation.complete",
+        "LIVE-08"
+      ]
+    },
+    "foundation.ams.semantics": {
+      "kind": "external-contract",
+      "source": "docs/roadmap/nodal-development-todo.md",
+      "anchor": "**Increment 128 \u2014",
+      "requires": [
+        "foundation.complete"
+      ],
+      "includesFoundationIncrements": [
+        128,
+        129,
+        134,
+        135,
+        136,
+        137,
+        138,
+        139,
+        140,
+        141,
+        142,
+        152
+      ]
+    },
+    "LIVE-01": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**LIVE-01 \u2014",
+      "requires": [
+        "foundation.complete"
+      ]
+    },
+    "LIVE-02": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**LIVE-02 \u2014",
+      "requires": [
+        "LIVE-01"
+      ]
+    },
+    "LIVE-03": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**LIVE-03 \u2014",
+      "requires": [
+        "LIVE-02"
+      ]
+    },
+    "LIVE-04": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**LIVE-04 \u2014",
+      "requires": [
+        "LIVE-03"
+      ]
+    },
+    "LIVE-05": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**LIVE-05 \u2014",
+      "requires": [
+        "LIVE-04"
+      ]
+    },
+    "LIVE-06": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**LIVE-06 \u2014",
+      "requires": [
+        "LIVE-05"
+      ]
+    },
+    "LIVE-07": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**LIVE-07 \u2014",
+      "requires": [
+        "LIVE-06"
+      ]
+    },
+    "LIVE-08": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**LIVE-08 \u2014",
+      "requires": [
+        "LIVE-07"
+      ]
+    },
+    "ANA-01": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**ANA-01 \u2014",
+      "requires": [
+        "foundation.complete",
+        "LIVE-06"
+      ]
+    },
+    "ANA-02": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**ANA-02 \u2014",
+      "requires": [
+        "ANA-01"
+      ]
+    },
+    "ANA-03": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**ANA-03 \u2014",
+      "requires": [
+        "ANA-02"
+      ]
+    },
+    "ANA-04": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**ANA-04 \u2014",
+      "requires": [
+        "ANA-03"
+      ]
+    },
+    "ANA-05": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**ANA-05 \u2014",
+      "requires": [
+        "ANA-04"
+      ]
+    },
+    "ANA-06": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**ANA-06 \u2014",
+      "requires": [
+        "ANA-05"
+      ]
+    },
+    "ANA-07": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**ANA-07 \u2014",
+      "requires": [
+        "ANA-06"
+      ]
+    },
+    "ANA-08": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**ANA-08 \u2014",
+      "requires": [
+        "release.analog-live"
+      ]
+    },
+    "ANA-09": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**ANA-09 \u2014",
+      "requires": [
+        "ANA-07"
+      ]
+    },
+    "MS-01": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**MS-01 \u2014",
+      "requires": [
+        "foundation.complete",
+        "LIVE-08",
+        "ANA-07",
+        "digital-live.required-slice"
+      ]
+    },
+    "MS-02": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**MS-02 \u2014",
+      "requires": [
+        "MS-01"
+      ]
+    },
+    "MS-03": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**MS-03 \u2014",
+      "requires": [
+        "MS-02"
+      ]
+    },
+    "MS-04": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**MS-04 \u2014",
+      "requires": [
+        "MS-03"
+      ]
+    },
+    "MS-05": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**MS-05 \u2014",
+      "requires": [
+        "MS-04"
+      ]
+    },
+    "MS-06": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**MS-06 \u2014",
+      "requires": [
+        "MS-05"
+      ]
+    },
+    "MS-07": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**MS-07 \u2014",
+      "requires": [
+        "release.mixed-live"
+      ]
+    },
+    "MS-08": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**MS-08 \u2014",
+      "requires": [
+        "MS-07"
+      ]
+    },
+    "MS-09": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**MS-09 \u2014",
+      "requires": [
+        "MS-06"
+      ]
+    },
+    "CAP-01": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**CAP-01 \u2014",
+      "requires": [
+        "foundation.complete",
+        "LIVE-01"
+      ]
+    },
+    "CAP-02": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**CAP-02 \u2014",
+      "requires": [
+        "CAP-01"
+      ]
+    },
+    "CAP-03": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**CAP-03 \u2014",
+      "requires": [
+        "CAP-02"
+      ]
+    },
+    "CAP-04": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**CAP-04 \u2014",
+      "requires": [
+        "CAP-03"
+      ]
+    },
+    "CAP-05": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**CAP-05 \u2014",
+      "requires": [
+        "CAP-04"
+      ]
+    },
+    "VTB-01": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**VTB-01 \u2014",
+      "requires": [
+        "foundation.complete",
+        "CAP-05"
+      ]
+    },
+    "VTB-02": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**VTB-02 \u2014",
+      "requires": [
+        "VTB-01"
+      ]
+    },
+    "VTB-03": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**VTB-03 \u2014",
+      "requires": [
+        "VTB-02"
+      ]
+    },
+    "VTB-04": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**VTB-04 \u2014",
+      "requires": [
+        "VTB-03"
+      ]
+    },
+    "VTB-05": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**VTB-05 \u2014",
+      "requires": [
+        "VTB-04"
+      ]
+    },
+    "VTB-06": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**VTB-06 \u2014",
+      "requires": [
+        "VTB-05"
+      ]
+    },
+    "VTB-07": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**VTB-07 \u2014",
+      "requires": [
+        "VTB-06"
+      ]
+    },
+    "UVM-01": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**UVM-01 \u2014",
+      "requires": [
+        "foundation.complete",
+        "CAP-05"
+      ]
+    },
+    "UVM-02": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**UVM-02 \u2014",
+      "requires": [
+        "UVM-01"
+      ]
+    },
+    "UVM-03": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**UVM-03 \u2014",
+      "requires": [
+        "UVM-02"
+      ]
+    },
+    "UVM-04": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**UVM-04 \u2014",
+      "requires": [
+        "UVM-03"
+      ]
+    },
+    "UVM-05": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**UVM-05 \u2014",
+      "requires": [
+        "UVM-04"
+      ]
+    },
+    "UVM-06": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**UVM-06 \u2014",
+      "requires": [
+        "UVM-05"
+      ]
+    },
+    "UVM-07": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**UVM-07 \u2014",
+      "requires": [
+        "UVM-06"
+      ]
+    },
+    "UVM-08": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**UVM-08 \u2014",
+      "requires": [
+        "UVM-07"
+      ]
+    },
+    "UVM-09": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**UVM-09 \u2014",
+      "requires": [
+        "UVM-08"
+      ]
+    },
+    "AMSP-01": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**AMSP-01 \u2014",
+      "requires": [
+        "foundation.complete",
+        "CAP-05",
+        "foundation.ams.semantics"
+      ]
+    },
+    "AMSP-02": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**AMSP-02 \u2014",
+      "requires": [
+        "AMSP-01"
+      ]
+    },
+    "AMSP-03": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**AMSP-03 \u2014",
+      "requires": [
+        "AMSP-01"
+      ]
+    },
+    "AMSP-04": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**AMSP-04 \u2014",
+      "requires": [
+        "AMSP-01",
+        "UVM-09"
+      ]
+    },
+    "AMSP-05": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**AMSP-05 \u2014",
+      "requires": [
+        "evidence.verilog-ams-tool",
+        "evidence.uvm-ms-tool"
+      ]
+    },
+    "AMSP-06": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**AMSP-06 \u2014",
+      "requires": [
+        "evidence.verilog-ams-vip",
+        "evidence.open-ams-vip",
+        "evidence.uvm-ms-vip"
+      ]
+    },
+    "AMSP-07": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**AMSP-07 \u2014",
+      "requires": [
+        "release.verilog-ams-tb",
+        "release.open-ams-harness",
+        "release.uvm-ms"
+      ]
+    },
+    "XPAR-01": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**XPAR-01 \u2014",
+      "requires": [
+        "foundation.complete",
+        "CAP-05"
+      ]
+    },
+    "XPAR-02": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**XPAR-02 \u2014",
+      "requires": [
+        "XPAR-01",
+        "LIVE-08",
+        "VTB-07"
+      ]
+    },
+    "XPAR-03": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**XPAR-03 \u2014",
+      "requires": [
+        "XPAR-01",
+        "LIVE-08",
+        "UVM-09"
+      ]
+    },
+    "XPAR-04": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**XPAR-04 \u2014",
+      "requires": [
+        "evidence.parity.open-ams",
+        "evidence.parity.verilog-ams",
+        "evidence.parity.uvm-ms"
+      ]
+    },
+    "XPAR-05": {
+      "kind": "item",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "**XPAR-05 \u2014",
+      "requires": [
+        "XPAR-02",
+        "XPAR-03",
+        "XPAR-04"
+      ]
+    },
+    "evidence.verilog-ams-tool": {
+      "kind": "profile-evidence",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`evidence.verilog-ams-tool`",
+      "owner": "AMSP-05",
+      "requires": [
+        "AMSP-02"
+      ],
+      "acceptance": "Actual selected Verilog-AMS simulator compile/elaborate/run, locked tool profile and wave/result evidence; no UVM-MS requirement."
+    },
+    "evidence.uvm-ms-tool": {
+      "kind": "profile-evidence",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`evidence.uvm-ms-tool`",
+      "owner": "AMSP-05",
+      "requires": [
+        "AMSP-04"
+      ],
+      "acceptance": "Actual selected UVM-MS simulator compile/elaborate/run and locked methodology/library profile; no procedural-AMS requirement."
+    },
+    "evidence.open-ams-tool": {
+      "kind": "profile-evidence",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`evidence.open-ams-tool`",
+      "owner": "AMSP-03",
+      "requires": [
+        "AMSP-03"
+      ],
+      "acceptance": "Open harness compile/load/co-simulation run, bridge/timing checks, replay and normalized waves/results."
+    },
+    "evidence.verilog-ams-vip": {
+      "kind": "profile-evidence",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`evidence.verilog-ams-vip`",
+      "owner": "AMSP-06",
+      "requires": [
+        "evidence.verilog-ams-tool"
+      ],
+      "acceptance": "External consumer VIP reuse and profile-specific scale/conformance for Verilog-AMS TB."
+    },
+    "evidence.open-ams-vip": {
+      "kind": "profile-evidence",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`evidence.open-ams-vip`",
+      "owner": "AMSP-06",
+      "requires": [
+        "evidence.open-ams-tool"
+      ],
+      "acceptance": "External consumer reuse and profile-specific scale/conformance for the open AMS harness."
+    },
+    "evidence.uvm-ms-vip": {
+      "kind": "profile-evidence",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`evidence.uvm-ms-vip`",
+      "owner": "AMSP-06",
+      "requires": [
+        "evidence.uvm-ms-tool"
+      ],
+      "acceptance": "External consumer VIP reuse and profile-specific scale/conformance for UVM-MS."
+    },
+    "evidence.parity.open-ams": {
+      "kind": "profile-evidence",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`evidence.parity.open-ams`",
+      "owner": "XPAR-04",
+      "requires": [
+        "XPAR-01",
+        "MS-09",
+        "release.open-ams-harness"
+      ],
+      "acceptance": "Qualified common-subset live/open-harness comparison with explicit exclusions and tolerance evidence."
+    },
+    "evidence.parity.verilog-ams": {
+      "kind": "profile-evidence",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`evidence.parity.verilog-ams`",
+      "owner": "XPAR-04",
+      "requires": [
+        "XPAR-01",
+        "MS-09",
+        "release.verilog-ams-tb"
+      ],
+      "acceptance": "Qualified common-subset live/Verilog-AMS-TB comparison with explicit exclusions and tolerance evidence."
+    },
+    "evidence.parity.uvm-ms": {
+      "kind": "profile-evidence",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`evidence.parity.uvm-ms`",
+      "owner": "XPAR-04",
+      "requires": [
+        "XPAR-01",
+        "MS-09",
+        "release.uvm-ms"
+      ],
+      "acceptance": "Qualified common-subset live/UVM-MS comparison with explicit exclusions and tolerance evidence."
+    },
+    "release.live": {
+      "kind": "release",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`release.live`",
+      "requires": [
+        "LIVE-08"
+      ],
+      "state": "deferred",
+      "aggregateOnly": false
+    },
+    "release.analog-live": {
+      "kind": "release",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`release.analog-live`",
+      "requires": [
+        "ANA-09"
+      ],
+      "state": "deferred",
+      "aggregateOnly": false
+    },
+    "release.mixed-live": {
+      "kind": "release",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`release.mixed-live`",
+      "requires": [
+        "MS-09"
+      ],
+      "state": "deferred",
+      "aggregateOnly": false
+    },
+    "release.capture": {
+      "kind": "release",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`release.capture`",
+      "requires": [
+        "CAP-05"
+      ],
+      "state": "deferred",
+      "aggregateOnly": false
+    },
+    "release.vtb": {
+      "kind": "release",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`release.vtb`",
+      "requires": [
+        "VTB-07"
+      ],
+      "state": "deferred",
+      "aggregateOnly": false
+    },
+    "release.uvm": {
+      "kind": "release",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`release.uvm`",
+      "requires": [
+        "UVM-09"
+      ],
+      "state": "deferred",
+      "aggregateOnly": false
+    },
+    "release.verilog-ams-tb": {
+      "kind": "release",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`release.verilog-ams-tb`",
+      "requires": [
+        "AMSP-02",
+        "evidence.verilog-ams-tool",
+        "evidence.verilog-ams-vip"
+      ],
+      "state": "deferred",
+      "aggregateOnly": false
+    },
+    "release.open-ams-harness": {
+      "kind": "release",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`release.open-ams-harness`",
+      "requires": [
+        "AMSP-03",
+        "evidence.open-ams-tool",
+        "evidence.open-ams-vip"
+      ],
+      "state": "deferred",
+      "aggregateOnly": false
+    },
+    "release.uvm-ms": {
+      "kind": "release",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`release.uvm-ms`",
+      "requires": [
+        "AMSP-04",
+        "evidence.uvm-ms-tool",
+        "evidence.uvm-ms-vip"
+      ],
+      "state": "deferred",
+      "aggregateOnly": false
+    },
+    "release.parity-vtb": {
+      "kind": "release",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`release.parity-vtb`",
+      "requires": [
+        "XPAR-02"
+      ],
+      "state": "deferred",
+      "aggregateOnly": false
+    },
+    "release.parity-uvm": {
+      "kind": "release",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`release.parity-uvm`",
+      "requires": [
+        "XPAR-03"
+      ],
+      "state": "deferred",
+      "aggregateOnly": false
+    },
+    "release.parity-open-ams": {
+      "kind": "release",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`release.parity-open-ams`",
+      "requires": [
+        "evidence.parity.open-ams"
+      ],
+      "state": "deferred",
+      "aggregateOnly": false
+    },
+    "release.parity-verilog-ams": {
+      "kind": "release",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`release.parity-verilog-ams`",
+      "requires": [
+        "evidence.parity.verilog-ams"
+      ],
+      "state": "deferred",
+      "aggregateOnly": false
+    },
+    "release.parity-uvm-ms": {
+      "kind": "release",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`release.parity-uvm-ms`",
+      "requires": [
+        "evidence.parity.uvm-ms"
+      ],
+      "state": "deferred",
+      "aggregateOnly": false
+    },
+    "release.ams-aggregate": {
+      "kind": "release",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`release.ams-aggregate`",
+      "requires": [
+        "AMSP-07"
+      ],
+      "state": "deferred",
+      "aggregateOnly": true
+    },
+    "release.parity-aggregate": {
+      "kind": "release",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`release.parity-aggregate`",
+      "requires": [
+        "XPAR-05"
+      ],
+      "state": "deferred",
+      "aggregateOnly": true
+    },
+    "release.all-qualification": {
+      "kind": "release",
+      "source": "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+      "anchor": "`release.all-qualification`",
+      "requires": [
+        "LIVE-08",
+        "ANA-09",
+        "ANA-08",
+        "MS-09",
+        "MS-07",
+        "MS-08",
+        "CAP-05",
+        "VTB-07",
+        "UVM-09",
+        "AMSP-07",
+        "XPAR-05"
+      ],
+      "state": "deferred",
+      "aggregateOnly": true
+    }
+  },
+  "profileReleaseGates": {
+    "nodal.hvl.live": "release.live",
+    "nodal.hvl.portable.core": "release.capture",
+    "nodal.hvl.projection.verilog_tb": "release.vtb",
+    "nodal.hvl.projection.uvm": "release.uvm",
+    "nodal.hvl.projection.verilog_ams_tb": "release.verilog-ams-tb",
+    "nodal.hvl.projection.open_ams_harness": "release.open-ams-harness",
+    "nodal.hvl.projection.uvm_ms": "release.uvm-ms"
+  },
+  "qualificationCases": [
+    {
+      "id": "host-reference-model",
+      "live": true,
+      "verilogTb": false,
+      "uvm": false
+    },
+    {
+      "id": "shared-transaction-check",
+      "live": true,
+      "verilogTb": true,
+      "uvm": true
+    },
+    {
+      "id": "uvm-factory-without-live-implementation",
+      "live": false,
+      "verilogTb": false,
+      "uvm": true
+    },
+    {
+      "id": "vtb-hook-without-other-implementation",
+      "live": false,
+      "verilogTb": true,
+      "uvm": false
+    }
+  ],
+  "qualificationCasesStatus": "required-future-fixtures-not-implemented",
+  "dependencyInterpretation": "requires are AND edges, not numeric-order inference. Profile-evidence owner identifies umbrella ownership, not a prerequisite on aggregate owner completion. Deferred nodes are not accepted merely because graph validation passes.",
+  "synchronizedDocuments": [
+    "docs/roadmap/nodal-hvl-simulation-v0.1-plan.md",
+    "docs/roadmap/nodal-development-todo.md",
+    "docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md",
+    "docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md",
+    "docs/architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md",
+    "docs/architecture/0025-generated-procedural-hdl-testbench-projections.md",
+    "docs/architecture/0027-hvl-execution-projection-capability-contract.md"
+  ]
 }

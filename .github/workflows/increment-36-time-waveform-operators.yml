@@ -5,6 +5,7 @@ on:
     branches: [dev]
     paths:
       - '.github/workflows/increment-36-time-waveform-operators.yml'
+      - 'build.mill'
       - 'core/**'
       - 'examples/continuousTimeApi/**'
       - 'scripts/check_increment36.py'
@@ -38,6 +39,9 @@ jobs:
         run: |
           ./mill -i examples.continuousTimeApi.runMain \
             nodal.increment36fixture.Increment36ConstructionCheck \
+            "${RUNNER_TEMP}/increment36-construction.txt"
+          ./mill -i core.scala.testkit.test.runMain \
+            nodal.internal.testkit.Increment36MlirCheck \
             "${RUNNER_TEMP}/increment36-source.mlir"
       - name: Build compiler and execute native and source-to-backend matrices
         shell: bash

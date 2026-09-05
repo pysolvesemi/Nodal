@@ -20,6 +20,15 @@ DOCUMENTS = [PLAN, 'docs/roadmap/nodal-development-todo.md',
              'docs/architecture/0025-generated-procedural-hdl-testbench-projections.md',
              'docs/architecture/0026-native-digital-simulator-adapter-architecture.md',
              'docs/roadmap/native-digital-simulator-adapters-v0.1-plan.md', ADR]
+EXPECTED_RELEASES = {
+    'nodal.hvl.live': 'release.live',
+    'nodal.hvl.portable.core': 'release.capture',
+    'nodal.hvl.projection.verilog_tb': 'release.vtb',
+    'nodal.hvl.projection.uvm': 'release.uvm',
+    'nodal.hvl.projection.verilog_ams_tb': 'release.verilog-ams-tb',
+    'nodal.hvl.projection.open_ams_harness': 'release.open-ams-harness',
+    'nodal.hvl.projection.uvm_ms': 'release.uvm-ms',
+}
 
 
 def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -146,7 +155,11 @@ def validate_surface(data: dict[str, Any], root: Path = ROOT, *, check_docs: boo
     for item in ids:
         require(nodes.get(item, {}).get('kind') == 'item', '008', f'missing work item binding: {item}')
         require('foundation.complete' in ancestors(item), '009', f'{item} bypasses Foundation')
-    for capability, gate in data.get('profileReleaseGates', {}).items():
+    bindings = data.get('profileReleaseGates', {})
+    expected_capabilities = {live.get('id')} | {profile.get('id') for profile in profiles.values()}
+    require(set(bindings) == expected_capabilities, '006', 'missing or extraneous capability release binding')
+    require(bindings == EXPECTED_RELEASES, '006', 'capability release mapping differs from the revision 0.3 contract')
+    for capability, gate in bindings.items():
         require(capability in definitions and nodes.get(gate, {}).get('kind') == 'release',
                 '006', f'unresolved capability release: {capability} -> {gate}')
 
@@ -163,10 +176,22 @@ def validate_surface(data: dict[str, Any], root: Path = ROOT, *, check_docs: boo
                                  'evidence.open-ams', 'evidence.uvm-ms'),
         'release.uvm-ms': ('VTB-', 'XPAR-', 'AMSP-02', 'AMSP-03', 'AMSP-05', 'AMSP-06', 'AMSP-07',
                           'evidence.open-ams', 'evidence.verilog-ams'),
+        'release.parity-vtb': ('UVM-', 'ANA-', 'MS-', 'AMSP-', 'XPAR-03', 'XPAR-04', 'XPAR-05'),
+        'release.parity-uvm': ('VTB-', 'ANA-', 'MS-', 'AMSP-', 'XPAR-02', 'XPAR-04', 'XPAR-05'),
+        'release.parity-open-ams': ('VTB-', 'UVM-', 'AMSP-02', 'AMSP-04', 'AMSP-05', 'AMSP-06', 'AMSP-07',
+                                  'XPAR-02', 'XPAR-03', 'XPAR-04', 'XPAR-05', 'evidence.verilog-ams',
+                                  'evidence.uvm-ms', 'evidence.parity.verilog-ams', 'evidence.parity.uvm-ms'),
+        'release.parity-verilog-ams': ('VTB-', 'UVM-', 'AMSP-03', 'AMSP-04', 'AMSP-05', 'AMSP-06', 'AMSP-07',
+                                     'XPAR-02', 'XPAR-03', 'XPAR-04', 'XPAR-05', 'evidence.open-ams',
+                                     'evidence.uvm-ms', 'evidence.parity.open-ams', 'evidence.parity.uvm-ms'),
+        'release.parity-uvm-ms': ('VTB-', 'AMSP-02', 'AMSP-03', 'AMSP-05', 'AMSP-06', 'AMSP-07',
+                                'XPAR-02', 'XPAR-03', 'XPAR-04', 'XPAR-05', 'evidence.open-ams',
+                                'evidence.verilog-ams', 'evidence.parity.open-ams', 'evidence.parity.verilog-ams'),
     }
+    aggregate_gates = ('release.ams-aggregate', 'release.parity-aggregate', 'release.all-qualification')
     for gate, excluded in independence.items():
         require(gate in nodes, '010', f'missing independent release gate: {gate}')
-        bad = sorted(dep for dep in ancestors(gate) if dep.startswith(excluded))
+        bad = sorted(dep for dep in ancestors(gate) if dep.startswith(excluded + aggregate_gates))
         require(not bad, '010', f'{gate} is coupled to forbidden prerequisites: {bad}')
     require('UVM-07' in ancestors('release.uvm'), '011', 'executable UVM needs actual tool qualification')
     for gate, evidence in [('release.open-ams-harness', 'evidence.open-ams-tool'),
@@ -194,22 +219,27 @@ def validate_surface(data: dict[str, Any], root: Path = ROOT, *, check_docs: boo
                 docs[path] = file.read_text(encoding='utf-8')
                 if path != ADR:
                     require(Path(ADR).name in docs[path], '013', f'missing authoritative amendment link: {path}')
-        ownership: dict[int, list[str]] = {}
-        current: int | None = None
-        for line in docs.get('docs/roadmap/nodal-development-todo.md', '').splitlines():
-            match = re.match(r'^- \[[ x]\] \*\*Digital Verification Increment (\d+) —', line)
-            if match:
-                current = int(match[1])
-                ownership.setdefault(current, [])
-            elif line.startswith(('- [', '#')):
-                current = None
-            elif current is not None and line.startswith('  - Ownership:'):
-                ownership[current].append(line)
         expected_owners = {6: 'CAP-01', 7: 'VTB-04', 8: 'UVM-01', 9: 'UVM-07',
                            10: 'XPAR-01', 11: 'VTB-06', 12: 'LIVE-08'}
-        for number, owner in expected_owners.items():
-            require(any(f'Ownership: {owner}' in note for note in ownership.get(number, [])),
-                    '014', f'Digital Verification {number} has missing or misplaced {owner} ownership')
+        for document in ('docs/roadmap/nodal-development-todo.md',
+                         'docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md'):
+            ownership: dict[int, list[str]] = {}
+            current: int | None = None
+            for line in docs.get(document, '').splitlines():
+                match = re.match(r'^- \[[ x]\] \*\*Digital Verification Increment (\d+) —', line)
+                if match:
+                    current = int(match[1])
+                    ownership.setdefault(current, [])
+                elif line.startswith(('- [', '#', '---')):
+                    current = None
+                elif current is not None and line.startswith('  - Ownership:'):
+                    ownership[current].append(line)
+            for number, owner in expected_owners.items():
+                require(any(f'Ownership: {owner}' in note for note in ownership.get(number, [])),
+                        '014', f'{document}: Digital Verification {number} has missing or misplaced {owner} ownership')
+        for path, text in docs.items():
+            require('\n---\n  - Ownership:' not in text,
+                    '014', f'{path}: ownership note outside an increment section')
         plan = docs.get(PLAN, '')
         require('**Revision:** 0.3' in plan, '013', 'plan/surface revision mismatch')
         require('strictly richer than or equal to every generated projection' not in plan,

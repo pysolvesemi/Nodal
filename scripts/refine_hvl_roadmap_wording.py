@@ -29,4 +29,8 @@ for path, old, new in changes:
         pass
     else:
         raise SystemExit('Unexpected wording state: ' + path)
-print('Reconciled five remaining broad single-source statements without changing checkboxes.')
+for path in ('docs/roadmap/nodal-hvl-simulation-v0.1-plan.md', 'docs/design-gates/NodalHvlCapabilityConsistency-DG-v0.1.md'):
+    file = root / path
+    lines = file.read_text(encoding='utf-8').splitlines()
+    file.write_text('\n'.join(line.rstrip() for line in lines) + '\n', encoding='utf-8')
+print('Reconciled five broad single-source statements and Markdown whitespace without changing checkboxes.')

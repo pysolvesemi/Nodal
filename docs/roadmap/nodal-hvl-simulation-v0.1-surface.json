@@ -1394,6 +1394,8 @@
     "docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md",
     "docs/architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md",
     "docs/architecture/0025-generated-procedural-hdl-testbench-projections.md",
-    "docs/architecture/0027-hvl-execution-projection-capability-contract.md"
+    "docs/architecture/0027-hvl-execution-projection-capability-contract.md",
+    "docs/architecture/0026-native-digital-simulator-adapter-architecture.md",
+    "docs/roadmap/native-digital-simulator-adapters-v0.1-plan.md"
   ]
 }

@@ -17,7 +17,9 @@ DOCUMENTS = [PLAN, 'docs/roadmap/nodal-development-todo.md',
              'docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md',
              'docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md',
              'docs/architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md',
-             'docs/architecture/0025-generated-procedural-hdl-testbench-projections.md', ADR]
+             'docs/architecture/0025-generated-procedural-hdl-testbench-projections.md',
+             'docs/architecture/0026-native-digital-simulator-adapter-architecture.md',
+             'docs/roadmap/native-digital-simulator-adapters-v0.1-plan.md', ADR]
 
 
 def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -192,6 +194,22 @@ def validate_surface(data: dict[str, Any], root: Path = ROOT, *, check_docs: boo
                 docs[path] = file.read_text(encoding='utf-8')
                 if path != ADR:
                     require(Path(ADR).name in docs[path], '013', f'missing authoritative amendment link: {path}')
+        ownership: dict[int, list[str]] = {}
+        current: int | None = None
+        for line in docs.get('docs/roadmap/nodal-development-todo.md', '').splitlines():
+            match = re.match(r'^- \[[ x]\] \*\*Digital Verification Increment (\d+) —', line)
+            if match:
+                current = int(match[1])
+                ownership.setdefault(current, [])
+            elif line.startswith(('- [', '#')):
+                current = None
+            elif current is not None and line.startswith('  - Ownership:'):
+                ownership[current].append(line)
+        expected_owners = {6: 'CAP-01', 7: 'VTB-04', 8: 'UVM-01', 9: 'UVM-07',
+                           10: 'XPAR-01', 11: 'VTB-06', 12: 'LIVE-08'}
+        for number, owner in expected_owners.items():
+            require(any(f'Ownership: {owner}' in note for note in ownership.get(number, [])),
+                    '014', f'Digital Verification {number} has missing or misplaced {owner} ownership')
         plan = docs.get(PLAN, '')
         require('**Revision:** 0.3' in plan, '013', 'plan/surface revision mismatch')
         require('strictly richer than or equal to every generated projection' not in plan,

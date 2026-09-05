@@ -1593,18 +1593,21 @@ Live Nodal HVL is the primary host-side execution path and does not require comp
 - [ ] **Digital Verification Increment 4 — Functional coverage and verification reporting**
 - [ ] **Digital Verification Increment 5 — Properties, protocol checks, and register-model verification**
 - [ ] **Digital Verification Increment 6 — Portable Verilog testbench generation**
-- [ ] **Digital Verification Increment 7 — Open-source Verilog testbench execution and qualification**
   - Ownership: CAP-01 through CAP-05 and VTB-01 through VTB-03; use the independent VTB capability set, library and generated-language IR. No UVM implementation prerequisite.
+
+- [ ] **Digital Verification Increment 7 — Open-source Verilog testbench execution and qualification**
   - Ownership: VTB-04 through VTB-07. Close the VTB release independently of UVM, AMSP and aggregate XPAR completion.
 
 - [ ] **Digital Verification Increment 8 — Verification SystemVerilog and digital UVM generation**
-- [ ] **Digital Verification Increment 9 — Commercial simulator profiles**
   - Ownership: UVM-01 through UVM-06 after CAP-05, not after VTB. Capture explicit UVM-only extensions with separate typed operations and library boundaries.
+
+- [ ] **Digital Verification Increment 9 — Commercial simulator profiles**
   - Ownership: UVM-07 for generated methodology qualification; direct commercial live adapters remain separate. Require an actual qualified simulator for an executable UVM claim, not every vendor family.
 
 - [ ] **Digital Verification Increment 10 — Native, Verilog-testbench, and UVM semantic parity**
-- [ ] **Digital Verification Increment 11 — Reusable digital VIP qualification**
   - Ownership: XPAR-01 through XPAR-03 and XPAR-05. Compare only qualified common semantic intersections; generated-only methodology behavior is not a live or sibling-profile parity requirement.
+
+- [ ] **Digital Verification Increment 11 — Reusable digital VIP qualification**
   - Ownership: VTB-06 and UVM-08 in their independent lanes. Common semantic VIP must not import either profile library; profile-specific wrappers and single-profile packages are valid.
 
 - [ ] **Digital Verification Increment 12 — Scale, performance, compatibility, and verification release gate**

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
+import shutil
+import tempfile
 import unittest
 
-from check_hvl_roadmap import ROOT, load_surface, unique_object, validate_surface
+from check_hvl_roadmap import DOCUMENTS, ROOT, load_surface, unique_object, validate_surface
 
 
 class HvlRoadmapTests(unittest.TestCase):
@@ -112,6 +115,24 @@ class HvlRoadmapTests(unittest.TestCase):
         self.data['dependencyNodes']['digital-live.required-slice']['anchor'] = 'NONEXISTENT-ARCHITECTURE-GATE'
         errors = validate_surface(self.data, ROOT)
         self.assertTrue(any('NODAL-HVL-013:' in e for e in errors), errors)
+
+    def test_misplaced_umbrella_ownership(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for path in DOCUMENTS:
+                destination = root / path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / path, destination)
+            todo = root / 'docs/roadmap/nodal-development-todo.md'
+            text = todo.read_text()
+            note = next(line for line in text.splitlines() if line.startswith('  - Ownership: CAP-01'))
+            text = text.replace(note + '\n', '', 1)
+            lines = text.splitlines()
+            heading = next(i for i, line in enumerate(lines) if line.startswith('- [ ] **Digital Verification Increment 7 —'))
+            lines.insert(heading + 1, note)
+            todo.write_text('\n'.join(lines) + '\n')
+            errors = validate_surface(self.data, root)
+            self.assertTrue(any('NODAL-HVL-014:' in error for error in errors), errors)
 
     def test_duplicate_json_keys_rejected(self):
         with self.assertRaises(ValueError):

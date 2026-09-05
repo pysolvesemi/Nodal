@@ -1,0 +1,117 @@
+name: HVL roadmap final reconciliation
+on:
+  push:
+    branches: [increment/147-hvl-roadmap-consistency]
+    paths: [.github/workflows/hvl-roadmap-reconcile.yml]
+permissions:
+  contents: write
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: increment/147-hvl-roadmap-consistency
+          fetch-depth: 0
+      - name: Correct bounded documentation and checker updates
+        shell: python
+        run: |
+          from pathlib import Path
+          import json
+          import re
+          root = Path('.')
+          todo = root / 'docs/roadmap/nodal-development-todo.md'
+          text = todo.read_text()
+          before = re.findall(r'^- \[([ x])\] \*\*(.*?)\*\*', text, re.M)
+          for first, second, owner in [(6, 7, 'CAP-01'), (8, 9, 'UVM-01'), (10, 11, 'XPAR-01')]:
+              pattern = (r'(^- \[[ x]\] \*\*Digital Verification Increment ' + str(first) + r' —[^\n]*\n)'
+                         r'(^- \[[ x]\] \*\*Digital Verification Increment ' + str(second) + r' —[^\n]*\n)'
+                         r'(  - Ownership: ' + owner + r'[^\n]*\n)')
+              text, count = re.subn(pattern, lambda m: m[1] + m[3] + '\n' + m[2], text, flags=re.M)
+              if count != 1:
+                  raise SystemExit(f'Unexpected ownership placement for {first}: {count}')
+          assert before == re.findall(r'^- \[([ x])\] \*\*(.*?)\*\*', text, re.M)
+          todo.write_text(text)
+          surface = root / 'docs/roadmap/nodal-hvl-simulation-v0.1-surface.json'
+          data = json.loads(surface.read_text())
+          native_docs = ['docs/architecture/0026-native-digital-simulator-adapter-architecture.md', 'docs/roadmap/native-digital-simulator-adapters-v0.1-plan.md']
+          for path in native_docs:
+              assert path not in data['synchronizedDocuments']
+              data['synchronizedDocuments'].append(path)
+          surface.write_text(json.dumps(data, indent=2) + '\n')
+          checker = root / 'scripts/check_hvl_roadmap.py'
+          code = checker.read_text()
+          old = "'docs/architecture/0025-generated-procedural-hdl-testbench-projections.md', ADR]"
+          new = "'docs/architecture/0025-generated-procedural-hdl-testbench-projections.md',\n             'docs/architecture/0026-native-digital-simulator-adapter-architecture.md',\n             'docs/roadmap/native-digital-simulator-adapters-v0.1-plan.md', ADR]"
+          assert code.count(old) == 1
+          code = code.replace(old, new)
+          old = "        plan = docs.get(PLAN, '')\n"
+          new = '''        ownership: dict[int, list[str]] = {}
+                  current: int | None = None
+                  for line in docs.get('docs/roadmap/nodal-development-todo.md', '').splitlines():
+                      match = re.match(r'^- \[[ x]\] \*\*Digital Verification Increment (\d+) —', line)
+                      if match:
+                          current = int(match[1])
+                          ownership.setdefault(current, [])
+                      elif line.startswith(('- [', '#')):
+                          current = None
+                      elif current is not None and line.startswith('  - Ownership:'):
+                          ownership[current].append(line)
+                  expected_owners = {6: 'CAP-01', 7: 'VTB-04', 8: 'UVM-01', 9: 'UVM-07',
+                                     10: 'XPAR-01', 11: 'VTB-06', 12: 'LIVE-08'}
+                  for number, owner in expected_owners.items():
+                      require(any(f'Ownership: {owner}' in note for note in ownership.get(number, [])),
+                              '014', f'Digital Verification {number} has missing or misplaced {owner} ownership')
+                  plan = docs.get(PLAN, '')
+          '''
+          # Normalize the Python string's continuation indentation to the checker block.
+          lines = new.splitlines()
+          new = lines[0] + '\n' + '\n'.join(line[10:] if line.startswith('          ') else line for line in lines[1:]) + '\n'
+          assert code.count(old) == 1
+          checker.write_text(code.replace(old, new))
+          tests = root / 'scripts/test_hvl_roadmap.py'
+          code = tests.read_text()
+          code = code.replace('import json\n', 'import json\nfrom pathlib import Path\nimport shutil\nimport tempfile\n')
+          code = code.replace('from check_hvl_roadmap import ROOT,', 'from check_hvl_roadmap import DOCUMENTS, ROOT,')
+          marker = '    def test_duplicate_json_keys_rejected(self):\n'
+          test = '''    def test_misplaced_umbrella_ownership(self):
+                  with tempfile.TemporaryDirectory() as directory:
+                      root = Path(directory)
+                      for path in DOCUMENTS:
+                          destination = root / path
+                          destination.parent.mkdir(parents=True, exist_ok=True)
+                          shutil.copyfile(ROOT / path, destination)
+                      todo = root / 'docs/roadmap/nodal-development-todo.md'
+                      text = todo.read_text()
+                      note = next(line for line in text.splitlines() if line.startswith('  - Ownership: CAP-01'))
+                      text = text.replace(note + '\\n', '', 1)
+                      lines = text.splitlines()
+                      heading = next(i for i, line in enumerate(lines) if line.startswith('- [ ] **Digital Verification Increment 7 —'))
+                      lines.insert(heading + 1, note)
+                      todo.write_text('\\n'.join(lines) + '\\n')
+                      errors = validate_surface(self.data, root)
+                      self.assertTrue(any('NODAL-HVL-014:' in error for error in errors), errors)
+
+          '''
+          lines = test.splitlines()
+          test = lines[0] + '\n' + '\n'.join(line[10:] if line.startswith('          ') else line for line in lines[1:]) + '\n'
+          assert code.count(marker) == 1
+          tests.write_text(code.replace(marker, test + marker))
+          print('Corrected three ownership placements and synchronized nine architecture/roadmap entry points.')
+      - name: Validate roadmap, mutation tests and Markdown
+        run: |
+          python3 -m py_compile scripts/check_hvl_roadmap.py scripts/test_hvl_roadmap.py
+          python3 scripts/check_hvl_roadmap.py
+          python3 scripts/test_hvl_roadmap.py
+          python3 scripts/check_markdown.py
+          git diff --check
+      - name: Publish bounded correction
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/roadmap/nodal-development-todo.md docs/roadmap/nodal-hvl-simulation-v0.1-surface.json scripts/check_hvl_roadmap.py scripts/test_hvl_roadmap.py
+          git diff --cached --check
+          git commit -m 'fix(increment147): bind roadmap ownership to the correct increments'
+          git push origin HEAD:increment/147-hvl-roadmap-consistency
+          git rev-parse HEAD

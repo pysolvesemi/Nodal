@@ -184,16 +184,13 @@ Exercise multiple analog islands, mixed digital agents, PVT/Monte Carlo matrices
 
 ## Implementation dependencies
 
-Foundation Increment 152 depends on the existing Foundation verification, interface, register, property, AMS, source-map, plugin, and tool-adapter contracts. The implementation-track increments remain blocked until every Foundation checkbox is complete.
+All dependent implementation remains blocked by the complete [Foundation completion barrier](nodal-development-todo.md#foundation-completion-barrier). This document does not define a second prerequisite list.
 
-Within the dependent tracks:
+Use [ADR 0027](../architecture/0027-hvl-execution-projection-capability-contract.md) for capability and release independence and the [resolved dependency and independent release ledger](nodal-hvl-simulation-v0.1-plan.md#resolved-dependency-and-independent-release-ledger) for prerequisites. Its machine-readable source is [`dependencyNodes` and `profileReleaseGates`](nodal-hvl-simulation-v0.1-surface.json).
 
-- Digital Verification Increment 6 depends on Digital Verification Increments 1-5 and Foundation 152.
-- Digital Verification Increment 7 depends on Digital Verification Increment 6.
-- Digital Verification Increment 8 may reuse Increments 1-5 but parity closure waits for Increment 7.
-- AMS Verification Increment 6 depends on AMS Verification Increments 1-5, Foundation 152, and the required Foundation AMS/backend work.
-- AMS Verification Increment 7 depends on AMS Verification Increment 6 only for shared identities; its open harness path may be implemented independently where the same frozen Verification IR operations are available.
-- UVM/UVM-MS generation remains independent of procedural HDL execution, except for shared canonical identities and parity evidence.
+Umbrella increment numbers identify ownership, not an implicit execution order. Evaluate the selected item's explicit dependencies in that ledger; neither full live-track completion nor an unrelated generated profile is an implied prerequisite. Shared identities are provided by common contracts, not by completing a sibling backend.
+
+Foundation Increment 152 acceptance remains historical evidence. This correction neither closes Foundation Increments 147-149 nor changes the dependency graph.
 
 ## Completion claim
 

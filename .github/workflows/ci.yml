@@ -55,6 +55,8 @@ jobs:
             >> "${GITHUB_ENV}"
 
       - name: Validate contracts, style, and online provenance
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python3 scripts/check_hvl_roadmap.py
           python3 scripts/test_hvl_roadmap.py

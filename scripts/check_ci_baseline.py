@@ -142,6 +142,7 @@ def check_repository(root: Path) -> list[Problem]:
         "./nodal check",
         "--contracts-only",
         "--online-toolchain",
+        "GITHUB_TOKEN: ${{ github.token }}",
         "--lint-toolchain",
         "--base-ref",
         "./nodal core scala",

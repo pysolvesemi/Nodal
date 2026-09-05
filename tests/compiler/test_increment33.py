@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import shutil
 import tempfile
 import unittest
@@ -9,6 +10,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+CURRENT_REVISION = re.search(
+    r"^\*\*Revision:\*\* ([0-9]+\.[0-9]+)$",
+    (ROOT / "docs/roadmap/nodal-development-todo.md").read_text(), re.M
+).group(1)
 CHECKER_PATH = ROOT / "scripts" / "check_increment33.py"
 SPEC = importlib.util.spec_from_file_location("check_increment33", CHECKER_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -82,7 +87,7 @@ class Increment33ContractTests(unittest.TestCase):
             path = root / "docs/roadmap/nodal-development-todo.md"
             path.write_text(
                 path.read_text(encoding="utf-8").replace(
-                    "**Revision:** 1.46",
+                    f"**Revision:** {CURRENT_REVISION}",
                     "**Revision:** 1.43",
                     1,
                 ),
@@ -152,7 +157,7 @@ class Increment33ContractTests(unittest.TestCase):
             roadmap = root / "docs/roadmap/nodal-development-todo.md"
             roadmap.write_text(
                 roadmap.read_text(encoding="utf-8")
-                .replace("**Revision:** 1.46", "**Revision:** 1.44", 1)
+                .replace(f"**Revision:** {CURRENT_REVISION}", "**Revision:** 1.44", 1)
                 .replace(
                     "- [x] **Increment 34 — Analog control flow**",
                     "- [ ] **Increment 34 — Analog control flow**",
@@ -459,6 +464,18 @@ class Increment33ContractTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assert_rejected(root, "exact native multiple-procedure diagnostic fixture")
+
+
+class AcceptedRoadmapRevisionTests(unittest.TestCase):
+    def test_later_revision_preserves_accepted_predecessor(self):
+        self.assertTrue(CHECKER.accepted_roadmap_revision("**Revision:** 1.47"))
+        self.assertTrue(CHECKER.accepted_roadmap_revision("**Revision:** 1.100"))
+
+    def test_missing_ambiguous_and_regressed_revisions_fail(self):
+        for text in ("", "**Revision:** 1.45", "**Revision:** bad",
+                     "**Revision:** 1.46\n**Revision:** 1.47"):
+            with self.subTest(text=text):
+                self.assertFalse(CHECKER.accepted_roadmap_revision(text))
 
 
 if __name__ == "__main__":

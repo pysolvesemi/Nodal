@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,16 @@ def load_json(root: Path, relative: str) -> dict[str, Any]:
 def require_tokens(content: str, tokens: tuple[str, ...], code: str, label: str) -> None:
     for token in tokens:
         require(token in content, f"{code}: {label} is missing {token!r}")
+
+
+def accepted_roadmap_revision(roadmap: str) -> bool:
+    """A validated predecessor remains valid in later roadmap revisions.
+
+    Open/candidate states still require their exact historical revision. The
+    active increment independently validates its own completion and evidence.
+    """
+    versions = re.findall(r"^\*\*Revision:\*\* ([0-9]+)\.([0-9]+)$", roadmap, re.M)
+    return len(versions) == 1 and tuple(map(int, versions[0])) >= (1, 46)
 
 
 def check_repository(root: Path) -> None:
@@ -425,7 +436,7 @@ def check_repository(root: Path) -> None:
                 )
                 and isinstance(successor_validation.get("closure_validation_run"), int)
                 and successor_validation.get("closure_validation_run") > 0
-                and "**Revision:** 1.46" in roadmap
+                and accepted_roadmap_revision(roadmap)
                 and increment35_closed in roadmap,
                 "NODAL-INC34-056: validated Increment 35 successor evidence is inconsistent",
             )

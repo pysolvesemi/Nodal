@@ -210,8 +210,8 @@ class Increment35ContractTests(unittest.TestCase):
                 return
             document["status"] = "validated-differential-integral-operators"
             document["tranche"] = "35b-evidence-closure"
-            validation["closure_validation_head"] = "1" * 40
-            validation["closure_validation_run"] = 1
+            validation["closure_validation_head"] = "39915b984707f0396777cc69030dfec29aa2befe"
+            validation["closure_validation_run"] = 33916159555
             self.write_manifest(path, document)
 
             implementation = (
@@ -232,12 +232,12 @@ class Increment35ContractTests(unittest.TestCase):
             )
             text = text.replace(
                 "**Closure validation head:** pending",
-                f"**Closure validation head:** `{'1' * 40}`",
+                "**Closure validation head:** `39915b984707f0396777cc69030dfec29aa2befe`",
                 1,
             )
             text = text.replace(
                 "**Closure validation run:** pending",
-                "**Closure validation run:** `1`",
+                "**Closure validation run:** `33916159555`",
                 1,
             )
             evidence.write_text(text, encoding="utf-8")

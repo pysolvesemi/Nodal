@@ -11,6 +11,11 @@ import sys
 from pathlib import Path
 
 
+# Immutable accepted Increment 35 closure, not values supplied by the manifest.
+INCREMENT35_CLOSURE_HEAD = "39915b984707f0396777cc69030dfec29aa2befe"
+INCREMENT35_CLOSURE_RUN = 33916159555
+
+
 class CheckFailure(RuntimeError):
     pass
 
@@ -676,6 +681,8 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
                     and all(character in "0123456789abcdef" for character in closure_head)
                     and isinstance(closure_run, int)
                     and closure_run > 0
+                    and closure_head == INCREMENT35_CLOSURE_HEAD
+                    and closure_run == INCREMENT35_CLOSURE_RUN
                     and accepted_roadmap_revision(roadmap)
                     and increment35_closed in roadmap,
                     "NODAL-INC33-090: validated Increment 35 evidence is inconsistent",

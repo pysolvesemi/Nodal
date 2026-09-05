@@ -23,6 +23,11 @@ CANDIDATE_STATUS = "evidence-closure-candidate"
 VALIDATED_STATUS = "validated-differential-integral-operators"
 
 
+# Immutable accepted Increment 35 closure, not values supplied by the manifest.
+INCREMENT35_CLOSURE_HEAD = "39915b984707f0396777cc69030dfec29aa2befe"
+INCREMENT35_CLOSURE_RUN = 33916159555
+
+
 class CheckFailure(RuntimeError):
     pass
 
@@ -211,7 +216,9 @@ def check_repository(root: Path) -> None:
             manifest.get("tranche") == "35b-evidence-closure"
             and valid_sha(accepted.get("closure_validation_head"))
             and isinstance(accepted.get("closure_validation_run"), int)
-            and accepted.get("closure_validation_run") > 0,
+            and accepted.get("closure_validation_run") > 0
+            and accepted.get("closure_validation_head") == INCREMENT35_CLOSURE_HEAD
+            and accepted.get("closure_validation_run") == INCREMENT35_CLOSURE_RUN,
             "NODAL-INC35-020: validated closure lacks exact candidate evidence",
         )
         require(

@@ -3,9 +3,12 @@ on:
   push:
     branches: [automation/increment36-integration-repair]
 permissions:
-  contents: write
+  contents: read
 jobs:
   prepare:
+    permissions:
+      contents: write
+      actions: write
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
@@ -15,15 +18,24 @@ jobs:
         with:
           ref: increment/36-time-waveform-operators-v1
           fetch-depth: 0
+      - name: Stop only superseded PR checks for the two obsolete implementation heads
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for sha in 9cd163d13ecaa616a2086e2d2844e3e19a5c2529 de82c2ecf507ab1084fabfdcfd92c4e109fa5361; do
+            for id in $(gh api "repos/pysolvesemi/Nodal/actions/runs?head_sha=$sha&per_page=100" --jq '.workflow_runs[] | select(.event == "pull_request" and .status != "completed") | .id'); do
+              gh api --method POST "repos/pysolvesemi/Nodal/actions/runs/$id/cancel" || true
+            done
+          done
       - name: Apply reviewed integration changes
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          test "$(git rev-parse HEAD)" = 50015ebb68f3899e2dfba8c7a935ad8a0c0cee63
-          gh api repos/pysolvesemi/Nodal/git/blobs/ab3f847c44a3f9835ea31102e7dcc15243bef1e7 --jq .content | base64 -d > /tmp/fix.py
+          test "$(git rev-parse HEAD)" = f0fc87b0bb64f39ca3a86cf172fb96fbf3646f3c
+          gh api repos/pysolvesemi/Nodal/git/blobs/ec7f8d9aaba30f81314e584b7505ac3a28c10b0d --jq .content | base64 -d > /tmp/fix.py
           python3 /tmp/fix.py
           git diff --binary > /tmp/repair.patch
-          echo '2e318a97e81dee1cd81cb8846f24e5270a9c1bd0f474811c39c613171927afc6  /tmp/repair.patch' | sha256sum -c -
+          echo 'fb5b7934f11fb5ce944f0bbf099ddde7d9312354c51568c90392b450c6c4e78f  /tmp/repair.patch' | sha256sum -c -
           python3 scripts/check_increment36.py
       - name: Format and publish
         id: publish
@@ -32,10 +44,10 @@ jobs:
           ./nodal style fix --lint-toolchain "$RUNNER_TEMP/lint"
           git diff --exit-code -- .github/workflows
           git diff --check
-          git add core
+          git add core docs tests/compiler
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'Increment 36 — Register optimization passes and reparse waveform output'
+          git commit -m 'Increment 36 — Verify all arities, invalid arithmetic, and signed RC regression'
           git push origin HEAD:refs/heads/increment/36-time-waveform-operators-v1
           echo "head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           git archive --format=tar.gz HEAD > /tmp/source.tar.gz
@@ -46,8 +58,6 @@ jobs:
           retention-days: 3
   scala:
     needs: prepare
-    permissions:
-      contents: read
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -71,27 +81,34 @@ jobs:
             /tmp/construction.txt
           retention-days: 3
   native:
-    needs: prepare
-    permissions:
-      contents: read
+    needs: [prepare, scala]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.prepare.outputs.head }}
-      - name: Native compiler and matrix
+      - uses: actions/download-artifact@v4
+        with:
+          name: increment36-scala-validation
+          path: /tmp/scala-source
+      - name: Native compiler and complete source-to-backend matrix
         shell: bash
         run: |
           set -o pipefail
           ./nodal bootstrap --mode prebuilt --prefix "$RUNNER_TEMP/native"
           ./nodal style bootstrap --prefix "$RUNNER_TEMP/lint"
           ./nodal core native --toolchain "$RUNNER_TEMP/native" --lint-toolchain "$RUNNER_TEMP/lint" 2>&1 | tee /tmp/native.log
+          nodalc=$(find out -type f -name nodalc -perm -u+x | head -n 1)
+          translate=$(find out -type f -name nodal-translate -perm -u+x | head -n 1)
+          python3 tests/compiler/fixtures/increment36/run_native_matrix.py --nodalc "$nodalc" --translate "$translate" --source /tmp/scala-source/source.mlir 2>&1 | tee /tmp/source-native.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: increment36-native-validation
-          path: /tmp/native.log
+          path: |
+            /tmp/native.log
+            /tmp/source-native.log
           retention-days: 3
       - uses: actions/upload-artifact@v4
         if: always()

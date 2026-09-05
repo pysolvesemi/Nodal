@@ -5,6 +5,9 @@ on:
     paths: [.github/workflows/hvl-roadmap-reconcile.yml]
 permissions:
   contents: write
+concurrency:
+  group: hvl-roadmap-reconcile
+  cancel-in-progress: false
 jobs:
   reconcile:
     runs-on: ubuntu-24.04
@@ -47,7 +50,7 @@ jobs:
           assert code.count(old) == 1
           code = code.replace(old, new)
           old = "        plan = docs.get(PLAN, '')\n"
-          new = '''        ownership: dict[int, list[str]] = {}
+          new = r'''        ownership: dict[int, list[str]] = {}
                   current: int | None = None
                   for line in docs.get('docs/roadmap/nodal-development-todo.md', '').splitlines():
                       match = re.match(r'^- \[[ x]\] \*\*Digital Verification Increment (\d+) —', line)
@@ -65,9 +68,6 @@ jobs:
                               '014', f'Digital Verification {number} has missing or misplaced {owner} ownership')
                   plan = docs.get(PLAN, '')
           '''
-          # Normalize the Python string's continuation indentation to the checker block.
-          lines = new.splitlines()
-          new = lines[0] + '\n' + '\n'.join(line[10:] if line.startswith('          ') else line for line in lines[1:]) + '\n'
           assert code.count(old) == 1
           checker.write_text(code.replace(old, new))
           tests = root / 'scripts/test_hvl_roadmap.py'
@@ -94,8 +94,6 @@ jobs:
                       self.assertTrue(any('NODAL-HVL-014:' in error for error in errors), errors)
 
           '''
-          lines = test.splitlines()
-          test = lines[0] + '\n' + '\n'.join(line[10:] if line.startswith('          ') else line for line in lines[1:]) + '\n'
           assert code.count(marker) == 1
           tests.write_text(code.replace(marker, test + marker))
           print('Corrected three ownership placements and synchronized nine architecture/roadmap entry points.')

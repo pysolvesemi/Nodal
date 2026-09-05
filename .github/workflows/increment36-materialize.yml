@@ -15,41 +15,42 @@ jobs:
         with:
           ref: increment/36-time-waveform-operators-v1
           fetch-depth: 0
-      - name: Apply exact reviewed patch
+      - name: Apply exact reviewed source patch
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = 99a4c379758489206a72fdbd883d7f89feecf520
+          test "$(git rev-parse HEAD)" = 9b917094882b391abc6b2b86bbb8e78a662721fc
           : > /tmp/inc36.patch.xz
           for sha in 3d0e0002f77d13fccdb86e6462ca246a34c82654 6626658e4c91c40545032668b44319e3767ec0ce 192965e85b19756ae457ce17f61d87181c3c03b4 525df128e0d01ebae526059141b83deec162c6d9 50f6778208d735f3546bef75cabd2129ee8c80b5 a8e89e6976b4266f9d4a020be2e816e59449b2d0; do
             gh api "repos/pysolvesemi/Nodal/git/blobs/$sha" --jq .content | base64 -d >> /tmp/inc36.patch.xz
           done
           xz -dc /tmp/inc36.patch.xz > /tmp/inc36.patch
           echo 'ce34650875219e69ffaa51a5900121513a9e190fe60a87b2952304c8cfec6a0b  /tmp/inc36.patch' | sha256sum -c -
-          git apply --check /tmp/inc36.patch
-          git apply /tmp/inc36.patch
+          git apply --check --exclude=.github/workflows/increment-36-time-waveform-operators.yml /tmp/inc36.patch
+          git apply --exclude=.github/workflows/increment-36-time-waveform-operators.yml /tmp/inc36.patch
           python3 scripts/check_increment36.py
           python3 -m unittest discover -s tests/compiler -p 'test_increment36*.py'
       - name: Install pinned lint tools
         run: ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
       - name: Apply deterministic formatting
-        continue-on-error: true
         run: ./nodal style fix --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
       - name: Publish source without temporary automation
         id: publish
         shell: bash
         run: |
           test ! -e .github/workflows/increment36-materialize.yml
+          git diff --exit-code -- .github/workflows
           git diff --check
-          git add core docs examples scripts/check_increment36.py tests/compiler .github/workflows/increment-36-time-waveform-operators.yml
+          git add core docs examples scripts/check_increment36.py tests/compiler
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'Increment 36 — Time and waveform operators'
+          git archive --format=tar.gz HEAD > /tmp/inc36-formatted-source.tar.gz
           git push origin HEAD:refs/heads/increment/36-time-waveform-operators-v1
           echo "head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          git archive --format=tar.gz HEAD > /tmp/inc36-formatted-source.tar.gz
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: increment36-formatted-source
           path: /tmp/inc36-formatted-source.tar.gz

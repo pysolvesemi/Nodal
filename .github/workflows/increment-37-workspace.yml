@@ -1,0 +1,29 @@
+name: Increment 37 Source Workspace
+
+on:
+  push:
+    branches: [increment/37-analog-events]
+    paths: ['.github/workflows/increment-37-workspace.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  source-workspace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Package exact source snapshot for implementation
+        run: |
+          git archive --format=tar.gz HEAD > "${RUNNER_TEMP}/nodal-increment37-source.tar.gz"
+          git rev-parse HEAD > "${RUNNER_TEMP}/nodal-increment37-head.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: increment37-source-workspace
+          path: |
+            ${{ runner.temp }}/nodal-increment37-source.tar.gz
+            ${{ runner.temp }}/nodal-increment37-head.txt
+          retention-days: 1

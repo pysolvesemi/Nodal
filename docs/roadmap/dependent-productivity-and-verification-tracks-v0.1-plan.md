@@ -260,8 +260,9 @@ Numbering restarts for this track. Live Nodal HVL is the primary execution path.
   - Exercise many tests reusing one compiled Verilator model and many concurrent external Icarus processes; prove cache invalidation over RTL, parameters, wrapper ABI, tool versions/options, native toolchain/platform, plugins, timing, trace, coverage, and optimization settings.
   - Publish independent live, CAP, VTB, UVM, and profile-pair capability/release matrices plus a reusable VIP author conformance kit. This umbrella completion does not delay any independently qualified release.
 
----
   - Ownership: LIVE-08, CAP-05, VTB-07, UVM-09 and applicable XPAR gates. Track independent releases; aggregate track completion is not a release prerequisite for an individual lane.
+
+---
 
 # Analog/Mixed-Signal Verification Track — blocked by Foundation
 

@@ -24,7 +24,9 @@ final class UnsupportedRcOperation extends Module:
   val n = inout(Electrical)
 
   analog:
-    I(p, n) <+ toReal(toUInt(V(p, n), 8))
+    // Keep a generic candidate node unsupported at the bridge boundary.
+    // Unary negation now has a first-class analog operation.
+    I(p, n) <+ CandidateRuntime.expr[Real](V(p, n))
 
 final class NegatedRcOperation extends Module:
   val p = inout(Electrical)

@@ -1,68 +1,30 @@
-name: Increment 35 review publication qualification
+name: Increment 35 review integration qualification
 on:
   push:
     branches: [automation/inc35-review-publication-20260905]
-    paths: ['_inc35_review_apply.py', '.github/workflows/inc35-review-publication.yml']
+    paths: ['_inc35_review_integrate.py', '.github/workflows/inc35-review-publication.yml']
 permissions:
   contents: write
 concurrency:
   group: inc35-review-publication
   cancel-in-progress: false
 jobs:
-  qualify:
+  qualify-integration:
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GITHUB_TOKEN: ${{ github.token }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Prepare isolated Increment 35 source candidate
+      - name: Merge accepted dev without losing the reviewed fixes
         shell: bash
         run: |
           set -euo pipefail
-          cp _inc35_review_apply.py "${RUNNER_TEMP}/inc35-review-apply.py"
-          git switch -c increment/35-review-hardening aa93bc7e9eb6df51162a486452b185025b77207a
-          python3 "${RUNNER_TEMP}/inc35-review-apply.py"
-          git add core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp core/compiler/lib/Backend/AnalogVerticalSlice.cpp core/compiler/test/CMakeLists.txt scripts/check_increment33.py scripts/check_increment34.py scripts/check_increment35.py tests/compiler/test_increment35.py tests/compiler/test_increment35_review_hardening.py tests/compiler/fixtures/increment35/run_review_matrix.py docs/implementation/increment35-review-hardening.md docs/roadmap/nodal-development-todo.md
-          git diff --cached --check
-          python3 scripts/check_increment24.py
-          python3 scripts/check_increment33.py
-          python3 scripts/check_increment34.py
-          python3 scripts/check_increment35.py
-          python3 scripts/check_increment36.py
-          python3 -m unittest discover -s tests/compiler -p 'test_increment35*.py'
-      - name: Install pinned toolchains and format native corrections
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
-          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
-          formatter=$(find "${RUNNER_TEMP}/nodal-lint-toolchain" -type f -name clang-format -perm -u+x | head -n 1)
-          test -n "$formatter"
-          "$formatter" -i core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp core/compiler/lib/Backend/AnalogVerticalSlice.cpp
-          git add core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp core/compiler/lib/Backend/AnalogVerticalSlice.cpp
-      - name: Run complete repository qualification gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./nodal check --online-toolchain --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" --base-ref origin/dev
-          python3 scripts/check_hvl_roadmap.py
-          python3 scripts/test_hvl_roadmap.py
-          git diff --check
-          test -z "$(git diff --name-only)"
-      - name: Publish only the qualified source changes
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git diff --cached --name-only | wc -l)" -eq 11
-          test -z "$(git diff --cached --name-only -- .github)"
-          test ! -e _inc35_review_apply.py
-          test ! -e .github/workflows/inc35-review-publication.yml
+          cp _inc35_review_integrate.py "${RUNNER_TEMP}/inc35-review-integrate.py"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'fix(increment35): close derivative, owner and evidence review gaps'
+          git switch -c increment/35-review-hardening 8c7aeb524fb3e427f43148e0acb8a00e2d0eac27
+          python3 "${RUNNER_TEMP}/inc35-review-integrate.py"
+          git commit -m 'merge(dev): retain Increment 36 closure with Increment 35 review fixes'
           git push origin HEAD:refs/heads/increment/35-review-hardening
-          printf 'candidate_head=%s\ncandidate_tree=%s\nqualification_run=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" "$GITHUB_RUN_ID" | tee "${RUNNER_TEMP}/increment35-review-publication.txt"
+          printf 'qualified_integration_head=%s\nqualified_integration_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})"

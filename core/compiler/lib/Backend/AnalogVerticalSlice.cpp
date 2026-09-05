@@ -282,12 +282,13 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
   } else if (name == "nodal.analog_ddt") {
     if (operation->getNumOperands() != 1)
       return failure();
+    auto contract = operation->getAttrOfType<StringAttr>("operator_contract");
     auto simplified = operation->getAttrOfType<BoolAttr>("nodal.simplified");
     auto rule = operation->getAttrOfType<StringAttr>("nodal.simplification_rule");
     auto provenance = operation->getAttrOfType<StringAttr>("nodal.simplification_provenance");
     auto value = operation->getAttrOfType<FloatAttr>("nodal.simplified_value");
-    if (simplified && simplified.getValue() && rule &&
-        rule.getValue() == "ddt-time-invariant-zero" && provenance &&
+    if (contract && contract.getValue() == "increment35" && simplified && simplified.getValue() &&
+        rule && rule.getValue() == "ddt-time-invariant-zero" && provenance &&
         provenance.getValue() == "increment35" && value && value.getValueAsDouble() == 0.0) {
       rendered = formatReal(0.0);
     } else {

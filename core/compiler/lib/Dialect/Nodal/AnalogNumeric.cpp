@@ -657,6 +657,15 @@ LogicalResult verifyContinuousAnalyses(Operation *operation) {
   return success();
 }
 
+// Match the canonical source-path text rules used by potential/flow access.
+// Retain UTF-8 identities; reject padding, ASCII controls, NUL and DEL.
+bool isCanonicalContinuousIdentity(llvm::StringRef value) {
+  return !value.empty() && value == value.trim() && llvm::all_of(value, [](char character) {
+    const unsigned char byte = static_cast<unsigned char>(character);
+    return byte >= 0x20 && byte != 0x7f;
+  });
+}
+
 LogicalResult verifyContinuousContract(Operation *operation, bool stateful,
                                        llvm::StringRef inputDimension,
                                        llvm::StringRef resultDimension) {
@@ -675,14 +684,34 @@ LogicalResult verifyContinuousContract(Operation *operation, bool stateful,
   auto declaredInput = operation->getAttrOfType<StringAttr>("input_dimension");
   auto declaredResult = operation->getAttrOfType<StringAttr>("result_dimension");
   auto initialization = operation->getAttrOfType<StringAttr>("initialization");
-  if (!operatorId || operatorId.getValue().trim().empty() || !owner ||
-      owner.getValue().trim().empty())
-    return emitMappedFailure(operation, "NODAL-ANALOG-035-002",
-                             "continuous-time operator identity and owner must be non-empty");
+  if (!operatorId || !isCanonicalContinuousIdentity(operatorId.getValue()) || !owner ||
+      !isCanonicalContinuousIdentity(owner.getValue()))
+    return emitMappedFailure(
+        operation, "NODAL-ANALOG-035-002",
+        "continuous-time operator identity and owner must be canonical printable text");
   const llvm::StringRef operatorIdentity = operatorId.getValue();
   const llvm::StringRef ownerIdentity = owner.getValue();
+  Operation *module = operation->getParentOp();
+  while (module && !isNamed(module, "nodal.module"))
+    module = module->getParentOp();
+  llvm::StringRef actualOwner = module ? textAttr(module, "sym_name") : llvm::StringRef();
+  if (module) {
+    if (auto metadata = module->getAttrOfType<DictionaryAttr>("metadata")) {
+      if (Attribute path = metadata.get("semantic_path")) {
+        auto semanticPath = llvm::dyn_cast<StringAttr>(path);
+        if (!semanticPath || !isCanonicalContinuousIdentity(semanticPath.getValue()))
+          return emitMappedFailure(operation, "NODAL-ANALOG-035-002",
+                                   "continuous-time enclosing module has an invalid semantic path");
+        actualOwner = semanticPath.getValue();
+      }
+    }
+  }
+  if (!isCanonicalContinuousIdentity(actualOwner) || ownerIdentity != actualOwner)
+    return emitMappedFailure(operation, "NODAL-ANALOG-035-002",
+                             "continuous-time operator owner must match its enclosing module");
   if (!operatorIdentity.starts_with(ownerIdentity) ||
-      !operatorIdentity.drop_front(ownerIdentity.size()).starts_with("."))
+      !operatorIdentity.drop_front(ownerIdentity.size()).starts_with(".") ||
+      operatorIdentity.size() <= ownerIdentity.size() + 1)
     return emitMappedFailure(
         operation, "NODAL-ANALOG-035-002",
         "continuous-time operator identity must be owned by its declared owner");
@@ -967,6 +996,10 @@ LogicalResult verifyDdt(Operation *operation) {
                              "ddt requires one input and one result");
 
   if (!contracted) {
+    // Legacy type compatibility must not authorize unverified simplification.
+    if (hasAnyAttribute(operation, kContinuousSimplificationAttributes))
+      return emitMappedFailure(operation, "NODAL-ANALOG-035-007",
+                               "ddt simplification requires the Increment 35 operator contract");
     if (operation->getOperand(0).getType().isF64() && operation->getResult(0).getType().isF64())
       return success();
     auto input = getAnalogNumericTypeInfo(operation->getOperand(0).getType());

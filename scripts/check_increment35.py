@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +103,16 @@ def require_accepted_implementation(validation: object) -> dict[str, Any]:
         "NODAL-INC35-016: closure evidence does not match the accepted implementation",
     )
     return validation
+
+
+def accepted_roadmap_revision(roadmap: str) -> bool:
+    """A validated predecessor remains valid in later roadmap revisions.
+
+    Open/candidate states still require their exact historical revision. The
+    active increment independently validates its own completion and evidence.
+    """
+    versions = re.findall(r"^\*\*Revision:\*\* ([0-9]+)\.([0-9]+)$", roadmap, re.M)
+    return len(versions) == 1 and tuple(map(int, versions[0])) >= (1, 46)
 
 
 def check_repository(root: Path) -> None:
@@ -211,7 +222,7 @@ def check_repository(root: Path) -> None:
             "NODAL-INC35-020: validated closure lacks exact candidate evidence",
         )
         require(
-            "**Revision:** 1.46" in roadmap
+            accepted_roadmap_revision(roadmap)
             and increment35_closed in roadmap
             and "**Status:** Validated" in implementation,
             "NODAL-INC35-021: validated state requires roadmap revision 1.46 and closed records",

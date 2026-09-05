@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from pathlib import Path
 import shutil
 import tempfile
 import unittest
 
-from check_hvl_roadmap import DOCUMENTS, ROOT, load_surface, unique_object, validate_surface
+from check_hvl_roadmap import (
+    DOCUMENTS, PROJECTION_PLAN, ROOT, load_surface, unique_object,
+    validate_projection_dependencies, validate_surface,
+)
 
 
 def copy_documents(root: Path) -> None:
@@ -180,9 +184,82 @@ class HvlRoadmapTests(unittest.TestCase):
                 self.data['dependencyNodes'][gate]['requires'].append(unrelated)
                 self.rejected('010')
 
+    def test_legacy_projection_dependencies_checked_with_surface(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            copy_documents(root)
+            self.assertEqual(validate_surface(self.data, root), [])
+            plan = root / PROJECTION_PLAN
+            text = plan.read_text(encoding='utf-8')
+            plan.write_text(text.replace('## Completion claim',
+                            '- UVM parity must wait for Verilog-TB execution.\n\n## Completion claim', 1),
+                            encoding='utf-8')
+            errors = validate_surface(self.data, root)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertTrue(errors[0].startswith('NODAL-HVL-015:'), errors)
+
     def test_duplicate_json_keys_rejected(self):
         with self.assertRaises(ValueError):
             json.loads('{"id":1,"id":2}', object_pairs_hook=unique_object)
+
+
+class ProjectionDependencyTests(unittest.TestCase):
+    def setUp(self):
+        self.text = (ROOT / PROJECTION_PLAN).read_text(encoding='utf-8')
+
+    def rejected(self, text):
+        errors = validate_projection_dependencies(text)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith('NODAL-HVL-015:'), errors)
+
+    def test_current_projection_dependencies(self):
+        self.assertEqual(validate_projection_dependencies(self.text), [])
+
+    def test_each_legacy_dependency_rejected(self):
+        obsolete = [
+            'Digital Verification Increment 6 depends on Digital Verification Increments 1-5 and Foundation 152.',
+            'Digital Verification Increment 8 may reuse Increments 1-5 but parity closure waits for Increment 7.',
+            'AMS Verification Increment 6 depends on AMS Verification Increments 1-5, Foundation 152, and the required Foundation AMS/backend work.',
+            'AMS Verification Increment 7 depends on AMS Verification Increment 6 only for shared identities.',
+        ]
+        for dependency in obsolete:
+            with self.subTest(dependency=dependency):
+                # Keep every valid reference: checking link presence alone is insufficient.
+                self.rejected(self.text.replace('## Completion claim',
+                              '- ' + dependency + '\n\n## Completion claim', 1))
+
+    def test_original_dependency_section_rejected(self):
+        legacy = 'Foundation Increment 152 depends on the existing Foundation verification, interface, register, property, AMS, source-map, plugin, and tool-adapter contracts. The implementation-track increments remain blocked until every Foundation checkbox is complete.\n\nWithin the dependent tracks:\n\n- Digital Verification Increment 6 depends on Digital Verification Increments 1-5 and Foundation 152.\n- Digital Verification Increment 7 depends on Digital Verification Increment 6.\n- Digital Verification Increment 8 may reuse Increments 1-5 but parity closure waits for Increment 7.\n- AMS Verification Increment 6 depends on AMS Verification Increments 1-5, Foundation 152, and the required Foundation AMS/backend work.\n- AMS Verification Increment 7 depends on AMS Verification Increment 6 only for shared identities; its open harness path may be implemented independently where the same frozen Verification IR operations are available.\n- UVM/UVM-MS generation remains independent of procedural HDL execution, except for shared canonical identities and parity evidence.'
+        text = re.sub(r'(?ms)(^## Implementation dependencies\n).*?(?=^## Completion claim)',
+                      lambda match: match[1] + '\n' + legacy + '\n\n', self.text, count=1)
+        self.rejected(text)
+
+    def test_missing_ledger_reference(self):
+        self.rejected(self.text.replace(
+            '[resolved dependency and independent release ledger](nodal-hvl-simulation-v0.1-plan.md#resolved-dependency-and-independent-release-ledger)',
+            'the old prerequisite list'))
+
+    def test_wrong_surface_reference(self):
+        self.rejected(self.text.replace(
+            '[`dependencyNodes` and `profileReleaseGates`](nodal-hvl-simulation-v0.1-surface.json)',
+            '[`dependencyNodes` and `profileReleaseGates`](obsolete-surface.json)'))
+
+    def test_missing_section(self):
+        self.rejected(self.text.replace('## Implementation dependencies', '## Retired dependencies'))
+
+    def test_duplicate_section(self):
+        self.rejected(self.text + '\n## Implementation dependencies\n\nDuplicate.\n')
+
+    def test_extra_dependency_heading(self):
+        for heading in ('## Legacy prerequisites', '### Legacy prerequisites'):
+            with self.subTest(heading=heading):
+                self.rejected(self.text.replace('## Completion claim',
+                              heading + '\n\nUVM requires VTB.\n\n## Completion claim', 1))
+
+    def test_line_wrapping_allowed(self):
+        text = self.text.replace('Umbrella increment numbers identify ownership, not an implicit execution order.',
+                                 'Umbrella increment numbers identify ownership,\nnot an implicit execution order.')
+        self.assertEqual(validate_projection_dependencies(text), [])
 
 
 if __name__ == '__main__':

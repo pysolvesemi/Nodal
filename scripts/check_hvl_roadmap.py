@@ -13,9 +13,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SURFACE = 'docs/roadmap/nodal-hvl-simulation-v0.1-surface.json'
 PLAN = 'docs/roadmap/nodal-hvl-simulation-v0.1-plan.md'
 ADR = 'docs/architecture/0027-hvl-execution-projection-capability-contract.md'
+PROJECTION_PLAN = 'docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md'
 DOCUMENTS = [PLAN, 'docs/roadmap/nodal-development-todo.md',
              'docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md',
-             'docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md',
+             PROJECTION_PLAN,
              'docs/architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md',
              'docs/architecture/0025-generated-procedural-hdl-testbench-projections.md',
              'docs/architecture/0026-native-digital-simulator-adapter-architecture.md',
@@ -29,6 +30,36 @@ EXPECTED_RELEASES = {
     'nodal.hvl.projection.open_ams_harness': 'release.open-ams-harness',
     'nodal.hvl.projection.uvm_ms': 'release.uvm-ms',
 }
+
+
+# Reference-only text is checked in full so obsolete prerequisites cannot coexist
+# with valid ledger links. Dependency edges remain exclusively in the JSON graph.
+# Whitespace-only reflow is allowed; changing the reference contract is explicit.
+PROJECTION_DEPENDENCY_BODY = """All dependent implementation remains blocked by the complete [Foundation completion barrier](nodal-development-todo.md#foundation-completion-barrier). This document does not define a second prerequisite list.
+
+Use [ADR 0027](../architecture/0027-hvl-execution-projection-capability-contract.md) for capability and release independence and the [resolved dependency and independent release ledger](nodal-hvl-simulation-v0.1-plan.md#resolved-dependency-and-independent-release-ledger) for prerequisites. Its machine-readable source is [`dependencyNodes` and `profileReleaseGates`](nodal-hvl-simulation-v0.1-surface.json).
+
+Umbrella increment numbers identify ownership, not an implicit execution order. Evaluate the selected item's explicit dependencies in that ledger; neither full live-track completion nor an unrelated generated profile is an implied prerequisite. Shared identities are provided by common contracts, not by completing a sibling backend.
+
+Foundation Increment 152 acceptance remains historical evidence. This correction neither closes Foundation Increments 147-149 nor changes the dependency graph."""
+
+
+def validate_projection_dependencies(text: str) -> list[str]:
+    """Reject missing, duplicate or divergent prerequisite prose in the secondary plan."""
+    error = (f'NODAL-HVL-015: {PROJECTION_PLAN}: Implementation dependencies must '
+             'reference the authoritative ledger without a second prerequisite list')
+    headings = list(re.finditer(r'^##[ \t]+([^\n]+)', text, re.M))
+    positions = [i for i, heading in enumerate(headings)
+                 if heading[1].strip() == 'Implementation dependencies']
+    if len(positions) != 1:
+        return [error]
+    index = positions[0]
+    if index + 1 == len(headings) or headings[index + 1][1].strip() != 'Completion claim':
+        return [error]
+    section = text[headings[index].end():headings[index + 1].start()]
+    if ' '.join(section.split()) != ' '.join(PROJECTION_DEPENDENCY_BODY.split()):
+        return [error]
+    return []
 
 
 def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -219,6 +250,7 @@ def validate_surface(data: dict[str, Any], root: Path = ROOT, *, check_docs: boo
                 docs[path] = file.read_text(encoding='utf-8')
                 if path != ADR:
                     require(Path(ADR).name in docs[path], '013', f'missing authoritative amendment link: {path}')
+        errors.extend(validate_projection_dependencies(docs.get(PROJECTION_PLAN, '')))
         expected_owners = {6: 'CAP-01', 7: 'VTB-04', 8: 'UVM-01', 9: 'UVM-07',
                            10: 'XPAR-01', 11: 'VTB-06', 12: 'LIVE-08'}
         for document in ('docs/roadmap/nodal-development-todo.md',

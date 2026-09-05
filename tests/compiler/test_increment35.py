@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import shutil
 import tempfile
 import unittest
@@ -9,6 +10,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+CURRENT_REVISION = re.search(
+    r"^\*\*Revision:\*\* ([0-9]+\.[0-9]+)$",
+    (ROOT / "docs/roadmap/nodal-development-todo.md").read_text(), re.M
+).group(1)
 CHECKER_PATH = ROOT / "scripts" / "check_increment35.py"
 SPEC = importlib.util.spec_from_file_location("check_increment35", CHECKER_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -118,7 +123,7 @@ class Increment35ContractTests(unittest.TestCase):
             self.replace_file(
                 root,
                 "docs/roadmap/nodal-development-todo.md",
-                "**Revision:** 1.46",
+                f"**Revision:** {CURRENT_REVISION}",
                 "**Revision:** 1.45",
             )
             self.replace_file(
@@ -143,6 +148,11 @@ class Increment35ContractTests(unittest.TestCase):
             path, document = self.read_manifest(root)
             validation = document["validation"]
             assert isinstance(validation, dict)
+            roadmap = root / "docs/roadmap/nodal-development-todo.md"
+            roadmap.write_text(re.sub(
+                r"^\*\*Revision:\*\* .*", "**Revision:** 1.46",
+                roadmap.read_text(), count=1, flags=re.M
+            ))
             document["status"] = "evidence-closure-candidate"
             document["tranche"] = "35b-evidence-closure"
             validation["closure_validation_head"] = None
@@ -306,6 +316,18 @@ class Increment35ContractTests(unittest.TestCase):
         self.assertFalse(manifest["semantics"]["inverse_operator_cancellation"])
         self.assertFalse(manifest["semantics"]["operator_distribution"])
         self.assertFalse(manifest["integration"]["full_dae_solver_lowering"])
+
+
+class AcceptedRoadmapRevisionTests(unittest.TestCase):
+    def test_later_revision_preserves_accepted_predecessor(self):
+        self.assertTrue(CHECKER.accepted_roadmap_revision("**Revision:** 1.47"))
+        self.assertTrue(CHECKER.accepted_roadmap_revision("**Revision:** 1.100"))
+
+    def test_missing_ambiguous_and_regressed_revisions_fail(self):
+        for text in ("", "**Revision:** 1.45", "**Revision:** bad",
+                     "**Revision:** 1.46\n**Revision:** 1.47"):
+            with self.subTest(text=text):
+                self.assertFalse(CHECKER.accepted_roadmap_revision(text))
 
 
 if __name__ == "__main__":

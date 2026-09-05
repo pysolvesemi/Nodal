@@ -28,19 +28,23 @@ jobs:
         with:
           path: ~/.cache/nodal/downloads
           key: nodal-native-download-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
-      - name: Apply exact hash-checked candidate
+      - name: Apply exact hash-checked candidate and review fixes
         id: apply
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
           import base64, hashlib, json, lzma, pathlib, subprocess
-          chunks = ['bcc9728521ed831cc462020323f45e81187e94fd', '2077ad4461ed7f12bc93d4f728b8355041fe1665', 'f559fed1f8ebdba179d0f08990f5a593ec96f4be']
-          data = b''.join(base64.b64decode(json.loads(subprocess.check_output(['gh', 'api', f'repos/pysolvesemi/Nodal/git/blobs/{sha}']))['content']) for sha in chunks)
-          patch = lzma.decompress(data)
-          assert len(patch) == 79642 and hashlib.sha256(patch).hexdigest() == '91ef9cc7e45f1d99515aee699b6116e19237856943e80dacb3b8644e3ec25913'
-          subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
-          subprocess.run(['git', 'apply', '-'], input=patch, check=True)
+          patches = [
+              (['bcc9728521ed831cc462020323f45e81187e94fd', '2077ad4461ed7f12bc93d4f728b8355041fe1665', 'f559fed1f8ebdba179d0f08990f5a593ec96f4be'], 79642, '91ef9cc7e45f1d99515aee699b6116e19237856943e80dacb3b8644e3ec25913'),
+              (['6b537ae45542a1f8648b99ac5b6c6649b551b682'], 16505, 'ba256d01890a6cb4f42c9e4b133673015c8b48d8997f1d23b582ec74d166e68f'),
+          ]
+          for chunks, size, digest in patches:
+              data = b''.join(base64.b64decode(json.loads(subprocess.check_output(['gh', 'api', f'repos/pysolvesemi/Nodal/git/blobs/{sha}']))['content']) for sha in chunks)
+              patch = lzma.decompress(data)
+              assert len(patch) == size and hashlib.sha256(patch).hexdigest() == digest
+              subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
+              subprocess.run(['git', 'apply', '-'], input=patch, check=True)
           pathlib.Path('.github/workflows/increment-37-lowering-workspace.yml').unlink()
           PY
       - name: Format and validate candidate

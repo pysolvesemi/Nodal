@@ -445,8 +445,12 @@ object ClockMux:
       KernelDomainKind.Generated
     )
 
-/** Candidate event handle. */
-final class Event private[nodal] ()
+/** Typed event handle. Analog composition is distinct from Boolean short-circuit logic. */
+final class Event private[nodal] (
+    private[nodal] val analogDefinition: Option[KernelAnalogEventDefinition] = None
+):
+  infix def or(other: Event): Event = AnalogProceduralConstruction.composeEvents(this, other)
+  def ||(other: Event): Event = this or other
 
 enum Edge:
   case Either, Rising, Falling
@@ -454,10 +458,11 @@ enum Edge:
 def analog(body: => Unit): Unit = CandidateRuntime.analogBlock(body)
 
 def initial(body: => Unit): Unit =
+  AnalogProceduralConstruction.requireContinuousContext("initial block")
   ConstructionKernel.waveformForbidden(CandidateRuntime.block(body))
 
 def on(event: Event)(body: => Unit): Unit =
-  ConstructionKernel.waveformForbidden(CandidateRuntime.block(event, body))
+  AnalogProceduralConstruction.eventControl(event)(body)
 
 def V[D <: Discipline](node: Node[D]): Expr[Real] =
   CandidateRuntime.analogExpr("potential_access", node)
@@ -480,13 +485,87 @@ def idt(value: Expr[Real]): Expr[Real] =
 def idt(value: Expr[Real], initialValue: Expr[Real]): Expr[Real] =
   CandidateRuntime.continuousOperator("analog_idt", value, Some(initialValue))
 
-def cross(value: Expr[Real], edge: Edge = Edge.Either): Event =
-  CandidateRuntime.event(value, edge)
+/** Transient zero-crossing monitor; unlike above, it does not initialize at time zero. */
+def cross(value: Expr[Real]): Event =
+  AnalogProceduralConstruction.event("analog_cross", Vector(value))
+def cross(value: Expr[Real], edge: Edge): Event =
+  AnalogProceduralConstruction.event("analog_cross", Vector(value, analogEdge(edge)))
+def cross(value: Expr[Real], edge: Edge, timeTolerance: Expr[Real]): Event =
+  AnalogProceduralConstruction.event("analog_cross", Vector(value, analogEdge(edge), timeTolerance))
+def cross(
+    value: Expr[Real],
+    edge: Edge,
+    timeTolerance: Expr[Real],
+    expressionTolerance: Expr[Real]
+): Event =
+  AnalogProceduralConstruction.event(
+    "analog_cross",
+    Vector(value, analogEdge(edge), timeTolerance, expressionTolerance)
+  )
+def cross(
+    value: Expr[Real],
+    edge: Edge,
+    timeTolerance: Expr[Real],
+    expressionTolerance: Expr[Real],
+    enable: Expr[Integer]
+): Event =
+  AnalogProceduralConstruction.event(
+    "analog_cross",
+    Vector(value, analogEdge(edge), timeTolerance, expressionTolerance, enable)
+  )
 
-def timer(start: Expr[Real]): Event = CandidateRuntime.event(start)
+private def analogEdge(edge: Edge): Expr[Integer] =
+  CandidateRuntime.literalInteger(edge match
+    case Edge.Either => 0
+    case Edge.Rising => 1
+    case Edge.Falling => -1)
 
+/** Positive crossing monitor that also participates in initialization and DC analysis. */
+def above(value: Expr[Real]): Event =
+  AnalogProceduralConstruction.event("analog_above", Vector(value))
+def above(value: Expr[Real], timeTolerance: Expr[Real]): Event =
+  AnalogProceduralConstruction.event("analog_above", Vector(value, timeTolerance))
+def above(value: Expr[Real], timeTolerance: Expr[Real], expressionTolerance: Expr[Real]): Event =
+  AnalogProceduralConstruction.event(
+    "analog_above",
+    Vector(value, timeTolerance, expressionTolerance)
+  )
+def above(
+    value: Expr[Real],
+    timeTolerance: Expr[Real],
+    expressionTolerance: Expr[Real],
+    enable: Expr[Integer]
+): Event =
+  AnalogProceduralConstruction.event(
+    "analog_above",
+    Vector(value, timeTolerance, expressionTolerance, enable)
+  )
+
+/** Absolute-time monitor. A nonpositive period means one-shot, not an invalid timer. */
+def timer(start: Expr[Real]): Event =
+  AnalogProceduralConstruction.event("analog_timer", Vector(start))
 def timer(start: Expr[Real], period: Expr[Real]): Event =
-  CandidateRuntime.event(start, period)
+  AnalogProceduralConstruction.event("analog_timer", Vector(start, period))
+def timer(start: Expr[Real], period: Expr[Real], timeTolerance: Expr[Real]): Event =
+  AnalogProceduralConstruction.event("analog_timer", Vector(start, period, timeTolerance))
+def timer(
+    start: Expr[Real],
+    period: Expr[Real],
+    timeTolerance: Expr[Real],
+    enable: Expr[Integer]
+): Event =
+  AnalogProceduralConstruction.event("analog_timer", Vector(start, period, timeTolerance, enable))
+
+def initialStep: Event = AnalogProceduralConstruction.event("analog_initial_step", Vector.empty)
+def initialStep(analysis: String, more: String*): Event =
+  AnalogProceduralConstruction.event(
+    "analog_initial_step",
+    Vector.empty,
+    (analysis +: more).toVector
+  )
+def finalStep: Event = AnalogProceduralConstruction.event("analog_final_step", Vector.empty)
+def finalStep(analysis: String, more: String*): Event =
+  AnalogProceduralConstruction.event("analog_final_step", Vector.empty, (analysis +: more).toVector)
 
 /** Smooth a piecewise-constant input. Omitted timing arguments retain target defaults. */
 def transition(value: Expr[Real]): Expr[Real] =
@@ -628,6 +707,7 @@ private[nodal] object CandidateRuntime:
     case Reset => KernelTypeDescriptor("Reset")
 
   def beginModule(module: Module): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("component construction")
     ConstructionKernel.beginModule(module)
     AnalogProceduralConstruction.beginModule(
       module,
@@ -645,6 +725,8 @@ private[nodal] object CandidateRuntime:
       domain: Option[ClockDomain] = None,
       attributes: Vector[(String, Any)] = Vector.empty
   ): Unit =
+    if kind != KernelSignalKind.Variable then
+      AnalogProceduralConstruction.requireContinuousContext("structural declaration")
     ConstructionKernel.declare(value, kind, dataType, explicitName, domain, attributes)
 
   private def dataTypeFromDescriptor(
@@ -658,6 +740,9 @@ private[nodal] object CandidateRuntime:
   def expressionDataType(value: Expr[?]): Option[DataType[? <: Data]] = value match
     case expression: KernelExpr[?] =>
       expression.resultType.map(dataTypeFromDescriptor)
+    case parameter: Param[?] => expressionDataType(parameter.default)
+    case variable: Variable[?] => Some(variable.dataType)
+    case signal: Signal[?] => Some(signal.dataType)
     case _ => None
 
   def declareAnalogVariable[A <: Data](
@@ -751,6 +836,7 @@ private[nodal] object CandidateRuntime:
       input: Expr[Real],
       initialValue: Option[Expr[Real]]
   ): Expr[Real] =
+    AnalogProceduralConstruction.requireContinuousContext(operation)
     val expression = new KernelExpr[Real](
       input +: initialValue.toVector,
       operation = Some(operation)
@@ -764,22 +850,28 @@ private[nodal] object CandidateRuntime:
     expression
 
   def waveformOperator(operation: String, inputs: Vector[Expr[Real]]): Expr[Real] =
+    AnalogProceduralConstruction.requireContinuousContext(operation)
     val expression = new KernelExpr[Real](inputs, operation = Some(operation))
     ConstructionKernel.waveformOperator(expression, operation, inputs)
     expression
 
   def analogBlock(body: => Unit): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("nested analog region")
     ConstructionKernel.analogBlock(body)
 
   def analogContribution(target: Expr[Real], value: Expr[Real]): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("analog contribution")
     ConstructionKernel.shortAnalogContribution(target, value)
 
   def analogSemanticBlock(
       kind: AnalogEquationRuntime.RegionKind,
       body: => Unit
-  ): Unit = ConstructionKernel.analogSemanticBlock(kind)(body)
+  ): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("analog semantic region")
+    ConstructionKernel.analogSemanticBlock(kind)(body)
 
   def analogProcedure(body: => Unit): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("nested procedural region")
     AnalogProceduralConstruction.procedure:
       ConstructionKernel.analogSemanticBlock(
         AnalogEquationRuntime.RegionKind.Procedural
@@ -789,21 +881,29 @@ private[nodal] object CandidateRuntime:
       left: Expr[Real],
       right: Expr[Real],
       options: EquationOptions
-  ): Unit = ConstructionKernel.analogEquation(left, right, options)
+  ): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("analog equation")
+    ConstructionKernel.analogEquation(left, right, options)
 
   def initialAnalogEquation(
       left: Expr[Real],
       right: Expr[Real],
       options: InitialEquationOptions
-  ): Unit = ConstructionKernel.initialAnalogEquation(left, right, options)
+  ): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("initial analog equation")
+    ConstructionKernel.initialAnalogEquation(left, right, options)
 
   def analogContribution(
       target: Expr[Real],
       value: Expr[Real],
       options: ContributionOptions
-  ): Unit = ConstructionKernel.analogContribution(target, value, options)
+  ): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("analog contribution")
+    ConstructionKernel.analogContribution(target, value, options)
 
-  def statement(values: Any*): Unit = ConstructionKernel.operation("statement", values*)
+  def statement(values: Any*): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("candidate effect")
+    ConstructionKernel.operation("statement", values*)
 
   def assignAnalogVariable[A <: Data](
       left: Variable[A],
@@ -817,12 +917,15 @@ private[nodal] object CandidateRuntime:
     )
 
   def assign(left: AnyRef, right: Any): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("digital assignment")
     ConstructionKernel.operation("assignment", left, right)
 
   def connectValues(left: AnyRef, right: AnyRef): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("digital connection")
     ConstructionKernel.operation("value-connect", left, right)
 
   def connectNodes(left: AnyRef, right: AnyRef): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("conservative connection")
     ConstructionKernel.operation("node-connect", left, right)
 
   def attachInstance(instance: Instance[? <: Module], module: Module): Unit =
@@ -852,6 +955,9 @@ private[nodal] object CandidateRuntime:
       ConstructionKernel.waveformForbidden(ConstructionKernel.block(body))
 
   def block(event: Event, body: => Unit): Unit =
+    if event.analogDefinition.nonEmpty then
+      AnalogEventRuntime.fail(1, "analog events cannot control a digital low-level process")
+    AnalogProceduralConstruction.requireContinuousContext("digital event process")
     ConstructionKernel.operation("event-block", event)
     AnalogProceduralConstruction.lexicalScope:
       ConstructionKernel.waveformForbidden(ConstructionKernel.block(body))

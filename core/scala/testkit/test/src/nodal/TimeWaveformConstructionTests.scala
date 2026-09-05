@@ -109,7 +109,7 @@ object TimeWaveformConstructionTests extends TestSuite:
       assert(code(new TimeWaveformInitialTop) == "NODAL-ANALOG-036-001")
       assert(code(new TimeWaveformProcedureTop) == "NODAL-ANALOG-036-001")
       invalid(initial { val _ = abstime }, "NODAL-ANALOG-036-001")
-      invalid(on(timer(1.0.ns)) { val _ = slew(1.0.V) }, "NODAL-ANALOG-036-001")
+      invalid(on(timer(1.0.ns)) { val _ = slew(1.0.V) }, "NODAL-ANALOG-037-001")
 
     test("physical units and signed slew rates are checked"):
       invalid(boundStep(1.0.V), "NODAL-ANALOG-036-003")

@@ -33,6 +33,9 @@ private[nodal] object AnalogProceduralConstruction:
     var statementSerial = 0
     var scopeSerial = 0
     var procedureDepth = 0
+    var procedureComplete = false
+    val eventBindings = mutable.LinkedHashMap.empty[String, AnyRef]
+    var eventDepth = 0
     var controlBuilder: Option[AnalogControlFlowConstruction.Builder] = None
     var controlSnapshot: Option[AnalogControlFlowConstruction.Snapshot] = None
     var controlScope: Vector[String] = Vector.empty
@@ -68,6 +71,106 @@ private[nodal] object AnalogProceduralConstruction:
     )
 
   def reset(): Unit = current.remove()
+
+  def requireContinuousContext(role: String): Unit =
+    if Option(current.get()).exists(_.stack.lastOption.exists(_.eventDepth > 0)) then
+      AnalogEventRuntime.fail(7, s"$role is not permitted inside an analog event-controlled body")
+
+  def event(
+      operation: String,
+      arguments: Vector[Expr[? <: Data]],
+      analyses: Vector[String] = Vector.empty
+  ): Event =
+    val module = activeModule
+    new Event(Some(KernelAnalogEventDefinition(
+      module.module,
+      operation,
+      arguments.zipWithIndex.map((value, slot) => slot -> value),
+      analyses,
+      Vector.empty,
+      ConstructionKernel.captureAnalogProceduralSource
+    )))
+
+  def composeEvents(left: Event, right: Event): Event =
+    val module = activeModule
+    val definitions = Vector(left, right).map: event =>
+      event.analogDefinition.getOrElse(
+        AnalogEventRuntime.fail(6, "analog event OR cannot contain digital edge handles")
+      )
+    if definitions.exists(definition => definition.owner ne module.module) then
+      AnalogEventRuntime.fail(5, "analog event OR cannot cross component ownership")
+    new Event(Some(KernelAnalogEventDefinition(
+      module.module,
+      "analog_event_or",
+      Vector.empty,
+      Vector.empty,
+      Vector(left, right),
+      ConstructionKernel.captureAnalogProceduralSource
+    )))
+
+  private def renderEventValue(module: ModuleState, value: Any): String = value match
+    case expression: KernelExpr[?] if expression.literal.nonEmpty => renderValue(module, expression)
+    case expression: KernelExpr[?] =>
+      s"${expression.operation.getOrElse("expression")}(${expression.operands.map(renderEventValue(module, _)).mkString(",")})"
+    case reference: AnyRef if findVariableOwner(reference).nonEmpty =>
+      resolveVariable(module, reference).identity
+    case reference: AnyRef =>
+      val token = s"@event_reference_${module.eventBindings.size}@"
+      module.eventBindings.update(token, reference)
+      token
+    case other => other.toString
+
+  private def finalizeEvents(module: ModuleState): Unit =
+    def resolved(value: String): String =
+      module.eventBindings.foldLeft(value): (text, entry) =>
+        val (token, reference) = entry
+        val path = ConstructionKernel.analogReferencePath(reference).getOrElse(
+          AnalogEventRuntime.fail(5, "event expression references an unregistered declaration")
+        )
+        text.replace(token, path)
+    module.controlSnapshot = module.controlSnapshot.map: snapshot =>
+      snapshot.mapRendered(resolved)
+
+  private def freezeEvent(module: ModuleState, event: Event): AnalogEventRuntime.Expression =
+    val definition = event.analogDefinition.getOrElse(
+      AnalogEventRuntime.fail(6, "analog on requires an analog event, not a digital edge")
+    )
+    if definition.owner ne module.module then
+      AnalogEventRuntime.fail(
+        5,
+        "analog event belongs to another component or construction session"
+      )
+    val result = AnalogEventRuntime.Expression(
+      definition.operation,
+      definition.arguments.map: (slot, expression) =>
+        AnalogEventRuntime.Argument(
+          slot,
+          semanticValue(module, expression, None).copy(rendered =
+            renderEventValue(module, expression)
+          ),
+          ConstructionKernel.analogEventConstant(expression)
+        ),
+      definition.analyses,
+      definition.alternatives.map(freezeEvent(module, _)),
+      definition.source,
+      definition.name
+    )
+    result.validate()
+    result
+
+  def eventControl[A](event: Event)(body: => A): A =
+    val module = activeModule
+    if module.procedureDepth == 0 then
+      AnalogEventRuntime.fail(1, "analog on requires an active analogProcedure")
+    if module.eventDepth > 0 then
+      AnalogEventRuntime.fail(7, "analog event controls cannot be nested")
+    materializeVariables(module)
+    val expression = freezeEvent(module, event)
+    val source = ConstructionKernel.captureAnalogProceduralSource
+    activeBuilder(module).eventControl(expression, source): identity =>
+      module.eventDepth += 1
+      try withControlScope(module, identity)(body)
+      finally module.eventDepth -= 1
 
   def beginModule(module: Module, owner: String): Unit =
     val moduleState = new ModuleState(
@@ -251,7 +354,7 @@ private[nodal] object AnalogProceduralConstruction:
   ): AnalogProceduralRuntime.Value =
     val reads = collectReads(module, expression)
     AnalogProceduralRuntime.Value(
-      renderValue(module, expression),
+      renderEventValue(module, expression),
       valueType(module, expression, fallback),
       reads
     )
@@ -409,6 +512,41 @@ private[nodal] object AnalogProceduralConstruction:
       .map(_.valueType.dimension)
       .headOption
 
+  /** A completed procedure proves persistent, event-only storage before a continuous read. */
+  def isEventHeldVariable(value: AnyRef): Boolean =
+    import AnalogControlFlowRuntime.*
+    def constant(expression: Any): Boolean = expression match
+      case _: Param[?] => true
+      case expr: KernelExpr[?] => expr.literal.nonEmpty ||
+        (Set("analog_add", "analog_sub", "analog_mul", "analog_div", "analog_neg")
+          .contains(expr.operation.getOrElse("")) && expr.operands.forall(constant))
+      case _ => false
+    Option(current.get()).exists: session =>
+      session.modules.exists: module =>
+        Option(module.variables.get(value)).exists: variable =>
+          val initializer = module.pending.find(_.value eq value).flatMap(_.initializer)
+          def writes(block: Block, controlled: Boolean): Vector[Boolean] =
+            block.statements.flatMap:
+              case assign: Statement.Assign if assign.target == variable.identity =>
+                Vector(controlled)
+              case event: Statement.EventControl => writes(event.body, true)
+              case scope: Statement.Scope => writes(scope.body, controlled)
+              case conditional: Statement.IfThenElse =>
+                conditional.branches.flatMap(branch => writes(branch.body, controlled)) ++
+                  conditional.otherwise.toVector.flatMap(writes(_, controlled))
+              case selection: Statement.CaseStatement =>
+                selection.arms.flatMap(arm => writes(arm.body, controlled)) ++
+                  selection.default.toVector.flatMap(writes(_, controlled))
+              case loop: Statement.Loop => writes(loop.body, controlled)
+              case _ => Vector.empty
+          module.procedureComplete && (module.module eq activeModule.module) &&
+          initializer.exists(constant) && module.controlSnapshot.exists: snapshot =>
+            val rootDeclaration = snapshot.root.statements.exists:
+              case declaration: Statement.Declare => declaration.variable == variable.identity
+              case _ => false
+            val updates = writes(snapshot.root, false)
+            rootDeclaration && updates.nonEmpty && updates.forall(identity)
+
   def procedure[A](body: => A): A =
     val module = activeModule
     module.procedureDepth += 1
@@ -422,6 +560,7 @@ private[nodal] object AnalogProceduralConstruction:
         val result = body
         val snapshot = builder.finish()
         if builder.hasStructuredControl then module.controlSnapshot = Some(snapshot)
+        module.procedureComplete = true
         result
     finally
       module.controlBuilder = None
@@ -668,6 +807,47 @@ private[nodal] object AnalogProceduralConstruction:
       ConstructionKernel.captureAnalogProceduralSource
     )
 
+  private def remapRendered(value: String, oldOwner: String, owner: String): String =
+    val pattern =
+      ("(?<![A-Za-z0-9_$])" + java.util.regex.Pattern.quote(oldOwner) +
+        "(?=\\.|$)").r
+    pattern.replaceAllIn(value, _ => java.util.regex.Matcher.quoteReplacement(owner))
+
+  private def resolvePayloads(
+      module: ModuleState,
+      snapshot: AnalogProceduralRuntime.Snapshot
+  ): AnalogProceduralRuntime.Snapshot =
+    def text(value: String): String =
+      module.eventBindings.foldLeft(value): (rendered, entry) =>
+        val (token, reference) = entry
+        val path = ConstructionKernel.analogReferencePath(reference).getOrElse(
+          AnalogEventRuntime.fail(5, "procedural expression references an unregistered declaration")
+        )
+        rendered.replace(token, path)
+    def value(input: AnalogProceduralRuntime.Value): AnalogProceduralRuntime.Value =
+      input.copy(rendered = text(input.rendered))
+    snapshot.copy(
+      variables = snapshot.variables.map: record =>
+        val declaration = module.pending.find(pending =>
+          Option(module.variables.get(pending.value)).exists(_.identity == record.variable.identity)
+        )
+        record.copy(
+          initializer = record.initializer.map(value),
+          authoredPath =
+            declaration.flatMap(pending => ConstructionKernel.analogReferencePath(pending.value))
+        )
+      ,
+      assignments = snapshot.assignments.map(record =>
+        record.copy(
+          value = value(record.value),
+          guard = record.guard.map(value)
+        )
+      ),
+      controlFlow = snapshot.controlFlow.map(_.mapRendered(text)),
+      controlExpressions =
+        snapshot.controlExpressions.map(record => record.copy(value = value(record.value)))
+    )
+
   private def remapSnapshot(
       snapshot: AnalogProceduralRuntime.Snapshot,
       owner: String
@@ -706,7 +886,10 @@ private[nodal] object AnalogProceduralConstruction:
     def remapValue(
         value: AnalogProceduralRuntime.Value
     ): AnalogProceduralRuntime.Value =
-      value.copy(reads = value.reads.map(remapVariable))
+      value.copy(
+        rendered = remapRendered(value.rendered, oldOwner, owner),
+        reads = value.reads.map(remapVariable)
+      )
 
     snapshot.copy(
       owner = owner,
@@ -734,6 +917,7 @@ private[nodal] object AnalogProceduralConstruction:
       resolveOwner: Module => String
   ): Vector[AnalogProceduralRuntime.Snapshot] =
     Option(current.get()).toVector.flatMap: value =>
+      value.modules.foreach(finalizeEvents)
       value.finalizedControlSnapshots = value.modules.iterator
         .flatMap(module =>
           module.controlSnapshot.map(_.remapOwner(resolveOwner(module.module)))
@@ -751,7 +935,7 @@ private[nodal] object AnalogProceduralConstruction:
               module.controlExpressions.toVector
             )
           else module.recorder.snapshot
-        val retained = remapSnapshot(sourceSnapshot, owner)
+        val retained = remapSnapshot(resolvePayloads(module, sourceSnapshot), owner)
         Option.when(
           retained.variables.nonEmpty || retained.assignments.nonEmpty ||
             retained.controlFlow.nonEmpty || retained.controlExpressions.nonEmpty

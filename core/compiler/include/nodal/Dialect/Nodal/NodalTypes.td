@@ -51,6 +51,11 @@ def Nodal_QuantityType : Nodal_Type<"Quantity", "quantity"> {
   let genVerifyDecl = 1;
 }
 
+def Nodal_AnalogEventType : Nodal_Type<"AnalogEvent", "analog_event"> {
+  let summary = "Analog event token, distinct from digital edges and numeric values";
+  let assemblyFormat = "";
+}
+
 def Nodal_VariableType : Nodal_Type<"Variable", "variable"> {
   let summary = "Typed component-local analog procedural variable handle";
   let description = [{

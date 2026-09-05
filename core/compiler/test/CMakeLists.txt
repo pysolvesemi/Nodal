@@ -740,6 +740,14 @@ add_test(
 )
 
 add_test(
+  NAME nodal.native.analog-events-matrix
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment37/run_native_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --translate "$<TARGET_FILE:nodal-translate>"
+)
+
+add_test(
   NAME nodal.native.analog-differential-integral-review-hardening
   COMMAND "${Python3_EXECUTABLE}"
     "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment35/run_review_matrix.py"

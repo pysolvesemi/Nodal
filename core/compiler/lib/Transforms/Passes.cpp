@@ -8,6 +8,7 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Support/LogicalResult.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
+#include "nodal/Dialect/Nodal/AnalogEvents.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
@@ -807,6 +808,57 @@ LogicalResult verifyEffects(mlir::ModuleOp module) {
   return success();
 }
 
+// Procedural source values bind terminals through the canonical expression grammar,
+// not SSA operands. Only a successfully parsed, resolved expression establishes an
+// observation. Metadata substrings or unknown source functions cannot waive topology.
+llvm::DenseSet<Operation *> proceduralTerminalUses(Operation *owner) {
+  llvm::DenseSet<Operation *> observed;
+  auto observe = [&](Operation *use, llvm::StringRef value) {
+    llvm::DenseSet<Operation *> candidates;
+    auto parsed = parseAnalogSourceExpression(use, value);
+    std::function<void(const AnalogSourceExpression &)> walk =
+        [&](const AnalogSourceExpression &expression) {
+          if (expression.declaration && llvm::isa<TerminalOp, NodeOp>(expression.declaration))
+            candidates.insert(expression.declaration);
+          for (const auto &operand : expression.operands)
+            walk(operand);
+        };
+    if (succeeded(parsed))
+      walk(*parsed);
+    if (succeeded(parsed))
+      observed.insert(candidates.begin(), candidates.end());
+  };
+  owner->walk([&](Operation *use) {
+    if (use->getParentOfType<nodal::ModuleOp>().getOperation() != owner)
+      return;
+    auto value = [&](llvm::StringRef key) {
+      if (auto attr = use->getAttrOfType<StringAttr>(key))
+        observe(use, attr.getValue());
+    };
+    if (llvm::isa<AnalogVariableOp>(use))
+      value("initializer_value");
+    if (llvm::isa<AnalogAssignOp>(use)) {
+      if (auto metadata = use->getAttrOfType<DictionaryAttr>("metadata"))
+        if (auto rhs = metadata.getAs<StringAttr>("value"))
+          observe(use, rhs.getValue());
+      value("guard_value");
+    }
+    if (llvm::isa<AnalogIfArmOp>(use))
+      value("condition_value");
+    if (llvm::isa<AnalogCaseOp>(use))
+      value("selector_value");
+    if (llvm::isa<AnalogLoopOp>(use))
+      value("bound_value");
+    if (isAnalogEventExpression(use))
+      if (auto args = use->getAttrOfType<ArrayAttr>("arguments"))
+        for (auto argument : args)
+          if (auto fields = llvm::dyn_cast<DictionaryAttr>(argument))
+            if (auto rhs = fields.getAs<StringAttr>("value"))
+              observe(use, rhs.getValue());
+  });
+  return observed;
+}
+
 LogicalResult verifyAnalog(mlir::ModuleOp module) {
   if (failed(verifyGuard(module, "nodal.verify.analog_topology", "NODAL-VERIFY-ANALOG-001",
                          "analog topology analysis")) ||
@@ -822,6 +874,7 @@ LogicalResult verifyAnalog(mlir::ModuleOp module) {
     bool analog = false;
     bool bridge = false;
     const bool partial = isPartialPhysicalComponent(owner);
+    auto observed = proceduralTerminalUses(owner);
     owner->walk([&](Operation *operation) {
       llvm::StringRef name = operation->getName().getStringRef();
       if (name == "nodal.component_contract" || name == "nodal.terminal" || name == "nodal.node" ||
@@ -844,7 +897,7 @@ LogicalResult verifyAnalog(mlir::ModuleOp module) {
       if (name == "nodal.bridge")
         bridge = true;
       if ((name == "nodal.terminal" || name == "nodal.node") && operation->getNumResults() == 1 &&
-          operation->getResult(0).use_empty() && !partial &&
+          operation->getResult(0).use_empty() && !observed.contains(operation) && !partial &&
           booleanMetadata(operation, "allow_floating") != std::optional<bool>(true))
         result = emitFailure(operation, "NODAL-VERIFY-ANALOG-003",
                              "floating conservative terminal requires explicit approval");

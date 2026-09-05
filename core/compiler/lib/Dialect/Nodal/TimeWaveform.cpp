@@ -3,6 +3,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
+#include "nodal/Dialect/Nodal/AnalogEvents.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
@@ -75,6 +76,12 @@ FailureOr<std::string> dimension(Value value, unsigned depth = 0) {
   if (!op)
     return failure();
   auto operationName = name(op);
+  if (operationName == "nodal.analog_held_read") {
+    auto variable = resolveAnalogHeldVariable(op);
+    if (failed(variable))
+      return failure();
+    return llvm::cast<VariableType>((*variable)->getResult(0).getType()).getDimension().str();
+  }
   if (operationName == "nodal.real_literal")
     return unitDimension(metadataUnit(op));
   if (Operation *declaration = parameter(value)) {
@@ -143,6 +150,8 @@ std::string continuity(Value value, unsigned depth = 0) {
     return "constant";
   Operation *op = value.getDefiningOp();
   auto n = name(op);
+  if (n == "nodal.analog_held_read" && succeeded(resolveAnalogHeldVariable(op)))
+    return "piecewise-constant";
   if (n == "nodal.analog_transition" || n == "nodal.analog_abstime")
     return "continuous";
   if (n == "nodal.analog_slew" && op->getNumOperands() > 1)

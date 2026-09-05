@@ -1,0 +1,26 @@
+name: Increment 36 Resume Source
+on:
+  push:
+    branches: [automation/increment36-resume-source-20260905]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: f4eb8593aad5af4ce4898649106344755c0eaed6
+      - name: Bundle exact source histories
+        run: |
+          git update-ref refs/heads/recovery-implementation f4eb8593aad5af4ce4898649106344755c0eaed6
+          git update-ref refs/heads/recovery-dev 4d7783e9505d1263e7ff236e07e6ea1392ffceba
+          git bundle create /tmp/nodal36-recovery.bundle refs/heads/recovery-implementation refs/heads/recovery-dev
+          git bundle verify /tmp/nodal36-recovery.bundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nodal36-recovery-history
+          path: /tmp/nodal36-recovery.bundle
+          retention-days: 3

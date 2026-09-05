@@ -8,6 +8,7 @@
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
+#include "nodal/Dialect/Nodal/TimeWaveform.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -17,6 +18,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -66,6 +68,11 @@ constexpr llvm::StringLiteral kSupportedOperations[] = {
     "nodal.analog_select",
     "nodal.analog_ddt",
     "nodal.analog_idt",
+    "nodal.analog_transition",
+    "nodal.analog_slew",
+    "nodal.analog_absdelay",
+    "nodal.analog_abstime",
+    "nodal.analog_bound_step",
     "nodal.contribute",
 };
 
@@ -116,6 +123,7 @@ struct ModuleRenderState {
   llvm::DenseMap<Value, std::pair<std::string, std::string>> branches;
   llvm::DenseMap<Value, std::string> branchNames;
   llvm::DenseMap<Value, std::string> expressions;
+  llvm::DenseMap<Value, std::string> waveformNames;
   llvm::StringMap<std::string> parameters;
 };
 
@@ -264,6 +272,13 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
         return failure();
       rendered = (llvm::Twine(access) + "(<" + port->second + ">)").str();
     }
+  } else if (name == "nodal.analog_abstime") {
+    rendered = "$abstime";
+  } else if (nodal::isStatefulWaveformOperation(operation)) {
+    // A stateful source operator is evaluated exactly once in renderAnalog.
+    // Reaching it here without its materialized name is an ordering violation.
+    return emitMappedFailure(operation, "NODAL-ANALOG-036-006",
+                             "waveform state used before its single materialization");
   } else if (name == "nodal.analog_ddt") {
     if (operation->getNumOperands() != 1)
       return failure();
@@ -594,6 +609,30 @@ LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::ra
   output << "  analog begin\n";
   for (Operation &operation : region.front()) {
     llvm::StringRef name = operation.getName().getStringRef();
+    if (nodal::isStatefulWaveformOperation(&operation) || name == "nodal.analog_bound_step") {
+      std::string call = name == "nodal.analog_bound_step"   ? "$bound_step"
+                         : name == "nodal.analog_transition" ? "transition"
+                         : name == "nodal.analog_slew"       ? "slew"
+                                                             : "absdelay";
+      call += "(";
+      for (unsigned index = 0; index < operation.getNumOperands(); ++index) {
+        auto argument = renderExpression(operation.getOperand(index), state);
+        if (failed(argument))
+          return failure();
+        if (index)
+          call += ", ";
+        call += *argument;
+      }
+      call += ")";
+      if (name == "nodal.analog_bound_step")
+        output << "    " << call << ";\n";
+      else {
+        const auto &temporary = state.waveformNames[operation.getResult(0)];
+        output << "    " << temporary << " = " << call << ";\n";
+        state.expressions[operation.getResult(0)] = temporary;
+      }
+      continue;
+    }
     if (name != "nodal.contribute")
       continue;
     if (operation.getNumOperands() != 2)
@@ -732,6 +771,27 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
     if (!unit.empty())
       output << " // unit: " << unit;
     output << "\n";
+  }
+
+  // Reserve every authored identifier before assigning deterministic private names.
+  llvm::StringSet<> reservedNames;
+  definition->walk([&](Operation *op) {
+    for (llvm::StringRef attribute : {llvm::StringRef("name"), llvm::StringRef("sym_name")})
+      if (auto value = op->getAttrOfType<StringAttr>(attribute))
+        reservedNames.insert(value.getValue());
+  });
+  unsigned waveformIndex = 0;
+  for (Operation *analog : analogs) {
+    for (Operation &op : analog->getRegion(0).front()) {
+      if (!nodal::isStatefulWaveformOperation(&op))
+        continue;
+      std::string temporary;
+      do {
+        temporary = "waveform_" + std::to_string(waveformIndex++);
+      } while (!reservedNames.insert(temporary).second);
+      state.waveformNames[op.getResult(0)] = temporary;
+      output << "  real " << temporary << ";\n";
+    }
   }
 
   if ((!ports.empty() || !nodes.empty() || !namedBranches.empty() || !parameters.empty()) &&

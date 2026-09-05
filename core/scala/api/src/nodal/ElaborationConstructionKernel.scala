@@ -134,6 +134,21 @@ private[nodal] final case class KernelContinuousOperatorSnapshot(
     source: Option[SourceSpan]
 )
 
+private[nodal] final case class KernelWaveformOperatorSnapshot(
+    path: String,
+    operation: String,
+    owner: String,
+    context: String,
+    operands: Vector[String],
+    operandDimensions: Vector[String],
+    resultDimension: String,
+    inputContinuity: String,
+    outputContinuity: String,
+    stateId: Option[String],
+    analyses: Vector[String],
+    source: Option[SourceSpan]
+)
+
 private[nodal] final case class KernelWaiverSnapshot(
     kind: String,
     id: String,
@@ -157,6 +172,7 @@ private[nodal] final case class ConstructionSnapshot(
     sourceMap: Vector[SourceMapEntry] = Vector.empty,
     analogRegions: Vector[KernelAnalogRegionSnapshot] = Vector.empty,
     continuousOperators: Vector[KernelContinuousOperatorSnapshot] = Vector.empty,
+    waveformOperators: Vector[KernelWaveformOperatorSnapshot] = Vector.empty,
     analogSemantics: AnalogEquationRuntime.Snapshot =
       AnalogEquationRuntime.Snapshot(Vector.empty, Vector.empty),
     analogProcedural: Vector[AnalogProceduralRuntime.Snapshot] = Vector.empty,
@@ -330,6 +346,18 @@ private final class ConstructionSession(val options: EmitOptions):
   private var analogSemanticContext: Option[AnalogSemanticContext] = None
   private val continuousOperators: mutable.ArrayBuffer[ContinuousOperatorRecord] =
     mutable.ArrayBuffer.empty
+  private val waveformOperators: mutable.ArrayBuffer[(
+      ExpressionRef,
+      String,
+      Vector[Expr[Real]],
+      String,
+      Vector[String],
+      String,
+      String,
+      String
+  )] =
+    mutable.ArrayBuffer.empty
+  private var waveformForbiddenDepth = 0
   private val semanticOrigin = new SemanticOriginBuilder
   private var semanticResult: Option[SemanticOriginResult] = None
 
@@ -525,6 +553,154 @@ private final class ConstructionSession(val options: EmitOptions):
       inputDimension,
       resultDimension
     )
+
+  // This check is deliberately structural: parameter defaults are not substituted for
+  // symbolic overrides, and time-dependent operators are never classified as constants.
+  private def waveformStatic(value: Any): Boolean = value match
+    case _: Param[?] => true
+    case expression: KernelExpr[?] =>
+      expression.literal.nonEmpty ||
+      (Set("analog_add", "analog_sub", "analog_mul", "analog_div", "analog_neg")
+        .contains(expression.operation.getOrElse("")) &&
+        expression.operands.forall(waveformStatic))
+    case _ => false
+
+  private def waveformConstant(value: Any): Option[Double] = value match
+    case expression: KernelExpr[?] =>
+      expression.literal.filter(_.kind == "real").flatMap(_.value.toDoubleOption).orElse:
+        expression.operands.map(waveformConstant) match
+          case Vector(Some(a), Some(b)) => expression.operation match
+              case Some("analog_add") => Some(a + b)
+              case Some("analog_sub") => Some(a - b)
+              case Some("analog_mul") => Some(a * b)
+              case Some("analog_div") => Some(a / b)
+              case _ => None
+          case Vector(Some(a)) if expression.operation.contains("analog_neg") => Some(-a)
+          case _ => None
+    case _ => None
+
+  private def waveformContinuity(value: Any): String =
+    if waveformStatic(value) then "constant"
+    else
+      value match
+        case expression: KernelExpr[?] => expression.operation match
+            case Some("analog_transition") => "continuous"
+            case Some("analog_slew") if expression.operands.size > 1 => "continuous"
+            case Some("analog_slew") => waveformContinuity(expression.operands.head)
+            // A changing transport delay can introduce jumps even for a smooth input.
+            case Some("analog_absdelay") => "unknown"
+            case Some("analog_abstime") => "continuous"
+            case Some("analog_select") if expression.operands.drop(1).forall(waveformStatic) =>
+              "piecewise-constant"
+            case _ => "unknown"
+        case _ => "unknown"
+
+  def withWaveformForbidden[A](body: => A): A =
+    waveformForbiddenDepth += 1
+    try body
+    finally waveformForbiddenDepth -= 1
+
+  def registerWaveformOperator(
+      value: KernelExpr[Real],
+      operation: String,
+      inputs: Vector[Expr[Real]]
+  ): Unit =
+    val module = currentModule
+    val context = analogSemanticContext match
+      case Some(candidate)
+          if candidate.module == module.handle &&
+            candidate.kind == AnalogEquationRuntime.RegionKind.Equation => "equation"
+      case Some(candidate)
+          if candidate.module == module.handle &&
+            candidate.kind == AnalogEquationRuntime.RegionKind.Contribution => "contribution"
+      case None if analogStack.lastOption.exists(_.module == module.handle) => "legacy-analog"
+      case _ => "illegal"
+    if context == "illegal" || waveformForbiddenDepth != 0 then
+      fail(
+        "NODAL-ANALOG-036-001",
+        "time/waveform operators require an unconditional continuous region"
+      )
+    val allowed = operation match
+      case "analog_transition" => inputs.size >= 1 && inputs.size <= 5
+      case "analog_slew" => inputs.size >= 1 && inputs.size <= 3
+      case "analog_absdelay" => inputs.size == 2 || inputs.size == 3
+      case "analog_abstime" => inputs.isEmpty
+      case "analog_bound_step" => inputs.size == 1
+      case _ => false
+    if !allowed then fail("NODAL-ANALOG-036-002", "invalid time/waveform operator or arity")
+    def checkOwner(input: Any): Unit = input match
+      case reference: AnyRef =>
+        val foreignExpression =
+          Option(expressionIds.get(reference)).exists(_.module != module.handle)
+        val foreignDeclaration =
+          Option(declarationIds.get(reference)).exists(_.module != module.handle)
+        if foreignExpression || foreignDeclaration then
+          fail("NODAL-ANALOG-036-002", "waveform operands must belong to the operator Module")
+        input match
+          case expression: KernelExpr[?] => expression.operands.foreach(checkOwner)
+          case _ => ()
+      case _ => ()
+    inputs.foreach(checkOwner)
+    val dimensions = inputs.map(inferAnalogDimension)
+    if dimensions.exists(_.isUnknown) then
+      fail("NODAL-ANALOG-036-003", "waveform operand requires a known real dimension")
+    val effect = operation == "analog_bound_step"
+    val resultDimension =
+      if effect then "none"
+      else if operation == "analog_abstime" then "time"
+      else dimensions.head.signature
+    val inputContinuity =
+      if operation == "analog_abstime" || effect then "none"
+      else waveformContinuity(inputs.head)
+    if operation == "analog_transition" &&
+      !Set("constant", "piecewise-constant").contains(inputContinuity)
+    then
+      fail(
+        "NODAL-ANALOG-036-005",
+        "transition requires proven piecewise-constant input; use slew for continuous input"
+      )
+    inputs.zipWithIndex.foreach: (input, index) =>
+      val timing = effect || (operation != "analog_slew" && index > 0)
+      val rate = operation == "analog_slew" && index > 0
+      val expected =
+        if timing then AnalogDimension.Time
+        else if rate then dimensions.head.divide(AnalogDimension.Time)
+        else dimensions(index)
+      // A dimensionless literal zero is accepted only for timing slots; a zero
+      // carrying another physical dimension cannot disguise a unit mismatch.
+      val zeroTime = timing && dimensions(index).powers.isEmpty &&
+        waveformConstant(input).contains(0.0)
+      if !zeroTime && dimensions(index).powers != expected.powers then
+        fail(
+          "NODAL-ANALOG-036-003",
+          "time arguments require seconds and slew rates require input/time"
+        )
+      waveformConstant(input).foreach: number =>
+        val badRange =
+          if rate then (if index == 1 then number <= 0.0 else number >= 0.0)
+          else if operation == "analog_absdelay" && index > 0 then number <= 0.0
+          else timing && number < 0.0
+        if !number.isFinite || badRange then
+          fail("NODAL-ANALOG-036-004", "non-finite value or invalid waveform timing/rate range")
+    if operation == "analog_absdelay" && inputs.size == 3 && !waveformStatic(inputs(2)) then
+      fail("NODAL-ANALOG-036-007", "maximum delay must be a constant expression")
+    val outputContinuity =
+      if effect then "none"
+      else waveformContinuity(value)
+    val reference = captureExpression(value).getOrElse(
+      fail("NODAL-ANALOG-036-002", "waveform operator has no construction owner")
+    )
+    waveformOperators +=
+      ((
+        reference,
+        operation,
+        inputs,
+        context,
+        dimensions.map(_.signature),
+        resultDimension,
+        inputContinuity,
+        outputContinuity
+      ))
 
   def attachInstance(instance: AnyRef, childModule: Module): Unit =
     if !moduleIds.containsKey(childModule) then
@@ -914,6 +1090,13 @@ private final class ConstructionSession(val options: EmitOptions):
                 case Vector(left, right) =>
                   inferAnalogDimension(left).divide(inferAnalogDimension(right))
                 case _ => AnalogDimension.Unknown
+            case Some("analog_neg") =>
+              expression.operands.headOption.map(
+                inferAnalogDimension
+              ).getOrElse(AnalogDimension.Unknown)
+            case Some("analog_select") =>
+              expression.operands.drop(1).map(inferAnalogDimension).reduceOption(_.compatibleAdd(_))
+                .getOrElse(AnalogDimension.Unknown)
             case Some("analog_ddt") =>
               expression.operands.headOption.map(inferAnalogDimension)
                 .map(_.divide(AnalogDimension.Time))
@@ -930,6 +1113,7 @@ private final class ConstructionSession(val options: EmitOptions):
               expression.operands.collectFirst { case state: AnalogState =>
                 physicalDimension(state.dimension)
               }.getOrElse(AnalogDimension.Unknown)
+            case Some("analog_abstime") => AnalogDimension.Time
             case Some("candidate-analysis-time") => AnalogDimension.Time
             case Some("candidate-analysis-frequency") =>
               AnalogDimension.Dimensionless.divide(AnalogDimension.Time)
@@ -1814,6 +1998,44 @@ private final class ConstructionSession(val options: EmitOptions):
       )
     .sortBy(_.path)
 
+  private def waveformOperatorSnapshots(
+      sourceMap: Vector[SourceMapEntry]
+  ): Vector[KernelWaveformOperatorSnapshot] =
+    val sources = sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
+    waveformOperators.toVector.map:
+      case (
+            reference,
+            operation,
+            inputs,
+            context,
+            dimensions,
+            result,
+            inputContinuity,
+            outputContinuity
+          ) =>
+        val path = expressionPath(reference)
+        val state = Set("analog_transition", "analog_slew", "analog_absdelay").contains(operation)
+        KernelWaveformOperatorSnapshot(
+          path,
+          operation,
+          modulePath(reference.module),
+          context,
+          inputs.map(input =>
+            pathOf(input).getOrElse(
+              fail("NODAL-ANALOG-036-002", "waveform input has no semantic path", Some(path))
+            )
+          ),
+          dimensions,
+          result,
+          inputContinuity,
+          outputContinuity,
+          if state then Some(s"$path.state") else None,
+          if operation == "analog_bound_step" then Vector("transient")
+          else Vector("ac", "dc", "initialization", "noise", "operating-point", "transient"),
+          sources.get(path)
+        )
+    .sortBy(_.path)
+
   private def analogSnapshots(): Vector[KernelAnalogRegionSnapshot] =
     analogRegions.toVector.sortBy(region => (modulePath(region.module), region.ordinal)).map:
       region =>
@@ -1886,7 +2108,8 @@ private final class ConstructionSession(val options: EmitOptions):
       "analog-signal"
     )
     val analog =
-      kinds.exists(analogKinds.contains) || snapshot.continuousOperators.nonEmpty
+      kinds.exists(analogKinds.contains) || snapshot.continuousOperators.nonEmpty ||
+        snapshot.waveformOperators.nonEmpty
     val digital = (kinds -- analogKinds).nonEmpty || snapshot.interfaceAbi.nonEmpty ||
       snapshot.resolvedNets.nonEmpty
     (digital, analog) match
@@ -1922,6 +2145,7 @@ private final class ConstructionSession(val options: EmitOptions):
       sourceMap = semantic.sourceMap,
       analogRegions = analogSnapshots(),
       continuousOperators = continuousOperatorSnapshots(semantic.sourceMap),
+      waveformOperators = waveformOperatorSnapshots(semantic.sourceMap),
       analogSemantics = analogSemanticRecorder.snapshot,
       analogProcedural = AnalogProceduralConstruction.snapshots(module =>
         modulePath(moduleHandle(module))
@@ -2011,6 +2235,17 @@ private[nodal] object ConstructionKernel:
     active.foreach(
       _.registerContinuousOperator(value, operation, input, initialValue)
     )
+
+  def waveformOperator(
+      value: KernelExpr[Real],
+      operation: String,
+      inputs: Vector[Expr[Real]]
+  ): Unit =
+    active.foreach(_.registerWaveformOperator(value, operation, inputs))
+
+  def waveformForbidden[A](body: => A): A = active match
+    case Some(session) => session.withWaveformForbidden(body)
+    case None => body
 
   def attachInstance(instance: Instance[? <: Module], child: Module): Unit =
     active.foreach(_.attachInstance(instance, child))

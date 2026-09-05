@@ -1,6 +1,7 @@
 add_mlir_dialect_library(NodalDialect
   NodalDialect.cpp
   AnalogNumeric.cpp
+  TimeWaveform.cpp
   ConservativeConnectivity.cpp
   NatureDiscipline.cpp
   ParameterModel.cpp

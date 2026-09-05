@@ -142,6 +142,7 @@ private[nodal] object ScalaToMlirBridge:
         "nodal.bridge.source_map" -> sourceMapInventory,
         "nodal.bridge.analog_semantics" -> analogSemanticInventory,
         "nodal.bridge.continuous_operators" -> continuousOperatorInventory,
+        "nodal.bridge.waveform_operators" -> waveformOperatorInventory,
         "nodal.bridge.analog_procedural" -> AnalogProceduralMlir.inventory(snapshot),
         "nodal.target.profile" -> quoted(targetProfile),
         "nodal.backend.profile" -> quoted(backendProfile),
@@ -182,6 +183,7 @@ ${indent(body, 2)}
       )
       val analog = snapshot.analogRegions.nonEmpty ||
         snapshot.continuousOperators.nonEmpty ||
+        snapshot.waveformOperators.nonEmpty ||
         snapshot.analogSemantics.equations.nonEmpty ||
         snapshot.analogSemantics.contributions.nonEmpty ||
         snapshot.analogProcedural.nonEmpty ||
@@ -237,6 +239,33 @@ ${indent(body, 2)}
             )
           )
       array(equations ++ contributions)
+
+    private def waveformOperatorAttributes(value: KernelWaveformOperatorSnapshot)
+        : Vector[(String, String)] =
+      Vector(
+        "operator_contract" -> quoted("increment36"),
+        "operator_id" -> quoted(value.path),
+        "owner" -> quoted(value.owner),
+        "context" -> quoted(value.context),
+        "operand_dimensions" -> array(value.operandDimensions.map(quoted)),
+        "result_dimension" -> quoted(value.resultDimension),
+        "input_continuity" -> quoted(value.inputContinuity),
+        "output_continuity" -> quoted(value.outputContinuity),
+        "analyses" -> array(value.analyses.map(quoted))
+      ) ++ value.stateId.toVector.map(state => "state_id" -> quoted(state))
+
+    private def waveformOperatorInventory: String =
+      array(snapshot.waveformOperators.map: value =>
+        dictionary(waveformOperatorAttributes(value) ++ Vector(
+          "operation" -> quoted(value.operation),
+          "operands" -> array(value.operands.map(quoted))
+        ) ++ value.source.toVector.flatMap(source =>
+          Vector(
+            "source_file" -> quoted(source.path),
+            "source_line" -> integer(source.line),
+            "source_column" -> integer(source.column)
+          )
+        )))
 
     private def continuousOperatorInventory: String =
       array(
@@ -318,6 +347,16 @@ ${indent(body, 2)}
         snapshot.continuousOperators.flatMap(_.stateId),
         "NODAL-ANALOG-035-005",
         "integral state identity"
+      )
+      requireUnique(
+        snapshot.waveformOperators.map(_.path),
+        "NODAL-ANALOG-036-002",
+        "waveform identity"
+      )
+      requireUnique(
+        snapshot.waveformOperators.flatMap(_.stateId),
+        "NODAL-ANALOG-036-006",
+        "waveform state"
       )
       if !moduleSymbols.contains(snapshot.root) then
         fail(
@@ -762,6 +801,18 @@ ${indent(body, 2)}
               semanticPath = expression.path
             )
             values.update(expression.path, result -> "f64")
+          case "analog_neg" =>
+            val input = operand(expression.operands.head)
+            lines += operation(
+              "nodal.analog_neg",
+              results = Vector(result),
+              operands = Vector(input._1),
+              operandTypes = Vector(input._2),
+              resultTypes = Vector("f64"),
+              attributes = Vector("metadata" -> metadata),
+              semanticPath = expression.path
+            )
+            values.update(expression.path, result -> "f64")
           case "analog_ddt" =>
             if expression.operands.size != 1 then
               fail("NODAL-RC-ARITY-001", "ddt operation has invalid arity", Some(expression.path))
@@ -794,6 +845,35 @@ ${indent(body, 2)}
               semanticPath = expression.path
             )
             values.update(expression.path, result -> "f64")
+          case "analog_transition" | "analog_slew" | "analog_absdelay" |
+              "analog_abstime" | "analog_bound_step" =>
+            val contract = snapshot.waveformOperators.find(_.path == expression.path).getOrElse(
+              fail(
+                "NODAL-ANALOG-036-002",
+                "waveform expression has no contract",
+                Some(expression.path)
+              )
+            )
+            if contract.operation != expression.operation ||
+              contract.operands != expression.operands
+            then
+              fail(
+                "NODAL-ANALOG-036-002",
+                "waveform inventory differs from expression",
+                Some(expression.path)
+              )
+            val inputs = expression.operands.map(operand)
+            val effect = expression.operation == "analog_bound_step"
+            lines += operation(
+              s"nodal.${expression.operation}",
+              results = if effect then Vector.empty else Vector(result),
+              operands = inputs.map(_._1),
+              operandTypes = inputs.map(_._2),
+              resultTypes = if effect then Vector.empty else Vector("f64"),
+              attributes = waveformOperatorAttributes(contract) :+ ("metadata" -> metadata),
+              semanticPath = expression.path
+            )
+            if !effect then values.update(expression.path, result -> "f64")
           case operationName =>
             fail(
               "NODAL-RC-OPERATION-001",

@@ -1,0 +1,35 @@
+# Increment 36 — Time and waveform operators
+
+**Status:** Implementation in progress; not evidence-closed.  
+**Baseline:** Increment 35 closure merge `99a4c379758489206a72fdbd883d7f89feecf520` (PR #114).  
+**Design gate:** [NodalTimeWaveformOperators-DG-v0.1](../design-gates/NodalTimeWaveformOperators-DG-v0.1.md).
+
+## Implementation
+
+The public Scala API adds all supported argument counts for `transition`, `slew`, and `absdelay`, plus `abstime` and effect-only `boundStep`. Construction records identity, owner, context, operand dimensions, result dimension, continuity, state identity, analysis inventory, and source mapping. Argument omissions are represented by actual arity, not invented literals.
+
+The bridge serializes a dedicated waveform inventory and emits five first-class operations for legacy analog regions. Existing equation/contribution source inventories remain distinct from native residual construction. The native verifier independently checks operator contracts and reconstructs legacy scalar dimensions from their definitions. Constant-time parameters are not confused with constant-valued defaults under overrides.
+
+The backend materializes each stateful operator once into a collision-free real temporary. Repeated uses share that temporary. Unused filter invocations and step requests are retained. Constant folding may simplify arguments but may not replace time observations, filter histories, or step effects.
+
+## Executable matrix
+
+| Layer | Evidence entry point |
+|---|---|
+| Construction | `TimeWaveformConstructionTests.scala` |
+| Serialization | `TimeWaveformBridgeTests.scala` |
+| Real source witness | `nodal.increment36fixture.Increment36ConstructionCheck` |
+| Native typed fixture | `core/compiler/test/IR/analog-time-waveform.mlir` |
+| Native rejection and backend matrix | `tests/compiler/fixtures/increment36/run_native_matrix.py` |
+| Repository and mutation checks | `scripts/check_increment36.py`, `tests/compiler/test_increment36.py` |
+| Required increment CI | `.github/workflows/increment-36-time-waveform-operators.yml` |
+
+The native matrix exercises every diagnostic family through both ordinary parsing/verification and the constant-folding/canonicalization/common-subexpression pipeline. It additionally checks deterministic repeated optimization, exact before/after emission, shared-state references, unused-state retention, effect-only retention, and authored-name collisions. The workflow feeds the actual Scala-emitted MLIR to the compiled native tools; handwritten IR alone is not sufficient evidence.
+
+## Closure policy
+
+The manifest remains `implementation-in-progress` with null validation evidence, and the roadmap checkbox remains open. Local checks, remote compilation, an open PR, and even pre-merge green CI are not interchangeable with accepted merge evidence. Implementation acceptance, exact post-merge validation, and the separate evidence-closure update must be recorded before completion is claimed.
+
+## Deferred work
+
+This increment does not execute numerical simulations or prove simulator accuracy. Event-held variable continuity, procedural waveform composition, residual DAE construction, analysis-specific AC/noise lowering, and full Verilog-AMS lowering remain deferred. Runtime argument checks for values not provably constant belong to the emitted target intrinsic, not to speculative substitution of defaults.

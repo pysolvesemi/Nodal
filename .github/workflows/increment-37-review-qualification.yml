@@ -36,14 +36,16 @@ jobs:
           python3 - <<'PY'
           import base64, hashlib, json, lzma, pathlib, subprocess
           def git(*args): return subprocess.check_output(['git', *args]).decode().strip()
-          assert git('rev-parse', 'HEAD^') == '4e8472a3247b4309eca5e2104bd2b06e28e42d08'
+          expected = '4e8472a3247b4309eca5e2104bd2b06e28e42d08'
+          assert git('merge-base', 'HEAD', expected) == expected
           subprocess.run(['git', '-c', 'user.name=Nodal qualification', '-c', 'user.email=qualification@localhost', 'merge', '--no-commit', '--no-ff', '8d4dcb3b0a04314f2ec33ccd2006c71ed20c5d61'], check=True)
-          blob = json.loads(subprocess.check_output(['gh', 'api', 'repos/pysolvesemi/Nodal/git/blobs/5a8b86d63cc28eb058a282e6ec2bc6d3aa53122b']))
+          blob = json.loads(subprocess.check_output(['gh', 'api', 'repos/pysolvesemi/Nodal/git/blobs/9028c03cc64e5d35516b25337c89a6ceaa10fc68']))
           patch = lzma.decompress(base64.b64decode(blob['content']))
-          assert len(patch) == 20993 and hashlib.sha256(patch).hexdigest() == '830dc4aad3d790645f79aa4532f4f08dada0a586b16985e56e3b4155113eac9d'
+          assert len(patch) == 19407 and hashlib.sha256(patch).hexdigest() == '103b2b87991727090352d35a33336b79d3eea11b2a3624444f43f30e4c4a2f81'
           subprocess.run(['git', 'apply', '--unidiff-zero', '--check', '-'], input=patch, check=True)
           subprocess.run(['git', 'apply', '--unidiff-zero', '-'], input=patch, check=True)
           pathlib.Path('.github/workflows/increment-37-review-qualification.yml').unlink()
+          subprocess.run(['git', 'add', '-A'], check=True)
           PY
       - name: Format and execute repository gates
         if: steps.apply.outcome == 'success'

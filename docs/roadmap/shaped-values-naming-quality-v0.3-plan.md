@@ -353,6 +353,249 @@ The gate freezes:
 - constant construction;
 - source mapping and diagnostics.
 
+The additional `reduceBalancedTree` candidate and its implementation obligations
+are specified below; it does not silently change the semantics of `reduce`,
+`fold`, or the historical Increment 15 freeze.
+
+## Typed symbolic balanced-tree reductions (planned)
+
+**Added:** 2026-09-06
+**Status:** Roadmap requirement; API validation, implementation, and evidence remain open.
+**Owners:** Existing digital Increments 54-58, pipeline Increments 59-64, backend
+and verification Increments 65-67, and documentation Increment 92.
+
+### Reference and intended improvement
+
+Use SpinalHDL's `reduceBalancedTree` as the usability and behavioral reference,
+not as a dependency or a second compiler architecture. Its documented API takes
+a binary reducer. The inspected implementation pairs adjacent elements, carries
+an unpaired tail forward, rejects an empty collection, bypasses a singleton, and
+provides a `levelBridge(value, level)` overload. The bridge is applied to both
+pair results and unpaired tails, with levels starting at zero. See the pinned
+upstream implementation and official documentation in the references below.
+
+Nodal must offer a similarly concise source API while adding first-class
+symbolic counts and widths, typed stage/result geometry, full nested aggregate
+support, explicit latency/effect contracts, deterministic target lowering, and
+independent correctness evidence. These are Nodal acceptance requirements, not
+a claim of measured superiority over SpinalHDL or a source-compatibility promise.
+
+Candidate source forms, to be compile-tested and approved before implementation:
+
+```scala
+val samples = in(Vec(UInt(width), count))
+val sum = samples.reduceBalancedTree((left, right) => left + right)
+val anyHit = hits.reduceBalancedTree((left, right) => left | right)
+val winner = candidates.reduceBalancedTree(chooseWinner)
+```
+
+The basic method must remain easy to discover on `Vec` and supported typed
+views. Fixed Scala collections of hardware values may be convenient adapters,
+but must not define the semantic representation of a symbolic `Vec`. Reuse the
+existing Scala 3, construction, shape, arithmetic, pipeline, and authoritative
+MLIR contracts. Exact overloads and optional bridge/context spelling require
+the applicable digital API design gate; this edit does not add an accepted API,
+change a frozen machine-readable surface, or reopen a completed increment.
+
+### Ordered tree, edge cases, and operator contract
+
+For a positive element count `N`, the required base topology is level-wise,
+adjacent-pair reduction in original logical order:
+
+- Start with level zero containing all `N` inputs. Each reduction round combines
+  elements `(0, 1)`, `(2, 3)`, and so on, left operand first. Carry an odd final
+  element to the next level without inventing a second operand.
+- Continue with `ceil(previous_count / 2)` elements until one remains. There
+  are `ceil(log2(N))` rounds and `N - 1` binary-combine nodes before optional
+  semantics-preserving optimization. Singleton input has zero rounds and returns
+  its element without invoking the reducer or level bridge.
+- Reject empty inputs and parameter envelopes permitting zero/negative counts.
+  Do not fabricate a zero, identity, padding leaf, or invalid zero-width range.
+  An identity-taking fold would be a distinct, explicitly specified API.
+- Do not reorder leaves or silently replace an ordered left/right fold with a
+  balanced tree. Calling this method requests the documented grouping. For
+  example, five inputs group as `op(op(op(x0,x1),op(x2,x3)),x4)` without a bridge.
+
+Associativity is required to claim equivalence to a differently grouped
+reduction; commutativity is required only for transformations that reorder
+operands. The ordered tree itself must support associative non-commutative
+operators and order-sensitive record selection with explicit tie behavior.
+Non-associative reducers have the specified tree result, not an implied
+left-fold result. Width growth, truncation, saturation, rounding, comparison
+unknowns, and four-state rules are part of the operator contract; real-number
+algebra alone cannot justify reassociation of finite-width hardware.
+
+The default operation is combinational, with no implicit state, iteration over
+clock cycles, memory, CDC, or protocol conversion. The reducer describes a typed
+hardware expression/region. Reject unsupported stateful operations, ambient
+mutable Scala effects, dynamic topology, or effects whose evaluation count and
+ordering cannot be preserved; do not guess purity by recognizing source text.
+
+### Symbolic counts, widths, and typed lowering
+
+Preserve `COUNT`, each leaf width, and independent nested Vec dimensions as typed
+symbolic expressions from construction through IR, hierarchy, optimization, and
+HDL. Derive stage counts and subtree sizes symbolically, including odd tails,
+under the declared legal parameter envelope. Legal HDL overrides must rebuild
+the tree during target elaboration without rerunning Scala or cloning one module
+per count. Ordinary Scala collection length or one default elaboration value is
+not the authority for symbolic geometry.
+
+Represent the ordered reduction and reducer/bridge regions in the existing
+typed compiler IR, with source origin, parameter constraints, subtree membership,
+per-node result type, and optional latency metadata. A level/node context used
+by callbacks is structural and typed: concrete instances may expose concrete
+indices, while symbolic instances must not be coerced into native Scala `Int`
+control flow. Reject unsupported callback staging with a source-located error.
+No value-shadow reconstruction, anonymous packed-bit type erasure, RTL-text
+rewriting, or component-specific callback recognition is permitted.
+
+Implement generic portable-Verilog stage/generate lowering with a proven
+termination/size-decrease argument. Each specialization must have legal constant
+widths and in-bounds selections; the singleton branch must never elaborate an
+absent pair or zero-width intermediate. Do not require recursive HDL module
+instantiation for the baseline. Any alternative lowering is profile-checked and
+must preserve the same typed tree, width, ordering, and bridge behavior.
+
+Keep lossless Nodal arithmetic by default. Growing intermediate values must not
+be forced back into the original element width merely to fit a homogeneous
+stage buffer. Preserve signedness, explicit conversions, and independently
+inferred result widths for every leaf and level, including unequal subtree
+widths and odd carries. For uniform `W`-bit inputs, `W + ceil(log2(N))` is a safe
+sum width for unsigned or two's-complement signed addition, and `N * W` is a
+safe full-product width. These are arithmetic-specific bounds, not universal
+rules for arbitrary reducers. Tighter widths need range evidence; narrowing,
+wrapping, and saturation require explicit source intent. Incompatible stage
+shapes/types must fail rather than being truncated or silently reinterpreted.
+
+### Whole records, nested Vecs, and named field vectors
+
+Support `Bool`, `Bits`, `UInt`, `SInt`, enums where the reducer is legal, and
+complete directionless Bundle/Struct values with arbitrary supported nested Vecs
+and fields. A callback may select an entire record based on one field or compute
+multiple output fields from multiple input fields. Preserve correlations among
+scores, tags, validity, payloads, and positions; never replace a whole-record
+callback with independent per-field reductions unless equivalence is proved.
+
+Reducing an outer Vec of records containing inner Vecs must preserve the inner
+dimensions and each field's independent width. Explicit multidimensional axis
+selection or a documented row-major shape-flattening view determines the reduced
+dimensions; it must not implicitly reduce every scalar bit or erase the remaining
+shape. Freeze axis/view spellings with the API gate rather than assuming them.
+
+Compose with FV-01 through FV-06: the same `Vec[Bundle/Struct]` source and reducer
+must work with whole-record packed and recursive named field-vector boundaries,
+including `pixels_color_red` and `pixels_position_x`. Layout affects transport,
+not callback semantics, record identity, logical serialization order, or result
+geometry. Inputs, outputs, parent/child bindings, and registered records retain
+their typed leaf paths. Do not require source rewrites, manual transposition,
+per-field annotations, or a special pixel/StreamFifo implementation.
+
+### Level bridges and explicit pipelining
+
+Plan an optional level-bridge capability at least as expressive as the SpinalHDL
+reference, integrated with Nodal's domain and pipeline contracts rather than
+arbitrary hidden mutation. After each round, apply the bridge exactly once to
+every next-level value, including the odd carry and final result. Start bridge
+level numbering at zero; a singleton calls no bridge. A bridge may transform a
+value as well as request an explicit supported stage, so its location and count
+are semantically observable and cannot be optimized away without proof.
+
+The identity bridge adds no state. Registered bridges must declare or infer from
+an approved typed primitive their clock/reset domain, enable, latency, reset
+value/policy, and effects. Delay odd tails and all associated fields/sidebands
+through the same selected cuts as paired results. Mixed-latency paths must be
+balanced under an explicit policy or rejected, never silently combined from
+different transactions. One register after every round yields a latency of
+`ceil(log2(N))` cycles for a fixed-rate tree; singleton latency remains zero unless
+a separate output-delay contract is requested. Other cut policies publish their
+exact, possibly parameter-dependent latency.
+
+Reuse Increments 59-64 for fixed-rate, valid-only, and elastic scheduling, stalls,
+bubbles, flush/reset behavior, sideband alignment, and latency-aware hierarchy.
+A plain Vec of data must not acquire `Valid`/`Stream` semantics automatically.
+A parameter-dependent latency must remain explicit in the module contract, or a
+separately requested fixed-latency wrapper must add verified compensation.
+Automatic scheduling may operate only in an explicitly selected pipeline region;
+manual bridges are anchors and must not be duplicated or retimed across domains.
+
+### Readability, quality, and independent evidence
+
+Use semantic names such as `sum_level_0_node_0` or
+`winner_level_1_node_0_position_x` for required materialized values, retaining
+caller-local names, logical subtree paths, and source maps. Safe inlining remains
+allowed; do not force a wire solely for naming. Report input count, symbolic
+stage geometry, combine-node count, operator depth, per-node/field widths, stage
+cuts, domains, latency, layout mapping, and implementation/profile constraints.
+Balanced operator depth is not a promise of physical timing closure, especially
+when arithmetic widths or operator delays grow across levels.
+
+Future acceptance must compare generated parameterized RTL against an independent
+ordered-tree reference, plus full-precision arithmetic or record-selection
+oracles where applicable. Do not use the same tree builder, packing mapper, or
+width-inference code for both candidate and oracle. SpinalHDL fixtures may provide
+an additional differential reference only where arithmetic, widths, grouping,
+bridge, reset, and four-state contracts match; document intentional differences.
+
+Require parse/elaboration/simulation with the pinned Icarus and Verilator lanes,
+Yosys synthesis/structural checks, and combinational, latency-aware sequential,
+or protocol-aware formal/equivalence evidence as appropriate. Compare optimized
+RTL to the untouched pre-optimization baseline as well as checking independent
+semantics. Label finite parameter matrices accurately; do not claim a proof for
+all symbolic counts from a few specializations. A general parametric claim needs
+an explicit proof argument/obligation in addition to tool-backed instances.
+
+### Balanced-tree implementation checklist
+
+These tasks extend the existing owning increments. All remain unchecked; no
+implementation, test execution, CI, or feature-completion claim is made here.
+
+- [ ] **BT-01 — API and semantic contract:** Increments 54-55 compile-test the
+  concise Vec/view method, generic reducers, and proposed bridge/context surface
+  with separate-library Scala 3 use. Approve grouping, ordering, singleton/empty
+  behavior, result typing, and stage/effect rules through the applicable gate.
+- [ ] **BT-02 — Symbolic tree IR and structural lowering:** Increments 54-55 and
+  58 implement authoritative typed reduction regions, symbolic stage/subtree
+  geometry, hierarchy parameter binding, callback staging, source diagnostics,
+  and terminating lowering without default-value specialization or a second IR.
+- [ ] **BT-03 — Numeric and composite closure:** Increments 54-55 and 58 cover
+  widening sums/products, unequal widths, signed/unsigned rules, explicit lossy
+  operations, whole-record/cross-field callbacks, nested Vecs, independent inner
+  dimensions, and preserved FV named-field layout/ABI semantics.
+- [ ] **BT-04 — Bridges, domains, and pipeline integration:** Increments 56-64
+  implement identity/value-transforming and explicit registered bridges, exact
+  invocation placement/count, odd-tail alignment, reset/enable/domain handling,
+  parameter-dependent latency, and fixed/valid/elastic composition. Keep the
+  combinational API available without requiring automatic scheduling to run.
+- [ ] **BT-05 — Portable emission and quality:** Increment 65 emits parameterized
+  stage/generate RTL with legal singleton/odd branches, independent stage/field
+  widths, deterministic semantic names, manifests, and source maps. Increments
+  83-88 must preserve the contract through later target optimization passes.
+- [ ] **BT-06 — Positive, negative, and scale matrix:** Increments 66-67 cover
+  counts `1, 2, 3, 5, 7, 8, 9, 16, 17, 31, 32, 33`, width one and larger widths,
+  independent count/width/inner-dimension overrides on the same emitted module,
+  zero/negative/runtime rejection, rank-one through rank-four views, hierarchical
+  instances, order-sensitive and associative non-commutative reducers, four-state
+  cases, Boolean/bitwise/min/max/sum/product/arg-selection, cross-field records,
+  identity/transforming/registered bridges, multiple cut policies, reset/stalls,
+  and illegal effects/shape/domain combinations. Measure scaling, operator depth,
+  area, emitted size, and compilation cost without substituting timing estimates
+  for measured evidence; include larger legal-envelope boundary cases.
+- [ ] **BT-07 — Independent functional and optimization proof:** Increments
+  66-67 add independent reference models, arithmetic/record-selection oracles,
+  parameter-specialized formal/equivalence tasks, latency/transaction-aware
+  scoreboards, and pre-pass versus post-pass equivalence. Include odd-tail bridge
+  behavior, singleton bypass, stable tie selection, width-growth boundaries,
+  nested-result geometry, and field-wise/packed layout parity. Publish exact
+  tool/profile coverage, assumptions, parameter scope, and failures.
+- [ ] **BT-08 — Documentation and release closure:** Increment 92 publishes
+  simple and advanced examples, exact grouping, widths, bridge and latency
+  semantics, diagnostics, limitations, and the pinned SpinalHDL comparison.
+  Increments 96-98 consume scaling and acceptance evidence; Increment 99 adds
+  future SystemVerilog parity within its existing deferred scope. Update the
+  versioned machine-readable surface with the approved implementation, not this
+  roadmap-only change, and do not close these tasks on documentation alone.
+
 ## Expression materialization candidates
 
 Preferred compiler option direction:
@@ -696,16 +939,17 @@ Increment 15 may freeze this contract only when:
 - Increment 22: source-located diagnostics and path reporting.
 - Increment 26: deterministic names, materialization, layouts, checks, and evidence.
 - Increment 43: analog arrays and static generation.
-- Increments 54-58: digital shaped values, expressions, state, hierarchy, and the recursive named field-vector deliverables FV-01/FV-03.
-- Increments 65-67: portable Verilog flattening/inlining, recursive named field-vector lowering and evidence FV-02 through FV-05, external lint/simulation/synthesis/equivalence.
+- Increments 54-58: digital shaped values, expressions, state, hierarchy, recursive named field-vector deliverables FV-01/FV-03, and balanced-tree API/IR/numeric/composite deliverables BT-01 through BT-03.
+- Increments 56-64: explicit balanced-tree level bridges, domain/latency contracts, and fixed/valid/elastic pipeline integration BT-04; default reductions remain combinational.
+- Increments 65-67: portable Verilog flattening/inlining, recursive named field-vector lowering and evidence FV-02 through FV-05, balanced-tree emission/matrix/independent evidence BT-05 through BT-07, and external lint/simulation/synthesis/equivalence.
 - Increment 71: full mixed-domain verifier.
-- Increment 72: Verilog-AMS mapping.
-- Increments 83-88: pass preservation and mandatory re-verification.
-- Increment 92: user/reference documentation, including recursive named field-vector examples and ABI mapping FV-06.
-- Increment 96: performance and scaling measurements.
+- Increment 72: Verilog-AMS mapping, preserving the digital balanced-tree type/order/width/latency contracts where supported.
+- Increments 83-88: pass preservation and mandatory re-verification, including balanced-tree grouping, effects, bridge cuts, and pre-pass equivalence evidence.
+- Increment 92: user/reference documentation, including recursive named field-vector examples and ABI mapping FV-06, and balanced-tree API/examples/limitations BT-08.
+- Increment 96: performance and scaling measurements, including balanced-tree stage geometry and emission cost BT-08.
 - Increment 97: v1 API/quality coverage review.
 - Increment 98: preview release evidence.
-- Increment 99: future SystemVerilog unpacked/packed port layout gate and field-wise flat/native parity FV-06.
+- Increment 99: future SystemVerilog unpacked/packed port layout gate, field-wise flat/native parity FV-06, and balanced-tree cross-backend parity BT-08.
 
 ## References
 
@@ -713,3 +957,5 @@ Increment 15 may freeze this contract only when:
 - Yosys arrays and memories: <https://yosyshq.readthedocs.io/projects/yosys/en/stable/CHAPTER_Basics.html>
 - SpinalHDL design errors: <https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Design%20errors/index.html>
 - CIRCT passes: <https://circt.llvm.org/docs/Passes/>
+- SpinalHDL Vec documentation, including `reduceBalancedTree` (reviewed 2026-09-06): <https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Data%20types/Vec.html>
+- SpinalHDL ordered pairing and `levelBridge` implementation, inspected at commit `a52dd2615f22d0f20dca9d51465457f4c570b9f6`, `lib/src/main/scala/spinal/lib/Utils.scala` (reviewed 2026-09-06): <https://github.com/SpinalHDL/SpinalHDL/blob/a52dd2615f22d0f20dca9d51465457f4c570b9f6/lib/src/main/scala/spinal/lib/Utils.scala#L977-L998>

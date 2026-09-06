@@ -462,7 +462,9 @@ def initial(body: => Unit): Unit =
   ConstructionKernel.waveformForbidden(CandidateRuntime.block(body))
 
 def on(event: Event)(body: => Unit): Unit =
-  AnalogProceduralConstruction.eventControl(event)(body)
+  if event.analogDefinition.nonEmpty then
+    AnalogProceduralConstruction.eventControl(event)(body)
+  else CandidateRuntime.digitalEventBlock(event, body)
 
 def V[D <: Discipline](node: Node[D]): Expr[Real] =
   CandidateRuntime.analogExpr("potential_access", node)
@@ -623,7 +625,7 @@ def toUInt(value: Expr[Real], width: Expr[Integer]): Expr[UInt] =
 def toReal(value: Expr[UInt]): Expr[Real] = CandidateRuntime.expr(value)
 
 object lowlevel:
-  def process(event: Event)(body: => Unit): Unit = CandidateRuntime.block(event, body)
+  def process(event: Event)(body: => Unit): Unit = CandidateRuntime.digitalEventBlock(event, body)
 
 extension (left: Expr[Real])
   def +(right: Expr[Real]): Expr[Real] =
@@ -953,6 +955,10 @@ private[nodal] object CandidateRuntime:
     ConstructionKernel.operation("block")
     AnalogProceduralConstruction.lexicalScope:
       ConstructionKernel.waveformForbidden(ConstructionKernel.block(body))
+
+  def digitalEventBlock(event: Event, body: => Unit): Unit =
+    AnalogProceduralConstruction.requireDigitalEventContext()
+    block(event, body)
 
   def block(event: Event, body: => Unit): Unit =
     if event.analogDefinition.nonEmpty then

@@ -74,6 +74,9 @@ private[nodal] object AnalogEventContract:
         fail(3, s"$operation argument ${argument.slot} requires $expectedKind")
       if argument.constant.exists(value => !java.lang.Double.isFinite(value)) then
         fail(4, s"$operation argument ${argument.slot} must be finite")
+      if operation == "analog_cross" && argument.slot == 1 &&
+        !argument.constant.exists(Set(-1.0, 0.0, 1.0))
+      then fail(4, "cross direction must be a proven falling, either, or rising value")
       if toleranceSlots(argument.slot) && argument.constant.exists(_ < 0.0) then
         fail(4, s"$operation tolerance must be nonnegative; zero requests simulator defaults")
       if integerSlots(argument.slot) && argument.dimension != "1" then

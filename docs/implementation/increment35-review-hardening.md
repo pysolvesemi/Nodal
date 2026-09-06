@@ -77,7 +77,35 @@ tests including the expanded ownership matrix, 12 Scala-to-native bridge tests,
 284 compiler Python tests, Markdown checks, and pinned formatting and
 clang-tidy checks passed. The focused Increment 35 Python suite passed 22 tests.
 
-No publication helper or workflow is included in the PR. The final
-recorded-evidence head requires its own PR checks and independent review.
-PR #122 records the accepted head, merge and exact post-merge validation;
-historical Increment 35 acceptance records remain unchanged.
+## Final accepted review-hardening evidence
+
+The final implementation candidate was head
+`a1e00a4168eef6cd935844b57f1a16da8066a71f`, tree
+`5d8db48e1ce79891c53ba55bfc8709b6c307b258`. All 26 exact-head pull-request
+workflows passed, including Core CI run
+[33955916667](https://github.com/pysolvesemi/Nodal/actions/runs/33955916667),
+Increment 35 run
+[33955916677](https://github.com/pysolvesemi/Nodal/actions/runs/33955916677),
+and Increment 36 successor run
+[33955916649](https://github.com/pysolvesemi/Nodal/actions/runs/33955916649).
+Independent Codex review of that exact head reported no major issues, and the
+additional canonical-text finding raised during PR #122 was corrected,
+requalified and resolved before merge.
+
+PR #122 merged into `dev` as
+`916f088bd7b0762dbeb14ef78ce4838d4d537f59`. The exact merge commit passed
+post-merge Core CI run
+[33958913763](https://github.com/pysolvesemi/Nodal/actions/runs/33958913763),
+dedicated Increment 35 validation run
+[33958946203](https://github.com/pysolvesemi/Nodal/actions/runs/33958946203),
+and Increment 36 successor validation run
+[33958913760](https://github.com/pysolvesemi/Nodal/actions/runs/33958913760).
+The original P1 derivative-rendering finding, P2 owner-binding finding and P2
+closure-evidence finding on PRs #113 and #114 are resolved against this accepted
+and post-merge-validated implementation.
+
+No temporary publication helper, validation workflow or generated build output
+is retained in the implementation tree. This evidence record changes no API,
+IR, backend or acceptance identity. Exact-head CI and independent review for the
+documentation-only evidence-record change are retained on its pull request rather
+than embedded self-referentially in this file.

@@ -651,6 +651,12 @@ LogicalResult verifyAnalogEventOperation(Operation *op) {
          !(expression->dimension == "1" && expression->constant == 0.0)) ||
         (valueTolerance && expression->dimension != monitoredDimension))
       return reject(op, 3, "event scalar kind or physical dimension mismatch");
+    // The public Edge contract is closed: do not infer a direction from a
+    // parameter default, a mutable initializer, or caller-supplied metadata.
+    if (cross && i == 1 &&
+        (!expression->constant || (*expression->constant != -1.0 && *expression->constant != 0.0 &&
+                                   *expression->constant != 1.0)))
+      return reject(op, 4, "cross direction must be a proven falling, either, or rising value");
     if (tolerance && expression->constant && *expression->constant < 0.0)
       return reject(op, 4, "event tolerances must be nonnegative; zero selects simulator defaults");
   }

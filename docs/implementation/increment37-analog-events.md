@@ -7,7 +7,7 @@
 
 ## Implemented semantics
 
-The public API supports all prefix arities of `cross`, `above`, and `timer`, typed crossing direction, integer enables, lifecycle events with analysis filters, and ordered event OR. `crossing` delegates to the crossing contract and retains its semantic name. Digital edge handles remain separate. Event controls belong to `analogProcedure`; module-level `on` and legacy `analog { on(...) }` convenience forms remain rejected rather than interpreted as digital processes.
+The public API supports all prefix arities of `cross`, `above`, and `timer`, typed crossing direction, integer enables, lifecycle events with analysis filters, and ordered event OR. `crossing` delegates to the crossing contract and retains its semantic name. Digital edge handles remain separate. Analog event controls belong to `analogProcedure`; module-level analog `on` and legacy `analog { on(analogEvent) }` convenience forms remain rejected rather than interpreted as digital processes. Digital `on(event)` retains the previous candidate block path and its waveform restrictions; it cannot enter `analogProcedure`.
 
 Controlled bodies use the existing procedural tree for ordered assignment, lexical scopes, conditionals, case selection, and bounded loops. Event-only writes do not establish unconditional initialization, even under `initialStep`. Empty bodies and unused monitors are retained. Nested event controls, contributions, continuous equations, and analog filters in controlled bodies are rejected. History-bearing monitors under runtime-dependent control are also rejected.
 

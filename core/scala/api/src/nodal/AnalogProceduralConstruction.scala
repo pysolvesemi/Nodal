@@ -76,6 +76,11 @@ private[nodal] object AnalogProceduralConstruction:
     if Option(current.get()).exists(_.stack.lastOption.exists(_.eventDepth > 0)) then
       AnalogEventRuntime.fail(7, s"$role is not permitted inside an analog event-controlled body")
 
+  def requireDigitalEventContext(): Unit =
+    requireContinuousContext("digital event process")
+    if Option(current.get()).exists(_.stack.lastOption.exists(_.procedureDepth > 0)) then
+      AnalogEventRuntime.fail(1, "digital event processes cannot enter an analogProcedure")
+
   def event(
       operation: String,
       arguments: Vector[Expr[? <: Data]],

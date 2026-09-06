@@ -1,6 +1,6 @@
 # Increment 37 — Analog events
 
-**Status:** Implementation in progress
+**Status:** Validated compiler/event profile
 **Branch:** `increment/37-analog-events`
 **Integration baseline:** `916f088bd7b0762dbeb14ef78ce4838d4d537f59`
 **Design gate:** [NodalAnalogEvents-DG-v0.1](../design-gates/NodalAnalogEvents-DG-v0.1.md)
@@ -43,4 +43,4 @@ Recovered candidate validation [33976368474](https://github.com/pysolvesemi/Noda
 
 ## Closure boundary
 
-Implementation merge, exact post-merge checks, and separate immutable evidence closure remain required. The roadmap checkbox stays open until that evidence is recorded. No numerical simulation, solver accuracy, or general target-equivalence result is claimed. Numerical scheduling, analog solvers, digital/analog co-simulation, and full Verilog-AMS digital processes remain outside this increment.
+Implementation PR #124 is merged and its exact merge commit passed post-merge validation. The accepted identities and witness hashes are recorded in [the separate evidence closure](increment37-evidence-closure.md). That evidence change has its own PR/CI gate; no self-referential future validation is claimed. No numerical simulation, solver accuracy, or general target-equivalence result is claimed. Numerical scheduling, analog solvers, digital/analog co-simulation, and full Verilog-AMS digital processes remain outside this increment.

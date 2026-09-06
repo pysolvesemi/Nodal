@@ -10,6 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = (
+    "docs/implementation/increment37-accepted-evidence.json",
+    "tests/compiler/fixtures/increment37/manifest.json",
     "docs/implementation/increment36-accepted-evidence.json",
     "docs/implementation/increment36-evidence-closure.md",
     "build.mill",
@@ -39,6 +41,9 @@ FILES = (
 
 
 ACCEPTED_EVIDENCE_SHA256 = "fac45088ac2a5e45a99fa7370533eade02d8fee9abea3ed19c578b7a4d17fdba"
+
+
+SUCCESSOR37_EVIDENCE_SHA256 = "395957ad825060eb4d03047c8597a465a61ef778e19cdfd66efc9dcdadd8bcbb"
 
 
 class CheckFailure(RuntimeError):
@@ -95,9 +100,22 @@ def check_repository(root: Path) -> None:
                       str(accepted["post_merge_core_ci_run"]),
                       str(accepted["post_merge_increment36_run"]), "PR #118"):
             require(token in record, f"closure record omits accepted identity {token}")
-    require(roadmap.count("- [ ] **Increment 37 — Analog events**") == 1 and
-            "- [x] **Increment 37 — Analog events**" not in roadmap,
-            "Increment 37 remains outside this closure")
+    successor_open = "- [ ] **Increment 37 — Analog events**"
+    successor_closed = "- [x] **Increment 37 — Analog events**"
+    require(roadmap.count(successor_open) + roadmap.count(successor_closed) == 1,
+            "missing or ambiguous Increment 37 successor state")
+    if successor_closed in roadmap:
+        require(status == "validated-time-waveform-operators",
+                "closed successor requires validated Increment 36")
+        successor_bytes = (root / "docs/implementation/increment37-accepted-evidence.json").read_bytes()
+        require(hashlib.sha256(successor_bytes).hexdigest() == SUCCESSOR37_EVIDENCE_SHA256,
+                "successor accepted evidence checksum changed")
+        successor = json.loads(texts["tests/compiler/fixtures/increment37/manifest.json"])
+        require(successor.get("schema") == 1 and successor.get("increment") == 37 and
+                successor.get("status") == "validated-analog-events" and
+                successor.get("remaining") == [] and
+                successor.get("validation") == json.loads(successor_bytes),
+                "successor closure lacks accepted implementation evidence")
     require(all(value is True for value in manifest["semantics"].values()), "semantic obligation disabled")
     require(len(manifest["semantics"]) == 14, "semantic obligation missing")
     require(manifest["operators"] == {"transition": [1, 2, 3, 4, 5], "slew": [1, 2, 3],

@@ -1,8 +1,8 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.47
+**Revision:** 1.48
 **Created:** 2026-08-20
-**Updated:** 2026-09-05
+**Updated:** 2026-09-06
 **Status:** Active roadmap
 **Primary language target:** Verilog-AMS 2023
 **Analog-only compatibility target:** Verilog-A
@@ -951,8 +951,10 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Implement `transition`, `slew`, `absdelay`, `$abstime`, `$bound_step`, units, continuity, and diagnostics.
   - Evidence: implementation PR [#118](https://github.com/pysolvesemi/Nodal/pull/118), accepted head [`cf0d4504`](https://github.com/pysolvesemi/Nodal/commit/cf0d4504b5463eaad574edd08bd32ccd1ec74e78), all 26 exact-head workflows, merge [`aa93bc7e`](https://github.com/pysolvesemi/Nodal/commit/aa93bc7e9eb6df51162a486452b185025b77207a), post-merge Core CI [33951187187](https://github.com/pysolvesemi/Nodal/actions/runs/33951187187), exact post-merge validation [33951187157](https://github.com/pysolvesemi/Nodal/actions/runs/33951187157), and [accepted-evidence record](../implementation/increment36-evidence-closure.md).
 
-- [ ] **Increment 37 — Analog events**
+- [x] **Increment 37 — Analog events**
   - Implement `cross`, `above`, `timer`, initial/final step, event composition, tolerances, and controlled statements.
+  - Accepted compiler/event profile: implementation PR #124 at `5684be7a725495cbbbd330d23da4d6c35bf353cb`, merged as `2070bf5824b448aa23b917386ef1eccc089f28c7`; exact-head CI, independent review, exact post-merge Core CI `34020356639` and Increment 37 `34020356658`, and byte-identical retained public-source/target witnesses are recorded in [the accepted-evidence record](../implementation/increment37-evidence-closure.md).
+  - Per-generated-instance lexical storage is rejected until represented under Increment 43. Numerical solver execution, full Verilog-AMS digital processes, and co-simulation remain separately scoped; structural target acceptance is not numerical simulation.
 
 - [ ] **Increment 38 — Mathematical and simulator functions**
   - Add a versioned registry with type/arity checking, constant evaluation, analysis queries, and backend spelling.

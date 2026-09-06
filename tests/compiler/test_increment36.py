@@ -1,6 +1,7 @@
 """Mutation hardening for waveform scope, required integration and closure evidence."""
 import importlib.util
 import json
+import re
 import shutil
 import tempfile
 import unittest
@@ -47,7 +48,8 @@ class Increment36Tests(unittest.TestCase):
         manifest.write_text(json.dumps(document))
         roadmap = root / "docs/roadmap/nodal-development-todo.md"
         roadmap.write_text(roadmap.read_text().replace(
-            "- [x] **Increment 36", "- [ ] **Increment 36", 1))
+            "- [x] **Increment 36", "- [ ] **Increment 36", 1).replace(
+            "- [x] **Increment 37", "- [ ] **Increment 37", 1))
         implementation = root / "docs/implementation/increment36-time-waveform-operators.md"
         implementation.write_text(implementation.read_text().replace(
             "**Status:** Validated", "**Status:** Implementation in progress", 1))
@@ -158,10 +160,13 @@ class Increment36Tests(unittest.TestCase):
                         CHECKER.check_repository(root)
 
     def test_roadmap_closure_consistency_is_required(self):
+        roadmap = (ROOT / "docs/roadmap/nodal-development-todo.md").read_text()
+        revision = re.search(r"^\*\*Revision:\*\* [0-9]+\.[0-9]+$", roadmap, re.M)
+        self.assertIsNotNone(revision)
         mutations = (
             ("- [x] **Increment 36", "- [ ] **Increment 36"),
-            ("**Revision:** 1.47", "**Revision:** 1.46"),
-            ("- [ ] **Increment 37", "- [x] **Increment 37"),
+            (revision.group(), "**Revision:** 1.46"),
+            ("- [x] **Increment 37 — Analog events**", "- [x] **Increment 37 — missing**"),
             ("- [x] **Increment 36 — Time and waveform operators**",
              "- [x] **Increment 36 — Time and waveform operators**\\n"
              "- [ ] **Increment 36 — Time and waveform operators**"),

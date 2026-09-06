@@ -1,11 +1,149 @@
 {
   "schema": 1,
   "increment": 37,
-  "status": "implementation-in-progress",
+  "status": "validated-analog-events",
   "baseline": "f6e11c5b3f92ee43b4a6d4fc6af21d478249b961",
-  "validation": null,
-  "remaining": [
-    "complete-acceptance-matrix",
-    "exact-head-ci-and-evidence-closure"
-  ]
+  "operators": {
+    "cross": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "above": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "timer": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "initial_step": [
+      0
+    ],
+    "final_step": [
+      0
+    ]
+  },
+  "semantics": {
+    "owned_event_identity": true,
+    "closed_cross_direction": true,
+    "dimensional_tolerances": true,
+    "exact_argument_omission": true,
+    "analysis_filters": true,
+    "ordered_event_composition": true,
+    "controlled_statement_order": true,
+    "event_writes_not_unconditional_initialization": true,
+    "captured_read_order": true,
+    "initialized_event_held_storage": true,
+    "continuous_transition_after_events": true,
+    "static_monitor_histories": true,
+    "runtime_bound_checks": true,
+    "generated_local_state_rejected": true,
+    "digital_event_compatibility": true,
+    "optimizer_state_preservation": true,
+    "no_partial_hdl_on_error": true
+  },
+  "deferred": [
+    "per-generated-instance-lexical-storage",
+    "ordinary-event-free-procedure-lowering",
+    "numerical-solver-execution",
+    "full-verilog-ams-digital-processes",
+    "analog-digital-cosimulation"
+  ],
+  "validation": {
+    "schema": 1,
+    "increment": 37,
+    "implementation_pull_request": 124,
+    "accepted_head": "5684be7a725495cbbbd330d23da4d6c35bf353cb",
+    "accepted_tree": "f54a970b62e3f4a9c72d754306ce0739cc69875f",
+    "tested_pull_request_merge": "7382b3102fddc5ae5752b73496d1c8fbc9a8b5ca",
+    "exact_head_workflows": {
+      "Core CI": 34016929155,
+      "Increment 13 Core Semantic Candidates": 34016929169,
+      "Increment 14 Pipeline and Interface Candidates": 34016929156,
+      "Increment 15 Unified Public API Freeze": 34016929175,
+      "Increment 16 Elaboration Construction Kernel": 34016929140,
+      "Increment 17 Source Origin Naming": 34016929139,
+      "Increment 18 MLIR Dialect Skeleton": 34016929138,
+      "Increment 19 Core MLIR Model": 34016929186,
+      "Increment 20 Scala-to-MLIR Bridge": 34016929168,
+      "Increment 21 Native Semantic Pipeline": 34016929199,
+      "Increment 22 Cross-Layer Diagnostics": 34016929181,
+      "Increment 23 Backend Framework": 34016929165,
+      "Increment 24 Minimal Analog IR": 34016929142,
+      "Increment 25 RC Filter Vertical Slice": 34016929187,
+      "Increment 26 Reproducibility Contract": 34016929157,
+      "Increment 27 Natures and Disciplines": 34016929152,
+      "Increment 28 Electrical Conservative Connectivity": 34016929195,
+      "Increment 29 Parameters Constants Ranges and Units": 34016929204,
+      "Increment 30 Analog Numeric Types and Expression Typing": 34016929172,
+      "Increment 31 Potential and Flow Access": 34016929167,
+      "Increment 32 Equation and Contribution Semantics": 34016929162,
+      "Increment 33 Analog Procedural Assignment": 34016929146,
+      "Increment 34 Analog Control Flow": 34016929166,
+      "Increment 35 Differential and Integral Operators": 34016929148,
+      "Increment 36 Time and Waveform Operators": 34016929180,
+      "Increment 37 Analog Events": 34016929176,
+      "Increment 133 Analog Semantic API": 34016929178
+    },
+    "source_qualification": {
+      "run_id": 34016438961,
+      "source_tree": "f54a970b62e3f4a9c72d754306ce0739cc69875f",
+      "artifact_id": 9984395363,
+      "artifact_sha256": "848a38fa94390235c5146a799f6dd42d86637251fa761dc15916b1e2ba014058",
+      "independently_reconstructed_git_tree_matches": true
+    },
+    "independent_review": {
+      "comment_id": 5557516026,
+      "commit": "5684be7a725495cbbbd330d23da4d6c35bf353cb",
+      "result": "no-major-issues",
+      "resolved_findings": [
+        "digital-event-dispatch",
+        "closed-cross-direction",
+        "generated-lexical-storage"
+      ]
+    },
+    "accepted_witness": {
+      "run_id": 34016929176,
+      "artifact_id": 9984555059,
+      "artifact_sha256": "c927e0461a1e029c046d4faa967975672858ceaa218c298d7cfcce827d6e9b26"
+    },
+    "source_witness_sha256": {
+      "increment37-normalized.mlir": "19199a88897e1f352d20742216409093d3c8b4ab229ee3860a044488d96de5e3",
+      "increment37-source.mlir": "806cabf2ed8c207771e16a2a20f737540fed3ff757ba888eebccd33ab68a6a65",
+      "increment37-source.mlir.controlled.mlir": "bb8ea3c49279160e8cad3454379dde55800986d7822766b27d76b05fa18a2915",
+      "increment37-source.mlir.controlled.mlir.va": "cf74deaeb332066a35bdb6bc61c5a49f11eaef34e02ba0d2799fbb31bc80fc65",
+      "increment37-source.mlir.held.mlir": "b9f0a34628045d1e31fe31df0fc5faa5da24a2d2419439dea4ff354b659394b2",
+      "increment37-source.mlir.held.mlir.va": "e3c49aecb20198df4675d0cd31ff815cff0c9524557aea7af833bfb0611cd252",
+      "increment37-source.mlir.va": "84d90a441bff6d4550028fdb95bebae62d1368bc5ef2905683a60ed4b23b0b77"
+    },
+    "observed_qualification_counts": {
+      "scala_tests": 117,
+      "native_ctest_tests": 127,
+      "separate_scala_to_native_bridge_tests": 12,
+      "compiler_python_tests": 291,
+      "native_source_checks": 63,
+      "independent_lowering_review_cases": 19,
+      "direction_checks": 52,
+      "counts_overlap_and_are_not_additive": true
+    },
+    "implementation_merge": "2070bf5824b448aa23b917386ef1eccc089f28c7",
+    "implementation_merge_tree": "21afe101cf251d4c7ab868df0a59c99a0ab9707e",
+    "preserved_dev_parent": "9be4bfd41a730e113afc1c6fce1be4da65bba46a",
+    "post_merge_core_ci_run": 34020356639,
+    "post_merge_increment37_run": 34020356658,
+    "post_merge_witness": {
+      "run_id": 34020356658,
+      "artifact_id": 9985481223,
+      "artifact_sha256": "fbdb02d2eb58b152b88222d8e5f46354762d53716613d0fcc4a1f5d8d1e2bb94"
+    },
+    "post_merge_witness_matches_accepted": true
+  },
+  "remaining": []
 }

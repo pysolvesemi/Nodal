@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import shutil
 import tempfile
 import unittest
@@ -61,8 +62,18 @@ class Increment37ContractTests(unittest.TestCase):
                 destination = root / name
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(ROOT / name, destination)
+            manifest = root / "tests/compiler/fixtures/increment37/manifest.json"
+            document = json.loads(manifest.read_text())
+            document.update(status="implementation-in-progress", validation=None,
+                            remaining=["exact-head-ci-and-evidence-closure"])
+            manifest.write_text(json.dumps(document))
+            implementation = root / "docs/implementation/increment37-analog-events.md"
+            implementation.write_text(implementation.read_text().replace(
+                "**Status:** Validated compiler/event profile", "**Status:** Implementation in progress"))
             roadmap = root / "docs/roadmap/nodal-development-todo.md"
-            roadmap.write_text(roadmap.read_text().replace("- [ ] **Increment 37", "- [x] **Increment 37"))
+            text = roadmap.read_text().replace(CHECK.CLOSED, CHECK.OPEN)
+            self.assertIn(CHECK.OPEN, text)
+            roadmap.write_text(text.replace(CHECK.OPEN, CHECK.CLOSED))
             with self.assertRaisesRegex(AssertionError, "premature"):
                 CHECK.check_repository(root)
 

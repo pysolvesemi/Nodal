@@ -205,8 +205,8 @@ val controller = fsm(initial = ControlState.Idle):
     on(start).goto(ControlState.Run)
   state(ControlState.Run):
     exclusive:
-      on(done).goto(ControlState.Idle)
-      on(fault).goto(ControlState.Error)
+      on(done).goto(State.Run)
+      on(fault).goto(Mode.Error)
 ```
 
 The gate freezes flat/manual and high-level FSM semantics, entry/active/exit/transition actions, reset/no-hidden-boot behavior, exclusive versus priority transitions, illegal-state policy, local storage encoding independent of enum ABI, typed status, reusable immutable definitions, nested/parallel/timed machines, finite structural recursion, explicit bounded runtime call stacks, graph diagnostics, reports, source maps, and formal readiness.
@@ -413,6 +413,28 @@ Required metadata:
 - source mapping and black-box identity.
 
 Unknown latency or effect creates a hard optimization and scheduling barrier.
+
+### External HDL modules — planned integration follow-up
+
+The [ExternalModule HDL integration and simulation plan](external-module-integration-v0.1-plan.md)
+adds open deliverables EM-01 through EM-09 for existing Verilog, Verilog-A, and
+Verilog-AMS implementations. It distinguishes the typed module declaration,
+source/compiled-model implementation binding, and parameterized instance from
+this operation-level `ExternalOp` contract. `ExternalModule` is the preferred
+public-name candidate, subject to the owning API gate, not a frozen new class.
+
+The required integration includes exact external pin/terminal names, symbolic
+parameter and nested-shape bindings, source dependencies and reproducible build
+manifests, digital/analog domain and effect boundaries, transitive backend/tool
+capability checks, and actual-model simulation of standalone or nested external
+DUTs. Interface-only packaging, executable simulation models, synthesis black-box
+preservation, and formal abstractions are separate modes. Missing simulation
+models must fail rather than silently use empty or constant-output stubs.
+
+The plan assigns work to existing analog/digital hierarchy, backend, validation,
+and Foundation-gated verification increments. It does not change the historical
+Increment 15 freeze, existing `ExternalOp` meaning, or the complete Foundation
+barrier for full live HVL and production simulator-adapter implementation.
 
 ## Relationship to automatic pipelines
 

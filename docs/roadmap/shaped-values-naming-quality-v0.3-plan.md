@@ -124,7 +124,7 @@ or a typed boundary annotation selected during Increment 13. The final API shoul
 
 ### Portable Verilog
 
-A multidimensional port becomes one flat packed vector:
+A multidimensional port with a scalar element becomes one flat packed vector:
 
 ```verilog
 input [(ROWS*COLS*WIDTH)-1:0] data;
@@ -166,6 +166,162 @@ The profile must preserve the same canonical Nodal index/flatten mapping and rej
 ### Verilog-A and Verilog-AMS
 
 Digital shaped values use the portable flat representation unless a selected profile explicitly supports more. Analog arrays require legal analog declarations and are never silently serialized into digital vectors.
+
+## Recursive named field-vector lowering (planned)
+
+**Added:** 2026-09-06
+**Status:** Roadmap requirement; implementation and evidence remain open.
+
+The existing multidimensional shape contract is not sufficient on its own: the
+portable backend must also support one named packed vector per scalar aggregate
+leaf, without changing the model source. Here `Bundle` means a directionless
+value aggregate, corresponding to Nodal's `Struct` contract; connectivity
+`Interface`s keep their separate role and leaf-direction rules.
+
+### Same source, field-wise boundary layout
+
+The source remains an aggregate-valued `Vec`:
+
+```scala
+val pixels = in Vec(Rgb(width), count)
+```
+
+For an `Rgb` aggregate with `red`, `green`, and `blue` fields of width `WIDTH`,
+the field-vector layout must emit:
+
+```verilog
+input wire [(WIDTH * COUNT)-1:0] pixels_red;
+input wire [(WIDTH * COUNT)-1:0] pixels_green;
+input wire [(WIDTH * COUNT)-1:0] pixels_blue;
+```
+
+Users must not have to rewrite `Vec[Rgb]` as an aggregate of three separately
+declared `Vec`s, manually transpose the data, write packing wrappers, annotate
+every leaf, or replace normal element/field access. Selection of this layout is
+a boundary/profile decision, not a change to the logical source type. Exact
+configuration spelling belongs to the applicable implementation/design gate;
+this roadmap does not introduce a new public Scala API or reopen a completed
+API freeze.
+
+When selected, the rule applies generically to every supported directionless
+aggregate, not just `Rgb`, pixels, or a particular library component. Input and
+output declarations, internal materialized aggregate views, and parent/child
+connections must use the same recursive mapping. Interface payloads reuse the
+value mapping only after their boundary roles and directions are resolved.
+
+### Recursive paths, widths, and dimensions
+
+Walk the semantic type recursively from the root:
+
+1. At a `Vec`, append its dimensions, in declared outermost-to-innermost order,
+   to the dimensions already encountered on that leaf's path.
+2. At a Bundle/Struct, recurse through fields in stable declaration order and
+   append each field name to the logical path. Do not collapse the record into
+   an opaque integer or discard any enclosing dimensions.
+3. At a scalar leaf, emit one carrier named from the root and full field path.
+   Its bit width is that leaf's width multiplied by every Vec dimension on that
+   path, and by no dimensions belonging only to sibling fields.
+
+For `pixels: Vec[Pixel, COUNT]`, nested scalar fields must therefore include:
+
+```verilog
+input wire [(RED_WIDTH * COUNT)-1:0] pixels_color_red;
+input wire [(X_WIDTH * COUNT)-1:0] pixels_position_x;
+input wire [(Y_WIDTH * COUNT)-1:0] pixels_position_y;
+```
+
+If `Pixel.samples` is itself `Vec[Rgb(COMP_WIDTH), SAMPLES]`, its red leaf becomes:
+
+```verilog
+input wire [(COMP_WIDTH * COUNT * SAMPLES)-1:0] pixels_samples_red;
+```
+
+A rank-two outer Vec adds both dimensions to every applicable leaf; for example,
+`pixels_color_red` then has width `RED_WIDTH * ROWS * COLS`. Nested Vecs inside
+Bundles append their own dimensions as well. Mixed leaf widths are independent:
+`RED_WIDTH`, `X_WIDTH`, and `Y_WIDTH` must never be replaced by one shared width.
+
+Preserve the complete ordered dimension list, each symbolic width expression,
+parameter binding/provenance, leaf type, and source path through frontend
+construction, authoritative MLIR, hierarchy, optimization, and HDL emission.
+A product-only bit count is not sufficient shape metadata. Symbolic parameters
+must not be replaced by their elaboration defaults or recovered from HDL text,
+rendered names, or component-specific patterns.
+
+### Indexing, names, and ABI preservation
+
+Within each field vector, use ADR 0017's canonical row-major mapping, with the
+rightmost dimension contiguous and logical index zero at the low end. For the
+rank-one example, `pixels(i).red` corresponds to
+`pixels_red[i * WIDTH +: WIDTH]`. For a rank-two leaf, the element offset is
+`((row * COLS) + col) * LEAF_WIDTH`. Whole-value copies, field/element reads and
+writes, slices, flatten/reshape, map/zip/reduce, and hierarchy connections must
+preserve logical behavior under the field-wise boundary representation.
+
+The public logical flattening/serialization order must not silently become
+field-major merely because ports are emitted field-wise. Any conversion between
+a whole-record packed ABI and a field-vector ABI needs an explicit recorded
+mapping, with inverse/round-trip evidence. Equal total bit counts alone do not
+establish compatible field types, dimension order, directions, or layout.
+
+Names retain the complete field path, such as `pixels_color_red` and
+`pixels_position_x`, rather than numbered per-element ports or anonymous
+`_zz*`/`_net*` boundary names. Handle underscore/path ambiguities, reserved words,
+and explicit-name collisions deterministically using the semantic naming
+contract; never silently merge two leaves. Retain logical paths separately from
+escaped/disambiguated HDL spellings in the ABI manifest and source maps.
+
+`Bool`, `Bits`, `UInt`, `SInt`, and enum leaves retain their own semantics.
+A flattened collection of `SInt` leaves uses signless carriers with correctly
+signed element views, not one signed integer spanning the whole collection.
+Structural `Vec` remains distinct from `Mem`, and analog terminals/quantities
+must not be serialized into digital field vectors.
+
+The layout choice, leaf names and order, types, widths, ordered dimensions,
+offset formulas, direction, and parent/child parameter bindings are part of the
+versioned boundary ABI. Do not silently change an existing external/black-box
+ABI; use an explicit compatible profile or adapter where necessary. Future
+SystemVerilog layouts must preserve this same logical leaf mapping and may
+retain dimensions in supported native array syntax. This requirement does not
+advance the deferred SystemVerilog backend.
+
+### Implementation checklist and acceptance evidence
+
+These are additional open deliverables of the existing digital shape, hierarchy,
+backend, and verification increments, not claims that the feature is implemented
+or that prior completed increments must be reopened.
+
+- [ ] **FV-01 — Semantic leaf projection:** Increments 54-58 retain unchanged
+  Vec-of-aggregate source and implement generic recursive leaf paths, independent
+  symbolic widths, complete ordered Vec dimensions, shape-aware operations,
+  read/write behavior, and hierarchy bindings using the existing typed IR.
+- [ ] **FV-02 — Portable named field vectors:** Increment 65 implements the
+  field-wise layout and exact RGB/nested examples above for inputs, outputs, and
+  materialized views, without source rewrites or per-component special cases.
+- [ ] **FV-03 — Naming, ABI, and diagnostics:** Increments 54-58 and 65 reuse the
+  existing source-origin/naming/IR contracts, record leaf mapping and layout ABI,
+  and reject incompatible shapes, lost parameters, illegal directions, invalid
+  dimensions, overflowing widths, and unresolved naming collisions. Preserve
+  manifests and source maps through the later optimization increments 83-88.
+- [ ] **FV-04 — Positive and negative matrix:** Increments 66-67 cover plain and
+  nested Bundles/Structs, Vec-of-Vec, Bundle-of-Vec, alternating Vec/Bundle shapes,
+  unequal leaf widths, rank-one through rank-four shapes, size/width one,
+  non-power-of-two counts, independent symbolic parameter overrides, signed/enum
+  leaves, static/dynamic indexing and assignment, hierarchy, and collision cases.
+  Reject zero/negative/runtime dimensions and equal-bit-count but incompatible
+  field/shape/layout connections rather than silently reinterpreting them.
+- [ ] **FV-05 — Independent functional evidence:** Increments 66-67 add golden
+  declaration/manifest checks, deterministic naming/source-map checks, portable
+  Verilog parse/elaboration/simulation/synthesis evidence, and equivalence or
+  formal checks against the unchanged logical aggregate behavior using an
+  independently specified packing map. Cover read/write and pack/unpack
+  round-trips, not just matching emitted text. These checks are future feature
+  acceptance work; no tests, formal jobs, or CI are run for this roadmap-only edit.
+- [ ] **FV-06 — Documentation and cross-backend closure:** Increment 92 documents
+  the unchanged source, recursive leaf examples, bit mapping, and ABI selection;
+  Increment 99 adds field-wise flat/native SystemVerilog parity evidence within
+  its existing deferred scope. Update machine-readable contracts with the
+  implementation rather than claiming coverage in this documentation change.
 
 ## Shape operations
 
@@ -540,16 +696,16 @@ Increment 15 may freeze this contract only when:
 - Increment 22: source-located diagnostics and path reporting.
 - Increment 26: deterministic names, materialization, layouts, checks, and evidence.
 - Increment 43: analog arrays and static generation.
-- Increments 54-58: digital shaped values, expressions, state, and hierarchy.
-- Increments 65-67: portable Verilog flattening/inlining, external lint/simulation/synthesis/equivalence.
+- Increments 54-58: digital shaped values, expressions, state, hierarchy, and the recursive named field-vector deliverables FV-01/FV-03.
+- Increments 65-67: portable Verilog flattening/inlining, recursive named field-vector lowering and evidence FV-02 through FV-05, external lint/simulation/synthesis/equivalence.
 - Increment 71: full mixed-domain verifier.
 - Increment 72: Verilog-AMS mapping.
 - Increments 83-88: pass preservation and mandatory re-verification.
-- Increment 92: user/reference documentation.
+- Increment 92: user/reference documentation, including recursive named field-vector examples and ABI mapping FV-06.
 - Increment 96: performance and scaling measurements.
 - Increment 97: v1 API/quality coverage review.
 - Increment 98: preview release evidence.
-- Increment 99: future SystemVerilog unpacked/packed port layout gate.
+- Increment 99: future SystemVerilog unpacked/packed port layout gate and field-wise flat/native parity FV-06.
 
 ## References
 

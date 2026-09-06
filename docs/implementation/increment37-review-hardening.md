@@ -35,8 +35,9 @@ identical before and after optimization.
 The direction regression reproduces the failure on the prior recovered compiler.
 The repaired local compiler passes 52 direction checks and the existing 63
 native/source checks using the retained public-source witnesses. These are
-local results, not final-head or post-merge qualification. Full published-head
-CI, review disposition, merge, and separate evidence closure remain required.
+historical local results, not final-head or post-merge qualification. The later
+accepted implementation, resolved reviews, merge, and exact post-merge checks are
+recorded in [the separate evidence closure](increment37-evidence-closure.md).
 
 ## Generated-loop lexical storage
 

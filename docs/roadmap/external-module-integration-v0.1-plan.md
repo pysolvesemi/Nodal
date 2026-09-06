@@ -2,6 +2,7 @@
 
 **Status:** Normative roadmap requirement; API gate, implementation, and evidence remain open  
 **Added:** 2026-09-06  
+**Public name:** `ExternalModule` — selected by the user on 2026-09-06  
 **Foundation roadmap:** [`nodal-development-todo.md`](nodal-development-todo.md)  
 **Related semantic contract:** [`core-semantics-api-v0.3-plan.md`](core-semantics-api-v0.3-plan.md)  
 **Simulation contracts:** [`nodal-hvl-simulation-v0.1-plan.md`](nodal-hvl-simulation-v0.1-plan.md), [`native-digital-simulator-adapters-v0.1-plan.md`](native-digital-simulator-adapters-v0.1-plan.md), and [`dependent-productivity-and-verification-tracks-v0.1-plan.md`](dependent-productivity-and-verification-tracks-v0.1-plan.md)
@@ -28,9 +29,10 @@ and instantiate the block normally. Its official documentation is linked below.
 Nodal must implement its own Scala 3 and typed-IR contract, not add a SpinalHDL
 dependency or promise complete source compatibility.
 
-## Preferred public name
+## Selected public name
 
-Use **`ExternalModule`** as the preferred candidate, alongside Nodal's `Module`:
+Use **`ExternalModule`** as the user-selected public name, alongside Nodal's
+`Module`. The naming decision was approved on 2026-09-06.
 
 - `Module` describes hardware implemented in Nodal.
 - `ExternalModule` describes a module whose implementation is supplied outside
@@ -42,16 +44,15 @@ Use **`ExternalModule`** as the preferred candidate, alongside Nodal's `Module`:
 
 The name does not imply that the source is secret, that the behavior is unknown
 to the simulator, or that the instance cannot be tested. Use “BlackBox / foreign
-HDL integration” in migration/search documentation. `ForeignModule` is a reasonable
-alternative, but `ExternalModule` is the clearer default; `ExternalModel` is too
-ambiguous between a DUT module and a simulation-only reference model. Do not add
-multiple synonymous APIs merely for discoverability.
+HDL integration” in migration/search documentation. Do not add multiple synonymous
+APIs merely for discoverability; `ExternalModule` is the selected name, not one
+of several remaining naming candidates.
 
-This is a naming recommendation and implementation requirement, not a frozen
-public class. The owning increment must compile-test the declaration, binding,
-and instantiation candidates and obtain the applicable design-gate approval.
-Do not change accepted APIs, historical gates, or machine-readable surfaces in
-this documentation-only update.
+This records the approved name, not a completed implementation or frozen API
+signature. The owning increment must still compile-test the declaration, binding,
+and instantiation surface and obtain the applicable design-gate approval.
+Do not change existing accepted APIs, historical gates, or machine-readable
+surfaces in this documentation-only update.
 
 ## One declaration, explicit implementation selection
 
@@ -270,9 +271,10 @@ All items below are open. Each is completed only by its owning implementation
 and applicable gate/evidence, never by this roadmap edit alone.
 
 - [ ] **EM-01 — Declaration, name, and boundary API gate:** Increments 42 and
-  54-58 approve the concise `ExternalModule` candidate, definition/binding/instance
-  separation, external names, typed parameters, digital/analog ports, directions,
-  units, domains, effects, and exact ABI checks. Keep `ExternalOp` separate.
+  54-58 approve the API under the selected `ExternalModule` name, including
+  definition/binding/instance separation, external names, typed parameters,
+  digital/analog ports, directions, units, domains, effects, and exact ABI checks.
+  Keep `ExternalOp` separate.
 - [ ] **EM-02 — Source and implementation manifest:** Increments 42, 47-53 and
   65-67 implement source bundles, dependencies/includes/defines/library order,
   auxiliary assets, purpose-specific bindings, content hashes, cache invalidation,

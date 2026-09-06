@@ -41,7 +41,8 @@ private[nodal] object AnalogProceduralRuntime:
       initializer: Option[Value],
       source: Option[Source],
       declarationOrder: Int,
-      operationOrder: Int = -1
+      operationOrder: Int = -1,
+      authoredPath: Option[String] = None
   )
 
   final case class AssignmentRecord(

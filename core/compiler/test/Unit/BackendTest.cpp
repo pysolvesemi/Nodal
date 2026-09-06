@@ -170,6 +170,31 @@ int main() {
       return fail("malformed waveform target passed structural reparsing");
   }
 
+  const std::string eventTarget =
+      "module E;\nreal event_held = 0.0;\ninteger event_select = 1;\n"
+      "analog begin\nbegin : event_procedure\n"
+      "@(initial_step or cross(V(p, n), 1, 0, 0.01) or timer(0, 1e-9)) begin\n"
+      "if (event_select) begin\nevent_held = V(p, n);\nend else begin\n"
+      "event_held = (-1.0);\nend\nend\n@(final_step(\"tran\")) begin\nend\n"
+      "end\nend\nendmodule\n";
+  if (mlir::failed(nodal::reparseBackendTarget(eventTarget, *configuration)))
+    return fail("event control, composition, lifecycle, or initialized variable failed reparse");
+  for (auto mutation : {std::make_pair("timer(0, 1e-9)", "timer()"),
+                        std::make_pair("cross(V(p, n), 1, 0, 0.01)", "cross(1, 1, 1, 1, 1, 1)"),
+                        std::make_pair("initial_step", "unknown_event"),
+                        std::make_pair("event_held = V(p, n);", "event_held = injected();"),
+                        std::make_pair("event_held = V(p, n);", "$shell(\"injected\");"),
+                        std::make_pair("end else begin", "end else injected"),
+                        std::make_pair("final_step(\"tran\")", "final_step()")}) {
+    std::string invalid = eventTarget;
+    size_t position = invalid.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("event mutation anchor missing");
+    invalid.replace(position, std::string(mutation.first).size(), mutation.second);
+    if (mlir::succeeded(nodal::reparseBackendTarget(invalid, *configuration)))
+      return fail("malformed or injected event target passed structural reparse");
+  }
+
   auto reserved = parse(context, kReservedModule);
   if (!reserved)
     return fail("could not parse the reserved-keyword fixture");

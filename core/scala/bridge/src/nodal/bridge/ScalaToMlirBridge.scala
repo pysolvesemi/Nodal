@@ -730,6 +730,27 @@ ${indent(body, 2)}
       def operand(path: String): (String, String) =
         values.get(path).orElse(parameterValues.get(path)).getOrElse:
           if parameterSymbols.contains(path) then parameterValue(path)
+          else if snapshot.analogProcedural.exists(program =>
+              program.owner == region.module &&
+                program.variables.exists(record => record.authoredPath.contains(path))
+            )
+          then
+            val variable = snapshot.analogProcedural.filter(_.owner == region.module)
+              .flatMap(_.variables).find(_.authoredPath.contains(path)).get
+            val result = s"%analog_${regionIndex}_held_${values.size}"
+            lines += operation(
+              "nodal.analog_held_read",
+              results = Vector(result),
+              resultTypes = Vector("f64"),
+              attributes = Vector(
+                "variable" -> quoted(variable.variable.identity),
+                "owner" -> quoted(region.module),
+                "metadata" -> bridgeMetadata(path, Vector.empty)
+              ),
+              semanticPath = path
+            )
+            values.update(path, result -> "f64")
+            result -> "f64"
           else
             fail(
               "NODAL-RC-ORDER-001",

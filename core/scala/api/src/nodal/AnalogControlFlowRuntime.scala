@@ -157,6 +157,13 @@ private[nodal] object AnalogControlFlowRuntime:
     def source: Option[AnalogProceduralRuntime.Source]
 
   object Statement:
+    final case class EventControl(
+        identity: String,
+        event: AnalogEventRuntime.Expression,
+        body: Block,
+        source: Option[AnalogProceduralRuntime.Source] = None
+    ) extends Statement
+
     final case class Declare(
         identity: String,
         variable: String,
@@ -242,6 +249,7 @@ private[nodal] object AnalogControlFlowRuntime:
       root: Block,
       initiallyInitialized: Set[String] = Set.empty
   ): Result =
+    validateEventPlacement(root, dynamic = false, inEvent = false)
     val identities = mutable.HashSet.empty[String]
     val declarations = mutable.HashSet.from(initiallyInitialized)
     initiallyInitialized.foreach: identity =>
@@ -260,6 +268,35 @@ private[nodal] object AnalogControlFlowRuntime:
       identities.size,
       flow.normal.nonEmpty
     )
+
+  private def validateEventPlacement(
+      block: Block,
+      dynamic: scala.Boolean,
+      inEvent: scala.Boolean
+  ): Unit =
+    block.statements.foreach:
+      case event: Statement.EventControl =>
+        if inEvent then AnalogEventRuntime.fail(7, "analog event controls cannot be nested")
+        if dynamic && event.event.hasMonitor then
+          AnalogEventRuntime.fail(
+            1,
+            "analog monitors cannot occur under runtime conditional or loop control"
+          )
+        validateEventPlacement(event.body, dynamic, inEvent = true)
+      case scope: Statement.Scope => validateEventPlacement(scope.body, dynamic, inEvent)
+      case conditional: Statement.IfThenElse =>
+        val runtime = dynamic || conditional.branches.exists(_.condition.stage == Stage.Runtime)
+        conditional.branches.foreach(branch =>
+          validateEventPlacement(branch.body, runtime, inEvent)
+        )
+        conditional.otherwise.foreach(validateEventPlacement(_, runtime, inEvent))
+      case selection: Statement.CaseStatement =>
+        val runtime = dynamic || selection.selector.staticValue.isEmpty
+        selection.arms.foreach(arm => validateEventPlacement(arm.body, runtime, inEvent))
+        selection.default.foreach(validateEventPlacement(_, runtime, inEvent))
+      case loop: Statement.Loop =>
+        validateEventPlacement(loop.body, dynamic || loop.stage != LoopStage.Static, inEvent)
+      case _ => ()
 
   private def validateIdentity(identity: String, identities: mutable.Set[String]): Unit =
     val canonical = identity.trim
@@ -439,6 +476,11 @@ private[nodal] object AnalogControlFlowRuntime:
           "control-flow read",
           read.identity
         )
+      case event: Statement.EventControl =>
+        validateIdentity(event.identity, identities)
+        event.event.validate()
+        requireVisibleReferences(event.event.reads, visible, "analog event", event.identity)
+        validateBlock(event.body, identities, declarations, visible, Vector.empty, isRoot = false)
       case scope: Statement.Scope =>
         validateIdentity(scope.identity, identities)
         validateBlock(
@@ -759,6 +801,12 @@ private[nodal] object AnalogControlFlowRuntime:
       Flow(Some(input + assignment.target), Vector.empty, Vector.empty)
     case read: Statement.Read =>
       checkReads(Set(read.variable), input, read.identity)
+      Flow(Some(input), Vector.empty, Vector.empty)
+    case event: Statement.EventControl =>
+      checkReads(event.event.reads, input, event.identity)
+      val body = analyzeBlock(event.body, input, 0)
+      if body.breaks.nonEmpty || body.continues.nonEmpty then
+        AnalogEventRuntime.fail(7, "loop control cannot escape an analog event-controlled body")
       Flow(Some(input), Vector.empty, Vector.empty)
     case scope: Statement.Scope =>
       analyzeBlock(scope.body, input, loopDepth)

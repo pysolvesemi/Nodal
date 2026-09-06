@@ -210,7 +210,9 @@ def crossing(
     tolerance: EventTolerance,
     edge: Edge = Edge.Either,
     name: String = ""
-): Event = CandidateRuntime.event("candidate-crossing", value, tolerance, edge, name)
+): Event =
+  val event = cross(value, edge, tolerance.time, tolerance.value)
+  new Event(event.analogDefinition.map(_.copy(name = name)))
 
 enum DiscontinuityKind:
   case Exact, EventGuarded, Transitioned

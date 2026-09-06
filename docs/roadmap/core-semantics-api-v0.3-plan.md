@@ -164,7 +164,7 @@ val matrix = in(Vec(SInt(width), rows, cols))
 val element = matrix(row, col)
 ```
 
-`Vec` has semantic rank/dimensions and structural storage. `Mem` remains explicit addressable storage. Portable Verilog uses a canonical flat carrier; future SystemVerilog defaults to unpacked multidimensional ports of packed elements. Flatten/index/reshape order is target independent.
+`Vec` has semantic rank/dimensions and structural storage. `Mem` remains explicit addressable storage. `Mem` remains explicit addressable storage. Portable Verilog uses a canonical flat carrier; future SystemVerilog defaults to unpacked multidimensional ports of packed elements. Flatten/index/reshape order is target independent.
 
 Preferred emission configuration direction:
 
@@ -420,8 +420,9 @@ The [ExternalModule HDL integration and simulation plan](external-module-integra
 adds open deliverables EM-01 through EM-09 for existing Verilog, Verilog-A, and
 Verilog-AMS implementations. It distinguishes the typed module declaration,
 source/compiled-model implementation binding, and parameterized instance from
-this operation-level `ExternalOp` contract. `ExternalModule` is the preferred
-public-name candidate, subject to the owning API gate, not a frozen new class.
+this operation-level `ExternalOp` contract. `ExternalModule` is the public name
+selected by the user on 2026-09-06; its detailed API surface remains subject to
+the owning API gate and is not yet a frozen or implemented class.
 
 The required integration includes exact external pin/terminal names, symbolic
 parameter and nested-shape bindings, source dependencies and reproducible build

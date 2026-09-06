@@ -205,8 +205,8 @@ val controller = fsm(initial = ControlState.Idle):
     on(start).goto(ControlState.Run)
   state(ControlState.Run):
     exclusive:
-      on(done).goto(State.Run)
-      on(fault).goto(Mode.Error)
+      on(done).goto(ControlState.Idle)
+      on(fault).goto(ControlState.Error)
 ```
 
 The gate freezes flat/manual and high-level FSM semantics, entry/active/exit/transition actions, reset/no-hidden-boot behavior, exclusive versus priority transitions, illegal-state policy, local storage encoding independent of enum ABI, typed status, reusable immutable definitions, nested/parallel/timed machines, finite structural recursion, explicit bounded runtime call stacks, graph diagnostics, reports, source maps, and formal readiness.

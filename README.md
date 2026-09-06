@@ -256,6 +256,22 @@ See the full incremental plan:
 
 - [`docs/roadmap/nodal-development-todo.md`](docs/roadmap/nodal-development-todo.md)
 
+### Sequential Scheduled Hardware — separate dependent track
+
+The [Sequential Scheduled Hardware roadmap](docs/roadmap/sequential-scheduled-hardware-v0.1-plan.md)
+adds software-like local value semantics, flexible pipeline cuts/policies and
+explicit later iteration, state, memory and hardware-task capabilities. It reuses
+Nodal's existing pipeline and MLIR foundation; ordinary RTL and analog semantics
+remain unchanged. The API examples are candidates, not implemented features.
+
+Implementation is blocked by the complete Foundation barrier, including the
+[architecture-only readiness supplement](docs/roadmap/sequential-scheduled-hardware-foundation-readiness-v0.1.md).
+Independent increments `SQ-001`–`SQ-024` are registered in the
+[dependent-track gate](docs/roadmap/dependent-track-gate-v0.1.json) and
+[machine-readable track manifest](docs/roadmap/sequential-scheduled-hardware-v0.1-surface.json).
+`SQ-010` is the first useful release gate; later advanced features do not block
+that release. No existing global roadmap increment is renumbered or marked done.
+
 ## Authoritative public references
 
 - [Accellera Verilog-AMS standards](https://www.accellera.org/downloads/standards/v-ams)

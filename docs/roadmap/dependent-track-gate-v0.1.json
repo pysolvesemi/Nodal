@@ -4,6 +4,7 @@
   "roadmap_revision": "1.43",
   "verification_plan_revision": "0.3",
   "low_power_plan_revision": "0.1",
+  "sequential_scheduled_hardware_plan_revision": "0.1",
   "foundation_track": {
     "roadmap": "docs/roadmap/nodal-development-todo.md",
     "completion_rule": "all-foundation-checkboxes-complete",
@@ -11,7 +12,8 @@
     "extensions": [
       "docs/roadmap/asic-memory-dependent-tracks-v0.1-plan.md",
       "docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md",
-      "docs/roadmap/native-digital-simulator-adapters-v0.1-plan.md"
+      "docs/roadmap/native-digital-simulator-adapters-v0.1-plan.md",
+      "docs/roadmap/sequential-scheduled-hardware-foundation-readiness-v0.1.md"
     ],
     "latest_foundation_increment": 159,
     "foundation_increment_148_owns_native_adapter_contracts": true,
@@ -22,7 +24,10 @@
     "foundation_contains_asic_memory_or_verification_backend_implementation_todos": false,
     "dependent_track_implementation_is_not_a_foundation_exit_criterion": true,
     "function_local_semantic_naming_closure_required": true,
-    "foundation_increments_153_through_157_own_naming_closure": true
+    "foundation_increments_153_through_157_own_naming_closure": true,
+    "sequential_readiness_extension_is_architecture_only": true,
+    "sequential_readiness_checkpoints": ["SQF-001", "SQF-002", "SQF-003", "SQF-004"],
+    "sequential_implementation_is_not_a_foundation_exit_criterion": true
   },
   "dependent_tracks": [
     {
@@ -56,6 +61,21 @@
       "todo_defined": true,
       "plan": "docs/roadmap/low-power-power-intent-v0.1-plan.md",
       "surface": "docs/roadmap/low-power-power-intent-v0.1-surface.json"
+    },
+    {
+      "id": "sequential-scheduled-hardware",
+      "display_name": "Sequential Scheduled Hardware",
+      "increment_prefix": "SQ",
+      "numbering_starts_at": 1,
+      "planned_increment_count": 24,
+      "implementation_status": "blocked-by-foundation",
+      "research_status": "allowed-before-foundation-completion",
+      "todo_defined": true,
+      "plan": "docs/roadmap/sequential-scheduled-hardware-v0.1-plan.md",
+      "surface": "docs/roadmap/sequential-scheduled-hardware-v0.1-surface.json",
+      "foundation_readiness": "docs/roadmap/sequential-scheduled-hardware-foundation-readiness-v0.1.md",
+      "first_useful_release_gate": "SQ-010",
+      "implementation_changes_foundation_exit_criteria": false
     },
     {
       "id": "asic-productivity-signoff",
@@ -148,6 +168,8 @@
     "docs/roadmap/dependent-productivity-and-verification-tracks-v0.1-plan.md",
     "docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md",
     "docs/roadmap/native-digital-simulator-adapters-v0.1-plan.md",
-    "docs/roadmap/low-power-power-intent-v0.1-plan.md"
+    "docs/roadmap/low-power-power-intent-v0.1-plan.md",
+    "docs/roadmap/sequential-scheduled-hardware-foundation-readiness-v0.1.md",
+    "docs/roadmap/sequential-scheduled-hardware-v0.1-plan.md"
   ]
 }

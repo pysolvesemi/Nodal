@@ -101,6 +101,28 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
                         f"{label}: rejected input published target output")
             count += 1
 
+        def unsupported_local_state(label: str, text: str) -> None:
+            nonlocal count
+            path = root / f"{label}.mlir"
+            path.write_text(text)
+            # Source-semantic IR is valid. The limitation belongs to the scalar
+            # target profile, not the event or procedural language verifier.
+            inputs = [text]
+            for args in [(), (PIPELINE,)]:
+                result = invoke(nodalc, path, *args)
+                require(result.returncode == 0, f"{label}: {result.stderr}")
+                inputs.append(result.stdout)
+            for target in ["--nodal-to-verilog-a", "--nodal-to-verilog-ams"]:
+                for ir in inputs:
+                    path.write_text(ir)
+                    result = invoke(translate, path, target)
+                    require(result.returncode != 0 and
+                            "NODAL-BACKEND-EVENT-001" in result.stderr and
+                            "per-generated-instance storage" in result.stderr,
+                            f"{label}: loop-local state was silently shared: {result.stderr}")
+                    require(not result.stdout.strip(), f"{label}: partial target published")
+            count += 1
+
         # An explicitly captured read is a value, not a late reference to storage.
         read = '''%saved = "nodal.analog_variable_read"(%held) <{owner = "Review", read_id = "Review.saved", metadata = {}}> : (!nodal.variable<"real", "1">) -> !nodal.quantity<"real", "1">'''
         body = "\n".join([variable("held", 0, "1.0"), variable("sink", 1), initial(),
@@ -129,6 +151,35 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
         nested = loop("outer", loop("inner", cross + "\n" + on("sample", "cross"), 3), 2)
         rendered = accepted("nested-static-monitors", module(nested))
         require(rendered.count("  genvar ") == 2, "nested monitor loops share a genvar")
+
+        # Lexical state in a generated event loop must not be hoisted to one
+        # shared module scalar. Reject until per-instance storage is represented.
+        local_read = read.replace("%held", "%local")
+        local_update = "\n".join([local_read,
+            assignment("bump", "local", 0, "analog_add(Review.local,1.0)", ("saved",))])
+        local_body = "\n".join([variable("local", 0, "1.0"), initial(),
+                                  on("sample", "initial", local_update)])
+        for trips in (0, 1, 2):
+            unsupported_local_state(f"generated-local-{trips}",
+                                    module(loop("repeat", local_body, trips)))
+        unsupported_local_state("nested-generated-local",
+                                module(loop("outer", loop("inner", local_body, 3), 2)))
+        inside_handler = "\n".join([initial(), on("sample", "initial",
+            "\n".join([variable("local", 0, "1.0"), local_update]))])
+        unsupported_local_state("generated-handler-local",
+                                module(loop("repeat", inside_handler, 2)))
+        # The same local in an ordinary runtime loop inside a handler has no
+        # generated-instance lifetime and must not be rejected by that boundary.
+        ordinary = "\n".join([initial(), on("sample", "initial",
+            loop("repeat", "\n".join([variable("local", 0, "1.0"), local_update]), 2, False))])
+        accepted("ordinary-handler-loop-local", module(ordinary))
+        # A root declaration denotes deliberately shared storage across handlers.
+        shared_body = "\n".join([variable("held", 0, "1.0"), loop("repeat",
+            "\n".join([initial(), on("sample", "initial", "\n".join([
+                read, assignment("bump", "held", 0, "analog_add(Review.held,1.0)", ("saved",))]))]), 2)])
+        rendered = accepted("generated-root-shared", module(shared_body))
+        require(rendered.count("real event_Review_held = 1.0;") == 1,
+                "intentionally shared root storage was cloned or removed")
 
         # A real crossing monitor cannot be evaluated in a runtime-dependent loop.
         rejected("runtime-monitor", module(loop("repeat", cross + "\n" + on("sample", "cross"), 3, False)),

@@ -37,3 +37,19 @@ The repaired local compiler passes 52 direction checks and the existing 63
 native/source checks using the retained public-source witnesses. These are
 local results, not final-head or post-merge qualification. Full published-head
 CI, review disposition, merge, and separate evidence closure remain required.
+
+## Generated-loop lexical storage
+
+The final-head review also found that hoisting a variable declared inside a
+genvar event loop would incorrectly share its storage across generated
+occurrences. The scalar event target now rejects such declarations with
+`NODAL-BACKEND-EVENT-001` until per-generated-instance storage is represented.
+The source-semantic IR remains legal. The backend checks all enclosing loop
+scopes, including nested loops and event-handler-local declarations, before
+accepting output; an error publishes no partial HDL.
+
+The independent lowering review matrix reproduces the original shared scalar
+on the previous compiler and checks zero, one, and multiple occurrences, nested
+generated loops, and declarations within a generated handler before and after
+optimization on both targets. Positive controls preserve deliberately shared
+root storage and ordinary loop-local storage within a handler.

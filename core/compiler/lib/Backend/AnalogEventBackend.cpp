@@ -338,6 +338,19 @@ LogicalResult prepareAnalogEventBackend(Operation *module, AnalogEventRenderStat
     if (!procedure || !hasAnalogEvents(procedure))
       return;
     if (llvm::isa<AnalogVariableOp, AnalogVariableReadOp>(op)) {
+      // Genvar expansion duplicates lexical state as well as event histories.
+      // The scalar target currently has no per-generated-instance storage
+      // representation; never alias loop-local variables across occurrences.
+      // Root variables intentionally shared by handlers remain supported.
+      if (llvm::isa<AnalogVariableOp>(op)) {
+        for (Operation *scope = op->getParentOp(); scope != procedure.getOperation();
+             scope = scope->getParentOp()) {
+          if (llvm::isa<AnalogLoopOp>(scope) && hasAnalogEvents(scope)) {
+            result = reject(op, "loop-local event state requires per-generated-instance storage");
+            return;
+          }
+        }
+      }
       auto id = text(op, llvm::isa<AnalogVariableOp>(op) ? "identity" : "read_id");
       auto type = llvm::isa<AnalogVariableOp>(op)
                       ? llvm::cast<VariableType>(op->getResult(0).getType())

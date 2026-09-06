@@ -1,0 +1,104 @@
+name: Increment 37 Evidence Closure Qualification
+on:
+  push:
+    branches: [automation/increment37-closure-qualified-v2-20260906]
+    paths: ['.github/workflows/increment-37-closure-qualification.yml']
+permissions:
+  contents: read
+jobs:
+  qualification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-scala-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', '.scalafmt.conf', '.scalafix.conf', 'toolchains/lock.json', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-scala-${{ runner.os }}-
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
+      - name: Verify exact post-merge evidence and prepare closure
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -u - <<'PYCODE'
+          import base64, hashlib, io, json, os, pathlib, subprocess, zipfile
+          chunks = ['f12c47f67a09cd8ccabd67e7190330fd0292002c', '87fc2a6f935f23db16fcf54ff0dd58f68aec6406', 'b2e32ea756253868bd814a608292d3c677331d4c']
+          data = b''.join(base64.b64decode(json.loads(subprocess.check_output(['gh', 'api', f'repos/pysolvesemi/Nodal/git/blobs/{sha}'], timeout=90))['content']) for sha in chunks)
+          assert len(data) == 15620 and hashlib.sha256(data).hexdigest() == '7568729c2183c04b0384fa6048e8fc41e92414e6718ddcbcd7fe0715707541fc'
+          package = pathlib.Path(os.environ['RUNNER_TEMP']) / 'closure-source-package'
+          package.mkdir()
+          names = {'qualify_increment37_closure.py', 'prepare_increment37_closure.py', 'prepare_increment37_tests.py', 'increment37-premerge-evidence.json', 'compare_increment37_witnesses.py', 'increment37-evidence-closure.template.md'}
+          with zipfile.ZipFile(io.BytesIO(data)) as archive:
+              assert len(archive.namelist()) == len(names) and set(archive.namelist()) == names
+              for name in sorted(names):
+                  (package / name).write_bytes(archive.read(name))
+          subprocess.run(['python3', '-u', str(package / 'qualify_increment37_closure.py')], check=True, timeout=2000)
+          PYCODE
+      - name: Execute canonical locked-toolchain repository gates
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The candidate removes this helper; stage its deletion before tracked-file checks.
+          git add -A
+          mkdir -p "${RUNNER_TEMP}/increment37-closure"
+          ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/native"
+          ./nodal style bootstrap --prefix "${RUNNER_TEMP}/lint"
+          ./nodal style check --base-ref origin/dev \
+            --lint-toolchain "${RUNNER_TEMP}/lint"
+          ./nodal check --online-toolchain --base-ref origin/dev \
+            --toolchain "${RUNNER_TEMP}/native" \
+            --lint-toolchain "${RUNNER_TEMP}/lint" \
+            2>&1 | tee "${RUNNER_TEMP}/increment37-closure/full-check.log"
+          python3 scripts/check_increment36.py
+          python3 scripts/check_increment37.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py'
+          python3 scripts/check_markdown.py
+          git diff --check
+      - name: Retain verified clean source tree without moving any branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess, urllib.request
+          base = '2070bf5824b448aa23b917386ef1eccc089f28c7'
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'increment37-closure'
+          def git(*args): return subprocess.check_output(['git', *args])
+          subprocess.run(['git', 'add', '-A'], check=True)
+          tree = git('write-tree').decode().strip()
+          paths = git('diff', '--cached', '--name-only', '-z', base).decode().strip('\0').split('\0')
+          allowed = ['docs/implementation/increment37-accepted-evidence.json', 'docs/implementation/increment37-evidence-closure.md', 'docs/implementation/increment37-analog-events.md', 'docs/implementation/increment37-review-hardening.md', 'docs/roadmap/nodal-development-todo.md', 'scripts/check_increment36.py', 'scripts/check_increment37.py', 'tests/compiler/test_increment36.py', 'tests/compiler/test_increment37.py', 'tests/compiler/test_increment37_closure.py', 'tests/compiler/fixtures/increment37/manifest.json']
+          assert set(paths) == set(allowed), paths
+          entries = []
+          for name in paths:
+              path = pathlib.Path(name)
+              assert path.is_file() and not name.startswith('.github/workflows/')
+              mode = '100755' if os.access(path, os.X_OK) else '100644'
+              entries.append({'path': name, 'type': 'blob', 'mode': mode, 'content': path.read_text()})
+          payload = json.dumps({'base_tree': git('rev-parse', base + '^{tree}').decode().strip(), 'tree': entries}).encode()
+          request = urllib.request.Request('https://api.github.com/repos/pysolvesemi/Nodal/git/trees', data=payload, method='POST', headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json'})
+          with urllib.request.urlopen(request, timeout=60) as response: result = json.load(response)
+          assert result['sha'] == tree, 'Published object differs from checked source'
+          (out / 'candidate.json').write_text(json.dumps({'base_commit': base, 'source_tree_sha': tree, 'run_id': os.environ['GITHUB_RUN_ID'], 'full_qualification': 'success'}, indent=2) + '\n')
+          (out / 'candidate.tar.gz').write_bytes(git('archive', '--format=tar.gz', tree))
+          (out / 'candidate.patch').write_bytes(git('diff', '--cached', '--binary', base))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: increment37-closure-qualification
+          path: ${{ runner.temp }}/increment37-closure
+          retention-days: 14

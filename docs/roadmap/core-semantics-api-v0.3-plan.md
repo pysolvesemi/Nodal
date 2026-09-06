@@ -164,7 +164,7 @@ val matrix = in(Vec(SInt(width), rows, cols))
 val element = matrix(row, col)
 ```
 
-`Vec` has semantic rank/dimensions and structural storage. `Mem` remains explicit addressable storage. `Mem` remains explicit addressable storage. Portable Verilog uses a canonical flat carrier; future SystemVerilog defaults to unpacked multidimensional ports of packed elements. Flatten/index/reshape order is target independent.
+`Vec` has semantic rank/dimensions and structural storage. `Mem` remains explicit addressable storage. Portable Verilog uses a canonical flat carrier; future SystemVerilog defaults to unpacked multidimensional ports of packed elements. Flatten/index/reshape order is target independent.
 
 Preferred emission configuration direction:
 
@@ -525,7 +525,7 @@ The unified v0.3 gate may be approved only when:
 2. numeric widths and explicit lossy conversions are unambiguous;
 3. aggregate payloads are directionless and exact connections are proven;
 4. plain/valid/stream semantics are shared consistently with the pipeline plan;
-5. physical-dimension diagnostics work at compile-contract level;
+5. physical-dimension diagnostics have a provenance anchor.
 6. memory and external effects have enough metadata to bound scheduling;
 7. automatic-pipeline candidates compile against the same types and rules;
 8. external-library fixtures use only the frozen public subset;

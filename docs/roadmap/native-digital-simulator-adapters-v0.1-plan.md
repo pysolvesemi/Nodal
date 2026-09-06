@@ -18,6 +18,32 @@ The existing roadmap correctly identifies Verilator as the primary fast native s
 
 This plan does **not** add another Foundation increment. It refines unchecked **Foundation Increment 148** and the existing Digital Verification increments. It does not mark any runtime or adapter implementation complete.
 
+## External DUT implementation bundles — planned follow-up, 2026-09-06
+
+The [ExternalModule HDL integration and simulation plan](external-module-integration-v0.1-plan.md)
+adds open EM-01 through EM-09 requirements for Verilog, Verilog-A, and Verilog-AMS
+imports. In the digital paths below, the DUT compilation input includes the
+selected external Verilog source/dependency bundle or an explicitly supported
+compiled implementation, not only Nodal-generated RTL.
+
+Foundation Increment 148 must freeze common external-DUT artifact binding,
+logical endpoint identity, lifecycle, capability, source-map and cache contracts.
+After the complete Foundation barrier opens, Digital Verification Increment 1
+must implement the same typed live HVL access for both a standalone external DUT
+through a generated wrapper and external instances inside a native Nodal design.
+The native Icarus path must not require a standalone generated Verilog testbench.
+
+Compile/link manifests and caches must include every external source, include,
+define, library dependency, initialization/model asset, actual parameter, wrapper
+mapping, tool option and supported binary ABI that can affect behavior. Missing,
+ambiguous, unsupported or unloadable simulation implementations must fail rather
+than silently run an empty module or constant-output stub. Qualification must
+show actual external behavior and dependency-sensitive cache invalidation.
+
+These refinements add no implementation here. Analog and mixed-signal execution
+use the separate capability routes and Foundation-gated workstreams in the linked
+plan; digital adapter availability does not imply general Verilog-A/AMS support.
+
 ## Binding architecture
 
 ```text

@@ -1,0 +1,139 @@
+diff --git a/.github/workflows/increment-38-mathematical-functions.yml b/.github/workflows/increment-38-mathematical-functions.yml
+index 4aa7ac6..82dce26 100644
+--- a/.github/workflows/increment-38-mathematical-functions.yml
++++ b/.github/workflows/increment-38-mathematical-functions.yml
+@@ -48,8 +48,9 @@ jobs:
+           ./mill -i core.scala.testkit.test.runMain nodal.internal.testkit.Increment38MlirCheck "$PWD/evidence/public.mlir"
+       - name: Locked native build and tests
+         run: |
+-          ./nodal bootstrap --prefix "$RUNNER_TEMP/nodal-native"
+-          ./nodal core native --toolchain "$RUNNER_TEMP/nodal-native"
++          ./nodal bootstrap --mode prebuilt --prefix "$RUNNER_TEMP/nodal-native"
++          ./nodal style bootstrap --prefix "$RUNNER_TEMP/nodal-lint"
++          ./nodal core native --toolchain "$RUNNER_TEMP/nodal-native" --lint-toolchain "$RUNNER_TEMP/nodal-lint"
+           nodalc=$(find out -type f -name nodalc -executable | head -1)
+           translate=$(find out -type f -name nodal-translate -executable | head -1)
+           python3 tests/compiler/fixtures/increment38/run_native_matrix.py \
+diff --git a/core/compiler/lib/Dialect/Nodal/AnalogFunctions.cpp b/core/compiler/lib/Dialect/Nodal/AnalogFunctions.cpp
+index 13d4bd3..6d64274 100644
+--- a/core/compiler/lib/Dialect/Nodal/AnalogFunctions.cpp
++++ b/core/compiler/lib/Dialect/Nodal/AnalogFunctions.cpp
+@@ -47,7 +47,7 @@ FailureOr<std::string> analogFunctionDimension(
+   if (dimensions.size() != entry.arity)
+     return failure();
+   for (const auto &dimension : dimensions)
+-    if (!isCanonicalDimensionSignature(dimension))
++    if (dimension == "unknown" || !isCanonicalDimensionSignature(dimension))
+       return failure();
+   auto rule = entry.dimensionRule;
+   if (rule == "preserve")
+diff --git a/core/scala/api/src/nodal/AnalogProceduralConstruction.scala b/core/scala/api/src/nodal/AnalogProceduralConstruction.scala
+index 5250801..17b6d85 100644
+--- a/core/scala/api/src/nodal/AnalogProceduralConstruction.scala
++++ b/core/scala/api/src/nodal/AnalogProceduralConstruction.scala
+@@ -523,8 +523,9 @@ private[nodal] object AnalogProceduralConstruction:
+     def constant(expression: Any): Boolean = expression match
+       case _: Param[?] => true
+       case expr: KernelExpr[?] => expr.literal.nonEmpty ||
+-        (Set("analog_add", "analog_sub", "analog_mul", "analog_div", "analog_neg")
+-          .contains(expr.operation.getOrElse("")) && expr.operands.forall(constant))
++        ((Set("analog_add", "analog_sub", "analog_mul", "analog_div", "analog_neg")
++          .contains(expr.operation.getOrElse("")) || expr.operation.exists(
++            _.startsWith(AnalogFunctionRegistry.FunctionPrefix))) && expr.operands.forall(constant))
+       case _ => false
+     Option(current.get()).exists: session =>
+       session.modules.exists: module =>
+diff --git a/core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala b/core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala
+index 8ef1144..8b14e67 100644
+--- a/core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala
++++ b/core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala
+@@ -780,6 +780,22 @@ ${indent(body, 2)}
+               semanticPath = expression.path
+             )
+             values.update(expression.path, result -> "f64")
++          case "boolean" =>
++            val value = expression.literal.flatMap(_.toBooleanOption).getOrElse(
++              fail("NODAL-ANALOG-038-003", "Boolean literal is unavailable", Some(expression.path))
++            )
++            lines += operation(
++              "nodal.const_literal",
++              results = Vector(result),
++              resultTypes = Vector("i1"),
++              attributes = Vector(
++                "value" -> value.toString,
++                "spelling" -> quoted(if value then "1" else "0"),
++                "metadata" -> metadata
++              ),
++              semanticPath = expression.path
++            )
++            values.update(expression.path, result -> "i1")
+           case "potential_access" | "flow_access" =>
+             val branch = accessBranches.getOrElse(
+               expression.path,
+diff --git a/examples/continuousTimeApi/src/nodal/increment38fixture/Increment38ConstructionCheck.scala b/examples/continuousTimeApi/src/nodal/increment38fixture/Increment38ConstructionCheck.scala
+index 4342cef..dcc193f 100644
+--- a/examples/continuousTimeApi/src/nodal/increment38fixture/Increment38ConstructionCheck.scala
++++ b/examples/continuousTimeApi/src/nodal/increment38fixture/Increment38ConstructionCheck.scala
+@@ -15,12 +15,12 @@ final class AnalogMathSource extends Module:
+     val _ = AnalogMath.log10(100.0.real)
+     val _ = AnalogMath.sqrt(4.0.V * 4.0.V)
+     val _ = AnalysisContext.active(AnalysisKind.Transient) &&
+-      !AnalysisContext.active(AnalysisKind.Ac)
++      !AnalysisContext.active(AnalysisKind.Ac) && true.B
+ 
+ final class AnalogMathEventSource extends Module:
+   val positive = inout(Electrical)
+   val negative = inout(Electrical)
+-  val held = variable(Real, 0.0.V)
++  val held = variable(Real, AnalogMath.sqrt(4.0.V * 4.0.V))
+   analogProcedure:
+     on(initialStep or timer(0.0.ns, 1.0.ns)):
+       analogConditional:
+diff --git a/tests/compiler/fixtures/increment38/run_native_matrix.py b/tests/compiler/fixtures/increment38/run_native_matrix.py
+index 9df9f6e..00a6fd6 100644
+--- a/tests/compiler/fixtures/increment38/run_native_matrix.py
++++ b/tests/compiler/fixtures/increment38/run_native_matrix.py
+@@ -3,6 +3,9 @@
+ from __future__ import annotations
+ import argparse
+ import json
++import math
++import re
++import struct
+ import subprocess
+ import tempfile
+ from pathlib import Path
+@@ -91,6 +94,18 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
+             folded, va, _ = positive(fixture(call(identifier, arguments) + output()))
+             assert entry["verilog_a"] + "(" in va, va
+             assert "increment38-registry1" in folded, folded
++            function_line = next(line for line in folded.splitlines() if '"nodal.analog_function"' in line)
++            folded_match = re.search(r'nodal.folded_value = ([^ ]+) : f64', function_line)
++            assert folded_match, function_line
++            token = folded_match[1]
++            value = (struct.unpack(">d", bytes.fromhex(token[2:]))[0]
++                     if token.startswith("0x") else float(token))
++            oracle = {"abs": abs, "min": min, "max": max, "ln": math.log}.get(identifier)
++            if oracle is None:
++                oracle = getattr(math, identifier)
++            samples = [2.0 if identifier == "acosh" else 0.5] + ([2.0] if entry["arity"] == 2 else [])
++            expected = oracle(*samples)
++            assert math.isclose(value, expected, rel_tol=2e-14, abs_tol=1e-15), (identifier, value, expected)
+             symbolic = ["%param"] * entry["arity"]
+             folded, va, _ = positive(fixture(call(identifier, symbolic) + output()))
+             function = next(line for line in folded.splitlines() if '"nodal.analog_function"' in line)
+@@ -128,7 +143,13 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
+         if source:
+             for path in [source, Path(str(source) + ".events.mlir")]:
+                 folded, va, after = positive(path.read_text())
+-                assert "analysis(" in va and "analysis(" in after
++                if path == source:
++                    # This public witness has intentionally unused queries: retain them in IR,
++                    # but do not require dead expressions to become Verilog statements.
++                    assert '"nodal.analog_analysis"' in folded
++                    assert "tanh(" in va and "tanh(" in after
++                else:
++                    assert 'analysis("tran")' in va and 'analysis("tran")' in after
+                 assert "@event_reference_" not in folded
+     return count
+ 

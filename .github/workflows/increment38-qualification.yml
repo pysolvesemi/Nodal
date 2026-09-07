@@ -12,10 +12,12 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Reconstruct hash-verified candidate on current integration baseline
+      - name: Reconstruct candidate with reviewed boundary fixes
+        id: reconstruct
         shell: bash
         run: |
           mkdir -p "${RUNNER_TEMP}/increment38-evidence"
+          cp .automation/increment38/followup.patch "${RUNNER_TEMP}/increment38-followup.patch"
           python3 - <<'PY'
           import base64, hashlib, lzma, os
           from pathlib import Path
@@ -24,9 +26,10 @@ jobs:
           assert hashlib.sha256(data).hexdigest() == 'ec64cd926615062e23cbca0175bb6a860445bec54daca6fc803e4257a3f13044'
           Path(os.environ['RUNNER_TEMP'], 'increment38.patch').write_bytes(lzma.decompress(data))
           PY
-          git checkout -b candidate-work 619cc98fa0b923e381cf13001b5b309ceab859b9
+          git checkout -b increment/38-mathematical-simulator-functions 619cc98fa0b923e381cf13001b5b309ceab859b9
           test "$(git rev-parse HEAD:core)" = 8b371a3a98894e7b373d985dce8e9158e25729e5
           git apply --index "${RUNNER_TEMP}/increment38.patch"
+          git apply --index "${RUNNER_TEMP}/increment38-followup.patch"
           git diff --cached --check
       - uses: actions/cache@v5
         with:
@@ -40,34 +43,36 @@ jobs:
         with:
           path: ~/.cache/nodal/downloads
           key: nodal-native-download-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
-      - name: Install pinned style tools and format candidate
+      - name: Format candidate with pinned tools
         id: format
         shell: bash
         run: |
           set -o pipefail
           ./nodal style bootstrap --prefix "${RUNNER_TEMP}/nodal-lint-toolchain" 2>&1 | tee "${RUNNER_TEMP}/increment38-evidence/style-bootstrap.log"
           ./nodal style fix --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" 2>&1 | tee "${RUNNER_TEMP}/increment38-evidence/style-fix.log"
-      - name: Publish candidate without claiming validation or merging
-        if: always() && steps.format.outcome != 'skipped'
+      - name: Archive and publish source candidate
+        if: always() && steps.reconstruct.outcome == 'success'
         shell: bash
         run: |
           git config user.name 'Nodal implementation'
           git config user.email 'nodal-implementation@users.noreply.github.com'
-          git add .github/workflows/increment-38-mathematical-functions.yml core examples scripts/generate_analog_function_registry.py tests/compiler docs/design-gates/NodalAnalogFunctions-DG-v0.1.md docs/implementation/increment38-mathematical-simulator-functions.md
+          git add core examples scripts/generate_analog_function_registry.py tests/compiler docs/design-gates/NodalAnalogFunctions-DG-v0.1.md docs/implementation/increment38-mathematical-simulator-functions.md
+          git reset HEAD -- .github/workflows/increment-38-mathematical-functions.yml
           git diff --cached --check
-          git commit -m 'Increment 38: add versioned mathematical and analysis function candidate'
-          git push origin HEAD:refs/heads/increment/38-mathematical-simulator-functions
+          git commit -m 'Increment 38: implement mathematical and simulator functions'
           git rev-parse HEAD HEAD^{tree} > "${RUNNER_TEMP}/increment38-evidence/candidate-identity.txt"
           git archive HEAD | gzip > "${RUNNER_TEMP}/increment38-evidence/candidate.tar.gz"
-      - name: Check registry and Python tests
-        if: always() && steps.format.outcome != 'skipped'
+          cp .github/workflows/increment-38-mathematical-functions.yml "${RUNNER_TEMP}/increment38-evidence/implementation-workflow.yml"
+          git push origin HEAD:refs/heads/increment/38-mathematical-simulator-functions
+      - name: Registry and Python tests
+        if: always() && steps.reconstruct.outcome == 'success'
         shell: bash
         run: |
           set -o pipefail
           python3 scripts/generate_analog_function_registry.py --check
-          python3 -m unittest discover -s tests/compiler -p 'test_increment38.py' 2>&1 | tee "${RUNNER_TEMP}/increment38-evidence/python.log"
-      - name: Compile Scala and run all core tests
-        if: always() && steps.format.outcome != 'skipped'
+          python3 -m unittest discover -s tests/compiler 2>&1 | tee "${RUNNER_TEMP}/increment38-evidence/python.log"
+      - name: Scala core and public witnesses
+        if: always() && steps.reconstruct.outcome == 'success'
         id: scala
         shell: bash
         run: |
@@ -75,15 +80,15 @@ jobs:
           ./nodal core scala 2>&1 | tee "${RUNNER_TEMP}/increment38-evidence/scala.log"
           ./mill -i examples.continuousTimeApi.runMain nodal.increment38fixture.Increment38ConstructionCheck 2>&1 | tee "${RUNNER_TEMP}/increment38-evidence/public-scala.log"
           ./mill -i core.scala.testkit.test.runMain nodal.internal.testkit.Increment38MlirCheck "${RUNNER_TEMP}/increment38-evidence/public.mlir"
-      - name: Build native compiler and run native contracts
-        if: always() && steps.format.outcome != 'skipped'
+      - name: Native core qualification
+        if: always() && steps.reconstruct.outcome == 'success'
         id: native
         shell: bash
         run: |
           set -o pipefail
           ./nodal bootstrap --mode prebuilt --prefix "${RUNNER_TEMP}/nodal-native-toolchain" 2>&1 | tee "${RUNNER_TEMP}/increment38-evidence/native-bootstrap.log"
           ./nodal core native --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain" 2>&1 | tee "${RUNNER_TEMP}/increment38-evidence/native.log"
-      - name: Run independent source-to-native matrix
+      - name: Public source through native boundary
         if: steps.scala.outcome == 'success' && steps.native.outcome == 'success'
         shell: bash
         run: |
@@ -91,8 +96,10 @@ jobs:
           nodalc=$(find out -type f -name nodalc -perm -u+x | head -n 1)
           translate=$(find out -type f -name nodal-translate -perm -u+x | head -n 1)
           python3 tests/compiler/fixtures/increment38/run_native_matrix.py --nodalc "$nodalc" --translate "$translate" --source "${RUNNER_TEMP}/increment38-evidence/public.mlir" 2>&1 | tee "${RUNNER_TEMP}/increment38-evidence/source-matrix.log"
-      - name: Check complete contract gate
-        if: always() && steps.format.outcome != 'skipped'
+          "$translate" --nodal-to-verilog-a "${RUNNER_TEMP}/increment38-evidence/public.mlir" > "${RUNNER_TEMP}/increment38-evidence/public.va"
+          "$translate" --nodal-to-verilog-a "${RUNNER_TEMP}/increment38-evidence/public.mlir.events.mlir" > "${RUNNER_TEMP}/increment38-evidence/events.va"
+      - name: Full contract gate
+        if: always() && steps.reconstruct.outcome == 'success'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         shell: bash

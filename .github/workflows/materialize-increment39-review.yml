@@ -1,0 +1,121 @@
+name: Increment 39 review hardening qualification
+on:
+  push:
+    branches: [automation/increment39-review-v3]
+permissions:
+  contents: write
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Materialize four reviewed files on the pinned candidate
+        id: source
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os
+          from pathlib import Path
+          patch = lzma.decompress(base64.b64decode(Path('.github/automation/inc39/review-extra.b64').read_text(), validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '36ad348c32071ef03272ae2c2ba15c4c250bbcdd253217800dd918f4ce90a628'
+          Path(os.environ['RUNNER_TEMP'], 'review.patch').write_bytes(patch)
+          PY
+          git checkout --detach 66df13694b78921104285383033784baf2546b51
+          git apply --index --exclude=core/compiler/lib/Dialect/Nodal/AnalogNoise.cpp "$RUNNER_TEMP/review.patch"
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('core/compiler/lib/Dialect/Nodal/AnalogNoise.cpp')
+          source = path.read_text()
+          edits = [
+            ('  // Identity is independent', '  if (module->getNumRegions() != 1 || !llvm::hasSingleElement(module->getRegion(0)))\n    return emitMappedFailure(op, "NODAL-ANALOG-039-002", "noise owner requires one body block");\n  // Identity is independent'),
+            ('    for (Operation &other : region.getRegion(0).front())', '    if (region.getNumRegions() != 1 || !llvm::hasSingleElement(region.getRegion(0)))\n      return emitMappedFailure(op, "NODAL-ANALOG-039-002", "noise inventory contains a malformed analog region");\n    for (Operation &other : region.getRegion(0).front())'),
+            ('      pending.push_back(definition);', '      pending.push_back(definition);\n    else\n      return emitMappedFailure(op, "NODAL-ANALOG-039-006", "noise operands require owned definitions");'),
+            ('        pending.push_back(parent);', '        pending.push_back(parent);\n      else\n        return emitMappedFailure(op, "NODAL-ANALOG-039-006", "noise operands require owned definitions");'),
+          ]
+          for old, new in edits:
+              assert source.count(old) == 1, old
+              source = source.replace(old, new)
+          path.write_text(source)
+          PY
+          git add core/compiler/lib/Dialect/Nodal/AnalogNoise.cpp
+          git config user.name 'Nodal implementation agent'
+          git config user.email 'noreply@github.com'
+          git commit -m 'Increment 39 — Harden ownership and independent target regressions'
+          mkdir -p evidence
+          git rev-parse HEAD HEAD^{tree} > evidence/source-identity.txt
+          git archive HEAD | gzip > evidence/source.tar.gz
+          git push origin HEAD:refs/heads/staging/increment39-candidate-v2
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-scala-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', '.scalafmt.conf', '.scalafix.conf', 'toolchains/lock.json', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-scala-${{ runner.os }}-
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
+      - name: Apply pinned formatting and retain exact candidate
+        run: |
+          set -euo pipefail
+          ./nodal style bootstrap --prefix "$RUNNER_TEMP/nodal-lint"
+          ./nodal style fix --lint-toolchain "$RUNNER_TEMP/nodal-lint" 2>&1 | tee evidence/style-fix.log
+          git add -u
+          if ! git diff --cached --quiet; then
+            git commit -m 'Increment 39 — Format review hardening'
+            git push origin HEAD:refs/heads/staging/increment39-candidate-v2
+          fi
+          git rev-parse HEAD HEAD^{tree} > evidence/source-identity.txt
+          git archive HEAD | gzip > evidence/source.tar.gz
+          git diff --check 5e33881b86fcbb9fdd127c58d6582ebfcfa60fea HEAD
+      - name: Canonical style and complete online check
+        id: check
+        if: always() && steps.source.outcome == 'success'
+        run: |
+          set -euo pipefail
+          ./nodal bootstrap --mode prebuilt --prefix "$RUNNER_TEMP/nodal-native" 2>&1 | tee evidence/bootstrap.log
+          ./nodal style check --base-ref origin/dev --lint-toolchain "$RUNNER_TEMP/nodal-lint" 2>&1 | tee evidence/style-check.log
+          ./nodal check --online-toolchain --base-ref origin/dev --toolchain "$RUNNER_TEMP/nodal-native" --lint-toolchain "$RUNNER_TEMP/nodal-lint" 2>&1 | tee evidence/check.log
+      - name: Public Scala to native IR and actual Verilog-A
+        if: always() && steps.source.outcome == 'success'
+        run: |
+          set -euo pipefail
+          ./mill -i examples.continuousTimeApi.runMain nodal.increment39fixture.Increment39ConstructionCheck
+          ./mill -i core.scala.testkit.test.runMain nodal.internal.testkit.Increment39MlirCheck "$PWD/evidence/public.mlir"
+          nodalc=$(find out -type f -name nodalc -executable | head -1)
+          translate=$(find out -type f -name nodal-translate -executable | head -1)
+          test -n "$nodalc" && test -n "$translate"
+          python3 tests/compiler/fixtures/increment39/run_native_matrix.py --nodalc "$nodalc" --translate "$translate" --source "$PWD/evidence/public.mlir" 2>&1 | tee evidence/source-matrix.log
+          "$translate" --nodal-to-verilog-a evidence/public.mlir > evidence/public.va
+      - name: Retain native tools and pinned formatter for replay
+        if: always() && steps.source.outcome == 'success'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os, re, shutil, subprocess
+          destination = Path('evidence/native-tools')
+          destination.mkdir(parents=True, exist_ok=True)
+          library = destination / 'lib'
+          library.mkdir(exist_ok=True)
+          root = str(Path(os.environ['RUNNER_TEMP']))
+          candidates = [p for p in Path('out').rglob('*') if p.name in ('nodalc', 'nodal-translate') and p.is_file() and os.access(p, os.X_OK)]
+          candidates += [p for p in Path(root, 'nodal-lint').rglob('clang-format') if p.is_file() and os.access(p, os.X_OK)]
+          for tool in candidates:
+              shutil.copy2(tool, destination / tool.name)
+              subprocess.run(['strip', str(destination / tool.name)], check=True)
+              dependencies = subprocess.check_output(['ldd', str(tool)], text=True)
+              for path in re.findall(r'=> (/\S+) \(', dependencies):
+                  if path.startswith(root + '/'):
+                      shutil.copy2(path, library / Path(path).name)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: increment39-review-qualification-v3
+          path: evidence/
+          retention-days: 14

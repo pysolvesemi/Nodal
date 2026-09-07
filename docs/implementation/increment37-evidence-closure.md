@@ -78,4 +78,4 @@ lexical storage remains rejected until represented under Increment 43. Ordinary
 event-free procedure lowering, full Verilog-AMS digital processes, numerical
 analog scheduling and solver accuracy, and analog/digital co-simulation remain
 separately scoped. Structural target acceptance is not a general Verilog-A parser,
-numerical simulation, or a solver-equivalence proof. Increment 38 remains open.
+numerical simulation, or a solver-equivalence proof. Increment 38 was still open at this historical acceptance; its later completion is recorded separately.

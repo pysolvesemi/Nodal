@@ -28,6 +28,14 @@ class RegistryTests(unittest.TestCase):
             self.assertRegex(entry["verilog_a"], r"^[a-z][a-z0-9]*$")
         self.assertNotIn("limexp", {f["id"] for f in registry["functions"]})
 
+    def test_repository_closure_contract(self):
+        path = ROOT / "scripts/check_increment38.py"
+        spec = importlib.util.spec_from_file_location("closure_contract38", path)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.check_repository(ROOT)
+
     def test_generation_is_deterministic(self):
         path = ROOT / "scripts/generate_analog_function_registry.py"
         spec = importlib.util.spec_from_file_location("registry_generator", path)

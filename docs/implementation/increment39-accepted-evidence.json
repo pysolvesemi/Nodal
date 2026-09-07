@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "increment": 39,
+  "implementation_pull_request": 128,
+  "accepted_head": "c22846da1812ef8b30ee8299ad89906bcd5171f2",
+  "accepted_tree": "2ec683ee9179a30cb690a9a4fdeb861ab5073870",
+  "tested_pull_request_merge": "682d41a7ac316cc335e895e664f83890173a10c5",
+  "accepted_head_pr_workflows": {
+    "Increment 13 Core Semantic Candidates": 34119122400,
+    "Increment 14 Pipeline and Interface Candidates": 34119122393,
+    "Increment 15 Unified Public API Freeze": 34119122153,
+    "Increment 16 Elaboration Construction Kernel": 34119122188,
+    "Increment 17 Source Origin Naming": 34119122265,
+    "Increment 18 MLIR Dialect Skeleton": 34119122350,
+    "Increment 19 Core MLIR Model": 34119122229,
+    "Increment 20 Scala-to-MLIR Bridge": 34119122245,
+    "Increment 21 Native Semantic Pipeline": 34119122084,
+    "Increment 22 Cross-Layer Diagnostics": 34119122301,
+    "Increment 23 Backend Framework": 34119122345,
+    "Increment 24 Minimal Analog IR": 34119122299,
+    "Increment 25 RC Filter Vertical Slice": 34119122460,
+    "Increment 26 Reproducibility Contract": 34119122207,
+    "Increment 27 Natures and Disciplines": 34119122190,
+    "Increment 28 Electrical Conservative Connectivity": 34119122289,
+    "Increment 29 Parameters Constants Ranges and Units": 34119122086,
+    "Increment 30 Analog Numeric Types and Expression Typing": 34119122369,
+    "Increment 31 Potential and Flow Access": 34119122360,
+    "Increment 32 Equation and Contribution Semantics": 34119122372,
+    "Increment 33 Analog Procedural Assignment": 34119122126,
+    "Increment 34 Analog Control Flow": 34119122178,
+    "Increment 35 Differential and Integral Operators": 34119122318,
+    "Increment 36 Time and Waveform Operators": 34119122254,
+    "Increment 37 Analog Events": 34119122324,
+    "Increment 38 mathematical and simulator functions": 34119122204,
+    "Increment 39 noise operators": 34119122353,
+    "Increment 133 Analog Semantic API": 34119122373,
+    "Core CI": 34119122192
+  },
+  "accepted_head_pr_workflows_conclusion": "all-success-at-closure",
+  "all_pr_workflows_passed_before_merge_claimed": false,
+  "source_qualification": {
+    "run_id": 34119122353,
+    "artifact_id": 10018124897,
+    "artifact_sha256": "1b733ece86215ea3a8ff3ada2a732dff2e23d2cec8d3ab74d90015a299d63920",
+    "source_tree": "2ec683ee9179a30cb690a9a4fdeb861ab5073870",
+    "independently_reconstructed_git_tree_matches": true
+  },
+  "review": {
+    "kind": "direct-implementation-agent",
+    "review_id": 5131703104,
+    "commit": "c22846da1812ef8b30ee8299ad89906bcd5171f2",
+    "result": "completed-with-no-blocking-findings",
+    "unresolved_threads": 0,
+    "independent_automated_review_claimed": false,
+    "automated_review_request": {
+      "status": "quota-blocked",
+      "comment_id": 5569652053
+    }
+  },
+  "source_witness_sha256": {
+    "public.mlir": "7119efa57a8a9d3e27672d3b8e17d776c4adc4dd666e7c25708e3df46ece8d7d",
+    "public.va": "3a7bcc95a8fc2a0a6b4556cd87ed921e9cf7b733f1320a48b2f6686edb49a36e"
+  },
+  "public_scala_source": {
+    "path": "examples/continuousTimeApi/src/nodal/increment39fixture/Increment39ConstructionCheck.scala",
+    "sha256": "1f77566eb4cce79980f6a3309442f34e9a1e8b5c36604d8a397d9a472d473ab5"
+  },
+  "observed_qualification_counts": {
+    "scala_tests": 130,
+    "native_ctest_tests": 130,
+    "noise_reparser_cases_within_ctest": 24,
+    "native_source_matrix_cases": 63,
+    "compiler_python_tests": 318,
+    "native_lint_translation_units": 32,
+    "counts_overlap_and_are_not_additive": true
+  },
+  "local_replay": {
+    "native_source_matrix_cases": 63,
+    "compiler_python_tests": 318
+  },
+  "implementation_merge": "924fd125b7958fc9fadefefd8857f34f58815351",
+  "implementation_merge_tree": "2ec683ee9179a30cb690a9a4fdeb861ab5073870",
+  "preserved_dev_parent": "5e33881b86fcbb9fdd127c58d6582ebfcfa60fea",
+  "post_merge_core_ci_run": 34122571681,
+  "post_merge_increment39_run": 34122571567,
+  "post_merge_witness": {
+    "run_id": 34122571567,
+    "artifact_id": 10019365081,
+    "artifact_sha256": "db8f15857809e8324dfd9da694c390333a1997c8328a4b15e48f31924a86cbb2",
+    "source_commit": "924fd125b7958fc9fadefefd8857f34f58815351",
+    "source_tree": "2ec683ee9179a30cb690a9a4fdeb861ab5073870",
+    "independently_reconstructed_git_tree_matches": true
+  },
+  "post_merge_witness_matches_accepted": true,
+  "numerical_simulator_execution_claimed": false,
+  "scala_local_lexical_naming_claimed": false,
+  "demonstration_sha256": {
+    "scala": [
+      "d2830b1e2d7f7b7cdeb2cbf1ba0bb8e6569d6af944c02920b084dc46a845888d"
+    ],
+    "verilog": [
+      "29976e8ae4a4e998ee1e3bc5a5c0e2c9fe3b7d09a8277d1a08eb021742b1fa78"
+    ]
+  }
+}

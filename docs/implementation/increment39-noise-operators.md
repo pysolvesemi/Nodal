@@ -1,6 +1,6 @@
 # Increment 39 — Noise operators
 
-**Status:** Implementation in progress
+**Status:** Validated — independent small-signal compiler/Verilog-A profile
 
 ## Implementation profile
 
@@ -33,9 +33,10 @@ nodal-translate --nodal-to-verilog-a /tmp/noise.mlir > /tmp/noise.va
 ```
 
 Generated HDL is retained in the qualification artifact, not committed as a build
-output. Actual source/output evidence and their hashes must be recorded after the
-compiler and source witness have executed successfully. This document does not
-claim an emitted-output demonstration before that execution.
+output. Actual source/output evidence, reproduction commands, and their hashes are recorded
+in the [accepted-evidence closure](increment39-evidence-closure.md). The retained
+public Scala and generated Verilog-A have been checked against the accepted source
+and exact implementation merge.
 
 ## Validation and completion state
 
@@ -46,9 +47,12 @@ malformed contracts, units, ranges, tables, and absence of partial HDL on errors
 Public construction/bridge tests and read-only CI add separately compiled source
 coverage. Structural reparse is not a third-party simulator or numerical PSD oracle.
 
-Increment 39 remains unchecked until required exact-head checks, review, merge,
-post-merge verification, and separate accepted-evidence closure are complete.
-Increment 38's accepted evidence is unchanged.
+Implementation PR #128 passed its required Core CI and dedicated noise workflow;
+its exact squash merge passed post-merge Core CI and noise qualification. This
+separate closure retains the accepted identities without changing production
+compiler code or Increment 38's historical evidence. The review is direct
+implementation-agent review, not independent automated review; the automated
+request returned the account review-quota limit.
 
 ## Explicitly deferred
 
@@ -57,3 +61,10 @@ transient/real-time noise extension, correlation group, symbolic table point,
 file/logarithmic table, event/procedural source creation, or equation-region source
 is qualified here. Unknown runtime power is not proved nonnegative by accepting a
 symbolic expression. Unsupported requests receive a capability diagnostic.
+
+## Naming boundary
+
+Noise source identities, reporting labels, and collision avoidance are supported.
+The current `noise_N` temporaries do not preserve Scala-local binders such as
+`shared` or `density`. Full lexical naming and metadata-preserving inlining remain
+under Foundation 153–157 and backend parity 65/72, as agreed with the owner.

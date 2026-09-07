@@ -30,6 +30,15 @@ class NoiseContractTests(unittest.TestCase):
                 output = root / path
                 output.parent.mkdir(parents=True, exist_ok=True)
                 output.write_bytes((ROOT / path).read_bytes())
+            path = root / checker.MANIFEST
+            manifest = json.loads(path.read_text())
+            manifest.update(status="implementation-in-progress", accepted_evidence=None, remaining=["validation"])
+            path.write_text(json.dumps(manifest))
+            roadmap = root / checker.ROADMAP
+            roadmap.write_text(roadmap.read_text().replace(checker.CLOSED, checker.OPEN))
+            implementation = root / checker.IMPLEMENTATION
+            implementation.write_text(implementation.read_text().replace(
+                "**Status:** Validated", "**Status:** Implementation in progress"))
             checker.check_repository(root)
             path = root / checker.MANIFEST
             manifest = json.loads(path.read_text())

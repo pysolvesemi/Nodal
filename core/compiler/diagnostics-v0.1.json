@@ -205,6 +205,12 @@
       "NODAL-ANALOG-037-009",
       "NODAL-ANALOG-037-010",
       "NODAL-BACKEND-EVENT-001"
+    ],
+    "mathematical-and-simulator-functions": [
+      "NODAL-ANALOG-038-001",
+      "NODAL-ANALOG-038-002",
+      "NODAL-ANALOG-038-003",
+      "NODAL-ANALOG-038-004"
     ]
   },
   "preserved_prefixes": [

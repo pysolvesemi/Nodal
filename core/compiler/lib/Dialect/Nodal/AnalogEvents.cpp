@@ -3,6 +3,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
+#include "nodal/Dialect/Nodal/AnalogFunctions.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
@@ -131,6 +132,12 @@ public:
     if (nesting != 0)
       return failure();
     pieces.push_back(body.drop_front(start));
+    if (function.starts_with(analogAnalysisSourcePrefix)) {
+      auto id = function.drop_front(analogAnalysisSourcePrefix.size());
+      if (!body.empty() || !lookupAnalogAnalysis(id))
+        return failure();
+      return Expression{"boolean", "1", std::nullopt, {}, function.str(), "", nullptr, {}};
+    }
     if (function == "potential_access" || function == "flow_access") {
       if (pieces.empty() || pieces.size() > 2)
         return failure();
@@ -164,7 +171,25 @@ public:
     const auto &left = args[0];
     Expression result{left.kind, left.dimension, std::nullopt, reads, function.str(),
                       "",        nullptr,        args};
-    if (function == "analog_select" && args.size() == 3) {
+    if (function.starts_with(analogFunctionSourcePrefix)) {
+      auto *entry = lookupAnalogFunction(function.drop_front(analogFunctionSourcePrefix.size()));
+      if (!entry || args.size() != entry->arity)
+        return failure();
+      llvm::SmallVector<std::string> dimensions;
+      llvm::SmallVector<std::optional<double>> constants;
+      for (const auto &argument : args) {
+        if (argument.kind != "real")
+          return failure();
+        dimensions.push_back(argument.dimension);
+        constants.push_back(argument.constant);
+      }
+      auto dimension = analogFunctionDimension(*entry, dimensions);
+      auto evaluated = evaluateAnalogFunction(*entry, constants);
+      if (failed(dimension) || failed(evaluated))
+        return failure();
+      result.dimension = *dimension;
+      result.constant = *evaluated;
+    } else if (function == "analog_select" && args.size() == 3) {
       if (left.kind != "boolean" || left.dimension != "1" || args[1].kind != args[2].kind ||
           args[1].dimension != args[2].dimension)
         return failure();

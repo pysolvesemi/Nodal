@@ -6,6 +6,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "nodal/Diagnostics/DiagnosticSupport.h"
 #include "nodal/Dialect/Nodal/AnalogEvents.h"
+#include "nodal/Dialect/Nodal/AnalogFunctions.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
@@ -2052,3 +2053,6 @@ LogicalResult nodal::AnalogEventOrOp::verify() { return verifyAnalogEventOperati
 LogicalResult nodal::AnalogOnOp::verify() { return verifyAnalogEventOperation(*this); }
 
 LogicalResult nodal::AnalogHeldReadOp::verify() { return verifyAnalogHeldRead(getOperation()); }
+
+LogicalResult nodal::AnalogFunctionOp::verify() { return verifyAnalogFunctionOperation(*this); }
+LogicalResult nodal::AnalogAnalysisOp::verify() { return verifyAnalogFunctionOperation(*this); }

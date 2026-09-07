@@ -1,4 +1,5 @@
 #include "nodal/Backend/AnalogEventBackend.h"
+#include "nodal/Dialect/Nodal/AnalogFunctions.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Regex.h"
@@ -109,6 +110,20 @@ private:
       return false;
     if (token != "(")
       return true;
+    if (name == "analysis") {
+      if (!eat("(") || token.size() < 2 || token.front() != '"' || token.back() != '"' ||
+          !isAnalogAnalysisTarget(token.drop_front().drop_back()) || !string(true))
+        return false;
+      return eat(")");
+    }
+    if (auto *entry = lookupAnalogFunctionTarget(name)) {
+      if (!eat("("))
+        return false;
+      for (unsigned i = 0; i < entry->arity; ++i)
+        if ((i && !eat(",")) || !expression(depth + 1))
+          return false;
+      return eat(")");
+    }
     if (name != "V" && name != "I")
       return false;
     if (!eat("(") || !identifier())

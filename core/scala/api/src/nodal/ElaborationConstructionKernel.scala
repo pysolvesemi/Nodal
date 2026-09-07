@@ -560,12 +560,22 @@ private final class ConstructionSession(val options: EmitOptions):
     case _: Param[?] => true
     case expression: KernelExpr[?] =>
       expression.literal.nonEmpty ||
-      (Set("analog_add", "analog_sub", "analog_mul", "analog_div", "analog_neg")
-        .contains(expression.operation.getOrElse("")) &&
+      ((Set("analog_add", "analog_sub", "analog_mul", "analog_div", "analog_neg")
+        .contains(expression.operation.getOrElse("")) || expression.operation.exists(
+        _.startsWith(AnalogFunctionRegistry.FunctionPrefix)
+      )) &&
         expression.operands.forall(waveformStatic))
     case _ => false
 
   def waveformConstant(value: Any): Option[Double] = value match
+    case expression: KernelExpr[?]
+        if expression.operation.exists(
+          _.startsWith(AnalogFunctionRegistry.FunctionPrefix)
+        ) =>
+      AnalogFunctionContract.constant(
+        expression.operation.get.stripPrefix(AnalogFunctionRegistry.FunctionPrefix),
+        expression.operands.map(waveformConstant)
+      )
     case expression: KernelExpr[?] =>
       expression.literal.filter(_.kind == "real").flatMap(_.value.toDoubleOption).orElse:
         expression.operands.map(waveformConstant) match
@@ -1059,7 +1069,24 @@ private final class ConstructionSession(val options: EmitOptions):
   private def isDimensionlessBoolean(dimension: AnalogDimension): Boolean =
     !dimension.isUnknown && dimension.powers.isEmpty
 
+  def registerAnalogFunction(expression: KernelExpr[Real], id: String): Unit =
+    // Infer before capture: a failed call cannot leave a partially accepted expression.
+    val _ = inferAnalogDimension(expression)
+    val _ = AnalogFunctionContract.constant(id, expression.operands.map(waveformConstant))
+    registerExpression(expression)
+
   def inferAnalogDimension(value: Any): AnalogDimension = value match
+    case expression: KernelExpr[?]
+        if expression.operation.exists(
+          _.startsWith(AnalogFunctionRegistry.FunctionPrefix)
+        ) =>
+      val id = expression.operation.get.stripPrefix(AnalogFunctionRegistry.FunctionPrefix)
+      val dimensions = expression.operands.map: operand =>
+        operand match
+          case value: Expr[?] if !CandidateRuntime.expressionDataType(value).exists(_ != Real) =>
+            inferAnalogDimension(value).signature
+          case _ => "unknown"
+      namedAnalogDimension(AnalogFunctionContract.dimension(id, dimensions))
     case parameter: Param[?] => inferAnalogDimension(parameter.default)
     case state: AnalogState => physicalDimension(state.dimension)
 
@@ -2238,6 +2265,9 @@ private[nodal] object ConstructionKernel:
   )
 
   def expression(value: AnyRef): Unit = active.foreach(_.registerExpression(value))
+
+  def analogFunction(value: KernelExpr[Real], id: String): Unit =
+    active.foreach(_.registerAnalogFunction(value, id))
 
   def continuousOperator(
       value: KernelExpr[Real],

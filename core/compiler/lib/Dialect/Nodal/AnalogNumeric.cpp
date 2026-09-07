@@ -4,6 +4,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
+#include "nodal/Dialect/Nodal/AnalogFunctions.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
@@ -538,6 +539,40 @@ EvaluationResult evaluateValue(Value value, bool reportErrors) {
     return dynamicResult();
   llvm::StringRef name = operation->getName().getStringRef();
 
+  if (name == "nodal.analog_function") {
+    auto *entry = lookupAnalogFunction(textAttr(operation, "function_id"));
+    if (!entry || textAttr(operation, "registry_version") != analogFunctionRegistryVersion)
+      return errorResult(operation, "NODAL-ANALOG-038-001", "unknown function registry entry",
+                         reportErrors);
+    llvm::SmallVector<std::optional<double>> arguments;
+    for (Value operand : operation->getOperands()) {
+      auto child = evaluateValue(operand, reportErrors);
+      if (child.status == EvaluationStatus::Error)
+        return child;
+      if (child.status == EvaluationStatus::Constant && child.value.kind != AnalogNumericKind::Real)
+        return errorResult(operation, "NODAL-ANALOG-038-003", "function constant is not real",
+                           reportErrors);
+      arguments.push_back(child.status == EvaluationStatus::Constant
+                              ? std::optional<double>(child.value.real)
+                              : std::nullopt);
+    }
+    auto evaluated = evaluateAnalogFunction(*entry, arguments);
+    if (failed(evaluated))
+      return errorResult(operation, "NODAL-ANALOG-038-004", "function domain or finite-value error",
+                         reportErrors);
+    if (!*evaluated)
+      return dynamicResult();
+    auto dimension = getAnalogRealDimension(value);
+    if (failed(dimension))
+      return errorResult(operation, "NODAL-ANALOG-038-003", "function dimension is invalid",
+                         reportErrors);
+    ConstantValue result;
+    result.kind = AnalogNumericKind::Real;
+    result.dimension = *dimension;
+    result.real = **evaluated;
+    return constantResult(std::move(result));
+  }
+  // Queries are intentionally absent: zero operands do not imply constness.
   if (name == "nodal.real_literal") {
     auto literal = operation->getAttrOfType<FloatAttr>("value");
     auto information = getAnalogNumericTypeInfo(value.getType());
@@ -609,10 +644,10 @@ constexpr llvm::StringLiteral kContinuousSimplificationAttributes[] = {
 
 bool isFoldCandidate(Operation *operation) {
   llvm::StringRef name = operation->getName().getStringRef();
-  return name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
-         name == "nodal.analog_div" || name == "nodal.analog_neg" ||
-         name == "nodal.analog_compare" || name == "nodal.analog_logic" ||
-         name == "nodal.analog_select";
+  return name == "nodal.analog_function" || name == "nodal.analog_add" ||
+         name == "nodal.analog_sub" || name == "nodal.analog_mul" || name == "nodal.analog_div" ||
+         name == "nodal.analog_neg" || name == "nodal.analog_compare" ||
+         name == "nodal.analog_logic" || name == "nodal.analog_select";
 }
 
 void clearFoldAttributes(Operation *operation) {
@@ -1210,6 +1245,8 @@ FailureOr<std::optional<double>> getAnalogConstantRealValue(Value value) {
 }
 
 LogicalResult verifyAnalogNumericOperation(Operation *operation) {
+  if (failed(verifyAnalogFunctionOperation(operation)))
+    return failure();
   if (isTimeWaveformOperation(operation))
     return verifyTimeWaveformOperation(operation);
   llvm::StringRef name = operation->getName().getStringRef();
@@ -1363,7 +1400,10 @@ LogicalResult foldAnalogNumericConstants(mlir::ModuleOp module) {
     operation->setAttr("nodal.folded_kind", StringAttr::get(context, kind));
     operation->setAttr("nodal.folded_dimension",
                        StringAttr::get(context, evaluated.value.dimension));
-    operation->setAttr("nodal.folded_provenance", StringAttr::get(context, "increment30"));
+    operation->setAttr("nodal.folded_provenance",
+                       StringAttr::get(context, name == "nodal.analog_function"
+                                                    ? "increment38-registry1"
+                                                    : "increment30"));
     if (evaluated.value.kind == AnalogNumericKind::Boolean) {
       operation->setAttr("nodal.folded_value", BoolAttr::get(context, evaluated.value.boolean));
     } else if (evaluated.value.kind == AnalogNumericKind::Real) {

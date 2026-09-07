@@ -23,6 +23,31 @@ public:
     return tokenStart;
   }
 
+  bool noiseCall() {
+    auto function = token;
+    if ((function != "white_noise" && function != "flicker_noise" && function != "noise_table") ||
+        !identifier() || !eat("("))
+      return false;
+    if (function == "noise_table") {
+      if (!eat("'") || !eat("{"))
+        return false;
+      unsigned count = 0;
+      do {
+        if (!expression())
+          return false;
+        ++count;
+      } while (eat(","));
+      if (!count || count % 2 || !eat("}"))
+        return false;
+    } else {
+      if (!expression())
+        return false;
+      if (function == "flicker_noise" && (!eat(",") || !expression()))
+        return false;
+    }
+    return eat(",") && token.size() > 2 && string(false) && eat(")") && token.empty() && !invalid;
+  }
+
 private:
   llvm::StringRef source, token;
   size_t cursor = 0, tokenStart = 0;
@@ -234,4 +259,7 @@ private:
 };
 } // namespace
 FailureOr<size_t> reparseAnalogEventBlock(llvm::StringRef source) { return Parser(source).run(); }
+LogicalResult reparseAnalogNoiseCall(llvm::StringRef source) {
+  return success(Parser(source).noiseCall());
+}
 } // namespace nodal

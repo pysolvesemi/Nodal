@@ -182,3 +182,22 @@ add_test(
   NAME nodal.native.parameter-model-unit
   COMMAND nodal-parameter-model-unit-tests
 )
+
+add_executable(nodal-noise-reparse-unit-tests
+  AnalogNoiseReparseTest.cpp
+)
+llvm_update_compile_flags(nodal-noise-reparse-unit-tests)
+target_link_libraries(nodal-noise-reparse-unit-tests
+  PRIVATE
+    NodalBackend
+    NodalDialect
+    CIRCTHW
+    MLIRIR
+    MLIRParser
+    MLIRSupport
+    LLVMSupport
+)
+add_test(
+  NAME nodal.native.noise-reparse-unit
+  COMMAND nodal-noise-reparse-unit-tests
+)

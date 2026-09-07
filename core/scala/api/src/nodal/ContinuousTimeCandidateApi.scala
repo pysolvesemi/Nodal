@@ -274,7 +274,7 @@ def whiteNoise(
     spectralDensity: Expr[Real],
     options: NoiseOptions = NoiseOptions()
 ): Expr[Real] =
-  CandidateRuntime.analogExpr("candidate-white-noise", id, spectralDensity, options)
+  AnalogNoiseContract.call("white", id, Vector(spectralDensity), options)
 
 def flickerNoise(
     id: NoiseId,
@@ -282,13 +282,19 @@ def flickerNoise(
     exponent: Double,
     options: NoiseOptions = NoiseOptions()
 ): Expr[Real] =
-  CandidateRuntime.analogExpr("candidate-flicker-noise", id, coefficient, exponent, options)
+  AnalogNoiseContract.call("flicker", id, Vector(coefficient, exponent.real), options)
 
 def tableNoise(
     id: NoiseId,
     points: Seq[NoisePoint],
     options: NoiseOptions = NoiseOptions()
-): Expr[Real] = CandidateRuntime.analogExpr("candidate-table-noise", id, points, options)
+): Expr[Real] =
+  AnalogNoiseContract.call(
+    "table",
+    id,
+    points.toVector.flatMap(point => Vector(point.frequency, point.spectralDensity)),
+    options
+  )
 
 enum ViolationPolicy:
   case Error, Warning, VerificationOnly

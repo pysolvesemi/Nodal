@@ -5,6 +5,7 @@
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/AnalogEvents.h"
 #include "nodal/Dialect/Nodal/AnalogFunctions.h"
+#include "nodal/Dialect/Nodal/AnalogNoise.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
@@ -77,6 +78,15 @@ FailureOr<std::string> dimension(Value value, unsigned depth = 0) {
   if (!op)
     return failure();
   auto operationName = name(op);
+  if (operationName == "nodal.analog_noise") {
+    unsigned index = text(op, "noise_kind") == "table" ? 1 : 0;
+    if (op->getNumOperands() <= index)
+      return failure();
+    auto density = dimension(op->getOperand(index), depth + 1);
+    if (failed(density))
+      return failure();
+    return analogNoiseResultDimension(*density);
+  }
   if (operationName == "nodal.analog_held_read") {
     auto variable = resolveAnalogHeldVariable(op);
     if (failed(variable))

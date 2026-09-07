@@ -27,7 +27,8 @@ bool dependsOnAnalysis(Operation *operation) {
     Operation *current = pending.pop_back_val();
     if (!visited.insert(current).second)
       continue;
-    if (current->getName().getStringRef() == "nodal.analog_analysis")
+    if (current->getName().getStringRef() == "nodal.analog_analysis" ||
+        current->getName().getStringRef() == "nodal.analog_noise")
       return true;
     for (Value operand : current->getOperands())
       if (Operation *definition = operand.getDefiningOp())
@@ -190,8 +191,9 @@ LogicalResult verifyAnalogFunctionOperation(Operation *op) {
     for (NamedAttribute attribute : op->getAttrs())
       annotated |= attribute.getName().getValue().starts_with("nodal.folded");
     if (annotated && dependsOnAnalysis(op))
-      return emitMappedFailure(op, "NODAL-ANALOG-FOLD-001",
-                               "analysis-dependent expressions cannot carry constant-fold claims");
+      return emitMappedFailure(
+          op, "NODAL-ANALOG-FOLD-001",
+          "analysis-dependent or noise-dependent expressions cannot carry constant-fold claims");
   }
   if (!query && name != "nodal.analog_function")
     return success();

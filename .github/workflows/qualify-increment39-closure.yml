@@ -1,0 +1,80 @@
+name: Increment 39 evidence closure qualification
+on:
+  push:
+    branches: [automation/increment39-close-qualified-20260907]
+permissions:
+  contents: write
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Apply the verified eight-file evidence closure
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os
+          from pathlib import Path
+          patch = lzma.decompress(base64.b64decode(Path('.github/automation/inc39/closure.b64').read_text(), validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'f8be7e9adfe91b580eb75865240798c31196042a3bdc399e940d743b6c647820'
+          Path(os.environ['RUNNER_TEMP'], 'closure.patch').write_bytes(patch)
+          PY
+          git checkout --detach 924fd125b7958fc9fadefefd8857f34f58815351
+          git apply --index "$RUNNER_TEMP/closure.patch"
+          test "$(git write-tree)" = 4461d1133b8661aaf80780b3307d493e9ad8fed4
+          test "$(git diff --cached --name-only | wc -l)" -eq 8
+          git diff --cached --check
+          git config user.name 'Nodal implementation agent'
+          git config user.email 'noreply@github.com'
+          git commit -m 'Increment 39 — Accepted evidence and roadmap closure'
+          mkdir -p evidence
+          git rev-parse HEAD HEAD^{tree} > evidence/source-identity.txt
+          git archive HEAD | gzip > evidence/source.tar.gz
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-scala-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', '.scalafmt.conf', '.scalafix.conf', 'toolchains/lock.json', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-scala-${{ runner.os }}-
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
+      - name: Canonical style and complete online validation
+        run: |
+          set -euo pipefail
+          ./nodal style bootstrap --prefix "$RUNNER_TEMP/nodal-lint" 2>&1 | tee evidence/lint-bootstrap.log
+          ./nodal bootstrap --mode prebuilt --prefix "$RUNNER_TEMP/nodal-native" 2>&1 | tee evidence/native-bootstrap.log
+          ./nodal style check --base-ref origin/dev --lint-toolchain "$RUNNER_TEMP/nodal-lint" 2>&1 | tee evidence/style.log
+          ./nodal check --online-toolchain --base-ref origin/dev --toolchain "$RUNNER_TEMP/nodal-native" --lint-toolchain "$RUNNER_TEMP/nodal-lint" 2>&1 | tee evidence/check.log
+      - name: Regenerate the accepted public source and noise matrix
+        run: |
+          set -euo pipefail
+          ./mill -i examples.continuousTimeApi.runMain nodal.increment39fixture.Increment39ConstructionCheck
+          ./mill -i core.scala.testkit.test.runMain nodal.internal.testkit.Increment39MlirCheck "$PWD/evidence/public.mlir"
+          out/native/release/bin/nodal-translate --nodal-to-verilog-a evidence/public.mlir > evidence/public.va
+          python3 tests/compiler/fixtures/increment39/run_native_matrix.py --nodalc out/native/release/bin/nodalc --translate out/native/release/bin/nodal-translate --source evidence/public.mlir 2>&1 | tee evidence/source-matrix.log
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          accepted = json.loads(Path('docs/implementation/increment39-accepted-evidence.json').read_text())
+          for name, digest in accepted['source_witness_sha256'].items():
+              assert hashlib.sha256(Path('evidence', name).read_bytes()).hexdigest() == digest, name
+          PY
+      - name: Publish only the qualified clean candidate
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          test "$(git rev-parse HEAD^{tree})" = 4461d1133b8661aaf80780b3307d493e9ad8fed4
+          git push origin HEAD:refs/heads/staging/increment39-evidence-qualified-v1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: increment39-closure-canonical-evidence
+          path: evidence/
+          retention-days: 14

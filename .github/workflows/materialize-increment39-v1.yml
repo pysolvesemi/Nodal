@@ -1,0 +1,124 @@
+name: Increment 39 scoped materialization and qualification v1
+on:
+  push:
+    branches: [automation/increment39-qualify-v1]
+permissions:
+  contents: write
+concurrency:
+  group: increment39-materialization-v1
+  cancel-in-progress: false
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Materialize exact scoped patch on the accepted predecessor
+        id: materialize
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os
+          from pathlib import Path
+          text = ''.join(Path(f'.github/automation/inc39/payload-{i}.b64').read_text() for i in range(5))
+          patch = lzma.decompress(base64.b64decode(text, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '2f794d503da59b6f72a247d6bac0150f3954101c9df2324d58bc15b205cc204a'
+          Path(os.environ['RUNNER_TEMP'], 'inc39.patch').write_bytes(patch)
+          PY
+          git checkout --detach 5e33881b86fcbb9fdd127c58d6582ebfcfa60fea
+          git apply --index "$RUNNER_TEMP/inc39.patch"
+          git config user.name 'Nodal implementation agent'
+          git config user.email 'noreply@github.com'
+          git commit -m 'Increment 39 — Implement white, flicker and table noise'
+          git push origin HEAD:refs/heads/staging/increment39-candidate-v1
+          mkdir -p evidence
+          git rev-parse HEAD HEAD^{tree} > evidence/source-identity.txt
+          git archive HEAD | gzip > evidence/source.tar.gz
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-scala-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', '.scalafmt.conf', '.scalafix.conf', 'toolchains/lock.json', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-scala-${{ runner.os }}-
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
+      - name: Apply pinned formatting and publish clean candidate
+        id: format
+        run: |
+          set -euo pipefail
+          ./nodal style bootstrap --prefix "$RUNNER_TEMP/nodal-lint" 2>&1 | tee evidence/style-bootstrap.log
+          ./nodal style fix --lint-toolchain "$RUNNER_TEMP/nodal-lint" 2>&1 | tee evidence/style-fix.log
+          git add -u
+          if ! git diff --cached --quiet; then
+            git commit -m 'Increment 39 — Apply pinned source formatting'
+            git push origin HEAD:refs/heads/staging/increment39-candidate-v1
+          fi
+          git rev-parse HEAD HEAD^{tree} > evidence/source-identity.txt
+          git archive HEAD | gzip > evidence/source.tar.gz
+          git diff --check 5e33881b86fcbb9fdd127c58d6582ebfcfa60fea HEAD
+      - name: Implementation contracts and Python tests
+        if: always() && steps.materialize.outcome == 'success'
+        run: |
+          set -euo pipefail
+          python3 scripts/check_increment39.py
+          python3 -m unittest discover -s tests/compiler -p 'test_*.py' 2>&1 | tee evidence/python.log
+      - name: Compile public Scala API and tests
+        id: scala
+        if: always() && steps.materialize.outcome == 'success'
+        run: |
+          set -euo pipefail
+          ./nodal core scala 2>&1 | tee evidence/scala.log
+          ./mill -i examples.continuousTimeApi.runMain nodal.increment39fixture.Increment39ConstructionCheck 2>&1 | tee evidence/public-scala.log
+          ./mill -i core.scala.testkit.test.runMain nodal.internal.testkit.Increment39MlirCheck "$PWD/evidence/public.mlir" 2>&1 | tee evidence/bridge.log
+      - name: Locked native compiler build and CTest
+        id: native
+        if: always() && steps.materialize.outcome == 'success'
+        run: |
+          set -euo pipefail
+          ./nodal bootstrap --mode prebuilt --prefix "$RUNNER_TEMP/nodal-native" 2>&1 | tee evidence/native-bootstrap.log
+          ./nodal core native --toolchain "$RUNNER_TEMP/nodal-native" --lint-toolchain "$RUNNER_TEMP/nodal-lint" 2>&1 | tee evidence/native.log
+      - name: Retain native tools for independent replay
+        if: always() && steps.materialize.outcome == 'success'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os, re, shutil, subprocess
+          destination = Path('evidence/native-tools')
+          destination.mkdir(parents=True, exist_ok=True)
+          library = destination / 'lib'
+          library.mkdir(exist_ok=True)
+          root = str(Path(os.environ['RUNNER_TEMP']) / 'nodal-native')
+          for name in ('nodalc', 'nodal-translate'):
+              candidates = [p for p in Path('out').rglob(name) if p.is_file() and os.access(p, os.X_OK)]
+              if not candidates:
+                  continue
+              tool = candidates[0]
+              shutil.copy2(tool, destination / name)
+              subprocess.run(['strip', str(destination / name)], check=True)
+              dependencies = subprocess.check_output(['ldd', str(tool)], text=True)
+              (destination / (name + '.dependencies.txt')).write_text(dependencies)
+              for path in re.findall(r'=> (/\S+) \(', dependencies):
+                  if path.startswith(root + '/'):
+                      shutil.copy2(path, library / Path(path).name)
+          PY
+      - name: Public source to native IR and actual Verilog-A
+        if: always() && steps.scala.outcome == 'success'
+        run: |
+          set -euo pipefail
+          nodalc=$(find out -type f -name nodalc -executable | head -1)
+          translate=$(find out -type f -name nodal-translate -executable | head -1)
+          test -n "$nodalc" && test -n "$translate"
+          python3 tests/compiler/fixtures/increment39/run_native_matrix.py --nodalc "$nodalc" --translate "$translate" --source "$PWD/evidence/public.mlir" 2>&1 | tee evidence/source-matrix.log
+          "$translate" --nodal-to-verilog-a evidence/public.mlir > evidence/public.va
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: increment39-materialization-v1
+          path: evidence/
+          retention-days: 14

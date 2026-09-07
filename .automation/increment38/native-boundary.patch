@@ -1,0 +1,44 @@
+diff --git a/core/compiler/lib/Dialect/Nodal/NodalOps.cpp b/core/compiler/lib/Dialect/Nodal/NodalOps.cpp
+index f85ef31..7bc8b4c 100644
+--- a/core/compiler/lib/Dialect/Nodal/NodalOps.cpp
++++ b/core/compiler/lib/Dialect/Nodal/NodalOps.cpp
+@@ -1488,7 +1488,11 @@ LogicalResult nodal::AnalogOp::verify() {
+   if (failed(requireSingleBlock(getOperation())))
+     return emitOpError("NODAL-ANALOG-REGION-001: analog region requires one body block");
+   for (Operation &operation : getOperation()->getRegion(0).front()) {
++    if (llvm::isa<nodal::ConstLiteralOp>(operation) && operation.getNumResults() == 1 &&
++        operation.getResult(0).getType().isInteger(1))
++      continue;
+     if (!llvm::isa<nodal::RealLiteralOp, nodal::AnalogIntegerLiteralOp, nodal::ParameterRefOp,
++                   nodal::AnalogFunctionOp, nodal::AnalogAnalysisOp,
+                    nodal::AnalogAddOp, nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp,
+                    nodal::AnalogNegOp, nodal::AnalogCompareOp, nodal::AnalogLogicOp,
+                    nodal::AnalogSelectOp, nodal::AnalogDdtOp, nodal::AnalogIdtOp,
+diff --git a/tests/compiler/fixtures/increment38/run_native_matrix.py b/tests/compiler/fixtures/increment38/run_native_matrix.py
+index 00a6fd6..6a4edcb 100644
+--- a/tests/compiler/fixtures/increment38/run_native_matrix.py
++++ b/tests/compiler/fixtures/increment38/run_native_matrix.py
+@@ -119,10 +119,22 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
+             line = next(line for line in folded.splitlines() if '"nodal.analog_analysis"' in line)
+             assert "nodal.folded" not in line, line
+             # Neither forged annotations nor a zero-operand node may manufacture constness.
+-            forged = text.replace('analysis_kind =', 'nodal.folded = true, nodal.folded_value = true, analysis_kind =', 1)
++            forged = text.replace(
++                'metadata = {}}> : () -> i1',
++                'metadata = {}}> {nodal.folded = true, nodal.folded_value = true} : () -> i1', 1)
+             folded, _, after = positive(forged)
+             assert f'analysis("{entry["verilog_a"]}")' in after
+             assert "nodal.folded_value = true" not in folded
++        # Boolean literals are admitted for analysis-query composition, not arbitrary
++        # digital integer constants or digital operations in a continuous region.
++        positive(fixture(query("transient") + '\n' + '\n'.join([
++            '      %truth = "nodal.const_literal"() <{value = true, spelling = "1", metadata = {}}> : () -> i1',
++            '      %both = "nodal.analog_logic"(%query, %truth) <{operator_name = "and", metadata = {}}> : (i1, i1) -> i1',
++            '      %result = "nodal.analog_select"(%both, %a, %b) <{metadata = {}}> : (i1, f64, f64) -> f64'
++        ]) + output()))
++        negative(fixture(
++            '      %digital = "nodal.const_literal"() <{value = 1 : i8, spelling = "1", metadata = {}}> : () -> i8'),
++            "NODAL-ANALOG-REGION-002")
+         negative(fixture(call("foreign_call", ["%a"])), "038-001")
+         negative(fixture(call("sin", ["%a"], version="2")), "038-001")
+         negative(fixture(call("sin", ["%a"], result="i1")), "038-003")

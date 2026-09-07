@@ -5,6 +5,7 @@
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/TimeWaveform.h"
 
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <cmath>
@@ -16,6 +17,23 @@ namespace {
 llvm::StringRef text(Operation *op, llvm::StringRef key) {
   auto attr = op->getAttrOfType<StringAttr>(key);
   return attr ? attr.getValue() : llvm::StringRef();
+}
+// An annotation on an enclosing expression must not launder a simulator read
+// into an alleged constant. Walk definitions, not advisory fold attributes.
+bool dependsOnAnalysis(Operation *operation) {
+  llvm::SmallVector<Operation *, 8> pending{operation};
+  llvm::SmallPtrSet<Operation *, 32> visited;
+  while (!pending.empty()) {
+    Operation *current = pending.pop_back_val();
+    if (!visited.insert(current).second)
+      continue;
+    if (current->getName().getStringRef() == "nodal.analog_analysis")
+      return true;
+    for (Value operand : current->getOperands())
+      if (Operation *definition = operand.getDefiningOp())
+        pending.push_back(definition);
+  }
+  return false;
 }
 } // namespace
 
@@ -167,6 +185,14 @@ evaluateAnalogFunction(const AnalogFunctionEntry &entry,
 LogicalResult verifyAnalogFunctionOperation(Operation *op) {
   auto name = op->getName().getStringRef();
   bool query = name == "nodal.analog_analysis";
+  if (!query) {
+    bool annotated = false;
+    for (NamedAttribute attribute : op->getAttrs())
+      annotated |= attribute.getName().getValue().starts_with("nodal.folded");
+    if (annotated && dependsOnAnalysis(op))
+      return emitMappedFailure(op, "NODAL-ANALOG-FOLD-001",
+                               "analysis-dependent expressions cannot carry constant-fold claims");
+  }
   if (!query && name != "nodal.analog_function")
     return success();
   if (text(op, "registry_version") != analogFunctionRegistryVersion)

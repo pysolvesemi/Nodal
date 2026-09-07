@@ -92,7 +92,8 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
             first = "%b" if identifier == "acosh" else "%a"
             arguments = [first] + (["%b"] if entry["arity"] == 2 else [])
             folded, va, _ = positive(fixture(call(identifier, arguments) + output()))
-            assert entry["verilog_a"] + "(" in va, va
+            # The mandatory backend pipeline may fold the constant parent root;
+            # verify target spelling separately on a genuinely symbolic call.
             assert "increment38-registry1" in folded, folded
             function_line = next(line for line in folded.splitlines() if '"nodal.analog_function"' in line)
             folded_match = re.search(r'nodal.folded_value = ([^ ]+) : f64', function_line)
@@ -107,7 +108,8 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
             expected = oracle(*samples)
             assert math.isclose(value, expected, rel_tol=2e-14, abs_tol=1e-15), (identifier, value, expected)
             symbolic = ["%param"] * entry["arity"]
-            folded, va, _ = positive(fixture(call(identifier, symbolic) + output()))
+            folded, va, after = positive(fixture(call(identifier, symbolic) + output()))
+            assert entry["verilog_a"] + "(" in va and entry["verilog_a"] + "(" in after, va
             function = next(line for line in folded.splitlines() if '"nodal.analog_function"' in line)
             assert "nodal.folded" not in function and "P" in va, function
             negative(fixture(call(identifier, [])), "038-002")
@@ -125,6 +127,13 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
             folded, _, after = positive(forged)
             assert f'analysis("{entry["verilog_a"]}")' in after
             assert "nodal.folded_value = true" not in folded
+            # A complete forged certificate on a parent must not hide the query.
+            parent_forgery = text.replace(
+                '<{metadata = {}}> : (i1, f64, f64) -> f64',
+                '<{metadata = {}}> {nodal.folded = true, nodal.folded_kind = "real", '
+                'nodal.folded_dimension = "1", nodal.folded_value = 0.5 : f64, '
+                'nodal.folded_provenance = "increment30"} : (i1, f64, f64) -> f64', 1)
+            negative(parent_forgery, "NODAL-ANALOG-FOLD-001")
         # Boolean literals are admitted for analysis-query composition, not arbitrary
         # digital integer constants or digital operations in a continuous region.
         positive(fixture(query("transient") + '\n' + '\n'.join([

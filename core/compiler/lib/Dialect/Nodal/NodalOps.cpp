@@ -1488,14 +1488,18 @@ LogicalResult nodal::AnalogOp::verify() {
   if (failed(requireSingleBlock(getOperation())))
     return emitOpError("NODAL-ANALOG-REGION-001: analog region requires one body block");
   for (Operation &operation : getOperation()->getRegion(0).front()) {
+    if (llvm::isa<nodal::ConstLiteralOp>(operation) && operation.getNumResults() == 1 &&
+        operation.getResult(0).getType().isInteger(1))
+      continue;
     if (!llvm::isa<nodal::RealLiteralOp, nodal::AnalogIntegerLiteralOp, nodal::ParameterRefOp,
-                   nodal::AnalogAddOp, nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp,
-                   nodal::AnalogNegOp, nodal::AnalogCompareOp, nodal::AnalogLogicOp,
-                   nodal::AnalogSelectOp, nodal::AnalogDdtOp, nodal::AnalogIdtOp,
-                   nodal::AnalogTransitionOp, nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp,
-                   nodal::AnalogAbstimeOp, nodal::AnalogBoundStepOp, nodal::AnalogHeldReadOp,
-                   nodal::AccessOp, nodal::TerminalAccessOp, nodal::PortFlowAccessOp,
-                   nodal::ContributeOp, nodal::AnalogProcedureOp>(operation))
+                   nodal::AnalogFunctionOp, nodal::AnalogAnalysisOp, nodal::AnalogAddOp,
+                   nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp, nodal::AnalogNegOp,
+                   nodal::AnalogCompareOp, nodal::AnalogLogicOp, nodal::AnalogSelectOp,
+                   nodal::AnalogDdtOp, nodal::AnalogIdtOp, nodal::AnalogTransitionOp,
+                   nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp, nodal::AnalogAbstimeOp,
+                   nodal::AnalogBoundStepOp, nodal::AnalogHeldReadOp, nodal::AccessOp,
+                   nodal::TerminalAccessOp, nodal::PortFlowAccessOp, nodal::ContributeOp,
+                   nodal::AnalogProcedureOp>(operation))
       return operation.emitOpError(
           "NODAL-ANALOG-REGION-002: operation is not legal in the analog numeric region");
   }

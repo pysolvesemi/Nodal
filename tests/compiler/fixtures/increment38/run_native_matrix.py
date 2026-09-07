@@ -119,10 +119,22 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
             line = next(line for line in folded.splitlines() if '"nodal.analog_analysis"' in line)
             assert "nodal.folded" not in line, line
             # Neither forged annotations nor a zero-operand node may manufacture constness.
-            forged = text.replace('analysis_kind =', 'nodal.folded = true, nodal.folded_value = true, analysis_kind =', 1)
+            forged = text.replace(
+                'metadata = {}}> : () -> i1',
+                'metadata = {}}> {nodal.folded = true, nodal.folded_value = true} : () -> i1', 1)
             folded, _, after = positive(forged)
             assert f'analysis("{entry["verilog_a"]}")' in after
             assert "nodal.folded_value = true" not in folded
+        # Boolean literals are admitted for analysis-query composition, not arbitrary
+        # digital integer constants or digital operations in a continuous region.
+        positive(fixture(query("transient") + '\n' + '\n'.join([
+            '      %truth = "nodal.const_literal"() <{value = true, spelling = "1", metadata = {}}> : () -> i1',
+            '      %both = "nodal.analog_logic"(%query, %truth) <{operator_name = "and", metadata = {}}> : (i1, i1) -> i1',
+            '      %result = "nodal.analog_select"(%both, %a, %b) <{metadata = {}}> : (i1, f64, f64) -> f64'
+        ]) + output()))
+        negative(fixture(
+            '      %digital = "nodal.const_literal"() <{value = 1 : i8, spelling = "1", metadata = {}}> : () -> i8'),
+            "NODAL-ANALOG-REGION-002")
         negative(fixture(call("foreign_call", ["%a"])), "038-001")
         negative(fixture(call("sin", ["%a"], version="2")), "038-001")
         negative(fixture(call("sin", ["%a"], result="i1")), "038-003")

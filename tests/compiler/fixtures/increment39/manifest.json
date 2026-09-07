@@ -1,11 +1,43 @@
 {
   "schema": 1,
   "increment": 39,
-  "status": "implementation-in-progress",
+  "status": "validated-noise-operators",
   "contract_version": "1",
-  "operators": ["white", "flicker", "table"],
-  "analyses": ["noise"],
-  "accepted_evidence": null,
-  "remaining": ["exact-head-validation", "review", "implementation-merge", "post-merge-validation", "separate-evidence-closure"],
-  "deferred": ["numerical-solver-qualification", "general-verilog-ams-qualification", "transient-noise", "correlation-groups", "symbolic-table-points", "file-and-log-tables", "procedural-and-equation-noise"]
+  "operators": [
+    "white",
+    "flicker",
+    "table"
+  ],
+  "analyses": [
+    "noise"
+  ],
+  "accepted_evidence": {
+    "path": "docs/implementation/increment39-accepted-evidence.json",
+    "sha256": "ee082e6f8a0bf2c9b13f48dfbbc77037f0438709b630682d8603f6aa110d9f15"
+  },
+  "remaining": [],
+  "deferred": [
+    "numerical-solver-qualification",
+    "general-verilog-ams-qualification",
+    "transient-noise",
+    "correlation-groups",
+    "symbolic-table-points",
+    "file-and-log-tables",
+    "procedural-and-equation-noise",
+    "scala-local-lexical-naming-foundation-153-157-backends-65-72"
+  ],
+  "semantics": {
+    "effectful_owned_source_identity": true,
+    "independent_type_arity_dimension_checks": true,
+    "proven_constant_domain_checks": true,
+    "symbolic_parameter_preservation": true,
+    "independent_reporting_labels": true,
+    "single_evaluation_for_shared_sources": true,
+    "unused_zero_source_retention": true,
+    "forged_fold_rejection": true,
+    "deterministic_normalization": true,
+    "source_map_retention": true,
+    "independent_target_reparse": true,
+    "no_partial_hdl_on_error": true
+  }
 }

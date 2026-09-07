@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.49
+**Revision:** 1.50
 **Created:** 2026-08-20
 **Updated:** 2026-09-07
 **Status:** Active roadmap
@@ -961,8 +961,10 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Accepted compiler/Verilog-A profile: implementation PR #126 at `05047f4bb511ef19a812de6e8f08fc2e709cb5c8`, merged as `e593a60eb6d6fdb9a505d0762c859934e041b92d`; all 28 PR workflows, independent review, post-merge Core CI `34090729148` and Increment 38 `34090729146`, and byte-identical public-source/output witnesses are recorded in [the accepted-evidence record](../implementation/increment38-evidence-closure.md).
   - Supports 24 real mathematical functions and six dynamic analysis queries. Numerical simulator execution, general Verilog-AMS, noise/transfer operators, user-defined functions and environment access remain separately scoped.
 
-- [ ] **Increment 39 — Noise operators**
+- [x] **Increment 39 — Noise operators**
   - Implement white, flicker, and table noise with analysis, naming, units, and capability checks.
+  - Accepted independent small-signal compiler/Verilog-A profile: implementation PR #128 at `c22846da1812ef8b30ee8299ad89906bcd5171f2`, merged as `924fd125b7958fc9fadefefd8857f34f58815351`; required Core CI `34119122192`, direct implementation-agent review, exact post-merge Core CI `34122571681` and Increment 39 `34122571567`, and matching public-source/output witnesses are retained in [the accepted-evidence record](../implementation/increment39-evidence-closure.md).
+  - Naming here covers source identity, reporting labels, and collision avoidance, not full Scala-local binders; lexical preservation remains in Foundation 153–157 and backend parity 65/72. Numerical noise simulation, transient/group correlation, broader tables/creation contexts, and general Verilog-AMS remain deferred.
 
 - [ ] **Increment 40 — Laplace and discrete transfer operators**
   - Implement supported Laplace/Z-domain forms, coefficient arrays, constant requirements, denominator validation, and emission.

@@ -127,6 +127,19 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
         positive(fixture(noise("table", ["%f1", "%density"]) + contribution()))
         positive(fixture(noise("table") + contribution()).replace(
             '%one = "nodal.real_literal"() <{value = 1.0', '%one = "nodal.real_literal"() <{value = 0.0'))
+        # Native typed results are independently checked, not inferred from an advisory string.
+        typed = noise().replace("-> f64", '-> !nodal.quantity<"real", "current">')
+        positive(fixture(typed))
+        for result_type in ['!nodal.quantity<"real", "voltage">',
+                            '!nodal.quantity<"integer", "current">', 'i1']:
+            negative(fixture(noise().replace("-> f64", "-> " + result_type)), "039-003")
+        positive(fixture(noise(dimension="voltage")).replace('unit = "A"', 'unit = "V"'))
+        positive(fixture(noise(operands=["%s"], dimension="1")))
+        collision = fixture(noise(operands=["%symbolic"]) + contribution()).replace(
+            'sym_name = "P"', 'sym_name = "noise_0"').replace('parameter = @P', 'parameter = @noise_0')
+        _, va, _ = positive(collision)
+        assert "parameter real noise_0" in va and "real noise_1;" in va, va
+        assert "I(p, n) <+ noise_1;" in va and "real noise_0;" not in va, va
         baseline = fixture(noise() + contribution())
         for old, new, code in [
             ('noise_kind = "white"', 'noise_kind = "foreign"', "039-002"),

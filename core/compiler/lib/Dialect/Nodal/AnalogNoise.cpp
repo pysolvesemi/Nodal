@@ -72,7 +72,8 @@ LogicalResult verifyAnalogNoiseOperation(Operation *op) {
     if (name(&region) != "nodal.analog")
       continue;
     if (region.getNumRegions() != 1 || !llvm::hasSingleElement(region.getRegion(0)))
-      return emitMappedFailure(op, "NODAL-ANALOG-039-002", "noise inventory contains a malformed analog region");
+      return emitMappedFailure(op, "NODAL-ANALOG-039-002",
+                               "noise inventory contains a malformed analog region");
     for (Operation &other : region.getRegion(0).front())
       if (&other != op && name(&other) == "nodal.analog_noise" && text(&other, "source_id") == id)
         return emitMappedFailure(op, "NODAL-ANALOG-039-002",
@@ -116,7 +117,8 @@ LogicalResult verifyAnalogNoiseOperation(Operation *op) {
     if (auto *definition = operand.getDefiningOp())
       pending.push_back(definition);
     else
-      return emitMappedFailure(op, "NODAL-ANALOG-039-006", "noise operands require owned definitions");
+      return emitMappedFailure(op, "NODAL-ANALOG-039-006",
+                               "noise operands require owned definitions");
   }
   // Inspect definitions rather than trusting defaults or supplied annotations.
   while (!pending.empty()) {
@@ -132,7 +134,8 @@ LogicalResult verifyAnalogNoiseOperation(Operation *op) {
       if (auto *parent = operand.getDefiningOp())
         pending.push_back(parent);
       else
-        return emitMappedFailure(op, "NODAL-ANALOG-039-006", "noise operands require owned definitions");
+        return emitMappedFailure(op, "NODAL-ANALOG-039-006",
+                                 "noise operands require owned definitions");
   }
   unsigned firstDensity = kind == "table" ? 1 : 0;
   for (unsigned i = firstDensity; i < count; i += kind == "table" ? 2 : count) {

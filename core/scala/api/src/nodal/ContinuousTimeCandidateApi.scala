@@ -290,7 +290,9 @@ def tableNoise(
     options: NoiseOptions = NoiseOptions()
 ): Expr[Real] =
   AnalogNoiseContract.call(
-    "table", id, points.toVector.flatMap(point => Vector(point.frequency, point.spectralDensity)),
+    "table",
+    id,
+    points.toVector.flatMap(point => Vector(point.frequency, point.spectralDensity)),
     options
   )
 

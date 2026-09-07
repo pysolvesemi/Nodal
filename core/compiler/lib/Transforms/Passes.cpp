@@ -887,10 +887,10 @@ LogicalResult verifyAnalog(mlir::ModuleOp module) {
           name == "nodal.analog_integer_literal" || name == "nodal.parameter_ref" ||
           name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
           name == "nodal.analog_div" || name == "nodal.analog_neg" ||
-          name == "nodal.analog_function" || name == "nodal.analog_analysis" || name == "nodal.analog_noise" ||
-          name == "nodal.analog_compare" || name == "nodal.analog_logic" ||
-          name == "nodal.analog_select" || name == "nodal.analog_ddt" ||
-          name == "nodal.analog_idt" || name == "nodal.contribute")
+          name == "nodal.analog_function" || name == "nodal.analog_analysis" ||
+          name == "nodal.analog_noise" || name == "nodal.analog_compare" ||
+          name == "nodal.analog_logic" || name == "nodal.analog_select" ||
+          name == "nodal.analog_ddt" || name == "nodal.analog_idt" || name == "nodal.contribute")
         analog = true;
       if (name == "nodal.port" || name == "nodal.resolved_net" || name == "nodal.net_drive" ||
           name == "nodal.crossing")
@@ -937,10 +937,10 @@ LogicalResult verifyCapabilities(mlir::ModuleOp module) {
         name == "nodal.real_literal" || name == "nodal.analog_integer_literal" ||
         name == "nodal.parameter_ref" || name == "nodal.analog_add" || name == "nodal.analog_sub" ||
         name == "nodal.analog_mul" || name == "nodal.analog_div" || name == "nodal.analog_neg" ||
-        name == "nodal.analog_function" || name == "nodal.analog_analysis" || name == "nodal.analog_noise" ||
-        name == "nodal.analog_compare" || name == "nodal.analog_logic" ||
-        name == "nodal.analog_select" || name == "nodal.analog_ddt" || name == "nodal.analog_idt" ||
-        name == "nodal.contribute";
+        name == "nodal.analog_function" || name == "nodal.analog_analysis" ||
+        name == "nodal.analog_noise" || name == "nodal.analog_compare" ||
+        name == "nodal.analog_logic" || name == "nodal.analog_select" ||
+        name == "nodal.analog_ddt" || name == "nodal.analog_idt" || name == "nodal.contribute";
     const bool digital = name == "nodal.resolved_net" || name == "nodal.net_driver" ||
                          name == "nodal.net_drive" || name == "nodal.crossing" ||
                          name == "nodal.fsm";

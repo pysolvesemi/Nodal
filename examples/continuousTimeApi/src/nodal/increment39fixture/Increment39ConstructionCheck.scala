@@ -13,10 +13,13 @@ final class AnalogNoiseSource extends Module:
     val independent = whiteNoise(NoiseId("thermal"), density)
     val flicker = flickerNoise(NoiseId("flicker"), density, 1.0)
     // Input order is retained; the standard defines sorting and linear interpolation.
-    val spectrum = tableNoise(NoiseId("spectrum"), Seq(
-      NoisePoint(1000.0.real / 1.0.s, density),
-      NoisePoint(1.0.real / 1.0.s, density * 4.0.real)
-    ))
+    val spectrum = tableNoise(
+      NoiseId("spectrum"),
+      Seq(
+        NoisePoint(1000.0.real / 1.0.s, density),
+        NoisePoint(1.0.real / 1.0.s, density * 4.0.real)
+      )
+    )
     I(positive, negative) <+ shared + shared + independent + flicker + spectrum
     val _ = whiteNoise(NoiseId("zero power"), 0.0.A * 1.0.A * 1.0.s)
 

@@ -855,8 +855,13 @@ ${indent(body, 2)}
               fail("NODAL-ANALOG-039-002", "noise source has no contract", Some(expression.path))
             )
             if name != AnalogNoiseContract.Prefix + contract.kind ||
-              contract.operands != expression.operands || contract.owner != region.module then
-              fail("NODAL-ANALOG-039-002", "noise inventory differs from its expression", Some(expression.path))
+              contract.operands != expression.operands || contract.owner != region.module
+            then
+              fail(
+                "NODAL-ANALOG-039-002",
+                "noise inventory differs from its expression",
+                Some(expression.path)
+              )
             val inputs = expression.operands.map(operand)
             lines += operation(
               "nodal.analog_noise",

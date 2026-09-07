@@ -3,7 +3,9 @@
 
 #include "mlir/IR/Operation.h"
 #include "mlir/Support/LogicalResult.h"
+
 #include "llvm/ADT/StringRef.h"
+
 #include <string>
 
 namespace nodal {

@@ -71,23 +71,24 @@ LogicalResult verifyAnalogNoiseOperation(Operation *op) {
       continue;
     for (Operation &other : region.getRegion(0).front())
       if (&other != op && name(&other) == "nodal.analog_noise" && text(&other, "source_id") == id)
-        return emitMappedFailure(op, "NODAL-ANALOG-039-002", "noise source identity must be unique");
+        return emitMappedFailure(op, "NODAL-ANALOG-039-002",
+                                 "noise source identity must be unique");
   }
   auto label = text(op, "noise_name");
-  if (label.empty() || llvm::any_of(label, [](char c) {
-        return c < ' ' || c > '~' || c == '"' || c == '\\';
-      }))
+  if (label.empty() ||
+      llvm::any_of(label, [](char c) { return c < ' ' || c > '~' || c == '"' || c == '\\'; }))
     return emitMappedFailure(op, "NODAL-ANALOG-039-005", "invalid portable noise reporting label");
   auto analyses = op->getAttrOfType<ArrayAttr>("analyses");
-  auto analysis = analyses && analyses.size() == 1 ? llvm::dyn_cast<StringAttr>(analyses[0])
-                                                   : StringAttr();
+  auto analysis =
+      analyses && analyses.size() == 1 ? llvm::dyn_cast<StringAttr>(analyses[0]) : StringAttr();
   if (text(op, "correlation") != "independent" || !analysis || analysis.getValue() != "noise")
     return emitMappedFailure(op, "NODAL-ANALOG-039-006",
                              "only independent small-signal noise sources are supported");
   for (NamedAttribute attr : op->getAttrs())
     if (attr.getName().getValue().starts_with("nodal.folded") ||
         attr.getName().getValue().starts_with("nodal.simplif"))
-      return emitMappedFailure(op, "NODAL-ANALOG-FOLD-001", "noise sources cannot carry fold claims");
+      return emitMappedFailure(op, "NODAL-ANALOG-FOLD-001",
+                               "noise sources cannot carry fold claims");
   auto kind = text(op, "noise_kind");
   const unsigned count = op->getNumOperands();
   if (op->getNumResults() != 1 ||
@@ -101,7 +102,8 @@ LogicalResult verifyAnalogNoiseOperation(Operation *op) {
   for (Value operand : op->getOperands()) {
     auto dimension = getAnalogRealDimension(operand);
     if (failed(dimension))
-      return emitMappedFailure(op, "NODAL-ANALOG-039-003", "noise operands require dimensioned reals");
+      return emitMappedFailure(op, "NODAL-ANALOG-039-003",
+                               "noise operands require dimensioned reals");
     dimensions.push_back(*dimension);
     auto constant = getAnalogConstantRealValue(operand);
     if (failed(constant) || (*constant && !std::isfinite(**constant)))
@@ -116,7 +118,8 @@ LogicalResult verifyAnalogNoiseOperation(Operation *op) {
     if (!visited.insert(definition).second)
       continue;
     if (owner(definition) != module)
-      return emitMappedFailure(op, "NODAL-ANALOG-039-002", "noise operand belongs to another Module");
+      return emitMappedFailure(op, "NODAL-ANALOG-039-002",
+                               "noise operand belongs to another Module");
     if (name(definition) == "nodal.analog_noise")
       return emitMappedFailure(op, "NODAL-ANALOG-039-006", "noise-modulated noise is unsupported");
     for (Value operand : definition->getOperands())
@@ -132,7 +135,8 @@ LogicalResult verifyAnalogNoiseOperation(Operation *op) {
   }
   if (kind == "flicker") {
     if (dimensions[1] != "1")
-      return emitMappedFailure(op, "NODAL-ANALOG-039-003", "flicker exponent must be dimensionless");
+      return emitMappedFailure(op, "NODAL-ANALOG-039-003",
+                               "flicker exponent must be dimensionless");
     if (!constants[1])
       return emitMappedFailure(op, "NODAL-ANALOG-039-006", "flicker exponent must be constant");
   }
@@ -142,9 +146,11 @@ LogicalResult verifyAnalogNoiseOperation(Operation *op) {
       if (dimensions[i] != "time^-1")
         return emitMappedFailure(op, "NODAL-ANALOG-039-003", "table frequencies require hertz");
       if (!constants[i] || !constants[i + 1])
-        return emitMappedFailure(op, "NODAL-ANALOG-039-006", "table points must be proven constants");
+        return emitMappedFailure(op, "NODAL-ANALOG-039-006",
+                                 "table points must be proven constants");
       if (*constants[i] < 0.0 || !frequencies.insert(*constants[i]).second)
-        return emitMappedFailure(op, "NODAL-ANALOG-039-004", "table frequencies must be nonnegative and unique");
+        return emitMappedFailure(op, "NODAL-ANALOG-039-004",
+                                 "table frequencies must be nonnegative and unique");
     }
   }
   auto dimension = analogNoiseResultDimension(dimensions[firstDensity]);
@@ -152,8 +158,9 @@ LogicalResult verifyAnalogNoiseOperation(Operation *op) {
   if (failed(dimension) || text(op, "result_dimension") != *dimension || failed(resultType) ||
       resultType->kind != AnalogNumericKind::Real ||
       (!resultType->legacyF64 && resultType->dimension != *dimension))
-    return emitMappedFailure(op, "NODAL-ANALOG-039-003",
-                             "noise result must have the square root of spectral-density/time dimensions");
+    return emitMappedFailure(
+        op, "NODAL-ANALOG-039-003",
+        "noise result must have the square root of spectral-density/time dimensions");
   return success();
 }
 } // namespace nodal

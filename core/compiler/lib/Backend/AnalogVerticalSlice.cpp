@@ -651,11 +651,14 @@ LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::ra
     llvm::StringRef name = operation.getName().getStringRef();
     if (name == "nodal.analog_noise") {
       auto kind = operation.getAttrOfType<StringAttr>("noise_kind").getValue();
-      std::string call = kind == "white" ? "white_noise(" : kind == "flicker" ? "flicker_noise(" : "noise_table('{";
+      std::string call = kind == "white"     ? "white_noise("
+                         : kind == "flicker" ? "flicker_noise("
+                                             : "noise_table('{";
       for (unsigned i = 0; i < operation.getNumOperands(); ++i) {
         auto argument = renderExpression(operation.getOperand(i), state);
         if (failed(argument))
-          return emitMappedFailure(&operation, "NODAL-BACKEND-NOISE-001", "cannot render noise argument");
+          return emitMappedFailure(&operation, "NODAL-BACKEND-NOISE-001",
+                                   "cannot render noise argument");
         if (i)
           call += ", ";
         call += *argument;
@@ -665,7 +668,8 @@ LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::ra
       call += ", \"" + operation.getAttrOfType<StringAttr>("noise_name").getValue().str() + "\")";
       auto temporary = state.noiseNames.find(operation.getResult(0));
       if (temporary == state.noiseNames.end())
-        return emitMappedFailure(&operation, "NODAL-BACKEND-NOISE-001", "noise source has no private storage");
+        return emitMappedFailure(&operation, "NODAL-BACKEND-NOISE-001",
+                                 "noise source has no private storage");
       // One evaluation per owned SSA source, including unused and zero-power sources.
       // Never inline this call at every use: that would silently lose correlation.
       output << "    " << temporary->second << " = " << call << ";\n";

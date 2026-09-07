@@ -44,12 +44,18 @@ object AnalogNoiseTests extends TestSuite:
       assert(AnalogNoiseContract.resultDimension("time") == "1")
       reject({ val _ = whiteNoise(NoiseId("bad"), 0.0.A) }, "NODAL-ANALOG-039-003")
       reject({ val _ = whiteNoise(NoiseId("bad"), 0.0.real) }, "NODAL-ANALOG-039-003")
-      reject({ val _ = whiteNoise(NoiseId("bad"), true.B.asInstanceOf[Expr[Real]]) }, "NODAL-ANALOG-039-003")
+      reject(
+        { val _ = whiteNoise(NoiseId("bad"), true.B.asInstanceOf[Expr[Real]]) },
+        "NODAL-ANALOG-039-003"
+      )
 
     test("negative and nonfinite powers or exponents reject"):
       reject({ val _ = whiteNoise(NoiseId("bad"), density * -1.0.real) }, "NODAL-ANALOG-039-004")
       reject({ val _ = flickerNoise(NoiseId("bad"), density, Double.NaN) }, "NODAL-ANALOG-039-004")
-      reject({ val _ = flickerNoise(NoiseId("bad"), density, Double.PositiveInfinity) }, "NODAL-ANALOG-039-004")
+      reject(
+        { val _ = flickerNoise(NoiseId("bad"), density, Double.PositiveInfinity) },
+        "NODAL-ANALOG-039-004"
+      )
       val _ = ConstructionKernel.inspect(new AnalogNoiseBody(() =>
         val _ = flickerNoise(NoiseId("negative exponent"), density, -1.0)
         val _ = whiteNoise(NoiseId("zero"), density * 0.0.real)
@@ -62,10 +68,24 @@ object AnalogNoiseTests extends TestSuite:
 
     test("tables require nonempty unique nonnegative frequency-power pairs"):
       reject({ val _ = tableNoise(NoiseId("bad"), Seq.empty) }, "NODAL-ANALOG-039-002")
-      reject({ val _ = tableNoise(NoiseId("bad"), Seq(NoisePoint(1.0.real, density))) }, "NODAL-ANALOG-039-003")
-      reject({ val _ = tableNoise(NoiseId("bad"), Seq(NoisePoint(-1.0.real / 1.0.s, density))) }, "NODAL-ANALOG-039-004")
-      reject({ val _ = tableNoise(NoiseId("bad"), Seq.fill(2)(NoisePoint(0.0.real / 1.0.s, density))) }, "NODAL-ANALOG-039-004")
-      reject({ val _ = tableNoise(NoiseId("bad"), Seq(NoisePoint(1.0.real / 1.0.s, density * -1.0.real))) }, "NODAL-ANALOG-039-004")
+      reject(
+        { val _ = tableNoise(NoiseId("bad"), Seq(NoisePoint(1.0.real, density))) },
+        "NODAL-ANALOG-039-003"
+      )
+      reject(
+        { val _ = tableNoise(NoiseId("bad"), Seq(NoisePoint(-1.0.real / 1.0.s, density))) },
+        "NODAL-ANALOG-039-004"
+      )
+      reject(
+        { val _ = tableNoise(NoiseId("bad"), Seq.fill(2)(NoisePoint(0.0.real / 1.0.s, density))) },
+        "NODAL-ANALOG-039-004"
+      )
+      reject(
+        {
+          val _ = tableNoise(NoiseId("bad"), Seq(NoisePoint(1.0.real / 1.0.s, density * -1.0.real)))
+        },
+        "NODAL-ANALOG-039-004"
+      )
       val _ = ConstructionKernel.inspect(new AnalogNoiseBody(() =>
         val _ = tableNoise(NoiseId("one point"), Seq(NoisePoint(0.0.real / 1.0.s, density)))
       ))
@@ -73,18 +93,38 @@ object AnalogNoiseTests extends TestSuite:
     test("unsafe labels and unsupported capability selections fail closed"):
       Seq("", "quote\"", "back\\slash", "new\nline", "nonascii\u00e9").foreach: label =>
         reject({ val _ = whiteNoise(NoiseId(label), density) }, "NODAL-ANALOG-039-005")
-      reject({ val _ = whiteNoise(NoiseId("bad"), density,
-        NoiseOptions(correlation = NoiseCorrelation.Group("shared"))) }, "NODAL-ANALOG-039-006")
-      Seq(AnalysisApplicability.All, AnalysisApplicability.only(AnalysisKind.Transient),
-        AnalysisApplicability.only(AnalysisKind.Noise, AnalysisKind.Ac)).foreach: analyses =>
-        reject({ val _ = whiteNoise(NoiseId("bad"), density, NoiseOptions(analyses = analyses)) }, "NODAL-ANALOG-039-006")
+      reject(
+        {
+          val _ = whiteNoise(
+            NoiseId("bad"),
+            density,
+            NoiseOptions(correlation = NoiseCorrelation.Group("shared"))
+          )
+        },
+        "NODAL-ANALOG-039-006"
+      )
+      Seq(
+        AnalysisApplicability.All,
+        AnalysisApplicability.only(AnalysisKind.Transient),
+        AnalysisApplicability.only(AnalysisKind.Noise, AnalysisKind.Ac)
+      ).foreach: analyses =>
+        reject(
+          { val _ = whiteNoise(NoiseId("bad"), density, NoiseOptions(analyses = analyses)) },
+          "NODAL-ANALOG-039-006"
+        )
 
     test("noise effects reject unsupported construction contexts and nesting"):
       val failure = scala.util.Try(ConstructionKernel.inspect(new AnalogNoiseOutside))
         .failed.get.asInstanceOf[ConstructionException]
       assert(failure.diagnostic.code == "NODAL-ANALOG-039-001")
-      reject({ val _ = ConstructionKernel.waveformForbidden(whiteNoise(NoiseId("bad"), density)) }, "NODAL-ANALOG-039-001")
-      reject({
-        val source = whiteNoise(NoiseId("inner"), 1.0.s)
-        val _ = whiteNoise(NoiseId("outer"), density * source)
-      }, "NODAL-ANALOG-039-006")
+      reject(
+        { val _ = ConstructionKernel.waveformForbidden(whiteNoise(NoiseId("bad"), density)) },
+        "NODAL-ANALOG-039-001"
+      )
+      reject(
+        {
+          val source = whiteNoise(NoiseId("inner"), 1.0.s)
+          val _ = whiteNoise(NoiseId("outer"), density * source)
+        },
+        "NODAL-ANALOG-039-006"
+      )

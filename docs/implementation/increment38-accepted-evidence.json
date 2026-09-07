@@ -1,0 +1,95 @@
+{
+  "schema": 1,
+  "increment": 38,
+  "implementation_pull_request": 126,
+  "accepted_head": "05047f4bb511ef19a812de6e8f08fc2e709cb5c8",
+  "accepted_tree": "486b0cc6912005a427862af7592a2185c587705e",
+  "tested_pull_request_merge": "31f414fa82aded0b043a72c30577120cc7ee665c",
+  "accepted_head_pr_workflows": {
+    "Core CI": 34077343955,
+    "Increment 13 Core Semantic Candidates": 34077343996,
+    "Increment 14 Pipeline and Interface Candidates": 34077344075,
+    "Increment 15 Unified Public API Freeze": 34077344005,
+    "Increment 16 Elaboration Construction Kernel": 34077343948,
+    "Increment 17 Source Origin Naming": 34077344166,
+    "Increment 18 MLIR Dialect Skeleton": 34077343981,
+    "Increment 19 Core MLIR Model": 34077344013,
+    "Increment 20 Scala-to-MLIR Bridge": 34077344033,
+    "Increment 21 Native Semantic Pipeline": 34077344001,
+    "Increment 22 Cross-Layer Diagnostics": 34077344030,
+    "Increment 23 Backend Framework": 34077344004,
+    "Increment 24 Minimal Analog IR": 34077344024,
+    "Increment 25 RC Filter Vertical Slice": 34077344184,
+    "Increment 26 Reproducibility Contract": 34077343987,
+    "Increment 27 Natures and Disciplines": 34077343919,
+    "Increment 28 Electrical Conservative Connectivity": 34077344011,
+    "Increment 29 Parameters Constants Ranges and Units": 34077343983,
+    "Increment 30 Analog Numeric Types and Expression Typing": 34077344048,
+    "Increment 31 Potential and Flow Access": 34077344016,
+    "Increment 32 Equation and Contribution Semantics": 34077344128,
+    "Increment 33 Analog Procedural Assignment": 34077344009,
+    "Increment 34 Analog Control Flow": 34077343932,
+    "Increment 35 Differential and Integral Operators": 34077343972,
+    "Increment 36 Time and Waveform Operators": 34077344019,
+    "Increment 37 Analog Events": 34077343970,
+    "Increment 38 mathematical and simulator functions": 34077344014,
+    "Increment 133 Analog Semantic API": 34077343927
+  },
+  "source_qualification": {
+    "run_id": 34077317999,
+    "head": "05047f4bb511ef19a812de6e8f08fc2e709cb5c8",
+    "artifact_id": 10002665161,
+    "artifact_sha256": "3170f3bd6c98c55367dc67b5b42eb5adc1b06496913d03e101a2a286a4689793",
+    "independently_reconstructed_git_tree_matches": true
+  },
+  "independent_review": {
+    "summary_comment_id": 5564322833,
+    "positive_reaction_id": 491907273,
+    "commit": "05047f4bb511ef19a812de6e8f08fc2e709cb5c8",
+    "reviewer": "chatgpt-codex-connector[bot]",
+    "result": "completed-with-no-findings",
+    "unresolved_threads": 0
+  },
+  "source_witness_sha256": {
+    "public.mlir": "837e6cc5444e67701c959d8c65689bd6c2d446165a41c1f5d44b4e59598550d1",
+    "public.mlir.events.mlir": "626ecf1ef30d2040513855e3ad9803ba0f486818fdc424edb9639d0dda5c5a00",
+    "public.va": "e1d02568a7a1b900e57c111bdc46a0c51f928fcdf6827f88f640263f63c1be30",
+    "events.va": "97cf507ec0f0fd84791fe9291d86deee4d1eec506801b9063d670360a21b4d1f"
+  },
+  "observed_qualification_counts": {
+    "scala_tests": 123,
+    "native_ctest_tests": 128,
+    "native_source_matrix_cases": 112,
+    "compiler_python_tests": 305,
+    "counts_overlap_and_are_not_additive": true
+  },
+  "local_replay": {
+    "native_source_matrix_cases": 112,
+    "compiler_python_tests": 305
+  },
+  "implementation_merge": "e593a60eb6d6fdb9a505d0762c859934e041b92d",
+  "implementation_merge_tree": "4a6a0771005e6e2d60fc22f003747b31c6d295a3",
+  "preserved_dev_parent": "a0424515f48bb0ec4cf869ef09d0ea2041551223",
+  "post_merge_core_ci_run": 34090729148,
+  "post_merge_increment38_run": 34090729146,
+  "post_merge_witness": {
+    "run_id": 34090729146,
+    "artifact_id": 10007015216,
+    "artifact_sha256": "3458eb6c9de67c446740f3f37694f65d8c79f46f01b7690afbcd7180e5a200c3",
+    "head": "e593a60eb6d6fdb9a505d0762c859934e041b92d",
+    "source_tree": "4a6a0771005e6e2d60fc22f003747b31c6d295a3",
+    "independently_reconstructed_git_tree_matches": true
+  },
+  "post_merge_witness_matches_accepted": true,
+  "numerical_simulator_execution_claimed": false,
+  "demonstration_sha256": {
+    "scala": [
+      "97125ce756de701db87cda2f2572768c230aeba4d869541a80cff1336a6315a4",
+      "7df650a9ec0792f44fdb392b5a88247e02518939a7ccd1b43079b10ae7369f01"
+    ],
+    "verilog": [
+      "2fb1839bb9b8f75a7286b8f39c94f147c7442b2759b6ca3115e086f05c1c9920",
+      "4c8bf509a5a551721d275a4621d8facbe4cdaa748101f38f37f69b34f259ae25"
+    ]
+  }
+}

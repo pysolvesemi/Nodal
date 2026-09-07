@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "increment": 38,
+  "status": "validated-mathematical-simulator-functions",
+  "registry_version": "1",
+  "function_count": 24,
+  "analysis_query_count": 6,
+  "accepted_evidence": {
+    "path": "docs/implementation/increment38-accepted-evidence.json",
+    "sha256": "0f36a914f9ae31c5659f259fe934665478c723e14c7e22f1c08148ce37545d9c"
+  },
+  "semantics": {
+    "closed_versioned_registry": true,
+    "independent_type_arity_dimension_checks": true,
+    "provable_constant_domain_checks": true,
+    "symbolic_parameter_preservation": true,
+    "dynamic_analysis_queries": true,
+    "forged_fold_rejection": true,
+    "source_map_retention": true,
+    "ordered_event_reads": true,
+    "deterministic_normalization": true,
+    "registry_controlled_verilog_a_spelling": true,
+    "no_partial_hdl_on_error": true
+  },
+  "deferred": [
+    "numerical-solver-qualification",
+    "general-verilog-ams-qualification",
+    "ordinary-event-free-procedure-lowering",
+    "stateful-limexp-and-simulator-tasks",
+    "noise-and-transfer-operators",
+    "user-defined-functions-and-environment-access"
+  ],
+  "remaining": []
+}

@@ -1,6 +1,11 @@
 # Increment 38 — Mathematical and simulator functions
 
-**Status:** Implementation candidate; final-head qualification, review and evidence closure pending.
+**Status:** Validated mathematical/simulator-function compiler and Verilog-A profile.
+
+Accepted head `05047f4bb511ef19a812de6e8f08fc2e709cb5c8`, implementation PR #126,
+merge `e593a60eb6d6fdb9a505d0762c859934e041b92d`. The accepted checks, independent
+review, exact post-merge validation and actual source/output demonstrations are in
+[the separate evidence record](increment38-evidence-closure.md).
 
 The implementation adds a closed version-1 registry for 24 real mathematical functions
 and six simulator analysis queries. Generated Scala and native identity/spelling tables
@@ -34,7 +39,8 @@ calls in emitted HDL. Analysis-dependent behavior must survive both paths.
 
 ```sh
 python3 scripts/generate_analog_function_registry.py --check
-python3 -m unittest discover -s tests/compiler -p 'test_increment38.py'
+python3 scripts/check_increment38.py
+python3 -m unittest discover -s tests/compiler -p 'test_increment38*.py'
 ./nodal core scala
 ./mill -i examples.continuousTimeApi.runMain nodal.increment38fixture.Increment38ConstructionCheck
 ./mill -i core.scala.testkit.test.runMain nodal.internal.testkit.Increment38MlirCheck /tmp/increment38.mlir
@@ -53,7 +59,8 @@ checks and compiled the native compiler. Native qualification exposed an omitted
 allowlist entry and an incorrect constant-call spelling expectation; both have committed
 fixes. Those earlier runs are not final-head acceptance evidence.
 
-The roadmap checkbox remains open until exact-head validation, review, integration
-and separate evidence closure are complete. No numerical solver execution or general
-Verilog-AMS qualification is claimed. The approved scope and its explicit limitations
+The separate accepted-evidence change closes the roadmap checkbox after exact-head
+validation, independent review, implementation merge and successful post-merge checks.
+It has its own CI gate and does not pre-approve future merges. No numerical solver
+execution or general Verilog-AMS qualification is claimed. The approved scope and its explicit limitations
 are in [the design gate](../design-gates/NodalAnalogFunctions-DG-v0.1.md).

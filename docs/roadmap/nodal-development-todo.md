@@ -1,8 +1,8 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.48
+**Revision:** 1.49
 **Created:** 2026-08-20
-**Updated:** 2026-09-06
+**Updated:** 2026-09-07
 **Status:** Active roadmap
 **Primary language target:** Verilog-AMS 2023
 **Analog-only compatibility target:** Verilog-A
@@ -956,8 +956,10 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Accepted compiler/event profile: implementation PR #124 at `5684be7a725495cbbbd330d23da4d6c35bf353cb`, merged as `2070bf5824b448aa23b917386ef1eccc089f28c7`; exact-head CI, independent review, exact post-merge Core CI `34020356639` and Increment 37 `34020356658`, and byte-identical retained public-source/target witnesses are recorded in [the accepted-evidence record](../implementation/increment37-evidence-closure.md).
   - Per-generated-instance lexical storage is rejected until represented under Increment 43. Numerical solver execution, full Verilog-AMS digital processes, and co-simulation remain separately scoped; structural target acceptance is not numerical simulation.
 
-- [ ] **Increment 38 — Mathematical and simulator functions**
+- [x] **Increment 38 — Mathematical and simulator functions**
   - Add a versioned registry with type/arity checking, constant evaluation, analysis queries, and backend spelling.
+  - Accepted compiler/Verilog-A profile: implementation PR #126 at `05047f4bb511ef19a812de6e8f08fc2e709cb5c8`, merged as `e593a60eb6d6fdb9a505d0762c859934e041b92d`; all 28 PR workflows, independent review, post-merge Core CI `34090729148` and Increment 38 `34090729146`, and byte-identical public-source/output witnesses are recorded in [the accepted-evidence record](../implementation/increment38-evidence-closure.md).
+  - Supports 24 real mathematical functions and six dynamic analysis queries. Numerical simulator execution, general Verilog-AMS, noise/transfer operators, user-defined functions and environment access remain separately scoped.
 
 - [ ] **Increment 39 — Noise operators**
   - Implement white, flicker, and table noise with analysis, naming, units, and capability checks.

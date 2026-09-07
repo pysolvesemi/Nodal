@@ -1,0 +1,119 @@
+name: Increment 40 source materializer
+on:
+  push:
+    branches: [automation/increment40-source-materializer]
+permissions:
+  contents: write
+concurrency:
+  group: increment40-source-materializer
+  cancel-in-progress: false
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+            ~/.cache/nodal/downloads
+          key: inc40-materialize-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/lint-lock.json', '.scalafmt.conf') }}
+      - name: Verify reviewed patch and apply to exact integration base
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, os, subprocess
+          from pathlib import Path
+          root = Path('.automation/increment40')
+          parts = [base64.b64encode((root / f'part{i}').read_bytes()).decode().rstrip('=') for i in range(1, 5)]
+          # Correct three identified connector transport transcription errors.
+          # Exact original hashes below reject any other alteration before git apply.
+          parts[0] = parts[0].replace('FPGo8U14m', 'FPGo14m', 1)
+          parts[0] = parts[0][:-4] + 'ea1a'
+          parts[1] = parts[1].replace('MrytumK', 'MryrumK', 1).replace('R+P+SI56', 'R+P+KI56', 1)
+          expected = ['b9a03a13c424dd9fdc7232e17abc725f7f1d921e', '207d2808507b9f66910f0fd87e4fcca984d476bb', '7e4bd1a3eaac26533046aa34f0e55ed1da5b4d66', '9a45306aa308fb7e92597b4ddbaf77133c69fa7f']
+          raw = []
+          for part, sha in zip(parts, expected):
+              value = base64.b64decode(part + '=' * (-len(part) % 4), validate=True)
+              actual = hashlib.sha1(b'blob ' + str(len(value)).encode() + b'\0' + value).hexdigest()
+              assert actual == sha, (actual, sha)
+              raw.append(value)
+          patch = gzip.decompress(b''.join(raw))
+          assert hashlib.sha256(patch).hexdigest() == '4962e95fe11ae1097a446da21ed384d002b141f1b06354947b5dc1b6bda1a578'
+          dest = Path(os.environ['RUNNER_TEMP']) / 'increment40.patch'
+          dest.write_bytes(patch)
+          base = 'ca255253b61bb5b2dae35d9f26b04197cbbbb4c4'
+          branch = 'increment/40-transfer-operators'
+          remote = subprocess.check_output(['git', 'ls-remote', 'origin', 'refs/heads/' + branch], text=True).split()[0]
+          assert remote == base, 'Implementation branch moved; refusing to overwrite work'
+          subprocess.run(['git', 'checkout', '--detach', base], check=True)
+          subprocess.run(['git', 'apply', '--check', '--whitespace=error', str(dest)], check=True)
+          subprocess.run(['git', 'apply', '--whitespace=error', str(dest)], check=True)
+          PY
+      - name: Pinned formatting and source checks
+        run: |
+          set -o pipefail
+          ./nodal style bootstrap --prefix "$RUNNER_TEMP/nodal-lint"
+          ./nodal style fix --lint-toolchain "$RUNNER_TEMP/nodal-lint"
+          python3 scripts/check_increment40.py
+          python3 -m unittest discover -s tests/compiler -p 'test_increment40.py'
+          git diff --check
+      - name: Publish only the reviewed implementation paths
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          allowed = set('''
+          .github/workflows/increment-40-transfer-operators.yml
+          core/compiler/include/nodal/Backend/AnalogEventBackend.h
+          core/compiler/include/nodal/Dialect/Nodal/AnalogTransfer.h
+          core/compiler/include/nodal/Dialect/Nodal/NodalOps.td
+          core/compiler/include/nodal/Dialect/Nodal/TimeWaveform.h
+          core/compiler/lib/Backend/AnalogEventReparse.cpp
+          core/compiler/lib/Backend/AnalogVerticalSlice.cpp
+          core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp
+          core/compiler/lib/Dialect/Nodal/AnalogTransfer.cpp
+          core/compiler/lib/Dialect/Nodal/CMakeLists.txt
+          core/compiler/lib/Dialect/Nodal/NodalOps.cpp
+          core/compiler/lib/Dialect/Nodal/TimeWaveform.cpp
+          core/compiler/test/CMakeLists.txt
+          core/compiler/test/Unit/AnalogTransferReparseTest.cpp
+          core/compiler/test/Unit/CMakeLists.txt
+          core/scala/api/src/nodal/AnalogTransferApi.scala
+          core/scala/api/src/nodal/AnalogTransferContract.scala
+          core/scala/api/src/nodal/ElaborationConstructionKernel.scala
+          core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala
+          core/scala/testkit/test/src/nodal/AnalogTransferTests.scala
+          core/scala/testkit/test/src/nodal/internal/testkit/Increment40MlirCheck.scala
+          docs/design-gates/NodalTransferOperators-DG-v0.1.md
+          docs/implementation/increment40-transfer-operators.md
+          docs/roadmap/nodal-development-todo.md
+          examples/continuousTimeApi/src/nodal/increment40fixture/Increment40ConstructionCheck.scala
+          scripts/check_increment40.py
+          tests/compiler/fixtures/increment40/manifest.json
+          tests/compiler/fixtures/increment40/run_native_matrix.py
+          tests/compiler/test_increment40.py
+          '''.split())
+          subprocess.run(['git', 'add', '--all'], check=True)
+          changed = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines())
+          assert changed == allowed, ('Unexpected changed paths', changed ^ allowed)
+          subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
+          subprocess.run(['git', 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'], check=True)
+          subprocess.run(['git', 'commit', '-m', 'Increment 40 — Typed Laplace and Z-domain numerator/denominator operators'], check=True)
+          subprocess.run(['git', 'push', 'origin', 'HEAD:refs/heads/increment/40-transfer-operators'], check=True)
+          PY
+      - name: Retain exact candidate for review and validation
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/inc40-materialized"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/inc40-materialized/identity.txt"
+          git archive HEAD | gzip > "$RUNNER_TEMP/inc40-materialized/source.tar.gz"
+          git diff > "$RUNNER_TEMP/inc40-materialized/uncommitted.patch"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: increment40-materialized-source
+          path: ${{ runner.temp }}/inc40-materialized/
+          retention-days: 7

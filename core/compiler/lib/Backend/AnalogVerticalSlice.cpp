@@ -68,6 +68,7 @@ constexpr llvm::StringLiteral kSupportedOperations[] = {
     "nodal.analog_div",
     "nodal.analog_neg",
     "nodal.analog_noise",
+    "nodal.analog_transfer",
     "nodal.analog_function",
     "nodal.analog_analysis",
     "nodal.analog_compare",
@@ -132,6 +133,7 @@ struct ModuleRenderState {
   llvm::DenseMap<Value, std::string> expressions;
   llvm::DenseMap<Value, std::string> waveformNames;
   llvm::DenseMap<Value, std::string> noiseNames;
+  llvm::DenseMap<Value, std::string> transferNames;
   llvm::StringMap<std::string> parameters;
   AnalogEventRenderState eventState;
 };
@@ -311,6 +313,9 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
     rendered = "analysis(\"" + entry->verilogA.str() + "\")";
   } else if (name == "nodal.analog_abstime") {
     rendered = "$abstime";
+  } else if (name == "nodal.analog_transfer") {
+    return emitMappedFailure(operation, "NODAL-BACKEND-TRANSFER-001",
+                             "transfer state used before its single materialization");
   } else if (nodal::isStatefulWaveformOperation(operation)) {
     // A stateful source operator is evaluated exactly once in renderAnalog.
     // Reaching it here without its materialized name is an ordering violation.
@@ -649,6 +654,43 @@ LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::ra
     output << "  analog begin\n";
   for (Operation &operation : region.front()) {
     llvm::StringRef name = operation.getName().getStringRef();
+    if (name == "nodal.analog_transfer") {
+      auto kind = operation.getAttrOfType<StringAttr>("transfer_kind").getValue();
+      unsigned numerator =
+          static_cast<unsigned>(operation.getAttrOfType<IntegerAttr>("numerator_size").getInt());
+      unsigned denominator =
+          static_cast<unsigned>(operation.getAttrOfType<IntegerAttr>("denominator_size").getInt());
+      auto input = renderExpression(operation.getOperand(0), state);
+      if (failed(input))
+        return failure();
+      std::string call = kind.str() + "(" + *input;
+      unsigned index = 1;
+      for (unsigned size : {numerator, denominator}) {
+        call += ", '{";
+        for (unsigned coefficient = 0; coefficient < size; ++coefficient, ++index) {
+          auto value = renderExpression(operation.getOperand(index), state);
+          if (failed(value))
+            return failure();
+          call += (coefficient ? ", " : "") + *value;
+        }
+        call += "}";
+      }
+      for (; index < operation.getNumOperands(); ++index) {
+        auto value = renderExpression(operation.getOperand(index), state);
+        if (failed(value))
+          return failure();
+        call += ", " + *value;
+      }
+      call += ")";
+      auto temporary = state.transferNames.find(operation.getResult(0));
+      if (temporary == state.transferNames.end())
+        return emitMappedFailure(&operation, "NODAL-BACKEND-TRANSFER-001",
+                                 "transfer state has no private storage");
+      // Do not inline at each consumer, normalize coefficients, or omit zero filters.
+      output << "    " << temporary->second << " = " << call << ";\n";
+      state.expressions[operation.getResult(0)] = temporary->second;
+      continue;
+    }
     if (name == "nodal.analog_noise") {
       auto kind = operation.getAttrOfType<StringAttr>("noise_kind").getValue();
       std::string call = kind == "white"     ? "white_noise("
@@ -861,8 +903,18 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
   });
   unsigned waveformIndex = 0;
   unsigned noiseIndex = 0;
+  unsigned transferIndex = 0;
   for (Operation *analog : analogs) {
     for (Operation &op : analog->getRegion(0).front()) {
+      if (op.getName().getStringRef() == "nodal.analog_transfer") {
+        std::string temporary;
+        do {
+          temporary = "transfer_" + std::to_string(transferIndex++);
+        } while (!reservedNames.insert(temporary).second);
+        state.transferNames[op.getResult(0)] = temporary;
+        output << "  real " << temporary << ";\n";
+        continue;
+      }
       if (op.getName().getStringRef() == "nodal.analog_noise") {
         std::string temporary;
         do {
@@ -1205,7 +1257,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       auto destination = statement.take_front(equals).trim();
       if (!realNames.contains(destination) || !assignedRealNames.insert(destination).second ||
           (!validWaveformCall(statement.drop_front(equals + 3).trim(), false) &&
-           failed(reparseAnalogNoiseCall(statement.drop_front(equals + 3).trim()))))
+           failed(reparseAnalogNoiseCall(statement.drop_front(equals + 3).trim())) &&
+           failed(reparseAnalogTransferCall(statement.drop_front(equals + 3).trim()))))
         return failure();
       continue;
     }

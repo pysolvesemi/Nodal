@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "increment": 40,
+  "contract_version": "1",
+  "status": "implementation-in-progress",
+  "operators": [
+    "laplace_nd",
+    "zi_nd"
+  ],
+  "coefficient_order": {
+    "laplace_nd": "ascending_s",
+    "zi_nd": "ascending_z_inverse"
+  },
+  "stateful": true,
+  "qualification": "compiler-structural-not-numerical-simulation",
+  "accepted_evidence": null,
+  "remaining": [
+    "exact-head Core CI and dedicated native/source matrix",
+    "independent review and merge",
+    "exact post-merge qualification and separately reviewed evidence closure"
+  ],
+  "deferred": [
+    "zero-pole, zero-denominator and numerator-pole forms",
+    "vector parameter carriers and symbolic coefficient-array length",
+    "symbolic d0/timing envelope proofs and closed-loop d0=0 filters",
+    "explicit zero transition, Laplace tolerance and initialization",
+    "general Verilog-AMS, numerical solver qualification and synthesis"
+  ]
+}

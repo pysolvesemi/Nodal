@@ -968,6 +968,7 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
 
 - [ ] **Increment 40 — Laplace and discrete transfer operators**
   - Implement supported Laplace/Z-domain forms, coefficient arrays, constant requirements, denominator validation, and emission.
+  - In progress: typed ND transfer state, normalized coefficient units, static/symbolic coefficient checks, nonzero-d0/timing validation, and single-evaluation Verilog-A lowering. See [the scoped design gate](../design-gates/NodalTransferOperators-DG-v0.1.md) and [implementation/qualification status](../implementation/increment40-transfer-operators.md). Numerical solver qualification and deferred forms are not claimed; acceptance remains open.
 
 - [ ] **Increment 41 — User-defined analog functions**
   - Implement typed declarations, arguments, locals, returns, recursion/overload policy, resolution, and lowering.

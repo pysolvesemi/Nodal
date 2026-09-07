@@ -991,6 +991,16 @@ def Nodal_AnalogFunctionOp : Nodal_Op<"analog_function", [HasParent<"AnalogOp">]
   let hasVerifier = 1;
 }
 
+def Nodal_AnalogNoiseOp : Nodal_Op<"analog_noise", [HasParent<"AnalogOp">]> {
+  let summary = "Owned small-signal noise source; effectful even with constant or zero power";
+  let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$noise_kind,
+                       StrAttr:$contract_version, StrAttr:$noise_name, StrAttr:$source_id,
+                       StrAttr:$owner, StrAttr:$correlation, ArrayAttr:$analyses,
+                       StrAttr:$result_dimension, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
 def Nodal_AnalogAnalysisOp : Nodal_Op<"analog_analysis", [HasParent<"AnalogOp">]> {
   let summary = "Dynamic simulator analysis query, never an elaboration constant";
   let arguments = (ins StrAttr:$analysis_kind, StrAttr:$registry_version, DictionaryAttr:$metadata);

@@ -67,6 +67,7 @@ constexpr llvm::StringLiteral kSupportedOperations[] = {
     "nodal.analog_mul",
     "nodal.analog_div",
     "nodal.analog_neg",
+    "nodal.analog_noise",
     "nodal.analog_function",
     "nodal.analog_analysis",
     "nodal.analog_compare",
@@ -130,6 +131,7 @@ struct ModuleRenderState {
   llvm::DenseMap<Value, std::string> branchNames;
   llvm::DenseMap<Value, std::string> expressions;
   llvm::DenseMap<Value, std::string> waveformNames;
+  llvm::DenseMap<Value, std::string> noiseNames;
   llvm::StringMap<std::string> parameters;
   AnalogEventRenderState eventState;
 };
@@ -647,6 +649,29 @@ LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::ra
     output << "  analog begin\n";
   for (Operation &operation : region.front()) {
     llvm::StringRef name = operation.getName().getStringRef();
+    if (name == "nodal.analog_noise") {
+      auto kind = operation.getAttrOfType<StringAttr>("noise_kind").getValue();
+      std::string call = kind == "white" ? "white_noise(" : kind == "flicker" ? "flicker_noise(" : "noise_table('{";
+      for (unsigned i = 0; i < operation.getNumOperands(); ++i) {
+        auto argument = renderExpression(operation.getOperand(i), state);
+        if (failed(argument))
+          return emitMappedFailure(&operation, "NODAL-BACKEND-NOISE-001", "cannot render noise argument");
+        if (i)
+          call += ", ";
+        call += *argument;
+      }
+      if (kind == "table")
+        call += "}";
+      call += ", \"" + operation.getAttrOfType<StringAttr>("noise_name").getValue().str() + "\")";
+      auto temporary = state.noiseNames.find(operation.getResult(0));
+      if (temporary == state.noiseNames.end())
+        return emitMappedFailure(&operation, "NODAL-BACKEND-NOISE-001", "noise source has no private storage");
+      // One evaluation per owned SSA source, including unused and zero-power sources.
+      // Never inline this call at every use: that would silently lose correlation.
+      output << "    " << temporary->second << " = " << call << ";\n";
+      state.expressions[operation.getResult(0)] = temporary->second;
+      continue;
+    }
     if (nodal::isStatefulWaveformOperation(&operation) || name == "nodal.analog_bound_step") {
       std::string call = name == "nodal.analog_bound_step"   ? "$bound_step"
                          : name == "nodal.analog_transition" ? "transition"
@@ -831,8 +856,18 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
         reservedNames.insert(value.getValue());
   });
   unsigned waveformIndex = 0;
+  unsigned noiseIndex = 0;
   for (Operation *analog : analogs) {
     for (Operation &op : analog->getRegion(0).front()) {
+      if (op.getName().getStringRef() == "nodal.analog_noise") {
+        std::string temporary;
+        do {
+          temporary = "noise_" + std::to_string(noiseIndex++);
+        } while (!reservedNames.insert(temporary).second);
+        state.noiseNames[op.getResult(0)] = temporary;
+        output << "  real " << temporary << ";\n";
+        continue;
+      }
       if (!nodal::isStatefulWaveformOperation(&op))
         continue;
       std::string temporary;
@@ -1155,7 +1190,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       }
       if (!line.ends_with(";"))
         return failure();
-      if (line.contains("<+"))
+      if (line.contains("<+") && !line.contains(" = "))
         continue;
       auto statement = line.drop_back().trim();
       if (validWaveformCall(statement, true))
@@ -1165,7 +1200,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
         return failure();
       auto destination = statement.take_front(equals).trim();
       if (!realNames.contains(destination) || !assignedRealNames.insert(destination).second ||
-          !validWaveformCall(statement.drop_front(equals + 3).trim(), false))
+          (!validWaveformCall(statement.drop_front(equals + 3).trim(), false) &&
+           failed(reparseAnalogNoiseCall(statement.drop_front(equals + 3).trim()))))
         return failure();
       continue;
     }

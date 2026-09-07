@@ -850,6 +850,34 @@ ${indent(body, 2)}
               semanticPath = expression.path
             )
             values.update(expression.path, result -> "f64")
+          case name if name.startsWith(AnalogNoiseContract.Prefix) =>
+            val contract = snapshot.noiseOperators.find(_.path == expression.path).getOrElse(
+              fail("NODAL-ANALOG-039-002", "noise source has no contract", Some(expression.path))
+            )
+            if name != AnalogNoiseContract.Prefix + contract.kind ||
+              contract.operands != expression.operands || contract.owner != region.module then
+              fail("NODAL-ANALOG-039-002", "noise inventory differs from its expression", Some(expression.path))
+            val inputs = expression.operands.map(operand)
+            lines += operation(
+              "nodal.analog_noise",
+              results = Vector(result),
+              operands = inputs.map(_._1),
+              operandTypes = inputs.map(_._2),
+              resultTypes = Vector("f64"),
+              attributes = Vector(
+                "noise_kind" -> quoted(contract.kind),
+                "contract_version" -> quoted("1"),
+                "noise_name" -> quoted(contract.label),
+                "source_id" -> quoted(contract.path),
+                "owner" -> quoted(contract.owner),
+                "correlation" -> quoted("independent"),
+                "analyses" -> "[\"noise\"]",
+                "result_dimension" -> quoted(contract.resultDimension),
+                "metadata" -> metadata
+              ),
+              semanticPath = expression.path
+            )
+            values.update(expression.path, result -> "f64")
           case name if name.startsWith(AnalogFunctionRegistry.FunctionPrefix) =>
             val id = name.stripPrefix(AnalogFunctionRegistry.FunctionPrefix)
             val descriptor = AnalogFunctionContract.entry(id)

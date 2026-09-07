@@ -1,4 +1,5 @@
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
+#include "nodal/Dialect/Nodal/AnalogNoise.h"
 
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -1247,6 +1248,8 @@ FailureOr<std::optional<double>> getAnalogConstantRealValue(Value value) {
 LogicalResult verifyAnalogNumericOperation(Operation *operation) {
   if (failed(verifyAnalogFunctionOperation(operation)))
     return failure();
+  if (operation->getName().getStringRef() == "nodal.analog_noise")
+    return verifyAnalogNoiseOperation(operation);
   if (isTimeWaveformOperation(operation))
     return verifyTimeWaveformOperation(operation);
   llvm::StringRef name = operation->getName().getStringRef();

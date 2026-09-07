@@ -149,6 +149,16 @@ private[nodal] final case class KernelWaveformOperatorSnapshot(
     source: Option[SourceSpan]
 )
 
+private[nodal] final case class KernelNoiseOperatorSnapshot(
+    path: String,
+    kind: String,
+    owner: String,
+    label: String,
+    operands: Vector[String],
+    resultDimension: String,
+    source: Option[SourceSpan]
+)
+
 private[nodal] final case class KernelWaiverSnapshot(
     kind: String,
     id: String,
@@ -173,6 +183,7 @@ private[nodal] final case class ConstructionSnapshot(
     analogRegions: Vector[KernelAnalogRegionSnapshot] = Vector.empty,
     continuousOperators: Vector[KernelContinuousOperatorSnapshot] = Vector.empty,
     waveformOperators: Vector[KernelWaveformOperatorSnapshot] = Vector.empty,
+    noiseOperators: Vector[KernelNoiseOperatorSnapshot] = Vector.empty,
     analogSemantics: AnalogEquationRuntime.Snapshot =
       AnalogEquationRuntime.Snapshot(Vector.empty, Vector.empty),
     analogProcedural: Vector[AnalogProceduralRuntime.Snapshot] = Vector.empty,
@@ -356,6 +367,8 @@ private final class ConstructionSession(val options: EmitOptions):
       String,
       String
   )] =
+    mutable.ArrayBuffer.empty
+  private val noiseOperators: mutable.ArrayBuffer[(ExpressionRef, String, String, Vector[Expr[Real]], String)] =
     mutable.ArrayBuffer.empty
   private var waveformForbiddenDepth = 0
   private val semanticOrigin = new SemanticOriginBuilder
@@ -611,6 +624,33 @@ private final class ConstructionSession(val options: EmitOptions):
     waveformForbiddenDepth += 1
     try body
     finally waveformForbiddenDepth -= 1
+
+  def registerNoiseOperator(
+      value: KernelExpr[Real], kind: String, label: String, inputs: Vector[Expr[Real]]
+  ): Unit =
+    val module = currentModule
+    if analogSemanticContext.nonEmpty ||
+      !analogStack.lastOption.exists(_.module == module.handle) || waveformForbiddenDepth != 0 then
+      AnalogNoiseContract.fail(1, "noise sources require an unconditional analog region; procedural and equation contexts are not supported")
+    def checkOwner(input: Any): Unit = input match
+      case reference: AnyRef =>
+        if Option(expressionIds.get(reference)).exists(_.module != module.handle) ||
+          Option(declarationIds.get(reference)).exists(_.module != module.handle) then
+          AnalogNoiseContract.fail(2, "noise operands must belong to the source Module")
+        input match
+          case expression: KernelExpr[?] =>
+            if expression.operation.exists(_.startsWith(AnalogNoiseContract.Prefix)) then
+              AnalogNoiseContract.fail(6, "a noise source cannot modulate another source in this profile")
+            expression.operands.foreach(checkOwner)
+          case _ => ()
+      case _ => ()
+    inputs.foreach(checkOwner)
+    val dimensions = inputs.map(inferAnalogDimension).map(_.signature)
+    val result = AnalogNoiseContract.validate(kind, inputs, dimensions, inputs.map(waveformConstant))
+    val reference = captureExpression(value).getOrElse(
+      AnalogNoiseContract.fail(2, "noise source has no construction owner")
+    )
+    noiseOperators += ((reference, kind, label, inputs, result))
 
   def registerWaveformOperator(
       value: KernelExpr[Real],
@@ -1076,6 +1116,12 @@ private final class ConstructionSession(val options: EmitOptions):
     registerExpression(expression)
 
   def inferAnalogDimension(value: Any): AnalogDimension = value match
+    case expression: KernelExpr[?]
+        if expression.operation.exists(_.startsWith(AnalogNoiseContract.Prefix)) =>
+      val index = if expression.operation.contains(AnalogNoiseContract.Prefix + "table") then 1 else 0
+      val density = expression.operands.lift(index).map(inferAnalogDimension)
+        .getOrElse(AnalogDimension.Unknown)
+      namedAnalogDimension(AnalogNoiseContract.resultDimension(density.signature))
     case expression: KernelExpr[?]
         if expression.operation.exists(
           _.startsWith(AnalogFunctionRegistry.FunctionPrefix)
@@ -2027,6 +2073,18 @@ private final class ConstructionSession(val options: EmitOptions):
       )
     .sortBy(_.path)
 
+  private def noiseOperatorSnapshots(sourceMap: Vector[SourceMapEntry]): Vector[KernelNoiseOperatorSnapshot] =
+    val sources = sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
+    noiseOperators.toVector.map: (reference, kind, label, inputs, dimension) =>
+      val path = expressionPath(reference)
+      KernelNoiseOperatorSnapshot(
+        path, kind, modulePath(reference.module), label,
+        inputs.map(input => pathOf(input).getOrElse(
+          AnalogNoiseContract.fail(2, "noise input has no semantic path")
+        )), dimension, sources.get(path)
+      )
+    .sortBy(_.path)
+
   private def waveformOperatorSnapshots(
       sourceMap: Vector[SourceMapEntry]
   ): Vector[KernelWaveformOperatorSnapshot] =
@@ -2138,7 +2196,7 @@ private final class ConstructionSession(val options: EmitOptions):
     )
     val analog =
       kinds.exists(analogKinds.contains) || snapshot.continuousOperators.nonEmpty ||
-        snapshot.waveformOperators.nonEmpty || snapshot.analogRegions.nonEmpty ||
+        snapshot.waveformOperators.nonEmpty || snapshot.noiseOperators.nonEmpty || snapshot.analogRegions.nonEmpty ||
         snapshot.analogProcedural.nonEmpty || snapshot.analogSemantics.equations.nonEmpty ||
         snapshot.analogSemantics.contributions.nonEmpty
     val storageKinds = if analog then Set("parameter", "variable") else Set.empty[String]
@@ -2179,6 +2237,7 @@ private final class ConstructionSession(val options: EmitOptions):
       analogRegions = analogSnapshots(),
       continuousOperators = continuousOperatorSnapshots(semantic.sourceMap),
       waveformOperators = waveformOperatorSnapshots(semantic.sourceMap),
+      noiseOperators = noiseOperatorSnapshots(semantic.sourceMap),
       analogSemantics = analogSemanticRecorder.snapshot,
       analogProcedural = AnalogProceduralConstruction.snapshots(module =>
         modulePath(moduleHandle(module))
@@ -2278,6 +2337,11 @@ private[nodal] object ConstructionKernel:
     active.foreach(
       _.registerContinuousOperator(value, operation, input, initialValue)
     )
+
+  def noiseOperator(value: KernelExpr[Real], kind: String, label: String,
+      inputs: Vector[Expr[Real]]): Unit = active match
+    case Some(session) => session.registerNoiseOperator(value, kind, label, inputs)
+    case None => AnalogNoiseContract.fail(1, "noise sources require an active Module construction")
 
   def waveformOperator(
       value: KernelExpr[Real],

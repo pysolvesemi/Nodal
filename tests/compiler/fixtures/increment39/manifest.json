@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "increment": 39,
+  "status": "implementation-in-progress",
+  "contract_version": "1",
+  "operators": ["white", "flicker", "table"],
+  "analyses": ["noise"],
+  "accepted_evidence": null,
+  "remaining": ["exact-head-validation", "review", "implementation-merge", "post-merge-validation", "separate-evidence-closure"],
+  "deferred": ["numerical-solver-qualification", "general-verilog-ams-qualification", "transient-noise", "correlation-groups", "symbolic-table-points", "file-and-log-tables", "procedural-and-equation-noise"]
+}

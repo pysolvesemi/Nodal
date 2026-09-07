@@ -25,5 +25,7 @@ mlir::LogicalResult renderAnalogEventProcedure(mlir::Operation *procedure,
 // Parse exactly the emitted procedural grammar. This is a structural acceptance
 // gate, not a general Verilog-A parser or an analog simulator.
 mlir::FailureOr<size_t> reparseAnalogEventBlock(llvm::StringRef source);
+// Independent expression grammar for emitted noise calls; not permitted in events.
+mlir::LogicalResult reparseAnalogNoiseCall(llvm::StringRef source);
 } // namespace nodal
 #endif

@@ -6,6 +6,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "nodal/Diagnostics/DiagnosticSupport.h"
 #include "nodal/Dialect/Nodal/AnalogEvents.h"
+#include "nodal/Dialect/Nodal/AnalogFunctions.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
@@ -1487,14 +1488,18 @@ LogicalResult nodal::AnalogOp::verify() {
   if (failed(requireSingleBlock(getOperation())))
     return emitOpError("NODAL-ANALOG-REGION-001: analog region requires one body block");
   for (Operation &operation : getOperation()->getRegion(0).front()) {
+    if (llvm::isa<nodal::ConstLiteralOp>(operation) && operation.getNumResults() == 1 &&
+        operation.getResult(0).getType().isInteger(1))
+      continue;
     if (!llvm::isa<nodal::RealLiteralOp, nodal::AnalogIntegerLiteralOp, nodal::ParameterRefOp,
-                   nodal::AnalogAddOp, nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp,
-                   nodal::AnalogNegOp, nodal::AnalogCompareOp, nodal::AnalogLogicOp,
-                   nodal::AnalogSelectOp, nodal::AnalogDdtOp, nodal::AnalogIdtOp,
-                   nodal::AnalogTransitionOp, nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp,
-                   nodal::AnalogAbstimeOp, nodal::AnalogBoundStepOp, nodal::AnalogHeldReadOp,
-                   nodal::AccessOp, nodal::TerminalAccessOp, nodal::PortFlowAccessOp,
-                   nodal::ContributeOp, nodal::AnalogProcedureOp>(operation))
+                   nodal::AnalogFunctionOp, nodal::AnalogAnalysisOp, nodal::AnalogAddOp,
+                   nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp, nodal::AnalogNegOp,
+                   nodal::AnalogCompareOp, nodal::AnalogLogicOp, nodal::AnalogSelectOp,
+                   nodal::AnalogDdtOp, nodal::AnalogIdtOp, nodal::AnalogTransitionOp,
+                   nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp, nodal::AnalogAbstimeOp,
+                   nodal::AnalogBoundStepOp, nodal::AnalogHeldReadOp, nodal::AccessOp,
+                   nodal::TerminalAccessOp, nodal::PortFlowAccessOp, nodal::ContributeOp,
+                   nodal::AnalogProcedureOp>(operation))
       return operation.emitOpError(
           "NODAL-ANALOG-REGION-002: operation is not legal in the analog numeric region");
   }
@@ -2052,3 +2057,6 @@ LogicalResult nodal::AnalogEventOrOp::verify() { return verifyAnalogEventOperati
 LogicalResult nodal::AnalogOnOp::verify() { return verifyAnalogEventOperation(*this); }
 
 LogicalResult nodal::AnalogHeldReadOp::verify() { return verifyAnalogHeldRead(getOperation()); }
+
+LogicalResult nodal::AnalogFunctionOp::verify() { return verifyAnalogFunctionOperation(*this); }
+LogicalResult nodal::AnalogAnalysisOp::verify() { return verifyAnalogFunctionOperation(*this); }

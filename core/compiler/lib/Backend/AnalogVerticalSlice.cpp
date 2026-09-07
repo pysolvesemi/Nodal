@@ -6,6 +6,7 @@
 #include "nodal/Backend/AnalogEventBackend.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/AnalogEvents.h"
+#include "nodal/Dialect/Nodal/AnalogFunctions.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
@@ -66,6 +67,8 @@ constexpr llvm::StringLiteral kSupportedOperations[] = {
     "nodal.analog_mul",
     "nodal.analog_div",
     "nodal.analog_neg",
+    "nodal.analog_function",
+    "nodal.analog_analysis",
     "nodal.analog_compare",
     "nodal.analog_logic",
     "nodal.analog_select",
@@ -285,6 +288,25 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
         return failure();
       rendered = (llvm::Twine(access) + "(<" + port->second + ">)").str();
     }
+  } else if (name == "nodal.analog_function") {
+    auto id = operation->getAttrOfType<StringAttr>("function_id");
+    auto *entry = id ? lookupAnalogFunction(id.getValue()) : nullptr;
+    if (!entry || operation->getNumOperands() != entry->arity)
+      return failure();
+    rendered = entry->verilogA.str() + "(";
+    for (unsigned i = 0; i < operation->getNumOperands(); ++i) {
+      auto argument = renderExpression(operation->getOperand(i), state);
+      if (failed(argument))
+        return failure();
+      rendered += (i ? ", " : "") + *argument;
+    }
+    rendered += ")";
+  } else if (name == "nodal.analog_analysis") {
+    auto id = operation->getAttrOfType<StringAttr>("analysis_kind");
+    auto *entry = id ? lookupAnalogAnalysis(id.getValue()) : nullptr;
+    if (!entry)
+      return failure();
+    rendered = "analysis(\"" + entry->verilogA.str() + "\")";
   } else if (name == "nodal.analog_abstime") {
     rendered = "$abstime";
   } else if (nodal::isStatefulWaveformOperation(operation)) {

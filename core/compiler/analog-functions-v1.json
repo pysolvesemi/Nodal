@@ -1,0 +1,254 @@
+{
+  "schema_version": 1,
+  "registry_version": "1",
+  "functions": [
+    {
+      "id": "abs",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "preserve",
+      "verilog_a": "abs",
+      "effect": "pure"
+    },
+    {
+      "id": "min",
+      "arity": 2,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "same",
+      "verilog_a": "min",
+      "effect": "pure"
+    },
+    {
+      "id": "max",
+      "arity": 2,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "same",
+      "verilog_a": "max",
+      "effect": "pure"
+    },
+    {
+      "id": "sqrt",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "sqrt",
+      "verilog_a": "sqrt",
+      "effect": "pure"
+    },
+    {
+      "id": "hypot",
+      "arity": 2,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "same",
+      "verilog_a": "hypot",
+      "effect": "pure"
+    },
+    {
+      "id": "atan2",
+      "arity": 2,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "ratio",
+      "verilog_a": "atan2",
+      "effect": "pure"
+    },
+    {
+      "id": "pow",
+      "arity": 2,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "pow",
+      "effect": "pure"
+    },
+    {
+      "id": "exp",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "exp",
+      "effect": "pure"
+    },
+    {
+      "id": "ln",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "ln",
+      "effect": "pure"
+    },
+    {
+      "id": "log10",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "log",
+      "effect": "pure"
+    },
+    {
+      "id": "sin",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "sin",
+      "effect": "pure"
+    },
+    {
+      "id": "cos",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "cos",
+      "effect": "pure"
+    },
+    {
+      "id": "tan",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "tan",
+      "effect": "pure"
+    },
+    {
+      "id": "asin",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "asin",
+      "effect": "pure"
+    },
+    {
+      "id": "acos",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "acos",
+      "effect": "pure"
+    },
+    {
+      "id": "atan",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "atan",
+      "effect": "pure"
+    },
+    {
+      "id": "sinh",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "sinh",
+      "effect": "pure"
+    },
+    {
+      "id": "cosh",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "cosh",
+      "effect": "pure"
+    },
+    {
+      "id": "tanh",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "tanh",
+      "effect": "pure"
+    },
+    {
+      "id": "asinh",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "asinh",
+      "effect": "pure"
+    },
+    {
+      "id": "acosh",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "acosh",
+      "effect": "pure"
+    },
+    {
+      "id": "atanh",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "atanh",
+      "effect": "pure"
+    },
+    {
+      "id": "floor",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "floor",
+      "effect": "pure"
+    },
+    {
+      "id": "ceil",
+      "arity": 1,
+      "argument_kind": "real",
+      "result_kind": "real",
+      "dimension_rule": "dimensionless",
+      "verilog_a": "ceil",
+      "effect": "pure"
+    }
+  ],
+  "analyses": [
+    {
+      "id": "initialization",
+      "scala": "Initialization",
+      "verilog_a": "ic"
+    },
+    {
+      "id": "dc",
+      "scala": "Dc",
+      "verilog_a": "dc"
+    },
+    {
+      "id": "operating_point",
+      "scala": "OperatingPoint",
+      "verilog_a": "static"
+    },
+    {
+      "id": "transient",
+      "scala": "Transient",
+      "verilog_a": "tran"
+    },
+    {
+      "id": "ac",
+      "scala": "Ac",
+      "verilog_a": "ac"
+    },
+    {
+      "id": "noise",
+      "scala": "Noise",
+      "verilog_a": "noise"
+    }
+  ]
+}

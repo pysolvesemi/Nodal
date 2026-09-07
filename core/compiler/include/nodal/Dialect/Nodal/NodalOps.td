@@ -983,6 +983,21 @@ def Nodal_ParameterRefOp : Nodal_Op<"parameter_ref", [HasParent<"AnalogOp">]> {
   let hasVerifier = 1;
 }
 
+def Nodal_AnalogFunctionOp : Nodal_Op<"analog_function", [HasParent<"AnalogOp">]> {
+  let summary = "Versioned pure real mathematical function";
+  let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$function_id,
+                       StrAttr:$registry_version, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogAnalysisOp : Nodal_Op<"analog_analysis", [HasParent<"AnalogOp">]> {
+  let summary = "Dynamic simulator analysis query, never an elaboration constant";
+  let arguments = (ins StrAttr:$analysis_kind, StrAttr:$registry_version, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
 class Nodal_AnalogBinaryOp<string mnemonic, string summaryText>
     : Nodal_Op<mnemonic, [HasParent<"AnalogOp">]> {
   let summary = summaryText;

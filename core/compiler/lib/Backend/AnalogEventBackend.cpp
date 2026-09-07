@@ -3,6 +3,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/AnalogEvents.h"
+#include "nodal/Dialect/Nodal/AnalogFunctions.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 
@@ -84,6 +85,23 @@ FailureOr<std::string> renderSource(const AnalogSourceExpression &value,
       result += (i ? ", " : "") + args[i];
     return result + ")";
   }
+  if (llvm::StringRef(value.operation).starts_with(analogFunctionSourcePrefix)) {
+    auto *entry = lookupAnalogFunction(
+        llvm::StringRef(value.operation).drop_front(analogFunctionSourcePrefix.size()));
+    if (!entry || args.size() != entry->arity)
+      return failure();
+    std::string result = entry->verilogA.str() + "(";
+    for (unsigned i = 0; i < args.size(); ++i)
+      result += (i ? ", " : "") + args[i];
+    return result + ")";
+  }
+  if (llvm::StringRef(value.operation).starts_with(analogAnalysisSourcePrefix)) {
+    auto *entry = lookupAnalogAnalysis(
+        llvm::StringRef(value.operation).drop_front(analogAnalysisSourcePrefix.size()));
+    if (!entry || !args.empty())
+      return failure();
+    return "analysis(\"" + entry->verilogA.str() + "\")";
+  }
   if (value.operation == "analog_neg" || value.operation == "bool_not")
     return std::string("(") + (value.operation == "analog_neg" ? "-" : "!") + args[0] + ")";
   if (value.operation == "analog_select")
@@ -121,6 +139,8 @@ FailureOr<std::string> expression(Operation *op, llvm::StringRef source,
                         : renderSource(*parsed, state, captures);
 }
 bool staticInitializer(const AnalogSourceExpression &value) {
+  if (llvm::StringRef(value.operation).starts_with(analogAnalysisSourcePrefix))
+    return false;
   if (value.operation == "reference")
     return value.declaration && llvm::isa<ParameterOp>(value.declaration);
   if (value.operation == "potential_access" || value.operation == "flow_access")

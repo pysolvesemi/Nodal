@@ -523,8 +523,10 @@ private[nodal] object AnalogProceduralConstruction:
     def constant(expression: Any): Boolean = expression match
       case _: Param[?] => true
       case expr: KernelExpr[?] => expr.literal.nonEmpty ||
-        (Set("analog_add", "analog_sub", "analog_mul", "analog_div", "analog_neg")
-          .contains(expr.operation.getOrElse("")) && expr.operands.forall(constant))
+        ((Set("analog_add", "analog_sub", "analog_mul", "analog_div", "analog_neg")
+          .contains(expr.operation.getOrElse("")) || expr.operation.exists(
+          _.startsWith(AnalogFunctionRegistry.FunctionPrefix)
+        )) && expr.operands.forall(constant))
       case _ => false
     Option(current.get()).exists: session =>
       session.modules.exists: module =>

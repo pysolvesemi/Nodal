@@ -229,7 +229,7 @@ def discontinuity(contract: DiscontinuityContract)(body: => Unit): Unit =
 
 object AnalysisContext:
   def active(kind: AnalysisKind): Expr[Bool] =
-    CandidateRuntime.booleanExpr("candidate-analysis-active", kind)
+    AnalogFunctionContract.analysis(kind)
 
   def time: Expr[Real] = CandidateRuntime.analogExpr("candidate-analysis-time")
 

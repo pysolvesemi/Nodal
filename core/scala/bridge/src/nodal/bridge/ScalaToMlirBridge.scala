@@ -780,6 +780,22 @@ ${indent(body, 2)}
               semanticPath = expression.path
             )
             values.update(expression.path, result -> "f64")
+          case "boolean" =>
+            val value = expression.literal.flatMap(_.toBooleanOption).getOrElse(
+              fail("NODAL-ANALOG-038-003", "Boolean literal is unavailable", Some(expression.path))
+            )
+            lines += operation(
+              "nodal.const_literal",
+              results = Vector(result),
+              resultTypes = Vector("i1"),
+              attributes = Vector(
+                "value" -> value.toString,
+                "spelling" -> quoted(if value then "1" else "0"),
+                "metadata" -> metadata
+              ),
+              semanticPath = expression.path
+            )
+            values.update(expression.path, result -> "i1")
           case "potential_access" | "flow_access" =>
             val branch = accessBranches.getOrElse(
               expression.path,
@@ -834,6 +850,73 @@ ${indent(body, 2)}
               semanticPath = expression.path
             )
             values.update(expression.path, result -> "f64")
+          case name if name.startsWith(AnalogFunctionRegistry.FunctionPrefix) =>
+            val id = name.stripPrefix(AnalogFunctionRegistry.FunctionPrefix)
+            val descriptor = AnalogFunctionContract.entry(id)
+            if expression.operands.size != descriptor.arity then
+              fail(
+                "NODAL-ANALOG-038-002",
+                "function arity differs from registry",
+                Some(expression.path)
+              )
+            val inputs = expression.operands.map(operand)
+            lines += operation(
+              "nodal.analog_function",
+              results = Vector(result),
+              operands = inputs.map(_._1),
+              operandTypes = inputs.map(_._2),
+              resultTypes = Vector("f64"),
+              attributes = Vector(
+                "function_id" -> quoted(id),
+                "registry_version" -> quoted(AnalogFunctionRegistry.Version),
+                "metadata" -> metadata
+              ),
+              semanticPath = expression.path
+            )
+            values.update(expression.path, result -> "f64")
+          case name if name.startsWith(AnalogFunctionRegistry.AnalysisPrefix) =>
+            val id = name.stripPrefix(AnalogFunctionRegistry.AnalysisPrefix)
+            if !AnalogFunctionRegistry.analysisTargets.contains(id) || expression.operands.nonEmpty
+            then
+              fail("NODAL-ANALOG-038-001", "invalid analysis query", Some(expression.path))
+            lines += operation(
+              "nodal.analog_analysis",
+              results = Vector(result),
+              resultTypes = Vector("i1"),
+              attributes = Vector(
+                "analysis_kind" -> quoted(id),
+                "registry_version" -> quoted(AnalogFunctionRegistry.Version),
+                "metadata" -> metadata
+              ),
+              semanticPath = expression.path
+            )
+            values.update(expression.path, result -> "i1")
+          case "real_gt" | "real_ge" | "real_lt" | "real_le" |
+              "bool_and" | "bool_or" | "bool_not" | "analog_select" =>
+            val inputs = expression.operands.map(operand)
+            val select = expression.operation == "analog_select"
+            val compare = expression.operation.startsWith("real_")
+            val arity = if select then 3 else if expression.operation == "bool_not" then 1 else 2
+            if inputs.size != arity then
+              fail("NODAL-ANALOG-038-002", "invalid query expression arity", Some(expression.path))
+            val resultType = if select then inputs(1)._2 else "i1"
+            val attributes =
+              if compare then
+                Vector("predicate" -> quoted(expression.operation.stripPrefix("real_")))
+              else if select then Vector.empty
+              else Vector("operator_name" -> quoted(expression.operation.stripPrefix("bool_")))
+            lines += operation(
+              if compare then "nodal.analog_compare"
+              else if select then "nodal.analog_select"
+              else "nodal.analog_logic",
+              results = Vector(result),
+              operands = inputs.map(_._1),
+              operandTypes = inputs.map(_._2),
+              resultTypes = Vector(resultType),
+              attributes = attributes :+ ("metadata" -> metadata),
+              semanticPath = expression.path
+            )
+            values.update(expression.path, result -> resultType)
           case "analog_ddt" =>
             if expression.operands.size != 1 then
               fail("NODAL-RC-ARITY-001", "ddt operation has invalid arity", Some(expression.path))

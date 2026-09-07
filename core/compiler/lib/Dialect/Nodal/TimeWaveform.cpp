@@ -4,6 +4,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/AnalogEvents.h"
+#include "nodal/Dialect/Nodal/AnalogFunctions.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
@@ -107,6 +108,19 @@ FailureOr<std::string> dimension(Value value, unsigned depth = 0) {
       return failure();
     return *a;
   }
+  if (operationName == "nodal.analog_function") {
+    const auto *entry = lookupAnalogFunction(text(op, "function_id"));
+    if (!entry || text(op, "registry_version") != analogFunctionRegistryVersion)
+      return failure();
+    llvm::SmallVector<std::string> dimensions;
+    for (Value operand : op->getOperands()) {
+      auto child = dimension(operand, depth + 1);
+      if (failed(child))
+        return failure();
+      dimensions.push_back(*child);
+    }
+    return analogFunctionDimension(*entry, dimensions);
+  }
   if (op->getNumOperands() == 0)
     return failure();
   auto a = dimension(op->getOperand(0), depth + 1);
@@ -137,8 +151,8 @@ bool staticExpression(Value value, unsigned depth = 0) {
     return true;
   if (parameter(value))
     return true;
-  if (n != "nodal.analog_add" && n != "nodal.analog_sub" && n != "nodal.analog_mul" &&
-      n != "nodal.analog_div" && n != "nodal.analog_neg")
+  if (n != "nodal.analog_function" && n != "nodal.analog_add" && n != "nodal.analog_sub" &&
+      n != "nodal.analog_mul" && n != "nodal.analog_div" && n != "nodal.analog_neg")
     return false;
   return llvm::all_of(op->getOperands(),
                       [&](Value input) { return staticExpression(input, depth + 1); });
@@ -164,6 +178,8 @@ std::string continuity(Value value, unsigned depth = 0) {
   return "unknown";
 }
 } // namespace
+
+FailureOr<std::string> getAnalogRealDimension(Value value) { return dimension(value); }
 
 bool isStatefulWaveformOperation(Operation *op) {
   auto n = name(op);

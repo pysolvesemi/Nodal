@@ -15,6 +15,45 @@ Complete every section in the repository pull-request template. A pull request
 into `dev` must pass the required Core CI gate before squash merge. Milestone
 promotion pull requests into `main` may originate only from `dev`.
 
+## Increment completion demonstrations
+
+This is a standing project instruction for every roadmap track, including
+numbered increments and lettered sub-increments. Whenever an increment is
+completed and marked `[x]`, include a demonstration in the user-facing
+completion report. A checkbox, commit reference, or passing test summary alone
+is not a sufficient completion report.
+
+When the increment affects generated HDL:
+
+- Show a small, concrete Nodal Scala example that demonstrates the capability
+  supported by the completed increment.
+- Show the corresponding actual generated Verilog-* output, or a clearly
+  identified relevant excerpt. Name the applicable backend or dialect, such as
+  Verilog, SystemVerilog, Verilog-A, or Verilog-AMS; do not imply support for
+  unaffected or unsupported backends.
+- Explain briefly what the example demonstrates. Include the source path and
+  generated-output or fixture path, plus the generation command and relevant
+  configuration when needed to reproduce the example.
+
+Use source and output from the completed implementation. Do not label
+handwritten, hypothetical, or planned HDL as generated output. When emission
+changes are the feature, use before-and-after excerpts where helpful. If an
+applicable demonstration is not yet available, report that gap rather than
+claiming the completion demonstration is complete.
+
+When the increment does not affect generated Verilog-*, explicitly write:
+
+> The current increment does not affect generated Verilog-*.
+
+Briefly explain why, for example a documentation-only, infrastructure, or
+diagnostics change. Still show a Nodal Scala example when it usefully
+demonstrates the increment; do not invent a Scala or HDL example when neither
+is applicable. A change confined to an analog backend still requires the
+applicable generated Verilog-A or Verilog-AMS demonstration, not this fallback.
+
+This reporting requirement supplements, and does not replace, the increment's
+existing acceptance criteria, validation evidence, and merge requirements.
+
 ## Local validation
 
 Install both pinned toolchains once:

@@ -24,6 +24,11 @@ llvm::StringRef text(Operation *op, llvm::StringRef key) {
   auto value = op->getAttrOfType<StringAttr>(key);
   return value ? value.getValue() : llvm::StringRef();
 }
+llvm::StringRef valueKind(Operation *op) {
+  if (op->getName().getStringRef() != "nodal.analog_function_value")
+    return {};
+  return text(op, "kind");
+}
 llvm::StringRef scalarSpelling(Type type) {
   auto quantity = llvm::dyn_cast<QuantityType>(type);
   return quantity ? quantity.getKind() : llvm::StringRef();
@@ -50,7 +55,7 @@ FailureOr<std::string> literal(Operation *op) {
   return failure();
 }
 FailureOr<std::string> expression(Operation *op, const llvm::DenseMap<Value, std::string> &values) {
-  auto kind = text(op, "kind");
+  auto kind = valueKind(op);
   if (kind == "input" || kind == "local")
     return text(op, "name").str();
   if (kind == "literal")
@@ -116,7 +121,7 @@ LogicalResult renderAnalogUserFunctions(Operation *module, llvm::raw_ostream &ou
     auto resultType = function->getAttrOfType<TypeAttr>("return_type").getValue();
     llvm::SmallVector<Operation *> inputs, locals;
     for (Operation &op : function->getRegion(0).front()) {
-      auto kind = text(&op, "kind");
+      auto kind = valueKind(&op);
       if (kind != "input" && kind != "local")
         continue;
       auto localName = text(&op, "name");
@@ -143,7 +148,7 @@ LogicalResult renderAnalogUserFunctions(Operation *module, llvm::raw_ostream &ou
         output << "      " << name << " = " << value->second << ";\n";
         continue;
       }
-      if (text(&op, "kind") == "local") {
+      if (valueKind(&op) == "local") {
         auto value = values.find(op.getOperand(0));
         if (value == values.end())
           return failure();

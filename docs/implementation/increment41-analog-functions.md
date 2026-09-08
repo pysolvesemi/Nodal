@@ -66,3 +66,23 @@ The roadmap remains unchecked. Required exact-head Core CI and dedicated
 qualification, implementation review, merge, exact post-merge validation, and a
 separate accepted-evidence record remain outstanding until demonstrated. This
 implementation note makes no assertion that an unexecuted test has passed.
+
+## Compiler-boundary review hardening
+
+Qualification of tree `5e18ffa1f2586b026589dfa45f16647b6a52b47d` passed the
+original 45-case native/public-source matrix, 134 CTest targets and 146 Scala
+tests. A subsequent direct review found a missing negative case: discardable
+`kind = "literal", value = 7.0 : f64` attributes on a nested user call were
+accepted, and the target renderer replaced that call with `7.0`. Successful
+syntax reparse did not detect this semantic substitution.
+
+The repair rejects body-value discriminator/payload attributes on calls using
+`NODAL-ANALOG-041-002`. Constant analysis and target rendering also dispatch on
+the actual operation identity, never a call's arbitrary `kind` attribute. The
+matrix adds 16 negative cases for nested and ordinary calls, with each case run
+through native verification, the optimization pipeline, and target emission.
+The tests require diagnostic rejection without publishing partial HDL.
+
+This repair requires fresh exact-head qualification. The earlier successful run
+is regression evidence, not acceptance of the repaired implementation. The
+roadmap and accepted-evidence manifest remain open.

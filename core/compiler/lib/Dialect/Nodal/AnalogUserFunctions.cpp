@@ -16,6 +16,7 @@
 #include "llvm/ADT/StringSet.h"
 
 #include <cmath>
+#include <initializer_list>
 #include <limits>
 #include <optional>
 #include <string>
@@ -90,6 +91,11 @@ llvm::SmallVector<Operation *> arguments(Operation *function) {
   return result;
 }
 LogicalResult verifyCall(Operation *call) {
+  // Value-operation properties are not call annotations. In particular, accepting kind/value
+  // here would let discardable attributes turn an opaque nested call into a literal or local.
+  for (llvm::StringRef key : {"kind", "name", "argument_index", "value", "function_id"})
+    if (call->hasAttr(key))
+      return error(call, "NODAL-ANALOG-041-002", "function call carries body-value attributes");
   if (text(call, "contract_version") != "1")
     return error(call, "NODAL-ANALOG-041-002", "unknown user-function call contract");
   if (!named(call->getParentOp(), "nodal.analog") &&
@@ -205,9 +211,9 @@ LogicalResult verifyValue(Operation *op) {
       for (auto [operand, type] : llvm::zip(op->getOperands(), types)) {
         dimensions.push_back(type.dimension);
         Operation *definition = operand.getDefiningOp();
-        auto value = definition && text(definition, "kind") == "literal"
-                         ? definition->getAttrOfType<FloatAttr>("value")
-                         : FloatAttr();
+        bool isLiteral = named(definition, "nodal.analog_function_value") &&
+                         text(definition, "kind") == "literal";
+        auto value = isLiteral ? definition->getAttrOfType<FloatAttr>("value") : FloatAttr();
         constants.push_back(value ? std::optional<double>(value.getValueAsDouble()) : std::nullopt);
       }
       auto dimension = analogFunctionDimension(*entry, dimensions);
@@ -225,6 +231,9 @@ LogicalResult verifyValue(Operation *op) {
 // infer constants across calls; target declarations and call identity remain observable.
 FailureOr<std::optional<double>>
 constant(Operation *op, const llvm::DenseMap<Value, std::optional<double>> &known) {
+  // Only this operation owns the body-value discriminator; user calls always remain opaque.
+  if (!named(op, "nodal.analog_function_value"))
+    return std::optional<double>();
   auto kind = text(op, "kind");
   llvm::SmallVector<std::optional<double>> values;
   for (Value operand : op->getOperands()) {

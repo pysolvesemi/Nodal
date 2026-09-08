@@ -178,6 +178,22 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
                     line.replace('}> :', '}> {' + annotation + '} :', 1)
                     if marker in line else line for line in text.splitlines()) + "\n"
                 negative(annotated, "NODAL-ANALOG-FOLD-001")
+        # A call is not a body-value operation. Discardable kind/value/name attributes must
+        # not replace a nested call with a literal, alias, builtin, or inferred constant.
+        nested_text = fixture(nested_functions,
+            call("answer", "outerSignal", ("%signal",), ("f64",), "f64") + previous.contribution("answer"))
+        for original in (text, nested_text):
+            for annotation in ('kind = "literal", value = 7.0 : f64',
+                               'kind = "local", name = "signal"',
+                               'kind = "math", function_id = "sqrt"',
+                               'kind = "add"', 'value = 7.0 : f64', 'name = "signal"',
+                               'argument_index = 0 : i64', 'function_id = "sqrt"'):
+                annotated = "\n".join(
+                    line.replace('}> :', '}> {' + annotation + '} :', 1)
+                    if 'callee = @scaleSignal,' in line else line
+                    for line in original.splitlines()) + "\n"
+                assert annotation in annotated and annotated != original
+                negative(annotated, "NODAL-ANALOG-041-002")
         # Constants are recursively checked through initialized locals, not only direct literals.
         zero_body = real_body.replace('value = 2.0 : f64', 'value = 0.0 : f64')
         negative(fixture(definition("zeroSignal", zero_body, REAL), ""), "NODAL-ANALOG-041-008")

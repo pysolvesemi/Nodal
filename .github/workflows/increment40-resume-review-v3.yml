@@ -1,0 +1,141 @@
+name: Increment 40 reviewed source qualification v3
+on:
+  push:
+    branches: [automation/increment40-resume-review-v3]
+permissions:
+  contents: write
+concurrency:
+  group: increment40-resume-review-v3
+  cancel-in-progress: false
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Apply exact reviewed repairs
+        run: |
+          python3 - <<'PY'
+          import gzip, hashlib, os, subprocess
+          from pathlib import Path
+          patches = [Path('.automation/increment40-resume.patch').read_bytes(), gzip.decompress(Path('.automation/increment40-hardening.patch.gz').read_bytes()), Path('.automation/increment40-regression-sync.patch').read_bytes()]
+          hashes = ['aa98cd2b5f610fc0c8114223d842a3de9c4f091e77ab547c7feafb8094ac6ee6', 'c7c3ea536b44ebf44ba2b89b4c0743226104ab244c317ece0e50efd77c200027', 'c2f949351d9c648e767e610e88cbf55a59ed178b87edb2615b8d9f073624f96d']
+          for data, expected in zip(patches, hashes):
+              assert hashlib.sha256(data).hexdigest() == expected
+          subprocess.run(['git', 'checkout', '--detach', 'eed0f6e132f0ef6795ec7880aaf26eadbc2d6a29'], check=True)
+          for i, data in enumerate(patches):
+              path = Path(os.environ['RUNNER_TEMP']) / f'increment40-{i}.patch'
+              path.write_bytes(data)
+              subprocess.run(['git', 'apply', '--check', '--whitespace=error', str(path)], check=True)
+              subprocess.run(['git', 'apply', '--whitespace=error', str(path)], check=True)
+          PY
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-scala-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', '.scalafmt.conf', '.scalafix.conf', 'toolchains/lock.json', 'toolchains/lint-lock.json') }}
+          restore-keys: nodal-scala-${{ runner.os }}-
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
+      - name: Pinned formatting and exact source commit
+        run: |
+          ./nodal bootstrap --mode prebuilt --prefix "$RUNNER_TEMP/nodal-native"
+          ./nodal style bootstrap --prefix "$RUNNER_TEMP/nodal-lint"
+          ./nodal style fix --lint-toolchain "$RUNNER_TEMP/nodal-lint"
+          python3 - <<'PY'
+          import subprocess
+          allowed = set('''
+          core/compiler/include/nodal/Backend/Backend.h
+          core/compiler/lib/Backend/AnalogEventReparse.cpp
+          core/compiler/lib/Backend/AnalogVerticalSlice.cpp
+          core/compiler/lib/Backend/Backend.cpp
+          core/compiler/lib/Dialect/Nodal/AnalogFunctions.cpp
+          core/compiler/lib/Dialect/Nodal/AnalogTransfer.cpp
+          core/compiler/test/Unit/AnalogTransferReparseTest.cpp
+          core/compiler/test/Unit/BackendTest.cpp
+          core/scala/testkit/test/src/nodal/AnalogTransferTests.scala
+          core/scala/testkit/test/src/nodal/AnalogEventConstructionTests.scala
+          docs/implementation/increment40-transfer-operators.md
+          examples/continuousTimeApi/src/nodal/increment40fixture/Increment40ConstructionCheck.scala
+          examples/continuousTimeApi/src/nodal/increment37fixture/Increment37ConstructionCheck.scala
+          tests/compiler/fixtures/increment37/run_review_matrix.py
+          tests/compiler/fixtures/increment40/run_native_matrix.py
+          '''.split())
+          subprocess.run(['git', 'add', '--all'], check=True)
+          changed = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines())
+          assert changed == allowed, changed ^ allowed
+          subprocess.run(['git', 'diff', '--cached', '--check'], check=True)
+          subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
+          subprocess.run(['git', 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'], check=True)
+          subprocess.run(['git', 'commit', '-m', 'Increment 40 — Repair state-fold verification and reject invalid target names'], check=True)
+          PY
+      - name: Canonical complete gate
+        id: gate
+        run: |
+          mkdir -p "$RUNNER_TEMP/inc40-evidence"
+          set -o pipefail
+          ./nodal check --online-toolchain --base-ref origin/dev --toolchain "$RUNNER_TEMP/nodal-native" --lint-toolchain "$RUNNER_TEMP/nodal-lint" 2>&1 | tee "$RUNNER_TEMP/inc40-evidence/check.log"
+      - name: Actual public source and native target matrix
+        id: source
+        if: always() && steps.gate.outcome == 'success'
+        run: |
+          set -o pipefail
+          dest="$RUNNER_TEMP/inc40-evidence"
+          ./mill -i examples.continuousTimeApi.runMain nodal.increment40fixture.Increment40ConstructionCheck 2>&1 | tee "$dest/public-scala.log"
+          ./mill -i core.scala.testkit.test.runMain nodal.internal.testkit.Increment40MlirCheck "$dest/public.mlir"
+          python3 tests/compiler/fixtures/increment40/run_native_matrix.py --nodalc "$PWD/out/native/release/bin/nodalc" --translate "$PWD/out/native/release/bin/nodal-translate" --source "$dest/public.mlir" 2>&1 | tee "$dest/source-matrix.log"
+          out/native/release/bin/nodal-translate --nodal-to-verilog-a "$dest/public.mlir" > "$dest/public.va"
+      - name: Requalify predecessor source-to-target boundaries
+        id: predecessor
+        if: always() && steps.gate.outcome == 'success'
+        run: |
+          set -o pipefail
+          dest="$RUNNER_TEMP/inc40-evidence"
+          for increment in 37 38 39; do
+            ./mill -i core.scala.testkit.test.runMain "nodal.internal.testkit.Increment${increment}MlirCheck" "$dest/increment${increment}.mlir"
+            python3 "tests/compiler/fixtures/increment${increment}/run_native_matrix.py" --nodalc "$PWD/out/native/release/bin/nodalc" --translate "$PWD/out/native/release/bin/nodal-translate" --source "$dest/increment${increment}.mlir" 2>&1 | tee "$dest/increment${increment}-source.log"
+            out/native/release/bin/nodal-translate --nodal-to-verilog-a "$dest/increment${increment}.mlir" > "$dest/increment${increment}.va"
+          done
+          for source in "$dest/increment37.mlir.held.mlir" "$dest/increment37.mlir.controlled.mlir"; do
+            out/native/release/bin/nodal-translate --nodal-to-verilog-a "$source" > "$source.va"
+          done
+      - name: Publish qualified candidate without overwriting concurrent work
+        if: steps.gate.outcome == 'success' && steps.source.outcome == 'success' && steps.predecessor.outcome == 'success'
+        run: |
+          test "$(git ls-remote origin refs/heads/staging/increment40-review-fixes-v3 | cut -f1)" = eed0f6e132f0ef6795ec7880aaf26eadbc2d6a29
+          git push origin HEAD:refs/heads/staging/increment40-review-fixes-v3
+      - name: Retain exact source and available native tools
+        if: always()
+        run: |
+          dest="$RUNNER_TEMP/inc40-evidence"
+          mkdir -p "$dest"
+          git rev-parse HEAD HEAD^{tree} > "$dest/source-identity.txt"
+          git archive HEAD | gzip > "$dest/source.tar.gz"
+          git diff HEAD > "$dest/uncommitted.patch"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os, re, shutil, subprocess
+          dest = Path(os.environ['RUNNER_TEMP']) / 'inc40-evidence' / 'native-tools'
+          (dest / 'lib').mkdir(parents=True, exist_ok=True)
+          root = str(Path(os.environ['RUNNER_TEMP']) / 'nodal-native')
+          for name in ('nodalc', 'nodal-translate'):
+              path = Path('out/native/release/bin') / name
+              if not path.is_file():
+                  continue
+              shutil.copy2(path, dest / name)
+              subprocess.run(['strip', str(dest / name)], check=True)
+              for library in re.findall(r'=> (/\S+) \(', subprocess.check_output(['ldd', str(path)], text=True)):
+                  if library.startswith(root + '/'):
+                      shutil.copy2(library, dest / 'lib' / Path(library).name)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: increment40-resume-v3-evidence
+          path: ${{ runner.temp }}/inc40-evidence/
+          retention-days: 14

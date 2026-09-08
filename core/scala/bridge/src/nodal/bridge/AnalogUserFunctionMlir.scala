@@ -37,7 +37,7 @@ private[nodal] object AnalogUserFunctionMlir:
     val sources = snapshot.sourceMap.map(value => value.semanticPath -> value.source).toMap
     snapshot.analogFunctions.filter(_.owner == owner).sortBy(_.definition.name).map: record =>
       val definition = record.definition
-      val base = s"$owner.function_${definition.name}"
+      val base = AnalogUserFunctionRuntime.semanticPath(owner, definition.name)
       def location(path: String): String = sources.get(path) match
         case Some(source) => s" loc(${quote(source.path)}:${source.line}:${source.column})"
         case None => " loc(unknown)"

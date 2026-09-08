@@ -26,6 +26,13 @@ final class FunctionBodyParameter extends Module:
     val _ = param(signal)
     signal
 
+final class FunctionSourceNamespace extends Module:
+  val function_scale = param(2.0.real)
+  val scale = AnalogFunction("scale", Real): f =>
+    f.input("signal", Real)
+  analog:
+    val _ = scale(function_scale)
+
 final class FunctionOutsideCall extends Module:
   val identity = AnalogFunction("identitySignal", Real): f =>
     f.input("signal", Real)
@@ -63,7 +70,7 @@ object AnalogUserFunctionTests extends TestSuite:
       assert(snapshot.analogFunctions.size == 6)
       assert(snapshot.analogFunctions.forall(_.definition.source.nonEmpty))
       assert(snapshot.analogFunctions.forall(_.definition.nodes.forall(_.source.nonEmpty)))
-      assert(snapshot.sourceMap.exists(_.semanticPath.contains("function_affineSignal.value_")))
+      assert(snapshot.sourceMap.exists(_.semanticPath.contains("@function.affineSignal.value_")))
       val source = ScalaToMlirBridge.fromSnapshot(snapshot)
       assert(source == ScalaToMlirBridge.lower(new FunctionAmplifier))
       assert(source.text.contains("nodal.bridge.analog_functions"))
@@ -71,6 +78,15 @@ object AnalogUserFunctionTests extends TestSuite:
       assert(source.text.contains("kind = \"local\""))
       assert(source.text.contains("!nodal.quantity<\"integer\", \"1\">"))
       assert(source.text.contains("!nodal.quantity<\"real\", \"voltage\">"))
+
+    test("function source paths do not collide with ordinary declaration names"):
+      val snapshot = ConstructionKernel.inspect(new FunctionSourceNamespace)
+      val paths = snapshot.sourceMap.map(_.semanticPath)
+      assert(paths.exists(_.endsWith(".function_scale")))
+      assert(paths.exists(_.endsWith(".@function.scale")))
+      assert(paths.distinct.size == paths.size)
+      val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+      assert(document == ScalaToMlirBridge.lower(new FunctionSourceNamespace))
 
     test("names and input ordering are unambiguous with no overloading"):
       reject(

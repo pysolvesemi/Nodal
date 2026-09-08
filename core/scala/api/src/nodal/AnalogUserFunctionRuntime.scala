@@ -158,10 +158,13 @@ private[nodal] object AnalogUserFunctionRuntime:
       definitions.toVector.map((key, value) => Snapshot(owner(key._1), value))
         .sortBy(value => (value.owner, value.definition.name))
 
+  // User declaration path components are sanitized to [A-Za-z0-9_]; '@' is disjoint.
+  def semanticPath(owner: String, name: String): String = s"$owner.@function.$name"
+
   def sourceMap(snapshots: Vector[Snapshot]): Vector[SourceMapEntry] =
     snapshots.flatMap: snapshot =>
       val definition = snapshot.definition
-      val base = s"${snapshot.owner}.function_${definition.name}"
+      val base = semanticPath(snapshot.owner, definition.name)
       val entries = Vector(base -> definition.source, s"$base.return" -> definition.returnSource) ++
         definition.nodes.zipWithIndex.map((node, index) => s"$base.value_$index" -> node.source)
       entries.flatMap: (path, source) =>

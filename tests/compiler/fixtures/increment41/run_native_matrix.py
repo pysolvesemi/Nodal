@@ -171,8 +171,13 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
         negative(text.replace(returned("scaled"), forbidden + returned("scaled")), "NODAL-ANALOG-041-")
         # Opaque calls cannot acquire folded/simplified metadata, including through enclosing math.
         for annotation in ('nodal.folded_value = 1.0 : f64', 'nodal.simplified = true', 'constant_value = 1.0 : f64'):
-            negative(text.replace('callee = @scaleSignal,', f'{annotation}, callee = @scaleSignal,'), "NODAL-ANALOG-FOLD-001")
-            negative(text.replace('kind = "mul",', f'{annotation}, kind = "mul",'), "NODAL-ANALOG-FOLD-001")
+            # Discardable annotations belong outside the generated operation properties.
+            # Unknown keys inside <{...}> are not retained by MLIR's property parser.
+            for marker in ('callee = @scaleSignal,', 'kind = "mul",'):
+                annotated = "\n".join(
+                    line.replace('}> :', '}> {' + annotation + '} :', 1)
+                    if marker in line else line for line in text.splitlines()) + "\n"
+                negative(annotated, "NODAL-ANALOG-FOLD-001")
         # Constants are recursively checked through initialized locals, not only direct literals.
         zero_body = real_body.replace('value = 2.0 : f64', 'value = 0.0 : f64')
         negative(fixture(definition("zeroSignal", zero_body, REAL), ""), "NODAL-ANALOG-041-008")

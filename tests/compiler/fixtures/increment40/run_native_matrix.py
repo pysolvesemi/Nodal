@@ -181,10 +181,32 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
         for attribute in ['nodal.folded = true', 'nodal.folded_value = 0.0 : f64', 'nodal.simplified = true']:
             call = transfer().replace('}}> :', f'}}}}> {{{attribute}}} :')
             negative(fixture(call), "NODAL-ANALOG-FOLD-001")
-        forged_parent = addition.replace('<{metadata = {}}> :',
-            '<{metadata = {}}> {nodal.folded = true, nodal.folded_value = 0.0 : f64, '
-            'nodal.folded_dimension = "voltage", nodal.folded_kind = "real", nodal.folded_provenance = "increment30"} :')
-        negative(fixture(transfer() + forged_parent + contribution("sum")), "NODAL-ANALOG-FOLD-001")
+        # Reject forged claims recursively, not just on a direct transfer use.
+        # Test incomplete claims as well as a plausible-looking complete record.
+        claims = [
+            'nodal.folded = true, nodal.folded_value = 0.0 : f64, '
+            'nodal.folded_dimension = "voltage", nodal.folded_kind = "real", '
+            'nodal.folded_provenance = "increment30"',
+            'nodal.folded_value = 0.0 : f64',
+            'nodal.folded_kind = "real"',
+            'nodal.simplified = true',
+            'nodal.simplified_value = 0.0 : f64',
+            'nodal.simplification_rule = "invented-zero"',
+        ]
+        negate = '      %negated = "nodal.analog_neg"(%sum) <{metadata = {}}> : (f64) -> f64\n'
+        multiply = '      %scaled = "nodal.analog_mul"(%negated, %zero) <{metadata = {}}> : (f64, f64) -> f64\n'
+        absolute = ('      %absolute = "nodal.analog_function"(%scaled) '
+                    '<{function_id = "abs", registry_version = "1", metadata = {}}> : (f64) -> f64\n')
+        for kind in ["laplace_nd", "zi_nd"]:
+            # Valid expressions retain state, including multiplication by zero.
+            positive(fixture(transfer(kind) + addition + negate + multiply + absolute + contribution("absolute")))
+            for prefix, operation in [("", addition), (addition, negate),
+                                      (addition + negate, multiply),
+                                      (addition + negate + multiply, absolute)]:
+                for claim in claims:
+                    forged = operation.replace('}> :', '}> {' + claim + '} :')
+                    assert forged != operation
+                    negative(fixture(transfer(kind) + prefix + forged), "NODAL-ANALOG-FOLD-001")
         if source:
             text = source.read_text()
             _, va, after = positive(text)

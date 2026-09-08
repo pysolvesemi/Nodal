@@ -1,0 +1,80 @@
+name: Increment 40 superseded CI queue recovery
+on:
+  push:
+    branches: [automation/increment40-ci-queue-recovery]
+permissions:
+  contents: read
+  actions: write
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Cancel only the superseded PR metadata snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, time, urllib.request, urllib.error
+          from pathlib import Path
+          root = 'https://api.github.com/repos/pysolvesemi/Nodal'
+          old_id, new_id = 34194088648, 34195513321
+          head = 'fa0379d6e28372c3a8ed718f5beff45206c2872c'
+          observations = []
+          def api(path, method='GET'):
+              request = urllib.request.Request(root + path, method=method, headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                  'Accept': 'application/vnd.github+json',
+                  'X-GitHub-Api-Version': '2022-11-28'})
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      raw = response.read()
+                      data = json.loads(raw) if raw else {}
+                      return response.status, data
+              except urllib.error.HTTPError as error:
+                  if method == 'POST' and error.code == 409:
+                      return error.code, {'message': 'run already completed or cancellation in progress'}
+                  raise
+          def snapshot(run_id):
+              _, run = api('/actions/runs/' + str(run_id))
+              assert run['head_sha'] == head and run['event'] == 'pull_request'
+              assert run['head_branch'] == 'increment/40-evidence-closure-v1'
+              assert run['path'] == '.github/workflows/ci.yml'
+              assert any(p['number'] == 131 for p in run['pull_requests'])
+              observations.append({'id': run_id, 'status': run['status'],
+                  'conclusion': run['conclusion'], 'head_sha': run['head_sha']})
+              print(json.dumps(observations[-1]))
+              return run
+          try:
+              old, new = snapshot(old_id), snapshot(new_id)
+              assert new['created_at'] > old['created_at']
+              if old['status'] != 'completed':
+                  _, jobs = api('/actions/runs/' + str(old_id) + '/jobs')
+                  by_name = {job['name']: job for job in jobs['jobs']}
+                  assert all(by_name[name]['conclusion'] == 'cancelled'
+                             for name in ('scala', 'native', 'contracts'))
+                  status, result = api('/actions/runs/' + str(old_id) + '/cancel', 'POST')
+                  print('Superseded run cancellation:', status)
+                  for _ in range(6):
+                      time.sleep(5)
+                      if snapshot(old_id)['status'] == 'completed':
+                          break
+                  else:
+                      # Escalate only after normal cancellation leaves the old always() job alive.
+                      status, result = api('/actions/runs/' + str(old_id) + '/force-cancel', 'POST')
+                      print('Superseded run force cancellation:', status)
+                      for _ in range(6):
+                          time.sleep(5)
+                          if snapshot(old_id)['status'] == 'completed':
+                              break
+                  assert snapshot(old_id)['status'] == 'completed', 'old cancellation still pending'
+              snapshot(new_id)
+          finally:
+              Path('queue-recovery.json').write_text(json.dumps(observations, indent=2) + '\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: increment40-ci-queue-recovery
+          path: queue-recovery.json
+          retention-days: 14

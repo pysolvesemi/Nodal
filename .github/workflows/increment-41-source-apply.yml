@@ -1,0 +1,62 @@
+name: Increment 41 source application
+on:
+  push:
+    branches: [increment/41-analog-functions]
+    paths: ['.github/workflows/increment-41-source-apply.yml']
+permissions:
+  contents: write
+concurrency:
+  group: increment41-source-application
+  cancel-in-progress: false
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+            ~/.cache/nodal/downloads
+          key: nodal-inc41-materialize-${{ runner.os }}-${{ hashFiles('toolchains/lint-lock.json', '.scalafmt.conf') }}
+      - name: Verify and apply exact source patch
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/increment/41-analog-functions
+          test "$(git rev-parse HEAD^)" = 1dbda8dbec572be16b802526a130be2ebcd937ac
+          git merge-base --is-ancestor 515024f3ce9f21dd0c957d5b0ca32d0e0aefe9ac HEAD
+          python3 - <<'PY'
+          import base64, hashlib, lzma
+          from pathlib import Path
+          encoded = ''.join(Path(f'scripts/.increment41-source.{n}.b64').read_text().strip() for n in (1,2,3))
+          assert len(encoded) == 45420, len(encoded)
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert len(patch) == 154766, len(patch)
+          assert hashlib.sha256(patch).hexdigest() == '13c8fa406e9ab842520f6925738ac2ba73855f23224c48d69992801105e3f49c'
+          Path('/tmp/increment41.patch').write_bytes(patch)
+          PY
+          git apply --check /tmp/increment41.patch
+          git apply /tmp/increment41.patch
+      - name: Format and publish source, removing temporary transport
+        run: |
+          set -uo pipefail
+          status=0
+          ./nodal style bootstrap --prefix "$RUNNER_TEMP/nodal-lint" || status=$?
+          if [ "$status" -eq 0 ]; then
+            ./nodal style fix --lint-toolchain "$RUNNER_TEMP/nodal-lint" || status=$?
+          fi
+          rm scripts/.increment41-source.{1,2,3}.b64 .github/workflows/increment-41-source-apply.yml
+          git diff --check || status=$?
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Increment 41 — Implement typed user-defined analog functions' || exit $?
+          git fetch origin increment/41-analog-functions
+          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA" || exit 1
+          git push origin HEAD:refs/heads/increment/41-analog-functions || exit $?
+          exit "$status"

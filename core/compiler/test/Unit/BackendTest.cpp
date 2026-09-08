@@ -103,6 +103,18 @@ mlir::OwningOpRef<mlir::ModuleOp> parse(mlir::MLIRContext &context, llvm::String
 } // namespace
 
 int main() {
+  // The target grammar distinguishes reserved built-in calls from identifiers.
+  for (llvm::StringRef keyword :
+       {"laplace_nd", "zi_nd", "abs", "analysis", "transition", "noise_table_log", "ln1p", "expm1",
+        "enddiscipline", "continuous", "return", "uwire"}) {
+    if (nodal::isPortableVerilogIdentifier(keyword) ||
+        !nodal::isPortableVerilogIdentifier((keyword + "_value").str()))
+      return fail("analog reserved identifiers must reject without rejecting suffixes");
+  }
+  if (!nodal::isPortableVerilogIdentifier("Abs") ||
+      !nodal::isPortableVerilogIdentifier("negedgenmos"))
+    return fail("identifier checking must retain case sensitivity and token boundaries");
+
   mlir::DialectRegistry registry;
   registry.insert<circt::hw::HWDialect, nodal::NodalDialect>();
   mlir::MLIRContext context(registry);

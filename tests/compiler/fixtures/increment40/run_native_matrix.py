@@ -149,7 +149,9 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
         _, va, _ = positive(collision)
         assert "real transfer_1;" in va and "'{transfer_0}" in va, va
         # Keywords fail for every emitted declaration kind, not just modules.
-        for keyword in ("input", "output", "parameter", "wire", "endmodule", "ground"):
+        for keyword in ("input", "output", "parameter", "wire", "endmodule", "ground",
+                        "laplace_nd", "zi_nd", "abs", "transition", "analysis",
+                        "noise_table", "expm1", "ln1p", "enddiscipline", "uwire"):
             ordinary = fixture(transfer() + contribution())
             reject_target(ordinary.replace('name = "p"', f'name = "{keyword}"'), "NODAL-BACKEND-NAMING-001")
             reject_target(ordinary.replace('sym_name = "P"', f'sym_name = "{keyword}"').replace(

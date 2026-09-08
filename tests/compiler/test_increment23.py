@@ -99,10 +99,10 @@ class Increment23CheckerTests(unittest.TestCase):
         temporary, root = self.temporary_repository()
         self.addCleanup(temporary.cleanup)
         path = root / "core/compiler/lib/Backend/Backend.cpp"
-        path.write_text(
-            path.read_text(encoding="utf-8").replace('    "input",', '    "input_removed",', 1),
-            encoding="utf-8",
-        )
+        original = path.read_text(encoding="utf-8")
+        mutated = original.replace('"input",', '"input_removed",', 1)
+        self.assertNotEqual(original, mutated, "reserved keyword mutation must take effect")
+        path.write_text(mutated, encoding="utf-8")
         self.assertIn("NODAL-INC23-004", self.codes(root))
 
     def test_rejects_substring_terminator_counting(self) -> None:

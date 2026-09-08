@@ -27,7 +27,7 @@ public:
   bool transferCall() {
     transferExpressions = true;
     auto function = token;
-    if ((function != "laplace_nd" && function != "zi_nd") || !identifier() || !eat("(") ||
+    if ((function != "laplace_nd" && function != "zi_nd") || !eat(function) || !eat("(") ||
         !expression())
       return false;
     for (unsigned array = 0; array < 2; ++array) {
@@ -53,7 +53,7 @@ public:
   bool noiseCall() {
     auto function = token;
     if ((function != "white_noise" && function != "flicker_noise" && function != "noise_table") ||
-        !identifier() || !eat("("))
+        !eat(function) || !eat("("))
       return false;
     if (function == "noise_table") {
       if (!eat("'") || !eat("{"))
@@ -161,8 +161,16 @@ private:
     if (transferExpressions && eat("$abstime"))
       return true;
     auto name = token;
-    if (!identifier())
+    // Reserved analog names are legal only in the corresponding call grammar,
+    // never as bare values, port references, assignment targets, or labels.
+    if (!isPortableVerilogIdentifier(name)) {
+      bool builtin = name == "analysis" || lookupAnalogFunctionTarget(name) ||
+                     (transferExpressions && (name == "ddt" || name == "idt"));
+      if (!builtin || !eat(name) || token != "(")
+        return false;
+    } else if (!identifier()) {
       return false;
+    }
     if (token != "(")
       return true;
     if (transferExpressions && (name == "ddt" || name == "idt")) {
@@ -215,11 +223,10 @@ private:
   bool event() {
     do {
       auto function = token;
-      if (!identifier())
-        return false;
       bool lifecycle = function == "initial_step" || function == "final_step";
       unsigned maximum = function == "cross" ? 5 : 4;
-      if (!lifecycle && function != "cross" && function != "above" && function != "timer")
+      if ((!lifecycle && function != "cross" && function != "above" && function != "timer") ||
+          !eat(function))
         return false;
       if (!eat("(")) {
         if (!lifecycle)

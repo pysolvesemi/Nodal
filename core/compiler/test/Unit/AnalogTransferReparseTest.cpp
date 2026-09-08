@@ -13,6 +13,7 @@ int main() {
         "laplace_nd((V(p, n) + noise_0), '{sqrt(4)}, '{1})",
         "laplace_nd(ddt(V(p, n)), '{1}, '{1, tau})", "laplace_nd(idt(V(p, n), 0), '{1}, '{1, tau})",
         "laplace_nd(I(<p>), '{1}, '{1})", "laplace_nd($abstime, '{1}, '{1})",
+        "laplace_nd((analysis(\"tran\") ? V(p) : V(n)), '{abs(-1)}, '{1})",
         "zi_nd(V(p), '{1}, '{1}, 1e-3)", "zi_nd(transfer_0, '{0.5, 0.5}, '{1, -0.1}, 1e-3, 1e-5)",
         "zi_nd((V(p) > 1 ? V(p) : V(n)), '{1}, '{1}, 1, 0.1, 0)"}) {
     ++count;
@@ -25,6 +26,11 @@ int main() {
                                "laplace_nd(V(input), '{1}, '{1})",
                                "laplace_nd(analog, '{1}, '{1})",
                                "laplace_nd(V(p), '{parameter}, '{1})",
+                               "laplace_nd(V(abs), '{1}, '{1})",
+                               "laplace_nd(analysis, '{1}, '{1})",
+                               "laplace_nd(V(p), '{sqrt}, '{1})",
+                               "laplace_nd(V(p), '{laplace_nd}, '{1})",
+                               "laplace_nd(V(p), '{zi_nd}, '{1})",
                                "laplace_nd(V(p), '{1}, '{})",
                                "laplace_nd(V(p), {1}, '{1})",
                                "laplace_nd(V(p), '{1}, {1})",

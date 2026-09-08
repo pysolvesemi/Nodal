@@ -89,3 +89,9 @@ assertion and independent expected target now use `reference`. This is a
 correctness repair to the current regression fixture, not a rewrite of accepted
 Increment 37 evidence or a change to event behavior. The historical evidence
 records and checksums are unchanged.
+
+The target identifier table covers Verilog-AMS 2023 Annex B, including reserved
+analog functions (Annex C.16 retains these reservations in Verilog-A). The
+independent parser consumes those words only in their explicit function/event
+productions; it still rejects them as bare expressions or declaration names.
+Regression cases also retain case sensitivity and valid keyword-containing names.

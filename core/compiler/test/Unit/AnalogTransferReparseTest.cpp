@@ -22,6 +22,9 @@ int main() {
     }
   }
   for (llvm::StringRef call : {"laplace_nd(V(p), '{}, '{1})",
+                               "laplace_nd(V(input), '{1}, '{1})",
+                               "laplace_nd(analog, '{1}, '{1})",
+                               "laplace_nd(V(p), '{parameter}, '{1})",
                                "laplace_nd(V(p), '{1}, '{})",
                                "laplace_nd(V(p), {1}, '{1})",
                                "laplace_nd(V(p), '{1}, {1})",

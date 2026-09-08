@@ -272,6 +272,25 @@ Independent increments `SQ-001`–`SQ-024` are registered in the
 `SQ-010` is the first useful release gate; later advanced features do not block
 that release. No existing global roadmap increment is renumbered or marked done.
 
+### Source-Level and Transaction-Aware Debugging — separate dependent track
+
+The [debugging roadmap](docs/roadmap/source-level-debugging-v0.1-plan.md)
+adds independent increments `DBG-001`–`DBG-014`, all initially open and blocked
+by the complete Foundation track, including its normative architecture extensions.
+The [dependent-track gate](docs/roadmap/dependent-track-gate-v0.1.json) and
+[machine-readable debugging manifest](docs/roadmap/source-level-debugging-v0.1-surface.json)
+record the same barrier and release dependencies.
+
+Source-aware recorded traces and failure reports come first (`DBG-006`). A
+qualified existing runtime, with hgdb evaluated as an adapter candidate, supplies
+read-only live digital debugging next (`DBG-009`). Source-to-stage and transaction
+tracking follow at `DBG-011`, gated by Sequential Scheduled Hardware `SQ-010`;
+advanced scheduled behavior additionally requires `SQ-024`. Later releases do
+not block the first useful release or add debugging implementation to Foundation's
+exit criteria. Compiler metadata remains Nodal-owned, ordinary hardware semantics
+stay unchanged, and unavailable values are reported rather than invented.
+This is a documentation-only plan, not an implemented debugger or frozen API.
+
 ## Authoritative public references
 
 - [Accellera Verilog-AMS standards](https://www.accellera.org/downloads/standards/v-ams)

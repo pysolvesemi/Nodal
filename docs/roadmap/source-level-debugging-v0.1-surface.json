@@ -1,0 +1,122 @@
+{
+  "schema": 1,
+  "track_id": "source-level-debugging",
+  "display_name": "Source-Level and Transaction-Aware Debugging",
+  "increment_prefix": "DBG",
+  "revision": "0.1",
+  "created": "2026-09-08",
+  "updated": "2026-09-08",
+  "status": "planned",
+  "implementation_status": "blocked-by-foundation",
+  "api_status": "candidate-not-frozen-not-implemented",
+  "research_status": "allowed-before-foundation-completion",
+  "plan": "docs/roadmap/source-level-debugging-v0.1-plan.md",
+  "gate_registry": "docs/roadmap/dependent-track-gate-v0.1.json",
+  "foundation_barrier": {
+    "roadmap": "docs/roadmap/nodal-development-todo.md",
+    "completion_rule": "all-foundation-checkboxes-complete-including-normative-architecture-extensions",
+    "inherits_extensions_from_gate_registry": true,
+    "new_architecture_gaps_return_to_foundation": true,
+    "debug_implementation_is_foundation_exit_criterion": false,
+    "new_foundation_checkboxes_added_by_this_update": false,
+    "historical_gates_and_global_numbering_unchanged": true
+  },
+  "architecture": {
+    "canonical_compiler_ir": "Nodal MLIR",
+    "debug_metadata": "versioned-backend-neutral-nodal-manifest",
+    "metadata_owns_source_value_instance_and_time_meaning": true,
+    "runtime_reuse_candidate": "hgdb",
+    "reuse_decision_gate": "DBG-007",
+    "reuse_evaluation_and_scope_gate": "DBG-001",
+    "hgdb_compatibility_claimed": false,
+    "existing_runtime_preferred_over_bespoke_debugger": true,
+    "initial_user_deliverable": "source-aware-recorded-traces-and-failure-inspection",
+    "initial_live_profile": "read-only-digital-one-qualified-pinned-simulator",
+    "first_simulator_candidate": "Verilator",
+    "normal_verilator_direct_wrapper_c_abi_preserved": true,
+    "vpi_policy": "optional-explicitly-qualified-debug-capability-not-production-default",
+    "native_adapter_adr": "docs/architecture/0026-native-digital-simulator-adapter-architecture.md",
+    "second_hvl_scheduler": false,
+    "generated_uvm_or_hdl_testbench_required": false,
+    "full_digital_verification_track_required": false,
+    "watch_evaluation": "restricted-pure-typed-hardware-expressions",
+    "arbitrary_scala_evaluation": false,
+    "ordinary_rtl_semantics_changed": false,
+    "analog_equation_semantics_changed": false,
+    "ordinary_scala_generator_debugging_changed": false,
+    "all_temporaries_preserved_by_default": false,
+    "extra_visibility_or_tags": "explicit-debug-profile-with-cost-and-behavioral-evidence",
+    "parameterized_module_cloning_for_debug": false,
+    "parameter_binding": "actual-elaborated-simulator-instance",
+    "artifact_mismatch_policy": "reject",
+    "value_states": ["observed", "reconstructed", "constant", "optimized-away", "unavailable"],
+    "reconstruction_semantics": "typed-width-sign-four-state-exact-at-recorded-observation-point",
+    "source_line_is_unique_hardware_program_counter": false,
+    "step_modes": ["source-debug-point", "selected-domain-clock-edge", "qualified-transaction-event"],
+    "observation_phase_and_capture_coverage_visible": true,
+    "transaction_identity": "existing-id-or-proven-passive-correlation-otherwise-explicit-debug-instrumentation",
+    "transaction_reset_and_configuration_epochs": true,
+    "missing_historical_values_policy": "unavailable-never-infer-from-current-registers",
+    "recorded_replay_is_live_simulator_rewind": false,
+    "default_source_paths": "remappable-project-relative"
+  },
+  "required_capabilities": {
+    "qualified-read-only-digital-adapter": {
+      "owner": "Digital Verification/native simulator adapter slice",
+      "contract": "docs/roadmap/native-digital-simulator-adapters-v0.1-plan.md",
+      "required_operations": ["cooperative-pause-resume", "snapshot", "qualified-observation-phase", "safe-process-lifecycle"],
+      "exact_owner_and_versions_frozen_at": "DBG-001",
+      "qualified_before": "DBG-007"
+    },
+    "qualified-additional-adapter-or-trace-capabilities": {
+      "qualified_before": "DBG-013",
+      "capability_profiles_are_independently_gated": true
+    }
+  },
+  "release_gates": {
+    "A": {"exit": "DBG-006", "scope": "source-aware-recorded-waveforms-and-failure-reports", "requires_live_debugger": false, "requires_sequential_track": false},
+    "B": {"exit": "DBG-009", "scope": "read-only-live-digital-debugging-on-one-qualified-simulator", "requires_sequential_track": false},
+    "C": {"exit": "DBG-011", "scope": "scheduled-source-stage-and-transaction-lifecycle-debugging", "requires": ["SQ-010"], "live_ui_requires": ["DBG-009"]},
+    "D": {"exit": "DBG-014", "scope": "advanced-scheduled-behavior-and-broader-qualified-profiles"},
+    "later_releases_block_earlier_release_acceptance": false
+  },
+  "increments": [
+    {"id": "DBG-001", "title": "Debug semantics, scope and reuse design gate", "release": "A", "depends_on": []},
+    {"id": "DBG-002", "title": "Compiler origin capture and versioned debug metadata", "release": "A", "depends_on": ["DBG-001"]},
+    {"id": "DBG-003", "title": "Transformation-aware mappings and honest value recovery", "release": "A", "depends_on": ["DBG-002"]},
+    {"id": "DBG-004", "title": "Parameterized hierarchy binding and artifact integrity", "release": "A", "depends_on": ["DBG-003"]},
+    {"id": "DBG-005", "title": "Source-aware recorded waveforms and value inspection", "release": "A", "depends_on": ["DBG-004"]},
+    {"id": "DBG-006", "title": "Source-linked failure reports and Release A qualification", "release": "A", "depends_on": ["DBG-005"]},
+    {"id": "DBG-007", "title": "Existing-runtime adapter and one-simulator feasibility gate", "release": "B", "depends_on": ["DBG-006"], "requires_capabilities": ["qualified-read-only-digital-adapter"]},
+    {"id": "DBG-008", "title": "Read-only live breakpoints, watches and hardware stepping", "release": "B", "depends_on": ["DBG-007"], "requires_capabilities": ["qualified-read-only-digital-adapter"]},
+    {"id": "DBG-009", "title": "Thin console/editor integration and Release B qualification", "release": "B", "depends_on": ["DBG-008"], "requires_capabilities": ["qualified-read-only-digital-adapter"]},
+    {"id": "DBG-010", "title": "Scheduled source-to-stage and state mapping", "release": "C", "depends_on": ["DBG-006", "SQ-010"], "live_ui_requires": ["DBG-009"]},
+    {"id": "DBG-011", "title": "Transaction lifecycle tracking and Release C qualification", "release": "C", "depends_on": ["DBG-010", "SQ-010"], "live_ui_requires": ["DBG-009"]},
+    {"id": "DBG-012", "title": "Advanced scheduled loops, tasks, memory and ordered effects", "release": "D", "depends_on": ["DBG-011", "SQ-024"]},
+    {"id": "DBG-013", "title": "Additional simulator and bounded recorded replay profiles", "release": "D", "depends_on": ["DBG-009"], "requires_capabilities": ["qualified-additional-adapter-or-trace-capabilities"]},
+    {"id": "DBG-014", "title": "Full-track evidence, cost limits and release documentation", "release": "D", "depends_on": ["DBG-006", "DBG-009", "DBG-011", "DBG-012", "DBG-013"]}
+  ],
+  "increment_defaults": {
+    "status": "planned",
+    "implementation_status": "blocked-by-foundation",
+    "inherits_complete_foundation_barrier": true,
+    "completed": false,
+    "evidence": []
+  },
+  "planned_increment_count": 14,
+  "deferred_capabilities": [
+    "analog-mixed-signal-solver-state-debugging",
+    "fpga-on-chip-debug-insertion",
+    "force-deposit",
+    "arbitrary-host-evaluation",
+    "unbounded-trace-retention",
+    "true-live-simulator-rewind"
+  ],
+  "current_update": {
+    "kind": "documentation-only",
+    "implementation_added": false,
+    "api_frozen": false,
+    "ci_requested": false,
+    "tests_or_formal_or_synthesis_claimed": false
+  }
+}

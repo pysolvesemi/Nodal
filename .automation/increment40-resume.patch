@@ -1,0 +1,105 @@
+diff --git a/core/compiler/lib/Dialect/Nodal/AnalogFunctions.cpp b/core/compiler/lib/Dialect/Nodal/AnalogFunctions.cpp
+index b08f663..d2c36d5 100644
+--- a/core/compiler/lib/Dialect/Nodal/AnalogFunctions.cpp
++++ b/core/compiler/lib/Dialect/Nodal/AnalogFunctions.cpp
+@@ -20,7 +20,7 @@ llvm::StringRef text(Operation *op, llvm::StringRef key) {
+ }
+ // An annotation on an enclosing expression must not launder a simulator read
+ // into an alleged constant. Walk definitions, not advisory fold attributes.
+-bool dependsOnAnalysis(Operation *operation) {
++bool dependsOnSimulatorState(Operation *operation) {
+   llvm::SmallVector<Operation *, 8> pending{operation};
+   llvm::SmallPtrSet<Operation *, 32> visited;
+   while (!pending.empty()) {
+@@ -28,7 +28,8 @@ bool dependsOnAnalysis(Operation *operation) {
+     if (!visited.insert(current).second)
+       continue;
+     if (current->getName().getStringRef() == "nodal.analog_analysis" ||
+-        current->getName().getStringRef() == "nodal.analog_noise")
++        current->getName().getStringRef() == "nodal.analog_noise" ||
++        current->getName().getStringRef() == "nodal.analog_transfer")
+       return true;
+     for (Value operand : current->getOperands())
+       if (Operation *definition = operand.getDefiningOp())
+@@ -189,11 +190,12 @@ LogicalResult verifyAnalogFunctionOperation(Operation *op) {
+   if (!query) {
+     bool annotated = false;
+     for (NamedAttribute attribute : op->getAttrs())
+-      annotated |= attribute.getName().getValue().starts_with("nodal.folded");
+-    if (annotated && dependsOnAnalysis(op))
++      annotated |= attribute.getName().getValue().starts_with("nodal.folded") ||
++                   attribute.getName().getValue().starts_with("nodal.simplif");
++    if (annotated && dependsOnSimulatorState(op))
+       return emitMappedFailure(
+           op, "NODAL-ANALOG-FOLD-001",
+-          "analysis-dependent or noise-dependent expressions cannot carry constant-fold claims");
++          "simulator-state-dependent expressions cannot carry fold or simplification claims");
+   }
+   if (!query && name != "nodal.analog_function")
+     return success();
+diff --git a/core/scala/testkit/test/src/nodal/AnalogTransferTests.scala b/core/scala/testkit/test/src/nodal/AnalogTransferTests.scala
+index d6c9c88..37e0ca8 100644
+--- a/core/scala/testkit/test/src/nodal/AnalogTransferTests.scala
++++ b/core/scala/testkit/test/src/nodal/AnalogTransferTests.scala
+@@ -60,14 +60,18 @@ object AnalogTransferTests extends TestSuite:
+       ).sorted == Vector(1, 2, 3))
+ 
+     test("coefficient order and dimensions extend to arbitrary polynomial degree"):
+-      val coefficients = (0 to 8).map: power =>
+-        (0 until power).foldLeft(1.0.real: Expr[Real])((value, _) => value * 1.0e-3.s)
++      // Expr values belong to the active elaboration, including array elements.
+       val snapshot = ConstructionKernel.inspect(new TransferBody(() =>
++        val coefficients = (0 to 8).map: power =>
++          (0 until power).foldLeft(1.0.real: Expr[Real])((value, _) => value * 1.0e-3.s)
+         val _ = laplaceNd(1.0.A, coefficients, coefficients)
+       ))
+       assert(snapshot.transferOperators.head.numeratorSize == 9)
+       assert(snapshot.transferOperators.head.denominatorSize == 9)
+       assert(snapshot.transferOperators.head.resultDimension == "current")
++      val source = ScalaToMlirBridge.fromSnapshot(snapshot).text
++      assert(source.contains("numerator_size = 9 : i64"))
++      assert(source.contains("denominator_size = 9 : i64"))
+       reject(
+         { val _ = laplaceNd(1.0.V, Seq(1.0.real, 1.0.real), Seq(1.0.real)) },
+         "NODAL-ANALOG-040-003"
+diff --git a/tests/compiler/fixtures/increment40/run_native_matrix.py b/tests/compiler/fixtures/increment40/run_native_matrix.py
+index 059644b..475e3f9 100644
+--- a/tests/compiler/fixtures/increment40/run_native_matrix.py
++++ b/tests/compiler/fixtures/increment40/run_native_matrix.py
+@@ -181,10 +181,32 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
+         for attribute in ['nodal.folded = true', 'nodal.folded_value = 0.0 : f64', 'nodal.simplified = true']:
+             call = transfer().replace('}}> :', f'}}}}> {{{attribute}}} :')
+             negative(fixture(call), "NODAL-ANALOG-FOLD-001")
+-        forged_parent = addition.replace('<{metadata = {}}> :',
+-            '<{metadata = {}}> {nodal.folded = true, nodal.folded_value = 0.0 : f64, '
+-            'nodal.folded_dimension = "voltage", nodal.folded_kind = "real", nodal.folded_provenance = "increment30"} :')
+-        negative(fixture(transfer() + forged_parent + contribution("sum")), "NODAL-ANALOG-FOLD-001")
++        # Reject forged claims recursively, not just on a direct transfer use.
++        # Test incomplete claims as well as a plausible-looking complete record.
++        claims = [
++            'nodal.folded = true, nodal.folded_value = 0.0 : f64, '
++            'nodal.folded_dimension = "voltage", nodal.folded_kind = "real", '
++            'nodal.folded_provenance = "increment30"',
++            'nodal.folded_value = 0.0 : f64',
++            'nodal.folded_kind = "real"',
++            'nodal.simplified = true',
++            'nodal.simplified_value = 0.0 : f64',
++            'nodal.simplification_rule = "invented-zero"',
++        ]
++        negate = '      %negated = "nodal.analog_neg"(%sum) <{metadata = {}}> : (f64) -> f64\n'
++        multiply = '      %scaled = "nodal.analog_mul"(%negated, %zero) <{metadata = {}}> : (f64, f64) -> f64\n'
++        absolute = ('      %absolute = "nodal.analog_function"(%scaled) '
++                    '<{function_id = "abs", registry_version = "1", metadata = {}}> : (f64) -> f64\n')
++        for kind in ["laplace_nd", "zi_nd"]:
++            # Valid expressions retain state, including multiplication by zero.
++            positive(fixture(transfer(kind) + addition + negate + multiply + absolute + contribution("absolute")))
++            for prefix, operation in [("", addition), (addition, negate),
++                                      (addition + negate, multiply),
++                                      (addition + negate + multiply, absolute)]:
++                for claim in claims:
++                    forged = operation.replace('}> :', '}> {' + claim + '} :')
++                    assert forged != operation
++                    negative(fixture(transfer(kind) + prefix + forged), "NODAL-ANALOG-FOLD-001")
+         if source:
+             text = source.read_text()
+             _, va, after = positive(text)

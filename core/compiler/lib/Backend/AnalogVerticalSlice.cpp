@@ -557,6 +557,21 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
       analogs.push_back(&operation);
     }
   }
+  // These names share a target namespace even though the source IR uses
+  // different declaration kinds. Reject invalid names before publishing HDL.
+  llvm::StringSet<> declarations;
+  for (const auto *group : {&parameters, &ports, &nodes, &namedBranches}) {
+    for (Operation *declaration : *group) {
+      auto spelling = declaration->getAttrOfType<StringAttr>(
+          declaration->getName().getStringRef() == "nodal.parameter" ? "sym_name" : "name");
+      if (!spelling || !isPortableVerilogIdentifier(spelling.getValue()))
+        return emitMappedFailure(declaration, "NODAL-BACKEND-NAMING-001",
+                                 "declaration requires a non-keyword portable HDL identifier");
+      if (!declarations.insert(spelling.getValue()).second)
+        return emitMappedFailure(declaration, "NODAL-BACKEND-NAMING-002",
+                                 "declarations collide in the target namespace");
+    }
+  }
   if (failed(orderParametersByDependency(definition, parameters)))
     return failure();
   llvm::sort(ports, [](Operation *lhs, Operation *rhs) {
@@ -976,16 +991,9 @@ bool validCanonicalCommentText(llvm::StringRef value) {
 
 bool validIdentifierList(llvm::StringRef value) {
   llvm::SmallVector<llvm::StringRef, 8> names;
-  value.split(names, ',', -1, false);
-  if (names.empty())
-    return false;
-  return llvm::all_of(names, [](llvm::StringRef name) {
-    name = name.trim();
-    if (name.empty() || !(llvm::isAlpha(name.front()) || name.front() == '_'))
-      return false;
-    return llvm::all_of(name.drop_front(), [](char character) {
-      return llvm::isAlnum(character) || character == '_' || character == '$';
-    });
+  value.split(names, ',', -1, true);
+  return !names.empty() && llvm::all_of(names, [](llvm::StringRef name) {
+    return isPortableVerilogIdentifier(name.trim());
   });
 }
 

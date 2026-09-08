@@ -1,4 +1,5 @@
 #include "nodal/Backend/AnalogEventBackend.h"
+#include "nodal/Backend/Backend.h"
 #include "nodal/Dialect/Nodal/AnalogFunctions.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -131,7 +132,7 @@ private:
     return true;
   }
   bool identifier() {
-    if (invalid || token.empty() || !(llvm::isAlpha(token.front()) || token.front() == '_'))
+    if (invalid || !isPortableVerilogIdentifier(token))
       return false;
     next();
     return true;

@@ -34,6 +34,13 @@ llvm::StringRef semanticPath(Operation *op) {
       return path.getValue();
   return {};
 }
+// Keep source identity text canonical without restricting Unicode binders.
+bool canonicalIdentity(llvm::StringRef value) {
+  return !value.empty() && value == value.trim() && llvm::all_of(value, [](char character) {
+    const unsigned char byte = static_cast<unsigned char>(character);
+    return byte >= 0x20 && byte != 0x7f;
+  });
+}
 std::string coefficientDimension(bool sampled, unsigned index) {
   if (sampled || index == 0)
     return "1";
@@ -55,9 +62,9 @@ LogicalResult verifyAnalogTransferOperation(Operation *op) {
   auto actualOwner = semanticPath(module);
   if (actualOwner.empty())
     actualOwner = text(module, "sym_name");
-  if (ownerId.empty() || ownerId != actualOwner || !id.starts_with((ownerId + ".").str()) ||
-      id.size() <= ownerId.size() + 1 || id != semanticPath(op) ||
-      text(op, "state_id") != (id + ".state").str())
+  if (!canonicalIdentity(ownerId) || !canonicalIdentity(id) || ownerId != actualOwner ||
+      !id.starts_with((ownerId + ".").str()) || id.size() <= ownerId.size() + 1 ||
+      id != semanticPath(op) || text(op, "state_id") != (id + ".state").str())
     return emitMappedFailure(op, "NODAL-ANALOG-040-002",
                              "invalid transfer identity or state owner");
   if (module->getNumRegions() != 1 || !llvm::hasSingleElement(module->getRegion(0)))
@@ -68,8 +75,8 @@ LogicalResult verifyAnalogTransferOperation(Operation *op) {
     if (region.getNumRegions() != 1 || !llvm::hasSingleElement(region.getRegion(0)))
       return emitMappedFailure(op, "NODAL-ANALOG-040-002", "malformed transfer inventory region");
     for (Operation &other : region.getRegion(0).front())
-      if (&other != op && name(&other) == "nodal.analog_transfer" &&
-          text(&other, "operator_id") == id)
+      if (&other != op && (text(&other, "operator_id") == id || text(&other, "source_id") == id ||
+                           text(&other, "state_id") == text(op, "state_id")))
         return emitMappedFailure(op, "NODAL-ANALOG-040-002", "transfer identity must be unique");
   }
   for (NamedAttribute attr : op->getAttrs())

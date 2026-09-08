@@ -20,7 +20,7 @@ llvm::StringRef text(Operation *op, llvm::StringRef key) {
 }
 // An annotation on an enclosing expression must not launder a simulator read
 // into an alleged constant. Walk definitions, not advisory fold attributes.
-bool dependsOnAnalysis(Operation *operation) {
+bool dependsOnSimulatorState(Operation *operation) {
   llvm::SmallVector<Operation *, 8> pending{operation};
   llvm::SmallPtrSet<Operation *, 32> visited;
   while (!pending.empty()) {
@@ -28,7 +28,8 @@ bool dependsOnAnalysis(Operation *operation) {
     if (!visited.insert(current).second)
       continue;
     if (current->getName().getStringRef() == "nodal.analog_analysis" ||
-        current->getName().getStringRef() == "nodal.analog_noise")
+        current->getName().getStringRef() == "nodal.analog_noise" ||
+        current->getName().getStringRef() == "nodal.analog_transfer")
       return true;
     for (Value operand : current->getOperands())
       if (Operation *definition = operand.getDefiningOp())
@@ -189,11 +190,12 @@ LogicalResult verifyAnalogFunctionOperation(Operation *op) {
   if (!query) {
     bool annotated = false;
     for (NamedAttribute attribute : op->getAttrs())
-      annotated |= attribute.getName().getValue().starts_with("nodal.folded");
-    if (annotated && dependsOnAnalysis(op))
+      annotated |= attribute.getName().getValue().starts_with("nodal.folded") ||
+                   attribute.getName().getValue().starts_with("nodal.simplif");
+    if (annotated && dependsOnSimulatorState(op))
       return emitMappedFailure(
           op, "NODAL-ANALOG-FOLD-001",
-          "analysis-dependent or noise-dependent expressions cannot carry constant-fold claims");
+          "simulator-state-dependent expressions cannot carry fold or simplification claims");
   }
   if (!query && name != "nodal.analog_function")
     return success();

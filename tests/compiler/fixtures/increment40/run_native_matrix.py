@@ -110,6 +110,17 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
                 assert "endmodule" not in result.stdout, "partial target escaped failure"
             count += 1
 
+        def reject_target(text, diagnostic):
+            nonlocal count
+            # Source identities remain target-neutral; backend declarations do not.
+            parsed = invoke(nodalc, text)
+            assert parsed.returncode == 0, parsed.stderr
+            for ir in (text, parsed.stdout):
+                result = invoke(translate, ir, "--nodal-to-verilog-a")
+                assert result.returncode != 0 and diagnostic in result.stderr, result.stdout + result.stderr
+                assert not result.stdout, "invalid declaration published partial HDL"
+            count += 1
+
         for kind in ["laplace_nd", "zi_nd"]:
             _, va, after = positive(fixture(transfer(kind) + contribution()))
             assert f"transfer_0 = {kind}(V(p, n), '{{1}}" in va, va
@@ -137,6 +148,45 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
             'sym_name = "P"', 'sym_name = "transfer_0"').replace('parameter = @P', 'parameter = @transfer_0')
         _, va, _ = positive(collision)
         assert "real transfer_1;" in va and "'{transfer_0}" in va, va
+        # Keywords fail for every emitted declaration kind, not just modules.
+        for keyword in ("input", "output", "parameter", "wire", "endmodule"):
+            ordinary = fixture(transfer() + contribution())
+            reject_target(ordinary.replace('name = "p"', f'name = "{keyword}"'), "NODAL-BACKEND-NAMING-001")
+            reject_target(ordinary.replace('sym_name = "P"', f'sym_name = "{keyword}"').replace(
+                'parameter = @P', f'parameter = @{keyword}'), "NODAL-BACKEND-NAMING-001")
+            named_branch = ordinary.replace('%branch = "nodal.branch"(%p, %n) <{metadata = {}}>',
+                f'%branch = "nodal.branch"(%p, %n) <{{name = "{keyword}", metadata = {{}}}}>')
+            reject_target(named_branch, "NODAL-BACKEND-NAMING-001")
+            node = ordinary.replace('"nodal.terminal"() <{name = "p"',
+                                    f'"nodal.node"() <{{name = "{keyword}"')
+            reject_target(node, "NODAL-BACKEND-NAMING-001")
+        # Parameters, terminals and named branches share one emitted namespace.
+        duplicate = fixture(transfer()).replace('sym_name = "P"', 'sym_name = "p"').replace(
+            'parameter = @P', 'parameter = @p')
+        reject_target(duplicate, "NODAL-BACKEND-NAMING-002")
+        for spelling in ("inputSignal", "myendmoduleBlock", "wire_value", "transfer_0"):
+            positive(fixture(transfer() + contribution()).replace('name = "p"', f'name = "{spelling}"'))
+        # Constant conditionals must retain the separately created state in either arm.
+        boolean = '      %yes = "nodal.const_literal"() <{value = true, spelling = "1", metadata = {}}> : () -> i1\n'
+        for kind in ("laplace_nd", "zi_nd"):
+            for a, b in (("%filter", "%volts"), ("%volts", "%filter")):
+                selected = (f'      %selected = "nodal.analog_select"(%yes, {a}, {b}) '
+                            '<{metadata = {}}> : (i1, f64, f64) -> f64\n')
+                positive(fixture(transfer(kind) + boolean + selected + contribution("selected")))
+        # Native IDs must remain safe source-map text, including on raw parsing.
+        for bad in ("TransferTop.filter ", "TransferTop.filter\\0Aline", "TransferTop.filter\\00nul", "TransferTop.filter\\7Fdel"):
+            negative(fixture(transfer()).replace("TransferTop.filter", bad), "040-002")
+        # A noise source and a transfer may not reuse the same source identity.
+        density = ('      %v2 = "nodal.analog_mul"(%volts, %volts) <{metadata = {}}> : (f64, f64) -> f64\n'
+                   '      %density = "nodal.analog_mul"(%v2, %time) <{metadata = {}}> : (f64, f64) -> f64\n')
+        noise = ('      %noise = "nodal.analog_noise"(%density) '
+                 '<{noise_kind = "white", contract_version = "1", noise_name = "test", '
+                 'source_id = "TransferTop.noise", owner = "TransferTop", correlation = "independent", '
+                 'analyses = ["noise"], result_dimension = "voltage", '
+                 'metadata = {semantic_path = "TransferTop.noise"}}> : (f64) -> f64\n')
+        for body in (density + noise + transfer(), transfer() + density + noise):
+            positive(fixture(body))
+            negative(fixture(body).replace("TransferTop.noise", "TransferTop.filter"), "040-002")
         typed = transfer().replace("-> f64", '-> !nodal.quantity<"real", "voltage">')
         positive(fixture(typed))
         baseline = fixture(transfer())
@@ -181,10 +231,32 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
         for attribute in ['nodal.folded = true', 'nodal.folded_value = 0.0 : f64', 'nodal.simplified = true']:
             call = transfer().replace('}}> :', f'}}}}> {{{attribute}}} :')
             negative(fixture(call), "NODAL-ANALOG-FOLD-001")
-        forged_parent = addition.replace('<{metadata = {}}> :',
-            '<{metadata = {}}> {nodal.folded = true, nodal.folded_value = 0.0 : f64, '
-            'nodal.folded_dimension = "voltage", nodal.folded_kind = "real", nodal.folded_provenance = "increment30"} :')
-        negative(fixture(transfer() + forged_parent + contribution("sum")), "NODAL-ANALOG-FOLD-001")
+        # Reject forged claims recursively, not just on a direct transfer use.
+        # Test incomplete claims as well as a plausible-looking complete record.
+        claims = [
+            'nodal.folded = true, nodal.folded_value = 0.0 : f64, '
+            'nodal.folded_dimension = "voltage", nodal.folded_kind = "real", '
+            'nodal.folded_provenance = "increment30"',
+            'nodal.folded_value = 0.0 : f64',
+            'nodal.folded_kind = "real"',
+            'nodal.simplified = true',
+            'nodal.simplified_value = 0.0 : f64',
+            'nodal.simplification_rule = "invented-zero"',
+        ]
+        negate = '      %negated = "nodal.analog_neg"(%sum) <{metadata = {}}> : (f64) -> f64\n'
+        multiply = '      %scaled = "nodal.analog_mul"(%negated, %zero) <{metadata = {}}> : (f64, f64) -> f64\n'
+        absolute = ('      %absolute = "nodal.analog_function"(%scaled) '
+                    '<{function_id = "abs", registry_version = "1", metadata = {}}> : (f64) -> f64\n')
+        for kind in ["laplace_nd", "zi_nd"]:
+            # Valid expressions retain state, including multiplication by zero.
+            positive(fixture(transfer(kind) + addition + negate + multiply + absolute + contribution("absolute")))
+            for prefix, operation in [("", addition), (addition, negate),
+                                      (addition + negate, multiply),
+                                      (addition + negate + multiply, absolute)]:
+                for claim in claims:
+                    forged = operation.replace('}> :', '}> {' + claim + '} :')
+                    assert forged != operation
+                    negative(fixture(transfer(kind) + prefix + forged), "NODAL-ANALOG-FOLD-001")
         if source:
             text = source.read_text()
             _, va, after = positive(text)

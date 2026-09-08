@@ -211,6 +211,8 @@ LogicalResult translateVerilogAMS(ModuleOp module, llvm::raw_ostream &output) {
 
 } // namespace
 
+bool isPortableVerilogIdentifier(llvm::StringRef value) { return isIdentifier(value); }
+
 const BackendProfile &getBackendProfile(BackendKind kind) {
   switch (kind) {
   case BackendKind::VerilogA:

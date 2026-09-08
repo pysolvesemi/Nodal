@@ -195,6 +195,27 @@ int main() {
       return fail("malformed or injected event target passed structural reparse");
   }
 
+  std::string declarationTarget =
+      "/* Nodal backend framework v1\n * profile: verilog-a\n */\n"
+      "`include \"constants.vams\"\n`include \"disciplines.vams\"\n"
+      "module DeclarationNames(p, n);\ninout p, n;\nelectrical p, n;\n"
+      "parameter real gain = 1;\nanalog begin\nV(p, n) <+ gain;\nend\nendmodule\n";
+  if (mlir::failed(nodal::reparseBackendTarget(declarationTarget, *configuration)))
+    return fail("valid target declaration names were rejected");
+  for (const auto &mutation : {std::make_pair("Names(p, n)", "Names(input, n)"),
+                               std::make_pair("Names(p, n)", "Names(p,, n)"),
+                               std::make_pair("inout p, n;", "inout input, n;"),
+                               std::make_pair("electrical p, n;", "electrical p, analog;"),
+                               std::make_pair("real gain =", "real parameter =")}) {
+    std::string invalid = declarationTarget;
+    auto position = invalid.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("target declaration mutation anchor missing");
+    invalid.replace(position, std::string(mutation.first).size(), mutation.second);
+    if (mlir::succeeded(nodal::reparseBackendTarget(invalid, *configuration)))
+      return fail("reserved or empty target declaration passed independent reparse");
+  }
+
   auto reserved = parse(context, kReservedModule);
   if (!reserved)
     return fail("could not parse the reserved-keyword fixture");

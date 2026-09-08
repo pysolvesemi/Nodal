@@ -60,14 +60,18 @@ object AnalogTransferTests extends TestSuite:
       ).sorted == Vector(1, 2, 3))
 
     test("coefficient order and dimensions extend to arbitrary polynomial degree"):
-      val coefficients = (0 to 8).map: power =>
-        (0 until power).foldLeft(1.0.real: Expr[Real])((value, _) => value * 1.0e-3.s)
+      // Expr values belong to the active elaboration, including array elements.
       val snapshot = ConstructionKernel.inspect(new TransferBody(() =>
+        val coefficients = (0 to 8).map: power =>
+          (0 until power).foldLeft(1.0.real: Expr[Real])((value, _) => value * 1.0e-3.s)
         val _ = laplaceNd(1.0.A, coefficients, coefficients)
       ))
       assert(snapshot.transferOperators.head.numeratorSize == 9)
       assert(snapshot.transferOperators.head.denominatorSize == 9)
       assert(snapshot.transferOperators.head.resultDimension == "current")
+      val source = ScalaToMlirBridge.fromSnapshot(snapshot).text
+      assert(source.contains("numerator_size = 9 : i64"))
+      assert(source.contains("denominator_size = 9 : i64"))
       reject(
         { val _ = laplaceNd(1.0.V, Seq(1.0.real, 1.0.real), Seq(1.0.real)) },
         "NODAL-ANALOG-040-003"

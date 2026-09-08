@@ -59,6 +59,9 @@ public:
                                             const BackendConfiguration &configuration) const = 0;
 };
 
+/// Unescaped identifiers in the supported Verilog-family target subset.
+bool isPortableVerilogIdentifier(llvm::StringRef value);
+
 const BackendProfile &getBackendProfile(BackendKind kind);
 llvm::StringRef stringifyBackendKind(BackendKind kind);
 llvm::StringRef stringifyShapedValueLayout(ShapedValueLayout layout);

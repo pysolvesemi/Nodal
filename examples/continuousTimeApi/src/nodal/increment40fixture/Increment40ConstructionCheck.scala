@@ -4,14 +4,14 @@ import nodal.*
 
 /** Public-only witness; native generation is performed separately by qualification. */
 final class TransferFilters extends Module:
-  val input = inout(Electrical)
+  val stimulus = inout(Electrical)
   val filtered = inout(Electrical)
   val sampled = inout(Electrical)
   val reference = inout(Electrical)
   val gain = param(2.0.real)
   val tau = param(1.0e-3.s)
   analog:
-    val signal = V(input, reference)
+    val signal = V(stimulus, reference)
     val shared = laplaceNd(signal, Seq(gain), Seq(1.0.real, tau))
     V(filtered, reference) <+ shared + shared
     val discrete = ziNd(

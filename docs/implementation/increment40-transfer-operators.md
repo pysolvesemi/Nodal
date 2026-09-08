@@ -29,7 +29,7 @@ A representative source excerpt is:
 val gain = param(2.0.real)
 val tau = param(1.0e-3.s)
 analog:
-  val shared = laplaceNd(V(input, reference), Seq(gain), Seq(1.0.real, tau))
+  val shared = laplaceNd(V(stimulus, reference), Seq(gain), Seq(1.0.real, tau))
   V(filtered, reference) <+ shared + shared
   val discrete = ziNd(shared, Seq(0.5.real, 0.5.real), Seq(1.0.real),
     1.0e-3.s, 1.0e-6.s, 0.0.s)
@@ -55,6 +55,20 @@ The dedicated workflow retains `public.mlir`, actual `public.va`, exact source
 commit/tree identities, source archive, native tools, and logs. Acceptance closure
 must quote the actual emitted output from a successful exact-source run, not a
 handwritten expected Verilog-A illustration.
+
+## Review hardening
+
+The first validation exposed an out-of-session degree-eight coefficient fixture
+and forged folding metadata on arithmetic above transfer state. The fixture is
+constructed inside elaboration, and recursive state-dependency checks now reject
+both folding and simplification claims on enclosing expressions.
+
+The source witness also exposed a backend naming gap: `input` is a reserved HDL
+keyword. The witness uses `stimulus`, while generic backend checks independently
+reject reserved declaration names and cross-kind target namespace collisions
+before publishing output. This is rejection, not automatic escaping or lexical
+binder retention. Native transfer identities reject padding/control characters
+and collisions with other source/state operation kinds.
 
 ## Validation and remaining work
 

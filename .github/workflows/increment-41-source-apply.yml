@@ -24,11 +24,13 @@ jobs:
             ~/.cache/nodal/mill
             ~/.cache/nodal/downloads
           key: nodal-inc41-materialize-${{ runner.os }}-${{ hashFiles('toolchains/lint-lock.json', '.scalafmt.conf') }}
+          restore-keys: |
+            nodal-scala-${{ runner.os }}-
       - name: Verify and apply exact source patch
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/increment/41-analog-functions
-          test "$(git rev-parse HEAD^)" = 1dbda8dbec572be16b802526a130be2ebcd937ac
+          test "$(git rev-parse HEAD^)" = 08f3bb49d40c7a96443b4b8f920f75b3e1e301f4
           git merge-base --is-ancestor 515024f3ce9f21dd0c957d5b0ca32d0e0aefe9ac HEAD
           python3 - <<'PY'
           import base64, hashlib, lzma
@@ -40,23 +42,32 @@ jobs:
           assert hashlib.sha256(patch).hexdigest() == '13c8fa406e9ab842520f6925738ac2ba73855f23224c48d69992801105e3f49c'
           Path('/tmp/increment41.patch').write_bytes(patch)
           PY
-          git apply --check /tmp/increment41.patch
-          git apply /tmp/increment41.patch
+          git apply --check --exclude=.github/workflows/increment-41-analog-functions.yml /tmp/increment41.patch
+          git apply --exclude=.github/workflows/increment-41-analog-functions.yml /tmp/increment41.patch
       - name: Format and publish source, removing temporary transport
         run: |
-          set -uo pipefail
-          status=0
-          ./nodal style bootstrap --prefix "$RUNNER_TEMP/nodal-lint" || status=$?
-          if [ "$status" -eq 0 ]; then
-            ./nodal style fix --lint-toolchain "$RUNNER_TEMP/nodal-lint" || status=$?
-          fi
-          rm scripts/.increment41-source.{1,2,3}.b64 .github/workflows/increment-41-source-apply.yml
-          git diff --check || status=$?
+          set -euo pipefail
+          ./nodal style bootstrap --prefix "$RUNNER_TEMP/nodal-lint"
+          ./nodal style fix --lint-toolchain "$RUNNER_TEMP/nodal-lint"
+          rm scripts/.increment41-source.{1,2,3}.b64
+          test -z "$(git diff --name-only -- .github/workflows)"
+          git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          git commit -m 'Increment 41 — Implement typed user-defined analog functions' || exit $?
+          git commit -m 'Increment 41 — Implement typed user-defined analog functions'
           git fetch origin increment/41-analog-functions
-          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA" || exit 1
-          git push origin HEAD:refs/heads/increment/41-analog-functions || exit $?
-          exit "$status"
+          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          git push origin HEAD:refs/heads/increment/41-analog-functions
+      - name: Preserve exact formatted source
+        if: always()
+        run: |
+          mkdir -p /tmp/increment41-formatted
+          git rev-parse HEAD HEAD^{tree} > /tmp/increment41-formatted/identity.txt
+          git archive HEAD | gzip > /tmp/increment41-formatted/source.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: increment41-formatted-source
+          path: /tmp/increment41-formatted/
+          retention-days: 7

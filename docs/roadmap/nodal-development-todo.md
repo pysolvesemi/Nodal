@@ -1,8 +1,8 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.50
+**Revision:** 1.51
 **Created:** 2026-08-20
-**Updated:** 2026-09-07
+**Updated:** 2026-09-08
 **Status:** Active roadmap
 **Primary language target:** Verilog-AMS 2023
 **Analog-only compatibility target:** Verilog-A
@@ -966,9 +966,11 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Accepted independent small-signal compiler/Verilog-A profile: implementation PR #128 at `c22846da1812ef8b30ee8299ad89906bcd5171f2`, merged as `924fd125b7958fc9fadefefd8857f34f58815351`; required Core CI `34119122192`, direct implementation-agent review, exact post-merge Core CI `34122571681` and Increment 39 `34122571567`, and matching public-source/output witnesses are retained in [the accepted-evidence record](../implementation/increment39-evidence-closure.md).
   - Naming here covers source identity, reporting labels, and collision avoidance, not full Scala-local binders; lexical preservation remains in Foundation 153–157 and backend parity 65/72. Numerical noise simulation, transient/group correlation, broader tables/creation contexts, and general Verilog-AMS remain deferred.
 
-- [ ] **Increment 40 — Laplace and discrete transfer operators**
+- [x] **Increment 40 — Laplace and discrete transfer operators**
   - Implement supported Laplace/Z-domain forms, coefficient arrays, constant requirements, denominator validation, and emission.
-  - In progress: typed ND transfer state, normalized coefficient units, static/symbolic coefficient checks, nonzero-d0/timing validation, and single-evaluation Verilog-A lowering. See [the scoped design gate](../design-gates/NodalTransferOperators-DG-v0.1.md) and [implementation/qualification status](../implementation/increment40-transfer-operators.md). Numerical solver qualification and deferred forms are not claimed; acceptance remains open.
+  - Accepted numerator/denominator compiler/Verilog-A profile: implementation PR #130 at `14860e5cfbbaacdc866fdfc6f61f91ffb93d33a1`, merged as `e26971903ef808b17feafaaa21b940e4a6494583`; required Core CI `34185774643`, dedicated transfer run `34185774644`, direct implementation-agent review, exact post-merge Core CI `34190895982` and Increment 40 `34190896012`, and byte-identical public-source/output witnesses are recorded in [the accepted-evidence record](../implementation/increment40-evidence-closure.md).
+  - Supports `laplaceNd`/`ziNd`, fixed coefficient-array lengths with symbolic scalar coefficients, physical-unit/static/d0/timing checks, and independent/shared/cascaded state preservation. Root/pole forms, broader symbolic proofs, numerical simulation, general Verilog-AMS and lexical binder naming (Foundation 153–157) remain deferred.
+
 
 - [ ] **Increment 41 — User-defined analog functions**
   - Implement typed declarations, arguments, locals, returns, recursion/overload policy, resolution, and lowering.

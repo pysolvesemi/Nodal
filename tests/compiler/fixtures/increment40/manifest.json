@@ -2,7 +2,7 @@
   "schema": 1,
   "increment": 40,
   "contract_version": "1",
-  "status": "implementation-in-progress",
+  "status": "validated-transfer-operators",
   "operators": [
     "laplace_nd",
     "zi_nd"
@@ -13,17 +13,35 @@
   },
   "stateful": true,
   "qualification": "compiler-structural-not-numerical-simulation",
-  "accepted_evidence": null,
-  "remaining": [
-    "exact-head Core CI and dedicated native/source matrix",
-    "independent review and merge",
-    "exact post-merge qualification and separately reviewed evidence closure"
-  ],
+  "accepted_evidence": {
+    "path": "docs/implementation/increment40-accepted-evidence.json",
+    "sha256": "8de26c0bdfe4cba9e0aea79167454a7c298737d2e64a79d6738482d8448ce37f"
+  },
+  "remaining": [],
   "deferred": [
     "zero-pole, zero-denominator and numerator-pole forms",
     "vector parameter carriers and symbolic coefficient-array length",
     "symbolic d0/timing envelope proofs and closed-loop d0=0 filters",
     "explicit zero transition, Laplace tolerance and initialization",
-    "general Verilog-AMS, numerical solver qualification and synthesis"
-  ]
+    "general Verilog-AMS, numerical solver qualification and synthesis",
+    "scala-local-lexical-naming-foundation-153-157",
+    "filter-stability-and-numerical-conditioning-proofs"
+  ],
+  "semantics": {
+    "effectful_owned_state_identity": true,
+    "independent_native_verification": true,
+    "immutable_coefficient_order": true,
+    "physical_dimension_validation": true,
+    "analysis_static_coefficients": true,
+    "proven_nonzero_d0": true,
+    "positive_sample_timing": true,
+    "symbolic_scalar_parameter_preservation": true,
+    "omitted_timing_preservation": true,
+    "shared_state_single_evaluation": true,
+    "independent_cascaded_zero_unused_state_retention": true,
+    "recursive_forged_fold_rejection": true,
+    "deterministic_roundtrip_and_source_maps": true,
+    "target_names_and_reparse": true,
+    "no_partial_hdl_on_error": true
+  }
 }

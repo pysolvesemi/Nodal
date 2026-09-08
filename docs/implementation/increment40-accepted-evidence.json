@@ -1,0 +1,99 @@
+{
+  "schema": 1,
+  "increment": 40,
+  "profile": "numerator-denominator-compiler-verilog-a-v0.1",
+  "accepted_head": "14860e5cfbbaacdc866fdfc6f61f91ffb93d33a1",
+  "accepted_tree": "5cf363573d1df5a7ee8f45cdebaf7344217850bd",
+  "implementation_pr": 130,
+  "tested_pr_merge": "5ae7594b314e5de4c3536bdc8e6bc96433ce49d0",
+  "required_core_ci_run": 34185774643,
+  "required_core_ci_conclusion": "success",
+  "dedicated_increment40_run": 34185774644,
+  "dedicated_increment40_conclusion": "success",
+  "canonical_qualification_run": 34184843380,
+  "all_pr_workflows_passed_before_merge_claimed": false,
+  "non_required_increment18": {
+    "run_id": 34185774673,
+    "first_attempt_conclusion": "failure",
+    "first_attempt_cause": "github-api-http-403-rate-limit",
+    "source_checks_and_333_tests_passed": true,
+    "retry_requested": true,
+    "latest_conclusion": "in-progress",
+    "retry_contracts_including_online_provenance": "success",
+    "retry_job_id": 101948301800
+  },
+  "source_qualification": {
+    "run_id": 34185774644,
+    "artifact_id": 10040656445,
+    "artifact_sha256": "0e2e6b17c506941ed3d5b2a184bd4722fc16a5166bb79f272acc454fc1f98019",
+    "source_commit": "5ae7594b314e5de4c3536bdc8e6bc96433ce49d0",
+    "source_tree": "5cf363573d1df5a7ee8f45cdebaf7344217850bd",
+    "independently_reconstructed_git_tree_matches": true
+  },
+  "review": {
+    "kind": "direct-implementation-agent",
+    "review_id": 5137199327,
+    "commit": "14860e5cfbbaacdc866fdfc6f61f91ffb93d33a1",
+    "result": "completed-with-no-blocking-findings",
+    "unresolved_threads": 0,
+    "independent_automated_review_claimed": false,
+    "automated_review_request": {
+      "status": "quota-blocked",
+      "comment_id": 5574804999
+    }
+  },
+  "source_witness_sha256": {
+    "public.mlir": "a1023e5eb837ec79c95cefe018ff64f65da535ae07b5aa190b950f867bd90927",
+    "public.va": "9e626a7d44bafc4c60a7c904911b42de019f5ab58c0bd4a73a449265fd17066a"
+  },
+  "public_scala_source": {
+    "path": "examples/continuousTimeApi/src/nodal/increment40fixture/Increment40ConstructionCheck.scala",
+    "sha256": "201bbba081582e66a0d0af5d6cc53e9959e5ee831f1675bba3fa0dec2e05c2f3"
+  },
+  "observed_qualification_counts": {
+    "scala_tests": 137,
+    "native_ctest_tests": 132,
+    "native_source_matrix_cases": 182,
+    "compiler_python_tests": 333,
+    "counts_overlap_and_are_not_additive": true
+  },
+  "local_replay": {
+    "native_source_matrix_cases": 182,
+    "public_verilog_a_byte_identical": true,
+    "predecessor_replay": {
+      "increment35": 91,
+      "increment36": "passed 27 negatives on two verifier paths and 10 optional arities",
+      "increment37": 63,
+      "increment37_lowering": 19,
+      "increment38": 112,
+      "increment39": 63
+    }
+  },
+  "implementation_merge": "e26971903ef808b17feafaaa21b940e4a6494583",
+  "implementation_merge_tree": "5cf363573d1df5a7ee8f45cdebaf7344217850bd",
+  "preserved_dev_parent": "ca255253b61bb5b2dae35d9f26b04197cbbbb4c4",
+  "post_merge_core_ci_run": 34190895982,
+  "post_merge_core_ci_conclusion": "success",
+  "post_merge_increment40_run": 34190896012,
+  "post_merge_increment40_conclusion": "success",
+  "post_merge_witness": {
+    "run_id": 34190896012,
+    "artifact_id": 10042500307,
+    "artifact_sha256": "499d97078801c356746effcaff7247af017867b5a5377cb64050d3827e9189f1",
+    "source_commit": "e26971903ef808b17feafaaa21b940e4a6494583",
+    "source_tree": "5cf363573d1df5a7ee8f45cdebaf7344217850bd",
+    "independently_reconstructed_git_tree_matches": true
+  },
+  "post_merge_witness_matches_accepted": true,
+  "numerical_simulator_execution_claimed": false,
+  "filter_stability_claimed": false,
+  "scala_local_lexical_naming_claimed": false,
+  "demonstration_sha256": {
+    "scala": [
+      "d45c53ea11536241af450a445645a79d6371b8dafafa335b065998e7bb453bb1"
+    ],
+    "verilog": [
+      "39a0b9e09a325ede535fe2e1721e861d1b58ff67e45d92f0db1c74ba9bf2f888"
+    ]
+  }
+}

@@ -1,0 +1,113 @@
+name: Increment 40 accepted-evidence qualification
+on:
+  push:
+    branches: [automation/increment40-evidence-closure]
+permissions:
+  contents: write
+concurrency:
+  group: increment40-evidence-closure
+  cancel-in-progress: false
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Apply checksum-verified closure to exact implementation merge
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import gzip, hashlib, os, subprocess
+          base = 'e26971903ef808b17feafaaa21b940e4a6494583'
+          patch = gzip.decompress(Path('.automation/increment40/closure.patch.gz').read_bytes())
+          assert hashlib.sha256(patch).hexdigest() == 'ffe4b37cb9923e41b3d1c31ddd906171106a349b0ae858f6000c91eeadbb258b'
+          destination = Path(os.environ['RUNNER_TEMP']) / 'closure.patch'
+          destination.write_bytes(patch)
+          subprocess.run(['git', 'checkout', '--detach', base], check=True)
+          subprocess.run(['git', 'apply', '--check', '--whitespace=error', str(destination)], check=True)
+          subprocess.run(['git', 'apply', '--whitespace=error', str(destination)], check=True)
+          expected = set('''
+          docs/implementation/increment40-accepted-evidence.json
+          docs/implementation/increment40-evidence-closure.md
+          docs/implementation/increment40-transfer-operators.md
+          docs/roadmap/nodal-development-todo.md
+          scripts/check_increment40.py
+          tests/compiler/fixtures/increment40/manifest.json
+          tests/compiler/test_increment40.py
+          '''.split())
+          subprocess.run(['git', 'add', '--all'], check=True)
+          changed = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines())
+          assert changed == expected, changed ^ expected
+          subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
+          subprocess.run(['git', 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'], check=True)
+          subprocess.run(['git', 'commit', '-m', 'Increment 40 — Accepted evidence, guarded roadmap closure and actual source/target demonstration'], check=True)
+          PY
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-scala-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', '.scalafmt.conf', '.scalafix.conf', 'toolchains/lock.json', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-scala-${{ runner.os }}-
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
+      - name: Canonical complete gate
+        run: |
+          set -o pipefail
+          mkdir -p evidence
+          git rev-parse HEAD HEAD^{tree} > evidence/source-identity.txt
+          ./nodal bootstrap --mode prebuilt --prefix "$RUNNER_TEMP/nodal-native"
+          ./nodal style bootstrap --prefix "$RUNNER_TEMP/nodal-lint"
+          ./nodal check --online-toolchain --base-ref origin/dev \
+            --toolchain "$RUNNER_TEMP/nodal-native" \
+            --lint-toolchain "$RUNNER_TEMP/nodal-lint" 2>&1 | tee evidence/check.log
+      - name: Verify closure tests and actual source-to-target parity
+        run: |
+          set -o pipefail
+          python3 scripts/check_increment40.py
+          python3 -m unittest discover -s tests/compiler -p 'test_increment40.py' 2>&1 | tee evidence/closure-tests.log
+          ./mill -i core.scala.testkit.test.runMain nodal.internal.testkit.Increment40MlirCheck "$PWD/evidence/public.mlir"
+          out/native/release/bin/nodal-translate --nodal-to-verilog-a evidence/public.mlir > evidence/public.va
+          python3 tests/compiler/fixtures/increment40/run_native_matrix.py \
+            --nodalc out/native/release/bin/nodalc \
+            --translate out/native/release/bin/nodal-translate \
+            --source evidence/public.mlir 2>&1 | tee evidence/source-matrix.log
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json
+          data = json.loads(Path('docs/implementation/increment40-accepted-evidence.json').read_text())
+          for name, digest in data['source_witness_sha256'].items():
+              assert hashlib.sha256((Path('evidence') / name).read_bytes()).hexdigest() == digest, name
+          print('Actual source/target hashes match the accepted implementation and exact merge')
+          PY
+          git diff --exit-code
+          git diff --cached --exit-code
+      - name: Publish qualified source without replacing concurrent changes
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          base = 'e26971903ef808b17feafaaa21b940e4a6494583'
+          branch = 'increment/40-evidence-closure-v1'
+          for ref in (branch, 'dev'):
+              sha = subprocess.check_output(['git', 'ls-remote', 'origin', 'refs/heads/' + ref], text=True).split()[0]
+              assert sha == base, f'{ref} changed; refusing to overwrite concurrent work'
+          subprocess.run(['git', 'push', 'origin', 'HEAD:refs/heads/' + branch], check=True)
+          PY
+      - name: Retain exact source and reproduction evidence
+        if: always()
+        run: |
+          mkdir -p evidence
+          git rev-parse HEAD HEAD^{tree} > evidence/source-identity.txt
+          git archive HEAD | gzip > evidence/source.tar.gz
+          git diff > evidence/uncommitted.patch
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: increment40-closure-qualification
+          path: evidence/
+          retention-days: 14

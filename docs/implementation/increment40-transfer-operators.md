@@ -1,6 +1,9 @@
 # Increment 40 - Laplace and discrete transfer operators
 
-**Status:** Implementation in progress; not accepted, not merged, roadmap unchecked.
+**Status:** Validated compiler/Verilog-A numerator/denominator profile; merged in PR #130.
+
+Accepted identities, exact post-merge results and the actual Scala/Verilog-A
+demonstration are retained in [the evidence closure](increment40-evidence-closure.md).
 
 ## Implemented path
 
@@ -15,7 +18,8 @@ reparser validates the emitted array/call grammar without accepting arbitrary te
 The exact scope, units, rejection policy, state invariants, and deferred forms
 are frozen in [the design gate](../design-gates/NodalTransferOperators-DG-v0.1.md).
 The [machine-readable manifest](../../tests/compiler/fixtures/increment40/manifest.json)
-is deliberately in-progress. No numerical simulation or stability claim is made.
+references the immutable accepted-evidence record. No numerical simulation or
+stability claim is made.
 
 ## Public example and reproduction
 
@@ -70,18 +74,18 @@ before publishing output. This is rejection, not automatic escaping or lexical
 binder retention. Native transfer identities reject padding/control characters
 and collisions with other source/state operation kinds.
 
-## Validation and remaining work
+## Validation and acceptance
 
 Tests are registered in Scala testkit, Python contracts, and CTest, including an
 independent native target-parser executable. The dedicated Increment 40 workflow
 runs public-source construction, Scala tests, pinned native compilation, native
 matrix, target emission, and evidence retention. Core CI remains mandatory.
 
-Remaining: execute and repair the complete CI matrix; review the final patch;
-retain exact accepted-head evidence; merge only after required checks; rerun at
-the exact merge commit; and perform a separate reviewed evidence closure before
-changing the roadmap checkbox. Root/pole representations and numerical simulation
-are outside the explicitly documented compiler profile, not silently passing tests.
+Required PR checks, direct implementation-agent review, squash merge and exact
+post-merge qualification passed. The separate accepted-evidence closure records
+them without rewriting historical predecessor evidence. Root/pole representations
+and numerical simulation are outside the explicitly documented compiler profile,
+not silently passing tests.
 
 The stricter shared target-naming check also exposed an older sample-and-hold
 fixture that named an unescaped terminal `ground`. Its public source, binding

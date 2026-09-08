@@ -149,6 +149,17 @@ private[nodal] final case class KernelWaveformOperatorSnapshot(
     source: Option[SourceSpan]
 )
 
+private[nodal] final case class KernelTransferOperatorSnapshot(
+    path: String,
+    kind: String,
+    owner: String,
+    numeratorSize: Int,
+    denominatorSize: Int,
+    operands: Vector[String],
+    resultDimension: String,
+    source: Option[SourceSpan]
+)
+
 private[nodal] final case class KernelNoiseOperatorSnapshot(
     path: String,
     kind: String,
@@ -184,6 +195,7 @@ private[nodal] final case class ConstructionSnapshot(
     continuousOperators: Vector[KernelContinuousOperatorSnapshot] = Vector.empty,
     waveformOperators: Vector[KernelWaveformOperatorSnapshot] = Vector.empty,
     noiseOperators: Vector[KernelNoiseOperatorSnapshot] = Vector.empty,
+    transferOperators: Vector[KernelTransferOperatorSnapshot] = Vector.empty,
     analogSemantics: AnalogEquationRuntime.Snapshot =
       AnalogEquationRuntime.Snapshot(Vector.empty, Vector.empty),
     analogProcedural: Vector[AnalogProceduralRuntime.Snapshot] = Vector.empty,
@@ -368,6 +380,9 @@ private final class ConstructionSession(val options: EmitOptions):
       String
   )] =
     mutable.ArrayBuffer.empty
+  private val transferOperators: mutable.ArrayBuffer[
+    (ExpressionRef, String, Int, Int, Vector[Expr[Real]], String)
+  ] = mutable.ArrayBuffer.empty
   private val noiseOperators
       : mutable.ArrayBuffer[(ExpressionRef, String, String, Vector[Expr[Real]], String)] =
     mutable.ArrayBuffer.empty
@@ -625,6 +640,43 @@ private final class ConstructionSession(val options: EmitOptions):
     waveformForbiddenDepth += 1
     try body
     finally waveformForbiddenDepth -= 1
+
+  def registerTransferOperator(
+      value: KernelExpr[Real],
+      kind: String,
+      numeratorSize: Int,
+      denominatorSize: Int,
+      inputs: Vector[Expr[Real]]
+  ): Unit =
+    val module = currentModule
+    if analogSemanticContext.nonEmpty ||
+      !analogStack.lastOption.exists(_.module == module.handle) || waveformForbiddenDepth != 0
+    then
+      AnalogTransferContract.fail(1, "transfer state requires an unconditional analog region")
+    def checkOwner(input: Any): Unit = input match
+      case reference: AnyRef =>
+        if Option(expressionIds.get(reference)).exists(_.module != module.handle) ||
+          Option(declarationIds.get(reference)).exists(_.module != module.handle)
+        then AnalogTransferContract.fail(2, "transfer operands must belong to their Module")
+        input match
+          case expression: KernelExpr[?] => expression.operands.foreach(checkOwner)
+          case _ => ()
+      case _ => ()
+    inputs.foreach(checkOwner)
+    val dimensions = inputs.map(inferAnalogDimension).map(_.signature)
+    val result = AnalogTransferContract.validate(
+      kind,
+      numeratorSize,
+      denominatorSize,
+      inputs,
+      dimensions,
+      inputs.map(waveformConstant),
+      inputs.map(waveformStatic)
+    )
+    val reference = captureExpression(value).getOrElse(
+      AnalogTransferContract.fail(2, "transfer state has no construction owner")
+    )
+    transferOperators += ((reference, kind, numeratorSize, denominatorSize, inputs, result))
 
   def registerNoiseOperator(
       value: KernelExpr[Real],
@@ -1129,6 +1181,9 @@ private final class ConstructionSession(val options: EmitOptions):
     registerExpression(expression)
 
   def inferAnalogDimension(value: Any): AnalogDimension = value match
+    case expression: KernelExpr[?]
+        if expression.operation.exists(_.startsWith(AnalogTransferContract.Prefix)) =>
+      expression.operands.headOption.map(inferAnalogDimension).getOrElse(AnalogDimension.Unknown)
     case expression: KernelExpr[?]
         if expression.operation.exists(_.startsWith(AnalogNoiseContract.Prefix)) =>
       val index =
@@ -2087,6 +2142,27 @@ private final class ConstructionSession(val options: EmitOptions):
       )
     .sortBy(_.path)
 
+  private def transferOperatorSnapshots(sourceMap: Vector[SourceMapEntry])
+      : Vector[KernelTransferOperatorSnapshot] =
+    val sources = sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
+    transferOperators.toVector.map: (reference, kind, n, d, inputs, dimension) =>
+      val path = expressionPath(reference)
+      KernelTransferOperatorSnapshot(
+        path,
+        kind,
+        modulePath(reference.module),
+        n,
+        d,
+        inputs.map(input =>
+          pathOf(input).getOrElse(
+            AnalogTransferContract.fail(2, "transfer input has no semantic path")
+          )
+        ),
+        dimension,
+        sources.get(path)
+      )
+    .sortBy(_.path)
+
   private def noiseOperatorSnapshots(sourceMap: Vector[SourceMapEntry])
       : Vector[KernelNoiseOperatorSnapshot] =
     val sources = sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
@@ -2219,6 +2295,7 @@ private final class ConstructionSession(val options: EmitOptions):
     val analog =
       kinds.exists(analogKinds.contains) || snapshot.continuousOperators.nonEmpty ||
         snapshot.waveformOperators.nonEmpty || snapshot.noiseOperators.nonEmpty ||
+        snapshot.transferOperators.nonEmpty ||
         snapshot.analogRegions.nonEmpty ||
         snapshot.analogProcedural.nonEmpty || snapshot.analogSemantics.equations.nonEmpty ||
         snapshot.analogSemantics.contributions.nonEmpty
@@ -2261,6 +2338,7 @@ private final class ConstructionSession(val options: EmitOptions):
       continuousOperators = continuousOperatorSnapshots(semantic.sourceMap),
       waveformOperators = waveformOperatorSnapshots(semantic.sourceMap),
       noiseOperators = noiseOperatorSnapshots(semantic.sourceMap),
+      transferOperators = transferOperatorSnapshots(semantic.sourceMap),
       analogSemantics = analogSemanticRecorder.snapshot,
       analogProcedural = AnalogProceduralConstruction.snapshots(module =>
         modulePath(moduleHandle(module))
@@ -2360,6 +2438,17 @@ private[nodal] object ConstructionKernel:
     active.foreach(
       _.registerContinuousOperator(value, operation, input, initialValue)
     )
+
+  def transferOperator(
+      value: KernelExpr[Real],
+      kind: String,
+      numeratorSize: Int,
+      denominatorSize: Int,
+      inputs: Vector[Expr[Real]]
+  ): Unit = active match
+    case Some(session) =>
+      session.registerTransferOperator(value, kind, numeratorSize, denominatorSize, inputs)
+    case None => AnalogTransferContract.fail(1, "transfer state requires an active Module")
 
   def noiseOperator(
       value: KernelExpr[Real],

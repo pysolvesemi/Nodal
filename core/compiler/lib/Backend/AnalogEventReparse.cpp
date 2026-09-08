@@ -1,4 +1,5 @@
 #include "nodal/Backend/AnalogEventBackend.h"
+#include "nodal/Backend/Backend.h"
 #include "nodal/Dialect/Nodal/AnalogFunctions.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -23,10 +24,36 @@ public:
     return tokenStart;
   }
 
+  bool transferCall() {
+    transferExpressions = true;
+    auto function = token;
+    if ((function != "laplace_nd" && function != "zi_nd") || !eat(function) || !eat("(") ||
+        !expression())
+      return false;
+    for (unsigned array = 0; array < 2; ++array) {
+      if (!eat(",") || !eat("'") || !eat("{"))
+        return false;
+      do {
+        if (!expression())
+          return false;
+      } while (eat(","));
+      if (!eat("}"))
+        return false;
+    }
+    unsigned timing = 0;
+    while (eat(",")) {
+      if (++timing > 3 || !expression())
+        return false;
+    }
+    if ((function == "laplace_nd" && timing != 0) || (function == "zi_nd" && timing == 0))
+      return false;
+    return eat(")") && token.empty() && !invalid;
+  }
+
   bool noiseCall() {
     auto function = token;
     if ((function != "white_noise" && function != "flicker_noise" && function != "noise_table") ||
-        !identifier() || !eat("("))
+        !eat(function) || !eat("("))
       return false;
     if (function == "noise_table") {
       if (!eat("'") || !eat("{"))
@@ -52,6 +79,7 @@ private:
   llvm::StringRef source, token;
   size_t cursor = 0, tokenStart = 0;
   bool invalid = false;
+  bool transferExpressions = false;
   unsigned eventDepth = 0;
   void next() {
     while (cursor < source.size() && llvm::isSpace(source[cursor]))
@@ -104,7 +132,7 @@ private:
     return true;
   }
   bool identifier() {
-    if (invalid || token.empty() || !(llvm::isAlpha(token.front()) || token.front() == '_'))
+    if (invalid || !isPortableVerilogIdentifier(token))
       return false;
     next();
     return true;
@@ -130,11 +158,28 @@ private:
       next();
       return !invalid;
     }
+    if (transferExpressions && eat("$abstime"))
+      return true;
     auto name = token;
-    if (!identifier())
+    // Reserved analog names are legal only in the corresponding call grammar,
+    // never as bare values, port references, assignment targets, or labels.
+    if (!isPortableVerilogIdentifier(name)) {
+      bool builtin = name == "analysis" || lookupAnalogFunctionTarget(name) ||
+                     (transferExpressions && (name == "ddt" || name == "idt"));
+      if (!builtin || !eat(name) || token != "(")
+        return false;
+    } else if (!identifier()) {
       return false;
+    }
     if (token != "(")
       return true;
+    if (transferExpressions && (name == "ddt" || name == "idt")) {
+      if (!eat("(") || !expression(depth + 1))
+        return false;
+      if (name == "idt" && eat(",") && !expression(depth + 1))
+        return false;
+      return eat(")");
+    }
     if (name == "analysis") {
       if (!eat("(") || token.size() < 2 || token.front() != '"' || token.back() != '"' ||
           !isAnalogAnalysisTarget(token.drop_front().drop_back()) || !string(true))
@@ -151,7 +196,11 @@ private:
     }
     if (name != "V" && name != "I")
       return false;
-    if (!eat("(") || !identifier())
+    if (!eat("("))
+      return false;
+    if (transferExpressions && name == "I" && eat("<"))
+      return identifier() && eat(">") && eat(")");
+    if (!identifier())
       return false;
     if (eat(",") && !identifier())
       return false;
@@ -174,11 +223,10 @@ private:
   bool event() {
     do {
       auto function = token;
-      if (!identifier())
-        return false;
       bool lifecycle = function == "initial_step" || function == "final_step";
       unsigned maximum = function == "cross" ? 5 : 4;
-      if (!lifecycle && function != "cross" && function != "above" && function != "timer")
+      if ((!lifecycle && function != "cross" && function != "above" && function != "timer") ||
+          !eat(function))
         return false;
       if (!eat("(")) {
         if (!lifecycle)
@@ -259,6 +307,9 @@ private:
 };
 } // namespace
 FailureOr<size_t> reparseAnalogEventBlock(llvm::StringRef source) { return Parser(source).run(); }
+LogicalResult reparseAnalogTransferCall(llvm::StringRef source) {
+  return success(Parser(source).transferCall());
+}
 LogicalResult reparseAnalogNoiseCall(llvm::StringRef source) {
   return success(Parser(source).noiseCall());
 }

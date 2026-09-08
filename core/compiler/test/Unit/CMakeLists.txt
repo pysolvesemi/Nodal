@@ -201,3 +201,22 @@ add_test(
   NAME nodal.native.noise-reparse-unit
   COMMAND nodal-noise-reparse-unit-tests
 )
+
+add_executable(nodal-transfer-reparse-unit-tests
+  AnalogTransferReparseTest.cpp
+)
+llvm_update_compile_flags(nodal-transfer-reparse-unit-tests)
+target_link_libraries(nodal-transfer-reparse-unit-tests
+  PRIVATE
+    NodalBackend
+    NodalDialect
+    CIRCTHW
+    MLIRIR
+    MLIRParser
+    MLIRSupport
+    LLVMSupport
+)
+add_test(
+  NAME nodal.native.transfer-reparse-unit
+  COMMAND nodal-transfer-reparse-unit-tests
+)

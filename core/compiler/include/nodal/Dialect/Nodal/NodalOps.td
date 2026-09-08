@@ -991,6 +991,17 @@ def Nodal_AnalogFunctionOp : Nodal_Op<"analog_function", [HasParent<"AnalogOp">]
   let hasVerifier = 1;
 }
 
+def Nodal_AnalogTransferOp : Nodal_Op<"analog_transfer", [HasParent<"AnalogOp">]> {
+  let summary = "Owned Laplace or sampled ND transfer state with immutable coefficient segments";
+  let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$transfer_kind,
+                       StrAttr:$contract_version, I64Attr:$numerator_size,
+                       I64Attr:$denominator_size, StrAttr:$operator_id, StrAttr:$state_id,
+                       StrAttr:$owner, StrAttr:$coefficient_order, StrAttr:$initialization,
+                       StrAttr:$result_dimension, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
 def Nodal_AnalogNoiseOp : Nodal_Op<"analog_noise", [HasParent<"AnalogOp">]> {
   let summary = "Owned small-signal noise source; effectful even with constant or zero power";
   let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$noise_kind,

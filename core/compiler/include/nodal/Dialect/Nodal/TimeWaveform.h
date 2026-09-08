@@ -8,6 +8,7 @@
 
 namespace nodal {
 mlir::FailureOr<std::string> getAnalogRealDimension(mlir::Value value);
+bool isAnalogStaticExpression(mlir::Value value);
 bool isTimeWaveformOperation(mlir::Operation *operation);
 bool isStatefulWaveformOperation(mlir::Operation *operation);
 mlir::LogicalResult verifyTimeWaveformOperation(mlir::Operation *operation);

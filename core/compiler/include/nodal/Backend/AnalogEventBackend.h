@@ -27,5 +27,7 @@ mlir::LogicalResult renderAnalogEventProcedure(mlir::Operation *procedure,
 mlir::FailureOr<size_t> reparseAnalogEventBlock(llvm::StringRef source);
 // Independent expression grammar for emitted noise calls; not permitted in events.
 mlir::LogicalResult reparseAnalogNoiseCall(llvm::StringRef source);
+// Exact ND coefficient-array and optional sampled-timing grammar, not numerical validation.
+mlir::LogicalResult reparseAnalogTransferCall(llvm::StringRef source);
 } // namespace nodal
 #endif

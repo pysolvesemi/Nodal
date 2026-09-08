@@ -6,6 +6,7 @@
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/AnalogFunctions.h"
 #include "nodal/Dialect/Nodal/AnalogNoise.h"
+#include "nodal/Dialect/Nodal/AnalogTransfer.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
@@ -1248,6 +1249,8 @@ FailureOr<std::optional<double>> getAnalogConstantRealValue(Value value) {
 LogicalResult verifyAnalogNumericOperation(Operation *operation) {
   if (failed(verifyAnalogFunctionOperation(operation)))
     return failure();
+  if (operation->getName().getStringRef() == "nodal.analog_transfer")
+    return verifyAnalogTransferOperation(operation);
   if (operation->getName().getStringRef() == "nodal.analog_noise")
     return verifyAnalogNoiseOperation(operation);
   if (isTimeWaveformOperation(operation))

@@ -136,7 +136,8 @@ FailureOr<std::string> dimension(Value value, unsigned depth = 0) {
   auto a = dimension(op->getOperand(0), depth + 1);
   if (failed(a))
     return failure();
-  if (isStatefulWaveformOperation(op) || operationName == "nodal.analog_neg")
+  if (isStatefulWaveformOperation(op) || operationName == "nodal.analog_neg" ||
+      operationName == "nodal.analog_transfer")
     return *a;
   if (operationName == "nodal.analog_ddt" || operationName == "nodal.analog_idt")
     return combineAnalogDimensions(*a, "time", operationName == "nodal.analog_ddt");
@@ -190,6 +191,7 @@ std::string continuity(Value value, unsigned depth = 0) {
 } // namespace
 
 FailureOr<std::string> getAnalogRealDimension(Value value) { return dimension(value); }
+bool isAnalogStaticExpression(Value value) { return staticExpression(value); }
 
 bool isStatefulWaveformOperation(Operation *op) {
   auto n = name(op);

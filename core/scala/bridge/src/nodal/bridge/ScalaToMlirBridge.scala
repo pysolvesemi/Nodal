@@ -154,7 +154,12 @@ private[nodal] object ScalaToMlirBridge:
           if backendProfile == "verilog-a" then "safe-inline" else "readable"
         ),
         "nodal.backend.naming" -> quoted("semantic")
-      ) ++ mandatoryVerificationAttributes
+      ) ++
+        (if snapshot.transferOperators.isEmpty then Vector.empty
+         else
+           Vector(
+             "nodal.bridge.transfer_operators" -> transferOperatorInventory
+           )) ++ mandatoryVerificationAttributes
       normalize(
         s"""module attributes ${dictionary(attributes)} {
 ${indent(body, 2)}
@@ -239,6 +244,34 @@ ${indent(body, 2)}
             )
           )
       array(equations ++ contributions)
+
+    private def transferOperatorAttributes(value: KernelTransferOperatorSnapshot)
+        : Vector[(String, String)] =
+      Vector(
+        "transfer_kind" -> quoted(value.kind),
+        "contract_version" -> quoted("1"),
+        "numerator_size" -> integer(value.numeratorSize),
+        "denominator_size" -> integer(value.denominatorSize),
+        "operator_id" -> quoted(value.path),
+        "state_id" -> quoted(value.path + ".state"),
+        "owner" -> quoted(value.owner),
+        "coefficient_order" ->
+          quoted(if value.kind == "laplace_nd" then "ascending_s" else "ascending_z_inverse"),
+        "initialization" -> quoted("simulator-default"),
+        "result_dimension" -> quoted(value.resultDimension)
+      )
+
+    private def transferOperatorInventory: String =
+      array(snapshot.transferOperators.sortBy(_.path).map: value =>
+        dictionary(transferOperatorAttributes(value) ++ Vector(
+          "operands" -> array(value.operands.map(quoted))
+        ) ++ value.source.toVector.flatMap(source =>
+          Vector(
+            "source_file" -> quoted(source.path),
+            "source_line" -> integer(source.line),
+            "source_column" -> integer(source.column)
+          )
+        )))
 
     private def waveformOperatorAttributes(value: KernelWaveformOperatorSnapshot)
         : Vector[(String, String)] =
@@ -358,6 +391,29 @@ ${indent(body, 2)}
         "NODAL-ANALOG-036-006",
         "waveform state"
       )
+      requireUnique(
+        snapshot.transferOperators.map(_.path),
+        "NODAL-ANALOG-040-002",
+        "transfer state"
+      )
+      val transfers = snapshot.analogRegions.flatMap(region =>
+        region.expressions
+          .filter(_.operation.startsWith(AnalogTransferContract.Prefix))
+          .map(value => value.path -> (region.module, value))
+      ).toMap
+      if transfers.keySet != snapshot.transferOperators.map(_.path).toSet then
+        fail("NODAL-ANALOG-040-002", "transfer inventory is incomplete or orphaned", None)
+      snapshot.transferOperators.foreach: contract =>
+        val (owner, expression) = transfers(contract.path)
+        val timing = contract.operands.size.toLong - 1L - contract.numeratorSize -
+          contract.denominatorSize
+        if owner != contract.owner || expression.operands != contract.operands ||
+          expression.operation != AnalogTransferContract.Prefix + contract.kind ||
+          contract.numeratorSize <= 0 || contract.denominatorSize <= 0 ||
+          !(contract.kind == "laplace_nd" && timing == 0 ||
+            contract.kind == "zi_nd" && timing >= 1 && timing <= 3)
+        then
+          fail("NODAL-ANALOG-040-002", "invalid transfer inventory contract", Some(contract.path))
       if !moduleSymbols.contains(snapshot.root) then
         fail(
           "NODAL-BRIDGE-011",
@@ -847,6 +903,29 @@ ${indent(body, 2)}
               operandTypes = Vector(input._2),
               resultTypes = Vector("f64"),
               attributes = Vector("metadata" -> metadata),
+              semanticPath = expression.path
+            )
+            values.update(expression.path, result -> "f64")
+          case name if name.startsWith(AnalogTransferContract.Prefix) =>
+            val contract = snapshot.transferOperators.find(_.path == expression.path).getOrElse(
+              fail("NODAL-ANALOG-040-002", "transfer has no state contract", Some(expression.path))
+            )
+            if name != AnalogTransferContract.Prefix + contract.kind ||
+              contract.operands != expression.operands || contract.owner != region.module
+            then
+              fail(
+                "NODAL-ANALOG-040-002",
+                "transfer inventory differs from expression",
+                Some(expression.path)
+              )
+            val inputs = expression.operands.map(operand)
+            lines += operation(
+              "nodal.analog_transfer",
+              results = Vector(result),
+              operands = inputs.map(_._1),
+              operandTypes = inputs.map(_._2),
+              resultTypes = Vector("f64"),
+              attributes = transferOperatorAttributes(contract) :+ ("metadata" -> metadata),
               semanticPath = expression.path
             )
             values.update(expression.path, result -> "f64")

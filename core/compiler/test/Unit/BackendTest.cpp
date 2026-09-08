@@ -103,6 +103,18 @@ mlir::OwningOpRef<mlir::ModuleOp> parse(mlir::MLIRContext &context, llvm::String
 } // namespace
 
 int main() {
+  // The target grammar distinguishes reserved built-in calls from identifiers.
+  for (llvm::StringRef keyword :
+       {"laplace_nd", "zi_nd", "abs", "analysis", "transition", "noise_table_log", "ln1p", "expm1",
+        "enddiscipline", "continuous", "return", "uwire"}) {
+    if (nodal::isPortableVerilogIdentifier(keyword) ||
+        !nodal::isPortableVerilogIdentifier((keyword + "_value").str()))
+      return fail("analog reserved identifiers must reject without rejecting suffixes");
+  }
+  if (!nodal::isPortableVerilogIdentifier("Abs") ||
+      !nodal::isPortableVerilogIdentifier("negedgenmos"))
+    return fail("identifier checking must retain case sensitivity and token boundaries");
+
   mlir::DialectRegistry registry;
   registry.insert<circt::hw::HWDialect, nodal::NodalDialect>();
   mlir::MLIRContext context(registry);
@@ -193,6 +205,27 @@ int main() {
     invalid.replace(position, std::string(mutation.first).size(), mutation.second);
     if (mlir::succeeded(nodal::reparseBackendTarget(invalid, *configuration)))
       return fail("malformed or injected event target passed structural reparse");
+  }
+
+  std::string declarationTarget =
+      "/* Nodal backend framework v1\n * profile: verilog-a\n */\n"
+      "`include \"constants.vams\"\n`include \"disciplines.vams\"\n"
+      "module DeclarationNames(p, n);\ninout p, n;\nelectrical p, n;\n"
+      "parameter real gain = 1;\nanalog begin\nV(p, n) <+ gain;\nend\nendmodule\n";
+  if (mlir::failed(nodal::reparseBackendTarget(declarationTarget, *configuration)))
+    return fail("valid target declaration names were rejected");
+  for (const auto &mutation : {std::make_pair("Names(p, n)", "Names(input, n)"),
+                               std::make_pair("Names(p, n)", "Names(p,, n)"),
+                               std::make_pair("inout p, n;", "inout input, n;"),
+                               std::make_pair("electrical p, n;", "electrical p, analog;"),
+                               std::make_pair("real gain =", "real parameter =")}) {
+    std::string invalid = declarationTarget;
+    auto position = invalid.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("target declaration mutation anchor missing");
+    invalid.replace(position, std::string(mutation.first).size(), mutation.second);
+    if (mlir::succeeded(nodal::reparseBackendTarget(invalid, *configuration)))
+      return fail("reserved or empty target declaration passed independent reparse");
   }
 
   auto reserved = parse(context, kReservedModule);

@@ -57,15 +57,15 @@ final class AnalogEventSource extends Module:
 final class AnalogSampleHoldSource extends Module:
   val sampleIn = inout(Electrical)
   val sampleOut = inout(Electrical)
-  val ground = inout(Electrical)
+  val reference = inout(Electrical)
   val initialVoltage = param(0.25.V)
   val samplePeriod = param(2.0.ns)
   val held = variable(Real, initialVoltage)
   analogProcedure:
     on(initialStep or timer(0.0.ns, samplePeriod)):
-      held := V(sampleIn, ground)
+      held := V(sampleIn, reference)
   analog:
-    V(sampleOut, ground) <+ transition(held, 0.0.ns, 0.5.ns)
+    V(sampleOut, reference) <+ transition(held, 0.0.ns, 0.5.ns)
 
 final class AnalogControlledEventsSource extends Module:
   val positive = inout(Electrical)

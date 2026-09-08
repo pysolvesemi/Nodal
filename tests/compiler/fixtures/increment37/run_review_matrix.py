@@ -218,9 +218,9 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
         if source:
             sample = Path(str(source) + ".held.mlir")
             rendered = accepted("source-sample-hold", sample.read_text())
-            expected = '''module AnalogSampleHoldSource(ground, sampleIn, sampleOut);
-  inout ground, sampleIn, sampleOut;
-  electrical ground, sampleIn, sampleOut;
+            expected = '''module AnalogSampleHoldSource(reference, sampleIn, sampleOut);
+  inout reference, sampleIn, sampleOut;
+  electrical reference, sampleIn, sampleOut;
   parameter real initialVoltage = 0.25;
   parameter real samplePeriod = 2e-09;
   real event_AnalogSampleHoldSource_held = initialVoltage;
@@ -229,11 +229,11 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
   analog begin
     begin : event_AnalogSampleHoldSource_procedure
       @(initial_step or timer(0.0, samplePeriod)) begin
-        event_AnalogSampleHoldSource_held = V(sampleIn, ground);
+        event_AnalogSampleHoldSource_held = V(sampleIn, reference);
       end
     end
     waveform_0 = transition(event_AnalogSampleHoldSource_held, 0, 5e-10);
-    V(sampleOut, ground) <+ waveform_0;
+    V(sampleOut, reference) <+ waveform_0;
   end
 endmodule
 '''

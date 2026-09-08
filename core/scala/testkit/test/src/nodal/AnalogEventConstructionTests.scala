@@ -78,7 +78,7 @@ object AnalogEventConstructionTests extends TestSuite:
       assert(record.initializer.get.rendered == "AnalogSampleHoldSource.initialVoltage")
       assert(source.analogProcedural.head.controlExpressions.exists(
         _.value.rendered ==
-          "potential_access(AnalogSampleHoldSource.sampleIn,AnalogSampleHoldSource.ground)"
+          "potential_access(AnalogSampleHoldSource.sampleIn,AnalogSampleHoldSource.reference)"
       ))
       assert(source.waveformOperators.exists(_.operation == "analog_transition"))
 

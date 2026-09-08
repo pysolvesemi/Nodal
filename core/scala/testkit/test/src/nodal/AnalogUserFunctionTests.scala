@@ -20,6 +20,12 @@ final class FunctionCaptureParameter extends Module:
     val signal = f.input("signal", Real)
     signal * gain
 
+final class FunctionBodyParameter extends Module:
+  val illegal = AnalogFunction("illegalParameter", Real): f =>
+    val signal = f.input("signal", Real)
+    val _ = param(signal)
+    signal
+
 final class FunctionOutsideCall extends Module:
   val identity = AnalogFunction("identitySignal", Real): f =>
     f.input("signal", Real)
@@ -138,6 +144,7 @@ object AnalogUserFunctionTests extends TestSuite:
 
     test("explicit inputs replace captures and bodies cannot create state or effects"):
       assert(code(new FunctionCaptureParameter) == "NODAL-ANALOG-041-006")
+      assert(code(new FunctionBodyParameter) == "NODAL-ANALOG-041-001")
       assert(code(new FunctionOutsideCall) == "NODAL-ANALOG-041-001")
       assert(code(new FunctionNestedDefinition) == "NODAL-ANALOG-041-001")
       for effect <- Vector[Expr[Real] => Expr[Real]](
@@ -146,7 +153,6 @@ object AnalogUserFunctionTests extends TestSuite:
           x => absdelay(x, 1.0.s),
           _ => abstime,
           x => laplaceNd(x, Seq(1.0.real), Seq(1.0.real)),
-          x => { val _ = param(x); x },
           x => { val _ = AnalysisContext.active(AnalysisKind.Transient); x }
         )
       do

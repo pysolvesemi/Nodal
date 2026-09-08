@@ -1,6 +1,7 @@
 add_mlir_library(NodalBackend
   AnalogEventBackend.cpp
   AnalogEventReparse.cpp
+  AnalogUserFunctionBackend.cpp
   AnalogVerticalSlice.cpp
   Backend.cpp
 

@@ -29,7 +29,8 @@ bool dependsOnSimulatorState(Operation *operation) {
       continue;
     if (current->getName().getStringRef() == "nodal.analog_analysis" ||
         current->getName().getStringRef() == "nodal.analog_noise" ||
-        current->getName().getStringRef() == "nodal.analog_transfer")
+        current->getName().getStringRef() == "nodal.analog_transfer" ||
+        current->getName().getStringRef() == "nodal.analog_user_call")
       return true;
     for (Value operand : current->getOperands())
       if (Operation *definition = operand.getDefiningOp())

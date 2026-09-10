@@ -6,6 +6,7 @@
   "low_power_plan_revision": "0.1",
   "sequential_scheduled_hardware_plan_revision": "0.1",
   "source_level_debugging_plan_revision": "0.1",
+  "visualizer_debug_extension_plan_revision": "0.1",
   "foundation_track": {
     "roadmap": "docs/roadmap/nodal-development-todo.md",
     "completion_rule": "all-foundation-checkboxes-complete",
@@ -29,7 +30,8 @@
     "sequential_readiness_extension_is_architecture_only": true,
     "sequential_readiness_checkpoints": ["SQF-001", "SQF-002", "SQF-003", "SQF-004"],
     "sequential_implementation_is_not_a_foundation_exit_criterion": true,
-    "debugging_implementation_is_not_a_foundation_exit_criterion": true
+    "debugging_implementation_is_not_a_foundation_exit_criterion": true,
+    "visualizer_debug_extension_implementation_is_not_a_foundation_exit_criterion": true
   },
   "dependent_tracks": [
     {
@@ -98,6 +100,27 @@
       "implementation_changes_foundation_exit_criteria": false
     },
     {
+      "id": "visualizer-debug-extension",
+      "display_name": "Visualizer-Class Interactive Debug and Analysis",
+      "increment_prefix": "DBGX",
+      "numbering_starts_at": 1,
+      "planned_increment_count": 12,
+      "implementation_status": "blocked-by-source-level-debugging-gates",
+      "research_status": "allowed-before-prerequisite-completion",
+      "todo_defined": true,
+      "plan": "docs/roadmap/visualizer-debug-extension-v0.1-plan.md",
+      "surface": "docs/roadmap/visualizer-debug-extension-v0.1-surface.json",
+      "inherits_complete_foundation_barrier": true,
+      "core_debug_track": "source-level-debugging",
+      "first_useful_release_gate": "DBGX-006",
+      "live_workspace_requires": ["DBG-009"],
+      "transaction_visualization_requires": ["DBG-011"],
+      "bounded_replay_requires": ["DBG-013"],
+      "default_debug_profile": "off",
+      "instrumentation_default": "none",
+      "implementation_changes_foundation_exit_criteria": false
+    },
+    {
       "id": "asic-productivity-signoff",
       "display_name": "ASIC Productivity and Sign-off",
       "numbering_starts_at": 1,
@@ -162,6 +185,33 @@
     "unsupported_feature_policy": "fail-or-explicitly-precompute-never-silently-omit",
     "vendor_variation_policy": "thin-adapter-profile"
   },
+  "debug_architecture": {
+    "core_plan": "docs/roadmap/source-level-debugging-v0.1-plan.md",
+    "core_surface": "docs/roadmap/source-level-debugging-v0.1-surface.json",
+    "extension_plan": "docs/roadmap/visualizer-debug-extension-v0.1-plan.md",
+    "extension_surface": "docs/roadmap/visualizer-debug-extension-v0.1-surface.json",
+    "canonical_debug_meaning": "versioned-nodal-debug-manifest-and-authoritative-nodal-mlir",
+    "default_profile": "off",
+    "candidate_cli_profiles": ["off", "source", "full"],
+    "candidate_cli_spelling": "--debug=off|source|full",
+    "public_spelling_frozen": false,
+    "diagnostic_source_locations_always_available": true,
+    "debug_off_generates_debug_database": false,
+    "debug_off_runs_debug_only_connectivity_or_transaction_analyses": false,
+    "debug_off_retains_intermediate_ir_for_debug": false,
+    "debug_off_instruments_generated_hdl": false,
+    "debug_only_passes_are_optional_and_lazily_scheduled": true,
+    "noninstrumented_debug_profiles_require_byte_identical_generated_hdl": true,
+    "instrumentation_requires_explicit_separate_opt_in": true,
+    "candidate_instrumentation_spelling": "--debug-instrument=none|visibility|transactions",
+    "instrumented_outputs_are_debug_artifacts_not_production_outputs": true,
+    "functional_latency_and_handshake_semantics_must_be_preserved": true,
+    "compile_time_memory_metadata_trace_and_runtime_costs_are_measured_per_profile": true,
+    "adapters_are_replaceable": true,
+    "candidate_adapters": ["hgdb", "Surfer", "CXXRTL-CDSP", "Yosys", "UHDM"],
+    "candidate_adapter_presence_is_not_a_compatibility_claim": true,
+    "debugger_extension_blocks_core_compiler_or_earlier_debug_releases": false
+  },
   "low_power_architecture": {
     "readiness_adr": "docs/architecture/0024-minimal-asic-advanced-io-readiness-boundary.md",
     "plan": "docs/roadmap/low-power-power-intent-v0.1-plan.md",
@@ -191,6 +241,7 @@
     "docs/roadmap/low-power-power-intent-v0.1-plan.md",
     "docs/roadmap/sequential-scheduled-hardware-foundation-readiness-v0.1.md",
     "docs/roadmap/sequential-scheduled-hardware-v0.1-plan.md",
-    "docs/roadmap/source-level-debugging-v0.1-plan.md"
+    "docs/roadmap/source-level-debugging-v0.1-plan.md",
+    "docs/roadmap/visualizer-debug-extension-v0.1-plan.md"
   ]
 }

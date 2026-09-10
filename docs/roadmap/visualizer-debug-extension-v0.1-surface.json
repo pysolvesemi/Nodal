@@ -1,0 +1,341 @@
+{
+  "schema": 1,
+  "track_id": "visualizer-debug-extension",
+  "display_name": "Visualizer-Class Interactive Debug and Analysis",
+  "increment_prefix": "DBGX",
+  "revision": "0.1",
+  "created": "2026-09-10",
+  "updated": "2026-09-10",
+  "status": "planned",
+  "implementation_status": "blocked-by-source-level-debugging-gates",
+  "api_status": "candidate-not-frozen-not-implemented",
+  "research_status": "allowed-before-prerequisite-completion",
+  "plan": "docs/roadmap/visualizer-debug-extension-v0.1-plan.md",
+  "gate_registry": "docs/roadmap/dependent-track-gate-v0.1.json",
+  "core_debug_plan": "docs/roadmap/source-level-debugging-v0.1-plan.md",
+  "core_debug_surface": "docs/roadmap/source-level-debugging-v0.1-surface.json",
+  "barriers": {
+    "inherits_complete_foundation_barrier": true,
+    "foundation_roadmap": "docs/roadmap/nodal-development-todo.md",
+    "local_dbg_and_sq_dependencies_required": true,
+    "new_architecture_gaps_return_to_owning_track": true,
+    "implementation_is_foundation_exit_criterion": false,
+    "blocks_core_compiler_or_earlier_dbg_releases": false
+  },
+  "profile_contract": {
+    "default": "off",
+    "candidate_cli_spelling": "--debug=off|source|full",
+    "public_spelling_frozen": false,
+    "profiles": {
+      "off": {
+        "purpose": "production-compilation",
+        "always_kept": [
+          "compact-source-locations-for-normal-diagnostics"
+        ],
+        "debug_database": false,
+        "debug_only_reverse_maps": false,
+        "debug_only_connectivity_graph": false,
+        "transaction_metadata": false,
+        "replay_indexes": false,
+        "intermediate_ir_retention_for_debug": false,
+        "hdl_instrumentation": false
+      },
+      "source": {
+        "purpose": "core-source-level-debugging",
+        "owned_by": "source-level-debugging",
+        "noninstrumented_generated_hdl_matches_off_byte_for_byte": true
+      },
+      "full": {
+        "purpose": "visualizer-class-interactive-analysis",
+        "owned_by": "visualizer-debug-extension",
+        "noninstrumented_generated_hdl_matches_off_byte_for_byte": true
+      }
+    },
+    "instrumentation": {
+      "default": "none",
+      "candidate_cli_spelling": "--debug-instrument=none|visibility|transactions",
+      "separate_explicit_opt_in": true,
+      "output_class": "debug-artifact-not-production-output",
+      "must_preserve": [
+        "functional-behavior",
+        "interfaces",
+        "latency",
+        "reset-semantics",
+        "handshake-semantics"
+      ],
+      "separate_cache_and_artifact_identity": true
+    },
+    "implementation": {
+      "debug_only_passes_optional_and_lazy": true,
+      "scattered_debug_conditionals_in_semantic_code": false,
+      "profile_participates_in_cache_identity": true,
+      "unsupported_capabilities_reported_not_invented": true
+    },
+    "measured_costs": [
+      "compile-time",
+      "peak-memory",
+      "metadata-size",
+      "trace-volume",
+      "simulation-runtime"
+    ],
+    "budgets_frozen_at": "DBGX-001"
+  },
+  "architecture": {
+    "canonical_compiler_ir": "Nodal MLIR",
+    "canonical_debug_meaning": "versioned-nodal-debug-database",
+    "clients_do_not_own_semantics": true,
+    "versioned_debug_service": true,
+    "batch_and_cli_supported_without_gui": true,
+    "adapters_replaceable": true,
+    "candidate_adapters": {
+      "source_runtime": [
+        "hgdb"
+      ],
+      "waveform_and_transaction_ui": [
+        "Surfer"
+      ],
+      "live_or_replay_transport": [
+        "CXXRTL-CDSP"
+      ],
+      "imported_rtl_structure": [
+        "Yosys",
+        "UHDM"
+      ]
+    },
+    "candidate_listing_is_compatibility_claim": false,
+    "graph_layers": [
+      "nodal-operations",
+      "lowered-rtl",
+      "imported-structure",
+      "post-synthesis-when-qualified"
+    ],
+    "whole_design_graph_built_eagerly_by_default": false,
+    "causal_analysis_distinguishes": [
+      "proven-cause",
+      "possible-contributor",
+      "missing-evidence"
+    ],
+    "two_state_backend_claims_x_root_cause": false
+  },
+  "required_capabilities": {
+    "source-aware-evidence": {
+      "requires": [
+        "DBG-006"
+      ]
+    },
+    "live-source-debugging": {
+      "requires": [
+        "DBG-009"
+      ]
+    },
+    "scheduled-source-stage-mapping": {
+      "requires": [
+        "DBG-010",
+        "SQ-010"
+      ]
+    },
+    "transaction-lifecycle": {
+      "requires": [
+        "DBG-011",
+        "SQ-010"
+      ]
+    },
+    "bounded-recorded-replay": {
+      "requires": [
+        "DBG-013"
+      ]
+    },
+    "advanced-scheduled-debugging": {
+      "requires": [
+        "DBG-012",
+        "SQ-024"
+      ]
+    },
+    "four-state-causal-profile": {
+      "requires": [
+        "qualified-four-state-simulator-or-trace-profile"
+      ]
+    },
+    "imported-rtl-structure": {
+      "requires": [
+        "independently-qualified-yosys-or-uhdm-style-adapter"
+      ]
+    }
+  },
+  "release_gates": {
+    "A": {
+      "exit": "DBGX-006",
+      "scope": "integrated-source-wave-hierarchy-watch-connectivity-and-schematic-workspace",
+      "requires": [
+        "DBG-009"
+      ]
+    },
+    "B": {
+      "exit": "DBGX-008",
+      "scope": "bounded-replay-and-pipeline-transaction-visualization",
+      "requires": [
+        "DBG-011",
+        "DBG-013",
+        "SQ-010"
+      ]
+    },
+    "C": {
+      "exit": "DBGX-010",
+      "scope": "temporal-causal-and-qualified-four-state-x-root-cause-analysis"
+    },
+    "D": {
+      "exit": "DBGX-012",
+      "scope": "imported-rtl-support-budgets-and-full-track-qualification"
+    },
+    "later_releases_block_earlier_release_acceptance": false
+  },
+  "increments": [
+    {
+      "id": "DBGX-001",
+      "title": "Extension semantics, profiles and adapter design gate",
+      "release": "A",
+      "depends_on": [
+        "DBG-001"
+      ]
+    },
+    {
+      "id": "DBGX-002",
+      "title": "Versioned debug service and workspace protocol",
+      "release": "A",
+      "depends_on": [
+        "DBGX-001",
+        "DBG-006"
+      ]
+    },
+    {
+      "id": "DBGX-003",
+      "title": "Embedded waveform integration and bidirectional navigation",
+      "release": "A",
+      "depends_on": [
+        "DBGX-002",
+        "DBG-005",
+        "DBG-006"
+      ]
+    },
+    {
+      "id": "DBGX-004",
+      "title": "Driver/load graph and selected-instance connectivity",
+      "release": "A",
+      "depends_on": [
+        "DBGX-002",
+        "DBG-004",
+        "DBG-006"
+      ]
+    },
+    {
+      "id": "DBGX-005",
+      "title": "Interactive schematic and logic-cone exploration",
+      "release": "A",
+      "depends_on": [
+        "DBGX-004"
+      ]
+    },
+    {
+      "id": "DBGX-006",
+      "title": "Live synchronized workspace and Release A qualification",
+      "release": "A",
+      "depends_on": [
+        "DBGX-003",
+        "DBGX-005",
+        "DBG-009"
+      ]
+    },
+    {
+      "id": "DBGX-007",
+      "title": "Bounded reverse and replay navigation",
+      "release": "B",
+      "depends_on": [
+        "DBGX-006",
+        "DBG-013"
+      ]
+    },
+    {
+      "id": "DBGX-008",
+      "title": "Pipeline and transaction timeline with Release B qualification",
+      "release": "B",
+      "depends_on": [
+        "DBGX-006",
+        "DBGX-007",
+        "DBG-011",
+        "SQ-010"
+      ]
+    },
+    {
+      "id": "DBGX-009",
+      "title": "Temporal causal graph and why-this-value analysis",
+      "release": "C",
+      "depends_on": [
+        "DBGX-005",
+        "DBGX-007",
+        "DBG-010",
+        "DBG-011"
+      ]
+    },
+    {
+      "id": "DBGX-010",
+      "title": "Four-state X root-cause tracing and Release C qualification",
+      "release": "C",
+      "depends_on": [
+        "DBGX-009"
+      ],
+      "requires_capabilities": [
+        "four-state-causal-profile"
+      ]
+    },
+    {
+      "id": "DBGX-011",
+      "title": "Imported RTL/SystemVerilog structural adapters",
+      "release": "D",
+      "depends_on": [
+        "DBGX-005"
+      ],
+      "requires_capabilities": [
+        "imported-rtl-structure"
+      ]
+    },
+    {
+      "id": "DBGX-012",
+      "title": "Full-track evidence, budgets and Release D documentation",
+      "release": "D",
+      "depends_on": [
+        "DBGX-006",
+        "DBGX-008",
+        "DBGX-010",
+        "DBGX-011"
+      ]
+    }
+  ],
+  "increment_defaults": {
+    "status": "planned",
+    "implementation_status": "blocked-by-prerequisites",
+    "inherits_complete_foundation_barrier": true,
+    "completed": false,
+    "evidence": []
+  },
+  "planned_increment_count": 12,
+  "deferred_capabilities": [
+    "analog-solver-state-introspection",
+    "analog-numerical-causality",
+    "physical-layout-cross-probing",
+    "gate-level-timing-back-annotation",
+    "fpga-on-chip-probes",
+    "unrestricted-force-deposit",
+    "arbitrary-host-evaluation",
+    "unbounded-live-rewind",
+    "uvm-class-object-debug"
+  ],
+  "current_update": {
+    "kind": "documentation-only",
+    "implementation_added": false,
+    "api_or_flag_spelling_frozen": false,
+    "existing_checkbox_changed": false,
+    "ci_requested": false,
+    "tests_or_formal_or_synthesis_claimed": false,
+    "generated_verilog_affected": false
+  }
+}

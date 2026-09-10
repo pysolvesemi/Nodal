@@ -159,7 +159,11 @@ private[nodal] object ScalaToMlirBridge:
          else
            Vector(
              "nodal.bridge.transfer_operators" -> transferOperatorInventory
-           )) ++ mandatoryVerificationAttributes
+           )) ++
+        (if snapshot.analogFunctions.isEmpty then Vector.empty
+         else
+           Vector("nodal.bridge.analog_functions" -> AnalogUserFunctionMlir.inventory(snapshot))) ++
+        mandatoryVerificationAttributes
       normalize(
         s"""module attributes ${dictionary(attributes)} {
 ${indent(body, 2)}
@@ -186,7 +190,7 @@ ${indent(body, 2)}
         "memory",
         "digital-inout"
       )
-      val analog = snapshot.analogRegions.nonEmpty ||
+      val analog = snapshot.analogRegions.nonEmpty || snapshot.analogFunctions.nonEmpty ||
         snapshot.continuousOperators.nonEmpty ||
         snapshot.waveformOperators.nonEmpty ||
         snapshot.analogSemantics.equations.nonEmpty ||
@@ -396,6 +400,15 @@ ${indent(body, 2)}
         "NODAL-ANALOG-040-002",
         "transfer state"
       )
+      AnalogUserFunctionMlir.validate(snapshot)
+      requireUnique(
+        snapshot.analogFunctions.map(value => s"${value.owner}.${value.definition.name}"),
+        "NODAL-ANALOG-041-002",
+        "analog function declaration"
+      )
+      snapshot.analogFunctions.foreach: value =>
+        if !moduleSymbols.contains(value.owner) then
+          fail("NODAL-ANALOG-041-005", "function has no owning module", Some(value.owner))
       val transfers = snapshot.analogRegions.flatMap(region =>
         region.expressions
           .filter(_.operation.startsWith(AnalogTransferContract.Prefix))
@@ -676,6 +689,8 @@ ${indent(body, 2)}
           branchByKey(expression.operands(0) -> expression.operands(1))
         )
 
+      body ++= AnalogUserFunctionMlir.renderModule(snapshot, module.path)
+
       analogRegionsFor(module).zipWithIndex.foreach: (region, regionIndex) =>
         body += renderAnalogRegion(
           region,
@@ -758,27 +773,30 @@ ${indent(body, 2)}
           declarationsByPath.get(path) match
             case Some(declaration)
                 if declaration.kind == "parameter" &&
-                  declaration.dataType.contains("Real") =>
+                  declaration.dataType.exists(value => value == "Real" || value == "Integer") =>
               val symbol = parameterSymbols.getOrElse(
                 path,
                 fail("NODAL-RC-PARAMETER-001", "real parameter symbol is unavailable", Some(path))
               )
               val result = s"%analog_${regionIndex}_parameter_${parameterValues.size}"
+              val outputType = if declaration.dataType.contains("Integer") then
+                "!nodal.quantity<\"integer\", \"1\">"
+              else "f64"
               lines += operation(
                 "nodal.parameter_ref",
                 results = Vector(result),
-                resultTypes = Vector("f64"),
+                resultTypes = Vector(outputType),
                 attributes = Vector(
                   "parameter" -> symbolReference(symbol),
                   "metadata" -> bridgeMetadata(path, Vector.empty)
                 ),
                 semanticPath = path
               )
-              result -> "f64"
+              result -> outputType
             case _ =>
               fail(
                 "NODAL-RC-PARAMETER-001",
-                "analog operand is not an enclosing Real parameter",
+                "analog operand is not an enclosing Real or Integer parameter",
                 Some(path)
               )
         )
@@ -962,6 +980,54 @@ ${indent(body, 2)}
               semanticPath = expression.path
             )
             values.update(expression.path, result -> "f64")
+          case name if name.startsWith(AnalogUserFunctionRuntime.CallPrefix) =>
+            val functionName = name.stripPrefix(AnalogUserFunctionRuntime.CallPrefix)
+            val definition = snapshot.analogFunctions.find(value =>
+              value.owner == region.module && value.definition.name == functionName
+            )
+              .map(_.definition).getOrElse(fail(
+                "NODAL-ANALOG-041-005",
+                "unresolved module-local analog function",
+                Some(expression.path)
+              ))
+            if expression.operands.size != definition.inputs.size then
+              fail("NODAL-ANALOG-041-005", "function call arity mismatch", Some(expression.path))
+            val inputs = expression.operands.map(operand)
+            val outputType = AnalogUserFunctionMlir.callType(definition.result)
+            lines += operation(
+              "nodal.analog_user_call",
+              results = Vector(result),
+              operands = inputs.map(_._1),
+              operandTypes = inputs.map(_._2),
+              resultTypes = Vector(outputType),
+              attributes = Vector(
+                "callee" -> symbolReference(functionName),
+                "contract_version" -> quoted("1"),
+                "metadata" -> metadata
+              ),
+              semanticPath = expression.path
+            )
+            values.update(expression.path, result -> outputType)
+          case "integer" =>
+            val value = expression.literal.flatMap(_.toIntOption).getOrElse(
+              fail(
+                "NODAL-ANALOG-041-003",
+                "integer argument literal is unavailable",
+                Some(expression.path)
+              )
+            )
+            val outputType = "!nodal.quantity<\"integer\", \"1\">"
+            lines += operation(
+              "nodal.analog_integer_literal",
+              results = Vector(result),
+              resultTypes = Vector(outputType),
+              attributes = Vector(
+                "value" -> s"$value : i32",
+                "metadata" -> metadata
+              ),
+              semanticPath = expression.path
+            )
+            values.update(expression.path, result -> outputType)
           case name if name.startsWith(AnalogFunctionRegistry.FunctionPrefix) =>
             val id = name.stripPrefix(AnalogFunctionRegistry.FunctionPrefix)
             val descriptor = AnalogFunctionContract.entry(id)

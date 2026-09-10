@@ -2,6 +2,7 @@ add_mlir_dialect_library(NodalDialect
   NodalDialect.cpp
   AnalogNumeric.cpp
   AnalogFunctions.cpp
+  AnalogUserFunctions.cpp
   AnalogNoise.cpp
   AnalogTransfer.cpp
   AnalogEvents.cpp

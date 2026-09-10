@@ -26,8 +26,10 @@ mlir::LogicalResult renderAnalogEventProcedure(mlir::Operation *procedure,
 // gate, not a general Verilog-A parser or an analog simulator.
 mlir::FailureOr<size_t> reparseAnalogEventBlock(llvm::StringRef source);
 // Independent expression grammar for emitted noise calls; not permitted in events.
-mlir::LogicalResult reparseAnalogNoiseCall(llvm::StringRef source);
+mlir::LogicalResult reparseAnalogNoiseCall(llvm::StringRef source,
+                                           const llvm::StringMap<unsigned> *functions = nullptr);
 // Exact ND coefficient-array and optional sampled-timing grammar, not numerical validation.
-mlir::LogicalResult reparseAnalogTransferCall(llvm::StringRef source);
+mlir::LogicalResult reparseAnalogTransferCall(llvm::StringRef source,
+                                              const llvm::StringMap<unsigned> *functions = nullptr);
 } // namespace nodal
 #endif

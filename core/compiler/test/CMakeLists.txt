@@ -787,6 +787,14 @@ add_test(
     --translate "$<TARGET_FILE:nodal-translate>"
 )
 
+add_test(
+  NAME nodal.native.analog-user-functions
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment41/run_native_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --translate "$<TARGET_FILE:nodal-translate>"
+)
+
 add_custom_target(check-nodal-native
   COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -C "$<CONFIG>"
   DEPENDS
@@ -802,6 +810,7 @@ add_custom_target(check-nodal-native
     nodal-conservative-connectivity-unit-tests
     nodal-parameter-model-unit-tests
     nodal-transfer-reparse-unit-tests
+    nodal-user-function-reparse-unit-tests
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
   USES_TERMINAL
 )

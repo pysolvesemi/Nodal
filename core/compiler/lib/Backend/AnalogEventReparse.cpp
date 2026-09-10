@@ -1,8 +1,10 @@
 #include "nodal/Backend/AnalogEventBackend.h"
+#include "nodal/Backend/AnalogUserFunctionBackend.h"
 #include "nodal/Backend/Backend.h"
 #include "nodal/Dialect/Nodal/AnalogFunctions.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Regex.h"
 
 #include <cerrno>
@@ -17,10 +19,67 @@ namespace {
 // balanced parentheses alone must not accept extra tasks or raw source text.
 class Parser {
 public:
-  explicit Parser(llvm::StringRef source) : source(source) { next(); }
+  explicit Parser(llvm::StringRef source, const llvm::StringMap<unsigned> *functions = nullptr)
+      : source(source), functions(functions) {
+    next();
+  }
   FailureOr<size_t> run() {
     if (!block(0))
       return failure();
+    return tokenStart;
+  }
+
+  bool standaloneExpression() {
+    transferExpressions = true;
+    return expression() && token.empty() && !invalid;
+  }
+
+  FailureOr<size_t> functionDeclaration(llvm::StringMap<unsigned> &known) {
+    pureFunction = true;
+    if (!eat("analog") || !eat("function") || (!eat("real") && !eat("integer")))
+      return failure();
+    auto functionName = token;
+    if (!identifier() || known.contains(functionName) || !eat(";") || !eat("input"))
+      return failure();
+    llvm::StringSet<> inputs, declared, locals, assigned;
+    do {
+      auto name = token;
+      if (name == functionName || known.contains(name) || !identifier() ||
+          !inputs.insert(name).second)
+        return failure();
+    } while (eat(","));
+    if (!eat(";") || inputs.empty())
+      return failure();
+    while (token == "real" || token == "integer") {
+      next();
+      auto name = token;
+      if (name == functionName || known.contains(name) || !identifier() || !eat(";") ||
+          !declared.insert(name).second)
+        return failure();
+      if (!inputs.contains(name))
+        locals.insert(name);
+    }
+    for (const auto &input : inputs)
+      if (!declared.contains(input.getKey()))
+        return failure();
+    if (!eat("begin"))
+      return failure();
+    for (const auto &input : inputs)
+      available.insert(input.getKey());
+    bool returned = false;
+    while (token != "end") {
+      if (returned)
+        return failure();
+      auto name = token;
+      if (!identifier() || (name != functionName && !locals.contains(name)) ||
+          !assigned.insert(name).second || !eat("=") || !expression() || !eat(";"))
+        return failure();
+      available.insert(name);
+      returned = name == functionName;
+    }
+    if (!returned || assigned.size() != locals.size() + 1 || !eat("end") || !eat("endfunction"))
+      return failure();
+    known.try_emplace(functionName, static_cast<unsigned>(inputs.size()));
     return tokenStart;
   }
 
@@ -77,6 +136,9 @@ public:
 
 private:
   llvm::StringRef source, token;
+  const llvm::StringMap<unsigned> *functions;
+  llvm::StringSet<> available;
+  bool pureFunction = false;
   size_t cursor = 0, tokenStart = 0;
   bool invalid = false;
   bool transferExpressions = false;
@@ -172,7 +234,20 @@ private:
       return false;
     }
     if (token != "(")
-      return true;
+      return !pureFunction || available.contains(name);
+    if (functions) {
+      auto function = functions->find(name);
+      if (function != functions->end()) {
+        if (!eat("("))
+          return false;
+        for (unsigned index = 0; index < function->second; ++index)
+          if ((index && !eat(",")) || !expression(depth + 1))
+            return false;
+        return eat(")");
+      }
+    }
+    if (pureFunction && !lookupAnalogFunctionTarget(name))
+      return false;
     if (transferExpressions && (name == "ddt" || name == "idt")) {
       if (!eat("(") || !expression(depth + 1))
         return false;
@@ -307,10 +382,20 @@ private:
 };
 } // namespace
 FailureOr<size_t> reparseAnalogEventBlock(llvm::StringRef source) { return Parser(source).run(); }
-LogicalResult reparseAnalogTransferCall(llvm::StringRef source) {
-  return success(Parser(source).transferCall());
+LogicalResult reparseAnalogTransferCall(llvm::StringRef source,
+                                        const llvm::StringMap<unsigned> *functions) {
+  return success(Parser(source, functions).transferCall());
 }
-LogicalResult reparseAnalogNoiseCall(llvm::StringRef source) {
-  return success(Parser(source).noiseCall());
+FailureOr<size_t> reparseAnalogUserFunction(llvm::StringRef source,
+                                            llvm::StringMap<unsigned> &functions) {
+  return Parser(source, &functions).functionDeclaration(functions);
+}
+LogicalResult reparseAnalogUserExpression(llvm::StringRef source,
+                                          const llvm::StringMap<unsigned> &functions) {
+  return success(Parser(source, &functions).standaloneExpression());
+}
+LogicalResult reparseAnalogNoiseCall(llvm::StringRef source,
+                                     const llvm::StringMap<unsigned> *functions) {
+  return success(Parser(source, functions).noiseCall());
 }
 } // namespace nodal

@@ -7,6 +7,7 @@
 #include "nodal/Dialect/Nodal/AnalogFunctions.h"
 #include "nodal/Dialect/Nodal/AnalogNoise.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
+#include "nodal/Dialect/Nodal/AnalogUserFunctions.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 
@@ -78,6 +79,16 @@ FailureOr<std::string> dimension(Value value, unsigned depth = 0) {
   if (!op)
     return failure();
   auto operationName = name(op);
+  if (operationName == "nodal.analog_user_call") {
+    auto function = resolveAnalogUserCall(op);
+    if (failed(function))
+      return failure();
+    auto result = (*function)->getAttrOfType<TypeAttr>("return_type");
+    auto quantity = result ? llvm::dyn_cast<QuantityType>(result.getValue()) : QuantityType();
+    if (!quantity || quantity.getKind() != "real")
+      return failure();
+    return quantity.getDimension().str();
+  }
   if (operationName == "nodal.analog_noise") {
     unsigned index = text(op, "noise_kind") == "table" ? 1 : 0;
     if (op->getNumOperands() <= index)

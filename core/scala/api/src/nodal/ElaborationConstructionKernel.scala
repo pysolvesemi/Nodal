@@ -196,6 +196,7 @@ private[nodal] final case class ConstructionSnapshot(
     waveformOperators: Vector[KernelWaveformOperatorSnapshot] = Vector.empty,
     noiseOperators: Vector[KernelNoiseOperatorSnapshot] = Vector.empty,
     transferOperators: Vector[KernelTransferOperatorSnapshot] = Vector.empty,
+    analogFunctions: Vector[AnalogUserFunctionRuntime.Snapshot] = Vector.empty,
     analogSemantics: AnalogEquationRuntime.Snapshot =
       AnalogEquationRuntime.Snapshot(Vector.empty, Vector.empty),
     analogProcedural: Vector[AnalogProceduralRuntime.Snapshot] = Vector.empty,
@@ -351,6 +352,7 @@ private object AnalogDimension:
   * hierarchy, explicit names, and deterministic local ordinals.
   */
 private final class ConstructionSession(val options: EmitOptions):
+  private val userFunctions = new AnalogUserFunctionRuntime.Registry
   private var nextModule: Long = 0L
   private val moduleIds = new IdentityHashMap[AnyRef, java.lang.Long]()
   private val domainIds = new IdentityHashMap[AnyRef, DomainRef]()
@@ -1180,7 +1182,70 @@ private final class ConstructionSession(val options: EmitOptions):
     val _ = AnalogFunctionContract.constant(id, expression.operands.map(waveformConstant))
     registerExpression(expression)
 
+  def defineUserFunction[A <: Data](
+      name: String,
+      resultType: DataType[A],
+      units: PhysicalDimension,
+      body: AnalogFunctionBody => Expr[A]
+  ): AnalogFunction[A] =
+    if analogStack.nonEmpty || analogSemanticContext.nonEmpty then
+      AnalogUserFunctionRuntime.fail(1, "analog function declarations belong directly to a Module")
+    userFunctions.define(
+      currentModule.handle,
+      name,
+      resultType,
+      units,
+      () => captureAnalogProceduralSource,
+      body
+    )
+
+  def callUserFunction[A <: Data](
+      function: AnalogFunction[A],
+      arguments: Vector[Expr[?]]
+  ): Expr[A] =
+    val module = currentModule
+    if analogSemanticContext.nonEmpty || !analogStack.lastOption.exists(_.module == module.handle)
+    then
+      AnalogUserFunctionRuntime.fail(
+        1,
+        "analog function calls currently require an analog expression region"
+      )
+    val definition = userFunctions.validate(function, module.handle)
+    def owned(value: Any): Unit = value match
+      case reference: AnyRef =>
+        if Option(expressionIds.get(reference)).exists(_.module != module.handle) ||
+          Option(declarationIds.get(reference)).exists(_.module != module.handle)
+        then AnalogUserFunctionRuntime.fail(5, "analog function argument belongs to another Module")
+        value match
+          case expression: KernelExpr[?] => expression.operands.foreach(owned)
+          case _ => ()
+      case _ => ()
+    arguments.foreach: argument =>
+      if !expressionIds.containsKey(argument) && !declarationIds.containsKey(argument) then
+        AnalogUserFunctionRuntime.fail(5, "function call argument has no active construction owner")
+      owned(argument)
+    val types = arguments.map: argument =>
+      val kind = CandidateRuntime.expressionDataType(argument) match
+        case Some(Integer) => "integer"
+        case Some(Real) | None => "real"
+        case _ => AnalogUserFunctionRuntime.fail(3, "unsupported function argument scalar type")
+      AnalogUserFunctionRuntime.ValueType(kind, inferAnalogDimension(argument).signature)
+    AnalogUserFunctionRuntime.checkArguments(definition, types)
+    val expression = AnalogUserFunctionRuntime.expression(function, arguments)
+    registerExpression(expression)
+    expression
+
   def inferAnalogDimension(value: Any): AnalogDimension = value match
+    case expression: KernelExpr[?]
+        if expression.literal.exists(value =>
+          value.kind == "integer" && value.dataType.kind == "Integer"
+        ) =>
+      AnalogDimension.Dimensionless
+    case expression: KernelExpr[?]
+        if expression.operation.exists(_.startsWith(AnalogUserFunctionRuntime.CallPrefix)) =>
+      expression.resultType.flatMap(_.arguments.headOption).collect { case units: String =>
+        namedAnalogDimension(units)
+      }.getOrElse(AnalogDimension.Unknown)
     case expression: KernelExpr[?]
         if expression.operation.exists(_.startsWith(AnalogTransferContract.Prefix)) =>
       expression.operands.headOption.map(inferAnalogDimension).getOrElse(AnalogDimension.Unknown)
@@ -2295,7 +2360,7 @@ private final class ConstructionSession(val options: EmitOptions):
     val analog =
       kinds.exists(analogKinds.contains) || snapshot.continuousOperators.nonEmpty ||
         snapshot.waveformOperators.nonEmpty || snapshot.noiseOperators.nonEmpty ||
-        snapshot.transferOperators.nonEmpty ||
+        snapshot.transferOperators.nonEmpty || snapshot.analogFunctions.nonEmpty ||
         snapshot.analogRegions.nonEmpty ||
         snapshot.analogProcedural.nonEmpty || snapshot.analogSemantics.equations.nonEmpty ||
         snapshot.analogSemantics.contributions.nonEmpty
@@ -2333,12 +2398,16 @@ private final class ConstructionSession(val options: EmitOptions):
       names = semantic.names,
       origins = semantic.origins,
       generatedNames = semantic.generatedNames,
-      sourceMap = semantic.sourceMap,
+      sourceMap =
+        (semantic.sourceMap ++ AnalogUserFunctionRuntime.sourceMap(
+          userFunctions.snapshots(modulePath)
+        )).sortBy(_.semanticPath),
       analogRegions = analogSnapshots(),
       continuousOperators = continuousOperatorSnapshots(semantic.sourceMap),
       waveformOperators = waveformOperatorSnapshots(semantic.sourceMap),
       noiseOperators = noiseOperatorSnapshots(semantic.sourceMap),
       transferOperators = transferOperatorSnapshots(semantic.sourceMap),
+      analogFunctions = userFunctions.snapshots(modulePath),
       analogSemantics = analogSemanticRecorder.snapshot,
       analogProcedural = AnalogProceduralConstruction.snapshots(module =>
         modulePath(moduleHandle(module))
@@ -2353,7 +2422,7 @@ private final class ConstructionSession(val options: EmitOptions):
         if kind == DesignKind.AnalogOnly || kind == DesignKind.Unsupported then None
         else Some(options.digitalProfile),
       interfaceAbi = abi,
-      sourceMap = semantic.sourceMap,
+      sourceMap = snapshot.sourceMap,
       schedules = Vector.empty
     )
     Emission(Vector.empty, report) -> snapshot
@@ -2363,6 +2432,7 @@ private[nodal] object ConstructionKernel:
     ScopedValue.newInstance[ConstructionSession]()
 
   private def active: Option[ConstructionSession] =
+    AnalogUserFunctionRuntime.rejectEffect()
     if Current.isBound then Some(Current.get) else None
 
   private def elaborate(top: => Module, options: EmitOptions): (Emission, ConstructionSnapshot) =
@@ -2424,10 +2494,28 @@ private[nodal] object ConstructionKernel:
     _.registerDeclaration(value, kind, dataType, explicitName, domain, attributes)
   )
 
-  def expression(value: AnyRef): Unit = active.foreach(_.registerExpression(value))
+  def expression(value: AnyRef): Unit =
+    if !AnalogUserFunctionRuntime.capture(value) then active.foreach(_.registerExpression(value))
+
+  def defineUserFunction[A <: Data](
+      name: String,
+      resultType: DataType[A],
+      dimension: PhysicalDimension,
+      body: AnalogFunctionBody => Expr[A]
+  ): AnalogFunction[A] = active match
+    case Some(session) => session.defineUserFunction(name, resultType, dimension, body)
+    case None => AnalogUserFunctionRuntime.fail(1, "analog function requires an active Module")
+
+  def callUserFunction[A <: Data](
+      function: AnalogFunction[A],
+      arguments: Vector[Expr[?]]
+  ): Expr[A] = active match
+    case Some(session) => session.callUserFunction(function, arguments)
+    case None => AnalogUserFunctionRuntime.fail(1, "analog function call requires an active Module")
 
   def analogFunction(value: KernelExpr[Real], id: String): Unit =
-    active.foreach(_.registerAnalogFunction(value, id))
+    if !AnalogUserFunctionRuntime.capture(value) then
+      active.foreach(_.registerAnalogFunction(value, id))
 
   def continuousOperator(
       value: KernelExpr[Real],

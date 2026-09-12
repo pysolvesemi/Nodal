@@ -52,7 +52,7 @@ Nodal is centered on behavioral and structural AMS modeling. The following table
 | Digital behavioral / RTL-like constructs | Supported only to the extent needed for useful Verilog-AMS models; Nodal is not intended to duplicate a full digital RTL ecosystem. |
 | Device and transistor-oriented models | May be represented through supported AMS constructs, external modules, and future optional libraries; PDK integration and physical implementation are outside the initial core. |
 | System architecture / virtual prototypes | Possible through hierarchical behavioral models, but Nodal is not a replacement for SystemC-AMS or general software/system simulation frameworks. |
-| Physical design | Out of scope. |
+| Physical design | Outside the nodal-hdl core; planned in the separate Foundation-gated nodal-analog AC/APL/APV tracks below. |
 
 ## Standards baseline
 
@@ -240,7 +240,7 @@ Language features required to express or compile Verilog-A/Verilog-AMS belong in
 
 ## Development model
 
-Development follows the checked roadmap in [`docs/roadmap/nodal-development-todo.md`](docs/roadmap/nodal-development-todo.md).
+Development follows the checked roadmap in [`docs/roadmap/nodal-development-todo.md`](docs/roadmap/nodal-development-todo.md) and its separately numbered plans registered in the [dependent-track gate](docs/roadmap/dependent-track-gate-v0.1.json).
 
 - Work proceeds one increment at a time on a dedicated branch.
 - An increment is complete only with implementation or documentation, tests where applicable, reproducible evidence, and its roadmap checkbox updated in the same change.
@@ -248,13 +248,20 @@ Development follows the checked roadmap in [`docs/roadmap/nodal-development-todo
 - Public API and semantic changes require versioned design gates.
 - Backend capability gaps must produce explicit diagnostics rather than silent fallback.
 
+The [increment and sub-checklist progress rule](CONTRIBUTING.md#increment-and-sub-checklist-progress)
+allows completed child tasks to be marked `[x]` while their parent remains `[ ]`.
+The parent closes only after all required children, dependencies, acceptance
+criteria, and completion evidence are satisfied. Checklist formatting alone does
+not establish implementation or verification completion.
+
 The current milestone is **M0 — Foundation**. After this charter, the next roadmap item is **Increment 2 — Architecture decision records**.
 
 ## Roadmap
 
-See the full incremental plan:
+See the full incremental plan and registered dependent-track extensions:
 
 - [`docs/roadmap/nodal-development-todo.md`](docs/roadmap/nodal-development-todo.md)
+- [`docs/roadmap/dependent-track-gate-v0.1.json`](docs/roadmap/dependent-track-gate-v0.1.json)
 
 ### Sequential Scheduled Hardware — separate dependent track
 
@@ -290,6 +297,51 @@ not block the first useful release or add debugging implementation to Foundation
 exit criteria. Compiler metadata remains Nodal-owned, ordinary hardware semantics
 stay unchanged, and unavailable values are reported rather than invented.
 This is a documentation-only plan, not an implemented debugger or frozen API.
+
+### Analog/mixed-signal to GDSII/OASIS — three separate dependent tracks
+
+The [analog physical-design roadmap](docs/roadmap/analog-physical-design-v0.1-plan.md)
+adds 36 increments with 216 independently checkable child tasks:
+
+| Track | Increment range | Scope |
+| --- | --- | --- |
+| Analog Circuit and PDK Enablement | AC-001–AC-012 | Structural circuit/package handoff, PDK binding, SPICE, simulation, PVT, and bounded sizing. |
+| Analog Layout and Physical Implementation | APL-001–APL-012 | Layout/constraint IR, device generators, external layout adapters, physical DB, and GDSII/OASIS. |
+| Analog Physical Verification and Sign-off | APV-001–APV-012 | DRC/LVS/PEX, post-layout correlation, reliability profiles, and macro-release evidence. |
+
+All implementation is blocked by **ALL FOUNDATION COMPLETE**, including every
+normative Foundation extension, and by the explicit per-increment dependencies.
+Research and roadmap work may proceed before that barrier. The new tracks do not
+add implementation to Foundation exit criteria or alter any existing completion
+state. The existing behavioral AMS Verification track remains separate.
+
+The planned ownership boundary is:
+
+```text
+nodal-hdl (Scala 3 + MLIR/CIRCT)
+    behavioral AMS + structural device/circuit semantics
+                         |
+             .nax / versioned semantic package
+                         |
+nodal-analog (separate Rust physical-implementation project)
+    PDK/SPICE + layout adapters + DRC/LVS/PEX + post-layout evidence
+                         |
+                  GDSII/OASIS macro
+                         |
+             separately qualified full-chip flow
+```
+
+`AC-006` is the first useful circuit-simulation gate, `APL-006` the first
+automated-layout gate, and `APV-005` the first complete open post-layout loop.
+The [machine-readable surface](docs/roadmap/analog-physical-design-v0.1-surface.json)
+and [track registry](docs/roadmap/dependent-track-gate-v0.1.json) record the same
+boundaries and dependencies. Each increment has six nested checkboxes, including
+an acceptance/evidence child; partial progress never closes the parent.
+
+All new checkboxes are initially open. This is a roadmap, not implemented analog
+synthesis/layout, a new runtime repository, or a promise that GDS generation or
+open DRC alone constitutes foundry sign-off. It does not authorize implementation
+of the reserved full-chip ASIC or memory-interface tracks.
 
 ## Authoritative public references
 

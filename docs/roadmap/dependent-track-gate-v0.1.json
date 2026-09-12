@@ -7,6 +7,7 @@
   "sequential_scheduled_hardware_plan_revision": "0.1",
   "source_level_debugging_plan_revision": "0.1",
   "visualizer_debug_extension_plan_revision": "0.1",
+  "analog_physical_design_plan_revision": "0.1",
   "foundation_track": {
     "roadmap": "docs/roadmap/nodal-development-todo.md",
     "completion_rule": "all-foundation-checkboxes-complete",
@@ -31,7 +32,8 @@
     "sequential_readiness_checkpoints": ["SQF-001", "SQF-002", "SQF-003", "SQF-004"],
     "sequential_implementation_is_not_a_foundation_exit_criterion": true,
     "debugging_implementation_is_not_a_foundation_exit_criterion": true,
-    "visualizer_debug_extension_implementation_is_not_a_foundation_exit_criterion": true
+    "visualizer_debug_extension_implementation_is_not_a_foundation_exit_criterion": true,
+    "analog_physical_implementation_is_not_a_foundation_exit_criterion": true
   },
   "dependent_tracks": [
     {
@@ -118,7 +120,63 @@
       "bounded_replay_requires": ["DBG-013"],
       "default_debug_profile": "off",
       "instrumentation_default": "none",
+      "candidate_instrumentation_spelling": "--debug-instrument=none|visibility|transactions",
+      "instrumented_outputs_are_debug_artifacts_not_production_outputs": true,
       "implementation_changes_foundation_exit_criteria": false
+    },
+    {
+      "id": "analog-circuit-pdk",
+      "display_name": "Analog Circuit and PDK Enablement",
+      "increment_prefix": "AC",
+      "numbering_starts_at": 1,
+      "planned_increment_count": 12,
+      "implementation_status": "blocked-by-foundation",
+      "research_status": "allowed-before-foundation-completion",
+      "todo_defined": true,
+      "plan": "docs/roadmap/analog-physical-design-v0.1-plan.md",
+      "surface": "docs/roadmap/analog-physical-design-v0.1-surface.json",
+      "inherits_complete_foundation_barrier": true,
+      "first_useful_release_gate": "AC-006",
+      "qualified_release_gate": "AC-012",
+      "required_children_per_increment": 6,
+      "implementation_changes_foundation_exit_criteria": false
+    },
+    {
+      "id": "analog-layout-physical-implementation",
+      "display_name": "Analog Layout and Physical Implementation",
+      "increment_prefix": "APL",
+      "numbering_starts_at": 1,
+      "planned_increment_count": 12,
+      "implementation_status": "blocked-by-foundation",
+      "research_status": "allowed-before-foundation-completion",
+      "todo_defined": true,
+      "plan": "docs/roadmap/analog-physical-design-v0.1-plan.md",
+      "surface": "docs/roadmap/analog-physical-design-v0.1-surface.json",
+      "inherits_complete_foundation_barrier": true,
+      "entry_requires": ["AC-010"],
+      "first_useful_release_gate": "APL-006",
+      "qualified_release_gate": "APL-012",
+      "required_children_per_increment": 6,
+      "implementation_changes_foundation_exit_criteria": false
+    },
+    {
+      "id": "analog-physical-verification-signoff",
+      "display_name": "Analog Physical Verification and Sign-off",
+      "increment_prefix": "APV",
+      "numbering_starts_at": 1,
+      "planned_increment_count": 12,
+      "implementation_status": "blocked-by-foundation",
+      "research_status": "allowed-before-foundation-completion",
+      "todo_defined": true,
+      "plan": "docs/roadmap/analog-physical-design-v0.1-plan.md",
+      "surface": "docs/roadmap/analog-physical-design-v0.1-surface.json",
+      "inherits_complete_foundation_barrier": true,
+      "entry_requires": ["AC-001", "APL-001"],
+      "first_useful_release_gate": "APV-005",
+      "qualified_release_gate": "APV-012",
+      "required_children_per_increment": 6,
+      "implementation_changes_foundation_exit_criteria": false,
+      "distinct_from_behavioral_ams_verification": true
     },
     {
       "id": "asic-productivity-signoff",
@@ -212,6 +270,26 @@
     "candidate_adapter_presence_is_not_a_compatibility_claim": true,
     "debugger_extension_blocks_core_compiler_or_earlier_debug_releases": false
   },
+  "analog_physical_architecture": {
+    "plan": "docs/roadmap/analog-physical-design-v0.1-plan.md",
+    "surface": "docs/roadmap/analog-physical-design-v0.1-surface.json",
+    "language_semantics_and_circuit_export_owner": "nodal-hdl",
+    "language_implementation": "Scala 3 + MLIR/CIRCT",
+    "interchange": ".nax-versioned-language-neutral-semantic-schema",
+    "physical_implementation_owner": "nodal-analog",
+    "physical_implementation_language": "Rust",
+    "physical_runtime_requires_jvm_or_mlir": false,
+    "implementation_status": "blocked-by-foundation",
+    "implementation_changes_foundation_exit_criteria": false,
+    "ams_behavioral_verification_remains_separate": true,
+    "arbitrary_behavioral_ams_to_transistors_is_not_claimed": true,
+    "gds_alone_or_open_drc_alone_is_not_foundry_signoff": true,
+    "parent_completion_requires_all_children_dependencies_and_acceptance": true,
+    "child_completion_may_precede_parent_completion": true,
+    "authoritative_progress": "plan-markdown-checkboxes",
+    "automatic_checkbox_synchronization_implemented": false,
+    "existing_reserved_asic_and_memory_tracks_remain_reserved": true
+  },
   "low_power_architecture": {
     "readiness_adr": "docs/architecture/0024-minimal-asic-advanced-io-readiness-boundary.md",
     "plan": "docs/roadmap/low-power-power-intent-v0.1-plan.md",
@@ -242,6 +320,7 @@
     "docs/roadmap/sequential-scheduled-hardware-foundation-readiness-v0.1.md",
     "docs/roadmap/sequential-scheduled-hardware-v0.1-plan.md",
     "docs/roadmap/source-level-debugging-v0.1-plan.md",
-    "docs/roadmap/visualizer-debug-extension-v0.1-plan.md"
+    "docs/roadmap/visualizer-debug-extension-v0.1-plan.md",
+    "docs/roadmap/analog-physical-design-v0.1-plan.md"
   ]
 }

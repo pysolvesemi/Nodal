@@ -1,8 +1,8 @@
-# Analog and mixed-signal physical implementation roadmap v0.2
+# Analog and mixed-signal physical implementation roadmap v0.3
 
 **Status:** Normative dependent-track roadmap; implementation not started  
 **Date:** 2026-09-13  
-**Revision scope:** External-tool integration only; no Nodal-owned physical-design engine  
+**Revision scope:** Explicit circuit-export profiles and cross-view qualification; external-tool integration only  
 **Parent roadmap:** [Nodal Incremental Development TODO](nodal-development-todo.md)  
 **Registration:** [Dependent-track gate](dependent-track-gate-v0.1.json)  
 **Manifest:** [Analog physical-design surface](analog-physical-design-v0.1-surface.json)  
@@ -19,7 +19,11 @@ These are 36 planned work items, not implemented APIs or tool integrations. Exis
 
 ### Approved scope correction from v0.1
 
-At the user's request, remove implementation of a Nodal-owned physical-design engine and the mandatory Rust/separate-repository requirements. Retain all increment and child IDs and all existing open states; re-scope the affected children to external-tool integration rather than deleting them or marking them complete. In particular, APL-001 defines physical-intent/adapter contracts, APL-004 manages external-tool checkpoints and layout artifacts instead of a custom physical database, and APL-007/APL-008 invoke existing placement/routing engines. AC-001/AC-003 no longer require a Rust package reader. The existing `v0.1` filenames remain stable links; the document and manifest revision is 0.2.
+At the user's request, remove implementation of a Nodal-owned physical-design engine and the mandatory Rust/separate-repository requirements. Retain all increment and child IDs and all existing open states; re-scope the affected children to external-tool integration rather than deleting them or marking them complete. In particular, APL-001 defines physical-intent/adapter contracts, APL-004 manages external-tool checkpoints and layout artifacts instead of a custom physical database, and APL-007/APL-008 invoke existing placement/routing engines. AC-001/AC-003 no longer require a Rust package reader. Revision 0.2 established this boundary; it remains unchanged. The existing `v0.1` filenames remain stable links.
+
+### Approved export-profile refinement in v0.3
+
+Make ngspice-compatible SPICE, HSPICE-compatible SPICE, Spectre native syntax, and CDL/LVS-reference SPICE explicit output profiles of the same circuit compiler. Add separate simulation, layout-input, and LVS-reference view contracts and independent cross-view qualification. Refine existing AC/APL/APV children, not add another frontend, track, repository, Rust subsystem, or physical engine. The plan and manifest revision is 0.3; all existing IDs, open checkboxes, and prerequisite edges are retained.
 
 ## Ownership, language choice, and package boundary
 
@@ -70,6 +74,51 @@ The existing AMS Verification track owns behavioral/system verification, HVL sch
 
 There are no implementation tasks for a native analog placer/router, geometry kernel, canonical Rust layout database, SPICE/AMS solver, DRC/LVS/PEX engine, or new GDSII/OASIS parser/writer. Use existing libraries, tools, and their APIs for those capabilities. No release gate depends on developing them. Proposing any such engine later requires a separate user-approved roadmap, not automatic expansion of AC/APL/APV. MLIR is reused for circuit semantics; it is not being claimed to supply physical-design algorithms.
 
+## Circuit export profiles and cross-view qualification
+
+### One frontend, purpose-specific backend views
+
+Keep Nodal Scala and the verified structural/device MLIR representation as the circuit source of truth. Each exporter consumes the resolved circuit plus its PDK/view binding directly; do not generate one dialect and use text replacement to obtain another. Shared structured lowering and serialization helpers are permitted, but emitted SPICE, Spectre, or CDL text is never the canonical circuit IR. Behavioral Verilog-A/AMS remains a separate model view; these exports do not imply arbitrary behavioral-to-transistor synthesis. Importing customer-authored HSPICE/Spectre/CDL is separate, unapproved frontend scope, not a prerequisite for output support.
+
+| Planned profile key | Purpose and target | Owning work | Qualification boundary |
+| --- | --- | --- | --- |
+| `sim-ngspice` | PDK-bound SPICE circuit plus a separate ngspice analysis/testbench deck | AC-005, AC-006 | Initial open simulation baseline; pin exact ngspice version, syntax/options, PDK/model subset, analyses, and tolerances. |
+| `sim-hspice` | HSPICE-compatible circuit and analysis export for Synopsys PrimeSim HSPICE | AC-009.b | Separate emitter and actual licensed-tool execution evidence; ngspice compatibility mode does not qualify HSPICE. |
+| `sim-spectre` | Native Spectre circuit and analysis export for Cadence Spectre | AC-009.c | Separate native-syntax exporter and actual licensed Spectre evidence; accepting SPICE input alone does not qualify native Spectre export. |
+| `layout-input` | Selected layout tool's accepted circuit subset or generator parameters, plus physical constraints and layout PDK data | AC-010, APL-006, APL-011 | Bind each tool/version/PDK/constraint profile; a simulator deck is not automatically accepted or physically realizable layout input. |
+| `lvs-reference` | Purpose-specific reference SPICE and a declared CDL subset/flavor for external LVS | APV-003, APV-008 | Pin comparison-tool/device-rule/deck semantics; an open supported subset does not qualify every commercial CDL extension. |
+
+These keys identify planned roadmap profiles, not frozen public APIs or implemented backends. Verilog-A/OpenVAF/OSDI retains its separately qualified model profile in AC-006. Additional simulators such as Xyce remain optional adapters; they cannot substitute for the explicitly required HSPICE and Spectre qualification tasks. Tool implementation licenses, netlist syntax, and PDK/model/deck redistribution rights are separate concerns.
+
+### Simulation, layout, and LVS are different views of one circuit
+
+```text
+Nodal Scala -> verified structural circuit IR -> resolved PDK/view bindings
+                                                    |
+                    +-------------------------------+--------------------+
+                    |                               |                    |
+              simulation view                 layout-input view    LVS-reference view
+                    |                               |                    |
+        ngspice / HSPICE / Spectre          tool-specific netlist    reference SPICE / CDL
+        circuit + analysis deck            or generator inputs     no simulation deck
+                    |                       + constraints/PDK             |
+             circuit simulation                  layout            external LVS
+```
+
+A view manifest must identify its purpose, profile, source-circuit revision, resolved PDK binding, model/device mappings, exporter revision, options, dependencies, and output hashes. Simulation additionally identifies analyses, stimuli, corner/model sections, and numerical tolerances. Layout adds process generators and physical intent. LVS adds extraction/comparison rules, device classes, parameter tolerances, and permitted reductions. The exact field spelling remains part of AC-001, not a new API freeze here.
+
+AC-004 must bind each physical device identity to its simulation model/subcircuit, layout generator/master, and LVS device/class where those views apply. Do not infer that identical names imply identical semantics. Preserve terminal order and bulk/supply connections, units, evaluated geometry, finger count, multiplicity, hierarchy, and parameter scope across projections. View-specific model names, omitted simulation-only data, documented dummy/auxiliary devices, and approved device reductions require an explicit mapping and rationale; they must not silently change the intended circuit. Simulation testbenches and numerical controls must not leak into layout or LVS inputs. Do not attempt to recover absent simulation parameters from a CDL file by guessing.
+
+### Independent evidence, not just syntax tests
+
+Use independently authored reference circuits and consumer-side parse/elaboration or normalized device/connectivity comparisons; two exporters sharing the same erroneous helper are not independent proof. Cover inverter, RC, current mirror, differential pair, hierarchy, parameters, physical-intent groups, and declared imported-macro cases. Compare device/net/terminal identity, physical geometry meaning, and documented view transformations. For simulation parity, use the same circuit, applicable model/corner assumptions, stimuli and measurement definitions, with explicit tolerances; document unavoidable model differences rather than requiring unrelated models to have identical waveforms.
+
+Negative fixtures must catch terminal/bulk swaps, unit-scale mistakes, finger-versus-multiplicity errors, parameter-scope changes, ground/global-net mistakes, wrong model or view bindings, missing includes, unsupported dialect constructs, omitted devices, unapproved reductions, and stale circuit/layout/profile hashes. Reuse existing tool readers and LVS engines for consumer-side checks; no new physical checker is authorized.
+
+Record emission validation separately from real-tool integration qualification. A profile's qualification identifies the exact exporter, consumer/version, PDK/model/deck subset, analyses or comparison rules, test corpus, tolerances, input/output hashes, and retained logs. Missing licenses/tools/models, unsupported capabilities, timeout, non-convergence, and incomplete runs never count as qualified. A profile or child requiring real-tool evidence stays open until it exists; support for one commercial simulator never implies support for another.
+
+The first open release gates AC-006, APL-006 and APV-005 retain their existing prerequisites and do not depend on AC-009 or commercial access. APV-003 qualifies reference-SPICE/CDL emission only for the declared accessible LVS consumer subset; commercial CDL flavors and approved sign-off decks are separately qualified in APV-008. Full AC-009 completion requires both named commercial profiles and all of its children; this refinement does not waive later aggregate release dependencies merely because a license is unavailable. A future open release can truthfully report its narrower existing early gate without claiming completion of AC-009 or AC-012.
+
 ## Increment and sub-checklist completion rule
 
 Each top-level `- [ ]` below is one increment. Every nested `- [ ]` is an independently trackable required task with a stable suffix `.a` through `.f`.
@@ -103,7 +152,7 @@ Owner: existing Nodal compiler and tool-adapter modules. Scala/MLIR owns source/
   - Depends on: ALL FOUNDATION COMPLETE.
   - [ ] **AC-001.a** Approve ownership and dependency direction for the existing Nodal compiler, `.nax`, thin tool adapters, AMS Verification, and macro consumers; require no new repository or Rust subsystem.
   - [ ] **AC-001.b** Define circuit, device, terminal, parameter, unit, hierarchy, source, and multi-view identities; separate behavioral equations from structural device instances.
-  - [ ] **AC-001.c** Define a versioned package manifest, capability negotiation, stable serialization, migration policy, hashes, and opaque external-view references without bundling restricted IP.
+  - [ ] **AC-001.c** Define a versioned package/view manifest with purpose, profile, circuit/PDK revision, capabilities, hashes, migration policy, and opaque external-view references; keep simulation, layout-input and LVS-reference payloads distinct and do not bundle restricted IP.
   - [ ] **AC-001.d** Prototype the existing compiler exporter and an independent adapter reader in a tool-appropriate language; reject malformed, oversized, missing, incompatible, or untrusted package content without requiring Rust.
   - [ ] **AC-001.e** Preserve existing AMS semantics and make unsupported topology/model/physical capabilities explicit errors rather than silent lowering.
   - [ ] **AC-001.f** Exit: approved design gate, deterministic round-trip fixtures, compatibility/negative evidence, and recorded public-API decisions; no physical synthesis claim.
@@ -129,24 +178,24 @@ Owner: existing Nodal compiler and tool-adapter modules. Scala/MLIR owns source/
 - [ ] **AC-004 — PDK device binding and legal operating envelopes**
   - Depends on: AC-003.
   - [ ] **AC-004.a** Define versioned PDK/platform/device/model/corner identities, license metadata, local installation references, and process capability manifests.
-  - [ ] **AC-004.b** Bind abstract device requests to explicit model/subcircuit names, terminal ordering, geometry rules, finger/multiplicity meanings, and unit scaling.
+  - [ ] **AC-004.b** Bind each device identity to explicit simulation model/subcircuit, layout master/generator and LVS device/class views as applicable; preserve terminal ordering, geometry, finger/multiplicity semantics and unit scaling with documented view-specific mappings.
   - [ ] **AC-004.c** Validate supply, temperature, geometry, device option, and operating-range requirements; reject unavailable models rather than substituting a generic transistor.
   - [ ] **AC-004.d** Qualify one named open PDK/device subset with pinned model hashes and a reproducible installation recipe; do not promise process portability from name mapping alone.
   - [ ] **AC-004.e** Keep unbound `.nax` separate from resolved implementation data and avoid redistributing restricted model decks or design-rule content.
-  - [ ] **AC-004.f** Exit: reference-device binding tests, wrong-terminal/unit/model/range failures, and a reviewed PDK capability/license matrix pass.
+  - [ ] **AC-004.f** Exit: independent binding fixtures detect wrong terminals, units, geometry, parameter scope, model/view identity and legal ranges; publish the PDK/view capability and license matrix without assuming one name or netlist serves every purpose.
 
-- [ ] **AC-005 — PDK-bound SPICE projection and simulator contract**
+- [ ] **AC-005 — ngspice SPICE export and simulator contract**
   - Depends on: AC-004.
-  - [ ] **AC-005.a** Generate deterministic hierarchical SPICE for the bound subset, including explicit units, parameters, model includes, terminal order, and source correlation.
-  - [ ] **AC-005.b** Keep simulation testbenches, stimuli, analyses, and controls separate from the physical circuit netlist.
-  - [ ] **AC-005.c** Define the initial ngspice profile and out-of-process request/result protocol, including timeouts, tool versions, output paths, and cleanup.
+  - [ ] **AC-005.a** Generate deterministic hierarchical `sim-ngspice` SPICE directly from the verified resolved circuit and PDK binding, retaining units, parameter scope, includes, terminal order and source correlation; no text-based dialect conversion.
+  - [ ] **AC-005.b** Separate the simulation circuit from its stimuli, analyses and numerical controls; give simulation, layout-input and LVS-reference exports distinct purpose/profile identities and never silently reuse the simulation deck as physical input.
+  - [ ] **AC-005.c** Define the initial ngspice profile and out-of-process request/result protocol with exact tool/version/options, PDK/model subset, analyses, timeouts, output paths and cleanup.
   - [ ] **AC-005.d** Negotiate supported analyses/device models before execution and normalize process failure, unsupported, convergence failure, and valid-result states.
-  - [ ] **AC-005.e** Reparse or independently compare emitted circuits, test escaping/include resolution, and reject injection/path traversal or unsupported constructs.
-  - [ ] **AC-005.f** Exit: circuit-equivalent SPICE fixtures and simulator-protocol tests pass with explicit unsupported cases; full vertical-slice qualification remains AC-006.
+  - [ ] **AC-005.e** Independently reparse/compare emitted circuits and test terminal/bulk order, unit scales, fingers/multiplicity, parameters, ground/global nets, escaping and include resolution; reject unsupported constructs and path/injection defects.
+  - [ ] **AC-005.f** Exit: circuit-equivalent ngspice-export fixtures and protocol tests pass with recorded emission evidence and explicit unsupported cases; actual simulation qualification remains AC-006, not an inferred HSPICE/Spectre capability.
 
 - [ ] **AC-006 — First open circuit-simulation vertical slice**
   - Depends on: AC-005.
-  - [ ] **AC-006.a** Run Nodal source through MLIR, `.nax`, PDK binding, SPICE, external simulation, and normalized results using one locked command/manifest.
+  - [ ] **AC-006.a** Run Nodal source through MLIR, `.nax`, PDK binding, `sim-ngspice` export, actual ngspice execution and normalized results using one locked command/manifest; require no commercial simulator or license.
   - [ ] **AC-006.b** Qualify DC, AC, and transient analyses on the supported fixture set with independent reference calculations or netlists and declared tolerances.
   - [ ] **AC-006.c** Add an explicitly qualified Verilog-A/OpenVAF/OSDI model adapter where supported; do not present this as full Verilog-AMS simulator support.
   - [ ] **AC-006.d** Preserve waveforms, measurements, seeds, model/tool hashes, convergence status, source IDs, and execution logs.
@@ -171,36 +220,36 @@ Owner: existing Nodal compiler and tool-adapter modules. Scala/MLIR owns source/
   - [ ] **AC-008.e** Demonstrate a sized small amplifier/current-mirror family meeting declared pre-layout constraints; detect infeasible requests and budget exhaustion.
   - [ ] **AC-008.f** Exit: independent measurement checks and replayable sizing results pass; post-layout closure is deferred to APV, not assumed from pre-layout success.
 
-- [ ] **AC-009 — Additional and commercial simulator profiles**
+- [ ] **AC-009 — HSPICE and Spectre export/qualification profiles**
   - Depends on: AC-006.
-  - [ ] **AC-009.a** Define dialect/model/analysis capability profiles for additional simulators without leaking vendor syntax into source semantics.
-  - [ ] **AC-009.b** Add one qualified additional adapter and retain a documented seam for HSPICE/Spectre/Xyce-class flows as applicable, not a blanket support claim.
-  - [ ] **AC-009.c** Handle executable discovery, licenses, runtime isolation, sensitive files, and simulator-specific failure states explicitly.
-  - [ ] **AC-009.d** Compare supported common circuits using agreed numerical tolerances and separate expected model differences from translation defects.
-  - [ ] **AC-009.e** Preserve portable circuit IDs and identical measurement definitions across simulator projections; unavailable vendor jobs report unavailable, not pass.
-  - [ ] **AC-009.f** Exit: exact adapter/version/model capability evidence and reproducible cross-simulator comparisons are published for the declared release profile.
+  - [ ] **AC-009.a** Define independent `sim-hspice` and `sim-spectre` dialect/model/analysis profiles and exporters from the same resolved circuit IR; preserve the Nodal frontend and keep vendor syntax out of canonical semantics.
+  - [ ] **AC-009.b** Implement HSPICE-compatible circuit/analysis emission and qualify the declared subset with actual licensed PrimeSim HSPICE, pinned tool/model/PDK versions, independent references and retained logs; compatibility-mode tests in another simulator are insufficient.
+  - [ ] **AC-009.c** Implement native Spectre circuit/analysis emission and qualify the declared subset with actual licensed Spectre, pinned tool/model/PDK versions, independent references and retained logs; Spectre accepting SPICE input does not qualify this native-syntax exporter.
+  - [ ] **AC-009.d** Reuse the common runner for executable/license discovery, process isolation, protected includes/results, timeout and convergence/error normalization; record emission-tested and real-tool-qualified evidence separately for each profile.
+  - [ ] **AC-009.e** Independently compare ngspice/HSPICE/Spectre circuit views and declared common measurements, checking terminal order, bulk/supplies, units, parameter scope, hierarchy, fingers/multiplicity and source identity; use explicit tolerances and explain model differences rather than silently accepting translation drift.
+  - [ ] **AC-009.f** Exit: both named commercial profiles and all children have exact tool/PDK/subset evidence, negative-case coverage and reproducible comparisons; missing access leaves affected children and this parent open. Optional Xyce/other adapters do not substitute; AC-006/APL-006/APV-005 remain independent.
 
 - [ ] **AC-010 — Circuit-to-layout physical-intent handoff**
   - Depends on: AC-004, AC-008.
   - [ ] **AC-010.a** Carry device grouping, matching, symmetry, common-centroid/interdigitation intent, sensitive nets, pin intent, and regions through stable circuit identities.
   - [ ] **AC-010.b** Separate required constraints from preferences and define conflicts, unsupported intent, explicit relaxations, and source diagnostics.
-  - [ ] **AC-010.c** Export resolved geometry/device parameters plus unresolved physical intent without forcing any one layout-tool schema or geometry database into `.nax`.
+  - [ ] **AC-010.c** Export a distinct `layout-input` view of resolved devices/geometry and physical intent for the selected tool; do not pass simulator controls or assume a simulation/SPICE/Spectre deck is a legal layout input, and do not force tool syntax or a geometry DB into `.nax`.
   - [ ] **AC-010.d** Preserve intent across hierarchy, generated instances, sizing changes, and parameter specialization; invalidate stale constraints when their targets change.
   - [ ] **AC-010.e** Test missing targets, incompatible dimensions, contradictory constraints, and binding revisions using independent expected mappings.
   - [ ] **AC-010.f** Exit: a versioned circuit/physical-intent package is consumed by a thin external-tool adapter with complete identity and diagnostic coverage, without a new physical engine.
 
 - [ ] **AC-011 — Mixed-signal macro and multi-view consistency**
   - Depends on: AC-006, AC-010.
-  - [ ] **AC-011.a** Link behavioral Verilog-A/AMS, structural circuit, digital wrappers, clocks/resets, supplies, modes, and configuration interfaces to one macro identity.
+  - [ ] **AC-011.a** Link behavioral Verilog-A/AMS, structural circuit, purpose-specific simulation/layout/LVS view references, digital wrappers, clocks/resets, supplies, modes and configuration interfaces to one circuit/macro revision; mark later unqualified profiles explicitly without adding new dependencies.
   - [ ] **AC-011.b** Preserve conservative terminals, digital nets, discrete-real values, and explicit converters as distinct interface categories.
   - [ ] **AC-011.c** Reuse existing AMS scheduling/verification contracts for threshold, sampling, hold, initialization, and time-resolution semantics; do not add a second scheduler.
   - [ ] **AC-011.d** Validate port/model/parameter/mode consistency and state each model's validity envelope and omitted physical effects.
-  - [ ] **AC-011.e** Correlate behavioral and transistor views on a declared small mixed-signal fixture; require only the relevant external verification capabilities.
+  - [ ] **AC-011.e** Independently compare available circuit views and correlate behavioral/transistor results on a declared small mixed-signal fixture; preserve topology and physical geometry meaning, document permitted view differences, and detect swapped terminals, missing devices and stale hashes without requiring unfinished commercial/LVS profiles.
   - [ ] **AC-011.f** Exit: multi-view mismatch negatives and correlation tolerances pass with actual models/results; no automatic analog-RTL-to-transistor claim.
 
 - [ ] **AC-012 — Circuit/PDK portability and release qualification**
   - Depends on: AC-001 through AC-011.
-  - [ ] **AC-012.a** Qualify the declared circuit/model/analysis feature matrix, package versions, simulator adapters, and supported PDK bindings.
+  - [ ] **AC-012.a** Publish separate ngspice, HSPICE and Spectre exporter/execution capability matrices, exact versions and PDK/model/analysis subsets, package compatibility and cross-view evidence; do not label one tested simulator as generic SPICE/commercial support.
   - [ ] **AC-012.b** Demonstrate a second process/profile binding where authorized, with explicit resizing/revalidation and reported unsupported devices rather than assumed physical portability.
   - [ ] **AC-012.c** Measure circuit-graph size, package size, import/export time, memory, run scheduling, and reproducibility on named small and large fixtures.
   - [ ] **AC-012.d** Publish install, debugging, failure recovery, compatibility, migration, and licensing instructions with frozen fixture/artifact hashes.
@@ -258,7 +307,7 @@ Owner: thin layout integration modules and qualified external layout tools. The 
 
 - [ ] **APL-006 — First ALIGN automated-layout vertical slice**
   - Depends on: APL-005, AC-006.
-  - [ ] **APL-006.a** Lower the selected sized circuit, physical constraints, and PDK binding into a pinned ALIGN adapter profile.
+  - [ ] **APL-006.a** Lower the selected sized circuit into a distinct pinned ALIGN `layout-input` subset with physical constraints and layout PDK/generator binding; derive it from circuit IR rather than assuming the ngspice/HSPICE/Spectre simulation deck is suitable.
   - [ ] **APL-006.b** Preflight supported devices/constraints/tool versions and reject unsupported physical intent before execution rather than silently omitting it.
   - [ ] **APL-006.c** Run the external engine on a small transistor-level benchmark through primitive generation, placement, routing, and stream-out with retained stage artifacts.
   - [ ] **APL-006.d** Collect tool-native checkpoints, layouts, logs, constraint reports, and circuit/device/net mappings into the artifact manifest; do not import geometry into a new Nodal physical DB.
@@ -303,11 +352,11 @@ Owner: thin layout integration modules and qualified external layout tools. The 
 
 - [ ] **APL-011 — Commercial and custom-layout adapter seam**
   - Depends on: APL-006.
-  - [ ] **APL-011.a** Define process/layout/generator adapter profiles with version, capability, licensing, sandboxing, and artifact contracts.
+  - [ ] **APL-011.a** Define exact process/layout/generator profiles and accepted SPICE/CDL/tool-native inputs or generator APIs, with versions, capabilities, licensing, sandboxing and artifact contracts; do not infer layout support from a commercial simulator profile.
   - [ ] **APL-011.b** Implement and qualify one additional accessible external layout/generator integration; distinguish tested commercial profiles from unexecuted adapter stubs.
   - [ ] **APL-011.c** Translate canonical physical intent without changing language semantics or hiding unsupported constraint differences.
   - [ ] **APL-011.d** Preserve imported/generated IP rights and keep confidential process data, commands, and result artifacts in authorized storage.
-  - [ ] **APL-011.e** Compare equivalent declared cases across adapters and check unavailable licenses, missing views, and failed tool executions.
+  - [ ] **APL-011.e** Independently compare equivalent declared circuit/layout-input views and resulting tool mappings across adapters; test wrong-view inputs, unavailable licenses, missing views and failed executions.
   - [ ] **APL-011.f** Exit: the selected adapter contract is demonstrated and untested profiles remain explicitly unqualified; commercial availability does not block APL-006.
 
 - [ ] **APL-012 — Layout-adapter scale and release qualification**
@@ -341,21 +390,21 @@ Owner: Nodal tool-adapter/evidence modules using process-qualified external veri
   - [ ] **APV-002.e** Report unavailable rules and explicit waivers; never rename an open-deck result as foundry sign-off.
   - [ ] **APV-002.f** Exit: declared DRC-positive/negative fixtures pass with complete executed-rule and deck/tool evidence.
 
-- [ ] **APV-003 — Open LVS baseline**
+- [ ] **APV-003 — Open LVS baseline and CDL/reference-SPICE exports**
   - Depends on: APV-002, AC-005.
-  - [ ] **APV-003.a** Invoke a qualified KLayout/Netgen-class LVS profile to extract devices/connectivity and compare against the intended bound circuit; reuse its extraction/comparison engines.
-  - [ ] **APV-003.b** Define terminal equivalence, allowed device reduction, bulk/supply treatment, multiplicity, and parameter tolerances explicitly.
-  - [ ] **APV-003.c** Preserve hierarchy and source correspondence through extraction and normalized mismatch reports.
-  - [ ] **APV-003.d** Detect injected opens, shorts, pin/bulk swaps, missing devices, and incorrect dimensions or finger interpretation.
-  - [ ] **APV-003.e** Handle black-box/imported-macro limitations, missing models, and incomplete extraction without declaring whole-design LVS clean.
-  - [ ] **APV-003.f** Exit: reference and deliberately faulty layouts receive correct independent LVS results with exact circuit/layout/deck provenance.
+  - [ ] **APV-003.a** Generate purpose-specific LVS-reference SPICE and a declared CDL subset directly from the intended resolved circuit, not the extracted layout or simulator deck; record profile, device/class mapping, required geometry parameters and source hashes, keeping simulation-only data separate.
+  - [ ] **APV-003.b** Independently parse/elaborate both reference exports through qualified accessible consumers and run a pinned KLayout/Netgen-class LVS comparison using the supported subset; reuse external extraction/comparison engines and reject unsupported CDL extensions.
+  - [ ] **APV-003.c** Preserve hierarchy/source identity, terminal and bulk/supply meaning, units, fingers/multiplicity and parameter tolerances; document permitted pin equivalences, dummy devices and reductions rather than forcing textual equality between simulation and LVS views.
+  - [ ] **APV-003.d** Detect injected opens, shorts, terminal/bulk swaps, missing devices, unit/geometry errors, incorrect model/class mappings and unapproved reductions using independent references; test that stale or wrong-purpose exports cannot pass.
+  - [ ] **APV-003.e** Handle opaque imported macros, unavailable models/rules, missing simulation parameters and incomplete extraction without guessing data or declaring whole-design LVS clean; commercial CDL flavors/decks require APV-008 qualification and do not block this declared open subset.
+  - [ ] **APV-003.f** Exit: both reference-SPICE/CDL export subsets preserve the intended circuit under independently checked view mappings, and correct/faulty layouts receive the expected external LVS outcomes with exact circuit/layout/consumer/PDK/deck evidence; no blanket commercial-CDL or simulation claim.
 
 - [ ] **APV-004 — Parasitic extraction and extracted-circuit identity**
   - Depends on: APV-003.
   - [ ] **APV-004.a** Add a qualified external extraction adapter with explicit capacitance, resistance, coupling, and reduction capabilities; do not implement extraction algorithms.
   - [ ] **APV-004.b** Preserve device/net correspondence and versioned references to extracted circuits tied to exact layout, process, corner, and extraction settings.
   - [ ] **APV-004.c** Distinguish schematic parasitics, extracted parasitics, and reduced models; prevent double-counting or silently missing unsupported effects.
-  - [ ] **APV-004.d** Collect simulator-compatible extracted netlists from existing tools with terminal/unit/model checks and bounded artifact sizes.
+  - [ ] **APV-004.d** Collect extracted simulation netlists for the selected qualified ngspice/HSPICE/Spectre profile, with explicit base-device/model bindings, parasitic units and source mapping; do not use a CDL/LVS view as a complete simulation model or require every simulator for the open baseline.
   - [ ] **APV-004.e** Validate known RC structures and extraction-corner changes independently; inject incorrect units, disconnected parasitics, and stale results.
   - [ ] **APV-004.f** Exit: supported extraction cases reproduce within declared tolerances; RF, substrate, and advanced effects remain unsupported unless explicitly qualified.
 
@@ -389,7 +438,7 @@ Owner: Nodal tool-adapter/evidence modules using process-qualified external veri
 - [ ] **APV-008 — Commercial sign-off and extraction adapters**
   - Depends on: APV-005.
   - [ ] **APV-008.a** Define approved-process/tool/deck/extraction profile contracts and verify the authorization needed to use protected process/IP data.
-  - [ ] **APV-008.b** Implement an accessible commercial/sign-off adapter or explicitly retain it as unqualified until the actual licensed flow can execute.
+  - [ ] **APV-008.b** Implement and execute an accessible commercial/sign-off adapter with its exact accepted reference-SPICE/CDL flavor, PDK device rules, required parameters and deck version; separately qualify vendor extensions and retain unexecuted profiles as unqualified.
   - [ ] **APV-008.c** Preserve native reports alongside normalized evidence and prevent an adapter stub, mock, or open-deck run from claiming commercial sign-off.
   - [ ] **APV-008.d** Compare declared common DRC/LVS/extraction fixtures against the qualified reference with documented tolerances and capability differences.
   - [ ] **APV-008.e** Test license/tool/deck failures, confidentiality boundaries, result corruption, and wrong-process or wrong-version requests.
@@ -406,7 +455,7 @@ Owner: Nodal tool-adapter/evidence modules using process-qualified external veri
 
 - [ ] **APV-010 — Analog hard-macro release package**
   - Depends on: APV-009, APL-009, AC-011.
-  - [ ] **APV-010.a** Package applicable externally produced GDS/OASIS, LEF/abstract, extracted, and timing views with the circuit, behavioral, digital-wrapper, and physical-interface views.
+  - [ ] **APV-010.a** Package applicable externally produced GDS/OASIS, LEF/abstract, extracted and timing views with separately identified simulation, layout-input, CDL/LVS-reference, behavioral and digital-wrapper views; retain each profile's exact circuit/binding/hash and qualification evidence.
   - [ ] **APV-010.b** Preserve legal configurations, supply/clock/reset/lock sequencing, electrical limits, PVT/model envelopes, pin maps, and integration constraints.
   - [ ] **APV-010.c** Include characterization data, unsupported effects, release profile, checks/waivers, license restrictions, and immutable source/tool evidence.
   - [ ] **APV-010.d** Validate consistency across all applicable views and state why a view is not applicable rather than fabricating timing or analog characterization.
@@ -437,6 +486,8 @@ Use contract/serialization/diagnostic and small circuit checks on ordinary imple
 
 Reuse existing project process-adapter infrastructure and the common runner, with future `nodal-eda` integration optional. Require clean failures, bounded resource use, resumable run matrices, cache invalidation, independent reference fixtures, and distinct unsupported/not-run/passed states. Open CI must not require proprietary PDKs or silently treat unavailable commercial checks as passing. Each release selects and documents its mandatory capabilities. A commercial sign-off release remains blocked until its actual required tools/decks execute. No new analog-native engine, repository, Rust runtime, or duplicate workflow framework is a CI prerequisite.
 
+Maintain separate emission and actual-tool qualification evidence per export profile. Open jobs cover ngspice and the selected open layout/LVS subsets; licensed HSPICE, Spectre and commercial-CDL/sign-off jobs run only in authorized environments. A missing licensed job is not a pass and cannot close a task requiring that evidence. Preserve the current early-open-release dependency graph and all parent/child completion rules.
+
 This roadmap revision itself is documentation-only. It creates no workflow, runs no CI/test/simulation/physical tool, creates no `nodal-analog` repository, and changes no compiler or generated HDL behavior.
 
 ## Deliberate exclusions and risk controls
@@ -449,6 +500,7 @@ This roadmap revision itself is documentation-only. It creates no workflow, runs
 - GDSII/OASIS generation, passing an open DRC deck, or functional simulation does not by itself establish foundry approval, manufacturability, analog performance, or silicon reliability.
 - No physical result may be reused after relevant source, circuit, layout, model, PDK, tool, rule deck, corner, or option changes without a valid dependency/invalidation decision.
 - Protect third-party IP, PDK models/decks, license servers, and proprietary results. Open-source tool licensing and foundry data licensing are separate integration requirements.
+- Commercial netlist export is backend scope, not another Nodal frontend. Do not assume dialects, simulation decks, layout inputs, or CDL/LVS references are interchangeable, or that emission-only tests prove commercial-tool execution.
 
 ## Reference integration contracts to evaluate
 

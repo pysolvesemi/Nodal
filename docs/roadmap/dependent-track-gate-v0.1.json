@@ -7,7 +7,7 @@
   "sequential_scheduled_hardware_plan_revision": "0.1",
   "source_level_debugging_plan_revision": "0.1",
   "visualizer_debug_extension_plan_revision": "0.1",
-  "analog_physical_design_plan_revision": "0.1",
+  "analog_physical_design_plan_revision": "0.2",
   "foundation_track": {
     "roadmap": "docs/roadmap/nodal-development-todo.md",
     "completion_rule": "all-foundation-checkboxes-complete",
@@ -157,7 +157,8 @@
       "first_useful_release_gate": "APL-006",
       "qualified_release_gate": "APL-012",
       "required_children_per_increment": 6,
-      "implementation_changes_foundation_exit_criteria": false
+      "implementation_changes_foundation_exit_criteria": false,
+      "scope": "external-layout-integration-not-native-engine-development"
     },
     {
       "id": "analog-physical-verification-signoff",
@@ -176,7 +177,8 @@
       "qualified_release_gate": "APV-012",
       "required_children_per_increment": 6,
       "implementation_changes_foundation_exit_criteria": false,
-      "distinct_from_behavioral_ams_verification": true
+      "distinct_from_behavioral_ams_verification": true,
+      "scope": "external-verification-adapters-and-evidence-not-native-checking-engines"
     },
     {
       "id": "asic-productivity-signoff",
@@ -276,9 +278,21 @@
     "language_semantics_and_circuit_export_owner": "nodal-hdl",
     "language_implementation": "Scala 3 + MLIR/CIRCT",
     "interchange": ".nax-versioned-language-neutral-semantic-schema",
-    "physical_implementation_owner": "nodal-analog",
-    "physical_implementation_language": "Rust",
-    "physical_runtime_requires_jvm_or_mlir": false,
+    "integration_owner": "existing-nodal-compiler-and-tool-adapter-modules",
+    "physical_implementation_owner": "qualified-external-open-source-or-commercial-tools",
+    "detailed_geometry_and_layout_state_owner": "external-tools",
+    "adapter_language_policy": "reuse-existing-Scala-native-infrastructure-or-Python-tool-native-scripting-as-appropriate",
+    "native_physical_engine_in_scope": false,
+    "custom_physical_database_required": false,
+    "new_rust_subsystem_required": false,
+    "new_rust_toolchain_dependency_required": false,
+    "rust_package_reader_required": false,
+    "separate_nodal_analog_repository_required": false,
+    "external_engines_require_live_mlir_objects": false,
+    "orchestration_policy": "reuse-common-runner-optional-nodal-eda-integration",
+    "changes_nodal_fpga_or_nodal_eda_language_choices": false,
+    "native_engine_work_requires_separate_user_approved_scope": true,
+    "scope_revision": "user-approved-removal-of-native-physical-engine-and-mandatory-rust-project",
     "implementation_status": "blocked-by-foundation",
     "implementation_changes_foundation_exit_criteria": false,
     "ams_behavioral_verification_remains_separate": true,

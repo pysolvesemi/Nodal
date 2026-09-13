@@ -52,7 +52,7 @@ Nodal is centered on behavioral and structural AMS modeling. The following table
 | Digital behavioral / RTL-like constructs | Supported only to the extent needed for useful Verilog-AMS models; Nodal is not intended to duplicate a full digital RTL ecosystem. |
 | Device and transistor-oriented models | May be represented through supported AMS constructs, external modules, and future optional libraries; PDK integration and physical implementation are outside the initial core. |
 | System architecture / virtual prototypes | Possible through hierarchical behavioral models, but Nodal is not a replacement for SystemC-AMS or general software/system simulation frameworks. |
-| Physical design | Outside the nodal-hdl core; planned in the separate Foundation-gated nodal-analog AC/APL/APV tracks below. |
+| Physical design | Executed by existing external tools; Foundation-gated AC/APL/APV tracks add circuit exports, thin adapters, and verification evidence, not a native physical-design engine. |
 
 ## Standards baseline
 
@@ -301,47 +301,62 @@ This is a documentation-only plan, not an implemented debugger or frozen API.
 ### Analog/mixed-signal to GDSII/OASIS — three separate dependent tracks
 
 The [analog physical-design roadmap](docs/roadmap/analog-physical-design-v0.1-plan.md)
-adds 36 increments with 216 independently checkable child tasks:
+contains 36 increments with 216 independently checkable child tasks. Revision 0.2
+removes native physical-engine implementation and mandatory Rust/separate-repo
+requirements; affected children are re-scoped to existing-tool integration, not
+marked complete. Stable file paths and increment/child IDs are retained.
 
 | Track | Increment range | Scope |
 | --- | --- | --- |
-| Analog Circuit and PDK Enablement | AC-001–AC-012 | Structural circuit/package handoff, PDK binding, SPICE, simulation, PVT, and bounded sizing. |
-| Analog Layout and Physical Implementation | APL-001–APL-012 | Layout/constraint IR, device generators, external layout adapters, physical DB, and GDSII/OASIS. |
-| Analog Physical Verification and Sign-off | APV-001–APV-012 | DRC/LVS/PEX, post-layout correlation, reliability profiles, and macro-release evidence. |
+| Analog Circuit and PDK Enablement | AC-001–AC-012 | Existing Scala/MLIR circuit support, package export, PDK binding, SPICE, external simulation and bounded sizing integration. |
+| Analog Layout and Physical Implementation | APL-001–APL-012 | Physical-intent translation, external generators/placement/routing, tool-native checkpoint/artifact handling, and existing GDSII/OASIS APIs. |
+| Analog Physical Verification and Sign-off | APV-001–APV-012 | Adapters for existing DRC/LVS/PEX and reliability tools, post-layout correlation, and macro-release evidence. |
 
 All implementation is blocked by **ALL FOUNDATION COMPLETE**, including every
 normative Foundation extension, and by the explicit per-increment dependencies.
-Research and roadmap work may proceed before that barrier. The new tracks do not
-add implementation to Foundation exit criteria or alter any existing completion
-state. The existing behavioral AMS Verification track remains separate.
+These tracks do not add implementation to Foundation exit criteria or alter any
+existing completion state. Behavioral AMS Verification remains separate.
 
 The planned ownership boundary is:
 
 ```text
-nodal-hdl (Scala 3 + MLIR/CIRCT)
+Existing Nodal compiler (Scala 3 + MLIR/CIRCT)
     behavioral AMS + structural device/circuit semantics
                          |
-             .nax / versioned semantic package
+          circuit + physical-intent export / .nax
                          |
-nodal-analog (separate Rust physical-implementation project)
-    PDK/SPICE + layout adapters + DRC/LVS/PEX + post-layout evidence
+        thin tool-specific adapters + common runner
                          |
-                  GDSII/OASIS macro
+       existing open-source or commercial EDA tools
+    simulation + layout + DRC/LVS/PEX + post-layout checks
+                         |
+              GDSII/OASIS + reports/evidence
                          |
              separately qualified full-chip flow
 ```
 
+No new `nodal-analog` repository, Rust subsystem, native layout database,
+geometry kernel, placer/router, SPICE solver, DRC/LVS/PEX engine, or stream
+parser/writer is required or implemented by these tracks. Existing tools own
+detailed geometry and physical algorithms. Nodal retains circuit identities,
+constraints, source mappings, artifact references, and verification evidence.
+Adapters can use existing Scala/native infrastructure, Python, or tool-native
+scripting as appropriate. Future `nodal-eda` orchestration may reuse these
+interfaces; it does not require a duplicate analog runtime or change the
+language choices of `nodal-fpga` or `nodal-eda`.
+
 `AC-006` is the first useful circuit-simulation gate, `APL-006` the first
-automated-layout gate, and `APV-005` the first complete open post-layout loop.
-The [machine-readable surface](docs/roadmap/analog-physical-design-v0.1-surface.json)
+external automated-layout gate, and `APV-005` the first complete open
+post-layout loop. The [machine-readable surface](docs/roadmap/analog-physical-design-v0.1-surface.json)
 and [track registry](docs/roadmap/dependent-track-gate-v0.1.json) record the same
 boundaries and dependencies. Each increment has six nested checkboxes, including
 an acceptance/evidence child; partial progress never closes the parent.
 
-All new checkboxes are initially open. This is a roadmap, not implemented analog
-synthesis/layout, a new runtime repository, or a promise that GDS generation or
-open DRC alone constitutes foundry sign-off. It does not authorize implementation
-of the reserved full-chip ASIC or memory-interface tracks.
+All 36 parent and 216 child checkboxes remain open. This is a roadmap, not
+implemented analog synthesis/layout or a promise that GDS generation or open
+DRC alone constitutes foundry sign-off. It does not authorize implementation
+of the reserved full-chip ASIC or memory-interface tracks. Any future native
+physical-engine proposal requires a separately approved scope.
 
 ## Authoritative public references
 

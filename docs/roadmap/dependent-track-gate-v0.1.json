@@ -8,6 +8,7 @@
   "source_level_debugging_plan_revision": "0.1",
   "visualizer_debug_extension_plan_revision": "0.1",
   "analog_physical_design_plan_revision": "0.3",
+  "parameter_requirements_plan_revision": "0.1",
   "foundation_track": {
     "roadmap": "docs/roadmap/nodal-development-todo.md",
     "completion_rule": "all-foundation-checkboxes-complete",
@@ -16,7 +17,9 @@
       "docs/roadmap/asic-memory-dependent-tracks-v0.1-plan.md",
       "docs/roadmap/generated-hdl-testbench-projections-v0.1-plan.md",
       "docs/roadmap/native-digital-simulator-adapters-v0.1-plan.md",
-      "docs/roadmap/sequential-scheduled-hardware-foundation-readiness-v0.1.md"
+      "docs/roadmap/sequential-scheduled-hardware-foundation-readiness-v0.1.md",
+      "docs/roadmap/parameter-requirements-foundation-readiness-v0.1.md",
+      "docs/roadmap/parameter-requirements-v0.1-plan.md"
     ],
     "latest_foundation_increment": 159,
     "foundation_increment_148_owns_native_adapter_contracts": true,
@@ -33,7 +36,14 @@
     "sequential_implementation_is_not_a_foundation_exit_criterion": true,
     "debugging_implementation_is_not_a_foundation_exit_criterion": true,
     "visualizer_debug_extension_implementation_is_not_a_foundation_exit_criterion": true,
-    "analog_physical_implementation_is_not_a_foundation_exit_criterion": true
+    "analog_physical_implementation_is_not_a_foundation_exit_criterion": true,
+    "parameter_requirements_readiness_extension_is_architecture_only": true,
+    "parameter_requirements_readiness_checkpoints": ["PRF-001", "PRF-002", "PRF-003", "PRF-004", "PRF-005", "PRF-006"],
+    "parameter_requirements_owner_obligations": ["PRC-001", "PRC-002", "PRC-003", "PRC-004", "PRC-005", "PRC-006", "PRC-007", "PRC-008"],
+    "parameter_requirements_architecture_approval_requires_later_backend_implementation": false,
+    "parameter_requirements_existing_foundation_owner_followups_are_exit_obligations": true,
+    "parameter_requirements_full_barrier_includes_registered_followups": true,
+    "parameter_requirements_owner_links_are_not_whole_increment_entry_dependencies": true
   },
   "dependent_tracks": [
     {
@@ -95,11 +105,11 @@
       "plan": "docs/roadmap/source-level-debugging-v0.1-plan.md",
       "surface": "docs/roadmap/source-level-debugging-v0.1-surface.json",
       "first_useful_release_gate": "DBG-006",
+      "implementation_changes_foundation_exit_criteria": false,
       "live_digital_release_gate": "DBG-009",
       "transaction_debugging_release_gate": "DBG-011",
       "pipeline_debugging_requires": ["SQ-010"],
-      "advanced_scheduled_debugging_requires": ["SQ-024"],
-      "implementation_changes_foundation_exit_criteria": false
+      "advanced_scheduled_debugging_requires": ["SQ-024"]
     },
     {
       "id": "visualizer-debug-extension",
@@ -316,6 +326,26 @@
     "automatic_checkbox_synchronization_implemented": false,
     "existing_reserved_asic_and_memory_tracks_remain_reserved": true
   },
+  "parameter_requirements_architecture": {
+    "readiness": "docs/roadmap/parameter-requirements-foundation-readiness-v0.1.md",
+    "plan": "docs/roadmap/parameter-requirements-v0.1-plan.md",
+    "surface": "docs/roadmap/parameter-requirements-v0.1-surface.json",
+    "status": "planned-not-implemented",
+    "authoritative_progress": "plan-markdown-checkboxes",
+    "public_api_gate_approved": false,
+    "readiness_is_architecture_only": true,
+    "owner_obligations_are_existing_foundation_followups": true,
+    "new_global_increment_ids_allocated": false,
+    "existing_completed_history_preserved": true,
+    "prerequisite_edges_owner_map_and_acceptance_ids": "docs/roadmap/parameter-requirements-v0.1-surface.json",
+    "dependent_tracks_inherit_complete_registered_foundation_barrier": true,
+    "dependent_track_implementation_is_a_foundation_prerequisite": false,
+    "future_systemverilog_blocks_portable_verilog_lowering": false,
+    "full_temporal_assertion_language_required": false,
+    "guarded_simulation_checks_validate_synthesis_configurations": false,
+    "unsupported_lowering_policy": "explicit-rejection-never-drop-or-metadata-only",
+    "tool_qualification_status": "not-run"
+  },
   "low_power_architecture": {
     "readiness_adr": "docs/architecture/0024-minimal-asic-advanced-io-readiness-boundary.md",
     "plan": "docs/roadmap/low-power-power-intent-v0.1-plan.md",
@@ -347,6 +377,8 @@
     "docs/roadmap/sequential-scheduled-hardware-v0.1-plan.md",
     "docs/roadmap/source-level-debugging-v0.1-plan.md",
     "docs/roadmap/visualizer-debug-extension-v0.1-plan.md",
-    "docs/roadmap/analog-physical-design-v0.1-plan.md"
+    "docs/roadmap/analog-physical-design-v0.1-plan.md",
+    "docs/roadmap/parameter-requirements-foundation-readiness-v0.1.md",
+    "docs/roadmap/parameter-requirements-v0.1-plan.md"
   ]
 }

@@ -4,6 +4,7 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Backend/AnalogEventBackend.h"
+#include "nodal/Backend/AnalogUserFunctionBackend.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/AnalogEvents.h"
 #include "nodal/Dialect/Nodal/AnalogFunctions.h"
@@ -70,6 +71,10 @@ constexpr llvm::StringLiteral kSupportedOperations[] = {
     "nodal.analog_noise",
     "nodal.analog_transfer",
     "nodal.analog_function",
+    "nodal.analog_user_function",
+    "nodal.analog_function_value",
+    "nodal.analog_function_return",
+    "nodal.analog_user_call",
     "nodal.analog_analysis",
     "nodal.analog_compare",
     "nodal.analog_logic",
@@ -292,6 +297,18 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
         return failure();
       rendered = (llvm::Twine(access) + "(<" + port->second + ">)").str();
     }
+  } else if (name == "nodal.analog_user_call") {
+    auto callee = operation->getAttrOfType<FlatSymbolRefAttr>("callee");
+    if (!callee || !isPortableVerilogIdentifier(callee.getValue()))
+      return failure();
+    rendered = callee.getValue().str() + "(";
+    for (auto [index, operand] : llvm::enumerate(operation->getOperands())) {
+      auto input = renderExpression(operand, state);
+      if (failed(input))
+        return failure();
+      rendered += (index ? ", " : "") + *input;
+    }
+    rendered += ")";
   } else if (name == "nodal.analog_function") {
     auto id = operation->getAttrOfType<StringAttr>("function_id");
     auto *entry = id ? lookupAnalogFunction(id.getValue()) : nullptr;
@@ -571,6 +588,17 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
         return emitMappedFailure(declaration, "NODAL-BACKEND-NAMING-002",
                                  "declarations collide in the target namespace");
     }
+  }
+  for (Operation &operation : region.front()) {
+    if (operation.getName().getStringRef() != "nodal.analog_user_function")
+      continue;
+    auto name = operation.getAttrOfType<StringAttr>("sym_name");
+    if (!name || !isPortableVerilogIdentifier(name.getValue()))
+      return emitMappedFailure(&operation, "NODAL-BACKEND-NAMING-001",
+                               "invalid function target name");
+    if (!declarations.insert(name.getValue()).second)
+      return emitMappedFailure(&operation, "NODAL-BACKEND-NAMING-002",
+                               "function collides with a module declaration");
   }
   if (failed(orderParametersByDependency(definition, parameters)))
     return failure();
@@ -953,6 +981,8 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
   if ((!ports.empty() || !nodes.empty() || !namedBranches.empty() || !parameters.empty()) &&
       !analogs.empty())
     output << "\n";
+  if (failed(renderAnalogUserFunctions(definition, output)))
+    return failure();
   llvm::SmallVector<Operation *> procedures;
   for (Operation *analog : analogs)
     for (Operation &op : analog->getRegion(0).front())
@@ -1074,6 +1104,7 @@ LogicalResult verifyBackendTarget(llvm::StringRef candidate,
 }
 
 LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfiguration &) {
+  llvm::StringMap<unsigned> userFunctions;
   auto validParameterDeclaration = [](llvm::StringRef line) {
     llvm::StringRef code = line;
     size_t comment = code.find("//");
@@ -1214,12 +1245,28 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       realNames.clear();
       assignedRealNames.clear();
       eventNames.clear();
+      userFunctions.clear();
       insideModule = true;
       sawModule = true;
       continue;
     }
     if (!insideModule)
       return failure();
+    if (line.starts_with("analog function ")) {
+      if (insideAnalog)
+        return failure();
+      std::string remaining;
+      for (size_t i = lineIndex; i < lines.size(); ++i)
+        remaining += lines[i].str() + "\n";
+      auto consumed = reparseAnalogUserFunction(remaining, userFunctions);
+      if (failed(consumed) || !*consumed)
+        return failure();
+      auto count = llvm::count(llvm::StringRef(remaining).take_front(*consumed), '\n');
+      if (!count)
+        return failure();
+      lineIndex += count - 1;
+      continue;
+    }
     if (line == "analog begin") {
       if (insideAnalog)
         return failure();
@@ -1254,8 +1301,15 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       }
       if (!line.ends_with(";"))
         return failure();
-      if (line.contains("<+") && !line.contains(" = "))
+      if (line.contains("<+") && !line.contains(" = ")) {
+        if (!userFunctions.empty()) {
+          auto parts = line.drop_back().split("<+");
+          if (failed(reparseAnalogUserExpression(parts.first.trim(), userFunctions)) ||
+              failed(reparseAnalogUserExpression(parts.second.trim(), userFunctions)))
+            return failure();
+        }
         continue;
+      }
       auto statement = line.drop_back().trim();
       if (validWaveformCall(statement, true))
         continue;
@@ -1265,8 +1319,10 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       auto destination = statement.take_front(equals).trim();
       if (!realNames.contains(destination) || !assignedRealNames.insert(destination).second ||
           (!validWaveformCall(statement.drop_front(equals + 3).trim(), false) &&
-           failed(reparseAnalogNoiseCall(statement.drop_front(equals + 3).trim())) &&
-           failed(reparseAnalogTransferCall(statement.drop_front(equals + 3).trim()))))
+           failed(
+               reparseAnalogNoiseCall(statement.drop_front(equals + 3).trim(), &userFunctions)) &&
+           failed(
+               reparseAnalogTransferCall(statement.drop_front(equals + 3).trim(), &userFunctions))))
         return failure();
       continue;
     }

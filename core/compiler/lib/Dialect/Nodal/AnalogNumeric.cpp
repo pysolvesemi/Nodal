@@ -7,6 +7,7 @@
 #include "nodal/Dialect/Nodal/AnalogFunctions.h"
 #include "nodal/Dialect/Nodal/AnalogNoise.h"
 #include "nodal/Dialect/Nodal/AnalogTransfer.h"
+#include "nodal/Dialect/Nodal/AnalogUserFunctions.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
@@ -1247,6 +1248,11 @@ FailureOr<std::optional<double>> getAnalogConstantRealValue(Value value) {
 }
 
 LogicalResult verifyAnalogNumericOperation(Operation *operation) {
+  auto operationName = operation->getName().getStringRef();
+  if (operationName == "nodal.analog_user_function" ||
+      operationName == "nodal.analog_function_value" ||
+      operationName == "nodal.analog_function_return" || operationName == "nodal.analog_user_call")
+    return verifyAnalogUserFunctionOperation(operation);
   if (failed(verifyAnalogFunctionOperation(operation)))
     return failure();
   if (operation->getName().getStringRef() == "nodal.analog_transfer")

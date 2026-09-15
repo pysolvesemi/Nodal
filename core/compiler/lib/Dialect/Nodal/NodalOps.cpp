@@ -10,6 +10,7 @@
 #include "nodal/Dialect/Nodal/AnalogNoise.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/AnalogTransfer.h"
+#include "nodal/Dialect/Nodal/AnalogUserFunctions.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
@@ -1486,6 +1487,19 @@ LogicalResult nodal::ProbeOp::verify() {
   return nodal::verifyPotentialFlowAccessOperation(getOperation());
 }
 
+LogicalResult nodal::AnalogUserFunctionOp::verify() {
+  return verifyAnalogUserFunctionOperation(getOperation());
+}
+LogicalResult nodal::AnalogFunctionValueOp::verify() {
+  return verifyAnalogUserFunctionOperation(getOperation());
+}
+LogicalResult nodal::AnalogFunctionReturnOp::verify() {
+  return verifyAnalogUserFunctionOperation(getOperation());
+}
+LogicalResult nodal::AnalogUserCallOp::verify() {
+  return verifyAnalogUserFunctionOperation(getOperation());
+}
+
 LogicalResult nodal::AnalogOp::verify() {
   if (failed(requireSingleBlock(getOperation())))
     return emitOpError("NODAL-ANALOG-REGION-001: analog region requires one body block");
@@ -1494,9 +1508,9 @@ LogicalResult nodal::AnalogOp::verify() {
         operation.getResult(0).getType().isInteger(1))
       continue;
     if (!llvm::isa<nodal::RealLiteralOp, nodal::AnalogIntegerLiteralOp, nodal::ParameterRefOp,
-                   nodal::AnalogFunctionOp, nodal::AnalogAnalysisOp, nodal::AnalogNoiseOp,
-                   nodal::AnalogTransferOp, nodal::AnalogAddOp, nodal::AnalogSubOp,
-                   nodal::AnalogMulOp, nodal::AnalogDivOp, nodal::AnalogNegOp,
+                   nodal::AnalogFunctionOp, nodal::AnalogUserCallOp, nodal::AnalogAnalysisOp,
+                   nodal::AnalogNoiseOp, nodal::AnalogTransferOp, nodal::AnalogAddOp,
+                   nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp, nodal::AnalogNegOp,
                    nodal::AnalogCompareOp, nodal::AnalogLogicOp, nodal::AnalogSelectOp,
                    nodal::AnalogDdtOp, nodal::AnalogIdtOp, nodal::AnalogTransitionOp,
                    nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp, nodal::AnalogAbstimeOp,

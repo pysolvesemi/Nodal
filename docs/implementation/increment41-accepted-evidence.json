@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "increment": 41,
+  "profile": "pure-scalar-module-local-total-return-compiler-verilog-a-v0.1",
+  "accepted_head": "3ef30a40e2f81c5938e37cfbad7ad38c9146c3c2",
+  "accepted_tree": "37b88463606400f43e4090a9c631745cd2b88ad6",
+  "implementation_pr": 132,
+  "tested_pr_merge": "66546465a4ddd1bb0e34cda14130a26a9ff50499",
+  "required_core_ci_run": 35532859513,
+  "required_core_ci_conclusion": "success",
+  "dedicated_increment41_run": 35532859216,
+  "dedicated_increment41_conclusion": "success",
+  "all_pr_workflows_passed_before_merge_claimed": true,
+  "premerge_pr_workflow_count": 31,
+  "premerge_push_core_ci_run": 35532856437,
+  "premerge_push_increment41_run": 35532856434,
+  "source_qualification": {
+    "run_id": 35532859216,
+    "artifact_id": 10612428754,
+    "artifact_sha256": "94a727cd99a7b14f3384ab8fe4f6111df87849a57bac81f02e7472fbc7d15457",
+    "source_commit": "66546465a4ddd1bb0e34cda14130a26a9ff50499",
+    "source_tree": "37b88463606400f43e4090a9c631745cd2b88ad6",
+    "test_merge_tree_matches_accepted": true
+  },
+  "review": {
+    "kind": "direct-implementation-agent",
+    "commit": "3ef30a40e2f81c5938e37cfbad7ad38c9146c3c2",
+    "result": "completed-with-no-additional-blocking-findings",
+    "unresolved_threads": 0,
+    "source_map_review_thread": "resolved-and-outdated",
+    "independent_automated_review_claimed": false
+  },
+  "source_witness_sha256": {
+    "public.mlir": "63d08015b4ac3ad1133f250f7de030fad61c8ef9e4f0467b34a55d638200df0a",
+    "public.va": "a09529f6f2e80ad8d7e26f5c1e5037d78628536ea83f797de4f5b1e2cd1c254f"
+  },
+  "public_scala_source": {
+    "path": "examples/continuousTimeApi/src/nodal/increment41fixture/Increment41ConstructionCheck.scala",
+    "sha256": "e697a3258e6fc6b82163955e7728a4d829d5b7dd7e74d290a87735751eb4b92f"
+  },
+  "observed_qualification_counts": {
+    "scala_tests": 146,
+    "native_ctest_tests": 134,
+    "dedicated_python_tests": 5,
+    "native_source_matrix_cases": 61,
+    "compiler_python_regression_tests": 348,
+    "counts_overlap_and_are_not_additive": true
+  },
+  "implementation_merge": "4d979879d9ee1edd2413068f33ea1a2e4b357e6f",
+  "implementation_merge_tree": "37b88463606400f43e4090a9c631745cd2b88ad6",
+  "preserved_dev_parent": "a69c6ba85f4f5be5b397ac8b9ddabfbd16944b8d",
+  "post_merge_core_ci_run": 35538979449,
+  "post_merge_core_ci_conclusion": "success",
+  "post_merge_increment41_run": 35538979384,
+  "post_merge_increment41_conclusion": "success",
+  "post_merge_compatibility_runs": {
+    "increment36": 35538979493,
+    "increment37": 35538979458,
+    "increment38": 35538979351,
+    "increment39": 35538979442,
+    "increment40": 35538979365
+  },
+  "post_merge_witness": {
+    "run_id": 35538979384,
+    "artifact_id": 10613274703,
+    "artifact_sha256": "1aff854ece06fed827eb1edb1fcb155426e9d4c0537cdb0666249a435340f219",
+    "source_commit": "4d979879d9ee1edd2413068f33ea1a2e4b357e6f",
+    "source_tree": "37b88463606400f43e4090a9c631745cd2b88ad6",
+    "exact_merge_identity_matches": true
+  },
+  "post_merge_witness_matches_accepted": true,
+  "numerical_simulator_execution_claimed": false,
+  "general_verilog_ams_claimed": false,
+  "synthesis_claimed": false,
+  "demonstration_sha256": {
+    "scala": [
+      "9ed29da0d42e238299a2177db4efb674e8556131e5819f9c1313b62c27f9c496"
+    ],
+    "verilog": [
+      "e9d0194c76223b97fb55c817ee15b08826c00bcf649280ab2af7af369a8ed251"
+    ]
+  }
+}

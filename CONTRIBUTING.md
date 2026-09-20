@@ -15,6 +15,33 @@ Complete every section in the repository pull-request template. A pull request
 into `dev` must pass the required Core CI gate before squash merge. Milestone
 promotion pull requests into `main` may originate only from `dev`.
 
+## Increment and sub-checklist progress
+
+This rule applies to every roadmap track. New or revised increments should use
+one parent `- [ ]` checkbox and nested `- [ ]` checkboxes for independently
+trackable implementation, validation, and acceptance tasks. Give children stable
+identifiers when they need cross-references, such as `AC-001.a`.
+
+A child may be marked `[x]` once its own deliverable and applicable validation
+are complete. Record the supporting commit, artifact, or evidence reference in
+the item or its linked completion report. Keep the parent `[ ]` while any
+required child remains open, any dependency is incomplete, or the increment's
+acceptance/evidence gate is outstanding. Partial child completion must not be
+reported or counted as completion of the parent increment.
+
+Mark a parent `[x]` only after all required children, dependencies, acceptance
+criteria, and completion-report obligations are satisfied. If a completed child
+is invalidated or reopened, reopen its parent. Do not silently delete, waive, or
+check unfinished children to close an increment; record an explicitly approved
+scope change and its rationale instead.
+
+The roadmap's detailed Markdown checklist is authoritative for progress.
+Machine-readable manifests should reference the same stable increment/child
+identities and dependency rules without introducing a competing editable status
+source. This is a tracking policy, not an implemented automatic checkbox-sync
+feature. Converting a roadmap to nested checklists must not invent completion
+evidence or change historical completion states without review.
+
 ## Increment completion demonstrations
 
 This is a standing project instruction for every roadmap track, including

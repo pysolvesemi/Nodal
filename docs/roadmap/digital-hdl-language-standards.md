@@ -96,3 +96,40 @@ The future `Backend.SystemVerilog` profile has its own declared simulator, synth
 - AMS Verification Increments 8-10 reuse the same bound RNM models in generated UVM-MS and commercial simulator profiles without copying model algorithms.
 
 SystemVerilog-AMS remains a separate research concern and is not implied by the IEEE 1800-2023 digital SystemVerilog backend.
+
+## Parameter-requirement diagnostics: planned capability amendment (2026-09-14)
+
+The [parameter-requirements contract and acceptance plan](parameter-requirements-v0.1-plan.md)
+and its [Foundation readiness supplement](parameter-requirements-foundation-readiness-v0.1.md)
+add open obligations to the existing owners; they do not claim current lowering
+or tool support. The [candidate surface](parameter-requirements-v0.1-surface.json)
+separates planned capabilities from implementation and qualification evidence.
+
+| Profile | Planned configuration-check behavior | Owner |
+| --- | --- | --- |
+| Required portable Verilog | Native procedural diagnostic bound to actual parameters; no SystemVerilog `assert` or `$fatal`; qualified deterministic runner failure or explicit rejection | 65-66 |
+| Future SystemVerilog | Native time-zero `initial` immediate assertion with fatal failure, after the separate language gate | 99, 130, with 66 |
+| Synthesis use of guarded HDL | Establish/verify `SYNTHESIS`; diagnostics removed and functional hardware unchanged; no synthesis-configuration validation claim | 67 |
+| Core formal | Separate supported configuration check/formal assertion lowering or explicit rejection; never automatically assume the requirement | 67 |
+| Verilog-A and Verilog-AMS | Independent context, predicate, timing and termination capabilities; no assumption that digital assertion syntax is legal | 23, 72, 75-76, 78 |
+
+All simulation-only requirement diagnostics must be guarded by
+`ifndef SYNTHESIS`; functional declarations and parameter arithmetic remain
+outside that guard. This is a tool/flow convention that adapters must establish
+or verify. The guarded assertions do not enforce parameter legality during
+synthesis and must not be advertised as synthesis-time protection.
+
+An `initial` immediate assertion checks the actual instantiated parameter binding
+at simulation time zero. It is not guaranteed to reject HDL during compilation
+or before all type/structural elaboration, and cannot repair a default-selected
+hardware structure. Unsupported lowerings fail explicitly rather than dropping
+a requirement, retaining metadata only or silently upgrading the language.
+`Backend.Auto` remains unchanged.
+
+The open PRV-001 through PRV-015 matrix requires executed Icarus/Verilator checks,
+valid and invalid overrides of one emitted artifact, deterministic diagnostics,
+independent parameters and hierarchy, pure-Verilog mode checks, Yosys synthesis
+isolation, separate formal/AMS handling and mutation sensitivity. Record pinned
+versions, modes, defines, complete commands, logs and runner-visible results;
+compilation alone or disabled assertion execution is not qualification. None of
+that implementation or qualification is performed by this roadmap amendment.

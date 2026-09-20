@@ -1,0 +1,104 @@
+name: Increment 41 analog functions
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - 'core/**'
+      - 'examples/continuousTimeApi/**'
+      - 'scripts/check_increment41.py'
+      - 'tests/compiler/**'
+      - 'docs/design-gates/NodalAnalogUserFunctions-DG-v*.md'
+      - 'docs/implementation/increment41-*.md'
+      - '.github/workflows/increment-41-analog-functions.yml'
+  push:
+    branches: [dev, increment/41-analog-functions]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: increment41-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  functions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Record exact source identity
+        run: |
+          mkdir -p evidence
+          git rev-parse HEAD HEAD^{tree} > evidence/source-identity.txt
+          git archive HEAD | gzip > evidence/source.tar.gz
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/nodal/mill
+          key: nodal-scala-${{ runner.os }}-${{ hashFiles('build.mill', '.mill-version', 'mill', '.scalafmt.conf', '.scalafix.conf', 'toolchains/lock.json', 'toolchains/lint-lock.json') }}
+          restore-keys: |
+            nodal-scala-${{ runner.os }}-
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/nodal/downloads
+          key: nodal-native-download-${{ runner.os }}-${{ hashFiles('toolchains/lock.json', 'toolchains/checksums/*.sha256') }}
+      - name: Function implementation contracts
+        run: |
+          set -o pipefail
+          python3 scripts/check_increment41.py
+          python3 -m unittest discover -s tests/compiler -p 'test_increment41.py' 2>&1 | tee evidence/python.log
+      - name: Public source and Scala tests
+        id: scala
+        run: |
+          set -o pipefail
+          ./nodal core scala 2>&1 | tee evidence/scala.log
+          ./mill -i examples.continuousTimeApi.runMain nodal.increment41fixture.Increment41ConstructionCheck 2>&1 | tee evidence/public-scala.log
+          ./mill -i core.scala.testkit.test.runMain nodal.internal.testkit.Increment41MlirCheck "$PWD/evidence/public.mlir"
+      - name: Locked native build and tests
+        id: native
+        run: |
+          set -o pipefail
+          ./nodal bootstrap --mode prebuilt --prefix "$RUNNER_TEMP/nodal-native"
+          ./nodal style bootstrap --prefix "$RUNNER_TEMP/nodal-lint"
+          ./nodal core native --toolchain "$RUNNER_TEMP/nodal-native" --lint-toolchain "$RUNNER_TEMP/nodal-lint" 2>&1 | tee evidence/native.log
+      - name: Preserve native tools for reproducible fixture debugging
+        if: always() && steps.scala.outcome == 'success'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os, re, shutil, subprocess
+          destination = Path('evidence/native-tools')
+          destination.mkdir(parents=True, exist_ok=True)
+          library = destination / 'lib'
+          library.mkdir(exist_ok=True)
+          root = str(Path(os.environ['RUNNER_TEMP']) / 'nodal-native')
+          for name in ('nodalc', 'nodal-translate'):
+              candidates = [p for p in Path('out').rglob(name) if p.is_file() and os.access(p, os.X_OK)]
+              if not candidates:
+                  continue
+              tool = candidates[0]
+              shutil.copy2(tool, destination / name)
+              subprocess.run(['strip', str(destination / name)], check=True)
+              dependencies = subprocess.check_output(['ldd', str(tool)], text=True)
+              (destination / (name + '.dependencies.txt')).write_text(dependencies)
+              for path in re.findall(r'=> (/\S+) \(', dependencies):
+                  if path.startswith(root + '/'):
+                      shutil.copy2(path, library / Path(path).name)
+          PY
+      - name: Public source through native compiler and target gates
+        if: always() && steps.scala.outcome == 'success'
+        run: |
+          set -o pipefail
+          nodalc=$(find out -type f -name nodalc -executable | head -1)
+          translate=$(find out -type f -name nodal-translate -executable | head -1)
+          test -n "$nodalc" && test -n "$translate"
+          python3 tests/compiler/fixtures/increment41/run_native_matrix.py \
+            --nodalc "$nodalc" --translate "$translate" --source "$PWD/evidence/public.mlir" 2>&1 | tee evidence/source-matrix.log
+          "$translate" --nodal-to-verilog-a evidence/public.mlir > evidence/public.va
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: increment41-source-target-evidence
+          path: evidence/
+          retention-days: 14

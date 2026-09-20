@@ -17,6 +17,46 @@ class Nodal_Op<string mnemonic, list<Trait> traits = []>
     : Op<Nodal_Dialect, mnemonic, traits>;
 
 //===----------------------------------------------------------------------===//
+// Increment 41: isolated pure analog function declarations and resolved calls.
+// Body expressions deliberately do not relax existing analog-region traits.
+//===----------------------------------------------------------------------===//
+
+def Nodal_AnalogUserFunctionOp : Nodal_Op<"analog_user_function",
+    [HasParent<"ModuleOp">, IsolatedFromAbove, Symbol, NoTerminator]> {
+  let summary = "Module-local typed pure analog function";
+  let arguments = (ins SymbolNameAttr:$sym_name, TypeAttr:$return_type,
+    StrAttr:$contract_version, DictionaryAttr:$metadata);
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogFunctionValueOp : Nodal_Op<"analog_function_value",
+    [HasParent<"AnalogUserFunctionOp">]> {
+  let summary = "Pure typed argument, local or scalar function-body expression";
+  let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$kind,
+    OptionalAttr<StrAttr>:$name, OptionalAttr<I64Attr>:$argument_index,
+    OptionalAttr<AnyAttr>:$value, OptionalAttr<StrAttr>:$function_id,
+    DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogFunctionReturnOp : Nodal_Op<"analog_function_return",
+    [HasParent<"AnalogUserFunctionOp">]> {
+  let summary = "Total, final analog function return";
+  let arguments = (ins AnyType:$value, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogUserCallOp : Nodal_Op<"analog_user_call"> {
+  let summary = "Exact typed module-local nonrecursive analog function call";
+  let arguments = (ins Variadic<AnyType>:$inputs, FlatSymbolRefAttr:$callee,
+    StrAttr:$contract_version, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // Increment 18 compatibility fixture
 //===----------------------------------------------------------------------===//
 

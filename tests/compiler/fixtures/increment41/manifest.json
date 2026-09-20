@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "increment": 41,
+  "contract_version": "1",
+  "status": "implementation-in-progress",
+  "profile": "pure-scalar-module-local-total-return",
+  "operations": [
+    "nodal.analog_user_function",
+    "nodal.analog_function_value",
+    "nodal.analog_user_call",
+    "nodal.analog_function_return"
+  ],
+  "argument_kinds": [
+    "real",
+    "integer"
+  ],
+  "recursion": "rejected",
+  "overloads": "rejected",
+  "qualification": "compiler-structural-not-numerical-simulation",
+  "accepted_evidence": null,
+  "remaining": [
+    "exact-head Core CI and dedicated source/native/target validation",
+    "implementation review and squash merge",
+    "exact post-merge qualification and separate accepted-evidence closure"
+  ],
+  "deferred": [
+    "mutable locals, loops and early returns",
+    "output/inout, string and array arguments/results",
+    "equation/procedural/event calls and cross-module calls",
+    "interprocedural optimization, numerical simulation, general Verilog-AMS and synthesis"
+  ]
+}

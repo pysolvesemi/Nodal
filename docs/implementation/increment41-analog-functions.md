@@ -1,6 +1,6 @@
 # Increment 41 — User-defined analog functions
 
-**Status:** Implementation in progress; not evidence-closed or merged.
+**Status:** Validated compiler/Verilog-A profile
 
 ## Implemented path
 
@@ -55,17 +55,22 @@ python3 tests/compiler/fixtures/increment41/run_native_matrix.py \
   --source evidence/public.mlir
 ```
 
-## Validation and outstanding acceptance
+## Accepted evidence and qualification
 
-Scala tests, Python contract/mutation tests, native compiler cases, and an
-independent C++ function-parser suite are registered in permanent test targets.
-The dedicated read-only workflow retains exact source/tree identities, source
-archive, source-map witness, generated `public.va`, native tools and logs.
+Implementation PR #132 was accepted at
+`3ef30a40e2f81c5938e37cfbad7ad38c9146c3c2`, tree
+`37b88463606400f43e4090a9c631745cd2b88ad6`, after all 31 PR workflows,
+required Core CI `35532859513`, and dedicated Increment 41 `35532859216`
+passed. It squash-merged as `4d979879d9ee1edd2413068f33ea1a2e4b357e6f`
+with the same tree. Exact post-merge Core CI `35538979449` and Increment 41
+`35538979384` passed, along with the Increment 36–40 compatibility workflows.
 
-The roadmap remains unchecked. Required exact-head Core CI and dedicated
-qualification, implementation review, merge, exact post-merge validation, and a
-separate accepted-evidence record remain outstanding until demonstrated. This
-implementation note makes no assertion that an unexecuted test has passed.
+The immutable acceptance record is
+[`increment41-accepted-evidence.json`](increment41-accepted-evidence.json),
+and the paired Scala/actual generated Verilog-A demonstration is in
+[`increment41-evidence-closure.md`](increment41-evidence-closure.md). The
+accepted profile remains compiler/structural qualification rather than numerical
+simulation or synthesis.
 
 ## Compiler-boundary review hardening
 
@@ -83,6 +88,6 @@ matrix adds 16 negative cases for nested and ordinary calls, with each case run
 through native verification, the optimization pipeline, and target emission.
 The tests require diagnostic rejection without publishing partial HDL.
 
-This repair requires fresh exact-head qualification. The earlier successful run
-is regression evidence, not acceptance of the repaired implementation. The
-roadmap and accepted-evidence manifest remain open.
+The repaired implementation subsequently passed exact-head and exact post-merge
+qualification. Its forged-call negatives remain part of the permanent accepted
+contract and are pinned by the separate evidence closure.

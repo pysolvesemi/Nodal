@@ -1,8 +1,8 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.51
+**Revision:** 1.52
 **Created:** 2026-08-20
-**Updated:** 2026-09-08
+**Updated:** 2026-09-21
 **Status:** Active roadmap
 **Primary language target:** Verilog-AMS 2023
 **Analog-only compatibility target:** Verilog-A
@@ -972,8 +972,9 @@ The numbered roadmap below is the **Foundation track**. FPGA Productivity, Digit
   - Supports `laplaceNd`/`ziNd`, fixed coefficient-array lengths with symbolic scalar coefficients, physical-unit/static/d0/timing checks, and independent/shared/cascaded state preservation. Root/pole forms, broader symbolic proofs, numerical simulation, general Verilog-AMS and lexical binder naming (Foundation 153–157) remain deferred.
 
 
-- [ ] **Increment 41 — User-defined analog functions**
+- [x] **Increment 41 — User-defined analog functions**
   - Implement typed declarations, arguments, locals, returns, recursion/overload policy, resolution, and lowering.
+  - Evidence: implementation PR [#132](https://github.com/pysolvesemi/Nodal/pull/132), accepted head `3ef30a40e2f81c5938e37cfbad7ad38c9146c3c2`, merge `4d979879d9ee1edd2413068f33ea1a2e4b357e6f`, exact post-merge Core CI `35538979449`, Increment 41 `35538979384`, and [accepted-evidence record](../implementation/increment41-evidence-closure.md).
 
 - [ ] **Increment 42 — Analog hierarchy and parameterized instances**
   - Implement instances, named ports, symbolic overrides, legal arrays, hierarchy verification, and recursion errors.

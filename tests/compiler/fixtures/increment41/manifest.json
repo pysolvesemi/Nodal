@@ -2,7 +2,7 @@
   "schema": 1,
   "increment": 41,
   "contract_version": "1",
-  "status": "implementation-in-progress",
+  "status": "validated-analog-functions",
   "profile": "pure-scalar-module-local-total-return",
   "operations": [
     "nodal.analog_user_function",
@@ -17,16 +17,30 @@
   "recursion": "rejected",
   "overloads": "rejected",
   "qualification": "compiler-structural-not-numerical-simulation",
-  "accepted_evidence": null,
-  "remaining": [
-    "exact-head Core CI and dedicated source/native/target validation",
-    "implementation review and squash merge",
-    "exact post-merge qualification and separate accepted-evidence closure"
-  ],
+  "accepted_evidence": {
+    "path": "docs/implementation/increment41-accepted-evidence.json",
+    "sha256": "177082f5edac85be80541384d94529c6fd8f82fe1cdbc39cd87b771398d81f32"
+  },
+  "remaining": [],
   "deferred": [
     "mutable locals, loops and early returns",
     "output/inout, string and array arguments/results",
     "equation/procedural/event calls and cross-module calls",
     "interprocedural optimization, numerical simulation, general Verilog-AMS and synthesis"
-  ]
+  ],
+  "semantics": {
+    "module_local_definition_ownership": true,
+    "pure_scalar_real_integer_profile": true,
+    "typed_dimensioned_arguments_and_return": true,
+    "initialized_immutable_locals": true,
+    "single_total_return": true,
+    "recursion_and_overload_rejection": true,
+    "implicit_capture_and_effect_rejection": true,
+    "call_operation_identity_preservation": true,
+    "forged_call_attribute_rejection": true,
+    "source_map_namespace_isolation": true,
+    "deterministic_dependency_ordered_emission": true,
+    "target_reparse": true,
+    "no_partial_hdl_on_error": true
+  }
 }

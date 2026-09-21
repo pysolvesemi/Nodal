@@ -15,6 +15,31 @@ Complete every section in the repository pull-request template. A pull request
 into `dev` must pass the required Core CI gate before squash merge. Milestone
 promotion pull requests into `main` may originate only from `dev`.
 
+## Staged CI, monitoring and merge verification
+
+[AGENTS.md](AGENTS.md) defines the standing targeted-first CI and browserless
+allowlisted-dispatch policy. Publish clean repair checkpoints with `[skip ci]`,
+qualify affected workflows on the exact head, then qualify the complete applicable
+CI set. Local checks do not replace remote qualification. Full-CI failures return
+to targeted repair; do not repeatedly restart successful independent workflows.
+
+Enable one hourly continuation immediately after the first targeted launch and
+keep it enabled through repairs, full CI, review, merge and accepted-evidence
+closure. Disable it only after the increment's closure obligations and completion
+report are satisfied, unless the user explicitly pauses or cancels it.
+
+After all required final-head CI and review pass, retain Nodal's squash-merge
+policy and include `[skip ci]` in the actual merge message. Verify the merged
+commit/ref and its equality to the qualified source tree instead of launching
+duplicate post-merge CI. Record suppression separately from executed validation;
+never label skipped CI as passed or invent post-merge run IDs. This policy applies
+to future merges/closures, not to rewriting historical accepted evidence.
+
+Separate accepted-evidence closure and the completion-demonstration requirements
+below remain mandatory. An evidence schema requiring new post-merge executions
+must be explicitly evolved and reviewed to represent qualified identical-tree
+merge verification; do not weaken its historical integrity checks.
+
 ## Increment and sub-checklist progress
 
 This rule applies to every roadmap track. New or revised increments should use
@@ -102,7 +127,7 @@ Run the style and policy gate against the integration branch:
 ./nodal style check --base-ref origin/dev
 ```
 
-Run the complete gate before publishing:
+Run the complete gate before final acceptance:
 
 ```bash
 ./nodal check --online-toolchain --base-ref origin/dev
@@ -110,6 +135,11 @@ Run the complete gate before publishing:
 
 The same commands run in GitHub Actions. Do not replace them with private CI-only
 command sequences.
+
+Clean intermediate repair checkpoints may be published before the full gate so
+that remote targeted qualification can run first, as specified in AGENTS.md.
+They are not accepted increments. A user-authorized documentation-only update
+with CI explicitly waived remains separate from implementation/closure work.
 
 ## Formatting and lint rules
 

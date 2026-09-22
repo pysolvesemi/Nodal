@@ -23,6 +23,8 @@ Future ASIC and memory-interface implementation may receive separately approved 
 
 ## Foundation TODO
 
+Nested-checklist presentation updated 2026-09-22 under [Foundation roadmap revision 1.53](nodal-development-todo.md#foundation-nested-checklist-and-acceptance-rules). The earlier amendment date and architecture acceptance remain historical; no implementation or dependent-track scope changes.
+
 - [x] **Foundation Increment 150 — Minimal ASIC, source-synchronous I/O, power, DFT, and hard-macro architecture readiness**
   - Accept [ADR 0024](../architecture/0024-minimal-asic-advanced-io-readiness-boundary.md).
   - Freeze only stable semantic identities, capability metadata, source correlation, ownership boundaries, and adapter seams for source-synchronous/multi-edge I/O, ASIC timing/sign-off intent, power intent, DFT/DFx intent, and hard-macro multi-view IP identity.
@@ -30,6 +32,7 @@ Future ASIC and memory-interface implementation may receive separately approved 
   - Keep SDC, Liberty/SDF/SPEF, STA, UPF, scan/ATPG/MBIST, JTAG generation, PDK/custom-layout flows, DRC/LVS/extraction, DDR training engines, DFI, LPDDR protocol libraries, and hard-PHY implementation outside Foundation.
   - Record that future protocol/device standards are versioned dependent libraries/profiles rather than core Nodal semantics.
   - This increment is architecture-only; no compiler/backend/vendor implementation is required for its completion.
+  - [x] **F-150.H — Historical acceptance breakdown: Minimal ASIC/I/O/power/DFT/hard-macro readiness.** Retain the documented ADR 0024 semantic identities and adapter seams only; no physical-design, power, DFT or PHY implementation is claimed.
 
 - [x] **Foundation Increment 151 — Foundation-only scope correction and open RTL-to-GDS readiness seam**
   - Remove ASIC and memory-interface implementation checklists from this Foundation extension. Retain only architecture ownership, capability seams, and reserved future track names.
@@ -40,6 +43,7 @@ Future ASIC and memory-interface implementation may receive separately approved 
   - Reserve future **ASIC Productivity and Sign-off** and **Memory Interface IP and PHY** track names. Each may start at Increment 1 only after a separate roadmap is explicitly approved.
   - Route canonical Power Intent IR, UPF, reusable low-power primitives, power-aware verification, and technology mappings to the separately numbered Low-Power Architecture and Power Intent Track without adding them to Foundation.
   - This increment is architecture-only; no implementation TODO, compiler behavior, backend, plugin, library, tool adapter, or physical artifact is added.
+  - [x] **F-151.H — Historical acceptance breakdown: Foundation-only scope and open-flow seam correction.** Retain the documentary architecture/readiness correction below and the unchanged implementation exclusions, reserved-track names and Foundation barrier.
 
 ## Architecture readiness boundary
 

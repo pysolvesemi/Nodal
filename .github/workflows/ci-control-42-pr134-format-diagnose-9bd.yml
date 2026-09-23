@@ -1,0 +1,52 @@
+name: Nodal 42 pinned format diagnosis
+
+on:
+  push:
+    branches:
+      - ci-control/nodal-42-pr134-format-diagnose-9bd-v1
+    paths:
+      - .github/workflows/ci-control-42-pr134-format-diagnose-9bd.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Fetch exact source and style
+        shell: bash
+        run: |
+          set -euo pipefail
+          root='https://raw.githubusercontent.com/pysolvesemi/Nodal/9bd5db950c7e103bf86807276f7dc0814b1a735b'
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "${root}/.clang-format" -o .clang-format
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "${root}/core/compiler/lib/Transforms/Passes.cpp" -o Passes.cpp
+          printf '%s  %s\n' \
+            '561f61439c969d9b5007aa4f1bdc7f30b7f8b431c24841cd22d6cc0eb1c4bb8b' \
+            '.clang-format' | sha256sum --check --strict
+          printf '%s  %s\n' \
+            'fc32a7b70a91dfea76fa3e1a62ab625de3201bcc93140b4dee78db90123a05b2' \
+            'Passes.cpp' | sha256sum --check --strict
+
+      - name: Install exact pinned formatter
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --no-deps \
+            'clang-format==22.1.8'
+          clang-format --version
+
+      - name: Emit exact formatter result
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang-format --style=file Passes.cpp > formatted.cpp
+          printf 'input_sha256=%s\n' "$(sha256sum Passes.cpp | awk '{print $1}')"
+          printf 'formatted_sha256=%s\n' "$(sha256sum formatted.cpp | awk '{print $1}')"
+          echo '--- hierarchy region after pinned formatter ---'
+          sed -n '375,410p' formatted.cpp
+          echo '--- exact diff ---'
+          diff -u Passes.cpp formatted.cpp || true

@@ -5,6 +5,59 @@ may narrow them for its subtree. A direct user instruction for the current task
 takes precedence. Read [CONTRIBUTING.md](CONTRIBUTING.md) before implementing or
 completing an increment.
 
+## Pre-implementation increment readiness gate
+
+Before modifying implementation source for an increment or sub-increment, audit
+the proposed work against the live integration target. This gate establishes a
+coherent scope and acceptance boundary before implementation; it is not
+permission to weaken an increment or rewrite historical acceptance.
+
+1. Refresh the integration target and read the applicable `AGENTS.md`,
+   `CONTRIBUTING.md`, complete parent/child checklist, linked plans and ADRs,
+   predecessor evidence, open PR discussion, and live branch/ref state.
+2. Inspect the relevant public API, frontend, bridge, native IR/verifiers,
+   lowering, backend, tools, tests, workflows, fixtures and known limitations.
+   Determine what already exists, what is reusable, and which claimed
+   dependencies or validation owners are real.
+3. Classify every existing child obligation as required now, blocked by a named
+   dependency, owned by a named later increment, explicitly optional, or
+   genuinely non-applicable to the selected feature/profile. Record the
+   rationale and the resulting acceptance limit; applicability review is not
+   execution evidence.
+4. Preserve stable IDs, original intent, parent state, historical evidence and
+   required acceptance strength. Prefer correcting or clarifying an item under
+   its existing ID. A genuinely non-applicable item should normally become an
+   explicit applicability result with its rationale instead of disappearing.
+   Never silently delete, waive, check, or defer required work merely to reduce
+   the increment. Removing or narrowing an obligation requires an explicitly
+   documented and approved scope change under `CONTRIBUTING.md`.
+5. Add missing feature-specific obligations and correct inaccurate, duplicated
+   or misplaced wording. Reuse established representations, infrastructure and
+   validation owners; avoid fixture-specific exceptions, copied generic
+   checklists, circular dependencies and unbounded interaction matrices.
+6. For a new increment, create exactly one
+   `increment/<number>-<slug>` branch from the refreshed integration target
+   and one draft PR. For existing work, reuse its current branch and PR; do not
+   create a replacement branch or parallel increment implicitly.
+7. If the audit requires a checklist correction, publish that focused
+   documentation update as the first branch commit with `[skip ci]`, create or
+   update the draft PR/checkpoint, and verify the changed-file scope before
+   implementation.
+   Do not run CI merely for this authorized documentation-only scope commit. If
+   no checklist edit is required, record the audit conclusion in the draft PR
+   or durable checkpoint without creating an empty commit.
+8. Start implementation only after the checklist, dependencies, implementation
+   layers, rejection coverage, independent validation ownership and acceptance
+   boundary are coherent. Keep the parent open until all required descendants
+   and closure obligations are complete.
+
+After the first durable increment commit and draft PR exist, create, re-enable
+or update exactly one hourly continuation for that increment. Before targeted
+CI, it tracks live refs, implementation progress, blockers and the durable
+checkpoint, and may resume already-authorized work only when it will not compete
+with an active worker. The same continuation transitions to CI monitoring after
+the first targeted launch; never create a second monitor for the CI phase.
+
 ## Targeted CI before full CI
 
 For every increment, sub-increment, repair and accepted-evidence closure, qualify
@@ -35,9 +88,12 @@ otherwise; do not start another increment or touch `main` implicitly.
    cancellations, timeouts, skipped applicable jobs and old-head successes are
    not passing evidence. Record legitimate non-applicable skips without giving
    them test credit. A prospective test-merge SHA is not an actual merge.
-6. After the first targeted launch, immediately enable hourly monitoring as
-   specified below. Repair failures and repeat only the affected targeted set
-   until all targeted requirements pass on the intended candidate.
+6. After the first targeted launch, confirm the increment's single hourly
+   continuation is enabled and transition it to CI monitoring as specified
+   below. If it was genuinely unavailable during implementation, enable it now.
+   Do not create a duplicate monitor. Repair failures and repeat only the
+   affected targeted set until all targeted requirements pass on the intended
+   candidate.
 7. Only then start one applicable full-CI qualification on that exact candidate.
    Inventory the complete required workflow/job set, including Core CI and
    applicable increment/compatibility workflows; Core CI alone is not the full
@@ -121,20 +177,36 @@ After launch, verify each resulting run has the allowlisted workflow ID, event
 `github-actions[bot]` is expected with the job token; neither that actor nor a
 green controller job is qualification evidence. Only the dispatched checks count.
 
-## Hourly monitoring until increment closure
+## Hourly monitoring from increment start through closure
 
-Immediately after launching targeted CI for an increment, create, re-enable or
-update one hourly continuation for that increment using the available scheduling
-tool (`RRULE:FREQ=HOURLY`). Do not wait for targeted CI to finish or ask for this
-standing authorization again. Reuse an existing task instead of creating
-competing monitors. Confirm scheduling actually succeeded before reporting it
-as enabled; report an unavailable scheduler without claiming background work.
+After the first durable increment commit and draft PR exist, create, re-enable
+or update one hourly continuation for that increment using the available
+scheduling tool (`RRULE:FREQ=HOURLY`). Do not create it before there is a durable
+branch/PR state to inspect. Reuse the same task throughout implementation,
+targeted repair, full CI, review, merge and accepted-evidence closure instead of
+creating competing monitors. Confirm scheduling actually succeeded before
+reporting it as enabled; report an unavailable scheduler without claiming
+background work.
 
-Keep the task enabled through targeted repairs, full CI, review, merge and any
-separate accepted-evidence closure. A green targeted run, green full matrix or
-merged implementation PR is not alone a reason to disable it.
+Before the first targeted launch, each execution must:
 
-Each execution must:
+1. Read the live target, feature ref, draft PR, checklist and durable checkpoint.
+   If another worker has an active, current checkpoint or is publishing, avoid
+   competing writes and end quietly unless coordination is required.
+2. Continue only the already-authorized increment scope. Work from the audited
+   checklist, run proportional local checks, preserve clean ancestry, and
+   publish focused `[skip ci]` checkpoints when remote evidence or handoff is
+   needed. Do not launch targeted or full CI before a clean candidate and
+   affected-workflow inventory are ready.
+3. Record completed children only with their own deliverables and applicable
+   validation. Keep blocked, deferred and non-applicable classifications
+   explicit, preserve parent state, and report real blockers rather than
+   deleting work or manufacturing progress.
+4. Update the durable checkpoint with the current phase, refs, completed work,
+   local evidence, remaining checklist items, blockers and next safe action.
+   Stay quiet when nothing actionable changed.
+
+After the first targeted launch, each execution must:
 
 1. Read live refs, PR/review state, the durable increment checkpoint and every
    applicable latest-attempt workflow/job/check/status page. Avoid competing

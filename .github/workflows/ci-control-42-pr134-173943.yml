@@ -1,0 +1,33 @@
+name: Nodal 42 PR134 formatting-repair targeted dispatcher
+on:
+  push:
+    branches:
+      - ci-control/nodal-42-pr134-173943-targeted-v2
+    paths:
+      - .github/workflows/ci-control-42-pr134-173943.yml
+      - scripts/ci_control/increment42_pr134_173943.py
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: nodal-42-pr134-173943-targeted-v2
+  cancel-in-progress: false
+jobs:
+  dispatch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate exact identities and dispatch allowlisted targeting
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci_control/increment42_pr134_173943.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nodal-42-pr134-173943-dispatch-ledger
+          path: dispatch-evidence/
+          retention-days: 14

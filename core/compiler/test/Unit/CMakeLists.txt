@@ -229,3 +229,16 @@ target_link_libraries(nodal-user-function-reparse-unit-tests
   PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport
 )
 add_test(NAME nodal.native.user-function-reparse-unit COMMAND nodal-user-function-reparse-unit-tests)
+
+add_executable(nodal-hierarchy-order-unit-tests HierarchyOrderTest.cpp)
+llvm_update_compile_flags(nodal-hierarchy-order-unit-tests)
+add_test(NAME nodal.native.hierarchy-order COMMAND nodal-hierarchy-order-unit-tests)
+
+add_executable(nodal-hierarchy-syntax-unit-tests AnalogHierarchySyntaxTest.cpp)
+llvm_update_compile_flags(nodal-hierarchy-syntax-unit-tests)
+add_test(NAME nodal.native.hierarchy-syntax COMMAND nodal-hierarchy-syntax-unit-tests)
+
+add_dependencies(nodal-native-unit-tests
+  nodal-hierarchy-order-unit-tests
+  nodal-hierarchy-syntax-unit-tests
+)

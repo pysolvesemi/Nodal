@@ -15,6 +15,7 @@
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
+#include "nodal/Support/HierarchyOrder.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -25,11 +26,14 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Casting.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 using namespace mlir;
 
@@ -370,44 +374,56 @@ LogicalResult verifyHierarchy(mlir::ModuleOp module) {
   if (failed(result))
     return failure();
 
-  llvm::StringMap<llvm::SmallVector<std::string, 4>> edges;
-  for (const auto &entry : definitions) {
-    Operation *definition = entry.getValue();
-    definition->walk([&](Operation *operation) {
-      if (!isNamed(operation, "nodal.instance"))
-        return;
-      FlatSymbolRefAttr target = flatReference(operation, "module");
-      if (!target || !definitions.contains(target.getValue())) {
-        result = emitFailure(operation, "NODAL-VERIFY-HIERARCHY-004",
-                             llvm::Twine("instance references unknown module '") +
-                                 (target ? target.getValue() : llvm::StringRef("")) + "'");
-        return;
-      }
-      edges[entry.getKey()].push_back(target.getValue().str());
-    });
-  }
-  if (failed(result))
-    return failure();
+  // StringMap iteration must not choose which cycle or unresolved binding is
+  // diagnosed. Sort definitions and instance names, retaining every edge and its
+  // source operation. Ordering the graph never reorders the user's IR or state.
+  std::vector<Operation *> ordered;
+  ordered.reserve(definitions.size());
+  for (const auto &entry : definitions)
+    ordered.push_back(entry.getValue());
+  std::sort(ordered.begin(), ordered.end(), [](Operation *left, Operation *right) {
+    return symbolName(left) < symbolName(right);
+  });
+  llvm::StringMap<std::size_t> indices;
+  for (std::size_t index = 0; index < ordered.size(); ++index)
+    indices.try_emplace(symbolName(ordered[index]), index);
 
-  llvm::StringMap<unsigned> colors;
-  std::function<LogicalResult(llvm::StringRef)> visit = [&](llvm::StringRef name) {
-    unsigned &color = colors[name];
-    if (color == 1)
-      return emitFailure(definitions[name], "NODAL-VERIFY-HIERARCHY-005",
-                         llvm::Twine("recursive module hierarchy includes '") + name + "'");
-    if (color == 2)
-      return success();
-    color = 1;
-    for (const std::string &child : edges[name]) {
-      if (failed(visit(child)))
-        return failure();
+  std::vector<std::vector<std::size_t>> edges(ordered.size());
+  std::vector<std::vector<Operation *>> sites(ordered.size());
+  for (std::size_t index = 0; index < ordered.size(); ++index) {
+    auto &instances = sites[index];
+    ordered[index]->walk([&](Operation *operation) {
+      if (isNamed(operation, "nodal.instance"))
+        instances.push_back(operation);
+    });
+    std::sort(instances.begin(), instances.end(), [](Operation *left, Operation *right) {
+      return symbolName(left) < symbolName(right);
+    });
+    edges[index].reserve(instances.size());
+    for (Operation *instance : instances) {
+      FlatSymbolRefAttr target = flatReference(instance, "module");
+      auto child = target ? indices.find(target.getValue()) : indices.end();
+      if (child == indices.end())
+        return emitFailure(instance, "NODAL-VERIFY-HIERARCHY-004",
+                           llvm::Twine("instance references unknown module '") +
+                               (target ? target.getValue() : llvm::StringRef("")) + "'");
+      edges[index].push_back(child->getValue());
     }
-    color = 2;
-    return success();
-  };
-  for (const auto &entry : definitions) {
-    if (failed(visit(entry.getKey())))
-      return failure();
+  }
+
+  // One definition can have many instances. This is a definition-dependency
+  // check, not expansion or specialization; its call stack is independent of
+  // hierarchy depth. All disconnected components remain mandatory.
+  const HierarchyOrder order = orderHierarchy(edges);
+  if (order.status == HierarchyOrder::Status::UnknownTarget)
+    return emitFailure(module, "NODAL-VERIFY-HIERARCHY-004", "invalid module dependency index");
+  if (order.status == HierarchyOrder::Status::Cycle) {
+    const auto &children = edges[order.source];
+    const auto closing = std::find(children.begin(), children.end(), order.target);
+    const auto offset = static_cast<std::size_t>(closing - children.begin());
+    return emitFailure(sites[order.source][offset], "NODAL-VERIFY-HIERARCHY-005",
+                       llvm::Twine("recursive module hierarchy includes '") +
+                           symbolName(ordered[order.target]) + "'");
   }
   return success();
 }

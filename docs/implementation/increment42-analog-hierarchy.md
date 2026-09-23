@@ -47,8 +47,78 @@ c++ -std=c++17 -Wall -Wextra -Werror -pedantic -O2 \
 
 Local helper tests do not qualify a native MLIR build, Scala source, generated
 HDL, independent OpenVAF compilation, numerical simulation or the increment.
-Targeted CI, full CI, review, merge and accepted-evidence closure remain pending.
-No targeted run or hourly continuation has been launched for this checkpoint.
+The initial targeting found a pinned formatting failure, repaired in
+`17394368c3ab57bcf88e7b551407690754a4b166`. Targeted Core CI
+[35825288843](https://github.com/pysolvesemi/Nodal/actions/runs/35825288843)
+and Increment 41
+[35825298112](https://github.com/pysolvesemi/Nodal/actions/runs/35825298112)
+passed on that exact head/tree `784e8b13c64337cbaeb89b771c0da61370cf4573`.
+All five applicable jobs passed; the dispatch-only aggregate push-status step
+was legitimately inapplicable, not executed qualification.
+
+The original Increment 41 artifact `10734538485` has SHA256
+`06a0578d5a9967d4efaf5159df074a9821ace810fcaaf0547b40f3e98138a04b`.
+Its archived source independently reconstructs the exact candidate tree.
+Retained logs record 136 CTest cases, 13 closure Python tests and 61
+function-source/native cases. These overlapping predecessor/helper results do
+not qualify the subsequent production repair. Hourly continuation is enabled;
+full CI, review, merge and accepted-evidence closure remain pending.
+
+## Native hierarchy verifier integration candidate
+
+The production `nodal-verify-hierarchy` stage now uses the existing iterative
+`orderHierarchy` kernel instead of a recursive `std::function` traversal.
+Definition and instance names select deterministic diagnostics. Every instance
+edge, including repeated children and disconnected definitions, is checked.
+Unknown references retain `NODAL-VERIFY-HIERARCHY-004`; cycles retain
+`NODAL-VERIFY-HIERARCHY-005` and identify the closing instance's real source
+location rather than an arbitrary module declaration. The existing closure
+guard, parameter/domain verification, pipeline transaction and other semantic
+stages remain required and unchanged.
+
+This verifier does not reorder or specialize the input IR, fold overrides,
+merge state or emit hierarchical Verilog-A. Its ordering work is
+`O(V log V + sum(d log d) + E)` for definitions and instance names; the graph
+traversal itself is `O(V + E)` with heap storage and depth-independent call
+stack. The ordering result is used for verification, not as a claim of backend
+module reuse or complete source hierarchy support.
+
+The ordinary native CTest build registers
+`nodal.native.hierarchy-integration`, invoking the actual `nodalc` through
+`tests/compiler/fixtures/increment42/run_hierarchy_matrix.py`. Its 559 cases
+cover all 512 directed three-definition graphs (self-edges included), checked
+against an independent Kahn reference; definition/instance-order permutations;
+source locations; unknown references; disconnected cycles; repeated children;
+parse/print stability; all three gate profiles; seeded wider DAGs; and
+50,000-definition depth cases. A parse-only control and both acyclic/cyclic
+hierarchy-pass cases use an explicit 1 MiB compiler-child stack. A crash,
+timeout, wrong diagnostic, missing output or partial failed output is a test
+failure. The script retains inputs, outputs, diagnostics and result hashes under
+`out/native/release/increment42-hierarchy-evidence`; the Increment 41 workflow
+retains that directory when produced without changing its predecessor tests.
+
+Executed baseline evidence: the retained compiler from exact head `17394368`
+passed 547/559 of these new cases. Twelve cases exposed closing-instance and
+ordering defects or stack crashes. The 50,000-definition parse-only control
+passed under the same 1 MiB limit; the hierarchy verifier crashed on the
+acyclic and back-edge cases. With the normal host stack, the original
+50,000-definition acyclic probe passed. This is an explicitly bounded-stack
+regression, not a claim that every ordinary 50,000-definition run crashes.
+
+Local checks on the new source: 368 compiler Python tests passed, including
+12 new harness controls; predecessor contract checkers 19-23 and 41 passed.
+These are not native compilation evidence. The modified native translation
+unit and the 559-case matrix still require exact-head remote qualification
+with the pinned SDK and format/lint tools. No current-head success is inferred
+from the earlier helper artifact.
+
+Reproduce with the candidate's built compiler, not the retained baseline:
+
+```sh
+python3 tests/compiler/fixtures/increment42/run_hierarchy_matrix.py \
+  --nodalc out/native/release/bin/nodalc \
+  --work-dir out/native/release/increment42-hierarchy-evidence
+```
 
 ## Remaining implementation and acceptance
 

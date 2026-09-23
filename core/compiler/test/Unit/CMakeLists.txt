@@ -242,3 +242,12 @@ add_dependencies(nodal-native-unit-tests
   nodal-hierarchy-order-unit-tests
   nodal-hierarchy-syntax-unit-tests
 )
+
+add_test(
+  NAME nodal.native.hierarchy-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment42/run_hierarchy_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment42-hierarchy-evidence"
+)
+set_tests_properties(nodal.native.hierarchy-integration PROPERTIES TIMEOUT 180)

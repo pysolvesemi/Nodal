@@ -8,7 +8,7 @@ on:
       - .github/workflows/ci-control-42-pr134-format-diagnose-9bd.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   diagnose:
@@ -39,14 +39,45 @@ jobs:
             'clang-format==22.1.8'
           clang-format --version
 
-      - name: Emit exact formatter result
+      - name: Materialize exact formatted blob only
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           clang-format --style=file Passes.cpp > formatted.cpp
-          printf 'input_sha256=%s\n' "$(sha256sum Passes.cpp | awk '{print $1}')"
-          printf 'formatted_sha256=%s\n' "$(sha256sum formatted.cpp | awk '{print $1}')"
+          printf '%s  %s\n' \
+            'c5a4e54be5ac8c517fe230d6c98f68cc2e19f4c66759a2d7c7246b51b5933a51' \
+            'formatted.cpp' | sha256sum --check --strict
           echo '--- hierarchy region after pinned formatter ---'
           sed -n '375,410p' formatted.cpp
           echo '--- exact diff ---'
           diff -u Passes.cpp formatted.cpp || true
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          payload = json.dumps({
+              'content': base64.b64encode(Path('formatted.cpp').read_bytes()).decode('ascii'),
+              'encoding': 'base64',
+          }).encode('utf-8')
+          request = urllib.request.Request(
+              'https://api.github.com/repos/pysolvesemi/Nodal/git/blobs',
+              data=payload,
+              method='POST',
+              headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                  'Accept': 'application/vnd.github+json',
+                  'X-GitHub-Api-Version': '2022-11-28',
+                  'User-Agent': 'Nodal-42-format-materializer',
+              },
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              result = json.load(response)
+          expected = '0a5a96eb320e32548a83bccace1d555595f66b11'
+          assert result.get('sha') == expected, result
+          print('formatted_blob_sha=' + result['sha'])
+          PY

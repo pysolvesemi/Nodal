@@ -1,0 +1,34 @@
+name: Nodal 42 PR134 native-hierarchy targeted dispatcher
+on:
+  push:
+    branches: [ci-control/nodal-42-pr134-e775281-targeted-v3]
+    paths:
+      - '.github/workflows/ci-control-42-pr134-e775281.yml'
+      - 'scripts/ci_control/increment42_pr134_e775281.py'
+      - 'docs/implementation/increment42-e775281-targeted-inventory.md'
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: nodal-42-pr134-targeted-dispatch
+  cancel-in-progress: false
+jobs:
+  dispatch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate exact identities and dispatch allowlisted targeting
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci_control/increment42_pr134_e775281.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nodal-42-pr134-e775281-dispatch-ledger
+          path: dispatch-evidence/
+          retention-days: 14
+          if-no-files-found: error

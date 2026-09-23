@@ -381,9 +381,10 @@ LogicalResult verifyHierarchy(mlir::ModuleOp module) {
   ordered.reserve(definitions.size());
   for (const auto &entry : definitions)
     ordered.push_back(entry.getValue());
-  std::sort(ordered.begin(), ordered.end(), [](Operation *left, Operation *right) {
-    return symbolName(left) < symbolName(right);
-  });
+  std::sort(ordered.begin(), ordered.end(),
+            [](Operation *left, Operation *right) {
+              return symbolName(left) < symbolName(right);
+            });
   llvm::StringMap<std::size_t> indices;
   for (std::size_t index = 0; index < ordered.size(); ++index)
     indices.try_emplace(symbolName(ordered[index]), index);
@@ -396,9 +397,10 @@ LogicalResult verifyHierarchy(mlir::ModuleOp module) {
       if (isNamed(operation, "nodal.instance"))
         instances.push_back(operation);
     });
-    std::sort(instances.begin(), instances.end(), [](Operation *left, Operation *right) {
-      return symbolName(left) < symbolName(right);
-    });
+    std::sort(instances.begin(), instances.end(),
+              [](Operation *left, Operation *right) {
+                return symbolName(left) < symbolName(right);
+              });
     edges[index].reserve(instances.size());
     for (Operation *instance : instances) {
       FlatSymbolRefAttr target = flatReference(instance, "module");

@@ -10,17 +10,36 @@ int main() {
       "Cell #(.R((R * 2)), .N(-3)) a(.p(mid), .n(gnd));",
       "Cell #(.R((2.5e-12 + 1p) / (-R)), .N(3 % 2)) a(.p(mid), .n(gnd));",
       "Cell #(.R(+-+-1), .N((2))) array_3(.p(mid), .n(gnd));"};
-  const std::vector<std::string> negative = {
-      "Cell a(p, n);", "Cell a(.p());", "Cell a(.p(V(n)));", "Cell a(.p(n), .p(n));",
-      "Cell a(.p(n),);", "Cell a[3:0](.p(n));", "Cell #() a();",
-      "Cell #(.R()) a();", "Cell #(.R(R +)) a();", "Cell #(.R(1), .R(2)) a();",
-      "Cell #(.R($abstime)) a();", "Cell #(.R(sin(R))) a();", "Cell #(.R(R R)) a();",
-      "Cell #(.R(1e+)) a();", "Cell #(.R(1ee2)) a();", "Cell #(.R(1kp)) a();",
-      "Cell #(.R(.)) a();", "Cell #(.R(())) a();", "Cell #(.R(1;2)) a();",
-      "Cell #(.R((R))) a(); injected", "Cell #(.R(R > 0)) a();",
-      "Cell #(.R(R ? 1 : 2)) a();", "Cell #(.R(1)) a(.p(n);",
-      "Cell a(); Cell b();", "Cell a(.p(n))", "Cell 3a();", "Cell a(.p(n.x));",
-      "Cell #(.R(1)) a(.p(n + x));", "Cell #(.R(1)) a(.p(n[0]));"};
+  std::vector<std::string> negative;
+  negative.push_back("Cell a(p, n);");
+  negative.push_back("Cell a(.p());");
+  negative.push_back("Cell a(.p(V(n)));");
+  negative.push_back("Cell a(.p(n), .p(n));");
+  negative.push_back("Cell a(.p(n),);");
+  negative.push_back("Cell a[3:0](.p(n));");
+  negative.push_back("Cell #() a();");
+  negative.push_back("Cell #(.R()) a();");
+  negative.push_back("Cell #(.R(R +)) a();");
+  negative.push_back("Cell #(.R(1), .R(2)) a();");
+  negative.push_back("Cell #(.R($abstime)) a();");
+  negative.push_back("Cell #(.R(sin(R))) a();");
+  negative.push_back("Cell #(.R(R R)) a();");
+  negative.push_back("Cell #(.R(1e+)) a();");
+  negative.push_back("Cell #(.R(1ee2)) a();");
+  negative.push_back("Cell #(.R(1kp)) a();");
+  negative.push_back("Cell #(.R(.)) a();");
+  negative.push_back("Cell #(.R(())) a();");
+  negative.push_back("Cell #(.R(1;2)) a();");
+  negative.push_back("Cell #(.R((R))) a(); injected");
+  negative.push_back("Cell #(.R(R > 0)) a();");
+  negative.push_back("Cell #(.R(R ? 1 : 2)) a();");
+  negative.push_back("Cell #(.R(1)) a(.p(n);");
+  negative.push_back("Cell a(); Cell b();");
+  negative.push_back("Cell a(.p(n))");
+  negative.push_back("Cell 3a();");
+  negative.push_back("Cell a(.p(n.x));");
+  negative.push_back("Cell #(.R(1)) a(.p(n + x));");
+  negative.push_back("Cell #(.R(1)) a(.p(n[0]));");
   unsigned checks = 0;
   bool ok = true;
   for (const auto &text : positive) {
@@ -44,8 +63,11 @@ int main() {
     std::cerr << "FAIL: retained named structure and symbolic parameter\n";
     ok = false;
   }
-  const std::string deep = "Cell #(.R(" + std::string(100000, '(') + "R" +
-                           std::string(100000, ')') + ")) a();";
+  std::string deep = "Cell #(.R(";
+  deep.append(100000, '(');
+  deep += "R";
+  deep.append(100000, ')');
+  deep += ")) a();";
   ++checks;
   if (!nodal::parseHierarchyInstance(deep)) {
     std::cerr << "FAIL: stack-safe deep expression\n";

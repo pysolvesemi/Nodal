@@ -21,11 +21,13 @@ int main() {
                   diamond.leavesFirst == std::vector<std::size_t>({3, 1, 2, 0}),
               "diamond has one shared leaf");
   auto cycle = nodal::orderHierarchy({{1}, {2}, {0}});
-  ok &= check(cycle.status == Status::Cycle && cycle.source == 2 && cycle.target == 0 &&
-                  cycle.leavesFirst.empty(), "cycle discards partial ordering");
+  const bool cycleKind = cycle.status == Status::Cycle && cycle.source == 2;
+  const bool cycleTarget = cycle.target == 0 && cycle.leavesFirst.empty();
+  ok &= check(cycleKind && cycleTarget, "cycle discards partial ordering");
   auto missing = nodal::orderHierarchy({{}, {4}});
-  ok &= check(missing.status == Status::UnknownTarget && missing.source == 1 &&
-                  missing.target == 4 && missing.leavesFirst.empty(), "unknown target");
+  const bool missingKind = missing.status == Status::UnknownTarget && missing.source == 1;
+  const bool missingTarget = missing.target == 4 && missing.leavesFirst.empty();
+  ok &= check(missingKind && missingTarget, "unknown target");
   auto disconnected = nodal::orderHierarchy({{}, {}, {2}});
   ok &= check(disconnected.status == Status::Cycle && disconnected.leavesFirst.empty(),
               "disconnected self-cycle");
@@ -47,8 +49,9 @@ int main() {
     wide[0].push_back(i);
   }
   auto fanout = nodal::orderHierarchy(wide);
-  ok &= check(fanout.status == Status::Success && fanout.leavesFirst.size() == size &&
-                  fanout.leavesFirst.back() == 0, "repeated wide instances");
+  const bool fanoutShape = fanout.status == Status::Success && fanout.leavesFirst.size() == size;
+  const bool fanoutRoot = fanout.leavesFirst.back() == 0;
+  ok &= check(fanoutShape && fanoutRoot, "repeated wide instances");
   std::cout << checks << " hierarchy-order checks " << (ok ? "passed" : "failed") << '\n';
   return ok ? 0 : 1;
 }

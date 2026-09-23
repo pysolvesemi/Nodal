@@ -78,8 +78,7 @@ private:
   std::size_t position = 0;
 
   void space() {
-    while (position < text.size() &&
-           std::isspace(static_cast<unsigned char>(text[position])))
+    while (position < text.size() && std::isspace(static_cast<unsigned char>(text[position])))
       ++position;
   }
   char peek() {

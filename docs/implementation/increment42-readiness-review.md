@@ -4,6 +4,36 @@
 **Status:** Readiness review recorded; increment remains incomplete.
 **Scope:** Foundation 42 only; existing `increment/42-analog-hierarchy` / PR #134.
 
+## Subsequent owner-approved syntax amendment - 2026-09-24
+
+The owner has now selected constructor-declared typed HDL parameters, ordinary
+`new Child(...)` attachment, direct child-port access and conservative `<>` as
+the preferred common hierarchy syntax. Read the
+[approved roadmap amendment](../roadmap/lightweight-hierarchy-iteration-v0.1-plan.md)
+and [new scoped gate](../design-gates/NodalLightweightHierarchyIteration-DG-v0.1.md)
+before continuing B.1. Those requirements supersede the earlier common-case
+explicit-only choice in this historical review; the existing explicit APIs and
+small policy helper remain useful canonical/compatibility infrastructure.
+The unrelated `.port`/`.instances` convenience names and old V2 blob set are
+still not mandatory. Do not mistake helper-only qualification for constructor,
+port/operator or real transaction integration.
+
+The amendment also records `hdlRange` as one target-visible iteration domain
+that can produce both structural and procedural regions from typed effects and
+declared domains. It replaces the intermediate context-only proposal; ordinary
+Scala loops still stay elaboration-time. 43 owns analog generation/shared capture,
+55-58/159 own digital semantics/unified iteration, and 96 owns later profiling,
+refactoring and optional Rust evaluation. None is a reverse prerequisite for 42.
+Keep MLIR authoritative and add necessary real integration without a second
+hierarchy engine or a guaranteed tiny line-count estimate.
+
+The main roadmap retains existing progress; the amendment is the only progress
+location for its newly added descendants. No existing acceptance checkbox or
+historical evidence changes. This publication changes documentation only, with
+CI explicitly waived. It neither implements the new syntax nor qualifies a new
+compiler candidate. AGENTS.md is unchanged. Preserve the earlier audit below as
+the record of the baseline decision, interpreted with this later approval.
+
 ## Authority and inspected baseline
 
 This review applies the current [AGENTS.md](../../AGENTS.md) pre-implementation

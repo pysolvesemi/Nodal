@@ -1,7 +1,8 @@
 # Lightweight hierarchy, unified HDL iteration and frontend scalability
 
-**Revision:** 0.1
+**Revision:** 0.2
 **Approved direction:** 2026-09-24
+**Updated:** 2026-09-24
 **Status:** Roadmap amendment only; implementation and qualification remain open.
 
 ## Authority, scope and progress
@@ -28,6 +29,13 @@ here or maintain a second status ledger. Completing a parent in the main file
 also requires its applicable descendants here. All new descendants start open.
 Existing F-042.C-G, F-043.C-G and F-159 validation obligations remain required.
 No historical API freeze, accepted artifact or executed result is rewritten.
+
+The subsequent approved [Foundation 160 modularization plan](construction-frontend-modularization-v0.1-plan.md)
+adds one bounded maintainability increment scheduled after completed 42 and
+before 43. It owns its own parent/children and the added 43 prerequisite; this
+file does not mirror those checkboxes. Revision 0.2 assigns initial construction
+modularization to 160, while 96 keeps broader measured optimization and Rust
+evaluation. No implementation or acceptance is claimed by this revision.
 
 The main roadmap file itself is unchanged in this publication. This linked
 amendment records the approved requirements without retranscribing that large
@@ -164,9 +172,11 @@ ordinary procedural `for` is not automatically legal for every analog body.
 range-capture checkpoint. **55-58** retain digital expression/state/domain and
 structural-generation semantics. **159** owns the unified staged-range frontend
 and mixed digital iteration integration against those prerequisites. Reuse the
-same shared range model; 43 does not wait for the whole later 159 or digital
-backend, and 42 does not wait for `hdlRange` or broader generation. Preserve
-159's existing 55/58 and 153-157 prerequisites and 65-67/72 qualification owners.
+same shared range model. Implementation is scheduled as **42 -> 160 -> 43**:
+43 starts after the accepted construction-modularization checkpoint in 160,
+without waiting for the whole later 159, digital backend or 96 study. Neither
+42 nor 160 waits for `hdlRange`, broader generation or Rust. Preserve 159's
+existing 55/58 and 153-157 prerequisites and 65-67/72 qualification owners.
 
 - [ ] **F-043.B.1.1 - Shared range capture and analog objects.** Implement/reuse the neutral typed iteration domain for literal/symbolic bounds and capture legal analog generated objects with stable index/owner identity. Make the shared checkpoint independently consumable by 159; no duplicate range engine or reverse parent dependency.
 - [ ] **F-043.B.2.1 - Analog iteration verification.** Verify bounds, shapes, generated lexical state, conservative terminal indexing and effects through bridge/native IR. Distinguish topology replication from procedural evaluation and reject unsupported analog operator placement or illegal flattening/memory inference.
@@ -186,9 +196,13 @@ structural creation. This plan changes no current implementation or fixture.
 
 ## Later frontend scalability and Rust evaluation
 
-Reuse the existing **Increment 96** owner rather than create another benchmark
-track or block Increment 42. Keep Scala for syntax, lexical construction and
-source capture, and keep the current native MLIR/C++ path. Construction records
+Use [Foundation 160](construction-frontend-modularization-v0.1-plan.md) for the
+bounded behavior-preserving modularization and its before/after regression
+baseline, after 42 and before 43. Keep the comprehensive benchmark program,
+further profile-guided optimization and Rust evaluation with **Increment 96**;
+do not duplicate 160's initial extraction checklist here or block 42/43 on 96.
+Keep Scala for syntax, lexical construction and source capture, and keep the
+current native MLIR/C++ path. Construction records
 may be compact, versioned and language-neutral, but MLIR remains authoritative
 for compiler semantics; do not create a competing IR truth or a second hierarchy
 engine. Rust is an evaluation option, not a required rewrite or a speed promise.
@@ -196,7 +210,7 @@ engine. Rust is an evaluation option, not a required rewrite or a speed promise.
 New descendants of the existing **F-096.B.2**:
 
 - [ ] **F-096.B.2.1 - Reproducible frontend/native baseline.** Measure representative 10K/100K/1M declaration tiers, deep/wide/repeated hierarchy, shared expression DAGs and symbolic combinations. Separate Scala compile/startup, cold/warm elaboration, snapshot/serialization, bridge, native verification/lowering and tool time; retain peak memory, allocations/GC, artifact sizes, hardware/tool versions and repeated-run distributions. Report unsupported/resource-limited tiers, not invented measurements.
-- [ ] **F-096.B.2.2 - Profile-guided decomposition.** Identify actual bottlenecks and separate ownership, hierarchy, expression, domain, topology and source-map responsibilities behind stable interfaces. Keep transaction invariants and narrow integration hooks. Make justified behavior-preserving refactors, or document why no refactor is needed; source-file size or transport inconvenience is not performance evidence.
+- [ ] **F-096.B.2.2 - Follow-on profile-guided optimization.** Consume the accepted F-160 component boundaries and baseline instead of repeating its initial modularization. Identify actual bottlenecks across the broader benchmark families, and make further justified algorithmic, data-layout or component refinements with behavior parity, or record why no further refactor is needed. Preserve transaction invariants and narrow interfaces; file size or transport inconvenience is not performance evidence. This stable ID remains open and owns only the later performance-driven work.
 - [ ] **F-096.B.2.3 - Native-boundary and Rust prototype comparison.** Evaluate coarse-grained graph/index/cache/incremental-analysis services against optimized Scala and existing C++ baselines using identical semantic workloads. Include serialization, FFI/process crossings, allocation, cleanup, determinism, parallel safety and build/distribution cost; do not assume Rust is faster or call native code once per tiny DSL operation by default.
 - [ ] **F-096.B.2.4 - Evidence-based adoption decision.** Record throughput/memory/latency, safety and maintenance tradeoffs with correctness parity. Keep, refactor or selectively move a service only when evidence justifies it and the applicable architecture/API gate is approved. No mandatory Rust dependency, broad kernel rewrite or frontier-performance claim without measurements; no reverse prerequisite for 42/43.
 

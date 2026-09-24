@@ -870,8 +870,148 @@ private final class ConstructionSession(val options: EmitOptions):
       fail("NODAL-BINDING-019", "selector domain does not belong to the child Instance")
     record.namedBindings += requirement -> domain
 
+  private def overrideTypeSignature(value: Any, owner: Long): Option[String] =
+    value match
+      case expression: Expr[?] =>
+        CandidateRuntime.expressionDataType(expression).map(renderType(_, owner)).orElse:
+          expression match
+            case kernel: KernelExpr[?]
+                if kernel.operation.exists(
+                  Set(
+                    "analog_add",
+                    "analog_sub",
+                    "analog_mul",
+                    "analog_div",
+                    "analog_neg"
+                  ).contains
+                ) =>
+              Some("Real")
+            case _ => None
+      case _ => None
+
+  private def overrideDimensionSignature(value: Any): Option[String] =
+    val dimension = inferAnalogDimension(value)
+    if dimension.isUnknown then None else Some(dimension.signature)
+
+  private def overrideEvidence(
+      parent: ModuleRecord,
+      instance: InstanceRecord,
+      target: DeclarationRecord,
+      value: Any
+  ): AnalogHierarchyOverridePolicy.Evidence =
+    val referencedDeclarationOwners = mutable.ArrayBuffer.empty[Long]
+    val expressionOwners = mutable.ArrayBuffer.empty[Long]
+    val operations = mutable.ArrayBuffer.empty[String]
+    val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+    var dynamicDependency = false
+
+    def declaration(reference: DeclarationRef): DeclarationRecord =
+      records(reference.module).declarations(reference.index)
+
+    def visit(candidate: Any): Unit = candidate match
+      case _: String | _: Int | _: Long | _: Double | _: Float | _: Boolean | _: BigInt => ()
+      case parameter: Param[?] =>
+        Option(declarationIds.get(parameter)) match
+          case Some(reference) =>
+            referencedDeclarationOwners += reference.module
+            if declaration(reference).kind != KernelSignalKind.Parameter then
+              dynamicDependency = true
+          case None => dynamicDependency = true
+      case expression: KernelExpr[?] =>
+        if visited.put(expression, java.lang.Boolean.TRUE) == null then
+          Option(expressionIds.get(expression)) match
+            case Some(reference) => expressionOwners += reference.module
+            case None => dynamicDependency = true
+          if expression.literal.isEmpty then
+            expression.operation match
+              case Some(operation) => operations += operation
+              case None => operations += "<unknown>"
+          expression.operands.foreach(visit)
+      case reference: AnyRef =>
+        Option(declarationIds.get(reference)) match
+          case Some(declarationReference) =>
+            referencedDeclarationOwners += declarationReference.module
+            if declaration(declarationReference).kind != KernelSignalKind.Parameter then
+              dynamicDependency = true
+          case None =>
+            Option(expressionIds.get(reference)) match
+              case Some(expressionReference) => expressionOwners += expressionReference.module
+              case None => dynamicDependency = true
+      case _ => ()
+
+    visit(value)
+
+    val targetType = target.dataType.map(renderType(_, instance.child))
+    val requiresDimension =
+      target.dataType.exists(dataType => CandidateRuntime.typeDescriptor(dataType).kind == "Real")
+
+    AnalogHierarchyOverridePolicy.Evidence(
+      parentOwner = parent.handle,
+      duplicate = instance.parameterOverrides.exists:
+        case (existing: AnyRef, _) =>
+          Option(declarationIds.get(existing)).contains(target.reference)
+        case _ => false,
+      referencedDeclarationOwners = referencedDeclarationOwners.toVector,
+      expressionOwners = expressionOwners.toVector,
+      dynamicDependency = dynamicDependency,
+      operations = operations.toVector,
+      targetTypeSignature = targetType,
+      valueTypeSignature = overrideTypeSignature(value, parent.handle),
+      requiresDimension = requiresDimension,
+      targetDimensionSignature =
+        if requiresDimension then overrideDimensionSignature(target.value) else None,
+      valueDimensionSignature =
+        if requiresDimension then overrideDimensionSignature(value) else None
+    )
+
   def overrideParameter(instance: AnyRef, parameter: Any, value: Any): Unit =
-    instanceRecord(instance).parameterOverrides += parameter -> value
+    val record = instanceRecord(instance)
+    val parent = currentModule
+    if !parent.instances.exists(_ eq record) then
+      fail(
+        "NODAL-PARAMETER-BINDING-020",
+        "instance parameter override must be recorded by the owning parent Module"
+      )
+    val targetReference = parameter match
+      case reference: AnyRef =>
+        Option(declarationIds.get(reference)).getOrElse(
+          fail(
+            "NODAL-PARAMETER-BINDING-016",
+            "instance parameter override targets an unknown parameter",
+            Some(instancePath(parent.handle, record.ordinal))
+          )
+        )
+      case _ =>
+        fail(
+          "NODAL-PARAMETER-BINDING-016",
+          "instance parameter override is not a declaration",
+          Some(instancePath(parent.handle, record.ordinal))
+        )
+    if targetReference.module != record.child then
+      fail(
+        "NODAL-PARAMETER-BINDING-017",
+        "instance parameter override targets another Module",
+        Some(instancePath(parent.handle, record.ordinal))
+      )
+    val target = records(record.child).declarations(targetReference.index)
+    if target.kind != KernelSignalKind.Parameter then
+      fail(
+        "NODAL-PARAMETER-BINDING-018",
+        "instance parameter override target is not a child parameter",
+        Some(instancePath(parent.handle, record.ordinal))
+      )
+
+    AnalogHierarchyOverridePolicy.validate(
+      overrideEvidence(parent, record, target, value)
+    ) match
+      case Left(rejection) =>
+        fail(
+          rejection.code,
+          rejection.message,
+          Some(instancePath(parent.handle, record.ordinal))
+        )
+      case Right(()) =>
+        record.parameterOverrides += parameter -> value
 
   def withDomain[A](domain: ClockDomain)(body: => A): A =
     if !domainIds.containsKey(domain) then

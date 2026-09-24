@@ -1,0 +1,71 @@
+name: Nodal 42 exact Scalafmt diagnosis
+
+on:
+  push:
+    branches:
+      - ci-control/nodal-42-pr134-scalafmt-diagnose-86f9ff5-v1
+    paths:
+      - .github/workflows/ci-control-42-pr134-scalafmt-diagnose-86f9ff5.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Fetch exact candidate source and formatter config
+        shell: bash
+        run: |
+          set -euo pipefail
+          root='https://raw.githubusercontent.com/pysolvesemi/Nodal/86f9ff5d2d5da1d708f6ecb8b78b7e69dbfeedf7'
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "${root}/.scalafmt.conf" -o .scalafmt.conf
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "${root}/core/scala/api/src/nodal/AnalogHierarchyOverridePolicy.scala" \
+            -o AnalogHierarchyOverridePolicy.scala
+          printf '%s  %s\n' \
+            '6bfcb56b43505a4bd5111b06f0cd5ce35eb742e6a28fbcdf983960ff8ee2733b' \
+            '.scalafmt.conf' | sha256sum --check --strict
+          printf '%s  %s\n' \
+            '8af0ea16701c27c38f588af1535a9bda1c08cc9a10bac2c3696824bed377a5af' \
+            'AnalogHierarchyOverridePolicy.scala' | sha256sum --check --strict
+
+      - name: Install exact official Scalafmt 3.11.5 native release
+        shell: bash
+        run: |
+          set -euo pipefail
+          url='https://github.com/scalameta/scalafmt/releases/download/v3.11.5/scalafmt-x86_64-pc-linux.zip'
+          curl --fail --location --proto '=https' --tlsv1.2 "$url" -o scalafmt.zip
+          printf '%s  %s\n' \
+            '7b0e44cc193eeff06daa14b394dc0489d8eaa4537eb945522f7f267641ed8c2b' \
+            'scalafmt.zip' | sha256sum --check --strict
+          mkdir scalafmt-dist
+          unzip -q scalafmt.zip -d scalafmt-dist
+          mapfile -t candidates < <(find scalafmt-dist -type f -name 'scalafmt*' -print | sort)
+          if [ "${#candidates[@]}" -ne 1 ]; then
+            printf 'expected exactly one Scalafmt executable candidate, found %s\n' "${#candidates[@]}" >&2
+            printf '%s\n' "${candidates[@]}" >&2
+            exit 1
+          fi
+          chmod +x "${candidates[0]}"
+          "${candidates[0]}" --version | tee scalafmt-version.txt
+          grep -Eq '^scalafmt 3\.11\.5([[:space:]]|$)' scalafmt-version.txt
+          printf '%s\n' "${candidates[0]}" > scalafmt-bin.txt
+
+      - name: Emit exact pinned formatter output and diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$(cat scalafmt-bin.txt)"
+          "$bin" --config .scalafmt.conf --stdout AnalogHierarchyOverridePolicy.scala \
+            > formatted.scala
+          printf 'input_sha256=%s\n' "$(sha256sum AnalogHierarchyOverridePolicy.scala | awk '{print $1}')"
+          printf 'formatted_sha256=%s\n' "$(sha256sum formatted.scala | awk '{print $1}')"
+          printf 'input_git_blob=%s\n' "$(git hash-object AnalogHierarchyOverridePolicy.scala)"
+          printf 'formatted_git_blob=%s\n' "$(git hash-object formatted.scala)"
+          echo '--- exact Scalafmt 3.11.5 output ---'
+          cat formatted.scala
+          echo '--- exact diff ---'
+          diff -u AnalogHierarchyOverridePolicy.scala formatted.scala || true

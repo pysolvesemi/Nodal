@@ -1,0 +1,205 @@
+name: CI control — Increment 42 B1 policy fef8f1f
+
+on:
+  push:
+    branches:
+      - ci-control/nodal-42-pr134-fef8f1f-b1-policy-v1
+    paths:
+      - .github/workflows/ci-control-42-pr134-fef8f1f-b1-policy.yml
+      - docs/implementation/increment42-fef8f1f-b1-policy-targeted-inventory.md
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: ci-control-nodal-42-pr134-fef8f1f-b1-policy-v1
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      REPO: pysolvesemi/Nodal
+      PR_NUMBER: '134'
+      BASE_SHA: c3ea7cbf0432de7143a08b4431d51708c307d67e
+      CANDIDATE_REF: increment/42-analog-hierarchy
+      CANDIDATE_SHA: fef8f1fc6f22fea071175bb049593c33f42efc23
+      CANDIDATE_TREE: 7b692238537801b8be7991f94fa3c3a28eb3b8df
+      CANDIDATE_PARENT: 29705bb8722541ba01a585a6178d625a66bfe424
+      WORKFLOW_ID: '338626156'
+      WORKFLOW_PATH: .github/workflows/ci.yml
+      WORKFLOW_BLOB: db695c972d0fb077cd355cf01d2c204afb6de40f
+      CONTROL_BRANCH: ci-control/nodal-42-pr134-fef8f1f-b1-policy-v1
+      LEDGER: .validation/increment42-fef8f1f-b1-policy-ledger.json
+    steps:
+      - name: Check out controller only
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Audit inherited trigger isolation
+        run: |
+          python3 - <<'PY'
+          import fnmatch
+          from pathlib import Path
+          import os
+
+          control = os.environ['CONTROL_BRANCH']
+          own = Path('.github/workflows/ci-control-42-pr134-fef8f1f-b1-policy.yml')
+
+          def indent(line): return len(line) - len(line.lstrip(' '))
+          def event(lines, name):
+              for i, raw in enumerate(lines):
+                  s = raw.strip()
+                  if not s or s.startswith('#'): continue
+                  if indent(raw) == 0 and s.startswith('on:'):
+                      suffix = s[3:].strip()
+                      if suffix:
+                          values = [v.strip().strip("'\"") for v in suffix.strip('[]').split(',')]
+                          return ('scalar', suffix) if name in values else None
+                      for j in range(i + 1, len(lines)):
+                          child = lines[j]; cs = child.strip()
+                          if not cs or cs.startswith('#'): continue
+                          if indent(child) == 0: return None
+                          if indent(child) == 2 and cs.startswith(name + ':'):
+                              end = j + 1
+                              while end < len(lines):
+                                  nxt = lines[end]
+                                  if nxt.strip() and not nxt.lstrip().startswith('#') and indent(nxt) <= 2: break
+                                  end += 1
+                              return ('block', lines[j + 1:end])
+                      return None
+              return None
+
+          def list_key(block, key):
+              for i, raw in enumerate(block):
+                  s = raw.strip()
+                  if indent(raw) == 4 and s.startswith(key + ':'):
+                      suffix = s[len(key) + 1:].strip()
+                      if suffix.startswith('['):
+                          return [v.strip().strip("'\"") for v in suffix.strip('[]').split(',') if v.strip()]
+                      out = []
+                      for child in block[i + 1:]:
+                          if child.strip() and indent(child) <= 4: break
+                          if child.strip().startswith('- '): out.append(child.strip()[2:].strip().strip("'\""))
+                      return out
+              return None
+
+          def push_matches(text):
+              found = event(text.splitlines(), 'push')
+              if found is None: return False
+              kind, block = found
+              if kind == 'scalar': return True
+              branches = list_key(block, 'branches')
+              ignores = list_key(block, 'branches-ignore') or []
+              matched = True if branches is None else any(fnmatch.fnmatchcase(control, p) for p in branches)
+              return matched and not any(fnmatch.fnmatchcase(control, p) for p in ignores)
+
+          matches = []
+          indirect = []
+          audited = 0
+          for path in Path('.github/workflows').glob('*.y*ml'):
+              if path == own: continue
+              audited += 1
+              text = path.read_text()
+              if push_matches(text): matches.append(str(path))
+              lines = text.splitlines()
+              if any(event(lines, e) is not None for e in ('create', 'workflow_run', 'pull_request_target')):
+                  indirect.append(str(path))
+          assert not matches, f'inherited push trigger match: {matches}'
+          assert not indirect, f'indirect trigger risk: {indirect}'
+          print(f'audited {audited} inherited workflow files; controller push isolated')
+          PY
+
+      - name: Validate exact identities, dedupe, and dispatch Core once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/${REPO}/git/ref/heads/dev" --jq .object.sha)" = "${BASE_SHA}"
+          test "$(gh api "repos/${REPO}/git/ref/heads/${CANDIDATE_REF}" --jq .object.sha)" = "${CANDIDATE_SHA}"
+          test "$(gh api "repos/${REPO}/git/commits/${CANDIDATE_SHA}" --jq .tree.sha)" = "${CANDIDATE_TREE}"
+          test "$(gh api "repos/${REPO}/git/commits/${CANDIDATE_SHA}" --jq '.parents | length')" = 1
+          test "$(gh api "repos/${REPO}/git/commits/${CANDIDATE_SHA}" --jq '.parents[0].sha')" = "${CANDIDATE_PARENT}"
+          test "$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq .state)" = open
+          test "$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq .draft)" = true
+          test "$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq .base.ref)" = dev
+          test "$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq .head.ref)" = "${CANDIDATE_REF}"
+          test "$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq .head.sha)" = "${CANDIDATE_SHA}"
+          test "$(gh api "repos/${REPO}/actions/workflows/${WORKFLOW_ID}" --jq .path)" = "${WORKFLOW_PATH}"
+          test "$(gh api "repos/${REPO}/actions/workflows/${WORKFLOW_ID}" --jq .state)" = active
+          test "$(gh api "repos/${REPO}/contents/${WORKFLOW_PATH}?ref=${BASE_SHA}" --jq .sha)" = "${WORKFLOW_BLOB}"
+          test "$(gh api "repos/${REPO}/contents/${WORKFLOW_PATH}?ref=${CANDIDATE_SHA}" --jq .sha)" = "${WORKFLOW_BLOB}"
+
+          runs_json="$(gh api --method GET "repos/${REPO}/actions/workflows/${WORKFLOW_ID}/runs" -f branch="${CANDIDATE_REF}" -f per_page=100)"
+          active_success="$(jq -r --arg sha "${CANDIDATE_SHA}" '[.workflow_runs[] | select(.head_sha==$sha and .event=="workflow_dispatch" and (.status=="queued" or .status=="in_progress" or .conclusion=="success"))] | length' <<<"${runs_json}")"
+          failed="$(jq -r --arg sha "${CANDIDATE_SHA}" '[.workflow_runs[] | select(.head_sha==$sha and .event=="workflow_dispatch" and .status=="completed" and .conclusion!="success")] | length' <<<"${runs_json}")"
+          test "${failed}" = 0
+
+          mkdir -p .validation
+          export ACTIVE_SUCCESS="${active_success}"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          p = Path(os.environ['LEDGER'])
+          payload = {
+              'schema': 'nodal.increment42.targeted-ledger.v1',
+              'controller_branch': os.environ['CONTROL_BRANCH'],
+              'candidate': os.environ['CANDIDATE_SHA'],
+              'candidate_tree': os.environ['CANDIDATE_TREE'],
+              'workflow_id': int(os.environ['WORKFLOW_ID']),
+              'workflow_path': os.environ['WORKFLOW_PATH'],
+              'workflow_blob': os.environ['WORKFLOW_BLOB'],
+              'action': 'retained-existing' if os.environ['ACTIVE_SUCCESS'] != '0' else 'intent-recorded',
+              'request_sent': False,
+              'observed_runs': [],
+              'uncertain_response': False,
+          }
+          with p.open('w') as f:
+              json.dump(payload, f, indent=2, sort_keys=True); f.write('\n'); f.flush(); os.fsync(f.fileno())
+          fd = os.open(str(p.parent), os.O_RDONLY); os.fsync(fd); os.close(fd)
+          PY
+
+          if [ "${active_success}" != 0 ]; then
+            echo 'Retaining existing same-head active/successful Core dispatch; no POST.'
+            exit 0
+          fi
+
+          gh api --method POST "repos/${REPO}/actions/workflows/${WORKFLOW_ID}/dispatches" -f ref="${CANDIDATE_REF}"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          p = Path(os.environ['LEDGER']); data = json.loads(p.read_text()); data['request_sent'] = True
+          with p.open('w') as f:
+              json.dump(data, f, indent=2, sort_keys=True); f.write('\n'); f.flush(); os.fsync(f.fileno())
+          PY
+
+          observed='[]'
+          for delay in 3 5 8 13; do
+            sleep "${delay}"
+            observed_json="$(gh api --method GET "repos/${REPO}/actions/workflows/${WORKFLOW_ID}/runs" -f branch="${CANDIDATE_REF}" -f per_page=100)"
+            observed="$(jq -c --arg sha "${CANDIDATE_SHA}" '[.workflow_runs[] | select(.head_sha==$sha and .event=="workflow_dispatch") | .id]' <<<"${observed_json}")"
+            [ "${observed}" != '[]' ] && break
+          done
+          export OBSERVED="${observed}"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          p = Path(os.environ['LEDGER']); data = json.loads(p.read_text()); observed = json.loads(os.environ['OBSERVED'])
+          data['observed_runs'] = observed; data['uncertain_response'] = not bool(observed)
+          with p.open('w') as f:
+              json.dump(data, f, indent=2, sort_keys=True); f.write('\n'); f.flush(); os.fsync(f.fileno())
+          if not observed: raise SystemExit('dispatch accepted but matching run not observed; no retry')
+          print('observed Core dispatch:', ','.join(map(str, observed)))
+          PY
+
+      - name: Upload dispatch ledger
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: increment42-fef8f1f-b1-policy-targeted-ledger-${{ github.run_id }}
+          path: .validation/increment42-fef8f1f-b1-policy-ledger.json
+          if-no-files-found: warn
+          retention-days: 30

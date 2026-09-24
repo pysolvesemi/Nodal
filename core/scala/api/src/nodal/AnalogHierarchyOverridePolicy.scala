@@ -2,10 +2,9 @@ package nodal
 
 /** Pure validation policy for Increment 42 instance-parameter overrides.
   *
-  * The construction transaction remains responsible for deriving these facts from
-  * exact declaration, expression, module, and instance identities. This helper owns
-  * only the fail-closed policy so the eventual integration does not duplicate the
-  * accepted staticness/type/unit rules.
+  * The construction transaction remains responsible for deriving these facts from exact
+  * declaration, expression, module, and instance identities. This helper owns only the fail-closed
+  * policy so the eventual integration does not duplicate the accepted staticness/type/unit rules.
   */
 private[nodal] object AnalogHierarchyOverridePolicy:
   final case class Evidence(

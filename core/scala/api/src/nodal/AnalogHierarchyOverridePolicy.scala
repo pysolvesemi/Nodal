@@ -47,9 +47,8 @@ private[nodal] object AnalogHierarchyOverridePolicy:
           "one child parameter may be overridden only once per Instance"
         )
       )
-    else if
-      evidence.referencedDeclarationOwners.exists(_ != evidence.parentOwner) ||
-        evidence.expressionOwners.exists(_ != evidence.parentOwner)
+    else if evidence.referencedDeclarationOwners.exists(_ != evidence.parentOwner) ||
+      evidence.expressionOwners.exists(_ != evidence.parentOwner)
     then
       Left(
         Rejection(

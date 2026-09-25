@@ -67,13 +67,13 @@ object AnalogHierarchyOverrideIntegrationTests extends TestSuite:
       val snapshot = ConstructionKernel.inspect(new ValidOverrideIntegrationTop)
       val top = snapshot.modules.find(_.path == "ValidOverrideIntegrationTop").get
       assert(top.instances.size == 1)
-      assert(top.instances.head.parameters.size == 2)
+      assert(top.instances.head.parameterBindings.size == 2)
 
     test("fixed Scala replication remains scalar construction"):
       val snapshot = ConstructionKernel.inspect(new FixedOverrideReplicationTop)
       val top = snapshot.modules.find(_.path == "FixedOverrideReplicationTop").get
       assert(top.instances.size == 3)
-      assert(top.instances.forall(_.parameters.size == 1))
+      assert(top.instances.forall(_.parameterBindings.size == 1))
 
     test("duplicate target is rejected before recording"):
       assert(

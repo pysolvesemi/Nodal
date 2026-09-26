@@ -1,0 +1,42 @@
+name: Nodal 42 PR134 override integration targeted dispatch 650a671
+
+on:
+  push:
+    branches:
+      - 'ci-control/nodal-42-pr134-650a671-integration-v1'
+    paths:
+      - '.github/workflows/ci-control-42-pr134-650a671.yml'
+      - 'scripts/ci_control/increment42_pr134_650a671_v1.py'
+      - 'scripts/ci_control/increment42_pr134_650a671_inventory.json'
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: nodal-42-pr134-650a671-integration-v1
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out only the pinned controller commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Validate identities and dispatch the four affected checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci_control/increment42_pr134_650a671_v1.py
+      - name: Preserve dispatch intent and observed run ledger
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nodal-42-pr134-650a671-dispatch-ledger-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dispatch-evidence/
+          if-no-files-found: error
+          retention-days: 30

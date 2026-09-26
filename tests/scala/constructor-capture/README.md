@@ -1,22 +1,26 @@
-# Literal constructor capture compile prototype
+# Constructor capture compiler and production ABI probes
 
-**Status: isolated probe executed successfully; production integration remains
-incomplete.** At commit `d3764318a1f332e3fc216969e47fda710287e7a2`,
+**Status: isolated probe executed successfully; production integration is present
+in the current candidate but remains unqualified and does not complete B.1.** At
+commit `d3764318a1f332e3fc216969e47fda710287e7a2`,
 [Core Scala job 108443599578](https://github.com/pysolvesemi/Nodal/actions/runs/36256292650/job/108443599578)
 compiled the probe with Scala 3.8.4 and passed 11 runtime cases with 169
 assertions, all six expected compile rejections, and the uninstrumented-factory
 runtime rejection. This records that exact source revision's isolated result;
-it does not qualify the current head or complete production F-042.B.1.1.
+it does not qualify the current head or complete production F-042.B.1.1. The
+current harness retains that historical protocol and additionally compiles the
+real API/plugin definitions, factory and consumer in separate compiler processes.
 Source review uses Scala 3.8.4 commit
 `7d4833b619d31ea9acac97fccf1e74b42b89c49f`; the Nodal review base is
 `315905bde74f23997ce1c03fe5bc3a7569a00b0d`.
 
-This is a bounded experiment for F-042.B.1.1, not completion of that item. The
+This directory provides bounded compiler evidence for F-042.B.1.1, not completion
+of that item. The
 approved lightweight hierarchy gate requires constructor lifecycle/default,
 factory, separate-compilation, evaluation and failure evidence. This experiment
-has compiler plugin source and executable fixtures for the tested partial
-profile. It does not implement IR, HDL, connectivity,
-static effects, units or production transaction semantics.
+has executable fixtures for the isolated protocol and the production ABI. The
+production API owns the transaction semantics; this harness does not establish
+IR, HDL, full static-effect/unit coverage or final qualification.
 
 ## Run through the existing toolchain owner
 
@@ -42,12 +46,20 @@ rejected so evidence cannot be overwritten silently.
 `--inventory-only` writes a source SHA-256 inventory without starting Java,
 Mill or Scala. An inventory-only result is explicitly `not-run`, never a pass.
 
-The execution creates independent runtime and plugin JARs, then compiles and
+The first phase creates independent prototype runtime and plugin JARs, then compiles and
 JARs module definitions, a non-inline helper factory, and a downstream consumer
 in separate compiler processes. It does not place definitions or factory source
 on the consumer compiler command. `-Ycheck:all` checks generated trees throughout
 the compiler; `-Xprint:nodalConstructorCapture` retains the transformed trees.
 The harness also compiles raw producers without the plugin to test the boundary.
+The second phase obtains `core.scala.api.jar` and
+`core.scala.constructorPlugin.jar` from their existing Mill owners. It compiles
+production definitions, a non-inline factory and a downstream consumer as three
+separate JAR/compiler stages with the production plugin, `-Ycheck:all`, strict
+warnings and retained transformed trees. It also compiles a factory without the
+plugin and requires the downstream runtime boundary to reject it with
+`NODAL-CONSTRUCTOR-MISSING-016`.
+
 The final manifest records every exact command, exit code, log hash, input source
 hash and compiler/artifact JAR hash. It also records actual Git HEAD, tree and
 worktree status. Attempts are persisted before execution; timeouts preserve
@@ -68,10 +80,10 @@ class Top(topGain: Param[Real] = 4.0) extends Module:
   val amp = new GainStage(gain = topGain)
 ```
 
-The names live under `nodal.prototype`; they are deliberately isolated type and
-lifecycle probes, not replacements for the real public Nodal API. The actual
-production `Param` eagerly declares itself and cannot yet serve as the inert
-carrier tested here.
+The names above live under `nodal.prototype`; they remain an isolated reference
+protocol, not replacements for the real public Nodal API. Production fixtures
+under `nodal.constructor.separate` use the actual `nodal.Module`, `Param`,
+`ConstructionKernel`, compiler plugin and canonical construction transaction.
 
 1. One `StandardPlugin` phase runs after posttyper and before TASTy pickling.
    It scans all already-typed units first, obtains actual companion default
@@ -131,19 +143,22 @@ Metadata is checked for exact marker identity, unique occurrence, argument
 arity/kinds/version and the supported constructor signature. Metadata does not
 replace independent ownership/type/effect/native semantic validation.
 
-The recorded execution establishes this isolated protocol only. Production
-Param literal lifting, source/instance identity, automatic canonical attachment,
-override legality, equivalent explicit-form parity, all transaction registries,
-public source-to-IR/HDL witnesses and full qualification remain required.
+The production candidate implements literal lifting, source/instance identity,
+automatic canonical attachment, root and child actual separation, explicit-form
+parity, ownership checks and transaction invalidation after partial construction.
+The public integration suite supplies the corresponding frontend regressions.
+General defaults, fixed replication, the B.2/B.3 lowering/output path, downstream
+witnesses and final qualification remain required.
 
 All new Scala sources participate in existing Scalafmt 3.11.5 and Scalafix 0.14.7
 checks through a sources-only Mill inventory and the existing syntactic lint
 path list. The trace retains intentional failures using the repository's
 `scala.util.Failure` and its `get` method; no rule is suppressed.
-On that revision, pinned Scalafmt rejected 16 probe files and Scalafix was not
-reached. Full current-head formatting, lint and qualification remain required.
-The compilation evidence above is from CI; no local Scala compilation is claimed.
+The historical `d3764318` run initially exposed formatting changes; its successor
+applied the exact retained formatter output and later targeted checks passed.
+Every new candidate still requires current-head pinned formatting, lint and
+qualification; local or historical compilation cannot supply that credit.
 
-See `INTEGRATION.md` for the exact shared CLI hook, dependency shape and the current
-production lifecycle gap. The pinned compiler-source review is not execution
-evidence.
+See `INTEGRATION.md` for the exact shared CLI hook, dependency shape, production
+ABI and remaining capability boundary. The pinned compiler-source review is not
+execution evidence.

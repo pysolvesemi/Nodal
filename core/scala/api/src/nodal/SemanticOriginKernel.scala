@@ -219,13 +219,14 @@ private[nodal] final class SemanticOriginBuilder:
       instance: AnyRef,
       childModule: Module
   ): Unit =
+    val parentClass = modules.find(_.handle == parent).map(_.module.getClass.getName)
     instances += OriginInstanceCapture(
       parent,
       ordinal,
       child,
       instance,
       childModule,
-      captureSite()
+      captureSite(parentClass)
     )
 
   def captureOperation(module: Long, kind: String, values: Vector[Any]): Unit =
@@ -239,18 +240,25 @@ private[nodal] final class SemanticOriginBuilder:
     */
   def captureSemanticSource(): Option[SourceSpan] = captureSite().span
 
-  private def captureSite(): KernelSourceSite =
+  private def captureSite(preferredClass: Option[String] = None): KernelSourceSite =
     val frames = walker.walk[java.util.List[StackWalker.StackFrame]](stream =>
       stream.limit(96).toList
     ).asScala.toVector
     val userFrames = frames.zipWithIndex.filter: (frame, _) =>
       isUserFrame(frame)
-    val userCandidate = userFrames
-      .find: (frame, _) =>
-        frame.getMethodName == "<init>" &&
-          Option(frame.getFileName)
-            .flatMap(fileName => locateSource(fileName, frame.getClassName))
-            .nonEmpty
+    val locatedConstructor = (candidate: (StackWalker.StackFrame, Int)) =>
+      val (frame, _) = candidate
+      frame.getMethodName == "<init>" &&
+        Option(frame.getFileName)
+          .flatMap(fileName => locateSource(fileName, frame.getClassName))
+          .nonEmpty
+    val userCandidate = preferredClass
+      .flatMap(name => userFrames.find: (frame, _) =>
+        frame.getClassName == name && locatedConstructor(frame -> 0)
+      )
+      .orElse(userFrames.find: candidate =>
+        locatedConstructor(candidate)
+      )
       .orElse(userFrames.headOption)
     val userIndex = userCandidate.map(_._2).getOrElse(-1)
     val user = userCandidate.map(_._1)
@@ -627,10 +635,13 @@ private[nodal] final class SemanticOriginBuilder:
 
   private def declarationBinding(site: KernelSourceSite, kind: String): Option[String] =
     val tokens = declarationTokens(kind, site)
-    bindingForTokens(site, tokens, if tokens.nonEmpty then 12 else 0)
+    site.bindingName
+      .map(cleanIdentifier(_, kind))
+      .orElse(bindingForTokens(site, tokens, if tokens.nonEmpty then 12 else 0))
 
   private def instanceBinding(site: KernelSourceSite): Option[String] =
     bindingForTokens(site, Vector("instance("), 12)
+      .orElse(site.bindingName.map(cleanIdentifier(_, "instance")))
 
   private def expressionBinding(site: KernelSourceSite): Option[String] =
     bindingForTokens(site, Vector.empty, 0)
@@ -847,9 +858,12 @@ private[nodal] final class SemanticOriginBuilder:
       val allocated = allocate(
         captures.toVector.map: capture =>
           val explicit = capture.explicitName.map(cleanIdentifier(_, capture.kind))
-          val binding = declarationBinding(capture.site, capture.kind)
-            .orElse(memberBinding(members, capture.value))
-            .filter(claimedBindings.add)
+          val binding =
+            if explicit.nonEmpty then None
+            else
+              declarationBinding(capture.site, capture.kind)
+                .orElse(memberBinding(members, capture.value))
+                .filter(claimedBindings.add)
           val sink = Option(sinkHints.get(capture.value)).map(name => s"${name}_source")
           val selected = explicit
             .map(_ -> "explicit")

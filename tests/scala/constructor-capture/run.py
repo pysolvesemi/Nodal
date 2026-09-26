@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Run the bounded Scala 3.8.4 probe through the existing Mill toolchain owner.
+"""Run the Scala 3.8.4 constructor probes through the existing Mill toolchain owner.
 
 No downloader, repository writer, CI dispatcher, or credential route exists here.
-A successful run is compiler/runtime evidence only for this isolated probe.
+A successful run is compiler/runtime evidence for the isolated protocol and production ABI.
 """
 from __future__ import annotations
 
@@ -22,6 +22,8 @@ HERE = Path(__file__).resolve().parent
 SCALA_VERSION = "3.8.4"
 BASE = "315905bde74f23997ce1c03fe5bc3a7569a00b0d"
 MAIN = "nodal.prototype.fixtures.ConstructorProbe"
+PRODUCTION_MAIN = "nodal.constructor.separate.SeparateConsumer"
+PRODUCTION_BOUNDARY_MAIN = "nodal.constructor.separate.RawSeparateConsumer"
 NEGATIVE_EXPECTATIONS = {
     "effectful-default": "NODAL-CTOR-PROTOTYPE-DEFAULT",
     "curried-constructor": "NODAL-CTOR-PROTOTYPE-SHAPE",
@@ -36,20 +38,20 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def parse_mill_classpath(raw: str) -> list[str]:
-    """Mill's PathRef JSON may use strings, {path:...}, or ref:hash:path.
+def existing_jars_from_mill_json(raw: str) -> list[str]:
+    """Decode existing jars from Mill PathRef JSON.
 
-    Accept only existing jar paths. Ignore log lines before the JSON value;
-    fail closed if the reported compiler classpath cannot be decoded.
+    Mill may use strings, {path:...}, or ref:hash:path. Ignore log lines before
+    the JSON value and accept only absolute paths to existing jar files.
     """
     decoder = json.JSONDecoder()
     values = []
-    for match in re.finditer(r"[\[{]", raw):
+    for match in re.finditer(r'''[\[{\"]''', raw):
         try:
             value, _ = decoder.raw_decode(raw[match.start():])
         except json.JSONDecodeError:
             continue
-        if isinstance(value, (list, dict)):
+        if isinstance(value, (list, dict, str)):
             values.append(value)
 
     def paths(value):
@@ -71,9 +73,23 @@ def parse_mill_classpath(raw: str) -> list[str]:
 
     for value in values:
         result = list(dict.fromkeys(paths(value)))
-        if any("scala3-compiler_3-3.8.4" in path for path in result):
+        if result:
             return result
+    return []
+
+
+def parse_mill_classpath(raw: str) -> list[str]:
+    result = existing_jars_from_mill_json(raw)
+    if any("scala3-compiler_3-3.8.4" in path for path in result):
+        return result
     raise RuntimeError("Mill did not report an existing Scala 3.8.4 compiler classpath")
+
+
+def parse_mill_jar(raw: str, label: str) -> str:
+    result = existing_jars_from_mill_json(raw)
+    if len(result) != 1:
+        raise RuntimeError(f"Mill did not report exactly one existing {label} jar")
+    return result[0]
 
 
 def validate_negative_diagnostic(output: str, diagnostic: str) -> None:
@@ -122,7 +138,10 @@ def main() -> int:
         "source_sha256": {str(p.relative_to(HERE)): digest(p) for p in sources},
         "commands": [],
         "negative_expectations": NEGATIVE_EXPECTATIONS,
-        "scope": "Standalone constructor lifecycle probe, not Nodal production qualification",
+        "scope": (
+            "Standalone lifecycle protocol plus separately compiled production constructor ABI; "
+            "not full F-042 qualification"
+        ),
     }
     evidence = out / "manifest.json"
 
@@ -294,6 +313,100 @@ def main() -> int:
         for name, diagnostic in NEGATIVE_EXPECTATIONS.items():
             compile_stage("negative-" + name, "fixtures/negative/" + name,
                           [runtime_jar, definitions_jar, raw_jar], True, diagnostic)
+
+        api_raw = run("mill-production-api-jar", [str(repo / "mill"), "-i", "show",
+                      "core.scala.api.jar"], cwd=repo)
+        production_api_jar = Path(parse_mill_jar(api_raw, "production API"))
+        plugin_raw = run("mill-production-plugin-jar", [str(repo / "mill"), "-i", "show",
+                         "core.scala.constructorPlugin.jar"], cwd=repo)
+        production_plugin_jar = Path(parse_mill_jar(plugin_raw, "production plugin"))
+        manifest["production_owner_jars"] = {
+            "api": {"path": str(production_api_jar), "sha256": digest(production_api_jar)},
+            "plugin": {
+                "path": str(production_plugin_jar),
+                "sha256": digest(production_plugin_jar),
+            },
+        }
+        save()
+
+        def compile_production(name, source_dir, dependencies=(), plugin=True):
+            target = out / name
+            target.mkdir()
+            source_paths = sorted(str(p) for p in (HERE / source_dir).rglob("*.scala"))
+            if not source_paths:
+                raise RuntimeError(f"{name}: source list is empty")
+            classpath = os.pathsep.join([compiler_cp, str(production_api_jar)] + [
+                str(path) for path in dependencies
+            ])
+            command = [java, "-cp", compiler_cp, "dotty.tools.dotc.Main",
+                       "-classpath", classpath, "-d", str(target), "-deprecation", "-feature",
+                       "-unchecked", "-Wunused:all", "-Werror", "-color:never"]
+            if plugin:
+                command += [f"-Xplugin:{production_plugin_jar}",
+                            "-Xplugin-require:nodal-constructor", "-Ycheck:all",
+                            "-Xprint:nodalConstructorCapture"]
+            run(name, command + source_paths)
+            return target
+
+        production_definitions = compile_production(
+            "production-definitions", "fixtures/production-definitions/src"
+        )
+        production_definitions_jar = pack(
+            "production-definitions-jar", production_definitions,
+            out / "production-definitions.jar"
+        )
+        production_factory = compile_production(
+            "production-factory", "fixtures/production-factory/src",
+            [production_definitions_jar]
+        )
+        production_factory_jar = pack(
+            "production-factory-jar", production_factory, out / "production-factory.jar"
+        )
+        production_consumer = compile_production(
+            "production-consumer", "fixtures/production-consumer/src",
+            [production_definitions_jar, production_factory_jar]
+        )
+        production_cp = os.pathsep.join([
+            compiler_cp, str(production_api_jar), str(production_definitions_jar),
+            str(production_factory_jar), str(production_consumer)
+        ])
+        production_result = run(
+            "production-runtime-assertions", [java, "-cp", production_cp, PRODUCTION_MAIN]
+        )
+        if production_result.splitlines().count("SEPARATE_COMPILE_CAPTURE_PASS") != 1:
+            raise RuntimeError("production separate-compilation assertions did not pass")
+
+        production_raw_factory = compile_production(
+            "production-uninstrumented-factory",
+            "fixtures/production-uninstrumented-factory/src",
+            [production_definitions_jar],
+            plugin=False,
+        )
+        production_raw_factory_jar = pack(
+            "production-uninstrumented-factory-jar", production_raw_factory,
+            out / "production-uninstrumented-factory.jar"
+        )
+        production_boundary = compile_production(
+            "production-boundary-consumer", "fixtures/production-boundary-consumer/src",
+            [production_definitions_jar, production_raw_factory_jar]
+        )
+        production_boundary_cp = os.pathsep.join([
+            compiler_cp, str(production_api_jar), str(production_definitions_jar),
+            str(production_raw_factory_jar), str(production_boundary)
+        ])
+        production_boundary_result = run(
+            "production-uninstrumented-factory-runtime-rejection",
+            [java, "-cp", production_boundary_cp, PRODUCTION_BOUNDARY_MAIN]
+        )
+        if production_boundary_result.splitlines().count(
+            "UNINSTRUMENTED_FACTORY_REJECTION_PASS"
+        ) != 1:
+            raise RuntimeError("production uninstrumented factory boundary did not reject")
+        manifest["production_abi"] = {
+            "status": "passed",
+            "separate_compilation_sentinel": "SEPARATE_COMPILE_CAPTURE_PASS",
+            "uninstrumented_factory_sentinel": "UNINSTRUMENTED_FACTORY_REJECTION_PASS",
+        }
         manifest["status"] = "passed"
         manifest["artifacts"] = {str(p.relative_to(out)): digest(p)
                                  for p in out.glob("*.jar")}

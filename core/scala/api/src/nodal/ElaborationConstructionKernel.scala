@@ -183,6 +183,7 @@ private[nodal] final case class KernelWaiverSnapshot(
 
 private[nodal] final case class ConstructionSnapshot(
     root: String,
+    rootParameterBindings: Vector[(String, String)] = Vector.empty,
     modules: Vector[KernelModuleSnapshot],
     interfaceAbi: Vector[InterfaceAbiEntry],
     resolvedNets: Vector[KernelResolvedNetSnapshot],
@@ -227,7 +228,8 @@ private final case class DeclarationRecord(
 private final class InstanceRecord(
     val ordinal: Int,
     val child: Long,
-    val lexicalDomain: Option[ClockDomain]
+    val lexicalDomain: Option[ClockDomain],
+    val captured: Boolean
 ):
   var defaultBinding: Option[ClockDomain] = None
   val namedBindings: mutable.ArrayBuffer[(ClockDomain, ClockDomain)] = mutable.ArrayBuffer.empty
@@ -359,6 +361,7 @@ private final class ConstructionSession(val options: EmitOptions):
   private val declarationIds = new IdentityHashMap[AnyRef, DeclarationRef]()
   private val expressionIds = new IdentityHashMap[AnyRef, ExpressionRef]()
   private val instanceIds = new IdentityHashMap[AnyRef, InstanceRecord]()
+  private val instanceObjects = new IdentityHashMap[AnyRef, Instance[? <: Module]]()
   private val records: mutable.LinkedHashMap[Long, ModuleRecord] = mutable.LinkedHashMap.empty
   private val moduleStack: mutable.ArrayBuffer[ModuleRecord] = mutable.ArrayBuffer.empty
   private val domainStack: mutable.ArrayBuffer[ClockDomain] = mutable.ArrayBuffer.empty
@@ -391,6 +394,9 @@ private final class ConstructionSession(val options: EmitOptions):
   private var waveformForbiddenDepth = 0
   private val semanticOrigin = new SemanticOriginBuilder
   private var semanticResult: Option[SemanticOriginResult] = None
+  private val rootParameterBindings: mutable.ArrayBuffer[(Any, Any)] =
+    mutable.ArrayBuffer.empty
+  private var constructorFailure: Option[(Throwable, String)] = None
 
   private def fail(code: String, message: String, path: Option[String] = None): Nothing =
     scala.util.Failure[Nothing](
@@ -429,6 +435,52 @@ private final class ConstructionSession(val options: EmitOptions):
     moduleIds.put(module, java.lang.Long.valueOf(handle))
     semanticOrigin.captureModule(handle, module, record.className, record.parentAtConstruction)
     moduleStack += record
+
+  def prepareConstructorAllocation(site: String): Int =
+    constructorFailure.foreach: (_, firstSite) =>
+      fail(
+        "NODAL-CONSTRUCTOR-LIFECYCLE-018",
+        s"construction transaction was already invalidated by a captured allocation at $firstSite",
+        Some(site)
+      )
+    moduleStack.size
+
+  def poisonConstructor(failure: Throwable, site: String): Unit =
+    if constructorFailure.isEmpty then constructorFailure = Some(failure -> site)
+
+  def abortConstructorAllocation(
+      depth: Int,
+      failure: Throwable,
+      site: String,
+      invalidate: Boolean
+  ): Unit =
+    if invalidate then poisonConstructor(failure, site)
+    while moduleStack.size > depth do moduleStack.remove(moduleStack.size - 1)
+
+  def constructorDepth: Int = moduleStack.size
+
+  def bindConstructorParameters(
+      module: Module,
+      parameters: Vector[ConstructorCapturedParameter]
+  ): Unit =
+    val handle = moduleHandle(module)
+    if moduleStack.lastOption.forall(_.handle != handle) then
+      fail(
+        "NODAL-CONSTRUCTOR-LIFECYCLE-019",
+        "constructor parameters can only bind at the exact child Module.begin"
+      )
+    parameters.foreach: parameter =>
+      registerDeclaration(
+        parameter.carrier,
+        KernelSignalKind.Parameter,
+        CandidateRuntime.expressionDataType(parameter.default),
+        Some(parameter.name),
+        None,
+        Vector(
+          "default" -> parameter.default,
+          "unit" -> CandidateRuntime.expressionUnit(parameter.default).getOrElse("")
+        )
+      )
 
   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
     val module = currentModule
@@ -821,7 +873,11 @@ private final class ConstructionSession(val options: EmitOptions):
         outputContinuity
       ))
 
-  def attachInstance(instance: AnyRef, childModule: Module): Unit =
+  private def attachInstance(
+      instance: Instance[? <: Module],
+      childModule: Module,
+      captured: Boolean
+  ): Unit =
     if !moduleIds.containsKey(childModule) then
       fail(
         "NODAL-HIERARCHY-016",
@@ -842,11 +898,13 @@ private final class ConstructionSession(val options: EmitOptions):
     val record = new InstanceRecord(
       parent.instances.size,
       childHandle,
-      domainStack.lastOption
+      domainStack.lastOption,
+      captured
     )
     parent.instances += record
     child.attached = true
     instanceIds.put(instance, record)
+    instanceObjects.put(childModule, instance)
     semanticOrigin.captureInstance(
       parent.handle,
       record.ordinal,
@@ -854,6 +912,27 @@ private final class ConstructionSession(val options: EmitOptions):
       instance,
       childModule
     )
+
+  def attachInstance(instance: Instance[? <: Module], childModule: Module): Unit =
+    attachInstance(instance, childModule, captured = false)
+
+  def instance[M <: Module](module: M, captured: Boolean): (Instance[M], Boolean) =
+    Option(instanceObjects.get(module)) match
+      case Some(existing) =>
+        val record = instanceRecord(existing)
+        val parent = currentModule
+        if !parent.instances.exists(_ eq record) then
+          fail(
+            "NODAL-PARAMETER-BINDING-020",
+            "only the owning parent Module can retrieve a captured child Instance"
+          )
+        if !record.captured || captured then
+          fail("NODAL-HIERARCHY-017", "child Module was attached twice")
+        (existing.asInstanceOf[Instance[M]], false)
+      case None =>
+        val created = new Instance(module)
+        attachInstance(created, module, captured)
+        (created, true)
 
   private def instanceRecord(instance: AnyRef): InstanceRecord =
     Option(instanceIds.get(instance)).getOrElse(
@@ -963,6 +1042,7 @@ private final class ConstructionSession(val options: EmitOptions):
         if Option(visited.put(expression, java.lang.Boolean.TRUE)).isEmpty then
           Option(expressionIds.get(expression)) match
             case Some(reference) => expressionOwners += reference.module
+            case None if expression.literal.nonEmpty => ()
             case None => dynamicDependency = true
           if expression.literal.isEmpty then
             expression.operation match
@@ -1055,6 +1135,50 @@ private final class ConstructionSession(val options: EmitOptions):
         )
       case Right(()) =>
         record.parameterOverrides += parameter -> value
+
+  def commitConstructorAllocation(
+      module: Module,
+      parameters: Vector[ConstructorCapturedParameter]
+  ): Boolean =
+    val handle = moduleHandle(module)
+    val record = records(handle)
+    record.parentAtConstruction match
+      case Some(_) =>
+        val (instance, attached) = this.instance(module, captured = true)
+        parameters.foreach: parameter =>
+          parameter.actual.foreach(actual =>
+            overrideParameter(instance, parameter.carrier, actual)
+          )
+        attached
+      case None =>
+        if moduleStack.headOption.forall(_.handle != handle) then
+          fail(
+            "NODAL-CONSTRUCTOR-LIFECYCLE-020",
+            "captured root allocation is not the active construction root"
+          )
+        parameters.foreach: parameter =>
+          parameter.actual.foreach: actual =>
+            val targetReference = Option(declarationIds.get(parameter.carrier)).getOrElse(
+              fail(
+                "NODAL-PARAMETER-BINDING-016",
+                "root constructor binding targets an unknown parameter"
+              )
+            )
+            val target = record.declarations(targetReference.index)
+            val duplicate = rootParameterBindings.exists:
+              case (existing: AnyRef, _) =>
+                Option(declarationIds.get(existing)).contains(targetReference)
+              case _ => false
+            val synthetic = new InstanceRecord(-1, handle, None, captured = true)
+            if duplicate then synthetic.parameterOverrides += parameter.carrier -> actual
+            AnalogHierarchyOverridePolicy.validate(
+              overrideEvidence(record, synthetic, target, actual)
+            ) match
+              case Left(rejection) =>
+                fail(rejection.code, rejection.message, Some(record.className))
+              case Right(()) =>
+                rootParameterBindings += parameter.carrier -> actual
+        false
 
   def withDomain[A](domain: ClockDomain)(body: => A): A =
     if !domainIds.containsKey(domain) then
@@ -2562,6 +2686,12 @@ private final class ConstructionSession(val options: EmitOptions):
       case _ => DesignKind.Unsupported
 
   def finish(root: Module): (Emission, ConstructionSnapshot) =
+    constructorFailure.foreach: (failure, site) =>
+      fail(
+        "NODAL-CONSTRUCTOR-LIFECYCLE-021",
+        s"captured constructor failure invalidated this transaction: ${failure.getClass.getName}",
+        Some(site)
+      )
     val rootHandle = moduleHandle(root)
     if moduleStack.size != 1 || moduleStack.last.handle != rootHandle then
       fail("NODAL-LIFECYCLE-017", "construction closed with an unattached child Module")
@@ -2578,6 +2708,21 @@ private final class ConstructionSession(val options: EmitOptions):
     val abi = interfaceAbi(resolved)
     val snapshot = ConstructionSnapshot(
       root = modulePath(rootHandle),
+      rootParameterBindings = rootParameterBindings.toVector.map:
+        case (parameter, value) =>
+          val reference = parameter match
+            case candidate: AnyRef => Option(declarationIds.get(candidate)).getOrElse(
+                fail(
+                  "NODAL-PARAMETER-BINDING-016",
+                  "root constructor binding targets an unknown parameter"
+                )
+              )
+            case _ =>
+              fail(
+                "NODAL-PARAMETER-BINDING-016",
+                "root constructor binding is not a declaration"
+              )
+          declarationName(reference) -> renderAny(value, rootHandle),
       modules = modules,
       interfaceAbi = abi,
       resolvedNets = resolvedNets(),
@@ -2623,25 +2768,87 @@ private[nodal] object ConstructionKernel:
     if Current.isBound then Some(Current.get) else None
 
   private def elaborate(top: => Module, options: EmitOptions): (Emission, ConstructionSnapshot) =
-    AnalogProceduralConstruction.withSession:
-      val session = new ConstructionSession(options)
-      var result: Option[(Emission, ConstructionSnapshot)] = None
-      ScopedValue.where(Current, session).run(
-        new Runnable:
-          override def run(): Unit =
-            val root = top
-            result = Some(session.finish(root))
-      )
-      result.getOrElse(
-        scala.util.Failure[(Emission, ConstructionSnapshot)](
-          new IllegalStateException("construction transaction did not publish a result")
-        ).get
-      )
+    ConstructorCaptureRuntime.withSession:
+      AnalogProceduralConstruction.withSession:
+        val session = new ConstructionSession(options)
+        var result: Option[(Emission, ConstructionSnapshot)] = None
+        ScopedValue.where(Current, session).run(
+          new Runnable:
+            override def run(): Unit =
+              val root = top
+              result = Some(session.finish(root))
+        )
+        result.getOrElse(
+          scala.util.Failure[(Emission, ConstructionSnapshot)](
+            new IllegalStateException("construction transaction did not publish a result")
+          ).get
+        )
 
   def emit(top: => Module, options: EmitOptions): Emission = elaborate(top, options)._1
 
   def inspect(top: => Module, options: EmitOptions = EmitOptions()): ConstructionSnapshot =
     elaborate(top, options)._2
+
+  def failConstructor(code: String, message: String, site: String): Nothing =
+    scala.util.Failure[Nothing](
+      new ConstructionException(KernelDiagnostic(code, message, Some(site)))
+    ).get
+
+  def prepareConstructorAllocation(site: String): Int = active match
+    case Some(session) => session.prepareConstructorAllocation(site)
+    case None =>
+      failConstructor(
+        "NODAL-CONSTRUCTOR-LIFECYCLE-022",
+        "captured Module allocation requires an active construction transaction",
+        site
+      )
+
+  def poisonConstructor(failure: Throwable, site: String): Unit =
+    active.foreach(_.poisonConstructor(failure, site))
+
+  def abortConstructorAllocation(
+      depth: Int,
+      failure: Throwable,
+      site: String,
+      invalidate: Boolean
+  ): Unit =
+    active.foreach(_.abortConstructorAllocation(depth, failure, site, invalidate))
+
+  def constructorDepth: Int = active.map(_.constructorDepth).getOrElse(0)
+
+  def bindConstructorParameters(
+      module: Module,
+      parameters: Vector[ConstructorCapturedParameter]
+  ): Unit =
+    active match
+      case Some(session) => session.bindConstructorParameters(module, parameters)
+      case None =>
+        failConstructor(
+          "NODAL-CONSTRUCTOR-LIFECYCLE-022",
+          "constructor parameter binding requires an active construction transaction",
+          module.getClass.getName
+        )
+
+  def commitConstructorAllocation(
+      module: Module,
+      parameters: Vector[ConstructorCapturedParameter]
+  ): Boolean = active match
+    case Some(session) => session.commitConstructorAllocation(module, parameters)
+    case None =>
+      failConstructor(
+        "NODAL-CONSTRUCTOR-LIFECYCLE-022",
+        "captured Module commit requires an active construction transaction",
+        module.getClass.getName
+      )
+
+  def instance[M <: Module](module: M): (Instance[M], Boolean) = active match
+    case Some(session) => session.instance(module, captured = false)
+    case None =>
+      failConstructor(
+        "NODAL-CONSTRUCTOR-LIFECYCLE-022",
+        "child Instance creation requires an active construction transaction",
+        module.getClass.getName
+      )
 
   def beginModule(module: Module): Unit = active.foreach(_.beginModule(module))
 

@@ -21,6 +21,33 @@ increment acceptance. Required compile prototypes, integration tests and target
 witnesses below remain outstanding. The detailed requirements and their existing
 owners are in the [roadmap amendment](../roadmap/lightweight-hierarchy-iteration-v0.1-plan.md).
 
+### Production ABI implementation record - 2026-09-26
+
+The bounded constructor profile uses compiler-owned version-1
+`ConstructorSchema` metadata and generated calls into the existing API
+construction owner. The compiler plugin is a leaf on the pinned Scala 3.8.4
+compiler: API and frontend compile without loading it, while supported producer
+and non-inline factory source must enable it. Repository example producers and
+testkit do so through one build trait. Separate definition, factory and consumer
+JAR compilation is required evidence. A prebuilt factory compiled without the
+plugin is rejected at runtime with `NODAL-CONSTRUCTOR-MISSING-016` rather than
+accepted with missing attachment/default semantics.
+
+The initial production profile captures direct top-level nongeneric Module
+classes with one primary `Param[Real]` list whose defaults are finite Double
+literals, plus the proven direct zero-argument shape. Host/generic/indirect
+legacy explicit constructors remain on their prior path. General defaults,
+other parameter types and unsupported Scala constructor shapes remain open and
+must not be inferred from version-1 metadata. This is an implementation record
+within the approved gate, not completion or acceptance evidence.
+
+Captured construction reuses the existing transaction and canonical Instance.
+An external root actual is retained separately from its authored declaration
+default; it is not invented as a parent instance or forwarded through a child's
+downstream use of the root parameter. Failures after construction effects poison
+snapshot publication, while a clean rejection before `Module.begin` may be
+caught. A fresh elaboration must remain clean in both cases.
+
 This gate supplements the existing construction-policy gate; it does not delete
 or relabel that gate's helper checkpoint or evidence. It supersedes only the
 planned explicit-only common syntax and one-range-name/one-HDL-loop restriction.

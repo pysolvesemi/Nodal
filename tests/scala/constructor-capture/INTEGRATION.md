@@ -1,10 +1,12 @@
 # Next execution and production boundary
 
-## Smallest next compile checkpoint
+## Required compile checkpoint
 
 This directory stays outside normal Mill module `src` and `test/src` roots.
 Its fixtures compile in separate stages rather than as one test source set.
-No new production Mill dependency is introduced.
+The standalone protocol introduces no production dependency. The production
+compiler artifact remains a compiler-only leaf, and producer modules opt into it
+through the existing build owner.
 
 `scripts/nodal.py` invokes the harness after the existing Scala compile/test
 commands with a fresh run directory under `.validation/constructor-capture/`.
@@ -39,48 +41,48 @@ Expected stage dependency shape:
 | Raw definitions | Runtime JAR | No |
 | Raw factory | Runtime and definitions JARs | No |
 | Negative/boundary consumers | Corresponding JARs and runtime | Yes |
+| Production definitions JAR | Actual API JAR | Actual production plugin |
+| Production factory JAR | Actual API and definitions JARs | Actual production plugin |
+| Production consumer | Actual API, definitions and factory JARs | Actual production plugin |
+| Production raw factory | Actual API and definitions JARs | No |
+| Production boundary consumer | Actual API, definitions and raw factory JARs | Actual production plugin |
 
 The plugin locates runtime symbols by their exact fully qualified compiler
 symbols. It imports no runtime or core API binary. The runtime imports no plugin
 or compiler. Definitions/factories depend on the runtime, and consumers depend
 on their JARs. This avoids an API/frontend/compiler-plugin dependency cycle.
 
-## Existing production owner and minimum required hooks
+## Production owner and implemented hooks
 
-The real owner is still `ConstructionSession` / `ConstructionKernel` in
+The real owner is `ConstructionSession` / `ConstructionKernel` in
 `core/scala/api/src/nodal/ElaborationConstructionKernel.scala`, with declaration
-and lifecycle entry points in `CandidateApi.scala`. The prototype does not add
-another production hierarchy registry.
+and lifecycle entry points in `CandidateApi.scala`. Constructor capture reuses
+those owners and does not add another production hierarchy registry.
 
-| Existing behavior | Required focused integration |
+| Existing behavior | Integrated production behavior |
 | --- | --- |
-| `Param` constructor immediately calls `CandidateRuntime.declare`. | Add a compiler-carrier construction mode that is inert before `Module.begin`; keep explicit `param(...)` on its current declaration path. Construct the actual child default in the child context; do not let literal materialization register it in the parent. |
-| `Module` invokes `CandidateRuntime.beginModule(this)`, which begins kernel and procedural state. | After those owners enter the child context, bind the exact pending carriers once through the existing declaration method with compiler parameter/source metadata. Retained parameter field copies remain inert. |
-| Explicit `Instance` attaches the child and `.param` runs existing override legality. | On successful captured allocation, create/reuse the canonical instance handle and invoke the same attachment and override path. Direct child aliases must resolve by exact recorded identity. Do not infer ownership from class/member names or create value-specialized module definitions. |
-| A whole `ConstructionSession` is scoped by `ConstructionKernel.elaborate`; `finish` rejects unattached children. | Complete captured allocation inside that owner. A failure must prevent snapshot publication and leave later elaborations clean. Continuing after a caught child failure would require coordinated rollback across all touched owners. |
+| `Param` constructor normally calls `CandidateRuntime.declare`. | Compiler-created carriers are inert until `Module.begin`; explicit `param(...)` retains the existing declaration path. The child declaration/default and parent actual remain distinct. |
+| `Module` invokes `CandidateRuntime.beginModule(this)`. | The existing child context binds exact pending carriers once through the canonical declaration method. Retained field copies remain inert. |
+| Explicit `Instance` attaches the child and `.param` runs existing legality. | Captured allocation creates or reuses that canonical handle and invokes the same attachment/override policy. Explicit naming retains priority over the automatic module alias. |
+| A `ConstructionSession` is scoped by `ConstructionKernel.elaborate`. | Partial constructor/argument effects poison publication; a clean rejection before `Module.begin` is catchable. All exits restore scoped state and a fresh elaboration remains clean. |
 
-The last row is a concrete production gap. Current source has mutable module,
-domain, declaration, expression and instance identity maps, module/domain
-stacks, operation and analog/operator records, semantic origins and procedural
-state. A rollback that only pops `moduleStack` would leave invalid state behind.
-A bounded owner-local undo journal/checkpoint would need to cover every touched
-owner to permit caught-child continuation. A smaller initial production policy
-is to poison the existing session on constructor/argument failure and refuse
-`finish` publication even if host code catches the exception, then restore scoped
-procedural state and permit a fresh elaboration. The failure guard must cover
-argument evaluation while the pending child frame starts only after those
-arguments have evaluated. Either policy needs actual production tests. The
-standalone trace tests do not prove this production rollback. Do not port the
-trace registry into production or claim B.1.1 from the prototype alone.
+The failure policy is deliberately narrower than an owner-wide rollback journal.
+Once a constructor enters `Module.begin`, or argument evaluation has already
+produced construction effects, a caught failure invalidates the whole transaction.
+A rejection before `Module.begin` with no new construction depth is recoverable.
+Public regressions cover both poison paths, clean recovery and a subsequent fresh
+transaction. This policy does not authorize caught continuation after partial
+child construction.
 
-A production compiler artifact should remain a compiler-only leaf using the
-single `Versions.scala3` pin. Its runtime bridge belongs to the existing API
-construction owner, and generated calls need a deliberate internal ABI and
-source identity format. Enabling the plugin for all supported producer/factory
-modules and downstream users is a build/distribution compatibility requirement.
-Do not make `api` depend on a plugin that itself depends on compiled `api`.
+The compiler artifact is a compiler-only leaf using the single `Versions.scala3`
+pin. Version-1 `ConstructorSchema` metadata and generated runtime calls form the
+internal ABI. API/frontend compile without loading the plugin; testkit and all
+repository example producer modules enable it through `ConstructorCapturedProducer`.
+External producer and factory source in the supported profile must also enable
+the plugin. A prebuilt uninstrumented factory is rejected; it is not silently
+treated as a legacy explicit constructor.
 
-## Approved scope and precise remaining boundary decision
+## Approved scope and remaining capability boundary
 
 The approved lightweight hierarchy gate expressly requests pinned constructor
 and separate-compilation prototypes and permits necessary frontend/lifecycle
@@ -90,13 +92,10 @@ prebuilt factories lacking instrumentation. This probe makes that distinction
 observable: instrumented non-inline factory JARs are supported by the proposed
 protocol; an uninstrumented factory is rejected.
 
-Before production integration, document/review the producer plugin requirement,
-versioned runtime/metadata ABI and migration/distribution behavior in the same
-existing gate or an applicable versioned supplement. If production module
-manifests or architecture-enforcement/core-library boundary rules change,
-CONTRIBUTING requires the applicable approved design gate in that PR. Do not
-silently reinterpret the existing separate-compilation requirement as support
-for all arbitrary prebuilt factory binaries.
+The producer plugin requirement, versioned runtime/metadata ABI and
+missing-instrumentation behavior are recorded here and in the existing approved
+lightweight hierarchy gate. Do not reinterpret separate compilation as support
+for arbitrary prebuilt factory binaries.
 
 General nonliteral constructor defaults, independent target witnesses and the
 rest of the public API contract remain open. No roadmap checkbox, acceptance

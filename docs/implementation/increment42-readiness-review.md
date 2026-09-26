@@ -172,6 +172,16 @@ string-based ownership merely to evade that limitation. Check a newly available
 safe transport only when actionable; otherwise continue useful scoped work or
 remain quiet. Do not keep retrying the same known-failing transfer.
 
+### Resumption note - 2026-09-26
+
+The publication limitation above is retained as historical context but is no
+longer active. The connected Git Data path has since published and independently
+verified exact large blobs, including the construction kernel, with complete
+tree/parent/ref checks and non-force updates. No offline device or manual file
+transfer is now required. This restores the ordinary implementation path; it
+does not relax exact-byte review, ancestry, targeted-first qualification or any
+F-042 acceptance obligation.
+
 ## Evidence and continuation
 
 The native hierarchy phase was qualified on `f82c7f1`, with its receipts retained

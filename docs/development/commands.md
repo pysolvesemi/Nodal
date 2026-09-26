@@ -58,12 +58,13 @@ explicitly.
 ```
 
 This compiles every Scala module through the repository Mill wrapper, runs the
-Scala testkit, and then compiles and executes the isolated constructor-capture
-prototype in separate producer/factory/consumer stages. The prototype uses the
-same Mill-owned pinned compiler and records each run under
-`.validation/constructor-capture/`. Its trace is prerequisite compiler evidence,
-not production hierarchy implementation or increment acceptance. Prototype
-failure fails this command locally and in Core CI.
+Scala testkit, and then executes both constructor-capture probes. The first is
+the isolated reference protocol. The second uses the actual API and production
+plugin while compiling definitions, a factory and a consumer in separate stages,
+plus an uninstrumented-factory rejection boundary. Both use the same Mill-owned
+pinned compiler and record each run under `.validation/constructor-capture/`.
+Probe success is required compiler/ABI evidence, not Increment 42 acceptance.
+Either failure fails this command locally and in Core CI.
 
 The standalone Scala fixtures participate in the existing pinned Scalafmt and
 Scalafix gates through `./nodal style check` and `./nodal style fix`; they remain

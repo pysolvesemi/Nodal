@@ -148,7 +148,8 @@ private final class ConstructorCapturePhase extends PluginPhase:
       if valid then
         val schema = Schema(fields.toList)
         schemas(cls) = schema
-        getterValues.foreach: (getter, value) => defaults(getter) = value
+        getterValues.foreach: (getter, value) =>
+          defaults(getter) = value
         cls.addAnnotation(Annotation(
           markerClass,
           List(Literal(Constant(1)), string(schema.encoded)),
@@ -268,7 +269,7 @@ private final class ConstructorCapturePhase extends PluginPhase:
                   string(parameter.name), number(parameter.default), ref(actual.symbol)
                 ))
               )
-            Block(carriers, cpy.Apply(tree)(args = carriers.map(v => ref(v.symbol))))
+            Block(carriers, cpy.Apply(tree)(tree.fun, carriers.map(v => ref(v.symbol))))
           val thunk = Lambda(MethodType(Nil)(_ => Nil, _ => tree.tpe), _ => body())
           val allocation = ref(requiredMethod("nodal.prototype.Capture.allocate"))
             .appliedToType(tree.tpe)

@@ -135,7 +135,7 @@ public source-to-IR/HDL witnesses and full qualification remain required.
 All new Scala sources participate in existing Scalafmt 3.11.5 and Scalafix 0.14.7
 checks through a sources-only Mill inventory and the existing syntactic lint
 path list. The trace retains intentional failures using the repository's
-`scala.util.Failure[Nothing](...).get` convention; no rule is suppressed.
+`scala.util.Failure` and its `get` method; no rule is suppressed.
 Pinned formatting and Scala compilation still have not run locally.
 
 See `INTEGRATION.md` for the exact shared CLI hook, dependency shape and the current

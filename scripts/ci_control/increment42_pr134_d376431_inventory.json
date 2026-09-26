@@ -1,0 +1,296 @@
+{
+  "base": "c3ea7cbf0432de7143a08b4431d51708c307d67e",
+  "base_ref": "dev",
+  "base_tree": "6edbf959d28104a1de62623e8b7e31170232bd64",
+  "candidate": "d3764318a1f332e3fc216969e47fda710287e7a2",
+  "candidate_parent": "527fc8d20b4909931d425609f2012d8d09da4fd5",
+  "candidate_parent_parent": "d799776408de9a9a35ace62a0a5b2b3e52608fb6",
+  "candidate_parent_tree": "9b1045f4a764bc2968ccf0d428ab0a14059014fd",
+  "candidate_ref": "increment/42-analog-hierarchy",
+  "candidate_tree": "4f4d062a405d66ccd3716198fc45f9becc7c26b1",
+  "candidate_workflows": [
+    {
+      "blob": "cc655027ac6e8d599858a6fcac99d2a7b390707f",
+      "id": 338626156,
+      "path": ".github/workflows/ci.yml",
+      "payload": {
+        "ref": "increment/42-analog-hierarchy"
+      },
+      "sha256": "f69cb1bb739acff58710ce055e70f27ae80db325d53f79df92c062778a8d0adf"
+    },
+    {
+      "blob": "0cfddfcf3c753b4bd1f915ac361b840ec3fc4ae4",
+      "id": 344284403,
+      "path": ".github/workflows/increment-28-electrical-connectivity.yml",
+      "payload": {
+        "ref": "increment/42-analog-hierarchy"
+      },
+      "sha256": "a70851c22b0f8c2d104a3a5500998e08f20f48bd3560794a2ae831516f513c8e"
+    }
+  ],
+  "controller_branch": "ci-control/nodal-42-pr134-d376431-constructor-repair-v1",
+  "controller_files": [
+    ".github/workflows/ci-control-42-pr134-d376431.yml",
+    "scripts/ci_control/increment42_pr134_d376431_v1.py",
+    "scripts/ci_control/increment42_pr134_d376431_inventory.json"
+  ],
+  "controller_workflow": ".github/workflows/ci-control-42-pr134-d376431.yml",
+  "controller_workflow_sha256": "bccc52928ea6c125ebbdb934684d9c7132c14e98f99073288aac613a24eb85fd",
+  "dev_workflows": {
+    ".github/workflows/ci.yml": {
+      "blob": "db695c972d0fb077cd355cf01d2c204afb6de40f",
+      "sha256": "52ee1f40bd55eebc97e699bdca854ab5b96a1a98159ef0f4b7a8f2b96f0dc124"
+    },
+    ".github/workflows/dependency-report.yml": {
+      "blob": "8abc90732a2d2fb4e3e84074c3dcecc4d608b944",
+      "sha256": "f4b99685283cd3fb7e6f826079219c4da8f3f7c7135033d65760ff43967942c6"
+    },
+    ".github/workflows/increment-10-public-api-candidates.yml": {
+      "blob": "375009f817889268e3191c2653d9aa7720717435",
+      "sha256": "5d0abdfa83bd85868d046ecfdc7c262cde30aa5ca9d19ad4d5b01e64c34576d7"
+    },
+    ".github/workflows/increment-11-public-api-freeze.yml": {
+      "blob": "fe960a24355bfd681425daefa2f9e41d653643b1",
+      "sha256": "1e010828887db468678dbb007b8958cb3c7529803b8d4c14855478ced1418806"
+    },
+    ".github/workflows/increment-12-clock-reset-api-freeze.yml": {
+      "blob": "7d7672b5712cdf4be3e3a64d4a360ca3041d1993",
+      "sha256": "8ec19d0f1d452bab27a4e3a8b9b8fd70ad193a6c240593c87fc88a11068370a5"
+    },
+    ".github/workflows/increment-13-core-semantic-candidates.yml": {
+      "blob": "e3ac56c229e8ca906eaf4c957d714d4c3a666f85",
+      "sha256": "b19f10f5990cef5d55ba55ea23f094d668409506f31d40b9f80e213aa3eb969e"
+    },
+    ".github/workflows/increment-133-analog-semantic-api.yml": {
+      "blob": "705290471fd5a8ef09dfb1f192b21169f7d28270",
+      "sha256": "e637db5668bc9711b7bd2784e76032191cc9de16449dfed887c1815f38f514d6"
+    },
+    ".github/workflows/increment-14-pipeline-interface-candidates.yml": {
+      "blob": "1607d70046e8cc9b83ae02d272b38b8fba82f242",
+      "sha256": "e72f4c8ce387ab0d0cb02ad3548a51f879e3af0c5fdb34db239eac1a41c4ed8e"
+    },
+    ".github/workflows/increment-15-unified-api-freeze.yml": {
+      "blob": "68bf8e792a6548f28e22b5b3743ba3ffed22908e",
+      "sha256": "1f0408199ebe04bcd5cc0931be46d9b825523d48e81eadcdf4763a7e2e013728"
+    },
+    ".github/workflows/increment-16-construction-kernel.yml": {
+      "blob": "1b5ed561e72e0d15745f8a2e7888eac3b47a2aea",
+      "sha256": "499c383d4d5d522f898b6356f9b142bd30bd3bda56bb2394cdd60005af8e38b7"
+    },
+    ".github/workflows/increment-17-source-origin-naming.yml": {
+      "blob": "09206e95819f79a04f138b5604d70d890dacfadb",
+      "sha256": "a2f5a99e1b4a9ee9c6c55cd3daea2ce278e7d20b013069d015361a0d5a9efb05"
+    },
+    ".github/workflows/increment-18-mlir-dialect-skeleton.yml": {
+      "blob": "b57e51340414418bf6a2b69cc93cad7a8890dd8a",
+      "sha256": "9edac479a5e552298382e85be06e5370cebd6dff1aa2bb31e8cf324c275d3884"
+    },
+    ".github/workflows/increment-19-core-mlir-model.yml": {
+      "blob": "a6d899a5ce28f9e2e3c4fefac6f8e6072146590f",
+      "sha256": "045bafab7b9774fd294b7aac03fc6c50021c8ec81f12823ee1aa3d66b1545c3a"
+    },
+    ".github/workflows/increment-20-scala-mlir-bridge.yml": {
+      "blob": "6408a35a0353adaefc3d85a08246d5238e302a0e",
+      "sha256": "72589312a568704f6a68a008cd5ea67af1b6ff4c1ff1817aa3c6180d8099fc4e"
+    },
+    ".github/workflows/increment-21-evidence-finalizer.yml": {
+      "blob": "0ef7aea2fd46171bb22c68ae88d5ab1c2d56ec14",
+      "sha256": "8fc77ad9c232ccde7453e749c5f81cfb4a54780ec64094461ce8d976c73e4d5f"
+    },
+    ".github/workflows/increment-21-native-semantic-pipeline.yml": {
+      "blob": "343e3ddf3a2b3e9f5c42621ac68e8f01b17b0730",
+      "sha256": "3a26ba42e2140b3f8802a7dec8572e01f97ba2fd9fb87939beef6aa42b125931"
+    },
+    ".github/workflows/increment-22-cross-layer-diagnostics.yml": {
+      "blob": "8d99e93ffac6c1472cd906d9b15281fc591c2625",
+      "sha256": "ab2e6d0e6bcc8b10ad69bc88b89b2398090346b7c13c932b3fa231bc93d53cbf"
+    },
+    ".github/workflows/increment-23-backend-framework.yml": {
+      "blob": "f7376ab2cdca31add160cb22834ba40a773784c2",
+      "sha256": "6451dee023216644c33748ad149d4d636a95ab5c7fe5c0606d07c1eb4f812087"
+    },
+    ".github/workflows/increment-24-minimal-analog-ir.yml": {
+      "blob": "757081b01a7670e8add2295191b5481e3c618f81",
+      "sha256": "bf6e67058101adc62212906ba1ef5b9cbe82ecd19afac95c78c6f12476fe02dc"
+    },
+    ".github/workflows/increment-25-rc-filter-vertical-slice.yml": {
+      "blob": "5078b75380c96e51e8c81cc41d39c7e4d8d1ea21",
+      "sha256": "0d48b24e041611b264994036f7708aa38984dd08769257d249498ec846fc6f32"
+    },
+    ".github/workflows/increment-26-reproducibility-contract.yml": {
+      "blob": "e17dd5ac0907212ec5994806c9e6f0a72c3e3d9b",
+      "sha256": "cbee6bd628631d6b7f0fcdd69ba2c0dd25663a4b2dd43e6fc715f47a8e55a26c"
+    },
+    ".github/workflows/increment-27-natures-disciplines.yml": {
+      "blob": "aed6c8ecfd8f4c09891d02c27aea3abcdd02abf7",
+      "sha256": "2b69512bd138e5b4f082f9a3982b81db438e216b4fd73b58f4d077ee799eea99"
+    },
+    ".github/workflows/increment-28-electrical-connectivity.yml": {
+      "blob": "0cfddfcf3c753b4bd1f915ac361b840ec3fc4ae4",
+      "sha256": "a70851c22b0f8c2d104a3a5500998e08f20f48bd3560794a2ae831516f513c8e"
+    },
+    ".github/workflows/increment-29-parameters-units.yml": {
+      "blob": "b05c9bac999a55b824584287502bd24b5395f026",
+      "sha256": "f69d4c5e57791839e3654292d90c6cbea92760797914d93c564abe04b75f16b4"
+    },
+    ".github/workflows/increment-30-analog-numeric-types.yml": {
+      "blob": "6aa0ad5b0a43499c952bc640f5cebda1640e8535",
+      "sha256": "05439bb368ec193557cc165526e0fbc0901c521a6fafc1dd9b0636fd5ee7b84c"
+    },
+    ".github/workflows/increment-31-potential-flow-access.yml": {
+      "blob": "d1a7094ab1924026961989ad8570ed7df6115b2c",
+      "sha256": "2bda9d3cee71107c554f300f91c1590f71b2c33417194f9fa0aa64d259207891"
+    },
+    ".github/workflows/increment-32-equation-contribution-semantics.yml": {
+      "blob": "6d18dd3cb8571f6711bffd11c1c52f49a5f40a77",
+      "sha256": "7795570a72c49fadd8e2391faf41b65e50cbd27cbe78524a76ea2d5d89db3d5e"
+    },
+    ".github/workflows/increment-33-analog-procedural-assignment.yml": {
+      "blob": "eecaf9509558d026413b45b4a97f71806691e057",
+      "sha256": "3771e329e17ae8868e223ed32cc000b5d8e88824a0e60c9e40ffccc9b06a278c"
+    },
+    ".github/workflows/increment-34-analog-control-flow.yml": {
+      "blob": "bafd8ace62f87d9e303476c8d3987c8cbf152dbb",
+      "sha256": "b524ec0880af17bead71b03f6c1aeae00412e2b2b4aeb306856f3ad7b24198bc"
+    },
+    ".github/workflows/increment-35-differential-integral-operators.yml": {
+      "blob": "b1b1198e037cce11118521b0c7255c8f89bd1071",
+      "sha256": "dcf90f16e841862300f1fbca29f61948bf88ebaa472eca362f556e60ef271a97"
+    },
+    ".github/workflows/increment-36-time-waveform-operators.yml": {
+      "blob": "2b04c8b29ae55c6cd63756cb33a96c10aa29ff6f",
+      "sha256": "a812d0e0b4b29330f05f14273b80b3d7da67850255ba2d2214351800beb66006"
+    },
+    ".github/workflows/increment-37-analog-events.yml": {
+      "blob": "872b0778c942ac6d74b16d295f4ca45bb8a36e7b",
+      "sha256": "d1688942b13fa071ff280a84dc67533942cb4b62834e9ec2c762e97903cadd8f"
+    },
+    ".github/workflows/increment-38-mathematical-functions.yml": {
+      "blob": "6c2ab4ecf2efcc5639f8ff88745961f9f817bfe5",
+      "sha256": "dd20eb590e8b709e7686948f39055ae2c24a39293586602349778277feb883c0"
+    },
+    ".github/workflows/increment-39-noise-operators.yml": {
+      "blob": "0a19222496174e7c2ea103702db65ad44cc17547",
+      "sha256": "38deca0f115878ccadee1738dffe483187c32f8b6f76044b27754e7e6b35041e"
+    },
+    ".github/workflows/increment-4-scala-bootstrap.yml": {
+      "blob": "0511f88ffb58366c33b9203244ab5a2aa733fd5c",
+      "sha256": "161016bf2e219a3c5ce7104876cb62274be63d90b6fbb42a523129523f70fffd"
+    },
+    ".github/workflows/increment-40-transfer-operators.yml": {
+      "blob": "a68fa529f6dd8f7244b0aa16b6ef05bbfd2dff09",
+      "sha256": "3bbce9f616d5a8d90d01386a18f0199ec3d4df976e2c52e1ab1e33944ee30597"
+    },
+    ".github/workflows/increment-41-analog-functions.yml": {
+      "blob": "bd31eb7ea872a934d769475c9bb0fab9ff700d76",
+      "sha256": "e493d46dfd20853dbe7cf18951b24598c52e06573e1a97d3c5779f9f99e8bb6d"
+    },
+    ".github/workflows/increment-5-native-toolchain-lock.yml": {
+      "blob": "7ca8443c24ca76ff0bf113afb52e1f9cedff533d",
+      "sha256": "922391270ff088bddfbf567a58055e83b37707a55d8752909db21e420806b071"
+    },
+    ".github/workflows/increment-6-native-compiler-bootstrap.yml": {
+      "blob": "270548ff1a5bdcf5107b300d4d979c6142eea45d",
+      "sha256": "ba0e0153823c59b4178f460faea82ee6b1959c4f7eec05973835262af1c62cb3"
+    },
+    ".github/workflows/increment-7-unified-developer-commands.yml": {
+      "blob": "56acba45eaa3429cc72a4e7883c944d60d7aff77",
+      "sha256": "f50b0785c7afdf8cf5c58fde440f125766b23e48ccbaf6d8b90d47db296dc602"
+    },
+    ".github/workflows/increment-8-ci-baseline.yml": {
+      "blob": "643b497262386b7ab2327965ac783223379c280f",
+      "sha256": "2859c6117fb9cec86c3fdd6dbd1b722e004a4aab5573295aee7d3cde39f36ba4"
+    },
+    ".github/workflows/increment-9-formatting-linting.yml": {
+      "blob": "e6a99e58178008cbee23c83a49ca5f3bb72a619e",
+      "sha256": "53d8c0f7fa60464119ad4801ca645f9c4d3f87752135239d04ca39513cffd5f4"
+    },
+    ".github/workflows/increment-9-roadmap-completion.yml": {
+      "blob": "83aff12e608e8969fd297456b7e44ce0f52983a3",
+      "sha256": "eeb074bce9878ebf3b3d4bcc56186e475f1d97883b644ebcd5264141cc7d6167"
+    }
+  },
+  "dispatchability": {
+    "both_workflows_empirically_dispatched_on_527": true,
+    "candidate_definitions_require_no_inputs": true,
+    "core_run": 36255516464,
+    "inc28_run": 36255523672
+  },
+  "failed_head": "527fc8d20b4909931d425609f2012d8d09da4fd5",
+  "failure_evidence_limit": "Actual 527 Markdown and prototype compiler failures are launch sequencing evidence only. Pin all five terminal jobs, Scala evidence upload success, native success and required failure. No old-head result qualifies this candidate.",
+  "inherited_trigger_review": "All 43 exact dev workflow definitions were read before publication. Push filters are confined to dev/main/increment branches; none matches this ci-control branch. None uses create, workflow_run, or pull_request_target. Definition bytes must match the audited set exactly.",
+  "launch_boundary": "Validate exact prior terminal failures and all existing Core/28 runs before any POST. Keep active and successful exact-head dispatches. Never cancel old work or retry an uncertain POST.",
+  "pr": 134,
+  "prior_failures": [
+    {
+      "jobs": [
+        {
+          "conclusion": "failure",
+          "id": 108441443823,
+          "name": "contracts",
+          "steps": {
+            "Validate contracts, style, and online provenance": "failure"
+          }
+        },
+        {
+          "conclusion": "failure",
+          "id": 108441443993,
+          "name": "scala",
+          "steps": {
+            "Compile and test Scala core": "failure",
+            "Preserve constructor prototype evidence": "success"
+          }
+        },
+        {
+          "conclusion": "success",
+          "id": 108441444085,
+          "name": "native",
+          "steps": {
+            "Configure, build, lint, and test native core": "success"
+          }
+        },
+        {
+          "conclusion": "failure",
+          "id": 108442937448,
+          "name": "required",
+          "steps": {
+            "Publish aggregate push status": "skipped",
+            "Require every Core CI job": "failure"
+          }
+        }
+      ],
+      "path": ".github/workflows/ci.yml",
+      "run_attempt": 1,
+      "run_id": 36255516464,
+      "workflow_id": 338626156
+    },
+    {
+      "jobs": [
+        {
+          "conclusion": "failure",
+          "id": 108441465178,
+          "name": "increment-28/electrical-connectivity",
+          "steps": {
+            "Build lint and test native core": "skipped",
+            "Prove deterministic topology and stable rejections": "skipped",
+            "Validate contracts and mutation tests": "failure"
+          }
+        }
+      ],
+      "path": ".github/workflows/increment-28-electrical-connectivity.yml",
+      "run_attempt": 1,
+      "run_id": 36255523672,
+      "workflow_id": 344284403
+    }
+  ],
+  "purpose": "Targeted qualification of the minimal direct-child repair of failed 527; not full F-042 or production constructor acceptance.",
+  "repository": "pysolvesemi/Nodal",
+  "schema": 1,
+  "scope_rationale": [
+    "Exactly Core and Increment 28; same affected owners as 527. The repair changes no workflow definition.",
+    "Core contracts rechecks Markdown/style/developer contracts; Scala rechecks existing tests and the required constructor probe; native rechecks its existing gates.",
+    "Increment 28 rechecks contracts then its direct connectivity native and topology witnesses, which were skipped after the 527 Markdown failure.",
+    "Actual 527 contracts and Increment 28 failed the broken local README link before Scalafmt; Scala failed prototype plugin compilation. Native must be terminal success before generation or dispatch.",
+    "No historical result qualifies this repair, no broader workflow set or roadmap closure is launched, and PR-only requirements are not waived."
+  ]
+}

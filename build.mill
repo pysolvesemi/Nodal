@@ -24,6 +24,10 @@ trait NodalScalaModule extends ScalaModule:
     "-Werror",
   )
 
+// Standalone positive/negative fixtures need formatting, not ordinary module compilation.
+object constructorCaptureSources extends Module:
+  def sources = Task.Sources(BuildCtx.workspaceRoot / "tests" / "scala" / "constructor-capture")
+
 object scalafix extends JavaModule:
   def scalafixClasspath: T[Seq[PathRef]] = Task {
     defaultResolver().classpath(
@@ -42,6 +46,7 @@ object scalafix extends JavaModule:
       "core/scala",
       "core/integrations",
       "examples",
+      "tests/scala/constructor-capture",
     )
 
   private def invoke(

@@ -155,6 +155,16 @@ def command_bootstrap(args: argparse.Namespace, root: Path, runner: Runner) -> i
 def command_core_scala(_args: argparse.Namespace, root: Path, runner: Runner) -> int:
     runner.run(_mill(root, "__.compile"))
     runner.run(_mill(root, "core.scala.testkit.test"))
+    runner.run(
+        (
+            sys.executable,
+            str(root / "tests" / "scala" / "constructor-capture" / "run.py"),
+            "--repo",
+            str(root),
+            "--out-parent",
+            str(root / ".validation" / "constructor-capture"),
+        )
+    )
     return 0
 
 

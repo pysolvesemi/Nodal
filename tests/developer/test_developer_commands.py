@@ -119,6 +119,33 @@ class UnifiedDeveloperCommandTests(unittest.TestCase):
         wrapper = str(root / ("mill.bat" if os.name == "nt" else "mill"))
         self.assertEqual(runner.calls[0][0], (wrapper, "__.compile"))
         self.assertEqual(runner.calls[1][0], (wrapper, "core.scala.testkit.test"))
+        self.assertEqual(
+            runner.calls[2][0],
+            (
+                sys.executable,
+                str(root / "tests" / "scala" / "constructor-capture" / "run.py"),
+                "--repo",
+                str(root),
+                "--out-parent",
+                str(root / ".validation" / "constructor-capture"),
+            ),
+        )
+        self.assertEqual(len(runner.calls), 3)
+
+    def test_core_scala_propagates_constructor_probe_failure(self) -> None:
+        temporary, root = self.temporary_root()
+        self.addCleanup(temporary.cleanup)
+
+        class FailingProbeRunner(RecordingRunner):
+            def run(self, command: Sequence[str], **kwargs) -> subprocess.CompletedProcess[str]:
+                if any("constructor-capture" in str(part) for part in command):
+                    raise subprocess.CalledProcessError(7, command)
+                return super().run(command, **kwargs)
+
+        self.assertEqual(
+            COMMANDS.main(["core", "scala"], root=root, runner=FailingProbeRunner(root)),
+            7,
+        )
 
     def test_core_native_uses_managed_toolchain(self) -> None:
         temporary, root = self.temporary_root()

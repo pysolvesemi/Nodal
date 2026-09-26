@@ -88,6 +88,15 @@ jobs:
       - name: Compile and test Scala core
         run: ./nodal core scala
 
+      - name: Preserve constructor prototype evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: constructor-prototype-${{ github.sha }}-${{ github.run_attempt }}
+          path: .validation/constructor-capture/**
+          include-hidden-files: true
+          if-no-files-found: error
+
   native:
     name: native
     runs-on: ubuntu-24.04

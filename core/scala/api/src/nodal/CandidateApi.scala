@@ -828,6 +828,7 @@ private[nodal] object CandidateRuntime:
   def analogExpr(operation: String, values: Any*): Expr[Real] =
     val expression = new KernelExpr[Real](
       values.toVector,
+      resultType = Some(KernelTypeDescriptor("Real")),
       operation = Some(operation)
     )
     ConstructionKernel.expression(expression)

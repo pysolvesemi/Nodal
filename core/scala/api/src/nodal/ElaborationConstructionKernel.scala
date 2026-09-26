@@ -301,8 +301,8 @@ private final case class AnalogDimension(
 
   def compatibleAdd(other: AnalogDimension): AnalogDimension =
     if isUnknown || other.isUnknown then AnalogDimension.Unknown
-    else if isZero then other.copy(isZero = other.isZero || isZero)
-    else if other.isZero then copy(isZero = isZero || other.isZero)
+    else if isZero then other.copy(isZero = other.isZero && isZero)
+    else if other.isZero then copy(isZero = isZero && other.isZero)
     else if powers == other.powers then copy(isZero = isZero && other.isZero)
     else AnalogDimension.Unknown
 
@@ -873,20 +873,7 @@ private final class ConstructionSession(val options: EmitOptions):
   private def overrideTypeSignature(value: Any, owner: Long): Option[String] =
     value match
       case expression: Expr[?] =>
-        CandidateRuntime.expressionDataType(expression).map(renderType(_, owner)).orElse:
-          expression match
-            case kernel: KernelExpr[?]
-                if kernel.operation.exists(
-                  Set(
-                    "analog_add",
-                    "analog_sub",
-                    "analog_mul",
-                    "analog_div",
-                    "analog_neg"
-                  ).contains
-                ) =>
-              Some("Real")
-            case _ => None
+        CandidateRuntime.expressionDataType(expression).map(renderType(_, owner))
       case _ => None
 
   private def overrideDimensionSignature(value: Any): Option[String] =
@@ -918,7 +905,7 @@ private final class ConstructionSession(val options: EmitOptions):
               dynamicDependency = true
           case None => dynamicDependency = true
       case expression: KernelExpr[?] =>
-        if visited.put(expression, java.lang.Boolean.TRUE) == null then
+        if Option(visited.put(expression, java.lang.Boolean.TRUE)).isEmpty then
           Option(expressionIds.get(expression)) match
             case Some(reference) => expressionOwners += reference.module
             case None => dynamicDependency = true
@@ -943,7 +930,8 @@ private final class ConstructionSession(val options: EmitOptions):
 
     val targetType = target.dataType.map(renderType(_, instance.child))
     val requiresDimension =
-      target.dataType.exists(dataType => CandidateRuntime.typeDescriptor(dataType).kind == "Real")
+      target.dataType.exists: dataType =>
+        Set("Real", "Bool").contains(CandidateRuntime.typeDescriptor(dataType).kind)
 
     AnalogHierarchyOverridePolicy.Evidence(
       parentOwner = parent.handle,

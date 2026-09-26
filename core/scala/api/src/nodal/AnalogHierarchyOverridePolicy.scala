@@ -94,14 +94,14 @@ private[nodal] object AnalogHierarchyOverridePolicy:
                   Left(
                     Rejection(
                       "NODAL-HIERARCHY-036",
-                      s"real parameter override dimension $valueDimension does not match $targetDimension"
+                      s"parameter override dimension $valueDimension does not match $targetDimension"
                     )
                   )
                 case (None, _) | (_, None) =>
                   Left(
                     Rejection(
                       "NODAL-HIERARCHY-035",
-                      "real parameter override dimension could not be proven"
+                      "parameter override dimension could not be proven"
                     )
                   )
                 case _ => Right(())

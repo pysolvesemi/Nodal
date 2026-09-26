@@ -25,12 +25,19 @@ trait NodalScalaModule extends ScalaModule:
   )
 
 trait ConstructorCapturedProducer extends ScalaModule:
+  def constructorPluginJar = Task {
+    core.scala.constructorPlugin.jar()
+  }
+
   override def scalacPluginClasspath = Task {
-    super.scalacPluginClasspath() ++ core.scala.constructorPlugin.localClasspath()
+    super.scalacPluginClasspath() ++ Seq(constructorPluginJar())
   }
 
   override def scalacOptions = Task {
-    super.scalacOptions() ++ Seq("-Xplugin-require:nodal-constructor")
+    super.scalacOptions() ++ Seq(
+      s"-Xplugin:${constructorPluginJar().path}",
+      "-Xplugin-require:nodal-constructor",
+    )
   }
 
 // Standalone positive/negative fixtures need formatting, not ordinary module compilation.

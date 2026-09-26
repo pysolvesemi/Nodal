@@ -321,6 +321,34 @@ class Increment34ContractTests(unittest.TestCase):
             )
             self.assert_rejected(root, "control-flow construction bridge is missing")
 
+    def test_inspection_snapshot_source_mutations_are_rejected(self) -> None:
+        canonical = "construction.analogProcedural.flatMap(_.controlFlow)"
+        for replacement in (
+            "AnalogProceduralConstruction.controlSnapshots",
+            "Vector.empty",
+            canonical + ".take(1)",
+        ):
+            with self.subTest(replacement=replacement):
+                temporary, root = self.fixture()
+                with temporary:
+                    path = root / "core/scala/api/src/nodal/AnalogControlFlowConstruction.scala"
+                    original = path.read_text(encoding="utf-8")
+                    self.assertEqual(original.count(canonical), 1)
+                    path.write_text(original.replace(canonical, replacement, 1), encoding="utf-8")
+                    self.assert_rejected(root, "control-flow inspection must retain all control trees")
+
+    def test_procedural_snapshot_publication_mutation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        with temporary:
+            path = root / "core/scala/api/src/nodal/AnalogProceduralConstruction.scala"
+            original = path.read_text(encoding="utf-8")
+            self.assertEqual(original.count("def snapshots("), 1)
+            path.write_text(
+                original.replace("def snapshots(", "def removedSnapshots(", 1),
+                encoding="utf-8",
+            )
+            self.assert_rejected(root, "procedural construction integration is missing")
+
     def test_canonical_snapshot_field_mutation_is_rejected(self) -> None:
         temporary, root = self.fixture()
         with temporary:

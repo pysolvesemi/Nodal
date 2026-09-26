@@ -2623,20 +2623,20 @@ private[nodal] object ConstructionKernel:
     if Current.isBound then Some(Current.get) else None
 
   private def elaborate(top: => Module, options: EmitOptions): (Emission, ConstructionSnapshot) =
-    AnalogProceduralConstruction.reset()
-    val session = new ConstructionSession(options)
-    var result: Option[(Emission, ConstructionSnapshot)] = None
-    ScopedValue.where(Current, session).run(
-      new Runnable:
-        override def run(): Unit =
-          val root = top
-          result = Some(session.finish(root))
-    )
-    result.getOrElse(
-      scala.util.Failure[(Emission, ConstructionSnapshot)](
-        new IllegalStateException("construction transaction did not publish a result")
-      ).get
-    )
+    AnalogProceduralConstruction.withSession:
+      val session = new ConstructionSession(options)
+      var result: Option[(Emission, ConstructionSnapshot)] = None
+      ScopedValue.where(Current, session).run(
+        new Runnable:
+          override def run(): Unit =
+            val root = top
+            result = Some(session.finish(root))
+      )
+      result.getOrElse(
+        scala.util.Failure[(Emission, ConstructionSnapshot)](
+          new IllegalStateException("construction transaction did not publish a result")
+        ).get
+      )
 
   def emit(top: => Module, options: EmitOptions): Emission = elaborate(top, options)._1
 

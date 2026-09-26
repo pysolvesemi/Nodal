@@ -104,6 +104,22 @@ final class PublicAnalogParentWithChild extends Module:
   val childModule = new PublicAnalogNestedChild
   val child = instance(childModule)
 
+final class PublicAnalogScopedProcedure(nested: () => Unit) extends Module:
+  val voltage: Variable[Real] = variable(Real, 0.0.V)
+
+  analogProcedure:
+    voltage := 1.0.V
+    nested()
+    voltage := 2.0.V
+
+final class PublicAnalogScopedEvent(nested: () => Unit) extends Module:
+  val voltage: Variable[Real] = variable(Real, 0.0.V)
+
+  analogProcedure:
+    on(initialStep):
+      nested()
+      voltage := 1.0.V
+
 object AnalogProceduralConstructionTests extends TestSuite:
   val tests: Tests = Tests:
     test("public variable and assignment APIs retain authored order"):
@@ -238,3 +254,76 @@ object AnalogProceduralConstructionTests extends TestSuite:
           "PublicAnalogCrossOwner.PublicAnalogChild_0.variable_0"
         )
       )
+
+    test("nested inspection retains its result and restores the outer procedure"):
+      val snapshot = ConstructionKernel.inspect(new PublicAnalogScopedProcedure(() => {
+        val nested = AnalogControlFlowInspection.inspect(new PublicAnalogConditionalComplete)
+        assert(nested.controlFlow.size == 1)
+        assert(nested.controlFlow.head.owner == "PublicAnalogConditionalComplete")
+        assert(nested.construction.analogProcedural.head.controlFlow.contains(
+          nested.controlFlow.head
+        ))
+      }))
+      assert(snapshot.analogProcedural.size == 1)
+      val procedure = snapshot.analogProcedural.head
+      assert(procedure.owner == "PublicAnalogScopedProcedure")
+      assert(procedure.variables.size == 1)
+      assert(procedure.assignments.map(_.authoredOrder) == Vector(0, 1))
+      assert(procedure.assignments.map(_.value.rendered) == Vector("1.0 V", "2.0 V"))
+      assert(procedure.assignments.forall(_.target == procedure.variables.head.variable))
+
+    test("failed nested elaboration restores the outer procedure"):
+      val snapshot = ConstructionKernel.inspect(new PublicAnalogScopedProcedure(() => {
+        val failure = scala.util
+          .Try(ConstructionKernel.inspect(new PublicAnalogDimensionMismatch))
+          .failed
+          .get
+          .asInstanceOf[AnalogProceduralRuntime.Failure]
+        assert(failure.diagnostic.code == "NODAL-ANALOG-033-013")
+      }))
+      assert(snapshot.analogProcedural.size == 1)
+      val procedure = snapshot.analogProcedural.head
+      assert(procedure.owner == "PublicAnalogScopedProcedure")
+      assert(procedure.variables.size == 1)
+      assert(procedure.assignments.map(_.authoredOrder) == Vector(0, 1))
+      assert(procedure.assignments.map(_.value.rendered) == Vector("1.0 V", "2.0 V"))
+
+    test("nested public emission restores the outer event context"):
+      val snapshot = ConstructionKernel.inspect(new PublicAnalogScopedEvent(() => {
+        val nested = Nodal.emit(new PublicAnalogProceduralTop)
+        assert(nested.report.designKind == DesignKind.AnalogOnly)
+        val failure = scala.util.Try(new PublicAnalogChild).failed.get
+        assert(failure.getMessage.contains("NODAL-ANALOG-037-007"))
+      }))
+      assert(snapshot.analogProcedural.size == 1)
+      val procedure = snapshot.analogProcedural.head
+      assert(procedure.owner == "PublicAnalogScopedEvent")
+      val events = procedure.controlFlow.get.root.statements.collect {
+        case event: AnalogControlFlowRuntime.Statement.EventControl => event
+      }
+      assert(events.size == 1)
+      assert(events.head.event.operation == "analog_initial_step")
+      assert(events.head.body.statements.exists(
+        _.isInstanceOf[AnalogControlFlowRuntime.Statement.Assign]
+      ))
+
+    test("completed elaboration does not leave a public event construction context"):
+      val _ = Nodal.emit(new PublicAnalogProceduralTop)
+      val failure = scala.util.Try(initialStep).failed.get
+        .asInstanceOf[AnalogProceduralRuntime.Failure]
+      assert(failure.diagnostic.code == "NODAL-ANALOG-033-003")
+
+    test("failed elaboration releases its context before a fresh construction"):
+      val failure = scala.util
+        .Try(Nodal.emit(new PublicAnalogDimensionMismatch))
+        .failed
+        .get
+        .asInstanceOf[AnalogProceduralRuntime.Failure]
+      assert(failure.diagnostic.code == "NODAL-ANALOG-033-013")
+      val outside = scala.util.Try(initialStep).failed.get
+        .asInstanceOf[AnalogProceduralRuntime.Failure]
+      assert(outside.diagnostic.code == "NODAL-ANALOG-033-003")
+      val recovered = ConstructionKernel.inspect(new PublicAnalogProceduralTop)
+      assert(recovered.analogProcedural.size == 1)
+      assert(recovered.analogProcedural.head.variables.size == 2)
+      assert(recovered.analogProcedural.head.assignments.size == 3)

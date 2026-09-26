@@ -7,4 +7,3 @@ final class ConstructorSchema(val version: Int, val encoded: String)
 /** The sole lifecycle hook exercised by this isolated experiment. */
 abstract class Module:
   final val captureIdentity: ModuleIdentity = Capture.begin(this)
-

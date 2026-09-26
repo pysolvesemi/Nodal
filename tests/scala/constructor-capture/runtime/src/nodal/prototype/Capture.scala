@@ -47,11 +47,10 @@ final case class Observation[+A](
     case Right(result) => result
     case Left(failure) => scala.util.Failure[Nothing](failure).get
 
-/**
- * A compiler lifecycle trace/assertion probe only. It has no hierarchy lookup,
- * topology, parameter expression evaluator, bridge, IR, or HDL implementation.
- * Metadata is recorded verbatim; it is never parsed to infer ownership.
- */
+/** A compiler lifecycle trace/assertion probe only. It has no hierarchy lookup, topology, parameter
+  * expression evaluator, bridge, IR, or HDL implementation. Metadata is recorded verbatim; it is
+  * never parsed to infer ownership.
+  */
 object Capture:
   private final class Pending(
       val classId: String,
@@ -98,7 +97,7 @@ object Capture:
     finally
       previous match
         case Some(outer) => current.set(outer)
-        case None        => current.remove()
+        case None => current.remove()
 
   /** The rewritten pure default getter returns this inert omission marker. */
   def omitted(defaultValue: Double): Param[Real] =
@@ -146,10 +145,9 @@ object Capture:
     active.events += Begun(identity, pending.carriers.size)
     identity
 
-  /**
-   * Commit is local to an allocation: nested records remain staged until their
-   * outer allocation succeeds. A failed outer body discards those records too.
-   */
+  /** Commit is local to an allocation: nested records remain staged until their outer allocation
+    * succeeds. A failed outer body discards those records too.
+    */
   def allocate[A <: Module](
       classId: String,
       site: String,
@@ -181,7 +179,7 @@ object Capture:
       val records = Allocation(identity, encoded, declarations) +: pending.nested.toVector
       previous.headOption match
         case Some(parent) => parent.nested ++= records
-        case None         => active.committed ++= records
+        case None => active.committed ++= records
       active.events += Committed(identity)
       result
     catch

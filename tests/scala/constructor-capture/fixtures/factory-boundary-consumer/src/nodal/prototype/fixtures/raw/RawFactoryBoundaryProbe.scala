@@ -18,4 +18,3 @@ object RawFactoryBoundaryProbe:
     assert(observation.pendingDepth == 0, "raw factory left a pending allocation")
     assert(Capture.activeDepth == 0, "raw factory leaked active state")
     println("UNINSTRUMENTED_FACTORY_REJECTED")
-

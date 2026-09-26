@@ -7,4 +7,3 @@ import nodal.prototype.fixtures.{GainStage, ProbeEffects}
 object PackagedFactory:
   def stage(actual: Param[Real]): GainStage =
     new GainStage(gain = ProbeEffects.mark("packaged.argument", actual))
-

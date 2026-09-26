@@ -1,8 +1,12 @@
 # Literal constructor capture compile prototype
 
-**Status: source prepared and statically reviewed; NOT COMPILED.** No Scala
-compiler, Maven resolution, CI launch, or production Nodal integration was run
-while preparing this directory. The Python harness passed syntax checking only.
+**Status: isolated probe executed successfully; production integration remains
+incomplete.** At commit `d3764318a1f332e3fc216969e47fda710287e7a2`,
+[Core Scala job 108443599578](https://github.com/pysolvesemi/Nodal/actions/runs/36256292650/job/108443599578)
+compiled the probe with Scala 3.8.4 and passed 11 runtime cases with 169
+assertions, all six expected compile rejections, and the uninstrumented-factory
+runtime rejection. This records that exact source revision's isolated result;
+it does not qualify the current head or complete production F-042.B.1.1.
 Source review uses Scala 3.8.4 commit
 `7d4833b619d31ea9acac97fccf1e74b42b89c49f`; the Nodal review base is
 `315905bde74f23997ce1c03fe5bc3a7569a00b0d`.
@@ -10,8 +14,8 @@ Source review uses Scala 3.8.4 commit
 This is a bounded experiment for F-042.B.1.1, not completion of that item. The
 approved lightweight hierarchy gate requires constructor lifecycle/default,
 factory, separate-compilation, evaluation and failure evidence. This experiment
-has actual compiler plugin source and executable fixtures for that evidence;
-its result is currently unknown. It does not implement IR, HDL, connectivity,
+has compiler plugin source and executable fixtures for the tested partial
+profile. It does not implement IR, HDL, connectivity,
 static effects, units or production transaction semantics.
 
 ## Run through the existing toolchain owner
@@ -127,7 +131,7 @@ Metadata is checked for exact marker identity, unique occurrence, argument
 arity/kinds/version and the supported constructor signature. Metadata does not
 replace independent ownership/type/effect/native semantic validation.
 
-Successful execution will establish this isolated protocol only. Production
+The recorded execution establishes this isolated protocol only. Production
 Param literal lifting, source/instance identity, automatic canonical attachment,
 override legality, equivalent explicit-form parity, all transaction registries,
 public source-to-IR/HDL witnesses and full qualification remain required.
@@ -136,7 +140,9 @@ All new Scala sources participate in existing Scalafmt 3.11.5 and Scalafix 0.14.
 checks through a sources-only Mill inventory and the existing syntactic lint
 path list. The trace retains intentional failures using the repository's
 `scala.util.Failure` and its `get` method; no rule is suppressed.
-Pinned formatting and Scala compilation still have not run locally.
+On that revision, pinned Scalafmt rejected 16 probe files and Scalafix was not
+reached. Full current-head formatting, lint and qualification remain required.
+The compilation evidence above is from CI; no local Scala compilation is claimed.
 
 See `INTEGRATION.md` for the exact shared CLI hook, dependency shape and the current
 production lifecycle gap. The pinned compiler-source review is not execution

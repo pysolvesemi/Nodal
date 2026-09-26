@@ -5,10 +5,9 @@ import scala.language.implicitConversions
 /** A type marker for the bounded compiler experiment, not a Nodal numeric type. */
 sealed trait Real
 
-/**
- * An inert expression or constructor carrier. Creating either kind has no
- * declaration or allocation side effect. Only Capture.begin binds a carrier.
- */
+/** An inert expression or constructor carrier. Creating either kind has no declaration or
+  * allocation side effect. Only Capture.begin binds a carrier.
+  */
 final class Param[A] private[prototype] (
     val literalValue: Option[Double],
     private[prototype] val omittedDefault: Boolean,

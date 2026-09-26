@@ -92,4 +92,3 @@ class NestedTop(topGain: Param[Real] = 4.0) extends Module:
 class IsolatedTop extends Module:
   val isolated = Capture.observe("nested isolated observation") { new GainStage() }
   val afterIsolation = new GainStage()
-

@@ -87,8 +87,11 @@ object ConstructorProbe:
     test("omitted default differs from explicit equal literal") {
       val observation = Capture.observe("default distinction") { new Top() }
       val top = successful(observation)
-      check(observation.events.collect { case event: OmittedDefaultGetter => event.value } ==
-        Vector(4.0, 2.0), "parent and omitted child getters must each execute once")
+      check(
+        observation.events.collect { case event: OmittedDefaultGetter => event.value } ==
+          Vector(4.0, 2.0),
+        "parent and omitted child getters must each execute once"
+      )
       val omitted = declaration(observation, top.omitted, "gain")
       val explicit = declaration(observation, top.explicitDefault, "gain")
       check(omitted.actual.isEmpty, "omitted default was represented as an override")
@@ -129,8 +132,10 @@ object ConstructorProbe:
     test("top-level omitted and explicit constructors") {
       val omittedObservation = Capture.observe("top-level omitted") { new GainStage() }
       val omitted = successful(omittedObservation)
-      check(omittedObservation.events.count(_.isInstanceOf[OmittedDefaultGetter]) == 1,
-        "omitted constructor must invoke its getter once")
+      check(
+        omittedObservation.events.count(_.isInstanceOf[OmittedDefaultGetter]) == 1,
+        "omitted constructor must invoke its getter once"
+      )
       check(omitted.captureIdentity.parent.isEmpty, "top-level module has a parent")
       check(declaration(omittedObservation, omitted, "gain").actual.isEmpty, "top-level default")
       val literal: Param[Real] = 9.0
@@ -138,8 +143,10 @@ object ConstructorProbe:
         new GainStage(gain = ProbeEffects.mark("top-level.argument", literal))
       }
       val explicit = successful(explicitObservation)
-      check(explicitObservation.events.count(_.isInstanceOf[OmittedDefaultGetter]) == 0,
-        "explicit actual must not invoke a default getter")
+      check(
+        explicitObservation.events.count(_.isInstanceOf[OmittedDefaultGetter]) == 0,
+        "explicit actual must not invoke a default getter"
+      )
       val bound = declaration(explicitObservation, explicit, "gain")
       check(bound.actual.exists(_ eq literal), "top-level literal reference")
       check(sameBits(bound.defaultValue, 2.0), "top-level explicit value replaced default")
@@ -313,4 +320,3 @@ object ConstructorProbe:
     }
 
     println(s"CONSTRUCTOR_PROBE_PASS cases=$cases assertions=$assertions")
-

@@ -6,4 +6,3 @@ import nodal.prototype.fixtures.raw.RawStage
 // Expected diagnostic: NODAL-CTOR-PROTOTYPE-MISSING.
 object MissingMetadata:
   def construct(): RawStage = new RawStage()
-

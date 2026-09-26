@@ -50,7 +50,7 @@ The first phase creates independent prototype runtime and plugin JARs, then comp
 JARs module definitions, a non-inline helper factory, and a downstream consumer
 in separate compiler processes. It does not place definitions or factory source
 on the consumer compiler command. `-Ycheck:all` checks generated trees throughout
-the compiler; `-Xprint:nodalConstructorCapture` retains the transformed trees.
+the compiler; `-Vprint:nodalConstructorCapture` retains the transformed trees.
 The harness also compiles raw producers without the plugin to test the boundary.
 The second phase obtains `core.scala.api.jar` and
 `core.scala.constructorPlugin.jar` from their existing Mill owners. It compiles

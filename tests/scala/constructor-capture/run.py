@@ -252,7 +252,7 @@ def main() -> int:
                        "-unchecked", "-color:never"]
             if plugin:
                 command += [f"-Xplugin:{plugin_jar}", "-Ycheck:all",
-                            "-Xprint:nodalConstructorCapture"]
+                            "-Vprint:nodalConstructorCapture"]
             text = run(name, command + sources, expect_failure=negative is not None)
             if negative is not None:
                 try:
@@ -344,7 +344,7 @@ def main() -> int:
             if plugin:
                 command += [f"-Xplugin:{production_plugin_jar}",
                             "-Xplugin-require:nodal-constructor", "-Ycheck:all",
-                            "-Xprint:nodalConstructorCapture"]
+                            "-Vprint:nodalConstructorCapture"]
             run(name, command + source_paths)
             return target
 

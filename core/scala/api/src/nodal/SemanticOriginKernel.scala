@@ -249,16 +249,16 @@ private[nodal] final class SemanticOriginBuilder:
     val locatedConstructor = (candidate: (StackWalker.StackFrame, Int)) =>
       val (frame, _) = candidate
       frame.getMethodName == "<init>" &&
-        Option(frame.getFileName)
-          .flatMap(fileName => locateSource(fileName, frame.getClassName))
-          .nonEmpty
+      Option(frame.getFileName)
+        .flatMap(fileName => locateSource(fileName, frame.getClassName))
+        .nonEmpty
     val userCandidate = preferredClass
-      .flatMap(name => userFrames.find: (frame, _) =>
-        frame.getClassName == name && locatedConstructor(frame -> 0)
+      .flatMap(name =>
+        userFrames.find: (frame, _) =>
+          frame.getClassName == name && locatedConstructor(frame -> 0)
       )
       .orElse(userFrames.find: candidate =>
-        locatedConstructor(candidate)
-      )
+        locatedConstructor(candidate))
       .orElse(userFrames.headOption)
     val userIndex = userCandidate.map(_._2).getOrElse(-1)
     val user = userCandidate.map(_._1)

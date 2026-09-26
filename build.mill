@@ -26,7 +26,7 @@ trait NodalScalaModule extends ScalaModule:
 
 trait ConstructorCapturedProducer extends ScalaModule:
   override def scalacPluginClasspath = Task {
-    super.scalacPluginClasspath() ++ Seq(core.scala.constructorPlugin.jar())
+    super.scalacPluginClasspath() ++ core.scala.constructorPlugin.localClasspath()
   }
 
   override def scalacOptions = Task {

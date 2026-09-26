@@ -711,9 +711,9 @@ private[nodal] def realLiteral(value: Double, unit: String): Expr[Real] =
 
 /** Runtime half of the compiler-owned constructor protocol.
   *
-  * The compiler preserves ordinary Scala argument evaluation outside `allocate`. The pending
-  * frame therefore starts only after every argument has completed, while `guard` still poisons
-  * the construction transaction if argument evaluation fails after producing earlier effects.
+  * The compiler preserves ordinary Scala argument evaluation outside `allocate`. The pending frame
+  * therefore starts only after every argument has completed, while `guard` still poisons the
+  * construction transaction if argument evaluation fails after producing earlier effects.
   */
 private[nodal] object ConstructorCaptureRuntime:
   private final class Pending(

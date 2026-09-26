@@ -27,6 +27,23 @@ SUCCESSOR_CONTRACT_ANCHORS = (
     "roadmap does not retain one Increment 17 origin graph",
 )
 
+CANONICAL_INSTANCE_SUCCESSOR_ANCHORS = (
+    "CandidateRuntime.instance(module)",
+    "val (instance, attached) = ConstructionKernel.instance(module)",
+)
+
+CANONICAL_INSTANCE_KERNEL_ANCHORS = (
+    "def instance[M <: Module](module: M, captured: Boolean): (Instance[M], Boolean) =",
+    "attachInstance(created, module, captured)",
+    "this.instance(module, captured = true)",
+)
+
+
+def has_canonical_instance_successor(candidate: str, kernel: str) -> bool:
+    return all(anchor in candidate for anchor in CANONICAL_INSTANCE_SUCCESSOR_ANCHORS) and all(
+        anchor in kernel for anchor in CANONICAL_INSTANCE_KERNEL_ANCHORS
+    )
+
 
 def roadmap_revision(root: Path) -> tuple[int, ...]:
     roadmap = root / "docs/roadmap/nodal-development-todo.md"
@@ -65,6 +82,26 @@ def validate_files(root: Path = ROOT) -> list[Problem]:
             problem
             for problem in problems
             if problem.code not in {"NODAL-INC16-032", "NODAL-INC16-035"}
+        ]
+    try:
+        candidate = (root / "core/scala/api/src/nodal/CandidateApi.scala").read_text(
+            encoding="utf-8"
+        )
+        kernel = (root / "core/scala/api/src/nodal/ElaborationConstructionKernel.scala").read_text(
+            encoding="utf-8"
+        )
+    except OSError:
+        candidate = ""
+        kernel = ""
+    if has_canonical_instance_successor(candidate, kernel):
+        problems = [
+            problem
+            for problem in problems
+            if not (
+                problem.code == "NODAL-INC16-016"
+                and problem.message
+                == "candidate hooks lacks: CandidateRuntime.attachInstance(this, module)"
+            )
         ]
     return problems
 

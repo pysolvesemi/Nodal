@@ -1,4 +1,4 @@
-package nodal.compiler
+package nodal.internal.frontend.compiler
 
 import dotty.tools.dotc.ast.tpd
 import dotty.tools.dotc.ast.tpd.*
@@ -96,7 +96,11 @@ private final class ConstructorCapturePhase extends PluginPhase:
 
     if cls.hasAnnotation(markerClass) then
       rejected += cls
-      fail("METADATA", "source must not supply compiler-owned ConstructorSchema metadata", definition)
+      fail(
+        "METADATA",
+        "source must not supply compiler-owned ConstructorSchema metadata",
+        definition
+      )
     else if simple && lists.size == 1 && formals.isEmpty then
       publish(cls, definition, Schema(Nil))
     else if hasParameter then
@@ -131,8 +135,9 @@ private final class ConstructorCapturePhase extends PluginPhase:
             definitions.get(getter).flatMap(definition => literalDefault(definition.rhs))
           else None
           literal match
-            case Some(value) if java.lang.Double.isFinite(value) &&
-                name.matches("[A-Za-z_][A-Za-z0-9_]*") =>
+            case Some(value)
+                if java.lang.Double.isFinite(value) &&
+                  name.matches("[A-Za-z_][A-Za-z0-9_]*") =>
               fields += Parameter(name, value)
               getterValues += ((getter, value))
             case _ =>
@@ -218,7 +223,7 @@ private final class ConstructorCapturePhase extends PluginPhase:
       !cls.is(Trait) && !cls.is(ModuleClass) &&
       cls.info.decl(nme.CONSTRUCTOR).alternatives.size == 1
     formals.exists(_.info.dealias.typeSymbol == paramClass) ||
-      (simple && lists.size == 1 && formals.isEmpty)
+    (simple && lists.size == 1 && formals.isEmpty)
 
   private def parseImported(
       cls: Symbol,

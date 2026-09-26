@@ -870,6 +870,61 @@ private final class ConstructionSession(val options: EmitOptions):
       fail("NODAL-BINDING-019", "selector domain does not belong to the child Instance")
     record.namedBindings += requirement -> domain
 
+  def connectNodes(left: AnyRef, right: AnyRef): Unit =
+    val parent = currentModule
+    val portKinds = Set(
+      KernelSignalKind.AnalogInput,
+      KernelSignalKind.AnalogOutput,
+      KernelSignalKind.AnalogInout
+    )
+
+    def endpoint(value: AnyRef): Node[?] =
+      val reference = Option(declarationIds.get(value)).getOrElse(
+        fail("NODAL-HIERARCHY-038", "connection endpoint is outside this construction transaction")
+      )
+      val owner = records(reference.module)
+      val declaration = owner.declarations(reference.index)
+      val node = value match
+        case candidate: Node[?] => candidate
+        case _ =>
+          fail("NODAL-HIERARCHY-039", "conservative connection requires a node or analog port")
+      val local = reference.module == parent.handle &&
+        (portKinds.contains(declaration.kind) || declaration.kind == KernelSignalKind.AnalogNode)
+      // attachInstance alone marks a child attached, after recording it in its exact parent.
+      val childPort = owner.attached && owner.parentAtConstruction.contains(parent.handle) &&
+        portKinds.contains(declaration.kind)
+      if !local && !childPort then
+        fail(
+          "NODAL-HIERARCHY-040",
+          "connection endpoint must be local or a declared port of an attached immediate child",
+          Some(declarationPath(reference))
+        )
+      node
+
+    def natures(discipline: Discipline): (Nature, Nature) = discipline match
+      case Electrical => Voltage -> Current
+      case named: NamedDiscipline => named.potential -> named.flow
+
+    val leftNode = endpoint(left)
+    val rightNode = endpoint(right)
+    val (leftPotential, leftFlow) = natures(leftNode.discipline)
+    val (rightPotential, rightFlow) = natures(rightNode.discipline)
+    if !(leftPotential eq rightPotential) || !(leftFlow eq rightFlow) ||
+      (leftPotential eq leftFlow)
+    then
+      fail(
+        "NODAL-HIERARCHY-041",
+        "conservative connection requires compatible potential and flow nature declarations"
+      )
+    val dimensionsKnown = Vector(true, false).forall: potential =>
+      val leftDimension = disciplineDimension(leftNode.discipline, potential)
+      val rightDimension = disciplineDimension(rightNode.discipline, potential)
+      !leftDimension.isUnknown && !rightDimension.isUnknown &&
+      leftDimension.powers == rightDimension.powers
+    if !dimensionsKnown then
+      fail("NODAL-HIERARCHY-042", "conservative connection dimensions could not be proven")
+    operation("node-connect", left, right)
+
   private def overrideTypeSignature(value: Any, owner: Long): Option[String] =
     value match
       case expression: Expr[?] =>
@@ -2137,7 +2192,11 @@ private final class ConstructionSession(val options: EmitOptions):
         operation.values.size >= 2
       then
         (pathOf(operation.values(0)), pathOf(operation.values(1))) match
-          case (Some(left), Some(right)) => Some(KernelTopologyEdge(operation.kind, left, right))
+          case (Some(left), Some(right)) =>
+            val (first, second) =
+              if operation.kind == "node-connect" && right < left then right -> left
+              else left -> right
+            Some(KernelTopologyEdge(operation.kind, first, second))
           case _ => None
       else None
     edges.sortBy(edge => (edge.kind, edge.left, edge.right))
@@ -2694,6 +2753,9 @@ private[nodal] object ConstructionKernel:
 
   def bindNamed(instance: Instance[?], requirement: ClockDomain, domain: ClockDomain): Unit =
     active.foreach(_.bindNamed(instance, requirement, domain))
+
+  def connectNodes(left: AnyRef, right: AnyRef): Unit =
+    active.foreach(_.connectNodes(left, right))
 
   def overrideParameter(instance: Instance[?], parameter: Any, value: Any): Unit =
     active.foreach(_.overrideParameter(instance, parameter, value))

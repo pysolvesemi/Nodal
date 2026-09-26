@@ -23,6 +23,8 @@ concurrency:
 jobs:
   contracts:
     name: contracts
+    permissions:
+      contents: read
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
@@ -55,6 +57,7 @@ jobs:
             >> "${GITHUB_ENV}"
 
       - name: Validate contracts, style, and online provenance
+        id: contract_validation
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -65,6 +68,46 @@ jobs:
             --online-toolchain \
             --lint-toolchain "${NODAL_LINT_TOOLCHAIN}" \
             --base-ref "${NODAL_BASE_REF}"
+
+      - name: Capture failed style repair for review
+        if: ${{ failure() && steps.contract_validation.outcome == 'failure' }}
+        shell: bash
+        run: |
+          evidence="${RUNNER_TEMP}/nodal-style-evidence"
+          mkdir -p "${evidence}"
+          git rev-parse HEAD > "${evidence}/source.commit"
+          git rev-parse 'HEAD^{tree}' > "${evidence}/source.tree"
+          printf 'run_id=%s\nrun_attempt=%s\nevent=%s\nref=%s\nsha=%s\n' \
+            "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}" "${GITHUB_EVENT_NAME}" \
+            "${GITHUB_REF}" "${GITHUB_SHA}" > "${evidence}/run.txt"
+          git status --porcelain=v1 > "${evidence}/before.status"
+          git diff --binary --full-index --no-ext-diff --no-textconv HEAD \
+            > "${evidence}/before.patch"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          git diff --quiet HEAD
+          set +e
+          ./nodal style fix --lint-toolchain "${NODAL_LINT_TOOLCHAIN}" \
+            > "${evidence}/style-fix.log" 2>&1
+          result=$?
+          set -e
+          printf '%s\n' "${result}" > "${evidence}/style-fix.exit-code"
+          git diff --binary --full-index --no-ext-diff --no-textconv HEAD \
+            > "${evidence}/style-fix.patch"
+          git status --porcelain=v1 > "${evidence}/after.status"
+          git diff --name-status --no-renames HEAD > "${evidence}/changed-paths.txt"
+          (cd "${evidence}" && sha256sum source.commit source.tree run.txt \
+            before.status before.patch style-fix.log style-fix.exit-code \
+            style-fix.patch after.status changed-paths.txt > SHA256SUMS)
+          cat "${evidence}/style-fix.log"
+          exit "${result}"
+
+      - name: Preserve failed style repair evidence
+        if: ${{ always() && steps.contract_validation.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: style-repair-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nodal-style-evidence/
+          if-no-files-found: error
 
   scala:
     name: scala
@@ -87,6 +130,15 @@ jobs:
 
       - name: Compile and test Scala core
         run: ./nodal core scala
+
+      - name: Preserve constructor prototype evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: constructor-prototype-${{ github.sha }}-${{ github.run_attempt }}
+          path: .validation/constructor-capture/**
+          include-hidden-files: true
+          if-no-files-found: error
 
   native:
     name: native

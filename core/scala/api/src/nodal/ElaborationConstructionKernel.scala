@@ -301,8 +301,8 @@ private final case class AnalogDimension(
 
   def compatibleAdd(other: AnalogDimension): AnalogDimension =
     if isUnknown || other.isUnknown then AnalogDimension.Unknown
-    else if isZero then other.copy(isZero = other.isZero || isZero)
-    else if other.isZero then copy(isZero = isZero || other.isZero)
+    else if isZero then other.copy(isZero = other.isZero && isZero)
+    else if other.isZero then copy(isZero = isZero && other.isZero)
     else if powers == other.powers then copy(isZero = isZero && other.isZero)
     else AnalogDimension.Unknown
 
@@ -870,8 +870,191 @@ private final class ConstructionSession(val options: EmitOptions):
       fail("NODAL-BINDING-019", "selector domain does not belong to the child Instance")
     record.namedBindings += requirement -> domain
 
+  def connectNodes(left: AnyRef, right: AnyRef): Unit =
+    val parent = currentModule
+    val portKinds = Set(
+      KernelSignalKind.AnalogInput,
+      KernelSignalKind.AnalogOutput,
+      KernelSignalKind.AnalogInout
+    )
+
+    def endpoint(value: AnyRef): Node[?] =
+      val reference = Option(declarationIds.get(value)).getOrElse(
+        fail("NODAL-HIERARCHY-038", "connection endpoint is outside this construction transaction")
+      )
+      val owner = records(reference.module)
+      val declaration = owner.declarations(reference.index)
+      val node = value match
+        case candidate: Node[?] => candidate
+        case _ =>
+          fail("NODAL-HIERARCHY-039", "conservative connection requires a node or analog port")
+      val local = reference.module == parent.handle &&
+        (portKinds.contains(declaration.kind) || declaration.kind == KernelSignalKind.AnalogNode)
+      // attachInstance alone marks a child attached, after recording it in its exact parent.
+      val childPort = owner.attached && owner.parentAtConstruction.contains(parent.handle) &&
+        portKinds.contains(declaration.kind)
+      if !local && !childPort then
+        fail(
+          "NODAL-HIERARCHY-040",
+          "connection endpoint must be local or a declared port of an attached immediate child",
+          Some(declarationPath(reference))
+        )
+      node
+
+    def natures(discipline: Discipline): (Nature, Nature) = discipline match
+      case Electrical => Voltage -> Current
+      case named: NamedDiscipline => named.potential -> named.flow
+
+    val leftNode = endpoint(left)
+    val rightNode = endpoint(right)
+    val (leftPotential, leftFlow) = natures(leftNode.discipline)
+    val (rightPotential, rightFlow) = natures(rightNode.discipline)
+    if !(leftPotential eq rightPotential) || !(leftFlow eq rightFlow) ||
+      (leftPotential eq leftFlow)
+    then
+      fail(
+        "NODAL-HIERARCHY-041",
+        "conservative connection requires compatible potential and flow nature declarations"
+      )
+    val dimensionsKnown = Vector(true, false).forall: potential =>
+      val leftDimension = disciplineDimension(leftNode.discipline, potential)
+      val rightDimension = disciplineDimension(rightNode.discipline, potential)
+      !leftDimension.isUnknown && !rightDimension.isUnknown &&
+      leftDimension.powers == rightDimension.powers
+    if !dimensionsKnown then
+      fail("NODAL-HIERARCHY-042", "conservative connection dimensions could not be proven")
+    operation("node-connect", left, right)
+
+  private def overrideTypeSignature(value: Any, owner: Long): Option[String] =
+    value match
+      case expression: Expr[?] =>
+        CandidateRuntime.expressionDataType(expression).map(renderType(_, owner))
+      case _ => None
+
+  private def overrideDimensionSignature(value: Any): Option[String] =
+    val dimension = inferAnalogDimension(value)
+    if dimension.isUnknown then None else Some(dimension.signature)
+
+  private def overrideEvidence(
+      parent: ModuleRecord,
+      instance: InstanceRecord,
+      target: DeclarationRecord,
+      value: Any
+  ): AnalogHierarchyOverridePolicy.Evidence =
+    val referencedDeclarationOwners = mutable.ArrayBuffer.empty[Long]
+    val expressionOwners = mutable.ArrayBuffer.empty[Long]
+    val operations = mutable.ArrayBuffer.empty[String]
+    val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+    var dynamicDependency = false
+
+    def declaration(reference: DeclarationRef): DeclarationRecord =
+      records(reference.module).declarations(reference.index)
+
+    def visit(candidate: Any): Unit = candidate match
+      case _: String | _: Int | _: Long | _: Double | _: Float | _: Boolean | _: BigInt => ()
+      case parameter: Param[?] =>
+        Option(declarationIds.get(parameter)) match
+          case Some(reference) =>
+            referencedDeclarationOwners += reference.module
+            if declaration(reference).kind != KernelSignalKind.Parameter then
+              dynamicDependency = true
+          case None => dynamicDependency = true
+      case expression: KernelExpr[?] =>
+        if Option(visited.put(expression, java.lang.Boolean.TRUE)).isEmpty then
+          Option(expressionIds.get(expression)) match
+            case Some(reference) => expressionOwners += reference.module
+            case None => dynamicDependency = true
+          if expression.literal.isEmpty then
+            expression.operation match
+              case Some(operation) => operations += operation
+              case None => operations += "<unknown>"
+          expression.operands.foreach(visit)
+      case reference: AnyRef =>
+        Option(declarationIds.get(reference)) match
+          case Some(declarationReference) =>
+            referencedDeclarationOwners += declarationReference.module
+            if declaration(declarationReference).kind != KernelSignalKind.Parameter then
+              dynamicDependency = true
+          case None =>
+            Option(expressionIds.get(reference)) match
+              case Some(expressionReference) => expressionOwners += expressionReference.module
+              case None => dynamicDependency = true
+      case _ => ()
+
+    visit(value)
+
+    val targetType = target.dataType.map(renderType(_, instance.child))
+    val requiresDimension =
+      target.dataType.exists: dataType =>
+        Set("Real", "Bool").contains(CandidateRuntime.typeDescriptor(dataType).kind)
+
+    AnalogHierarchyOverridePolicy.Evidence(
+      parentOwner = parent.handle,
+      duplicate = instance.parameterOverrides.exists:
+        case (existing: AnyRef, _) =>
+          Option(declarationIds.get(existing)).contains(target.reference)
+        case _ => false,
+      referencedDeclarationOwners = referencedDeclarationOwners.toVector,
+      expressionOwners = expressionOwners.toVector,
+      dynamicDependency = dynamicDependency,
+      operations = operations.toVector,
+      targetTypeSignature = targetType,
+      valueTypeSignature = overrideTypeSignature(value, parent.handle),
+      requiresDimension = requiresDimension,
+      targetDimensionSignature =
+        if requiresDimension then overrideDimensionSignature(target.value) else None,
+      valueDimensionSignature =
+        if requiresDimension then overrideDimensionSignature(value) else None
+    )
+
   def overrideParameter(instance: AnyRef, parameter: Any, value: Any): Unit =
-    instanceRecord(instance).parameterOverrides += parameter -> value
+    val record = instanceRecord(instance)
+    val parent = currentModule
+    if !parent.instances.exists(_ eq record) then
+      fail(
+        "NODAL-PARAMETER-BINDING-020",
+        "instance parameter override must be recorded by the owning parent Module"
+      )
+    val targetReference = parameter match
+      case reference: AnyRef =>
+        Option(declarationIds.get(reference)).getOrElse(
+          fail(
+            "NODAL-PARAMETER-BINDING-016",
+            "instance parameter override targets an unknown parameter",
+            Some(instancePath(parent.handle, record.ordinal))
+          )
+        )
+      case _ =>
+        fail(
+          "NODAL-PARAMETER-BINDING-016",
+          "instance parameter override is not a declaration",
+          Some(instancePath(parent.handle, record.ordinal))
+        )
+    if targetReference.module != record.child then
+      fail(
+        "NODAL-PARAMETER-BINDING-017",
+        "instance parameter override targets another Module",
+        Some(instancePath(parent.handle, record.ordinal))
+      )
+    val target = records(record.child).declarations(targetReference.index)
+    if target.kind != KernelSignalKind.Parameter then
+      fail(
+        "NODAL-PARAMETER-BINDING-018",
+        "instance parameter override target is not a child parameter",
+        Some(instancePath(parent.handle, record.ordinal))
+      )
+
+    AnalogHierarchyOverridePolicy.validate(
+      overrideEvidence(parent, record, target, value)
+    ) match
+      case Left(rejection) =>
+        fail(
+          rejection.code,
+          rejection.message,
+          Some(instancePath(parent.handle, record.ordinal))
+        )
+      case Right(()) =>
+        record.parameterOverrides += parameter -> value
 
   def withDomain[A](domain: ClockDomain)(body: => A): A =
     if !domainIds.containsKey(domain) then
@@ -2009,7 +2192,11 @@ private final class ConstructionSession(val options: EmitOptions):
         operation.values.size >= 2
       then
         (pathOf(operation.values(0)), pathOf(operation.values(1))) match
-          case (Some(left), Some(right)) => Some(KernelTopologyEdge(operation.kind, left, right))
+          case (Some(left), Some(right)) =>
+            val (first, second) =
+              if operation.kind == "node-connect" && right < left then right -> left
+              else left -> right
+            Some(KernelTopologyEdge(operation.kind, first, second))
           case _ => None
       else None
     edges.sortBy(edge => (edge.kind, edge.left, edge.right))
@@ -2436,20 +2623,20 @@ private[nodal] object ConstructionKernel:
     if Current.isBound then Some(Current.get) else None
 
   private def elaborate(top: => Module, options: EmitOptions): (Emission, ConstructionSnapshot) =
-    AnalogProceduralConstruction.reset()
-    val session = new ConstructionSession(options)
-    var result: Option[(Emission, ConstructionSnapshot)] = None
-    ScopedValue.where(Current, session).run(
-      new Runnable:
-        override def run(): Unit =
-          val root = top
-          result = Some(session.finish(root))
-    )
-    result.getOrElse(
-      scala.util.Failure[(Emission, ConstructionSnapshot)](
-        new IllegalStateException("construction transaction did not publish a result")
-      ).get
-    )
+    AnalogProceduralConstruction.withSession:
+      val session = new ConstructionSession(options)
+      var result: Option[(Emission, ConstructionSnapshot)] = None
+      ScopedValue.where(Current, session).run(
+        new Runnable:
+          override def run(): Unit =
+            val root = top
+            result = Some(session.finish(root))
+      )
+      result.getOrElse(
+        scala.util.Failure[(Emission, ConstructionSnapshot)](
+          new IllegalStateException("construction transaction did not publish a result")
+        ).get
+      )
 
   def emit(top: => Module, options: EmitOptions): Emission = elaborate(top, options)._1
 
@@ -2566,6 +2753,9 @@ private[nodal] object ConstructionKernel:
 
   def bindNamed(instance: Instance[?], requirement: ClockDomain, domain: ClockDomain): Unit =
     active.foreach(_.bindNamed(instance, requirement, domain))
+
+  def connectNodes(left: AnyRef, right: AnyRef): Unit =
+    active.foreach(_.connectNodes(left, right))
 
   def overrideParameter(instance: Instance[?], parameter: Any, value: Any): Unit =
     active.foreach(_.overrideParameter(instance, parameter, value))

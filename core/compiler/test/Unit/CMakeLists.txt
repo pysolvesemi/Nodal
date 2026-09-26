@@ -229,3 +229,25 @@ target_link_libraries(nodal-user-function-reparse-unit-tests
   PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport
 )
 add_test(NAME nodal.native.user-function-reparse-unit COMMAND nodal-user-function-reparse-unit-tests)
+
+add_executable(nodal-hierarchy-order-unit-tests HierarchyOrderTest.cpp)
+llvm_update_compile_flags(nodal-hierarchy-order-unit-tests)
+add_test(NAME nodal.native.hierarchy-order COMMAND nodal-hierarchy-order-unit-tests)
+
+add_executable(nodal-hierarchy-syntax-unit-tests AnalogHierarchySyntaxTest.cpp)
+llvm_update_compile_flags(nodal-hierarchy-syntax-unit-tests)
+add_test(NAME nodal.native.hierarchy-syntax COMMAND nodal-hierarchy-syntax-unit-tests)
+
+add_dependencies(nodal-native-unit-tests
+  nodal-hierarchy-order-unit-tests
+  nodal-hierarchy-syntax-unit-tests
+)
+
+add_test(
+  NAME nodal.native.hierarchy-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment42/run_hierarchy_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment42-hierarchy-evidence"
+)
+set_tests_properties(nodal.native.hierarchy-integration PROPERTIES TIMEOUT 180)

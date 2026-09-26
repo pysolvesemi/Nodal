@@ -134,6 +134,8 @@ final class Node[D <: Discipline] private[nodal] (
     attributes = Vector("discipline" -> discipline)
   )
 
+  infix def <>(other: Node[?]): Unit = CandidateRuntime.connectNodes(this, other)
+
 /** Frequency metadata carried by a clock-domain declaration. */
 sealed trait Frequency
 
@@ -310,7 +312,7 @@ abstract class Module:
   protected final def connect[A <: Data](left: Signal[A], right: Signal[A]): Unit =
     CandidateRuntime.connectValues(left, right)
 
-  protected final def connect[D <: Discipline](left: Node[D], right: Node[D]): Unit =
+  protected final def connect[D <: Discipline](left: Node[? <: D], right: Node[? <: D]): Unit =
     CandidateRuntime.connectNodes(left, right)
 
 /** Domain-owned state captured at its lexical construction point. */
@@ -828,6 +830,7 @@ private[nodal] object CandidateRuntime:
   def analogExpr(operation: String, values: Any*): Expr[Real] =
     val expression = new KernelExpr[Real](
       values.toVector,
+      resultType = Some(KernelTypeDescriptor("Real")),
       operation = Some(operation)
     )
     ConstructionKernel.expression(expression)
@@ -928,7 +931,7 @@ private[nodal] object CandidateRuntime:
 
   def connectNodes(left: AnyRef, right: AnyRef): Unit =
     AnalogProceduralConstruction.requireContinuousContext("conservative connection")
-    ConstructionKernel.operation("node-connect", left, right)
+    ConstructionKernel.connectNodes(left, right)
 
   def attachInstance(instance: Instance[? <: Module], module: Module): Unit =
     ConstructionKernel.attachInstance(instance, module)

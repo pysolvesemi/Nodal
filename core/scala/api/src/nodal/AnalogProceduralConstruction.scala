@@ -43,7 +43,6 @@ private[nodal] object AnalogProceduralConstruction:
   private final class State:
     val stack = mutable.ArrayBuffer.empty[ModuleState]
     val modules = mutable.ArrayBuffer.empty[ModuleState]
-    var finalizedControlSnapshots = Vector.empty[AnalogControlFlowConstruction.Snapshot]
 
   private val current = new ThreadLocal[State]
 
@@ -70,7 +69,14 @@ private[nodal] object AnalogProceduralConstruction:
       )
     )
 
-  def reset(): Unit = current.remove()
+  def withSession[A](body: => A): A =
+    val previous = Option(current.get())
+    current.set(new State)
+    try body
+    finally
+      previous match
+        case Some(value) => current.set(value)
+        case None => current.remove()
 
   def requireContinuousContext(role: String): Unit =
     if Option(current.get()).exists(_.stack.lastOption.exists(_.eventDepth > 0)) then
@@ -925,11 +931,6 @@ private[nodal] object AnalogProceduralConstruction:
   ): Vector[AnalogProceduralRuntime.Snapshot] =
     Option(current.get()).toVector.flatMap: value =>
       value.modules.foreach(finalizeEvents)
-      value.finalizedControlSnapshots = value.modules.iterator
-        .flatMap(module =>
-          module.controlSnapshot.map(_.remapOwner(resolveOwner(module.module)))
-        )
-        .toVector
       value.modules.flatMap: module =>
         val owner = resolveOwner(module.module)
         val sourceSnapshot =
@@ -947,6 +948,3 @@ private[nodal] object AnalogProceduralConstruction:
           retained.variables.nonEmpty || retained.assignments.nonEmpty ||
             retained.controlFlow.nonEmpty || retained.controlExpressions.nonEmpty
         )(retained)
-
-  def controlSnapshots: Vector[AnalogControlFlowConstruction.Snapshot] =
-    Option(current.get()).map(_.finalizedControlSnapshots).getOrElse(Vector.empty)

@@ -138,8 +138,10 @@ object AnalogHierarchyConnectivityIntegrationTests extends TestSuite:
         ConstructionKernel.inspect(new ConnectivityIntegrationTop(form))
       assert(snapshots.map(_.topology).distinct.size == 1)
       assert(snapshots.head.topology.count(_.kind == "node-connect") == 2)
-      assert(snapshots.forall(_.modules.find(_.path == "ConnectivityIntegrationTop")
-        .exists(_.instances.size == 1)))
+      assert(
+        snapshots.forall(_.modules.find(_.path == "ConnectivityIntegrationTop")
+          .exists(_.instances.size == 1))
+      )
 
     test("parent can connect ports of two attached immediate children"):
       val snapshot = ConstructionKernel.inspect(new SiblingPortConnectionIntegrationTop)
@@ -216,7 +218,7 @@ object AnalogHierarchyConnectivityIntegrationTests extends TestSuite:
       ))
       assert(first.topology.exists(edge =>
         edge.kind == "inout-pass-through" && edge.left.endsWith(".padZ") &&
-        edge.right.endsWith(".padA")
+          edge.right.endsWith(".padA")
       ))
 
     test("digital operands and private child members fail Scala type checking"):

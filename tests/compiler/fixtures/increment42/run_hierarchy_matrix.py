@@ -35,6 +35,55 @@ def instance(name: str, target: str, line: int = 30) -> str:
     )
 
 
+def parameter(name: str, data_type: str = "f64", value: str = "1.0 : f64") -> str:
+    return (
+        f'"nodal.parameter"() <{{sym_name = "{name}", type = {data_type}, '
+        f'default_value = {value}, variability = "symbolic", metadata = {{}}}}> '
+        ': () -> ()'
+    )
+
+
+def parameter_reference(name: str, data_type: str = "f64") -> str:
+    return (
+        f'%{name}_actual = "nodal.const_parameter_ref"() '
+        f'<{{parameter = @{name}, metadata = {{}}}}> : () -> {data_type}'
+    )
+
+
+def parameter_override(instance_name: str, parameter_name: str,
+                       source_name: str, data_type: str = "f64", line: int = 50) -> str:
+    return (
+        f'"nodal.parameter_override"(%{source_name}_actual) '
+        f'<{{instance = @{instance_name}, parameter = @{parameter_name}, metadata = {{}}}}> '
+        f': ({data_type}) -> () loc("Hierarchy42.scala":{line}:11)'
+    )
+
+
+def terminal(name: str, discipline: str = "electrical", direction: str = "input",
+             line: int = 20, internal: bool = False) -> str:
+    operation = "nodal.node" if internal else "nodal.terminal"
+    attributes = f'name = "{name}", source_path = "Leaf.{name}", metadata = {{}}'
+    if not internal:
+        attributes += (f', direction = "{direction}", '
+                       'flow_orientation = "into_component"')
+    return (
+        f'%{name} = "{operation}"() <{{{attributes}}}> : () -> '
+        f'!nodal.terminal<"{discipline}"> loc("Hierarchy42.scala":{line}:3)'
+    )
+
+
+def instance_terminal(instance_name: str, port: str, discipline: str = "electrical",
+                      direction: str = "input", line: int = 40) -> str:
+    return (
+        f'%{instance_name}_{port} = "nodal.instance_terminal"() '
+        f'<{{instance = @{instance_name}, port = "{port}", '
+        f'name = "{instance_name}.{port}", direction = "{direction}", '
+        'flow_orientation = "out_of_component", '
+        f'source_path = "Top.{instance_name}.{port}", metadata = {{}}}}> : () -> '
+        f'!nodal.terminal<"{discipline}"> loc("Hierarchy42.scala":{line}:9)'
+    )
+
+
 def definition(name: str, statements: list[str], line: int = 10) -> str:
     return (
         f'"nodal.module"() <{{metadata = {{}}, sym_name = "{name}"}}> ({{\n'
@@ -47,6 +96,14 @@ def source(definitions: list[str], guard: bool = True) -> str:
     closed = "true" if guard else "false"
     return (
         f"module attributes {{nodal.verify.hierarchy_closed = {closed}}} {{\n"
+        + "\n".join(definitions) + "\n}\n"
+    )
+
+
+def parameter_source(definitions: list[str], root: str, bindings: str) -> str:
+    return (
+        "module attributes {nodal.verify.parameters_complete = true, "
+        f"nodal.root.module = @{root}, nodal.root.parameter_bindings = {{{bindings}}}}} {{\n"
         + "\n".join(definitions) + "\n}\n"
     )
 
@@ -197,6 +254,70 @@ def run(nodalc: Path, work: Path) -> int:
                  code="NODAL-VERIFY-HIERARCHY-005", location="Hierarchy42.scala:45:7")
     matrix.check("disconnected-cycle", graph_source([[], [2], [1]]),
                  code="NODAL-VERIFY-HIERARCHY-005")
+    leaf = definition("Leaf", [terminal("vin")])
+    matrix.check("typed-child-terminal", source([
+        definition("Top", [instance("child", "Leaf"), instance_terminal("child", "vin")]),
+        leaf,
+    ]), expected_modules=2)
+    matrix.check("child-terminal-unknown-instance", source([
+        definition("Top", [instance("child", "Leaf"), instance_terminal("missing", "vin")]),
+        leaf,
+    ]), code="NODAL-VERIFY-HIERARCHY-006", location="Hierarchy42.scala:40:9")
+    matrix.check("child-terminal-unknown-port", source([
+        definition("Top", [instance("child", "Leaf"), instance_terminal("child", "missing")]),
+        leaf,
+    ]), code="NODAL-VERIFY-HIERARCHY-007", location="Hierarchy42.scala:40:9")
+    matrix.check("child-terminal-internal-node", source([
+        definition("Top", [instance("child", "Leaf"), instance_terminal("child", "hidden")]),
+        definition("Leaf", [terminal("hidden", internal=True)]),
+    ]), code="NODAL-VERIFY-HIERARCHY-007", location="Hierarchy42.scala:40:9")
+    matrix.check("child-terminal-type-mismatch", source([
+        definition("Top", [
+            instance("child", "Leaf"),
+            instance_terminal("child", "vin", discipline="thermal"),
+        ]),
+        leaf,
+    ]), code="NODAL-VERIFY-HIERARCHY-008", location="Hierarchy42.scala:40:9")
+    matrix.check("child-terminal-direction-mismatch", source([
+        definition("Top", [
+            instance("child", "Leaf"),
+            instance_terminal("child", "vin", direction="output"),
+        ]),
+        leaf,
+    ]), code="NODAL-VERIFY-HIERARCHY-009", location="Hierarchy42.scala:40:9")
+    root_parameter = definition("Root", [parameter("gain")])
+    matrix.check("root-parameter-binding", parameter_source(
+        [root_parameter], "Root", "gain = 6.0 : f64"
+    ), pipeline="--pass-pipeline=builtin.module(nodal-verify-parameters)")
+    matrix.check("root-parameter-unknown-module", parameter_source(
+        [root_parameter], "Missing", "gain = 6.0 : f64"
+    ), code="NODAL-VERIFY-PARAMETER-007",
+        pipeline="--pass-pipeline=builtin.module(nodal-verify-parameters)")
+    matrix.check("root-parameter-type-mismatch", parameter_source(
+        [root_parameter], "Root", "gain = 6 : i64"
+    ), code="NODAL-VERIFY-PARAMETER-008", location="Hierarchy42.scala:10:1",
+        pipeline="--pass-pipeline=builtin.module(nodal-verify-parameters)")
+    leaf_parameter = definition("ParameterizedLeaf", [parameter("gain")])
+    symbolic_parent = definition("ParameterizedTop", [
+        parameter("rootGain"),
+        instance("child", "ParameterizedLeaf"),
+        parameter_reference("rootGain"),
+        parameter_override("child", "gain", "rootGain"),
+    ])
+    matrix.check("symbolic-child-parameter-override", parameter_source(
+        [symbolic_parent, leaf_parameter], "ParameterizedTop", "rootGain = 6.0 : f64"
+    ), pipeline="--pass-pipeline=builtin.module(nodal-verify-parameters)")
+    integer_leaf = definition("IntegerLeaf", [parameter("gain", "i64", "1 : i64")])
+    mismatched_parent = definition("MismatchedTop", [
+        parameter("rootGain"),
+        instance("child", "IntegerLeaf"),
+        parameter_reference("rootGain"),
+        parameter_override("child", "gain", "rootGain"),
+    ])
+    matrix.check("symbolic-child-parameter-type-mismatch", parameter_source(
+        [mismatched_parent, integer_leaf], "MismatchedTop", "rootGain = 6.0 : f64"
+    ), code="NODAL-PARAMETER-OVERRIDE-001", location="Hierarchy42.scala:50:11",
+        pipeline="--pass-pipeline=builtin.module(nodal-verify-parameters)")
     cycle = [definition("A", [instance("ab", "B", 31)]),
              definition("B", [instance("ba", "A", 80)]),
              definition("Unrelated", [])]

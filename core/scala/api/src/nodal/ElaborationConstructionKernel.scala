@@ -95,7 +95,12 @@ private[nodal] final case class KernelResolvedNetSnapshot(
     operations: Vector[String]
 )
 
-private[nodal] final case class KernelTopologyEdge(kind: String, left: String, right: String)
+private[nodal] final case class KernelTopologyEdge(
+    owner: String,
+    kind: String,
+    left: String,
+    right: String
+)
 
 private[nodal] final case class KernelAnalogExpressionSnapshot(
     path: String,
@@ -246,7 +251,7 @@ private final class ModuleRecord(
   var expressionCount: Int = 0
   var attached: Boolean = parentAtConstruction.isEmpty
 
-private final case class Operation(kind: String, values: Vector[Any])
+private final case class Operation(owner: Long, kind: String, values: Vector[Any])
 
 private final class AnalogRegionRecord(val module: Long, val ordinal: Int):
   val expressions: mutable.ArrayBuffer[ExpressionRef] = mutable.ArrayBuffer.empty
@@ -1819,7 +1824,10 @@ private final class ConstructionSession(val options: EmitOptions):
       if values.size != 2 then
         fail("NODAL-ANALOG-LIFECYCLE-003", "analog contribution requires target and value")
       region.contributions += ((values(0), values(1)))
-    val captured = Operation(kind, values.toVector)
+    val owner = moduleStack.lastOption.map(_.handle).getOrElse(
+      fail("NODAL-LIFECYCLE-018", "operation requires an active Module")
+    )
+    val captured = Operation(owner, kind, values.toVector)
     operations += captured
     moduleStack.lastOption.foreach(module =>
       semanticOrigin.captureOperation(module.handle, kind, captured.values)
@@ -2320,10 +2328,10 @@ private final class ConstructionSession(val options: EmitOptions):
             val (first, second) =
               if operation.kind == "node-connect" && right < left then right -> left
               else left -> right
-            Some(KernelTopologyEdge(operation.kind, first, second))
+            Some(KernelTopologyEdge(modulePath(operation.owner), operation.kind, first, second))
           case _ => None
       else None
-    edges.sortBy(edge => (edge.kind, edge.left, edge.right))
+    edges.sortBy(edge => (edge.owner, edge.kind, edge.left, edge.right))
 
   private def clockEdgeName(edge: ClockEdge): String = edge match
     case ClockEdge.Rising => "rising"

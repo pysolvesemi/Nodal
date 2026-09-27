@@ -58,6 +58,29 @@ final class BridgeTop extends Module:
     child.param(_.width, 12.U(8))
     output := input
 
+final class BridgeHierarchyLeaf(gain: Param[Real] = 2.0) extends Module:
+  def parameter: Param[Real] = gain
+  val vin: Node[Electrical.type] = in(Electrical)
+  val vout: Node[Electrical.type] = out(Electrical)
+
+final class BridgeHierarchyTop(rootGain: Param[Real] = 4.0) extends Module:
+  val parameter: Param[Real] = rootGain
+  val vin: Node[Electrical.type] = in(Electrical)
+  val vout: Node[Electrical.type] = out(Electrical)
+  val child: BridgeHierarchyLeaf = new BridgeHierarchyLeaf(gain = rootGain)
+  vin <> child.vin
+  child.vout <> vout
+
+final class BridgeNamedDisciplineLeaf extends Module:
+  val declared: NamedDiscipline = discipline("leaf_electrical", Voltage, Current)
+  val port: Node[NamedDiscipline] = in(declared)
+
+final class BridgeNamedDisciplineTop extends Module:
+  val declared: NamedDiscipline = discipline("top_electrical", Voltage, Current)
+  val port: Node[NamedDiscipline] = in(declared)
+  val child: BridgeNamedDisciplineLeaf = new BridgeNamedDisciplineLeaf
+  port <> child.port
+
 final class BridgeProceduralTop extends Module:
   val accumulator: Variable[Real] = variable(Real, 1.0.V)
   val scratch: Variable[Real] = variable(Real, 0.0.V)
@@ -140,6 +163,40 @@ object ScalaToMlirBridgeTests extends TestSuite:
       assert(first.text.contains("loc(\""))
       assert(first.text.endsWith("\n"))
       assert(!first.text.contains("\r"))
+
+    test("hierarchy bridge retains typed root actuals, symbolic overrides, and child ports"):
+      val snapshot = ConstructionKernel.inspect(new BridgeHierarchyTop(rootGain = 6.0))
+      val first = ScalaToMlirBridge.fromSnapshot(snapshot)
+      val second = ScalaToMlirBridge.fromSnapshot(snapshot)
+
+      assert(first == second)
+      assert(snapshot.rootParameterBindings == Vector("rootGain" -> "6.0"))
+      assert(snapshot.topology.forall(_.owner == snapshot.root))
+      assert(first.text.contains("nodal.root.module = @BridgeHierarchyTop"))
+      assert(first.text.contains("nodal.root.parameter_bindings = {rootGain = 6.0 : f64}"))
+      assert(first.text.contains("parameter_bindings = {}"))
+      assert(first.text.contains("\"nodal.const_parameter_ref\""))
+      assert(first.text.contains("parameter = @rootGain"))
+      assert(first.text.contains("\"nodal.parameter_override\""))
+      assert(first.text.contains("parameter = @gain"))
+      assert(occurrences(first.text, "\"nodal.instance_terminal\"") == 2)
+      assert(occurrences(first.text, "\"nodal.connect\"") == 2)
+      assert(first.text.contains("module = @child"))
+      assert(first.text.contains("instance = @child_instance"))
+      assert(first.text.contains("port = \"vin\""))
+      assert(first.text.contains("port = \"vout\""))
+      assert(!first.text.contains("NODAL-BRIDGE"))
+
+    test("hierarchy bridge canonicalizes compatible named conservative disciplines"):
+      val document = ScalaToMlirBridge.lower(new BridgeNamedDisciplineTop)
+
+      assert(occurrences(document.text, "\"nodal.instance_terminal\"") == 1)
+      assert(occurrences(document.text, "\"nodal.connect\"") == 1)
+      assert(document.text.contains("!nodal.terminal<\"electrical\">"))
+      assert(!document.text.contains("!nodal.terminal<\"top_electrical\">"))
+      assert(!document.text.contains("!nodal.terminal<\"leaf_electrical\">"))
+      assert(document.text.contains("declared_discipline = \"top_electrical\""))
+      assert(document.text.contains("declared_discipline = \"leaf_electrical\""))
 
     test("analog procedural IR retains order, source locations, and serialization"):
       val first = ScalaToMlirBridge.lower(new BridgeProceduralTop)

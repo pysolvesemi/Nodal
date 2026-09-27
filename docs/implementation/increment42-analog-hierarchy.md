@@ -2,6 +2,48 @@
 
 **Status:** Implementation in progress; not accepted or merged.
 
+## Current production boundary
+
+Exact source `7bee1fa9c6035f3df6e933de04f73e89b03e3188` is the targeted-green
+constructor/frontend checkpoint. Core run
+[36292225388](https://github.com/pysolvesemi/Nodal/actions/runs/36292225388)
+passed contracts, all 212 Scala tests, the production separate-compilation and
+raw-factory sentinels, all 137 native CTests twice, all 12 bridge tests, 39
+clang-tidy translation units and required aggregation. Its fixed-replication
+matrix covers empty, singleton and boundary ranges, `Vector.tabulate`,
+`List.tabulate`, deterministic instance/register identities and invalid child
+reuse. Documentation-only child `d1680b495ec6ca720756ff477dc5a38ad76e1d5d`
+reconciles that evidence by marking F-042.B.1 complete. These results qualify
+B.1 on their exact source; they do not qualify downstream B.2 or Increment 42
+acceptance.
+
+The next bridge/native checkpoint carries the construction snapshot's exact
+topology owner, root actual bindings, direct parent-parameter overrides and
+immediate-child conservative terminals into typed MLIR. Direct symbolic
+overrides use the existing `nodal.const_parameter_ref` and
+`nodal.parameter_override` operations rather than a string or a symbol-valued
+instance attribute. `nodal.instance_terminal` identifies one boundary terminal
+of one direct child instance; the native hierarchy verifier resolves its exact
+instance/module/port, type and direction. Missing instances, non-boundary or
+missing ports, type changes and direction changes are source-located failures.
+The bridge emits explicit `nodal.connect` operations for parent/child topology
+and fails unavailable or incompatible endpoints instead of omitting them.
+
+The proposed hierarchy matrix grows from the historical 559 cases below to 570 cases:
+six typed child-terminal cases, three root-binding cases and two direct symbolic
+override cases are added without altering the original graph, diagnostic or
+bounded-stack controls. Local Scala
+3.8.4/JDK 25 compilation of the complete API/frontend/bridge source and an
+instrumented public hierarchy runtime witness pass. The native translation
+units, pinned format/lint and the 570-case matrix still require exact-head CI;
+no local review or prior-head result qualifies this successor.
+
+This is an unpublished bounded B.2 candidate, not completed B.2. Static override-expression
+DAG serialization beyond a direct parent parameter, native-to-Verilog-A
+hierarchy lowering, combined equation/event/function witnesses, scale review,
+full qualification and closure remain required. No local review or prior-head
+result qualifies this candidate.
+
 ## Published checkpoint 1
 
 Base: `c24207e47e012d8704da5d6d8e650914b2804f28` on `dev`.

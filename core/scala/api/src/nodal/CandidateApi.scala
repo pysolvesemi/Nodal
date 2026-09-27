@@ -143,7 +143,7 @@ final class Node[D <: Discipline] private[nodal] (
   CandidateRuntime.declare(
     this,
     kind,
-    attributes = Vector("discipline" -> discipline)
+    attributes = CandidateRuntime.conservativeAttributes(discipline)
   )
 
   infix def <>(other: Node[?]): Unit = CandidateRuntime.connectNodes(this, other)
@@ -867,6 +867,16 @@ private[nodal] object ConstructorCaptureRuntime:
     finally active.stack = previous
 
 private[nodal] object CandidateRuntime:
+  def conservativeAttributes(discipline: Discipline): Vector[(String, Any)] =
+    val (declared, potential, flow) = discipline match
+      case Electrical => ("electrical", Voltage.name, Current.name)
+      case named: NamedDiscipline => (named.name, named.potential.name, named.flow.name)
+    Vector(
+      "discipline" -> declared,
+      "potential_nature" -> potential,
+      "flow_nature" -> flow
+    )
+
   def dataType[A <: Data](kind: String, arguments: Any*): DataType[A] =
     new KernelDataType[A](KernelTypeDescriptor(kind, arguments.toVector))
 

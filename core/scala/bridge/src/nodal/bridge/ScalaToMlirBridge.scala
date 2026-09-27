@@ -680,7 +680,7 @@ ${indent(body, 2)}
         )
         values.update(path, result -> resultType)
 
-      topology.zipWithIndex.foreach: (edge, index) =>
+      topology.foreach: edge =>
         if Set("terminal-connect", "node-connect").contains(edge.kind) then
           (values.get(edge.left), values.get(edge.right)) match
             case (Some((leftValue, leftType)), Some((rightValue, rightType)))
@@ -1618,8 +1618,7 @@ ${indent(body, 2)}
         val dataType = declaration.dataType.map(parseType(_, declaration.path)).getOrElse(
           fail("NODAL-BRIDGE-005", "parameter type is unavailable", Some(declaration.path))
         )
-        stableLocalSymbol("parameter", name) -> typedLiteral(value, dataType, declaration.path)
-      )
+        stableLocalSymbol("parameter", name) -> typedLiteral(value, dataType, declaration.path))
 
     private def conservativeDiscipline(declaration: KernelDeclarationSnapshot): String =
       val attributes = declaration.attributes.toMap

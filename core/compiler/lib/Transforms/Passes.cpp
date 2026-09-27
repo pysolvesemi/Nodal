@@ -954,30 +954,29 @@ LogicalResult verifyAnalog(mlir::ModuleOp module) {
     owner->walk([&](Operation *operation) {
       llvm::StringRef name = operation->getName().getStringRef();
       if (name == "nodal.component_contract" || name == "nodal.terminal" ||
-          name == "nodal.instance_terminal" || name == "nodal.node" ||
-          name == "nodal.connect" || name == "nodal.alias" || name == "nodal.reference" ||
-          name == "nodal.branch" || name == "nodal.connection_set" ||
-          name == "nodal.potential_equality" || name == "nodal.reference_potential" ||
-          name == "nodal.flow_conservation" || name == "nodal.access" ||
-          name == "nodal.terminal_access" || name == "nodal.port_flow_access" ||
-          name == "nodal.probe" || name == "nodal.analog" || name == "nodal.real_literal" ||
-          name == "nodal.analog_integer_literal" || name == "nodal.parameter_ref" ||
-          name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
-          name == "nodal.analog_div" || name == "nodal.analog_neg" ||
-          name == "nodal.analog_function" || name == "nodal.analog_analysis" ||
-          name == "nodal.analog_noise" || name == "nodal.analog_compare" ||
-          name == "nodal.analog_logic" || name == "nodal.analog_select" ||
-          name == "nodal.analog_ddt" || name == "nodal.analog_idt" || name == "nodal.contribute")
+          name == "nodal.instance_terminal" || name == "nodal.node" || name == "nodal.connect" ||
+          name == "nodal.alias" || name == "nodal.reference" || name == "nodal.branch" ||
+          name == "nodal.connection_set" || name == "nodal.potential_equality" ||
+          name == "nodal.reference_potential" || name == "nodal.flow_conservation" ||
+          name == "nodal.access" || name == "nodal.terminal_access" ||
+          name == "nodal.port_flow_access" || name == "nodal.probe" || name == "nodal.analog" ||
+          name == "nodal.real_literal" || name == "nodal.analog_integer_literal" ||
+          name == "nodal.parameter_ref" || name == "nodal.analog_add" ||
+          name == "nodal.analog_sub" || name == "nodal.analog_mul" || name == "nodal.analog_div" ||
+          name == "nodal.analog_neg" || name == "nodal.analog_function" ||
+          name == "nodal.analog_analysis" || name == "nodal.analog_noise" ||
+          name == "nodal.analog_compare" || name == "nodal.analog_logic" ||
+          name == "nodal.analog_select" || name == "nodal.analog_ddt" ||
+          name == "nodal.analog_idt" || name == "nodal.contribute")
         analog = true;
       if (name == "nodal.port" || name == "nodal.resolved_net" || name == "nodal.net_drive" ||
           name == "nodal.crossing")
         digital = true;
       if (name == "nodal.bridge")
         bridge = true;
-      if ((name == "nodal.terminal" || name == "nodal.instance_terminal" ||
-           name == "nodal.node") &&
-          operation->getNumResults() == 1 &&
-          operation->getResult(0).use_empty() && !observed.contains(operation) && !partial &&
+      if ((name == "nodal.terminal" || name == "nodal.instance_terminal" || name == "nodal.node") &&
+          operation->getNumResults() == 1 && operation->getResult(0).use_empty() &&
+          !observed.contains(operation) && !partial &&
           booleanMetadata(operation, "allow_floating") != std::optional<bool>(true))
         result = emitFailure(operation, "NODAL-VERIFY-ANALOG-003",
                              "floating conservative terminal requires explicit approval");
@@ -1007,16 +1006,16 @@ LogicalResult verifyCapabilities(mlir::ModuleOp module) {
     llvm::StringRef name = operation->getName().getStringRef();
     const bool analog =
         name == "nodal.component_contract" || name == "nodal.terminal" ||
-        name == "nodal.instance_terminal" || name == "nodal.node" ||
-        name == "nodal.connect" || name == "nodal.alias" || name == "nodal.reference" ||
-        name == "nodal.branch" || name == "nodal.connection_set" ||
-        name == "nodal.potential_equality" || name == "nodal.reference_potential" ||
-        name == "nodal.flow_conservation" || name == "nodal.access" ||
-        name == "nodal.terminal_access" || name == "nodal.port_flow_access" ||
-        name == "nodal.probe" || name == "nodal.bridge" || name == "nodal.analog" ||
-        name == "nodal.real_literal" || name == "nodal.analog_integer_literal" ||
-        name == "nodal.parameter_ref" || name == "nodal.analog_add" || name == "nodal.analog_sub" ||
-        name == "nodal.analog_mul" || name == "nodal.analog_div" || name == "nodal.analog_neg" ||
+        name == "nodal.instance_terminal" || name == "nodal.node" || name == "nodal.connect" ||
+        name == "nodal.alias" || name == "nodal.reference" || name == "nodal.branch" ||
+        name == "nodal.connection_set" || name == "nodal.potential_equality" ||
+        name == "nodal.reference_potential" || name == "nodal.flow_conservation" ||
+        name == "nodal.access" || name == "nodal.terminal_access" ||
+        name == "nodal.port_flow_access" || name == "nodal.probe" || name == "nodal.bridge" ||
+        name == "nodal.analog" || name == "nodal.real_literal" ||
+        name == "nodal.analog_integer_literal" || name == "nodal.parameter_ref" ||
+        name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
+        name == "nodal.analog_div" || name == "nodal.analog_neg" ||
         name == "nodal.analog_function" || name == "nodal.analog_analysis" ||
         name == "nodal.analog_noise" || name == "nodal.analog_compare" ||
         name == "nodal.analog_logic" || name == "nodal.analog_select" ||

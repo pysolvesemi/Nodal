@@ -413,8 +413,8 @@ LogicalResult materializeModule(Operation *module) {
           "NODAL-CONNECTIVITY-PROVENANCE-001: endpoint names must be canonical and unique "
           "within a physical component");
 
-    const bool terminal = isNamed(&operation, "nodal.terminal") ||
-                          isNamed(&operation, "nodal.instance_terminal");
+    const bool terminal =
+        isNamed(&operation, "nodal.terminal") || isNamed(&operation, "nodal.instance_terminal");
     if (terminal) {
       llvm::StringRef direction = textAttr(&operation, "direction");
       if (!oneOf(direction, {"input", "output", "inout"}))

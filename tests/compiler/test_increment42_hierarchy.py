@@ -101,6 +101,13 @@ class HierarchyHarnessTests(unittest.TestCase):
         self.assertIn("run_hierarchy_matrix.py", cmake)
         self.assertIn("$<TARGET_FILE:nodalc>", cmake)
 
+    def test_bridge_module_resolution_is_indexed_once(self):
+        bridge = (ROOT / "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala").read_text()
+        renderer = bridge[bridge.index("private final class Renderer"):]
+        self.assertEqual(renderer.count("private val modulesByPath ="), 1)
+        self.assertNotIn("modules.find(", renderer)
+        self.assertGreaterEqual(renderer.count("modulesByPath.getOrElse("), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

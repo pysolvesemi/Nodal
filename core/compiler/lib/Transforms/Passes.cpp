@@ -551,6 +551,9 @@ LogicalResult verifyParameters(mlir::ModuleOp module) {
     if (!rootModule || !rootBindings)
       return emitFailure(module, "NODAL-VERIFY-PARAMETER-007",
                          "root parameter bindings require a resolved root Module");
+    // verifyParameterModel above enforces variability, unit normalization,
+    // ranges, and exclusions. Retain the staged verifier's resolved-name and
+    // exact storage-type diagnostics at this serialization boundary.
     for (NamedAttribute binding : rootBindings) {
       Operation *parameter =
           findDirectSymbol(rootModule, "nodal.parameter", binding.getName().getValue());

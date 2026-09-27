@@ -119,6 +119,7 @@ private[nodal] object ScalaToMlirBridge:
 
   private final class Renderer(snapshot: ConstructionSnapshot, backend: Backend):
     private val modules = snapshot.modules.sortBy(_.path)
+    private val modulesByPath = modules.map(module => module.path -> module).toMap
     private val sourceByPath = snapshot.sourceMap
       .sortBy(entry => (entry.semanticPath, entry.source.path, entry.source.line))
       .map(entry => entry.semanticPath -> entry.source)
@@ -177,7 +178,6 @@ ${indent(body, 2)}
       )
 
     private def canonicalizeModuleDefinitions(): Unit =
-      val modulesByPath = modules.map(module => module.path -> module).toMap
       val childrenByPath = modules
         .map(module => module.path -> module.instances.map(_.childModule).distinct)
         .toMap
@@ -789,7 +789,8 @@ ${indent(body, 2)}
         .sorted
       childEndpoints.zipWithIndex.foreach: (path, index) =>
         val owner = owningModule(path)
-        val child = modules.find(_.path == owner).getOrElse(
+        val child = modulesByPath.getOrElse(
+          owner,
           fail("NODAL-BRIDGE-007", "child Module is absent from the snapshot", Some(path))
         )
         val declaration = child.declarations.find(_.path == path).getOrElse(
@@ -1544,7 +1545,8 @@ ${indent(body, 2)}
           Some(instance.path)
         )
       )
-      val child = modules.find(_.path == instance.childModule).getOrElse(
+      val child = modulesByPath.getOrElse(
+        instance.childModule,
         fail(
           "NODAL-BRIDGE-007",
           "instance child Module is absent from the snapshot",
@@ -1912,7 +1914,8 @@ ${indent(body, 2)}
             )
 
     private def rootParameterBindingInventory: String =
-      val root = modules.find(_.path == snapshot.root).getOrElse(
+      val root = modulesByPath.getOrElse(
+        snapshot.root,
         fail("NODAL-BRIDGE-011", "root Module is absent from the snapshot", Some(snapshot.root))
       )
       val parameters = root.declarations

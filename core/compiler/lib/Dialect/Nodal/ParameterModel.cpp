@@ -1130,6 +1130,38 @@ LogicalResult nodal::verifyParameterModel(mlir::ModuleOp module) {
       definitions[symbolName(&operation)] = &operation;
   }
 
+  auto rootReference = module->getAttrOfType<FlatSymbolRefAttr>("nodal.root.module");
+  auto rootBindings = module->getAttrOfType<DictionaryAttr>("nodal.root.parameter_bindings");
+  Operation *rootModule = rootReference ? definitions.lookup(rootReference.getValue()) : nullptr;
+  if (rootModule && rootBindings) {
+    for (NamedAttribute binding : rootBindings) {
+      Operation *parameter =
+          findDirectSymbol(rootModule, binding.getName().getValue(), "nodal.parameter");
+      // The staged verifier diagnoses unresolved names and malformed root
+      // metadata. Enforce declaration-level contracts here once the target is
+      // known, at the same trust boundary as instance bindings.
+      if (!parameter)
+        continue;
+      if (textAttr(parameter, "variability") == "fixed")
+        return rootModule->emitOpError(
+            "NODAL-PARAMETER-OVERRIDE-001: fixed parameter cannot be bound at the root");
+      auto type = parameter->getAttrOfType<TypeAttr>("type");
+      FailureOr<EvaluatedConstant> raw = failure();
+      if (type)
+        raw = constantFromAttribute(binding.getValue(), type.getValue());
+      // Passes.cpp retains the existing NODAL-VERIFY-PARAMETER-008
+      // diagnostic for a missing or storage-incompatible attribute.
+      if (failed(raw))
+        continue;
+      auto normalized = normalizeForParameter(*raw, parameter);
+      if (failed(normalized) ||
+          failed(
+              checkConstraints(parameter, *normalized, "NODAL-PARAMETER-OVERRIDE-001", rootModule)))
+        return rootModule->emitOpError(
+            "NODAL-PARAMETER-OVERRIDE-001: root binding violates parameter contract");
+    }
+  }
+
   for (const auto &entry : definitions) {
     Operation *owner = entry.getValue();
     Block *body = moduleBody(owner);

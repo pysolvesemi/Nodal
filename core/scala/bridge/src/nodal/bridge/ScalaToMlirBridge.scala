@@ -129,7 +129,8 @@ private[nodal] object ScalaToMlirBridge:
 
     def render(): String =
       validate()
-      val body = modules.map(renderModule).mkString("\n\n")
+      val body =
+        (standardConservativeDeclarations ++ modules.map(renderModule)).mkString("\n\n")
       val attributes = Vector(
         "nodal.bridge.schema" -> quoted(Schema),
         "nodal.bridge.version" -> integer(Version),
@@ -172,6 +173,63 @@ ${indent(body, 2)}
 }
 """
       )
+
+    private def standardConservativeDeclarations: Vector[String] =
+      val needsElectrical = modules.exists(module => terminalDeclarations(module).nonEmpty)
+      if !needsElectrical then Vector.empty
+      else
+        val standardMetadata = (semanticPath: String) =>
+          dictionary(
+            Vector(
+              "bridge_schema" -> quoted(Schema),
+              "bridge_version" -> integer(Version),
+              "semantic_path" -> quoted(semanticPath)
+            )
+          )
+        Vector(
+          operation(
+            "nodal.nature",
+            attributes = Vector(
+              "sym_name" -> quoted("Voltage"),
+              "units" -> quoted("V"),
+              "access" -> quoted("V"),
+              "abstol" -> "1.0e-6 : f64",
+              "dimension" -> quoted("voltage"),
+              "metadata" -> standardMetadata("std.Voltage")
+            ),
+            semanticPath = "std.Voltage"
+          ),
+          operation(
+            "nodal.nature",
+            attributes = Vector(
+              "sym_name" -> quoted("Current"),
+              "units" -> quoted("A"),
+              "access" -> quoted("I"),
+              "abstol" -> "1.0e-12 : f64",
+              "dimension" -> quoted("current"),
+              "metadata" -> standardMetadata("std.Current")
+            ),
+            semanticPath = "std.Current"
+          ),
+          operation(
+            "nodal.discipline",
+            attributes = Vector(
+              "sym_name" -> quoted("electrical"),
+              "domain" -> quoted("continuous"),
+              "potential" -> symbolReference("Voltage"),
+              "flow" -> symbolReference("Current"),
+              "metadata" -> dictionary(
+                Vector(
+                  "bridge_schema" -> quoted(Schema),
+                  "bridge_version" -> integer(Version),
+                  "kind" -> quoted("conservative"),
+                  "semantic_path" -> quoted("std.electrical")
+                )
+              )
+            ),
+            semanticPath = "std.electrical"
+          )
+        )
 
     private def targetProfile: String =
       val analogKinds = Set(

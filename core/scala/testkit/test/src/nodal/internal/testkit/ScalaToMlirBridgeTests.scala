@@ -548,7 +548,8 @@ object ScalaToMlirBridgeTests extends TestSuite:
                 assert(success.normalizedMlir.contains("nodal.bridge.schema"))
                 assert(success.normalizedMlir.contains("\"nodal.module\""))
               case failure: NativeCompilerFailure =>
-                throw new AssertionError(
+                scala.Predef.assert(
+                  false,
                   s"${failure.diagnostic}\n${failure.standardError}"
                 )
           finally delete(directory)

@@ -849,8 +849,8 @@ private[nodal] final class SemanticOriginBuilder:
     declarations.foreach: capture =>
       capture.explicitName
         .map(cleanIdentifier(_, capture.kind))
-        .orElse(declarationBinding(capture.site, capture.kind))
         .orElse(memberBinding(members, capture.value))
+        .orElse(declarationBinding(capture.site, capture.kind))
         .foreach(name => directDeclarationNames.put(capture.value, name))
 
     val sinkHints = new IdentityHashMap[AnyRef, String]()
@@ -889,8 +889,8 @@ private[nodal] final class SemanticOriginBuilder:
           val binding =
             if explicit.nonEmpty then None
             else
-              declarationBinding(capture.site, capture.kind)
-                .orElse(memberBinding(members, capture.value))
+              memberBinding(members, capture.value)
+                .orElse(declarationBinding(capture.site, capture.kind))
                 .filter(claimedBindings.add)
           val sink = Option(sinkHints.get(capture.value)).map(name => s"${name}_source")
           val selected = explicit

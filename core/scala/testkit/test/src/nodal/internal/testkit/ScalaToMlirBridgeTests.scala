@@ -62,6 +62,7 @@ final class BridgeHierarchyLeaf(gain: Param[Real] = 2.0) extends Module:
   def parameter: Param[Real] = gain
   val vin: Node[Electrical.type] = in(Electrical)
   val vout: Node[Electrical.type] = out(Electrical)
+  vin <> vout
 
 final class BridgeHierarchyTop(rootGain: Param[Real] = 4.0) extends Module:
   val parameter: Param[Real] = rootGain

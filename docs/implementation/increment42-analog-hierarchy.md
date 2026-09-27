@@ -4,62 +4,64 @@
 
 ## Current production boundary
 
-Exact source `7bee1fa9c6035f3df6e933de04f73e89b03e3188` is the targeted-green
-constructor/frontend checkpoint. Core run
-[36292225388](https://github.com/pysolvesemi/Nodal/actions/runs/36292225388)
-passed contracts, all 212 Scala tests, the production separate-compilation and
-raw-factory sentinels, all 137 native CTests twice, all 12 bridge tests, 39
-clang-tidy translation units and required aggregation. Its fixed-replication
-matrix covers empty, singleton and boundary ranges, `Vector.tabulate`,
-`List.tabulate`, deterministic instance/register identities and invalid child
-reuse. Documentation-only child `d1680b495ec6ca720756ff477dc5a38ad76e1d5d`
-reconciles that evidence by marking F-042.B.1 complete. These results qualify
-B.1 on their exact source; they do not qualify downstream B.2 or Increment 42
-acceptance.
+Exact source `3fd4f99fcd29a6b6e785bd285926ad1fbdddad8f` is the targeted-green
+static override-DAG checkpoint. Core run
+[36302775991](https://github.com/pysolvesemi/Nodal/actions/runs/36302775991)
+passed contracts, 216 Scala tests, 137 native CTests twice, 16 bridge tests, 39
+clang-tidy translation units and required aggregation. Increment 29 run
+[36302783500](https://github.com/pysolvesemi/Nodal/actions/runs/36302783500)
+also passed its parameter folding, constraints, envelope, override and native
+rendering proofs. The exact qualification is recorded in PR #134 comment
+`5854083546`. Earlier exact source `7bee1fa9c6035f3df6e933de04f73e89b03e3188`
+and documentation child `d1680b495ec6ca720756ff477dc5a38ad76e1d5d`
+remain the targeted evidence that completed F-042.B.1. Neither receipt qualifies
+downstream Verilog-A hierarchy emission or Increment 42 acceptance.
 
-The next bridge/native checkpoint carries the construction snapshot's exact
-topology owner, root actual bindings, direct parent-parameter overrides and
-immediate-child conservative terminals into typed MLIR. Direct symbolic
-overrides use the existing `nodal.const_parameter_ref` and
-`nodal.parameter_override` operations rather than a string or a symbol-valued
-instance attribute. `nodal.instance_terminal` identifies one boundary terminal
-of one direct child instance; the native hierarchy verifier resolves its exact
-instance/module/port, type and direction. Missing instances, non-boundary or
-missing ports, type changes and direction changes are source-located failures.
-The bridge emits explicit `nodal.connect` operations for parent/child topology
-and fails unavailable or incompatible endpoints instead of omitting them.
+The published B.2 work carries the construction snapshot's exact topology
+owner, typed root actuals, direct parent-parameter overrides and immediate-child
+conservative terminals into typed MLIR. Direct symbolic overrides use the
+existing `nodal.const_parameter_ref`, `nodal.const_literal`, `nodal.const_expr`
+and `nodal.parameter_override` operations. `nodal.instance_terminal` identifies
+one boundary terminal of one direct child instance; the native hierarchy
+verifier resolves its exact instance/module/port, type and direction. Explicit
+`nodal.connect` operations retain parent/child topology. Missing or foreign
+owners, non-boundary ports, type/direction changes, unsupported expressions and
+cycles fail with source locations. The retained 570-case hierarchy matrix
+preserves every historical graph, diagnostic and bounded-stack control while
+adding typed terminal, root-binding and symbolic-override cases.
 
-The proposed hierarchy matrix grows from the historical 559 cases below to 570 cases:
-six typed child-terminal cases, three root-binding cases and two direct symbolic
-override cases are added without altering the original graph, diagnostic or
-bounded-stack controls. Local Scala
-3.8.4/JDK 25 compilation of the complete API/frontend/bridge source and an
-instrumented public hierarchy runtime witness pass. The native translation
-units, pinned format/lint and the 570-case matrix still require exact-head CI;
-no local review or prior-head result qualifies this successor.
+## Current Verilog-A successor candidate
 
-This is a published bounded B.2 checkpoint, not completed B.2. The current
-successor adds canonical serialization for the reachable, parent-owned static
-override-expression DAG instead of flattening it to a display string. The
-internal construction snapshot records each reachable expression's stable
-semantic path, owner, operation, operands, exact type, literal and optional
-unit. The bridge lowers those nodes through the existing
-`nodal.const_parameter_ref`, `nodal.const_literal`, `nodal.const_expr` and
-`nodal.parameter_override` operations. Supported production operations are
-real/integer `+`, `-`, `*`, `/`, unary negation, real/integer comparisons and
-Boolean `&&`, `||`, `!`; dynamic values, foreign owners, absent semantic
-identities, incompatible types and unsupported operations fail explicitly.
-Native parameter evaluation and rendering retain comparison and Boolean DAG
-structure. This changes no public constructor plugin ABI or distribution
-boundary.
+The current successor connects those canonical operations to the
+existing production backend. It resolves conservative connection components,
+requires each child boundary port to have exactly one parent-local named net,
+and rejects incomplete, multiply anchored, parent-only or domain-bound
+connectivity under this scalar profile. It emits one reusable module definition
+and deterministic named instances with sorted port and parameter bindings. Both
+literal and parent-owned symbolic overrides retain their target spelling; no
+clone-per-value specialization or second hierarchy registry is introduced.
 
-Local Scala 3.8.4/JDK 25 strict compilation and instrumented arithmetic and
-Boolean public-path witnesses pass, as do all 370 compiler Python tests and the
-Increment 29 checker and 16 Python regressions. The native unit, pinned
-format/lint and targeted workflow results still require exact-head CI. Native
-to Verilog-A hierarchy lowering, combined equation/event/function witnesses,
-scale review, full qualification and closure remain required. No local review
-or prior-head result qualifies this candidate.
+The independent backend reparser now recognizes only the emitted named scalar
+instance grammar and verifies module, port, net, parameter, fixed-parameter and
+dependency scope across the complete output. Its constant grammar is extended
+only for the already-supported comparison and Boolean override operators.
+Malformed ports, foreign nets, unknown/fixed parameters, duplicate instance
+names and recursive output remain failures before target publication.
+
+Root actuals remain separate from authored parameter defaults in canonical
+MLIR. Because a standalone Verilog-A library has no parent instance in which to
+encode a root override, this compiler profile accepts an explicit root binding
+only when it equals the authored default. A non-default root actual fails with
+`NODAL-BACKEND-HIERARCHY-010` and requires a later external top-binding adapter;
+it is never silently discarded, substituted into the declaration default or
+represented by an invented parent module.
+
+Local dependency-free hierarchy syntax checks pass 52 cases and all 370 compiler
+Python tests pass. The pinned native SDK, Scala toolchain and formatter are not
+available in this scratch runtime, so native compilation, the public Scala to
+generated-Verilog-A witness and pinned format/lint remain unqualified until an
+exact-head targeted run. Combined equation/event/function witnesses, scale
+review, full qualification and closure also remain required.
 
 ## Published checkpoint 1
 

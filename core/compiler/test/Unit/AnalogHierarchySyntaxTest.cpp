@@ -9,6 +9,7 @@ int main() {
       "Cell a(.p(input), .n(ground));", "Empty x();",
       "Cell #(.R((R * 2)), .N(-3)) a(.p(mid), .n(gnd));",
       "Cell #(.R((2.5e-12 + 1p) / (-R)), .N(3 % 2)) a(.p(mid), .n(gnd));",
+      "Cell #(.R(((R >= 1) && !(R < 4))), .N((R > 0) || (R <= 2))) a();",
       "Cell #(.R(+-+-1), .N((2))) array_3(.p(mid), .n(gnd));"};
   std::vector<std::string> negative;
   negative.push_back("Cell a(p, n);");
@@ -31,7 +32,9 @@ int main() {
   negative.push_back("Cell #(.R(())) a();");
   negative.push_back("Cell #(.R(1;2)) a();");
   negative.push_back("Cell #(.R((R))) a(); injected");
-  negative.push_back("Cell #(.R(R > 0)) a();");
+  negative.push_back("Cell #(.R(R &&)) a();");
+  negative.push_back("Cell #(.R(R & 1)) a();");
+  negative.push_back("Cell #(.R(R == 1)) a();");
   negative.push_back("Cell #(.R(R ? 1 : 2)) a();");
   negative.push_back("Cell #(.R(1)) a(.p(n);");
   negative.push_back("Cell a(); Cell b();");

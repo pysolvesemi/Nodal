@@ -146,7 +146,7 @@ private:
       if (token == ')' && depth == 0)
         break;
       if (expectsValue) {
-        if (token == '+' || token == '-') {
+        if (token == '+' || token == '-' || token == '!') {
           ++position;
           continue;
         }
@@ -168,7 +168,12 @@ private:
       } else if (token == ')' && depth) {
         ++position;
         --depth;
-      } else if (token == '+' || token == '-' || token == '*' || token == '/' || token == '%') {
+      } else if (text.substr(position, 2) == "&&" || text.substr(position, 2) == "||" ||
+                 text.substr(position, 2) == ">=" || text.substr(position, 2) == "<=") {
+        position += 2;
+        expectsValue = true;
+      } else if (token == '+' || token == '-' || token == '*' || token == '/' || token == '%' ||
+                 token == '>' || token == '<') {
         ++position;
         expectsValue = true;
       } else {

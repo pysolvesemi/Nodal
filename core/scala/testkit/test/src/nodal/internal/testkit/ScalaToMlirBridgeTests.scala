@@ -635,3 +635,49 @@ object ScalaToMlirBridgeTests extends TestSuite:
                     s"${failure.diagnostic}\n${failure.standardError}"
                   )
             finally delete(directory)
+
+    test("public Scala hierarchy compiles to reusable named Verilog-A instances when configured"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new BridgeHierarchyTop,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.verilogA.contains("module child(vin, vout);"))
+            assert(result.verilogA.contains("module BridgeHierarchyTop(vin, vout);"))
+            assert(
+              result.verilogA.contains(
+                "child #(.gain(rootGain)) child_instance(.vin(vin), .vout(vout));"
+              )
+            )
+            assert(occurrences(result.verilogA, "module child") == 1)
+            assert(!result.verilogA.contains("module child_gain"))
+            val rejectedDirectory = Files.createDirectory(directory.resolve("non-default-root"))
+            ScalaToMlirBridge.compileToVerilogA(
+              new BridgeHierarchyTop(rootGain = 6.0),
+              Path.of(nodalc).toAbsolutePath,
+              Path.of(translator).toAbsolutePath,
+              rejectedDirectory,
+              Duration.ofSeconds(60)
+            ) match
+              case Left(failure) =>
+                assert(
+                  s"${failure.diagnostic}\n${failure.standardError}".contains(
+                    "NODAL-BACKEND-HIERARCHY-010"
+                  )
+                )
+              case Right(_) =>
+                scala.Predef.assert(false, "non-default root actual was silently discarded")
+          finally delete(directory)
+        case _ => assert(true)

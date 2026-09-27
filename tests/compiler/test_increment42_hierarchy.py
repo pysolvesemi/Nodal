@@ -114,6 +114,28 @@ class HierarchyHarnessTests(unittest.TestCase):
         self.assertGreaterEqual(renderer.count("modulesByPath.getOrElse("), 3)
         self.assertIn("topologyByOwner.getOrElse(module.path, Vector.empty)", renderer)
 
+    def test_native_hierarchy_rejects_duplicate_child_port_references(self):
+        production = (ROOT / "core/compiler/lib/Transforms/Passes.cpp").read_text()
+        begin = production.index("LogicalResult verifyHierarchy(")
+        end = production.index("LogicalResult verifyTypes(", begin)
+        hierarchy = production[begin:end]
+        self.assertIn("llvm::StringMap<llvm::StringSet<>> referencedPorts;", hierarchy)
+        self.assertIn("NODAL-VERIFY-HIERARCHY-010", hierarchy)
+        fixture = (ROOT / "tests/compiler/fixtures/increment42/run_hierarchy_matrix.py").read_text()
+        self.assertIn('"child-terminal-duplicate-reference"', fixture)
+
+    def test_target_visible_real_ordering_is_exact(self):
+        production = (ROOT / "core/compiler/lib/Dialect/Nodal/ParameterModel.cpp").read_text()
+        begin = production.index('if (name == "gt" || name == "ge"')
+        end = production.index('if (name == "and" || name == "or")', begin)
+        comparison = production[begin:end]
+        self.assertIn("lhs->realValue < rhs->realValue", comparison)
+        self.assertIn("lhs->realValue > rhs->realValue", comparison)
+        self.assertNotIn("const int comparison = compareConstants(*lhs, *rhs);", comparison)
+        fixture = (ROOT / "core/compiler/test/Unit/ParameterModelTest.cpp").read_text()
+        self.assertIn('sym_name = "NEAR_ORDERED"', fixture)
+        self.assertIn("1.0000000000005", fixture)
+
 
 if __name__ == "__main__":
     unittest.main()

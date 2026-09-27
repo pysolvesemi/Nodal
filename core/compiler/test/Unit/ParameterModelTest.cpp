@@ -53,6 +53,13 @@ module {
     %truth_bits = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = true}> : () -> !nodal.bits<1>
     %enabled_value = "nodal.const_expr"(%ordered, %truth) <{metadata = {}, operator_name = "and"}> : (i1, i1) -> i1
     "nodal.parameter_value"(%enabled_value) <{metadata = {}, parameter = @ENABLED}> : (i1) -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = true, metadata = {}, parameter_kind = "boolean", sym_name = "NEAR_ORDERED", type = i1, variability = "symbolic"}> : () -> ()
+    %near_left = "nodal.const_literal"() <{metadata = {}, spelling = "1.0000000000005", value = 1.0000000000005 : f64}> : () -> f64
+    %near_right = "nodal.const_literal"() <{metadata = {}, spelling = "1.0", value = 1.0 : f64}> : () -> f64
+    %near_ordered = "nodal.const_expr"(%near_left, %near_right) <{metadata = {}, operator_name = "gt"}> : (f64, f64) -> i1
+    %false = "nodal.const_literal"() <{metadata = {}, spelling = "0", value = false}> : () -> i1
+    "nodal.parameter_value"(%near_ordered) <{metadata = {}, parameter = @NEAR_ORDERED}> : (i1) -> ()
+    "nodal.parameter_constraint"(%false) <{constraint_kind = "exclude", lower_inclusive = false, metadata = {}, parameter = @NEAR_ORDERED, upper_inclusive = false}> : (i1) -> ()
   }) : () -> ()
 }
 )mlir";

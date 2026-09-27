@@ -411,6 +411,7 @@ LogicalResult verifyHierarchy(mlir::ModuleOp module) {
       instanceByName.try_emplace(symbolName(instance), instance);
     }
 
+    llvm::StringMap<llvm::StringSet<>> referencedPorts;
     Block &body = ordered[index]->getRegion(0).front();
     for (Operation &endpoint : body) {
       if (!isNamed(&endpoint, "nodal.instance_terminal"))
@@ -442,6 +443,10 @@ LogicalResult verifyHierarchy(mlir::ModuleOp module) {
         return emitFailure(&endpoint, "NODAL-VERIFY-HIERARCHY-007",
                            llvm::Twine("instance target has no boundary terminal '") +
                                (port ? port.getValue() : llvm::StringRef("")) + "'");
+      if (!referencedPorts[instanceReference.getValue()].insert(port.getValue()).second)
+        return emitFailure(&endpoint, "NODAL-VERIFY-HIERARCHY-010",
+                           llvm::Twine("duplicate child terminal reference for instance '") +
+                               instanceReference.getValue() + "' port '" + port.getValue() + "'");
       if (endpoint.getNumResults() != 1 || childTerminal->getNumResults() != 1 ||
           endpoint.getResult(0).getType() != childTerminal->getResult(0).getType())
         return emitFailure(&endpoint, "NODAL-VERIFY-HIERARCHY-008",

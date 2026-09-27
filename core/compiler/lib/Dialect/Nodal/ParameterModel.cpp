@@ -520,7 +520,15 @@ FailureOr<EvaluatedConstant> evaluateExpression(Operation *operation, Operation 
         (lhs->kind != ConstantKind::Real && lhs->kind != ConstantKind::Integer) ||
         lhs->dimension != rhs->dimension)
       return failure();
-    const int comparison = compareConstants(*lhs, *rhs);
+    int comparison = 0;
+    if (lhs->kind == ConstantKind::Real) {
+      if (lhs->realValue < rhs->realValue)
+        comparison = -1;
+      else if (lhs->realValue > rhs->realValue)
+        comparison = 1;
+    } else {
+      comparison = compareConstants(*lhs, *rhs);
+    }
     result.booleanValue = name == "gt"   ? comparison > 0
                           : name == "ge" ? comparison >= 0
                           : name == "lt" ? comparison < 0

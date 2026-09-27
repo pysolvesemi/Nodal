@@ -835,7 +835,7 @@ object ScalaToMlirBridgeTests extends TestSuite:
             assert(nested.verilogA.contains("leaf #(.gain(branchGain)) leaf_instance"))
             assert(occurrences(nested.verilogA, "firstBranch #(") == 2)
             assert(nested.verilogA.contains(".branchGain(rootGain)"))
-            assert(nested.verilogA.contains(".branchGain(6.0)"))
+            assert(nested.verilogA.contains(".branchGain(6)"))
 
             val rejectedDirectory = Files.createDirectory(directory.resolve("non-default-root"))
             ScalaToMlirBridge.compileToVerilogA(

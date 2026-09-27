@@ -132,6 +132,15 @@ test expectations to the established target spelling; production bridge,
 canonical MLIR and backend behavior are unchanged. These results do not yet
 qualify the repaired exact head.
 
+Exact source `7f874f91916b0a282fb092b7de8a171fde509838` repeated the same
+seven-workflow boundary. Core contracts and Scala succeeded; every native path
+again passed all 137 CTests twice and then failed only at the remaining nested
+target assertion, which required `.branchGain(6.0)`. The same canonical target
+formatter emits `.branchGain(6)`, so the focused successor updates that final
+configured-target spelling expectation. Production bridge, fixture, MLIR and
+backend bytes remain unchanged. The `7f874f9` runs are terminal diagnosis and
+do not qualify the successor.
+
 ## Published checkpoint 1
 
 Base: `c24207e47e012d8704da5d6d8e650914b2804f28` on `dev`.

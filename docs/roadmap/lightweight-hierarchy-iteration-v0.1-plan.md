@@ -3,7 +3,7 @@
 **Revision:** 0.2
 **Approved direction:** 2026-09-24
 **Updated:** 2026-09-27
-**Status:** Roadmap amendment only; implementation and qualification remain open.
+**Status:** Roadmap amendment; Increment 42 compiler implementation is targeted-green while later acceptance remains open.
 
 ## Authority, scope and progress
 
@@ -27,7 +27,7 @@ feature obligations, milestones and historical evidence. This companion owns
 only the NEW descendant checkboxes below; do not copy existing parent states
 here or maintain a second status ledger. Completing a parent in the main file
 also requires its applicable descendants here. All new descendants start open.
-Existing F-042.C-G, F-043.C-G and F-159 validation obligations remain required.
+F-042 states remain governed by the main roadmap; F-043.C-G and F-159 validation obligations remain required.
 No historical API freeze, accepted artifact or executed result is rewritten.
 
 The subsequent approved [Foundation 160 modularization plan](construction-frontend-modularization-v0.1-plan.md)
@@ -80,9 +80,10 @@ ranges, strict `Vector` and `List` construction, stable child indices,
 repeat determinism; illegal reuse of one child at multiple indices is rejected.
 The pinned Scala 3.8.4 artifact also passed separate
 definition/factory/consumer compilation, raw-factory rejection, 11 prototype
-cases with 169 assertions and six compiler negatives. This completes only
-F-042.B.1 and its descendants; B.2/B.3 and the remaining C-G acceptance
-obligations stay open.
+cases with 169 assertions and six compiler negatives. This completes F-042.B.1 and its descendants. The later exact-head compiler
+implementation and qualification recorded in the authoritative roadmap also
+complete F-042.A, B.2, B.3, C, D.1, E and F; F-042.D.2, aggregate D, G and the
+Increment 42 parent remain open.
 
 **F-042.A/B.2:** Reuse transaction-owned IDs, declarations and the existing bridge
 and native verifier. Most new policy should be in focused private helpers; use

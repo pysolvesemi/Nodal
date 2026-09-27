@@ -1,23 +1,38 @@
 # Increment 42 - Analog hierarchy and parameterized instances
 
-**Status:** Implementation in progress; not accepted or merged.
+**Status:** Compiler implementation targeted-green; later-tool handoff, full acceptance and merge remain open.
 
 ## Current production boundary
 
-Exact source `7ed0451082f03a94c153a376e814fae2a368650f` is the latest
-published targeted-green hierarchy checkpoint. Core run
-[36323630647](https://github.com/pysolvesemi/Nodal/actions/runs/36323630647)
-passed contracts, 218 Scala tests, 137 native CTests twice, 18 configured bridge
-tests, formatting/lint and required aggregation. Exact-head Increment 37 and 41
-runs [36323641614](https://github.com/pysolvesemi/Nodal/actions/runs/36323641614)
-and [36323652235](https://github.com/pysolvesemi/Nodal/actions/runs/36323652235)
-also passed their public analog-event and hierarchy matrices. The exact
-qualification is recorded in PR #134 comment `5856631863`. Earlier exact source
-`f325a5d9f22226ce3ab532c9cf56231bf1eb38ff` retains its Increment 23, 25,
-28 and 29 predecessor receipts; `7bee1fa9c6035f3df6e933de04f73e89b03e3188`
-and documentation child `d1680b495ec6ca720756ff477dc5a38ad76e1d5d`
-remain the targeted evidence that completed F-042.B.1. No receipt by itself
-qualifies Increment 42 acceptance.
+Exact source `7ab7ec09f70e7928118857231da6f8a8c0c99fe4`, tree
+`942f7f46589b715f5d4a12f8887d0f0fe041378b`, is the current targeted-green
+hierarchy checkpoint. Core run
+[36332604210](https://github.com/pysolvesemi/Nodal/actions/runs/36332604210)
+passed contracts, 219 Scala tests, all 370 compiler Python tests, the constructor
+probe, 137 native CTests twice, 19 configured bridge tests, formatting/lint and
+required aggregation. Exact-head Increment 23, 25, 28, 29 and 41 runs
+[36332616923](https://github.com/pysolvesemi/Nodal/actions/runs/36332616923),
+[36332627314](https://github.com/pysolvesemi/Nodal/actions/runs/36332627314),
+[36332644101](https://github.com/pysolvesemi/Nodal/actions/runs/36332644101),
+[36332654703](https://github.com/pysolvesemi/Nodal/actions/runs/36332654703) and
+[36332684933](https://github.com/pysolvesemi/Nodal/actions/runs/36332684933)
+also passed.
+
+The first exact-head Increment 37 run
+[36332674015](https://github.com/pysolvesemi/Nodal/actions/runs/36332674015)
+failed only on an external Maven HTTP 429. The bounded one-request dispatcher
+retry [36334138396](https://github.com/pysolvesemi/Nodal/actions/runs/36334138396)
+then passed the complete public event/source-to-native/Verilog-A matrix on the
+same source and tree. Artifact `10937037949` retains seven normalized-MLIR and
+Verilog-A witnesses; its ZIP/API/upload SHA256 is
+`11de528d5243783ba08c95f5df308b3515779d53deeeb7bcf57416621f24cb17`,
+and all internal hashes match the job log. The exact qualification is recorded
+in [PR #134 comment 5857885496](https://github.com/pysolvesemi/Nodal/pull/134#issuecomment-5857885496).
+
+Earlier exact source `7bee1fa9c6035f3df6e933de04f73e89b03e3188` and documentation
+child `d1680b495ec6ca720756ff477dc5a38ad76e1d5d` retain the targeted
+evidence that completed F-042.B.1. No receipt by itself qualifies final
+Increment 42 acceptance.
 
 The published B.2 work carries the construction snapshot's exact topology
 owner, typed root actuals, direct parent-parameter overrides and immediate-child
@@ -141,6 +156,23 @@ configured-target spelling expectation. Production bridge, fixture, MLIR and
 backend bytes remain unchanged. The `7f874f9` runs are terminal diagnosis and
 do not qualify the successor.
 
+## Checklist reconciliation — 2026-09-27
+
+The authoritative roadmap now records F-042.A, B.2, B.3, C, D.1, E and F
+complete on the exact targeted-green compiler head. The evidence demonstrates
+one canonical construction/IR/backend path; typed root actuals, symbolic child
+overrides and direct child terminals; reusable named Verilog-A definitions;
+source-located negatives and predecessor combinations; retained public
+Scala/normalized-MLIR/generated-Verilog-A witnesses; exact structural reuse; and
+bounded-depth/repeated/nested determinism.
+
+F-042.D.2 remains open: the applicable 48 compile and 49/52 numerical cases,
+analyses, references and tolerances still require an explicit handoff record.
+Strict internal target reparse is intentionally not described as independent
+OpenVAF execution. F-042.G and the Increment 42 parent also remain open pending
+that handoff, final full applicable CI, review, verified integration, merge and
+separate accepted-evidence closure.
+
 ## Published checkpoint 1
 
 Base: `c24207e47e012d8704da5d6d8e650914b2804f28` on `dev`.
@@ -261,15 +293,15 @@ python3 tests/compiler/fixtures/increment42/run_hierarchy_matrix.py \
 
 ## Remaining implementation and acceptance
 
-All original F-042 obligations remain in scope. Continue with typed public
-named-port construction, parent-owned symbolic override DAGs, legal fixed
-instance arrays, native ownership/type/unit/binding verification, recursive
-hierarchy rejection, parameter-preserving Verilog-A emission and safe duplicate
-definition elimination. Retain actual public Scala, normalized MLIR and generated
-Verilog-A witnesses, predecessor interactions, negative mutations, source maps,
-scale and determinism evidence. Complete targeted-first and full qualification,
-review and verified integration before any accepted-evidence closure.
+The compiler implementation scope through F-042.A/B/C/D.1/E/F is complete and
+targeted-green on `7ab7ec09f70e7928118857231da6f8a8c0c99fe4`. Do not reopen
+that scope without a concrete defect. Preserve the qualified public Scala,
+normalized MLIR, generated Verilog-A, negative mutations, source maps, scale and
+determinism evidence.
 
-The authoritative Foundation parent and children remain unchecked. Independent
-OpenVAF and numerical execution belong to their later qualification owners;
-this compiler checkpoint does not count unavailable execution as passed or N/A.
+F-042.D.2 remains to map concrete hierarchy witnesses into the later Increment
+48 OpenVAF compile and Increment 49/52 numerical qualification owners, including
+required analyses, references and tolerances. F-042.G then requires final full
+applicable CI on the exact final head, review, verified integration, squash
+merge and separate accepted-evidence closure. Unavailable independent or
+numerical execution remains open, not passed or N/A.

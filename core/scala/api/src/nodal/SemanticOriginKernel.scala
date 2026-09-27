@@ -552,16 +552,44 @@ private[nodal] final class SemanticOriginBuilder:
 
   private def discoverMemberNames(): IdentityHashMap[AnyRef, String] =
     val discovered = new IdentityHashMap[AnyRef, String]()
+    val semanticObjects = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+    modules.foreach(capture => semanticObjects.put(capture.module, java.lang.Boolean.TRUE))
+    domains.foreach(capture => semanticObjects.put(capture.domain, java.lang.Boolean.TRUE))
+    declarations.foreach(capture => semanticObjects.put(capture.value, java.lang.Boolean.TRUE))
+    expressions.foreach(capture => semanticObjects.put(capture.value, java.lang.Boolean.TRUE))
+    instances.foreach: capture =>
+      semanticObjects.put(capture.instance, java.lang.Boolean.TRUE)
+      semanticObjects.put(capture.childModule, java.lang.Boolean.TRUE)
+
+    def retain(value: AnyRef, candidate: String): Unit =
+      if semanticObjects.containsKey(value) then
+        Option(discovered.get(value)) match
+          case Some(existing) =>
+            if candidate < existing then discovered.put(value, candidate)
+          case None => discovered.put(value, candidate)
+
+    def visit(value: Any, candidate: String): Unit = value match
+      case option: Option[?] =>
+        option.foreach(element => visit(element, candidate))
+      case indexed: IndexedSeq[?] =>
+        indexed.zipWithIndex.foreach: (element, index) =>
+          visit(element, s"${candidate}_$index")
+      case list: List[?] =>
+        list.zipWithIndex.foreach: (element, index) =>
+          visit(element, s"${candidate}_$index")
+      case array: Array[?] =>
+        array.zipWithIndex.foreach: (element, index) =>
+          visit(element, s"${candidate}_$index")
+      case reference: AnyRef => retain(reference, candidate)
+      case _ => ()
+
     modules.sortBy(_.handle).foreach: capture =>
       memberFields(capture.module.getClass).foreach: field =>
         try
           if field.trySetAccessible() then
             Option(field.get(capture.module)).foreach: value =>
               val candidate = cleanIdentifier(field.getName, "member")
-              Option(discovered.get(value)) match
-                case Some(existing) =>
-                  if candidate < existing then discovered.put(value, candidate)
-                case None => discovered.put(value, candidate)
+              visit(value, candidate)
         catch
           case _: ReflectiveOperationException => ()
           case _: RuntimeException => ()

@@ -183,6 +183,37 @@ final class ConstructorLegacyDoubleAttachTop extends Module:
   val first: Instance[ConstructorLegacyHost] = instance(child)
   val second: Instance[ConstructorLegacyHost] = instance(child)
 
+final class ConstructorReplicationTop extends Module:
+  val empty: IndexedSeq[ConstructorGain] =
+    (0 until 0).map(_ => new ConstructorGain)
+  val singleton: IndexedSeq[ConstructorGain] =
+    (0 until 1).map(_ => new ConstructorGain)
+  val boundary: IndexedSeq[ConstructorGain] =
+    (0 until 4).map(_ => new ConstructorGain)
+  val vector: Vector[ConstructorGain] =
+    Vector.tabulate(2)(_ => new ConstructorGain)
+  val list: List[ConstructorGain] =
+    List.tabulate(2)(_ => new ConstructorGain)
+  val core: ClockDomain = ClockDomain.external(
+    "core",
+    edge = ClockEdge.Rising,
+    reset = ResetPolicy.Sync,
+    resetPolarity = ResetPolarity.ActiveHigh,
+    frequency = 100.MHz
+  )
+  val states: Vector[Register[UInt]] =
+    var captured = Vector.empty[Register[UInt]]
+    core:
+      captured = Vector.tabulate(4)(_ => Reg(0.U(8)))
+    captured
+  core:
+    for index <- 0 until 4 do states(index) := (index + 1).U(8)
+
+final class ConstructorInvalidReplicationTop extends Module:
+  val childModule: ConstructorLegacyHost = new ConstructorLegacyHost
+  val repeated: Vector[Instance[ConstructorLegacyHost]] =
+    Vector.tabulate(2)(_ => instance(childModule))
+
 final class ConstructorFailingGain(gain: Param[Real] = 2.0) extends Module:
   def parameter: Param[Real] = gain
   val begun: Param[Real] = param(11.0.real)
@@ -392,6 +423,43 @@ object AnalogHierarchyConstructorIntegrationTests extends TestSuite:
     test("legacy unattached and double attachment guards remain active"):
       assert(failure(new ConstructorLegacyUnattachedTop).diagnostic.code == "NODAL-LIFECYCLE-017")
       assert(failure(new ConstructorLegacyDoubleAttachTop).diagnostic.code == "NODAL-HIERARCHY-017")
+
+    test("fixed Scala ranges and strict collections retain stable indexed identities"):
+      val first = ConstructionKernel.inspect(new ConstructorReplicationTop)
+      val second = ConstructionKernel.inspect(new ConstructorReplicationTop)
+      assert(first == second)
+      val expected = Vector(
+        "singleton_0",
+        "boundary_0",
+        "boundary_1",
+        "boundary_2",
+        "boundary_3",
+        "vector_0",
+        "vector_1",
+        "list_0",
+        "list_1"
+      )
+      assert(root(first).instances.map(_.childModule) ==
+        expected.map(name => s"${first.root}.$name"))
+      assert(root(first).declarations.filter(_.kind == "register").map(_.name) ==
+        Vector("states_0", "states_1", "states_2", "states_3"))
+      assert(first.modules.map(_.path).toSet ==
+        (first.root +: expected.map(name => s"${first.root}.$name")).toSet)
+      expected.foreach: name =>
+        val path = s"${first.root}.$name"
+        assert(first.names.exists(entry =>
+          entry.semanticPath == path && entry.name == name &&
+            entry.provenance == "scala-declaration"
+        ))
+        assert(first.sourceMap.exists(entry =>
+          entry.semanticPath == path &&
+            entry.source.path.endsWith("AnalogHierarchyConstructorIntegrationTests.scala") &&
+            entry.source.line > 0 && entry.source.column > 0
+        ))
+
+    test("invalid fixed replication cannot attach one legacy child at multiple indices"):
+      assert(failure(new ConstructorInvalidReplicationTop).diagnostic.code ==
+        "NODAL-HIERARCHY-017")
 
     test("automatic hierarchy source identities are deterministic and mapped"):
       val first = ConstructionKernel.inspect(new ConstructorTop)

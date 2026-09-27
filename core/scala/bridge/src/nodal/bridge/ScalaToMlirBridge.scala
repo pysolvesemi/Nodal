@@ -483,7 +483,7 @@ ${indent(body, 2)}
             ),
             semanticPath = domain.path
           )
-          domain.binding.foreach: actual =>
+          domain.binding.filter(actual => owningModule(actual) == module.path).foreach: actual =>
             body += operation(
               "nodal.domain_bind",
               attributes = Vector(

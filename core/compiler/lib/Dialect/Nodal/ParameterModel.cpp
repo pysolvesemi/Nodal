@@ -182,10 +182,12 @@ bool attributeFits(Attribute value, Type type) {
     if (typed.getType() == type)
       return true;
   }
-  if (auto integer = llvm::dyn_cast<IntegerAttr>(value))
-    return integerFits(integer, type);
+  // BoolAttr also satisfies IntegerAttr; handle it before signed APInt fitting so
+  // true remains valid for Boolean custom types such as !nodal.bits<1>.
   if (llvm::isa<BoolAttr>(value))
     return kindForType(type) == ConstantKind::Boolean;
+  if (auto integer = llvm::dyn_cast<IntegerAttr>(value))
+    return integerFits(integer, type);
   return false;
 }
 

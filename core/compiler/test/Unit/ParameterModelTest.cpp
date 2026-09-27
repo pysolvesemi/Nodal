@@ -50,6 +50,7 @@ module {
     %zero_real = "nodal.const_literal"() <{metadata = {}, spelling = "0", value = 0.0 : f64}> : () -> f64
     %ordered = "nodal.const_expr"(%one_real, %zero_real) <{metadata = {}, operator_name = "gt"}> : (f64, f64) -> i1
     %truth = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = true}> : () -> i1
+    %truth_bits = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = true}> : () -> !nodal.bits<1>
     %enabled_value = "nodal.const_expr"(%ordered, %truth) <{metadata = {}, operator_name = "and"}> : (i1, i1) -> i1
     "nodal.parameter_value"(%enabled_value) <{metadata = {}, parameter = @ENABLED}> : (i1) -> ()
   }) : () -> ()

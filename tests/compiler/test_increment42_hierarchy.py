@@ -105,13 +105,18 @@ class HierarchyHarnessTests(unittest.TestCase):
         bridge = (ROOT / "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala").read_text()
         renderer = bridge[bridge.index("private final class Renderer"):]
         self.assertEqual(renderer.count("private val modulesByPath ="), 1)
+        self.assertEqual(renderer.count("private val parameterExpressionsByOwner ="), 1)
         self.assertEqual(renderer.count("private val topologyByOwner ="), 1)
         self.assertEqual(renderer.count("private val topologyEndpointOwners ="), 1)
         self.assertEqual(renderer.count("private val externallyBoundTerminalsByModule ="), 1)
         self.assertNotIn("modules.find(", renderer)
+        self.assertNotIn("module.instances.find(_.childModule == owner)", renderer)
+        self.assertNotIn("snapshot.parameterExpressions\n        .filter(_.owner == module.path)", renderer)
         self.assertNotIn("snapshot.topology.flatMap:", renderer)
         self.assertNotIn("sortBy(module => -module.path.length)", renderer)
         self.assertGreaterEqual(renderer.count("modulesByPath.getOrElse("), 3)
+        self.assertIn("instancesByChildModule.getOrElse(", renderer)
+        self.assertIn("parameterExpressionsByOwner.getOrElse(module.path, Map.empty)", renderer)
         self.assertIn("topologyByOwner.getOrElse(module.path, Vector.empty)", renderer)
 
     def test_native_hierarchy_rejects_duplicate_child_port_references(self):

@@ -120,6 +120,11 @@ private[nodal] object ScalaToMlirBridge:
   private final class Renderer(snapshot: ConstructionSnapshot, backend: Backend):
     private val modules = snapshot.modules.sortBy(_.path)
     private val modulesByPath = modules.map(module => module.path -> module).toMap
+    private val parameterExpressionsByOwner = snapshot.parameterExpressions
+      .groupBy(_.owner)
+      .view
+      .mapValues(_.map(expression => expression.path -> expression).toMap)
+      .toMap
     private val topologyByOwner = snapshot.topology
       .groupBy(_.owner)
       .view
@@ -642,6 +647,13 @@ ${indent(body, 2)}
       val declarationsByPath = module.declarations.map(declaration =>
         declaration.path -> declaration
       ).toMap
+      val instancesByChildModule = module.instances
+        .groupBy(_.childModule)
+        .view
+        .mapValues(_.head)
+        .toMap
+      val expressionsByPath =
+        parameterExpressionsByOwner.getOrElse(module.path, Map.empty)
       val parameterSymbols = module.declarations
         .filter(_.kind == "parameter")
         .map(declaration =>
@@ -720,7 +732,14 @@ ${indent(body, 2)}
           case _ => ()
 
       module.instances.sortBy(_.path).zipWithIndex.foreach: (instance, index) =>
-        body ++= renderInstance(module, instance, index, parameterSymbols)
+        body ++= renderInstance(
+          module,
+          instance,
+          index,
+          parameterSymbols,
+          declarationsByPath,
+          expressionsByPath
+        )
 
       interfaceEntries(module).foreach: entry =>
         body += operation(
@@ -829,7 +848,8 @@ ${indent(body, 2)}
         val declaration = child.declarations.find(_.path == path).getOrElse(
           fail("NODAL-BRIDGE-032", "child endpoint declaration is absent", Some(path))
         )
-        val instance = module.instances.find(_.childModule == owner).getOrElse(
+        val instance = instancesByChildModule.getOrElse(
+          owner,
           fail(
             "NODAL-BRIDGE-026",
             "child endpoint is not owned by an immediate instance",
@@ -1568,7 +1588,9 @@ ${indent(body, 2)}
         module: KernelModuleSnapshot,
         instance: KernelInstanceSnapshot,
         instanceIndex: Int,
-        parameterSymbols: Map[String, String]
+        parameterSymbols: Map[String, String],
+        declarationsByPath: Map[String, KernelDeclarationSnapshot],
+        expressionsByPath: Map[String, KernelParameterExpressionSnapshot]
     ): Vector[String] =
       val moduleSymbol = moduleSymbols.getOrElse(
         instance.childModule,
@@ -1590,12 +1612,6 @@ ${indent(body, 2)}
         .filter(_.kind == "parameter")
         .map(declaration => declaration.name -> declaration)
         .toMap
-      val expressionsByPath = snapshot.parameterExpressions
-        .filter(_.owner == module.path)
-        .map(expression => expression.path -> expression)
-        .toMap
-      val declarationsByPath =
-        module.declarations.map(declaration => declaration.path -> declaration).toMap
       val symbolicBindings = mutable.ArrayBuffer.empty[(String, String, String)]
       val literalBindings = instance.parameterBindings.flatMap: (name, value) =>
         val target = childParameters.getOrElse(

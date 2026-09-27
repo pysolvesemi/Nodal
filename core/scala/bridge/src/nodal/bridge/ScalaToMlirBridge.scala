@@ -669,21 +669,22 @@ ${indent(body, 2)}
             ),
             semanticPath = domain.path
           )
-          domain.binding.filter(actual => domainBindingOwners(actual) == module.path).foreach: actual =>
-            body += operation(
-              "nodal.domain_bind",
-              attributes = Vector(
-                "requirement" -> symbolReference(symbol),
-                "actual" -> symbolReference(
-                  stableLocalSymbol("domain", lastSegment(actual))
+          domain.binding.filter(actual => domainBindingOwners(actual) == module.path).foreach:
+            actual =>
+              body += operation(
+                "nodal.domain_bind",
+                attributes = Vector(
+                  "requirement" -> symbolReference(symbol),
+                  "actual" -> symbolReference(
+                    stableLocalSymbol("domain", lastSegment(actual))
+                  ),
+                  "metadata" -> bridgeMetadata(
+                    domain.path,
+                    Vector("actual_path" -> quoted(actual))
+                  )
                 ),
-                "metadata" -> bridgeMetadata(
-                  domain.path,
-                  Vector("actual_path" -> quoted(actual))
-                )
-              ),
-              semanticPath = domain.path
-            )
+                semanticPath = domain.path
+              )
         else
           val edge = domain.edge.getOrElse(
             fail(

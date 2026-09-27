@@ -182,6 +182,16 @@ transfer is now required. This restores the ordinary implementation path; it
 does not relax exact-byte review, ancestry, targeted-first qualification or any
 F-042 acceptance obligation.
 
+### Implementation resumption checkpoint - 2026-09-27
+
+The restored path has now carried the production constructor, bridge and native
+hierarchy work through exact-byte source publication and exact-head targeted
+qualification. Current work therefore proceeds directly on the existing feature
+branch and PR, without an offline device, source-staging branch or manual transfer.
+The historical limitation and prohibitions above remain unchanged as audit
+context; this note records changed transport availability, not a waiver or an
+acceptance claim.
+
 ## Evidence and continuation
 
 The native hierarchy phase was qualified on `f82c7f1`, with its receipts retained

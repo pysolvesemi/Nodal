@@ -4,18 +4,22 @@
 
 ## Current production boundary
 
-Exact source `3fd4f99fcd29a6b6e785bd285926ad1fbdddad8f` is the targeted-green
-static override-DAG checkpoint. Core run
-[36302775991](https://github.com/pysolvesemi/Nodal/actions/runs/36302775991)
-passed contracts, 216 Scala tests, 137 native CTests twice, 16 bridge tests, 39
-clang-tidy translation units and required aggregation. Increment 29 run
-[36302783500](https://github.com/pysolvesemi/Nodal/actions/runs/36302783500)
-also passed its parameter folding, constraints, envelope, override and native
-rendering proofs. The exact qualification is recorded in PR #134 comment
-`5854083546`. Earlier exact source `7bee1fa9c6035f3df6e933de04f73e89b03e3188`
+Exact source `f325a5d9f22226ce3ab532c9cf56231bf1eb38ff` is the current
+targeted-green hierarchy checkpoint. Core run
+[36318100915](https://github.com/pysolvesemi/Nodal/actions/runs/36318100915)
+passed contracts, 217 Scala tests, 137 native CTests twice, 17 configured bridge
+tests, formatting/lint and required aggregation. Exact-head Increment 23, 25,
+28 and 29 runs
+[36318114025](https://github.com/pysolvesemi/Nodal/actions/runs/36318114025),
+[36318125104](https://github.com/pysolvesemi/Nodal/actions/runs/36318125104),
+[36318138563](https://github.com/pysolvesemi/Nodal/actions/runs/36318138563) and
+[36318152556](https://github.com/pysolvesemi/Nodal/actions/runs/36318152556)
+also passed their named predecessor proofs plus the shared native and bridge
+paths. The exact qualification is recorded in PR #134 comment `5856180094`.
+Earlier exact source `7bee1fa9c6035f3df6e933de04f73e89b03e3188`
 and documentation child `d1680b495ec6ca720756ff477dc5a38ad76e1d5d`
-remain the targeted evidence that completed F-042.B.1. Neither receipt qualifies
-downstream Verilog-A hierarchy emission or Increment 42 acceptance.
+remain the targeted evidence that completed F-042.B.1. No receipt by itself
+qualifies Increment 42 acceptance.
 
 The published B.2 work carries the construction snapshot's exact topology
 owner, typed root actuals, direct parent-parameter overrides and immediate-child
@@ -56,12 +60,34 @@ only when it equals the authored default. A non-default root actual fails with
 it is never silently discarded, substituted into the declaration default or
 represented by an invented parent module.
 
-Local dependency-free hierarchy syntax checks pass 52 cases and all 370 compiler
-Python tests pass. The pinned native SDK, Scala toolchain and formatter are not
-available in this scratch runtime, so native compilation, the public Scala to
-generated-Verilog-A witness and pinned format/lint remain unqualified until an
-exact-head targeted run. Combined equation/event/function witnesses, scale
-review, full qualification and closure also remain required.
+The final external-boundary repair approves floating child declarations only
+when an actual topology edge owned by another module binds that terminal. Root,
+local and unbound declarations remain unapproved. Its regression requires
+exactly two approvals for the two immediate child ports, while the configured
+public-source witness emits one reusable child definition and one named instance
+with a symbolic parent parameter override. The non-default root-actual negative
+remains mandatory and retains `NODAL-BACKEND-HIERARCHY-010`.
+
+## Current predecessor-combination candidate
+
+Three separately compiled public-only sources now combine the same direct child
+boundary and symbolic override with, respectively, a parent-owned analog
+equation, an `initial_step` event-controlled assignment plus continuous
+contribution, and a module-local pure analog function call. The focused bridge
+regression lowers each source twice and requires identical normalized MLIR,
+exact child terminal/connect counts and its predecessor operation inventory.
+The configured path compiles all three through `nodalc` and `nodal-translate`,
+retains the normalized predecessor witness, reparses the complete target, and
+requires one reusable child definition and one symbolic named instance.
+
+A local Scala 3.8.4 compile with the production constructor plugin passed for
+the public fixture. An executable bridge smoke check produced deterministic
+document hashes `eb09715fc24d2049c8f2e145c554efa0fa1a22fcf5d8b040ecb964d01acc21eb`
+(equation), `84b353dc6d37815d672445a3acab1dc218f8d28aded2bf91839fb195313e1203`
+(event) and `7bc6fe3e7854eb54b376ad52580dfa268a692de2b4e100e785ca590ebfb1537b`
+(function). Those local checks do not qualify the pending native target,
+formatter or exact successor head. Scale review, final applicable CI and closure
+also remain required.
 
 ## Published checkpoint 1
 

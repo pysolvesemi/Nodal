@@ -1,6 +1,7 @@
 package nodal.internal.testkit
 
 import nodal.*
+import nodal.increment42fixture.*
 import nodal.internal.bridge.*
 
 import java.nio.file.Files
@@ -210,6 +211,32 @@ object ScalaToMlirBridgeTests extends TestSuite:
       assert(first.text.contains("port = \"vin\""))
       assert(first.text.contains("port = \"vout\""))
       assert(!first.text.contains("NODAL-BRIDGE"))
+
+    test("hierarchy composes deterministically with equations events and local functions"):
+      val equation = ScalaToMlirBridge.lower(new HierarchyEquationTop)
+      val event = ScalaToMlirBridge.lower(new HierarchyEventTop)
+      val function = ScalaToMlirBridge.lower(new HierarchyFunctionTop)
+
+      Vector(
+        equation -> ScalaToMlirBridge.lower(new HierarchyEquationTop),
+        event -> ScalaToMlirBridge.lower(new HierarchyEventTop),
+        function -> ScalaToMlirBridge.lower(new HierarchyFunctionTop)
+      ).foreach: (first, second) =>
+        assert(first == second)
+        assert(occurrences(first.text, "\"nodal.instance_terminal\"") == 2)
+        assert(occurrences(first.text, "\"nodal.connect\"") == 2)
+        assert(first.text.contains("\"nodal.parameter_override\""))
+        assert(first.text.contains("parameter = @gain"))
+        assert(first.text.contains("module = @child"))
+        assert(!first.text.contains("NODAL-BRIDGE"))
+
+      assert(equation.text.contains("nodal.bridge.analog_semantics"))
+      assert(equation.text.contains("lhs-minus-rhs-equals-zero"))
+      assert(event.text.contains("\"nodal.analog_initial_step\""))
+      assert(event.text.contains("\"nodal.analog_on\""))
+      assert(function.text.contains("nodal.bridge.analog_functions"))
+      assert(function.text.contains("\"nodal.analog_user_call\""))
+      assert(function.text.contains("callee = @scaleSignal"))
 
     test("hierarchy bridge canonicalizes compatible named conservative disciplines"):
       val document = ScalaToMlirBridge.lower(new BridgeNamedDisciplineTop)
@@ -664,6 +691,53 @@ object ScalaToMlirBridgeTests extends TestSuite:
             )
             assert(occurrences(result.verilogA, "module child") == 1)
             assert(!result.verilogA.contains("module child_gain"))
+
+            val combinations = Vector[(String, () => Module, String, String)](
+              (
+                "HierarchyEquationTop",
+                () => new HierarchyEquationTop,
+                "nodal.bridge.analog_semantics",
+                "child #(.gain(rootGain)) child_instance(.vin(vin), .vout(vout));"
+              ),
+              (
+                "HierarchyEventTop",
+                () => new HierarchyEventTop,
+                "\"nodal.analog_initial_step\"",
+                "@(initial_step)"
+              ),
+              (
+                "HierarchyFunctionTop",
+                () => new HierarchyFunctionTop,
+                "\"nodal.analog_user_call\"",
+                "analog function real scaleSignal;"
+              )
+            )
+            combinations.foreach: (name, construct, mlirWitness, targetWitness) =>
+              val combinationDirectory = Files.createDirectory(directory.resolve(name))
+              val combination = ScalaToMlirBridge
+                .compileToVerilogA(
+                  construct(),
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  combinationDirectory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+              assert(combination.mlir.contains(mlirWitness))
+              assert(combination.verilogA.contains(s"module $name(vin, vout);"))
+              assert(
+                combination.verilogA.contains(
+                  "child #(.gain(rootGain)) child_instance(.vin(vin), .vout(vout));"
+                )
+              )
+              assert(combination.verilogA.contains(targetWitness))
+              assert(occurrences(combination.verilogA, "module child") == 1)
+              assert(!combination.verilogA.contains("module child_gain"))
+
             val rejectedDirectory = Files.createDirectory(directory.resolve("non-default-root"))
             ScalaToMlirBridge.compileToVerilogA(
               new BridgeHierarchyTop(rootGain = 6.0),

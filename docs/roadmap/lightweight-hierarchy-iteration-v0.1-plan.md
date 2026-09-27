@@ -2,7 +2,7 @@
 
 **Revision:** 0.2
 **Approved direction:** 2026-09-24
-**Updated:** 2026-09-24
+**Updated:** 2026-09-27
 **Status:** Roadmap amendment only; implementation and qualification remain open.
 
 ## Authority, scope and progress
@@ -68,15 +68,21 @@ Required descendants of the existing **F-042.B.1**:
 - [x] **F-042.B.1.2 - Direct typed child-port access.** Accept `amp.vin` and `amp.vout` on connection/binding paths with exact immediate-child instance and declaration identity. Reject non-port, private/internal, foreign, sibling-internal and detached endpoints where illegal. Ordinary legal Scala member access alone is not a topology permission; no reflection/name-based ownership bypass.
 - [x] **F-042.B.1.3 - Symmetric conservative connectivity.** Add `a <> b` as the same semantic operation as `connect(a, b)` for compatible conservative terminals. Operand reversal must preserve connection sets, potentials/flow orientation rules and normalized topology. Retain discipline, dimension and ownership checks. Do not make it implicit digital assignment, signal-flow conversion or a universal smart-connect operator.
 - [x] **F-042.B.1.4 - Override legality and explicit-form parity.** Enforce exact child parameter target, parent ownership, duplicate rejection, analysis-static DAG effects, type/width compatibility and physical dimensions. Reject `transition(parentBias)` even with parent-owned operands, as well as dynamic/unknown effects and forged ownership. Keep the existing typed `.param` and explicit `instance`/`connect` forms; prove equivalence against an equivalent declaration, not an invalid constructor call or a second semantic engine.
-- [ ] **F-042.B.1.5 - Fixed Scala replication.** Qualify ordinary finite Scala ranges/collections producing scalar instances, including singleton/boundary and explicitly diagnosed invalid forms. Preserve stable caller/local/index/source identities. Plain `0 until 4` stays elaboration-time even if the body creates instances or updates registers; target-visible symbolic/shaped generation remains owned by 43/159.
+- [x] **F-042.B.1.5 - Fixed Scala replication.** Qualify ordinary finite Scala ranges/collections producing scalar instances, including singleton/boundary and explicitly diagnosed invalid forms. Preserve stable caller/local/index/source identities. Plain `0 until 4` stays elaboration-time even if the body creates instances or updates registers; target-visible symbolic/shaped generation remains owned by 43/159.
 
-The completed B.1.1-B.1.4 descendants are backed by exact-head Core run
-`36286213304` on `4753158b212512b29adb67365495a5c680760c4b`: 210 Scala tests,
-all 18 production-constructor regressions, all 12 conservative-connection
-regressions, all 17 override regressions, separate definition/factory/consumer
-compilation and raw-factory rejection passed. B.1 and B.1.5 remain open: the
-existing three-element `Vector.tabulate` regression does not by itself prove the
-required singleton/boundary/invalid-form and stable-index matrix.
+The completed B.1.1-B.1.5 descendants are backed cumulatively by exact-head
+Core run `36292225388` on `7bee1fa9c6035f3df6e933de04f73e89b03e3188`:
+all 212 Scala tests passed, including all 20 production-constructor regressions,
+all 12 conservative-connection regressions and all 17 override regressions.
+The fixed-replication witness covers empty, singleton and four-element ordinary
+ranges, strict `Vector` and `List` construction, stable child indices,
+`states_0` through `states_3` retained declaration identities, source maps and
+repeat determinism; illegal reuse of one child at multiple indices is rejected.
+The pinned Scala 3.8.4 artifact also passed separate
+definition/factory/consumer compilation, raw-factory rejection, 11 prototype
+cases with 169 assertions and six compiler negatives. This completes only
+F-042.B.1 and its descendants; B.2/B.3 and the remaining C-G acceptance
+obligations stay open.
 
 **F-042.A/B.2:** Reuse transaction-owned IDs, declarations and the existing bridge
 and native verifier. Most new policy should be in focused private helpers; use
@@ -230,3 +236,4 @@ Implement in the existing owning increments, keep actual source/IR/HDL witnesses
 and retain targeted-first/full qualification, review, verified integration and
 separate accepted-evidence closure. `AGENTS.md` is unchanged. The user waived CI
 for this roadmap publication only; compiler changes still require qualification.
+

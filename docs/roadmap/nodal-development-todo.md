@@ -1066,7 +1066,8 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
   - Original scope retained: Implement instances, named ports, symbolic overrides, legal arrays, hierarchy verification, and recursion errors.
   - [ ] **F-042.A — Architecture, scope and extensibility.** Reuse module, instance, parameter and conservative-terminal ownership from 19/28/29/41; distinguish module-local function calls from hierarchical connectivity.
   - [ ] **F-042.B — Implementation and integration**
-    - [ ] **F-042.B.1** Implement public construction and frontend ownership for instances, named ports, symbolic parameter overrides and the legal instance-array forms.
+    - [x] **F-042.B.1** Implement public construction and frontend ownership for instances, named ports, symbolic parameter overrides and the legal instance-array forms.
+      - Evidence: exact-head Core run [36292225388](https://github.com/pysolvesemi/Nodal/actions/runs/36292225388) on `7bee1fa9c6035f3df6e933de04f73e89b03e3188` passed all 212 Scala tests and required aggregation, including 20 constructor, 12 conservative-connection and 17 override regressions. The linked [lightweight hierarchy plan](lightweight-hierarchy-iteration-v0.1-plan.md) retains the complete B.1.1-B.1.5 matrix and scope limit.
     - [ ] **F-042.B.2** Carry hierarchy, ports, overrides and ownership through the bridge/native IR; verify bindings and reject recursive or cross-owner construction with source locations.
     - [ ] **F-042.B.3** Lower the supported hierarchical Verilog-A profile with retained symbolic overrides and stable module/instance identity; document unsupported cases rather than prototype-only success.
   - [ ] **F-042.C — Correctness, rejection and predecessor regression.** Exercise named-port mismatch, illegal overrides, cross-owner terminals and recursion; combine hierarchy with equations, events and module-local functions.
@@ -2841,3 +2842,4 @@ When an increment is completed:
 - Accellera UVM / IEEE 1800.2 reference implementation: <https://www.accellera.org/downloads/standards/uvm>
 - Accellera UVM-MS 1.0: <https://www.accellera.org/downloads/standards/uvm-ms>
 - SystemVerilog-AMS working group: <https://accellera.org/activities/working-groups/systemverilog-ams>
+

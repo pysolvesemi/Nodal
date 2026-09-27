@@ -61,6 +61,10 @@ class RecordingRunner:
             )
             nodalc.parent.mkdir(parents=True, exist_ok=True)
             nodalc.write_text("compiler\n", encoding="utf-8")
+            translator = nodalc.with_name(
+                "nodal-translate.exe" if os.name == "nt" else "nodal-translate"
+            )
+            translator.write_text("translator\n", encoding="utf-8")
         return subprocess.CompletedProcess(normalized, 0, stdout=stdout, stderr="")
 
 
@@ -183,6 +187,10 @@ class UnifiedDeveloperCommandTests(unittest.TestCase):
         ]
         self.assertEqual(len(bridge_calls), 1)
         self.assertEqual(bridge_calls[0][1]["NODAL_NODALC"], str(nodalc))
+        self.assertEqual(
+            bridge_calls[0][1]["NODAL_TRANSLATE"],
+            str(nodalc.with_name("nodal-translate.exe" if os.name == "nt" else "nodal-translate")),
+        )
         self.assertEqual(
             bridge_calls[0][1]["NODAL_NATIVE_TOOLCHAIN"], str(native)
         )

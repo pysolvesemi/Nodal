@@ -201,13 +201,15 @@ int main() {
     return fail("could not parse the hierarchy backend fixture");
   std::string hierarchyOutput;
   llvm::raw_string_ostream hierarchyStream(hierarchyOutput);
-  if (mlir::failed(
-          nodal::emitBackend(*hierarchy, nodal::BackendKind::VerilogA, hierarchyStream)))
+  if (mlir::failed(nodal::emitBackend(*hierarchy, nodal::BackendKind::VerilogA, hierarchyStream)))
     return fail("named symbolic hierarchy emission failed");
   hierarchyStream.flush();
-  if (hierarchyOutput.find(
-          "Child #(.gain(rootGain)) child(.vin(vin), .vout(vout));") == std::string::npos ||
-      llvm::count(llvm::StringRef(hierarchyOutput), "module Child(vin, vout);") != 1)
+  constexpr llvm::StringLiteral childDefinition = "module Child(vin, vout);";
+  const size_t firstChildDefinition = hierarchyOutput.find(childDefinition.str());
+  if (hierarchyOutput.find("Child #(.gain(rootGain)) child(.vin(vin), .vout(vout));") ==
+          std::string::npos ||
+      firstChildDefinition == std::string::npos ||
+      hierarchyOutput.find(childDefinition.str(), firstChildDefinition + 1) != std::string::npos)
     return fail("hierarchy output lost symbolic overrides, names, or definition reuse");
 
   std::string mismatchedRootSource = kHierarchyModule.str();
@@ -222,8 +224,8 @@ int main() {
     return fail("could not parse the non-default root-actual fixture");
   std::string rejectedRootOutput = "sentinel";
   llvm::raw_string_ostream rejectedRootStream(rejectedRootOutput);
-  if (mlir::succeeded(nodal::emitBackend(*mismatchedRoot, nodal::BackendKind::VerilogA,
-                                         rejectedRootStream)))
+  if (mlir::succeeded(
+          nodal::emitBackend(*mismatchedRoot, nodal::BackendKind::VerilogA, rejectedRootStream)))
     return fail("non-default root actual was silently discarded");
   rejectedRootStream.flush();
   if (rejectedRootOutput != "sentinel")
@@ -306,14 +308,13 @@ int main() {
       "Leaf #(.gain(((rootGain + 1) * 2))) child(.vin(vin), .vout(vout));\nendmodule\n";
   if (mlir::failed(nodal::reparseBackendTarget(hierarchyTarget, *configuration)))
     return fail("valid named scalar hierarchy failed independent reparse");
-  for (const auto &mutation : {
-           std::make_pair(".vout(vout)", ".unknown(vout)"),
-           std::make_pair(", .vout(vout)", ""),
-           std::make_pair(".vin(vin)", ".vin(foreign)"),
-           std::make_pair(".gain(((rootGain + 1) * 2))", ".missing(rootGain)"),
-           std::make_pair("parameter real gain = 2", "localparam real gain = 2"),
-           std::make_pair("Leaf #(", "Top #("),
-           std::make_pair("module Leaf(vin, vout);", "module Missing(vin, vout);")}) {
+  for (const auto &mutation :
+       {std::make_pair(".vout(vout)", ".unknown(vout)"), std::make_pair(", .vout(vout)", ""),
+        std::make_pair(".vin(vin)", ".vin(foreign)"),
+        std::make_pair(".gain(((rootGain + 1) * 2))", ".missing(rootGain)"),
+        std::make_pair("parameter real gain = 2", "localparam real gain = 2"),
+        std::make_pair("Leaf #(", "Top #("),
+        std::make_pair("module Leaf(vin, vout);", "module Missing(vin, vout);")}) {
     std::string invalid = hierarchyTarget;
     auto position = invalid.find(mutation.first);
     if (position == std::string::npos)

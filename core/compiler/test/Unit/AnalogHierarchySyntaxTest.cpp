@@ -6,7 +6,8 @@
 
 int main() {
   const std::vector<std::string> positive = {
-      "Cell a(.p(input), .n(ground));", "Empty x();",
+      "Cell a(.p(input), .n(ground));",
+      "Empty x();",
       "Cell #(.R((R * 2)), .N(-3)) a(.p(mid), .n(gnd));",
       "Cell #(.R((2.5e-12 + 1p) / (-R)), .N(3 % 2)) a(.p(mid), .n(gnd));",
       "Cell #(.R(((R >= 1) && !(R < 4))), .N((R > 0) || (R <= 2))) a();",

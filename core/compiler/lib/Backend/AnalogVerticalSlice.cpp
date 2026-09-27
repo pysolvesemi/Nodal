@@ -710,8 +710,7 @@ Operation *findDirectParameter(Operation *definition, llvm::StringRef name) {
       !llvm::hasSingleElement(definition->getRegion(0)))
     return nullptr;
   for (Operation &candidate : definition->getRegion(0).front())
-    if (candidate.getName().getStringRef() == "nodal.parameter" &&
-        symbolName(&candidate) == name)
+    if (candidate.getName().getStringRef() == "nodal.parameter" && symbolName(&candidate) == name)
       return &candidate;
   return nullptr;
 }
@@ -767,8 +766,9 @@ LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
   if (instances.empty() && instanceTerminals.empty() && connections.empty() && overrides.empty())
     return success();
 
-  llvm::sort(instances,
-             [](Operation *left, Operation *right) { return symbolName(left) < symbolName(right); });
+  llvm::sort(instances, [](Operation *left, Operation *right) {
+    return symbolName(left) < symbolName(right);
+  });
   llvm::StringMap<Operation *> instancesByName;
   llvm::DenseMap<Operation *, HierarchyInstanceRender> rendered;
   for (Operation *instance : instances) {
@@ -838,8 +838,8 @@ LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
   for (Operation *terminal : instanceTerminals) {
     auto instanceReference = terminal->getAttrOfType<FlatSymbolRefAttr>("instance");
     auto port = terminal->getAttrOfType<StringAttr>("port");
-    Operation *instance = instanceReference ? instancesByName.lookup(instanceReference.getValue())
-                                            : nullptr;
+    Operation *instance =
+        instanceReference ? instancesByName.lookup(instanceReference.getValue()) : nullptr;
     if (!instance || !port || !isPortableVerilogIdentifier(port.getValue()))
       return emitMappedFailure(terminal, "NODAL-BACKEND-HIERARCHY-003",
                                "child terminal does not resolve to a portable instance port");
@@ -888,8 +888,8 @@ LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
                                "instance parameter bindings are unavailable");
     for (NamedAttribute binding : bindings) {
       Operation *parameter = findDirectParameter(entry.child, binding.getName().getValue());
-      auto variability = parameter ? parameter->getAttrOfType<StringAttr>("variability")
-                                   : StringAttr();
+      auto variability =
+          parameter ? parameter->getAttrOfType<StringAttr>("variability") : StringAttr();
       auto value = parameter ? renderParameterBinding(binding.getValue(), parameter)
                              : FailureOr<std::string>(failure());
       if (!parameter || (variability && variability.getValue() == "fixed") || failed(value) ||
@@ -902,22 +902,20 @@ LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
   for (Operation *override : overrides) {
     auto instanceReference = override->getAttrOfType<FlatSymbolRefAttr>("instance");
     auto parameterReference = override->getAttrOfType<FlatSymbolRefAttr>("parameter");
-    Operation *instance = instanceReference ? instancesByName.lookup(instanceReference.getValue())
-                                            : nullptr;
-    Operation *parameter = instance && parameterReference
-                               ? findDirectParameter(rendered[instance].child,
-                                                     parameterReference.getValue())
-                               : nullptr;
-    auto variability = parameter ? parameter->getAttrOfType<StringAttr>("variability")
-                                 : StringAttr();
+    Operation *instance =
+        instanceReference ? instancesByName.lookup(instanceReference.getValue()) : nullptr;
+    Operation *parameter =
+        instance && parameterReference
+            ? findDirectParameter(rendered[instance].child, parameterReference.getValue())
+            : nullptr;
+    auto variability =
+        parameter ? parameter->getAttrOfType<StringAttr>("variability") : StringAttr();
     auto value = parameter && override->getNumOperands() == 1
                      ? nodal::renderParameterConstantExpression(override->getOperand(0), parameter)
                      : FailureOr<std::string>(failure());
     if (!instance || !parameter || (variability && variability.getValue() == "fixed") ||
         failed(value) ||
-        !rendered[instance].parameters
-             .emplace(parameterReference.getValue().str(), *value)
-             .second)
+        !rendered[instance].parameters.emplace(parameterReference.getValue().str(), *value).second)
       return emitMappedFailure(override, "NODAL-BACKEND-HIERARCHY-008",
                                "symbolic parameter override is not uniquely renderable");
   }
@@ -1469,8 +1467,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       return false;
     return true;
   };
-  auto parameterDeclarationName = [](llvm::StringRef line)
-      -> std::optional<std::pair<std::string, bool>> {
+  auto parameterDeclarationName =
+      [](llvm::StringRef line) -> std::optional<std::pair<std::string, bool>> {
     llvm::StringRef code = line;
     if (size_t comment = code.find("//"); comment != llvm::StringRef::npos)
       code = code.take_front(comment).rtrim();
@@ -1486,8 +1484,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       return std::nullopt;
     }
     size_t equals = code.find(" = ");
-    llvm::StringRef name = equals == llvm::StringRef::npos ? llvm::StringRef()
-                                                           : code.take_front(equals).trim();
+    llvm::StringRef name =
+        equals == llvm::StringRef::npos ? llvm::StringRef() : code.take_front(equals).trim();
     if (!isPortableVerilogIdentifier(name))
       return std::nullopt;
     return std::make_pair(name.str(), fixed);

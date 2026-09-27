@@ -812,8 +812,8 @@ object ScalaToMlirBridgeTests extends TestSuite:
             assert(!repeated.verilogA.contains("module fourth"))
             assert(occurrences(repeated.verilogA, "first #(") == 4)
             assert(repeated.verilogA.contains(".gain(rootGain)"))
-            assert(repeated.verilogA.contains(".gain(3.0)"))
-            assert(repeated.verilogA.contains(".gain(5.0)"))
+            assert(repeated.verilogA.contains(".gain(3)"))
+            assert(repeated.verilogA.contains(".gain(5)"))
 
             val nestedDirectory = Files.createDirectory(directory.resolve("nested"))
             val nested = ScalaToMlirBridge

@@ -89,11 +89,11 @@ also remain required.
 
 ## Repeated-definition and bounded-depth candidate
 
-The next candidate makes the bridge, rather than the target printer, the owner
-of reusable definition selection. It computes module depth iteratively from the
-already captured hierarchy, then compares exact normalized definition text from
-leaves upward. Normalization removes only the candidate module's absolute
-semantic prefix and definition symbol; constructed-class metadata, declaration
+The published candidate makes the bridge, rather than the target printer, the
+owner of reusable definition selection. It computes module depth iteratively
+from the already captured hierarchy, then compares exact normalized definition
+text from leaves upward. Normalization removes only the candidate module's
+absolute semantic prefix and definition symbol; constructed-class metadata, declaration
 types/defaults, source locations, analog bodies, local names, child structure
 and canonical child targets remain part of the comparison. The root definition
 is never folded into a child. This allows only actually identical constructed
@@ -118,8 +118,19 @@ deterministic document hashes
 `afdb052bc2f107957bfc87840be133e6b29e21b160bcff7bc5acc7133f507e71`
 (four leaves) and
 `7bb83d1b7461c2be413b624356218793fb247ed56345e00ae4c29a2c6961acd8`
-(nested branches). These local results do not yet qualify native normalization,
-Verilog-A emission, formatting or the unpublished successor head.
+(nested branches).
+
+Exact source `62561b3bc704d9321a7ae38ca22e79406698c6ef` was targeted
+through Core and Increments 23, 25, 28, 29, 37 and 41. Contracts and Scala
+passed, and every native path completed all 137 CTests twice before the same
+configured bridge assertion failed. The backend intentionally renders finite
+real bindings with `std::to_chars(..., std::chars_format::general)`, so the
+literal actuals are canonically emitted as `.gain(3)` and `.gain(5)`.
+The new target witness had incorrectly required the source spellings
+`.gain(3.0)` and `.gain(5.0)`. The focused successor changes only those two
+test expectations to the established target spelling; production bridge,
+canonical MLIR and backend behavior are unchanged. These results do not yet
+qualify the repaired exact head.
 
 ## Published checkpoint 1
 

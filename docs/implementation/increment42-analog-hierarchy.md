@@ -38,7 +38,7 @@ instrumented public hierarchy runtime witness pass. The native translation
 units, pinned format/lint and the 570-case matrix still require exact-head CI;
 no local review or prior-head result qualifies this successor.
 
-This is an unpublished bounded B.2 candidate, not completed B.2. Static override-expression
+This is a published bounded B.2 checkpoint, not completed B.2. Static override-expression
 DAG serialization beyond a direct parent parameter, native-to-Verilog-A
 hierarchy lowering, combined equation/event/function witnesses, scale review,
 full qualification and closure remain required. No local review or prior-head

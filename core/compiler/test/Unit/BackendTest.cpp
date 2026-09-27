@@ -89,6 +89,9 @@ module attributes {
   nodal.root.parameter_bindings = {rootGain = 4.0 : f64},
   nodal.target.profile = "analog"
 } {
+  "nodal.nature"() <{abstol = 1.0e-6 : f64, access = "V", metadata = {}, sym_name = "Voltage", units = "V"}> : () -> ()
+  "nodal.nature"() <{abstol = 1.0e-12 : f64, access = "I", metadata = {}, sym_name = "Current", units = "A"}> : () -> ()
+  "nodal.discipline"() <{domain = "continuous", flow = @Current, metadata = {}, potential = @Voltage, sym_name = "electrical"}> : () -> ()
   "nodal.module"() <{metadata = {}, sym_name = "Child"}> ({
   ^bb0:
     %child_vin = "nodal.terminal"() <{metadata = {declaration_kind = "analog-input"}, name = "vin"}> : () -> !nodal.terminal<"electrical">

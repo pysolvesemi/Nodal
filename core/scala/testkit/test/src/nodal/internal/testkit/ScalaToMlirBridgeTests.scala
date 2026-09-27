@@ -617,17 +617,21 @@ object ScalaToMlirBridgeTests extends TestSuite:
           ).foreach: document =>
             val directory = workDirectory()
             try
-              val success = NativeCompilerClient
-                .run(
-                  document,
-                  NativeCompilerRequest(
-                    executable = Path.of(executable).toAbsolutePath,
-                    arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
-                    workingDirectory = directory,
-                    timeout = Duration.ofSeconds(30)
-                  )
+              NativeCompilerClient.run(
+                document,
+                NativeCompilerRequest(
+                  executable = Path.of(executable).toAbsolutePath,
+                  arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
+                  workingDirectory = directory,
+                  timeout = Duration.ofSeconds(30)
                 )
-                .asInstanceOf[NativeCompilerSuccess]
-              assert(success.normalizedMlir.contains("\"nodal.parameter_override\""))
-              assert(success.normalizedMlir.contains("\"nodal.const_expr\""))
+              ) match
+                case success: NativeCompilerSuccess =>
+                  assert(success.normalizedMlir.contains("\"nodal.parameter_override\""))
+                  assert(success.normalizedMlir.contains("\"nodal.const_expr\""))
+                case failure: NativeCompilerFailure =>
+                  scala.Predef.assert(
+                    false,
+                    s"${failure.diagnostic}\n${failure.standardError}"
+                  )
             finally delete(directory)

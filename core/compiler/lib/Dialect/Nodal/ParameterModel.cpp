@@ -528,11 +528,10 @@ FailureOr<EvaluatedConstant> evaluateExpression(Operation *operation, Operation 
 
   if (name == "and" || name == "or") {
     if (result.kind != ConstantKind::Boolean || lhs->kind != ConstantKind::Boolean ||
-        rhs->kind != ConstantKind::Boolean || !lhs->dimension.empty() ||
-        !rhs->dimension.empty())
+        rhs->kind != ConstantKind::Boolean || !lhs->dimension.empty() || !rhs->dimension.empty())
       return failure();
     result.booleanValue = name == "and" ? lhs->booleanValue && rhs->booleanValue
-                                         : lhs->booleanValue || rhs->booleanValue;
+                                        : lhs->booleanValue || rhs->booleanValue;
     return result;
   }
 
@@ -1010,8 +1009,8 @@ LogicalResult nodal::ConstParameterRefOp::verify() {
 
 LogicalResult nodal::ConstExprOp::verify() {
   llvm::StringRef name = textAttr(getOperation(), "operator_name");
-  if (!oneOf(name, {"add", "sub", "mul", "div", "mod", "neg", "not", "gt", "ge", "lt",
-                    "le", "and", "or"}))
+  if (!oneOf(name, {"add", "sub", "mul", "div", "mod", "neg", "not", "gt", "ge", "lt", "le", "and",
+                    "or"}))
     return emitOpError("NODAL-CONSTANT-EXPR-001: unsupported constant-expression operator");
   const unsigned expected = name == "neg" || name == "not" ? 1 : 2;
   if (getOperation()->getNumOperands() != expected || getOperation()->getNumResults() != 1)

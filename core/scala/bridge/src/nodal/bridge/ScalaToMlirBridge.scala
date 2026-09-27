@@ -1628,20 +1628,20 @@ ${indent(body, 2)}
                   val validTypes = operatorName match
                     case "add" | "sub" | "mul" | "div" =>
                       operands.size == 2 && Set("f64", "i64").contains(dataType) &&
-                        operands.forall(_._2 == dataType)
+                      operands.forall(_._2 == dataType)
                     case "neg" =>
                       operands.size == 1 && Set("f64", "i64").contains(dataType) &&
-                        operands.head._2 == dataType
+                      operands.head._2 == dataType
                     case "gt" | "ge" | "lt" | "le" =>
                       operands.size == 2 && Set("i1", "!nodal.bits<1>").contains(dataType) &&
-                        operands.map(_._2).distinct.size == 1 &&
-                        operands.forall(value => Set("f64", "i64").contains(value._2))
+                      operands.map(_._2).distinct.size == 1 &&
+                      operands.forall(value => Set("f64", "i64").contains(value._2))
                     case "and" | "or" =>
                       operands.size == 2 && Set("i1", "!nodal.bits<1>").contains(dataType) &&
-                        operands.forall(_._2 == dataType)
+                      operands.forall(_._2 == dataType)
                     case "not" =>
                       operands.size == 1 && Set("i1", "!nodal.bits<1>").contains(dataType) &&
-                        operands.head._2 == dataType
+                      operands.head._2 == dataType
                   if !validTypes then
                     fail(
                       "NODAL-BRIDGE-034",

@@ -184,12 +184,9 @@ final class ConstructorLegacyDoubleAttachTop extends Module:
   val second: Instance[ConstructorLegacyHost] = instance(child)
 
 final class ConstructorReplicationTop extends Module:
-  val empty: IndexedSeq[ConstructorGain] =
-    (0 until 0).map(_ => new ConstructorGain)
-  val singleton: IndexedSeq[ConstructorGain] =
-    (0 until 1).map(_ => new ConstructorGain)
-  val boundary: IndexedSeq[ConstructorGain] =
-    (0 until 4).map(_ => new ConstructorGain)
+  val empty: IndexedSeq[ConstructorGain] = (0 until 0).map(_ => new ConstructorGain)
+  val singleton: IndexedSeq[ConstructorGain] = (0 until 1).map(_ => new ConstructorGain)
+  val boundary: IndexedSeq[ConstructorGain] = (0 until 4).map(_ => new ConstructorGain)
   val vector: Vector[ConstructorGain] =
     Vector.tabulate(2)(_ => new ConstructorGain)
   val list: List[ConstructorGain] =

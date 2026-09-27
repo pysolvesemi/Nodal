@@ -770,9 +770,9 @@ private[nodal] final class SemanticOriginBuilder:
     val instanceByChild = instances.iterator.map(capture => capture.child -> capture).toMap
     val instanceCandidates = instances.toVector.map: capture =>
       val childClass = moduleByHandle(capture.child).className
-      val direct = instanceBinding(capture.site)
-        .orElse(memberBinding(members, capture.instance))
+      val direct = memberBinding(members, capture.instance)
         .orElse(memberBinding(members, capture.childModule))
+        .orElse(instanceBinding(capture.site))
       val base = direct.getOrElse(
         s"${lowerInitial(cleanIdentifier(childClass, "module"))}_${sourceSuffix(capture.site)}"
       )

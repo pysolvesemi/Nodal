@@ -81,24 +81,22 @@ must be invalidated by any model, tool or capability-profile change.
 
 ## Increment 49/52 numerical contracts
 
-Use the comparison rule
+Use the comparison rule:
 
-[
-|x_{measured} - x_{reference}| le A + R |x_{reference}|
-]
+`abs(measured - reference) <= A + R * abs(reference)`
 
-with the per-metric absolute tolerance (A) and relative tolerance (R) below.
-Retain raw samples, units, bench text, OSDI/model hashes, solver options,
-accepted/rejected timestep history where available, and the independently
-computed reference values. Tolerances are fixed by this handoff and must not be
-loosened after seeing results; a justified future change requires a reviewed
-successor record.
+Here `A` is the per-metric absolute tolerance and `R` is the relative
+tolerance. Retain raw samples, units, bench text, OSDI/model hashes, solver
+options, accepted/rejected timestep history where available, and the
+independently computed reference values. Tolerances are fixed by this handoff
+and must not be loosened after seeing results; a justified future change requires
+a reviewed successor record.
 
 | Case ID | Bench and analysis | Independent reference | Required tolerance |
 |---|---|---|---|
-| H42-EQUATION-DC | Ground `vout`; drive positive current from `vin` to `vout`; DC points 0, 0.5 mA and 1 mA with `resistance = 1 kOhm` | (V(vin,vout)=R I(vin,vout)): 0, 0.5 V and 1 V | voltage (A=1,mu V), (R=10^{-6}); source current (A=1,pA), (R=10^{-6}) |
-| H42-FUNCTION-DC | Add a 1 MOhm shunt for a defined operating point; DC runs with external top parameter `rootGain` = 2, 4 and 6 | (V(vin,vout)=rootGain 	imes 1,V): 2 V, 4 V and 6 V | voltage (A=1,mu V), (R=10^{-6}) |
-| H42-EVENT-TRAN | Add a 1 MOhm shunt; transient 0 to 2 ns with maximum step no larger than 10 ps | source semantics give 0 V before the initial-step update and a completed 1 V plateau after the 1 ns transition | endpoint voltage (A=1,mu V), (R=10^{-6}); final plateau must be reached by (1,ns + maxstep); samples must remain within ([-1,mu V, 1,V+1,mu V]) |
+| H42-EQUATION-DC | Ground `vout`; force `V(vin,vout)` with a DC voltage source at 0, 0.5 V and 1 V; define model current as `-I(Vdrive)` | `I(vin,vout) = V(vin,vout) / R` with `resistance = 1 kOhm`: 0, 0.5 mA and 1 mA | driven voltage: `A = 1 uV`, `R = 1e-6`; model current: `A = 1 pA`, `R = 1e-6` |
+| H42-FUNCTION-DC | Add a 1 MOhm shunt for a defined operating point; DC runs with external top parameter `rootGain` = 2, 4 and 6 | `V(vin,vout) = rootGain * 1 V`: 2 V, 4 V and 6 V | voltage: `A = 1 uV`, `R = 1e-6` |
+| H42-EVENT-TRAN | Add a 1 MOhm shunt; transient 0 to 2 ns with maximum step no larger than 10 ps | source semantics give 0 V before the initial-step update and a completed 1 V plateau after the 1 ns transition | endpoint voltage: `A = 1 uV`, `R = 1e-6`; final plateau by `1 ns + maxstep`; every sample in `[-1 uV, 1 V + 1 uV]` |
 | H42-REPEATED-LOAD | Load the complete four-instance model and sweep the externally visible root parameter over 2, 4 and 6 | structural/load case only; exact instance/actual identities come from retained target and compile manifests | no numerical behavior claim; load and sweep setup must complete without altering model identity |
 | H42-NESTED-LOAD | Load the complete three-level model at default parameters and once with external root value 6 | structural/load case only; exact nested identities come from retained target and compile manifests | no numerical behavior claim; successful load is reported separately from simulation |
 
@@ -107,11 +105,13 @@ OpenVAF/ngspice capability profile implements the emitted event and transition
 forms. If not, the case remains blocked and no event numerical claim is made.
 The endpoint reference does not assert a tool-specific interpolation polynomial.
 
-For DC cases, orient bench sources and measurements exactly as the public
-`V(vin, vout)` and `I(vin, vout)` expressions. A sign reversal is a failed
-bench contract, not a reason to compare magnitudes. Each numerical case must run
-at least twice with the same model, bench and solver options; raw waveform/result
-digests and pass/fail classification must repeat.
+For H42-EQUATION-DC, place the voltage source's positive terminal at `vin`
+and negative terminal at grounded `vout`. SPICE reports source current into
+the positive terminal, so the model's `I(vin, vout)` is `-I(Vdrive)` by KCL.
+Compare that signed value, never its magnitude. Other DC measurements must retain
+the public `V(vin, vout)` orientation. Each numerical case must run at least
+twice with the same model, bench and solver options; raw waveform/result digests
+and pass/fail classification must repeat.
 
 ## Increment 52 behavior-bearing hierarchy addition
 

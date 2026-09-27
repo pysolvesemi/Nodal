@@ -160,7 +160,7 @@ module attributes {nodal.root.module = @Fixture, nodal.root.parameter_bindings =
     %four = "nodal.const_literal"() <{metadata = {}, spelling = "4", value = 4 : i64}> : () -> i64
     "nodal.parameter_value"(%four) <{metadata = {}, parameter = @COUNT}> : (i64) -> ()
     %five = "nodal.const_literal"() <{metadata = {}, spelling = "5", value = 5 : i64}> : () -> i64
-    "nodal.parameter_constraint"(%five) <{constraint_kind = "exclude", metadata = {}, parameter = @COUNT}> : (i64) -> ()
+    "nodal.parameter_constraint"(%five) <{constraint_kind = "exclude", lower_inclusive = false, metadata = {}, parameter = @COUNT, upper_inclusive = false}> : (i64) -> ()
   }) : () -> ()
 }
 )mlir";

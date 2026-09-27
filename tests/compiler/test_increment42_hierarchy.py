@@ -101,12 +101,18 @@ class HierarchyHarnessTests(unittest.TestCase):
         self.assertIn("run_hierarchy_matrix.py", cmake)
         self.assertIn("$<TARGET_FILE:nodalc>", cmake)
 
-    def test_bridge_module_resolution_is_indexed_once(self):
+    def test_bridge_module_and_topology_resolution_are_indexed_once(self):
         bridge = (ROOT / "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala").read_text()
         renderer = bridge[bridge.index("private final class Renderer"):]
         self.assertEqual(renderer.count("private val modulesByPath ="), 1)
+        self.assertEqual(renderer.count("private val topologyByOwner ="), 1)
+        self.assertEqual(renderer.count("private val topologyEndpointOwners ="), 1)
+        self.assertEqual(renderer.count("private val externallyBoundTerminalsByModule ="), 1)
         self.assertNotIn("modules.find(", renderer)
+        self.assertNotIn("snapshot.topology.flatMap:", renderer)
+        self.assertNotIn("sortBy(module => -module.path.length)", renderer)
         self.assertGreaterEqual(renderer.count("modulesByPath.getOrElse("), 3)
+        self.assertIn("topologyByOwner.getOrElse(module.path, Vector.empty)", renderer)
 
 
 if __name__ == "__main__":

@@ -120,6 +120,41 @@ private[nodal] object ScalaToMlirBridge:
   private final class Renderer(snapshot: ConstructionSnapshot, backend: Backend):
     private val modules = snapshot.modules.sortBy(_.path)
     private val modulesByPath = modules.map(module => module.path -> module).toMap
+    private val topologyByOwner = snapshot.topology
+      .groupBy(_.owner)
+      .view
+      .mapValues(_.sortBy(edge => (edge.kind, edge.left, edge.right)))
+      .toMap
+    private val topologyEndpointOwners = snapshot.topology.iterator
+      .flatMap(edge => Iterator(edge.left, edge.right))
+      .toSet
+      .map(path => path -> resolveOwningModule(path))
+      .toMap
+    private val externallyBoundTerminalsByModule = snapshot.topology.iterator
+      .flatMap: edge =>
+        Iterator(edge.left, edge.right).flatMap: path =>
+          val owner = topologyEndpointOwners(path)
+          Option.when(edge.owner != owner)(owner -> path)
+      .toVector
+      .groupMap(_._1)(_._2)
+      .view
+      .mapValues(_.toSet)
+      .toMap
+    private val interfaceEntriesByModule = snapshot.interfaceAbi
+      .groupBy(entry => resolveOwningModule(entry.logicalPath))
+      .view
+      .mapValues(_.sortBy(_.logicalPath))
+      .toMap
+    private val resolvedEntriesByModule = snapshot.resolvedNets
+      .groupBy(entry => resolveOwningModule(entry.path))
+      .view
+      .mapValues(_.sortBy(_.path))
+      .toMap
+    private val domainBindingOwners = modules.iterator
+      .flatMap(_.domains.iterator.flatMap(_.binding))
+      .toSet
+      .map(path => path -> resolveOwningModule(path))
+      .toMap
     private val sourceByPath = snapshot.sourceMap
       .sortBy(entry => (entry.semanticPath, entry.source.path, entry.source.line))
       .map(entry => entry.semanticPath -> entry.source)
@@ -634,7 +669,7 @@ ${indent(body, 2)}
             ),
             semanticPath = domain.path
           )
-          domain.binding.filter(actual => owningModule(actual) == module.path).foreach: actual =>
+          domain.binding.filter(actual => domainBindingOwners(actual) == module.path).foreach: actual =>
             body += operation(
               "nodal.domain_bind",
               attributes = Vector(
@@ -732,11 +767,8 @@ ${indent(body, 2)}
         )
         values.update(net.path, result -> resultType)
 
-      val externallyBoundTerminals = snapshot.topology.flatMap: edge =>
-        if edge.owner == module.path then Vector.empty
-        else
-          Vector(edge.left, edge.right).filter(path => owningModule(path) == module.path)
-      .toSet
+      val externallyBoundTerminals =
+        externallyBoundTerminalsByModule.getOrElse(module.path, Set.empty)
       terminalDeclarations(module).zipWithIndex.foreach: (declaration, index) =>
         val discipline = conservativeDiscipline(declaration)
         val resultType = s"""!nodal.terminal<${quoted(discipline)}>"""
@@ -785,10 +817,10 @@ ${indent(body, 2)}
       val childEndpoints = topology
         .flatMap(edge => Vector(edge.left, edge.right))
         .distinct
-        .filter(path => owningModule(path) != module.path)
+        .filter(path => topologyEndpointOwners(path) != module.path)
         .sorted
       childEndpoints.zipWithIndex.foreach: (path, index) =>
-        val owner = owningModule(path)
+        val owner = topologyEndpointOwners(path)
         val child = modulesByPath.getOrElse(
           owner,
           fail("NODAL-BRIDGE-007", "child Module is absent from the snapshot", Some(path))
@@ -1784,16 +1816,12 @@ ${indent(body, 2)}
     private def interfaceEntries(
         module: KernelModuleSnapshot
     ): Vector[InterfaceAbiEntry] =
-      snapshot.interfaceAbi
-        .filter(entry => owningModule(entry.logicalPath) == module.path)
-        .sortBy(_.logicalPath)
+      interfaceEntriesByModule.getOrElse(module.path, Vector.empty)
 
     private def resolvedEntries(
         module: KernelModuleSnapshot
     ): Vector[KernelResolvedNetSnapshot] =
-      snapshot.resolvedNets
-        .filter(entry => owningModule(entry.path) == module.path)
-        .sortBy(_.path)
+      resolvedEntriesByModule.getOrElse(module.path, Vector.empty)
 
     private def terminalDeclarations(
         module: KernelModuleSnapshot
@@ -1812,25 +1840,21 @@ ${indent(body, 2)}
     private def topologyEntries(
         module: KernelModuleSnapshot
     ): Vector[KernelTopologyEdge] =
-      snapshot.topology
-        .filter(_.owner == module.path)
-        .sortBy(edge => (edge.kind, edge.left, edge.right))
+      topologyByOwner.getOrElse(module.path, Vector.empty)
 
-    private def owningModule(path: String): String =
-      modules
-        .filter(module =>
-          path == module.path || path.startsWith(s"${module.path}.")
-        )
-        .sortBy(module => -module.path.length)
-        .headOption
-        .map(_.path)
-        .getOrElse(
-          fail(
-            "NODAL-BRIDGE-008",
-            "semantic path has no owning Module",
-            Some(path)
-          )
-        )
+    private def resolveOwningModule(path: String): String =
+      def resolve(candidate: String): String =
+        if modulesByPath.contains(candidate) then candidate
+        else
+          val separator = candidate.lastIndexOf('.')
+          if separator >= 0 then resolve(candidate.take(separator))
+          else
+            fail(
+              "NODAL-BRIDGE-008",
+              "semantic path has no owning Module",
+              Some(path)
+            )
+      resolve(path)
 
     private def parseType(text: String, path: String): String =
       text match

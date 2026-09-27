@@ -123,14 +123,16 @@ private[nodal] object ScalaToMlirBridge:
       .sortBy(entry => (entry.semanticPath, entry.source.path, entry.source.line))
       .map(entry => entry.semanticPath -> entry.source)
       .toMap
-    private val moduleSymbols = modules.map(module =>
+    private var moduleSymbols = modules.map(module =>
       module.path -> stableModuleSymbol(module.path)
     ).toMap
+    private var emittedModules = modules
 
     def render(): String =
       validate()
+      canonicalizeModuleDefinitions()
       val body =
-        (standardConservativeDeclarations ++ modules.map(renderModule)).mkString("\n\n")
+        (standardConservativeDeclarations ++ emittedModules.map(renderModule)).mkString("\n\n")
       val attributes = Vector(
         "nodal.bridge.schema" -> quoted(Schema),
         "nodal.bridge.version" -> integer(Version),
@@ -173,6 +175,85 @@ ${indent(body, 2)}
 }
 """
       )
+
+    private def canonicalizeModuleDefinitions(): Unit =
+      val modulesByPath = modules.map(module => module.path -> module).toMap
+      val childrenByPath = modules
+        .map(module => module.path -> module.instances.map(_.childModule).distinct)
+        .toMap
+      val parentsByChild = mutable.Map.empty[String, mutable.ArrayBuffer[String]]
+      childrenByPath.foreach: (parent, children) =>
+        children.foreach: child =>
+          if !modulesByPath.contains(child) then
+            fail(
+              "NODAL-BRIDGE-007",
+              "instance child Module is absent from the snapshot",
+              Some(child)
+            )
+          parentsByChild.getOrElseUpdate(child, mutable.ArrayBuffer.empty) += parent
+
+      val remainingChildren = mutable.Map.from(
+        childrenByPath.map((path, children) => path -> children.size)
+      )
+      val depths = mutable.Map.empty[String, Int]
+      val leaves = modules.iterator
+        .filter(module => remainingChildren(module.path) == 0)
+        .map(_.path)
+        .toVector
+      leaves.foreach(path => depths.update(path, 0))
+      val ready = mutable.ArrayDeque.from(leaves)
+      while ready.nonEmpty do
+        val child = ready.removeHead()
+        val childDepth = depths.getOrElse(child, 0)
+        parentsByChild.getOrElse(child, mutable.ArrayBuffer.empty).foreach: parent =>
+          depths.update(parent, depths.getOrElse(parent, 0).max(childDepth + 1))
+          val next = remainingChildren(parent) - 1
+          remainingChildren.update(parent, next)
+          if next == 0 then ready.append(parent)
+      if depths.size != modules.size then
+        val cycle = modules.iterator.map(_.path).filterNot(depths.contains).toVector.sorted.head
+        fail(
+          "NODAL-BRIDGE-035",
+          "module dependency cycle prevents definition canonicalization",
+          Some(cycle)
+        )
+
+      val representativeByPath = mutable.Map.from(modules.map(module => module.path -> module.path))
+      depths.toVector.groupBy(_._2).toVector.sortBy(_._1).foreach: (_, entries) =>
+        val representativeByStructure = mutable.LinkedHashMap.empty[String, String]
+        entries.map(_._1).sorted.foreach: path =>
+          if path != snapshot.root then
+            val module = modulesByPath(path)
+            val structure = normalizedModuleStructure(module)
+            val representative = representativeByStructure.getOrElseUpdate(structure, path)
+            representativeByPath.update(path, representative)
+        entries.foreach: (path, _) =>
+          moduleSymbols = moduleSymbols.updated(
+            path,
+            stableModuleSymbol(representativeByPath(path))
+          )
+
+      emittedModules = modules.filter(module => representativeByPath(module.path) == module.path)
+      val emittedPaths = emittedModules.map(_.path)
+      val representativeSymbols = emittedPaths.map(path =>
+        path -> stableModuleSymbol(path, emittedPaths)
+      ).toMap
+      moduleSymbols = modules
+        .map(module => module.path -> representativeSymbols(representativeByPath(module.path)))
+        .toMap
+
+    private def normalizedModuleStructure(module: KernelModuleSnapshot): String =
+      val normalizedPath = renderModule(module).replace(module.path, "$module")
+      val symbolAttribute = "sym_name = " + quoted(moduleSymbols(module.path))
+      val position = normalizedPath.indexOf(symbolAttribute)
+      if position < 0 then
+        fail(
+          "NODAL-BRIDGE-035",
+          "module definition has no canonical symbol attribute",
+          Some(module.path)
+        )
+      module.className + "\u0000" +
+        normalizedPath.patch(position, "sym_name = \"$module\"", symbolAttribute.length)
 
     private def standardConservativeDeclarations: Vector[String] =
       val needsElectrical = modules.exists(module => terminalDeclarations(module).nonEmpty)
@@ -2110,9 +2191,12 @@ ${indent(region, 2)}
 
     private def symbolReference(symbol: String): String = s"@$symbol"
 
-    private def stableModuleSymbol(value: String): String =
+    private def stableModuleSymbol(
+        value: String,
+        definitionPaths: Iterable[String] = modules.map(_.path)
+    ): String =
       val base = normalizeSymbol(lastSegment(value))
-      val collisions = modules.count(module => normalizeSymbol(lastSegment(module.path)) == base)
+      val collisions = definitionPaths.count(path => normalizeSymbol(lastSegment(path)) == base)
       if collisions == 1 then base
       else s"${base}_${ScalaToMlirBridge.digest(s"module:$value").take(10)}"
 

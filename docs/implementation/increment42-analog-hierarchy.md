@@ -4,19 +4,17 @@
 
 ## Current production boundary
 
-Exact source `f325a5d9f22226ce3ab532c9cf56231bf1eb38ff` is the current
-targeted-green hierarchy checkpoint. Core run
-[36318100915](https://github.com/pysolvesemi/Nodal/actions/runs/36318100915)
-passed contracts, 217 Scala tests, 137 native CTests twice, 17 configured bridge
-tests, formatting/lint and required aggregation. Exact-head Increment 23, 25,
-28 and 29 runs
-[36318114025](https://github.com/pysolvesemi/Nodal/actions/runs/36318114025),
-[36318125104](https://github.com/pysolvesemi/Nodal/actions/runs/36318125104),
-[36318138563](https://github.com/pysolvesemi/Nodal/actions/runs/36318138563) and
-[36318152556](https://github.com/pysolvesemi/Nodal/actions/runs/36318152556)
-also passed their named predecessor proofs plus the shared native and bridge
-paths. The exact qualification is recorded in PR #134 comment `5856180094`.
-Earlier exact source `7bee1fa9c6035f3df6e933de04f73e89b03e3188`
+Exact source `7ed0451082f03a94c153a376e814fae2a368650f` is the latest
+published targeted-green hierarchy checkpoint. Core run
+[36323630647](https://github.com/pysolvesemi/Nodal/actions/runs/36323630647)
+passed contracts, 218 Scala tests, 137 native CTests twice, 18 configured bridge
+tests, formatting/lint and required aggregation. Exact-head Increment 37 and 41
+runs [36323641614](https://github.com/pysolvesemi/Nodal/actions/runs/36323641614)
+and [36323652235](https://github.com/pysolvesemi/Nodal/actions/runs/36323652235)
+also passed their public analog-event and hierarchy matrices. The exact
+qualification is recorded in PR #134 comment `5856631863`. Earlier exact source
+`f325a5d9f22226ce3ab532c9cf56231bf1eb38ff` retains its Increment 23, 25,
+28 and 29 predecessor receipts; `7bee1fa9c6035f3df6e933de04f73e89b03e3188`
 and documentation child `d1680b495ec6ca720756ff477dc5a38ad76e1d5d`
 remain the targeted evidence that completed F-042.B.1. No receipt by itself
 qualifies Increment 42 acceptance.
@@ -88,6 +86,40 @@ document hashes `eb09715fc24d2049c8f2e145c554efa0fa1a22fcf5d8b040ecb964d01acc21e
 (function). Those local checks do not qualify the pending native target,
 formatter or exact successor head. Scale review, final applicable CI and closure
 also remain required.
+
+## Repeated-definition and bounded-depth candidate
+
+The next candidate makes the bridge, rather than the target printer, the owner
+of reusable definition selection. It computes module depth iteratively from the
+already captured hierarchy, then compares exact normalized definition text from
+leaves upward. Normalization removes only the candidate module's absolute
+semantic prefix and definition symbol; constructed-class metadata, declaration
+types/defaults, source locations, analog bodies, local names, child structure
+and canonical child targets remain part of the comparison. The root definition
+is never folded into a child. This allows only actually identical constructed
+definitions to share the lexicographically first representative and does not
+introduce clone-per-actual specialization or a second mutable hierarchy model.
+
+Every parent instance retains its own handle, name, parameter actual, terminal,
+connection and source path while targeting the representative definition. The
+complete declaration/name/topology/source inventories remain instance-specific.
+The new public witness covers four compatible leaf instances with two symbolic
+and two distinct literal actuals, plus two compatible nested branches and their
+compatible leaves. The expected normalized MLIR has two definitions for the
+flat case and three for the nested case; target checks require four instances of
+the first leaf definition and two instances of the first branch definition.
+
+The added canonicalization performs one iterative `O(V + E)` depth pass, sorts
+paths within depth groups, and hashes exact rendered structure strings whose
+total size is `S`; its additional expected work is `O(V log V + E + S)` with a
+depth-independent call stack. Local Scala 3.8.4 compilation with `-Ycheck:all`
+passed for the bridge, fixture and regression source. Repeated execution produced
+deterministic document hashes
+`afdb052bc2f107957bfc87840be133e6b29e21b160bcff7bc5acc7133f507e71`
+(four leaves) and
+`7bb83d1b7461c2be413b624356218793fb247ed56345e00ae4c29a2c6961acd8`
+(nested branches). These local results do not yet qualify native normalization,
+Verilog-A emission, formatting or the unpublished successor head.
 
 ## Published checkpoint 1
 

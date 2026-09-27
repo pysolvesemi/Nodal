@@ -238,6 +238,60 @@ object ScalaToMlirBridgeTests extends TestSuite:
       assert(function.text.contains("\"nodal.analog_user_call\""))
       assert(function.text.contains("callee = @scaleSignal"))
 
+    test("hierarchy scale witnesses retain repeated identities and bounded depth"):
+      val repeated = ScalaToMlirBridge.lower(new HierarchyRepeatedTop)
+      val nested = ScalaToMlirBridge.lower(new HierarchyNestedTop)
+
+      assert(repeated == ScalaToMlirBridge.lower(new HierarchyRepeatedTop))
+      assert(nested == ScalaToMlirBridge.lower(new HierarchyNestedTop))
+      assert(occurrences(repeated.text, "\"nodal.module\"") == 2)
+      assert(occurrences(repeated.text, "\"nodal.instance\"") == 4)
+      assert(occurrences(repeated.text, "\"nodal.instance_terminal\"") == 8)
+      assert(occurrences(repeated.text, "\"nodal.connect\"") == 8)
+      assert(occurrences(repeated.text, "\"nodal.parameter_override\"") == 2)
+      Vector("first", "second", "third", "fourth").foreach: name =>
+        assert(repeated.text.contains(s"child_path = \"HierarchyRepeatedTop.$name\""))
+      assert(occurrences(repeated.text, "module = @first") == 4)
+      assert(!repeated.text.contains("sym_name = \"second\""))
+      assert(!repeated.text.contains("sym_name = \"third\""))
+      assert(!repeated.text.contains("sym_name = \"fourth\""))
+      assert(repeated.text.contains("3.0 : f64"))
+      assert(repeated.text.contains("5.0 : f64"))
+
+      assert(occurrences(nested.text, "\"nodal.module\"") == 3)
+      assert(occurrences(nested.text, "\"nodal.instance\"") == 3)
+      assert(occurrences(nested.text, "\"nodal.instance_terminal\"") == 6)
+      assert(occurrences(nested.text, "\"nodal.connect\"") == 6)
+      assert(occurrences(nested.text, "module = @firstBranch") == 2)
+      assert(nested.text.contains("module = @leaf"))
+      assert(nested.text.contains("child_path = \"HierarchyNestedTop.firstBranch\""))
+      assert(nested.text.contains("child_path = \"HierarchyNestedTop.secondBranch\""))
+      assert(
+        nested.text.contains("child_path = \"HierarchyNestedTop.firstBranch.leaf\"")
+      )
+      assert(!nested.text.contains("sym_name = \"secondBranch\""))
+
+      val repeatedSnapshot = ConstructionKernel.inspect(new HierarchyRepeatedTop)
+      val distinctDefault = repeatedSnapshot.copy(
+        modules = repeatedSnapshot.modules.map: module =>
+          if module.path == "HierarchyRepeatedTop.second" then
+            module.copy(
+              declarations = module.declarations.map: declaration =>
+                if declaration.kind == "parameter" then
+                  declaration.copy(
+                    attributes = declaration.attributes.map:
+                      case ("default", _) => "default" -> "7.0"
+                      case entry => entry
+                  )
+                else declaration
+            )
+          else module
+      )
+      val distinct = ScalaToMlirBridge.fromSnapshot(distinctDefault)
+      assert(occurrences(distinct.text, "\"nodal.module\"") == 3)
+      assert(distinct.text.contains("module = @second"))
+      assert(distinct.text.contains("sym_name = \"second\""))
+
     test("hierarchy bridge canonicalizes compatible named conservative disciplines"):
       val document = ScalaToMlirBridge.lower(new BridgeNamedDisciplineTop)
 
@@ -737,6 +791,51 @@ object ScalaToMlirBridgeTests extends TestSuite:
               assert(combination.verilogA.contains(targetWitness))
               assert(occurrences(combination.verilogA, "module child") == 1)
               assert(!combination.verilogA.contains("module child_gain"))
+
+            val repeatedDirectory = Files.createDirectory(directory.resolve("repeated"))
+            val repeated = ScalaToMlirBridge
+              .compileToVerilogA(
+                new HierarchyRepeatedTop,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                repeatedDirectory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(occurrences(repeated.verilogA, "module first") == 1)
+            assert(!repeated.verilogA.contains("module second"))
+            assert(!repeated.verilogA.contains("module third"))
+            assert(!repeated.verilogA.contains("module fourth"))
+            assert(occurrences(repeated.verilogA, "first #(") == 4)
+            assert(repeated.verilogA.contains(".gain(rootGain)"))
+            assert(repeated.verilogA.contains(".gain(3.0)"))
+            assert(repeated.verilogA.contains(".gain(5.0)"))
+
+            val nestedDirectory = Files.createDirectory(directory.resolve("nested"))
+            val nested = ScalaToMlirBridge
+              .compileToVerilogA(
+                new HierarchyNestedTop,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                nestedDirectory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(nested.verilogA.contains("module leaf(vin, vout);"))
+            assert(nested.verilogA.contains("module firstBranch(vin, vout);"))
+            assert(nested.verilogA.contains("module HierarchyNestedTop(vin0, vin1, vout0, vout1);"))
+            assert(nested.verilogA.contains("leaf #(.gain(branchGain)) leaf_instance"))
+            assert(occurrences(nested.verilogA, "firstBranch #(") == 2)
+            assert(nested.verilogA.contains(".branchGain(rootGain)"))
+            assert(nested.verilogA.contains(".branchGain(6.0)"))
 
             val rejectedDirectory = Files.createDirectory(directory.resolve("non-default-root"))
             ScalaToMlirBridge.compileToVerilogA(

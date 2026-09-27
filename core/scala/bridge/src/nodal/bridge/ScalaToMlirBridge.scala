@@ -733,7 +733,6 @@ ${indent(body, 2)}
 
       module.instances.sortBy(_.path).zipWithIndex.foreach: (instance, index) =>
         body ++= renderInstance(
-          module,
           instance,
           index,
           parameterSymbols,
@@ -1585,7 +1584,6 @@ ${indent(body, 2)}
       )
 
     private def renderInstance(
-        module: KernelModuleSnapshot,
         instance: KernelInstanceSnapshot,
         instanceIndex: Int,
         parameterSymbols: Map[String, String],

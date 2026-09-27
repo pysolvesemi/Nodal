@@ -320,6 +320,10 @@ def main() -> int:
         plugin_raw = run("mill-production-plugin-jar", [str(repo / "mill"), "-i", "show",
                          "core.scala.constructorPlugin.jar"], cwd=repo)
         production_plugin_jar = Path(parse_mill_jar(plugin_raw, "production plugin"))
+        mill_java = [str(repo / "mill"), "-i", "java"]
+        mill_java_version = run("mill-java-version", mill_java + ["-version"], cwd=repo)
+        if not re.search(r'''openjdk version "25(?:[.\"\s])''', mill_java_version):
+            raise RuntimeError("Mill managed Java runtime is not pinned major version 25")
         manifest["production_owner_jars"] = {
             "api": {"path": str(production_api_jar), "sha256": digest(production_api_jar)},
             "plugin": {
@@ -371,7 +375,9 @@ def main() -> int:
             str(production_factory_jar), str(production_consumer)
         ])
         production_result = run(
-            "production-runtime-assertions", [java, "-cp", production_cp, PRODUCTION_MAIN]
+            "production-runtime-assertions",
+            mill_java + ["-cp", production_cp, PRODUCTION_MAIN],
+            cwd=repo,
         )
         if production_result.splitlines().count("SEPARATE_COMPILE_CAPTURE_PASS") != 1:
             raise RuntimeError("production separate-compilation assertions did not pass")
@@ -396,7 +402,8 @@ def main() -> int:
         ])
         production_boundary_result = run(
             "production-uninstrumented-factory-runtime-rejection",
-            [java, "-cp", production_boundary_cp, PRODUCTION_BOUNDARY_MAIN]
+            mill_java + ["-cp", production_boundary_cp, PRODUCTION_BOUNDARY_MAIN],
+            cwd=repo,
         )
         if production_boundary_result.splitlines().count(
             "UNINSTRUMENTED_FACTORY_REJECTION_PASS"

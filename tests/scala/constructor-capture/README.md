@@ -37,9 +37,11 @@ reaches the same command. Core CI needs no private execution sequence.
 
 The harness asks the existing Mill module for
 `core.scala.api.scalaCompilerClasspath`, verifies `dotty.tools.dotc.Main
--version` is exactly 3.8.4, and invokes that existing compiler classpath. It
-uses existing `java` and `jar`; it has no alternative downloader, token, proxy,
-new build system, or remote write. `--compiler-classpath` accepts an explicit
+-version` is exactly 3.8.4, and invokes that existing compiler classpath. The
+isolated protocol uses existing `java` and `jar`; production runtime assertions
+use Mill's managed Java 25 from the repository's pinned `mill-jvm-version`. The
+harness has no alternative downloader, token, proxy, new build system, or remote
+write. `--compiler-classpath` accepts an explicit
 already-available classpath for controlled runs. A nonempty output directory is
 rejected so evidence cannot be overwritten silently.
 

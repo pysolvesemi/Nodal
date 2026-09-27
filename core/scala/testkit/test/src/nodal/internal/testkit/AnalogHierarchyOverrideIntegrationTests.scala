@@ -108,6 +108,10 @@ object AnalogHierarchyOverrideIntegrationTests extends TestSuite:
       val top = snapshot.modules.find(_.path == "ValidOverrideIntegrationTop").get
       assert(top.instances.size == 1)
       assert(top.instances.head.parameterBindings.size == 2)
+      val expressionBinding = top.instances.head.parameterBindings.find(_._1 == "gain").get._2
+      assert(snapshot.parameterExpressions.map(_.operation) == Vector("real_literal", "analog_add"))
+      assert(snapshot.parameterExpressions.last.path == expressionBinding)
+      assert(snapshot.parameterExpressions.forall(_.owner == top.path))
 
     test("fixed Scala replication remains scalar construction"):
       val snapshot = ConstructionKernel.inspect(new FixedOverrideReplicationTop)

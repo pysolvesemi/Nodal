@@ -71,6 +71,22 @@ final class BridgeHierarchyTop(rootGain: Param[Real] = 4.0) extends Module:
   vin <> child.vin
   child.vout <> vout
 
+final class BridgeHierarchyExpressionLeaf extends Module:
+  val gain: Param[Real] = param(2.0.real)
+
+final class BridgeHierarchyExpressionTop extends Module:
+  val rootGain: Param[Real] = param(4.0.real)
+  val child: Instance[BridgeHierarchyExpressionLeaf] = instance(new BridgeHierarchyExpressionLeaf)
+  child.param(_.gain, (rootGain + 1.0.real) * 2.0.real)
+
+final class BridgeBooleanExpressionLeaf extends Module:
+  val enabled: Param[Bool] = param(false.B)
+
+final class BridgeBooleanExpressionTop extends Module:
+  val threshold: Param[Real] = param(4.0.real)
+  val child: Instance[BridgeBooleanExpressionLeaf] = instance(new BridgeBooleanExpressionLeaf)
+  child.param(_.enabled, (threshold > 1.0.real) && true.B)
+
 final class BridgeNamedDisciplineLeaf extends Module:
   val declared: NamedDiscipline = discipline("leaf_electrical", Voltage, Current)
   val port: Node[NamedDiscipline] = in(declared)
@@ -204,6 +220,38 @@ object ScalaToMlirBridgeTests extends TestSuite:
       assert(!document.text.contains("!nodal.terminal<\"leaf_electrical\">"))
       assert(document.text.contains("declared_discipline = \"top_electrical\""))
       assert(document.text.contains("declared_discipline = \"leaf_electrical\""))
+
+    test("hierarchy bridge serializes parent-owned static override expression DAGs"):
+      val arithmeticSnapshot = ConstructionKernel.inspect(new BridgeHierarchyExpressionTop)
+      val arithmetic = ScalaToMlirBridge.fromSnapshot(arithmeticSnapshot)
+      val operations = arithmeticSnapshot.parameterExpressions.map(_.operation)
+
+      assert(operations == Vector("real_literal", "analog_add", "real_literal", "analog_mul"))
+      assert(arithmeticSnapshot.parameterExpressions.forall(
+        _.owner == "BridgeHierarchyExpressionTop"
+      ))
+      assert(arithmetic.text.contains("\"nodal.const_parameter_ref\""))
+      assert(occurrences(arithmetic.text, "\"nodal.const_literal\"") == 2)
+      assert(occurrences(arithmetic.text, "\"nodal.const_expr\"") == 2)
+      assert(arithmetic.text.contains("operator_name = \"add\""))
+      assert(arithmetic.text.contains("operator_name = \"mul\""))
+      assert(arithmetic.text.contains(
+        s"source_value = \"${arithmeticSnapshot.parameterExpressions.last.path}\""
+      ))
+
+      val booleanSnapshot = ConstructionKernel.inspect(new BridgeBooleanExpressionTop)
+      val boolean = ScalaToMlirBridge.fromSnapshot(booleanSnapshot)
+      assert(booleanSnapshot.parameterExpressions.map(_.operation) == Vector(
+        "real_literal",
+        "real_gt",
+        "boolean",
+        "bool_and"
+      ))
+      assert(boolean.text.contains("operator_name = \"gt\""))
+      assert(boolean.text.contains("operator_name = \"and\""))
+      assert(boolean.text.contains("-> !nodal.bits<1>"))
+      assert(!arithmetic.text.contains("NODAL-BRIDGE"))
+      assert(!boolean.text.contains("NODAL-BRIDGE"))
 
     test("analog procedural IR retains order, source locations, and serialization"):
       val first = ScalaToMlirBridge.lower(new BridgeProceduralTop)
@@ -558,3 +606,28 @@ object ScalaToMlirBridgeTests extends TestSuite:
                   s"${failure.diagnostic}\n${failure.standardError}"
                 )
           finally delete(directory)
+
+    test("locked nodalc verifies static hierarchy override DAGs when configured"):
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          Vector(
+            ScalaToMlirBridge.lower(new BridgeHierarchyExpressionTop),
+            ScalaToMlirBridge.lower(new BridgeBooleanExpressionTop)
+          ).foreach: document =>
+            val directory = workDirectory()
+            try
+              val success = NativeCompilerClient
+                .run(
+                  document,
+                  NativeCompilerRequest(
+                    executable = Path.of(executable).toAbsolutePath,
+                    arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
+                    workingDirectory = directory,
+                    timeout = Duration.ofSeconds(30)
+                  )
+                )
+                .asInstanceOf[NativeCompilerSuccess]
+              assert(success.normalizedMlir.contains("\"nodal.parameter_override\""))
+              assert(success.normalizedMlir.contains("\"nodal.const_expr\""))
+            finally delete(directory)

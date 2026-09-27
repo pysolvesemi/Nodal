@@ -434,6 +434,7 @@ Operation *findParameterEnvelope(Operation *module, llvm::StringRef parameter, b
 
 FailureOr<EvaluatedConstant> evaluateValue(Value value, Operation *scope,
                                            llvm::DenseSet<Operation *> &parameterStack);
+int compareConstants(const EvaluatedConstant &lhs, const EvaluatedConstant &rhs);
 
 FailureOr<EvaluatedConstant> adoptParameterUnit(EvaluatedConstant value, Operation *parameter) {
   Operation *unit = resolveUnit(parameter, parameter->getAttrOfType<FlatSymbolRefAttr>("unit"));
@@ -477,7 +478,8 @@ FailureOr<EvaluatedConstant> evaluateExpression(Operation *operation, Operation 
                                                 llvm::DenseSet<Operation *> &parameterStack) {
   llvm::StringRef name = textAttr(operation, "operator_name");
   const unsigned count = operation->getNumOperands();
-  if ((name == "neg" || name == "not") ? count != 1 : count != 2)
+  const bool unary = name == "neg" || name == "not";
+  if (unary ? count != 1 : count != 2)
     return failure();
 
   auto lhs = evaluateValue(operation->getOperand(0), scope, parameterStack);
@@ -510,6 +512,29 @@ FailureOr<EvaluatedConstant> evaluateExpression(Operation *operation, Operation 
   auto rhs = evaluateValue(operation->getOperand(1), scope, parameterStack);
   if (failed(rhs))
     return failure();
+
+  if (name == "gt" || name == "ge" || name == "lt" || name == "le") {
+    if (result.kind != ConstantKind::Boolean || lhs->kind != rhs->kind ||
+        (lhs->kind != ConstantKind::Real && lhs->kind != ConstantKind::Integer) ||
+        lhs->dimension != rhs->dimension)
+      return failure();
+    const int comparison = compareConstants(*lhs, *rhs);
+    result.booleanValue = name == "gt"   ? comparison > 0
+                          : name == "ge" ? comparison >= 0
+                          : name == "lt" ? comparison < 0
+                                         : comparison <= 0;
+    return result;
+  }
+
+  if (name == "and" || name == "or") {
+    if (result.kind != ConstantKind::Boolean || lhs->kind != ConstantKind::Boolean ||
+        rhs->kind != ConstantKind::Boolean || !lhs->dimension.empty() ||
+        !rhs->dimension.empty())
+      return failure();
+    result.booleanValue = name == "and" ? lhs->booleanValue && rhs->booleanValue
+                                         : lhs->booleanValue || rhs->booleanValue;
+    return result;
+  }
 
   if (name == "add" || name == "sub") {
     if (lhs->dimension != rhs->dimension)
@@ -809,6 +834,12 @@ FailureOr<std::string> renderValue(Value value, llvm::DenseSet<Operation *> &vis
                                  : operatorName == "mul" ? "*"
                                  : operatorName == "div" ? "/"
                                  : operatorName == "mod" ? "%"
+                                 : operatorName == "gt"  ? ">"
+                                 : operatorName == "ge"  ? ">="
+                                 : operatorName == "lt"  ? "<"
+                                 : operatorName == "le"  ? "<="
+                                 : operatorName == "and" ? "&&"
+                                 : operatorName == "or"  ? "||"
                                                          : "";
       if (spelling.empty()) {
         visited.erase(operation);
@@ -979,7 +1010,8 @@ LogicalResult nodal::ConstParameterRefOp::verify() {
 
 LogicalResult nodal::ConstExprOp::verify() {
   llvm::StringRef name = textAttr(getOperation(), "operator_name");
-  if (!oneOf(name, {"add", "sub", "mul", "div", "mod", "neg", "not"}))
+  if (!oneOf(name, {"add", "sub", "mul", "div", "mod", "neg", "not", "gt", "ge", "lt",
+                    "le", "and", "or"}))
     return emitOpError("NODAL-CONSTANT-EXPR-001: unsupported constant-expression operator");
   const unsigned expected = name == "neg" || name == "not" ? 1 : 2;
   if (getOperation()->getNumOperands() != expected || getOperation()->getNumResults() != 1)
@@ -987,14 +1019,34 @@ LogicalResult nodal::ConstExprOp::verify() {
   ConstantKind resultKind = kindForType(getOperation()->getResult(0).getType());
   if (resultKind == ConstantKind::Invalid)
     return emitOpError("NODAL-CONSTANT-EXPR-001: result type is not a supported scalar kind");
-  for (Value operand : getOperation()->getOperands()) {
-    if (kindForType(operand.getType()) != resultKind)
+  const bool comparison = oneOf(name, {"gt", "ge", "lt", "le"});
+  const bool logic = oneOf(name, {"not", "and", "or"});
+  const Type firstOperandType = getOperation()->getOperand(0).getType();
+  const ConstantKind firstOperand = kindForType(firstOperandType);
+  if (comparison) {
+    if (resultKind != ConstantKind::Boolean ||
+        (firstOperand != ConstantKind::Real && firstOperand != ConstantKind::Integer))
       return emitOpError(
-          "NODAL-CONSTANT-EXPR-001: implicit constant-expression promotion is not supported");
+          "NODAL-CONSTANT-EXPR-001: comparison requires like numeric operands and a Boolean "
+          "result");
+    for (Value operand : getOperation()->getOperands())
+      if (operand.getType() != firstOperandType)
+        return emitOpError(
+            "NODAL-CONSTANT-EXPR-001: comparison operands must have identical numeric types");
+  } else if (logic) {
+    if (resultKind != ConstantKind::Boolean)
+      return emitOpError("NODAL-CONSTANT-EXPR-001: logical operators require Boolean values");
+    for (Value operand : getOperation()->getOperands())
+      if (operand.getType() != getOperation()->getResult(0).getType())
+        return emitOpError("NODAL-CONSTANT-EXPR-001: logical operands must be Boolean");
+  } else {
+    for (Value operand : getOperation()->getOperands())
+      if (kindForType(operand.getType()) != resultKind)
+        return emitOpError(
+            "NODAL-CONSTANT-EXPR-001: implicit constant-expression promotion is not supported");
+    if (resultKind == ConstantKind::Boolean)
+      return emitOpError("NODAL-CONSTANT-EXPR-001: arithmetic operators require numeric values");
   }
-  if ((name == "not") != (resultKind == ConstantKind::Boolean))
-    return emitOpError(
-        "NODAL-CONSTANT-EXPR-001: not is Boolean-only and arithmetic operators are numeric-only");
   if (name == "mod" && resultKind != ConstantKind::Integer)
     return emitOpError("NODAL-CONSTANT-EXPR-001: mod requires integer operands");
   return success();

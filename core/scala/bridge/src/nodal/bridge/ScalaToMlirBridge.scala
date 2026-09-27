@@ -431,6 +431,18 @@ ${indent(body, 2)}
         "instance semantic path"
       )
       requireUnique(
+        snapshot.parameterExpressions.map(_.path),
+        "NODAL-BRIDGE-034",
+        "parameter-expression semantic path"
+      )
+      snapshot.parameterExpressions.foreach: expression =>
+        if !moduleSymbols.contains(expression.owner) then
+          fail(
+            "NODAL-BRIDGE-034",
+            "parameter expression has no owning Module",
+            Some(expression.path)
+          )
+      requireUnique(
         snapshot.sourceMap.map(_.semanticPath),
         "NODAL-BRIDGE-010",
         "source-map semantic path"
@@ -591,7 +603,7 @@ ${indent(body, 2)}
           case _ => ()
 
       module.instances.sortBy(_.path).zipWithIndex.foreach: (instance, index) =>
-        body ++= renderInstance(instance, index, parameterSymbols)
+        body ++= renderInstance(module, instance, index, parameterSymbols)
 
       interfaceEntries(module).foreach: entry =>
         body += operation(
@@ -1431,6 +1443,7 @@ ${indent(body, 2)}
       )
 
     private def renderInstance(
+        module: KernelModuleSnapshot,
         instance: KernelInstanceSnapshot,
         instanceIndex: Int,
         parameterSymbols: Map[String, String]
@@ -1454,6 +1467,12 @@ ${indent(body, 2)}
         .filter(_.kind == "parameter")
         .map(declaration => declaration.name -> declaration)
         .toMap
+      val expressionsByPath = snapshot.parameterExpressions
+        .filter(_.owner == module.path)
+        .map(expression => expression.path -> expression)
+        .toMap
+      val declarationsByPath =
+        module.declarations.map(declaration => declaration.path -> declaration).toMap
       val symbolicBindings = mutable.ArrayBuffer.empty[(String, String, String)]
       val literalBindings = instance.parameterBindings.flatMap: (name, value) =>
         val target = childParameters.getOrElse(
@@ -1463,11 +1482,11 @@ ${indent(body, 2)}
         val targetType = target.dataType.map(parseType(_, target.path)).getOrElse(
           fail("NODAL-BRIDGE-005", "parameter type is unavailable", Some(target.path))
         )
-        val rendered = parameterSymbols.get(value) match
-          case Some(symbol) =>
-            symbolicBindings += ((name, symbol, targetType))
+        val rendered =
+          if parameterSymbols.contains(value) || expressionsByPath.contains(value) then
+            symbolicBindings += ((name, value, targetType))
             None
-          case None => Some(typedLiteral(value, targetType, instance.path))
+          else Some(typedLiteral(value, targetType, instance.path))
         rendered.map(stableLocalSymbol("parameter", name) -> _)
       val parameterBindings = dictionary(literalBindings)
       val domainBindings = dictionary(
@@ -1496,22 +1515,162 @@ ${indent(body, 2)}
           semanticPath = instance.path
         )
       )
-      symbolicBindings.zipWithIndex.foreach: (binding, bindingIndex) =>
-        val (name, sourceSymbol, dataType) = binding
-        val value = s"%instance_${instanceIndex}_parameter_$bindingIndex"
-        rendered += operation(
-          "nodal.const_parameter_ref",
-          results = Vector(value),
-          resultTypes = Vector(dataType),
-          attributes = Vector(
-            "parameter" -> symbolReference(sourceSymbol),
-            "metadata" -> bridgeMetadata(
-              instance.path,
-              Vector("binding" -> quoted(name))
-            )
-          ),
-          semanticPath = instance.path
+      val staticValues = mutable.LinkedHashMap.empty[String, (String, String)]
+      var nextStaticValue = 0
+
+      def allocateStaticValue(): String =
+        val result = s"%instance_${instanceIndex}_parameter_value_$nextStaticValue"
+        nextStaticValue += 1
+        result
+
+      def literalAttributes(expression: KernelParameterExpressionSnapshot, dataType: String)
+          : Vector[(String, String)] =
+        val value = expression.literal.getOrElse(
+          fail(
+            "NODAL-BRIDGE-034",
+            "parameter literal has no captured value",
+            Some(expression.path)
+          )
         )
+        val spelling =
+          if Set("i1", "!nodal.bits<1>").contains(dataType) then
+            value.toBooleanOption
+              .map(if _ then "1" else "0")
+              .getOrElse(
+                fail(
+                  "NODAL-BRIDGE-034",
+                  "Boolean parameter literal has invalid spelling",
+                  Some(expression.path)
+                )
+              )
+          else value
+        Vector(
+          "value" -> typedLiteral(value, dataType, expression.path),
+          "spelling" -> quoted(spelling),
+          "metadata" -> bridgeMetadata(
+            expression.path,
+            expression.unit.toVector.map(unit => "unit" -> quoted(unit))
+          )
+        )
+
+      def constantOperator(expression: KernelParameterExpressionSnapshot): String =
+        expression.operation match
+          case "analog_add" => "add"
+          case "analog_sub" => "sub"
+          case "analog_mul" => "mul"
+          case "analog_div" => "div"
+          case "analog_neg" => "neg"
+          case "real_gt" => "gt"
+          case "real_ge" => "ge"
+          case "real_lt" => "lt"
+          case "real_le" => "le"
+          case "bool_and" => "and"
+          case "bool_or" => "or"
+          case "bool_not" => "not"
+          case operation =>
+            fail(
+              "NODAL-BRIDGE-034",
+              s"unsupported static parameter operation '$operation'",
+              Some(expression.path)
+            )
+
+      def staticValue(path: String): (String, String) =
+        staticValues.getOrElseUpdate(
+          path,
+          parameterSymbols.get(path) match
+            case Some(symbol) =>
+              val declaration = declarationsByPath.getOrElse(
+                path,
+                fail(
+                  "NODAL-BRIDGE-034",
+                  "parameter reference has no declaration",
+                  Some(path)
+                )
+              )
+              val dataType = declaration.dataType.map(parseType(_, path)).getOrElse(
+                fail("NODAL-BRIDGE-005", "parameter type is unavailable", Some(path))
+              )
+              val result = allocateStaticValue()
+              rendered += operation(
+                "nodal.const_parameter_ref",
+                results = Vector(result),
+                resultTypes = Vector(dataType),
+                attributes = Vector(
+                  "parameter" -> symbolReference(symbol),
+                  "metadata" -> bridgeMetadata(path, Vector.empty)
+                ),
+                semanticPath = path
+              )
+              result -> dataType
+            case None =>
+              val expression = expressionsByPath.getOrElse(
+                path,
+                fail(
+                  "NODAL-BRIDGE-034",
+                  "symbolic parameter binding has no canonical expression",
+                  Some(path)
+                )
+              )
+              val dataType = parseType(expression.dataType, expression.path)
+              val result = allocateStaticValue()
+              expression.literal match
+                case Some(_) =>
+                  rendered += operation(
+                    "nodal.const_literal",
+                    results = Vector(result),
+                    resultTypes = Vector(dataType),
+                    attributes = literalAttributes(expression, dataType),
+                    semanticPath = expression.path
+                  )
+                case None =>
+                  val operands = expression.operands.map(staticValue)
+                  val operatorName = constantOperator(expression)
+                  val validTypes = operatorName match
+                    case "add" | "sub" | "mul" | "div" =>
+                      operands.size == 2 && Set("f64", "i64").contains(dataType) &&
+                        operands.forall(_._2 == dataType)
+                    case "neg" =>
+                      operands.size == 1 && Set("f64", "i64").contains(dataType) &&
+                        operands.head._2 == dataType
+                    case "gt" | "ge" | "lt" | "le" =>
+                      operands.size == 2 && Set("i1", "!nodal.bits<1>").contains(dataType) &&
+                        operands.map(_._2).distinct.size == 1 &&
+                        operands.forall(value => Set("f64", "i64").contains(value._2))
+                    case "and" | "or" =>
+                      operands.size == 2 && Set("i1", "!nodal.bits<1>").contains(dataType) &&
+                        operands.forall(_._2 == dataType)
+                    case "not" =>
+                      operands.size == 1 && Set("i1", "!nodal.bits<1>").contains(dataType) &&
+                        operands.head._2 == dataType
+                  if !validTypes then
+                    fail(
+                      "NODAL-BRIDGE-034",
+                      "static parameter expression has incompatible operand or result types",
+                      Some(expression.path)
+                    )
+                  rendered += operation(
+                    "nodal.const_expr",
+                    results = Vector(result),
+                    operands = operands.map(_._1),
+                    operandTypes = operands.map(_._2),
+                    resultTypes = Vector(dataType),
+                    attributes = Vector(
+                      "operator_name" -> quoted(operatorName),
+                      "metadata" -> bridgeMetadata(expression.path, Vector.empty)
+                    ),
+                    semanticPath = expression.path
+                  )
+              result -> dataType
+        )
+      symbolicBindings.zipWithIndex.foreach: (binding, bindingIndex) =>
+        val (name, sourcePath, dataType) = binding
+        val (value, sourceType) = staticValue(sourcePath)
+        if sourceType != dataType then
+          fail(
+            "NODAL-BRIDGE-034",
+            s"symbolic parameter binding type '$sourceType' does not match '$dataType'",
+            Some(instance.path)
+          )
         rendered += operation(
           "nodal.parameter_override",
           operands = Vector(value),
@@ -1521,7 +1680,11 @@ ${indent(body, 2)}
             "parameter" -> symbolReference(stableLocalSymbol("parameter", name)),
             "metadata" -> bridgeMetadata(
               instance.path,
-              Vector("source_parameter" -> symbolReference(sourceSymbol))
+              Vector(
+                "binding" -> quoted(name),
+                "source_value" -> quoted(sourcePath),
+                "binding_index" -> integer(bindingIndex)
+              )
             )
           ),
           semanticPath = instance.path

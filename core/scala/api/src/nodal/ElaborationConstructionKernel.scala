@@ -78,6 +78,16 @@ private[nodal] final case class KernelInstanceSnapshot(
     parameterBindings: Vector[(String, String)] = Vector.empty
 )
 
+private[nodal] final case class KernelParameterExpressionSnapshot(
+    path: String,
+    owner: String,
+    operation: String,
+    operands: Vector[String],
+    dataType: String,
+    literal: Option[String],
+    unit: Option[String]
+)
+
 private[nodal] final case class KernelModuleSnapshot(
     path: String,
     className: String,
@@ -189,6 +199,7 @@ private[nodal] final case class KernelWaiverSnapshot(
 private[nodal] final case class ConstructionSnapshot(
     root: String,
     rootParameterBindings: Vector[(String, String)] = Vector.empty,
+    parameterExpressions: Vector[KernelParameterExpressionSnapshot] = Vector.empty,
     modules: Vector[KernelModuleSnapshot],
     interfaceAbi: Vector[InterfaceAbiEntry],
     resolvedNets: Vector[KernelResolvedNetSnapshot],
@@ -1923,8 +1934,7 @@ private final class ConstructionSession(val options: EmitOptions):
     case reference: AnyRef =>
       Option(declarationIds.get(reference)).map(declarationPath)
         .orElse(
-          Option(expressionIds.get(reference)).map: expression =>
-            s"${modulePath(expression.module)}.expr_${expression.index}"
+          Option(expressionIds.get(reference)).map(expressionPath)
         )
         .getOrElse(stableClassName(reference))
     case other => other.toString
@@ -2666,6 +2676,70 @@ private final class ConstructionSession(val options: EmitOptions):
           contributions
         )
 
+  private def parameterExpressionSnapshots(): Vector[KernelParameterExpressionSnapshot] =
+    val reachable = mutable.LinkedHashSet.empty[ExpressionRef]
+    val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+
+    def visit(value: Any): Unit = value match
+      case expression: KernelExpr[?] =>
+        if Option(visited.put(expression, java.lang.Boolean.TRUE)).isEmpty then
+          val reference = Option(expressionIds.get(expression)).getOrElse(
+            fail(
+              "NODAL-PARAMETER-BINDING-021",
+              "static parameter expression has no captured semantic identity"
+            )
+          )
+          reachable += reference
+          if expression.literal.isEmpty then expression.operands.foreach(visit)
+      case _: Param[?] => ()
+      case _ => ()
+
+    val roots = rootParameterBindings.iterator.map(_._2) ++ records.valuesIterator.flatMap(
+      _.instances.iterator.flatMap(_.parameterOverrides.iterator.map(_._2))
+    )
+    roots.foreach:
+      case expression: KernelExpr[?] if expression.literal.isEmpty => visit(expression)
+      case _ => ()
+
+    expressionValues.toVector.collect:
+      case (reference, expression) if reachable.contains(reference) =>
+        val path = expressionPath(reference)
+        val dataType = CandidateRuntime.expressionDataType(expression)
+          .map(renderType(_, reference.module))
+          .getOrElse(
+            fail(
+              "NODAL-PARAMETER-BINDING-022",
+              "static parameter expression type is unavailable",
+              Some(path)
+            )
+          )
+        val operands =
+          if expression.literal.nonEmpty then Vector.empty
+          else
+            expression.operands.map: operand =>
+              pathOf(operand).getOrElse(
+                fail(
+                  "NODAL-PARAMETER-BINDING-023",
+                  "static parameter expression operand has no semantic identity",
+                  Some(path)
+                )
+              )
+        KernelParameterExpressionSnapshot(
+          path,
+          modulePath(reference.module),
+          expression.operation.orElse(expression.literal.map(_.kind)).getOrElse(
+            fail(
+              "NODAL-PARAMETER-BINDING-024",
+              "static parameter expression operation is unavailable",
+              Some(path)
+            )
+          ),
+          operands,
+          dataType,
+          expression.literal.map(_.value),
+          expression.operands.lift(1).collect { case unit: String => unit }.filter(_.nonEmpty)
+        )
+
   private def classify(snapshot: ConstructionSnapshot): DesignKind =
     val kinds = snapshot.modules.flatMap(_.declarations.map(_.kind)).toSet
     val analogKinds = Set(
@@ -2731,6 +2805,7 @@ private final class ConstructionSession(val options: EmitOptions):
                 "root constructor binding is not a declaration"
               )
           declarationName(reference) -> renderAny(value, rootHandle),
+      parameterExpressions = parameterExpressionSnapshots(),
       modules = modules,
       interfaceAbi = abi,
       resolvedNets = resolvedNets(),

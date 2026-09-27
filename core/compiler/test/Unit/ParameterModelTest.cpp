@@ -45,6 +45,13 @@ module {
     %eight = "nodal.const_literal"() <{metadata = {}, spelling = "8", value = 8 : i64}> : () -> i64
     "nodal.parameter_constraint"(%one, %eight) <{constraint_kind = "range", lower_inclusive = true, metadata = {}, parameter = @COUNT, upper_inclusive = true}> : (i64, i64) -> ()
     "nodal.parameter_envelope"() <{effects = ["topology"], metadata = {}, parameter = @COUNT, policy = "static_generate"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = true, metadata = {}, parameter_kind = "boolean", sym_name = "ENABLED", type = i1, variability = "symbolic"}> : () -> ()
+    %one_real = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1.0 : f64}> : () -> f64
+    %zero_real = "nodal.const_literal"() <{metadata = {}, spelling = "0", value = 0.0 : f64}> : () -> f64
+    %ordered = "nodal.const_expr"(%one_real, %zero_real) <{metadata = {}, operator_name = "gt"}> : (f64, f64) -> i1
+    %truth = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = true}> : () -> i1
+    %enabled_value = "nodal.const_expr"(%ordered, %truth) <{metadata = {}, operator_name = "and"}> : (i1, i1) -> i1
+    "nodal.parameter_value"(%enabled_value) <{metadata = {}, parameter = @ENABLED}> : (i1) -> ()
   }) : () -> ()
 }
 )mlir";
@@ -151,6 +158,7 @@ int main() {
 
   bool sawLossless = false;
   bool sawTargetUnit = false;
+  bool sawBooleanDag = false;
   valid->walk([&](nodal::ParameterValueOp value) {
     auto parameter = value->getAttrOfType<mlir::FlatSymbolRefAttr>("parameter");
     if (!parameter)
@@ -168,11 +176,17 @@ int main() {
       auto rendered = nodal::renderParameterConstantExpression(value->getOperand(0), declaration);
       sawTargetUnit = mlir::succeeded(rendered) && *rendered == "1k";
     }
+    if (parameter.getValue() == "ENABLED") {
+      auto rendered = nodal::renderParameterConstantExpression(value->getOperand(0));
+      sawBooleanDag = mlir::succeeded(rendered) && *rendered == "((1 > 0) && 1)";
+    }
   });
   if (!sawLossless)
     return fail("constant expression did not preserve native spelling");
   if (!sawTargetUnit)
     return fail("bare parameter magnitude did not inherit target unit");
+  if (!sawBooleanDag)
+    return fail("Boolean comparison and logical expression did not retain structure");
 
   auto badConstraint = mlir::parseSourceString<mlir::ModuleOp>(kBadConstraint, &context);
   if (!badConstraint || mlir::succeeded(nodal::verifyParameterModel(*badConstraint)))

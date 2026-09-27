@@ -38,11 +38,28 @@ instrumented public hierarchy runtime witness pass. The native translation
 units, pinned format/lint and the 570-case matrix still require exact-head CI;
 no local review or prior-head result qualifies this successor.
 
-This is a published bounded B.2 checkpoint, not completed B.2. Static override-expression
-DAG serialization beyond a direct parent parameter, native-to-Verilog-A
-hierarchy lowering, combined equation/event/function witnesses, scale review,
-full qualification and closure remain required. No local review or prior-head
-result qualifies this candidate.
+This is a published bounded B.2 checkpoint, not completed B.2. The current
+successor adds canonical serialization for the reachable, parent-owned static
+override-expression DAG instead of flattening it to a display string. The
+internal construction snapshot records each reachable expression's stable
+semantic path, owner, operation, operands, exact type, literal and optional
+unit. The bridge lowers those nodes through the existing
+`nodal.const_parameter_ref`, `nodal.const_literal`, `nodal.const_expr` and
+`nodal.parameter_override` operations. Supported production operations are
+real/integer `+`, `-`, `*`, `/`, unary negation, real/integer comparisons and
+Boolean `&&`, `||`, `!`; dynamic values, foreign owners, absent semantic
+identities, incompatible types and unsupported operations fail explicitly.
+Native parameter evaluation and rendering retain comparison and Boolean DAG
+structure. This changes no public constructor plugin ABI or distribution
+boundary.
+
+Local Scala 3.8.4/JDK 25 strict compilation and instrumented arithmetic and
+Boolean public-path witnesses pass, as do all 370 compiler Python tests and the
+Increment 29 checker and 16 Python regressions. The native unit, pinned
+format/lint and targeted workflow results still require exact-head CI. Native
+to Verilog-A hierarchy lowering, combined equation/event/function witnesses,
+scale review, full qualification and closure remain required. No local review
+or prior-head result qualifies this candidate.
 
 ## Published checkpoint 1
 

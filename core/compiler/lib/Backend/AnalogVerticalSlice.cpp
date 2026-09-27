@@ -965,9 +965,9 @@ LogicalResult verifyRootExport(llvm::ArrayRef<Operation *> definitions) {
     Operation *parameter = findDirectParameter(root, binding.getName().getValue());
     auto actual = parameter ? renderParameterBinding(binding.getValue(), parameter)
                             : FailureOr<std::string>(failure());
-    auto authored =
-        parameter ? renderParameterBinding(parameter->getAttr("default_value"), parameter)
-                  : FailureOr<std::string>(failure());
+    auto authored = parameter
+                        ? renderParameterBinding(parameter->getAttr("default_value"), parameter)
+                        : FailureOr<std::string>(failure());
     if (!parameter || failed(actual) || failed(authored) || *actual != *authored)
       return emitMappedFailure(
           parameter ? parameter : root, "NODAL-BACKEND-HIERARCHY-010",

@@ -62,7 +62,6 @@ final class BridgeHierarchyLeaf(gain: Param[Real] = 2.0) extends Module:
   def parameter: Param[Real] = gain
   val vin: Node[Electrical.type] = in(Electrical)
   val vout: Node[Electrical.type] = out(Electrical)
-  vin <> vout
 
 final class BridgeHierarchyTop(rootGain: Param[Real] = 4.0) extends Module:
   val parameter: Param[Real] = rootGain
@@ -205,6 +204,7 @@ object ScalaToMlirBridgeTests extends TestSuite:
       assert(first.text.contains("parameter = @gain"))
       assert(occurrences(first.text, "\"nodal.instance_terminal\"") == 2)
       assert(occurrences(first.text, "\"nodal.connect\"") == 2)
+      assert(occurrences(first.text, "allow_floating = true") == 2)
       assert(first.text.contains("module = @child"))
       assert(first.text.contains("instance = @child_instance"))
       assert(first.text.contains("port = \"vin\""))

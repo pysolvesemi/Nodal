@@ -651,6 +651,11 @@ ${indent(body, 2)}
         )
         values.update(net.path, result -> resultType)
 
+      val externallyBoundTerminals = snapshot.topology.flatMap: edge =>
+        if edge.owner == module.path then Vector.empty
+        else
+          Vector(edge.left, edge.right).filter(path => owningModule(path) == module.path)
+      .toSet
       terminalDeclarations(module).zipWithIndex.foreach: (declaration, index) =>
         val discipline = conservativeDiscipline(declaration)
         val resultType = s"""!nodal.terminal<${quoted(discipline)}>"""
@@ -686,6 +691,8 @@ ${indent(body, 2)}
                 "declared_discipline" -> quoted(
                   declaration.attributes.toMap.getOrElse("discipline", discipline)
                 )
+              ) ++ Option.when(externallyBoundTerminals.contains(declaration.path))(
+                "allow_floating" -> boolean(true)
               )
             )
           ) ++ boundaryAttributes,

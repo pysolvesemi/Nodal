@@ -94,16 +94,16 @@ module attributes {
   "nodal.discipline"() <{domain = "continuous", flow = @Current, metadata = {}, potential = @Voltage, sym_name = "electrical"}> : () -> ()
   "nodal.module"() <{metadata = {}, sym_name = "Child"}> ({
   ^bb0:
-    %child_vin = "nodal.terminal"() <{metadata = {declaration_kind = "analog-input"}, name = "vin"}> : () -> !nodal.terminal<"electrical">
-    %child_vout = "nodal.terminal"() <{metadata = {declaration_kind = "analog-output"}, name = "vout"}> : () -> !nodal.terminal<"electrical">
+    %child_vin = "nodal.terminal"() <{direction = "input", flow_orientation = "into_component", metadata = {declaration_kind = "analog-input"}, name = "vin", source_path = "Child.vin"}> : () -> !nodal.terminal<"electrical">
+    %child_vout = "nodal.terminal"() <{direction = "output", flow_orientation = "into_component", metadata = {declaration_kind = "analog-output"}, name = "vout", source_path = "Child.vout"}> : () -> !nodal.terminal<"electrical">
     "nodal.parameter"() <{classification = "ordinary", default_value = 2.0 : f64, metadata = {}, parameter_kind = "real", sym_name = "gain", type = f64, variability = "symbolic"}> : () -> ()
     %child_default = "nodal.const_literal"() <{metadata = {}, spelling = "2.0", value = 2.0 : f64}> : () -> f64
     "nodal.parameter_value"(%child_default) <{metadata = {}, parameter = @gain}> : (f64) -> ()
   }) : () -> ()
   "nodal.module"() <{metadata = {}, sym_name = "Top"}> ({
   ^bb0:
-    %top_vin = "nodal.terminal"() <{metadata = {declaration_kind = "analog-input"}, name = "vin"}> : () -> !nodal.terminal<"electrical">
-    %top_vout = "nodal.terminal"() <{metadata = {declaration_kind = "analog-output"}, name = "vout"}> : () -> !nodal.terminal<"electrical">
+    %top_vin = "nodal.terminal"() <{direction = "input", flow_orientation = "into_component", metadata = {declaration_kind = "analog-input"}, name = "vin", source_path = "Top.vin"}> : () -> !nodal.terminal<"electrical">
+    %top_vout = "nodal.terminal"() <{direction = "output", flow_orientation = "into_component", metadata = {declaration_kind = "analog-output"}, name = "vout", source_path = "Top.vout"}> : () -> !nodal.terminal<"electrical">
     "nodal.parameter"() <{classification = "ordinary", default_value = 4.0 : f64, metadata = {}, parameter_kind = "real", sym_name = "rootGain", type = f64, variability = "symbolic"}> : () -> ()
     %top_default = "nodal.const_literal"() <{metadata = {}, spelling = "4.0", value = 4.0 : f64}> : () -> f64
     "nodal.parameter_value"(%top_default) <{metadata = {}, parameter = @rootGain}> : (f64) -> ()

@@ -1,6 +1,6 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.54
+**Revision:** 1.55
 **Created:** 2026-08-20
 **Updated:** 2026-09-27
 **Status:** Active roadmap
@@ -1075,10 +1075,11 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
       - Evidence: exact-head Increment 37 retry run [36334138396](https://github.com/pysolvesemi/Nodal/actions/runs/36334138396) retained normalized IR and generated Verilog-A for reusable named modules, symbolic/literal actuals and predecessor combinations; strict target reparse and the explicit non-default-root-actual rejection passed.
   - [x] **F-042.C — Correctness, rejection and predecessor regression.** Exercise named-port mismatch, illegal overrides, cross-owner terminals and recursion; combine hierarchy with equations, events and module-local functions.
     - Evidence: exact-head Core and Increment 37 cover named-port/owner/type/direction/duplicate/effect/cycle negatives plus separately compiled equation, event and module-local-function sources; exact-head Increment 23/25/28/29/41 runs [36332616923](https://github.com/pysolvesemi/Nodal/actions/runs/36332616923), [36332627314](https://github.com/pysolvesemi/Nodal/actions/runs/36332627314), [36332644101](https://github.com/pysolvesemi/Nodal/actions/runs/36332644101), [36332654703](https://github.com/pysolvesemi/Nodal/actions/runs/36332654703) and [36332684933](https://github.com/pysolvesemi/Nodal/actions/runs/36332684933) preserve predecessor behavior.
-  - [ ] **F-042.D — Independent validation and applicability**
+  - [x] **F-042.D — Independent validation and applicability**
     - [x] **F-042.D.1** Compiler witnesses: Retain actual public Scala, normalized IR and generated Verilog-A witnesses for the supported compiler profile; distinguish internal reparse from independent OpenVAF compilation.
-      - Evidence: Increment 37 artifact `10937037949` from run [36334138396](https://github.com/pysolvesemi/Nodal/actions/runs/36334138396) retains seven normalized-MLIR/Verilog-A witnesses with matching logged hashes and strict internal reparse. This is compiler evidence, not independent OpenVAF execution.
-    - [ ] **F-042.D.2** Later tool qualification: Identify the applicable witness cases for 48 compile and 49/52 numerical qualification, with required analyses, references and tolerances. Preserve compiler-only acceptance limits; unavailable required execution remains blocked, not passed or N/A.
+      - Evidence: exact-head Core run [36332604210](https://github.com/pysolvesemi/Nodal/actions/runs/36332604210) executes the public hierarchy sources and checks their actual normalized MLIR and generated Verilog-A; Increment 37 run [36334138396](https://github.com/pysolvesemi/Nodal/actions/runs/36334138396) repeats the predecessor/event path and artifact `10937037949` retains seven event-source MLIR/Verilog-A files with matching logged hashes. Strict internal reparse is compiler evidence, not independent OpenVAF execution.
+    - [x] **F-042.D.2** Later tool qualification: Identify the applicable witness cases for 48 compile and 49/52 numerical qualification, with required analyses, references and tolerances. Preserve compiler-only acceptance limits; unavailable required execution remains blocked, not passed or N/A.
+      - Evidence: the [later-tool qualification handoff](../implementation/increment42-later-tool-handoff.md) names five positive and one compiler-negative hierarchy cases, pins the 48 compile/load boundary, defines DC/transient references and tolerances for 49/52, capability-gates event execution, and explicitly keeps structure-only repeated/nested witnesses from becoming numerical claims.
   - [x] **F-042.E — Optimization review and output quality.** Review duplicate module emission, preserved symbolic overrides and hierarchy-derived names without clone-per-default specialization. Apply the proportionate review rule above; document no new optimization required when justified.
     - Evidence: the public repeated/nested witnesses select one exact structural definition bottom-up, retain per-instance handles, names, paths and actuals, and emit one reusable definition per compatible structure without specializing on actual values.
   - [x] **F-042.F — Scale, determinism and compatibility.** Vary hierarchy depth, repeated instance count and non-default parameter combinations; compare deterministic instance/source paths.

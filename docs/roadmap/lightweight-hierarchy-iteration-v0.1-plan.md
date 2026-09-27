@@ -82,8 +82,9 @@ The pinned Scala 3.8.4 artifact also passed separate
 definition/factory/consumer compilation, raw-factory rejection, 11 prototype
 cases with 169 assertions and six compiler negatives. This completes F-042.B.1 and its descendants. The later exact-head compiler
 implementation and qualification recorded in the authoritative roadmap also
-complete F-042.A, B.2, B.3, C, D.1, E and F; F-042.D.2, aggregate D, G and the
-Increment 42 parent remain open.
+complete F-042.A, B.2, B.3, C, D, E and F. The explicit 48/49/52 handoff now
+completes D.2 without claiming later-tool execution; G and the Increment 42
+parent remain open.
 
 **F-042.A/B.2:** Reuse transaction-owned IDs, declarations and the existing bridge
 and native verifier. Most new policy should be in focused private helpers; use
@@ -105,9 +106,10 @@ source, bridge, native or emitted-output tests.
 
 **F-042.D/G:** Retain actual public Scala, normalized IR and generated Verilog-A,
 strict internal reparse, reproduction commands and capability limits. Internal
-reparse is not independent tool execution. Preserve 48/49/52 handoff obligations
-without making their entire later parents reverse prerequisites for compiler-only
-42 acceptance. No current feature or acceptance box is completed by this plan.
+reparse is not independent tool execution. The completed F-042.D.2 handoff preserves
+48/49/52 case, analysis, reference and tolerance obligations without making
+their entire later parents reverse prerequisites for compiler-only 42
+acceptance. No feature box is completed merely by this plan text.
 
 ## One target-visible iteration domain
 

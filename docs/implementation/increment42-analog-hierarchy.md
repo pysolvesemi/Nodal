@@ -1,6 +1,6 @@
 # Increment 42 - Analog hierarchy and parameterized instances
 
-**Status:** Compiler implementation targeted-green; later-tool handoff, full acceptance and merge remain open.
+**Status:** Compiler implementation and later-tool handoff complete; full acceptance and merge remain open.
 
 ## Current production boundary
 
@@ -23,8 +23,8 @@ The first exact-head Increment 37 run
 failed only on an external Maven HTTP 429. The bounded one-request dispatcher
 retry [36334138396](https://github.com/pysolvesemi/Nodal/actions/runs/36334138396)
 then passed the complete public event/source-to-native/Verilog-A matrix on the
-same source and tree. Artifact `10937037949` retains seven normalized-MLIR and
-Verilog-A witnesses; its ZIP/API/upload SHA256 is
+same source and tree. Artifact `10937037949` retains seven predecessor-event
+MLIR/Verilog-A files; its ZIP/API/upload SHA256 is
 `11de528d5243783ba08c95f5df308b3515779d53deeeb7bcf57416621f24cb17`,
 and all internal hashes match the job log. The exact qualification is recorded
 in [PR #134 comment 5857885496](https://github.com/pysolvesemi/Nodal/pull/134#issuecomment-5857885496).
@@ -166,12 +166,13 @@ source-located negatives and predecessor combinations; retained public
 Scala/normalized-MLIR/generated-Verilog-A witnesses; exact structural reuse; and
 bounded-depth/repeated/nested determinism.
 
-F-042.D.2 remains open: the applicable 48 compile and 49/52 numerical cases,
-analyses, references and tolerances still require an explicit handoff record.
-Strict internal target reparse is intentionally not described as independent
-OpenVAF execution. F-042.G and the Increment 42 parent also remain open pending
-that handoff, final full applicable CI, review, verified integration, merge and
-separate accepted-evidence closure.
+F-042.D.2 is complete in the [later-tool qualification handoff](increment42-later-tool-handoff.md).
+That record selects the 48 compile/load and 49/52 numerical cases, pins analyses,
+independent references, units and tolerances, capability-gates event execution,
+and prevents structure-only witnesses from becoming numerical claims. Strict
+internal target reparse remains distinct from independent OpenVAF execution.
+F-042.G and the Increment 42 parent remain open pending final full applicable
+CI, review, verified integration, merge and separate accepted-evidence closure.
 
 ## Published checkpoint 1
 
@@ -299,9 +300,9 @@ that scope without a concrete defect. Preserve the qualified public Scala,
 normalized MLIR, generated Verilog-A, negative mutations, source maps, scale and
 determinism evidence.
 
-F-042.D.2 remains to map concrete hierarchy witnesses into the later Increment
-48 OpenVAF compile and Increment 49/52 numerical qualification owners, including
-required analyses, references and tolerances. F-042.G then requires final full
-applicable CI on the exact final head, review, verified integration, squash
-merge and separate accepted-evidence closure. Unavailable independent or
+The [F-042.D.2 handoff](increment42-later-tool-handoff.md) now maps concrete
+hierarchy witnesses into the later Increment 48 OpenVAF compile and Increment
+49/52 numerical owners without claiming their execution. F-042.G requires final
+full applicable CI on the exact final head, review, verified integration,
+squash merge and separate accepted-evidence closure. Unavailable independent or
 numerical execution remains open, not passed or N/A.

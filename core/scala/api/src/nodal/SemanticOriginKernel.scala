@@ -219,14 +219,13 @@ private[nodal] final class SemanticOriginBuilder:
       instance: AnyRef,
       childModule: Module
   ): Unit =
-    val parentClass = modules.find(_.handle == parent).map(_.module.getClass.getName)
     instances += OriginInstanceCapture(
       parent,
       ordinal,
       child,
       instance,
       childModule,
-      captureSite(parentClass)
+      captureSite()
     )
 
   def captureOperation(module: Long, kind: String, values: Vector[Any]): Unit =
@@ -240,7 +239,7 @@ private[nodal] final class SemanticOriginBuilder:
     */
   def captureSemanticSource(): Option[SourceSpan] = captureSite().span
 
-  private def captureSite(preferredClass: Option[String] = None): KernelSourceSite =
+  private def captureSite(): KernelSourceSite =
     val frames = walker.walk[java.util.List[StackWalker.StackFrame]](stream =>
       stream.limit(96).toList
     ).asScala.toVector
@@ -252,13 +251,9 @@ private[nodal] final class SemanticOriginBuilder:
       Option(frame.getFileName)
         .flatMap(fileName => locateSource(fileName, frame.getClassName))
         .nonEmpty
-    val userCandidate = preferredClass
-      .flatMap(name =>
-        userFrames.find: (frame, _) =>
-          frame.getClassName == name && locatedConstructor(frame -> 0)
-      )
-      .orElse(userFrames.find: candidate =>
-        locatedConstructor(candidate))
+    val userCandidate = userFrames
+      .find: candidate =>
+        locatedConstructor(candidate)
       .orElse(userFrames.headOption)
     val userIndex = userCandidate.map(_._2).getOrElse(-1)
     val user = userCandidate.map(_._1)
@@ -680,6 +675,17 @@ private[nodal] final class SemanticOriginBuilder:
   ): Option[String] =
     Option(members.get(value)).map(cleanIdentifier(_, "value"))
 
+  private def authoredOrProjectedBinding(
+      authored: Option[String],
+      member: Option[String]
+  ): Option[String] =
+    authored match
+      case Some(name) =>
+        member
+          .filter(candidate => candidate == name || candidate.startsWith(s"${name}_"))
+          .orElse(Some(name))
+      case None => member
+
   private def allocate(
       candidates: Vector[NameCandidate],
       reserved: Set[String] = Set.empty
@@ -770,9 +776,11 @@ private[nodal] final class SemanticOriginBuilder:
     val instanceByChild = instances.iterator.map(capture => capture.child -> capture).toMap
     val instanceCandidates = instances.toVector.map: capture =>
       val childClass = moduleByHandle(capture.child).className
-      val direct = memberBinding(members, capture.instance)
-        .orElse(memberBinding(members, capture.childModule))
-        .orElse(instanceBinding(capture.site))
+      val direct = authoredOrProjectedBinding(
+        instanceBinding(capture.site),
+        memberBinding(members, capture.instance)
+          .orElse(memberBinding(members, capture.childModule))
+      )
       val base = direct.getOrElse(
         s"${lowerInitial(cleanIdentifier(childClass, "module"))}_${sourceSuffix(capture.site)}"
       )
@@ -849,8 +857,12 @@ private[nodal] final class SemanticOriginBuilder:
     declarations.foreach: capture =>
       capture.explicitName
         .map(cleanIdentifier(_, capture.kind))
-        .orElse(memberBinding(members, capture.value))
-        .orElse(declarationBinding(capture.site, capture.kind))
+        .orElse(
+          authoredOrProjectedBinding(
+            declarationBinding(capture.site, capture.kind),
+            memberBinding(members, capture.value)
+          )
+        )
         .foreach(name => directDeclarationNames.put(capture.value, name))
 
     val sinkHints = new IdentityHashMap[AnyRef, String]()
@@ -889,9 +901,10 @@ private[nodal] final class SemanticOriginBuilder:
           val binding =
             if explicit.nonEmpty then None
             else
-              memberBinding(members, capture.value)
-                .orElse(declarationBinding(capture.site, capture.kind))
-                .filter(claimedBindings.add)
+              authoredOrProjectedBinding(
+                declarationBinding(capture.site, capture.kind),
+                memberBinding(members, capture.value)
+              ).filter(claimedBindings.add)
           val sink = Option(sinkHints.get(capture.value)).map(name => s"${name}_source")
           val selected = explicit
             .map(_ -> "explicit")

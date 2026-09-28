@@ -1,0 +1,43 @@
+name: Nodal 42 PR134 Increment 20 rate-limit retry 36ba53c
+
+on:
+  push:
+    branches:
+      - 'ci-control/nodal-42-pr134-36ba53c-inc20-rate-limit-v1'
+    paths:
+      - '.github/workflows/ci-control-42-pr134-36ba53c-inc20-rate-limit.yml'
+      - 'scripts/ci_control/increment42_pr134_36ba53c_inc20_rate_limit_v1.py'
+      - 'scripts/ci_control/increment42_pr134_36ba53c_inc20_rate_limit_inventory.json'
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: nodal-42-pr134-36ba53c-inc20-rate-limit-v1
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out only the pinned controller commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Validate exact transient failure and dispatch one fresh Increment 20 run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci_control/increment42_pr134_36ba53c_inc20_rate_limit_v1.py
+      - name: Preserve retry intent and observed run ledger
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nodal-42-pr134-36ba53c-inc20-rate-limit-ledger-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dispatch-evidence/
+          if-no-files-found: error
+          retention-days: 30
+

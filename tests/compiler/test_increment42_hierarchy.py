@@ -150,6 +150,33 @@ class HierarchyHarnessTests(unittest.TestCase):
         fixture = (ROOT / "tests/compiler/fixtures/increment42/run_hierarchy_matrix.py").read_text()
         self.assertIn('"child-terminal-duplicate-reference"', fixture)
 
+    def test_native_hierarchy_rejects_duplicate_boundary_port_names(self):
+        production = (ROOT / "core/compiler/lib/Transforms/Passes.cpp").read_text()
+        begin = production.index("LogicalResult verifyHierarchy(")
+        end = production.index("LogicalResult verifyTypes(", begin)
+        hierarchy = production[begin:end]
+        self.assertIn("boundaryPorts", hierarchy)
+        self.assertIn("NODAL-VERIFY-HIERARCHY-011", hierarchy)
+        self.assertNotIn("for (Operation &candidate : childModule->getRegion", hierarchy)
+        fixture = (ROOT / "tests/compiler/fixtures/increment42/run_hierarchy_matrix.py").read_text()
+        self.assertIn('"child-terminal-duplicate-boundary-name"', fixture)
+
+    def test_root_export_compares_typed_values_not_rendered_spelling(self):
+        production = (
+            ROOT / "core/compiler/lib/Backend/AnalogVerticalSlice.cpp"
+        ).read_text()
+        begin = production.index("FailureOr<bool> parameterBindingsEqual(")
+        end = production.index("struct HierarchyInstanceRender", begin)
+        comparison = production[begin:end]
+        self.assertIn("llvm::APFloat::cmpEqual", comparison)
+        root_begin = production.index("LogicalResult verifyRootExport(")
+        root_end = production.index("LogicalResult renderAnalog(", root_begin)
+        root_export = production[root_begin:root_end]
+        self.assertIn("parameterBindingsEqual", root_export)
+        self.assertNotIn("*actual != *authored", root_export)
+        fixture = (ROOT / "core/compiler/test/Unit/BackendTest.cpp").read_text()
+        self.assertIn("numerically equal signed-zero root actual was rejected", fixture)
+
     def test_target_visible_real_ordering_is_exact(self):
         production = (ROOT / "core/compiler/lib/Dialect/Nodal/ParameterModel.cpp").read_text()
         begin = production.index('if (name == "gt" || name == "ge"')

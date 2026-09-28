@@ -16,6 +16,7 @@
 #include "nodal/Dialect/Nodal/TimeWaveform.h"
 #include "nodal/Support/AnalogHierarchySyntax.h"
 
+#include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -32,6 +33,7 @@
 #include <charconv>
 #include <cmath>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <system_error>
@@ -736,6 +738,40 @@ FailureOr<std::string> renderParameterBinding(Attribute value, Operation *parame
   return failure();
 }
 
+FailureOr<bool> parameterBindingsEqual(Attribute actual, Attribute authored, Operation *parameter) {
+  llvm::StringRef kind = nodal::getParameterKind(parameter);
+  if (kind == "real") {
+    auto actualReal = llvm::dyn_cast<FloatAttr>(actual);
+    auto authoredReal = llvm::dyn_cast<FloatAttr>(authored);
+    if (!actualReal || !authoredReal || !std::isfinite(actualReal.getValueAsDouble()) ||
+        !std::isfinite(authoredReal.getValueAsDouble()))
+      return failure();
+    return actualReal.getValue().compare(authoredReal.getValue()) == llvm::APFloat::cmpEqual;
+  }
+  if (kind == "integer") {
+    auto actualInteger = llvm::dyn_cast<IntegerAttr>(actual);
+    auto authoredInteger = llvm::dyn_cast<IntegerAttr>(authored);
+    if (!actualInteger || !authoredInteger)
+      return failure();
+    return actualInteger.getValue() == authoredInteger.getValue();
+  }
+  if (kind == "boolean") {
+    auto booleanValue = [](Attribute value) -> std::optional<bool> {
+      if (auto boolean = llvm::dyn_cast<BoolAttr>(value))
+        return boolean.getValue();
+      if (auto integer = llvm::dyn_cast<IntegerAttr>(value))
+        return integer.getInt() != 0;
+      return std::nullopt;
+    };
+    auto actualBoolean = booleanValue(actual);
+    auto authoredBoolean = booleanValue(authored);
+    if (!actualBoolean || !authoredBoolean)
+      return failure();
+    return *actualBoolean == *authoredBoolean;
+  }
+  return failure();
+}
+
 struct HierarchyInstanceRender {
   Operation *child = nullptr;
   std::map<std::string, std::string> ports;
@@ -963,12 +999,11 @@ LogicalResult verifyRootExport(llvm::ArrayRef<Operation *> definitions) {
 
   for (NamedAttribute binding : bindings) {
     Operation *parameter = findDirectParameter(root, binding.getName().getValue());
-    auto actual = parameter ? renderParameterBinding(binding.getValue(), parameter)
-                            : FailureOr<std::string>(failure());
-    auto authored = parameter
-                        ? renderParameterBinding(parameter->getAttr("default_value"), parameter)
-                        : FailureOr<std::string>(failure());
-    if (!parameter || failed(actual) || failed(authored) || *actual != *authored)
+    auto matches = parameter
+                       ? parameterBindingsEqual(binding.getValue(),
+                                                parameter->getAttr("default_value"), parameter)
+                       : FailureOr<bool>(failure());
+    if (!parameter || failed(matches) || !*matches)
       return emitMappedFailure(
           parameter ? parameter : root, "NODAL-BACKEND-HIERARCHY-010",
           "non-default root actual requires an external top-binding adapter and is unsupported");

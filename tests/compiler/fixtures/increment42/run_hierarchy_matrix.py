@@ -297,6 +297,14 @@ def run(nodalc: Path, work: Path) -> int:
         leaf,
     ]), code="NODAL-VERIFY-HIERARCHY-010", location="Hierarchy42.scala:41:9",
         detail="instance 'child' port 'vin'")
+    duplicate_boundary_terminal = terminal("vin", line=21).replace(
+        "%vin =", "%vin_duplicate ="
+    )
+    matrix.check("child-terminal-duplicate-boundary-name", source([
+        definition("Top", [instance("child", "Leaf"), instance_terminal("child", "vin")]),
+        definition("Leaf", [terminal("vin"), duplicate_boundary_terminal]),
+    ]), code="NODAL-VERIFY-HIERARCHY-011", location="Hierarchy42.scala:21:3",
+        detail="duplicate boundary terminal name 'vin'")
     root_parameter = definition("Root", [parameter("gain")])
     matrix.check("root-parameter-binding", parameter_source(
         [root_parameter], "Root", "gain = 6.0 : f64"

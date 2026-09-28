@@ -387,6 +387,23 @@ LogicalResult verifyHierarchy(mlir::ModuleOp module) {
   for (std::size_t index = 0; index < ordered.size(); ++index)
     indices.try_emplace(symbolName(ordered[index]), index);
 
+  std::vector<llvm::StringMap<Operation *>> boundaryPorts(ordered.size());
+  for (std::size_t index = 0; index < ordered.size(); ++index) {
+    Block &body = ordered[index]->getRegion(0).front();
+    for (Operation &candidate : body) {
+      if (!isNamed(&candidate, "nodal.terminal"))
+        continue;
+      auto name = candidate.getAttrOfType<StringAttr>("name");
+      auto direction = candidate.getAttrOfType<StringAttr>("direction");
+      if (!name || !direction)
+        continue;
+      if (!boundaryPorts[index].try_emplace(name.getValue(), &candidate).second)
+        return emitFailure(&candidate, "NODAL-VERIFY-HIERARCHY-011",
+                           llvm::Twine("duplicate boundary terminal name '") + name.getValue() +
+                               "'");
+    }
+  }
+
   std::vector<std::vector<std::size_t>> edges(ordered.size());
   std::vector<std::vector<Operation *>> sites(ordered.size());
   for (std::size_t index = 0; index < ordered.size(); ++index) {
@@ -424,21 +441,12 @@ LogicalResult verifyHierarchy(mlir::ModuleOp module) {
                            "child terminal references an unknown direct instance");
       Operation *instance = foundInstance->getValue();
       FlatSymbolRefAttr target = flatReference(instance, "module");
-      Operation *childModule = target ? definitions.lookup(target.getValue()) : nullptr;
+      auto childDefinition = target ? indices.find(target.getValue()) : indices.end();
       auto port = endpoint.getAttrOfType<StringAttr>("port");
-      Operation *childTerminal = nullptr;
-      if (childModule && port && childModule->getNumRegions() == 1 &&
-          !childModule->getRegion(0).empty()) {
-        for (Operation &candidate : childModule->getRegion(0).front()) {
-          auto name = candidate.getAttrOfType<StringAttr>("name");
-          auto direction = candidate.getAttrOfType<StringAttr>("direction");
-          if (isNamed(&candidate, "nodal.terminal") && name && direction &&
-              name.getValue() == port.getValue()) {
-            childTerminal = &candidate;
-            break;
-          }
-        }
-      }
+      Operation *childTerminal =
+          childDefinition != indices.end() && port
+              ? boundaryPorts[childDefinition->getValue()].lookup(port.getValue())
+              : nullptr;
       if (!childTerminal)
         return emitFailure(&endpoint, "NODAL-VERIFY-HIERARCHY-007",
                            llvm::Twine("instance target has no boundary terminal '") +

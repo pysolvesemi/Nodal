@@ -215,6 +215,34 @@ int main() {
       hierarchyOutput.find(childDefinition.str(), firstChildDefinition + 1) != std::string::npos)
     return fail("hierarchy output lost symbolic overrides, names, or definition reuse");
 
+  std::string signedZeroRootSource = kHierarchyModule.str();
+  const std::string signedZeroBinding = "nodal.root.parameter_bindings = {rootGain = 4.0 : f64}";
+  const size_t signedZeroBindingPosition = signedZeroRootSource.find(signedZeroBinding);
+  const std::string rootDefault = "default_value = 4.0 : f64";
+  const size_t rootDefaultPosition = signedZeroRootSource.find(rootDefault);
+  const std::string rootDefaultLiteral = "spelling = \"4.0\", value = 4.0 : f64";
+  const size_t rootDefaultLiteralPosition = signedZeroRootSource.find(rootDefaultLiteral);
+  if (signedZeroBindingPosition == std::string::npos || rootDefaultPosition == std::string::npos ||
+      rootDefaultLiteralPosition == std::string::npos)
+    return fail("signed-zero root-actual mutation anchors missing");
+  signedZeroRootSource.replace(rootDefaultLiteralPosition, rootDefaultLiteral.size(),
+                               "spelling = \"0.0\", value = 0.0 : f64");
+  signedZeroRootSource.replace(rootDefaultPosition, rootDefault.size(),
+                               "default_value = 0.0 : f64");
+  signedZeroRootSource.replace(signedZeroBindingPosition, signedZeroBinding.size(),
+                               "nodal.root.parameter_bindings = {rootGain = -0.0 : f64}");
+  auto signedZeroRoot = parse(context, signedZeroRootSource);
+  if (!signedZeroRoot)
+    return fail("could not parse the signed-zero root-actual fixture");
+  std::string signedZeroRootOutput;
+  llvm::raw_string_ostream signedZeroRootStream(signedZeroRootOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*signedZeroRoot, nodal::BackendKind::VerilogA, signedZeroRootStream)))
+    return fail("numerically equal signed-zero root actual was rejected");
+  signedZeroRootStream.flush();
+  if (signedZeroRootOutput.find("parameter real rootGain = 0.0;") == std::string::npos)
+    return fail("signed-zero root fixture lost the authored declaration default");
+
   std::string mismatchedRootSource = kHierarchyModule.str();
   const std::string matchingRoot = "nodal.root.parameter_bindings = {rootGain = 4.0 : f64}";
   const size_t matchingRootPosition = mismatchedRootSource.find(matchingRoot);

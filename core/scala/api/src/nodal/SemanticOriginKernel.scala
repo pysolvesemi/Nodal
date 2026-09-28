@@ -245,12 +245,15 @@ private[nodal] final class SemanticOriginBuilder:
     ).asScala.toVector
     val userFrames = frames.zipWithIndex.filter: (frame, _) =>
       isUserFrame(frame)
+    val locatedConstructor = (candidate: (StackWalker.StackFrame, Int)) =>
+      val (frame, _) = candidate
+      frame.getMethodName == "<init>" &&
+      Option(frame.getFileName)
+        .flatMap(fileName => locateSource(fileName, frame.getClassName))
+        .nonEmpty
     val userCandidate = userFrames
-      .find: (frame, _) =>
-        frame.getMethodName == "<init>" &&
-          Option(frame.getFileName)
-            .flatMap(fileName => locateSource(fileName, frame.getClassName))
-            .nonEmpty
+      .find: candidate =>
+        locatedConstructor(candidate)
       .orElse(userFrames.headOption)
     val userIndex = userCandidate.map(_._2).getOrElse(-1)
     val user = userCandidate.map(_._1)
@@ -544,16 +547,53 @@ private[nodal] final class SemanticOriginBuilder:
 
   private def discoverMemberNames(): IdentityHashMap[AnyRef, String] =
     val discovered = new IdentityHashMap[AnyRef, String]()
+    val semanticObjects = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+    val preferredNames = new IdentityHashMap[AnyRef, String]()
+    modules.foreach(capture => semanticObjects.put(capture.module, java.lang.Boolean.TRUE))
+    domains.foreach(capture => semanticObjects.put(capture.domain, java.lang.Boolean.TRUE))
+    declarations.foreach: capture =>
+      semanticObjects.put(capture.value, java.lang.Boolean.TRUE)
+      declarationBinding(capture.site, capture.kind).foreach: name =>
+        preferredNames.put(capture.value, name)
+    expressions.foreach(capture => semanticObjects.put(capture.value, java.lang.Boolean.TRUE))
+    instances.foreach: capture =>
+      semanticObjects.put(capture.instance, java.lang.Boolean.TRUE)
+      semanticObjects.put(capture.childModule, java.lang.Boolean.TRUE)
+      instanceBinding(capture.site).foreach: name =>
+        preferredNames.put(capture.instance, name)
+
+    def retain(value: AnyRef, candidate: String): Unit =
+      if semanticObjects.containsKey(value) then
+        val preferred = Option(preferredNames.get(value))
+        Option(discovered.get(value)) match
+          case Some(existing) =>
+            if preferred.contains(candidate) ||
+              (!preferred.contains(existing) && candidate < existing)
+            then discovered.put(value, candidate)
+          case None => discovered.put(value, candidate)
+
+    def visit(value: Any, candidate: String): Unit = value match
+      case option: Option[?] =>
+        option.foreach(element => visit(element, candidate))
+      case indexed: IndexedSeq[?] =>
+        indexed.zipWithIndex.foreach: (element, index) =>
+          visit(element, s"${candidate}_$index")
+      case list: List[?] =>
+        list.zipWithIndex.foreach: (element, index) =>
+          visit(element, s"${candidate}_$index")
+      case array: Array[?] =>
+        array.zipWithIndex.foreach: (element, index) =>
+          visit(element, s"${candidate}_$index")
+      case reference: AnyRef => retain(reference, candidate)
+      case _ => ()
+
     modules.sortBy(_.handle).foreach: capture =>
       memberFields(capture.module.getClass).foreach: field =>
         try
           if field.trySetAccessible() then
             Option(field.get(capture.module)).foreach: value =>
               val candidate = cleanIdentifier(field.getName, "member")
-              Option(discovered.get(value)) match
-                case Some(existing) =>
-                  if candidate < existing then discovered.put(value, candidate)
-                case None => discovered.put(value, candidate)
+              visit(value, candidate)
         catch
           case _: ReflectiveOperationException => ()
           case _: RuntimeException => ()
@@ -627,10 +667,13 @@ private[nodal] final class SemanticOriginBuilder:
 
   private def declarationBinding(site: KernelSourceSite, kind: String): Option[String] =
     val tokens = declarationTokens(kind, site)
-    bindingForTokens(site, tokens, if tokens.nonEmpty then 12 else 0)
+    site.bindingName
+      .map(cleanIdentifier(_, kind))
+      .orElse(bindingForTokens(site, tokens, if tokens.nonEmpty then 12 else 0))
 
   private def instanceBinding(site: KernelSourceSite): Option[String] =
     bindingForTokens(site, Vector("instance("), 12)
+      .orElse(site.bindingName.map(cleanIdentifier(_, "instance")))
 
   private def expressionBinding(site: KernelSourceSite): Option[String] =
     bindingForTokens(site, Vector.empty, 0)
@@ -731,9 +774,9 @@ private[nodal] final class SemanticOriginBuilder:
     val instanceByChild = instances.iterator.map(capture => capture.child -> capture).toMap
     val instanceCandidates = instances.toVector.map: capture =>
       val childClass = moduleByHandle(capture.child).className
-      val direct = instanceBinding(capture.site)
-        .orElse(memberBinding(members, capture.instance))
+      val direct = memberBinding(members, capture.instance)
         .orElse(memberBinding(members, capture.childModule))
+        .orElse(instanceBinding(capture.site))
       val base = direct.getOrElse(
         s"${lowerInitial(cleanIdentifier(childClass, "module"))}_${sourceSuffix(capture.site)}"
       )
@@ -810,8 +853,8 @@ private[nodal] final class SemanticOriginBuilder:
     declarations.foreach: capture =>
       capture.explicitName
         .map(cleanIdentifier(_, capture.kind))
-        .orElse(declarationBinding(capture.site, capture.kind))
         .orElse(memberBinding(members, capture.value))
+        .orElse(declarationBinding(capture.site, capture.kind))
         .foreach(name => directDeclarationNames.put(capture.value, name))
 
     val sinkHints = new IdentityHashMap[AnyRef, String]()
@@ -847,9 +890,12 @@ private[nodal] final class SemanticOriginBuilder:
       val allocated = allocate(
         captures.toVector.map: capture =>
           val explicit = capture.explicitName.map(cleanIdentifier(_, capture.kind))
-          val binding = declarationBinding(capture.site, capture.kind)
-            .orElse(memberBinding(members, capture.value))
-            .filter(claimedBindings.add)
+          val binding =
+            if explicit.nonEmpty then None
+            else
+              memberBinding(members, capture.value)
+                .orElse(declarationBinding(capture.site, capture.kind))
+                .filter(claimedBindings.add)
           val sink = Option(sinkHints.get(capture.value)).map(name => s"${name}_source")
           val selected = explicit
             .map(_ -> "explicit")

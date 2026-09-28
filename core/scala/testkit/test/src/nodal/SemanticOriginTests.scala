@@ -48,6 +48,17 @@ final class SemanticOriginTop extends Module:
     val child = instance(new SemanticOriginLeaf)
     child.domain(root)
 
+final class SemanticOriginAliasTop extends Module:
+  val z: Signal[UInt] = in(UInt(8))
+  val a: Signal[UInt] = z
+
+final class SemanticOriginAliasInstanceTop extends Module:
+  val z: Instance[SemanticOriginInheritedLeaf] =
+    instance(new SemanticOriginInheritedLeaf)
+  val a: Instance[SemanticOriginInheritedLeaf] = z
+
+final class SemanticOriginInheritedDerived extends SemanticOriginInheritedBase
+
 object SemanticOriginTests extends TestSuite:
   private val counterOnly =
     raw"(?:module|instance|input|output|wire|variable|register|memory|expr)_\d+".r
@@ -136,3 +147,21 @@ object SemanticOriginTests extends TestSuite:
       assert(!beta.sourceMap.exists(entry =>
         entry.source.path.endsWith("duplicate/alpha/DuplicateSource.scala")
       ))
+
+    test("authored declaration names outrank unrelated aliases"):
+      val declaration = ConstructionKernel.inspect(new SemanticOriginAliasTop)
+      val instance = ConstructionKernel.inspect(new SemanticOriginAliasInstanceTop)
+
+      assert(declaration.modules.head.declarations.exists(_.name == "z"))
+      assert(!declaration.modules.head.declarations.exists(_.name == "a"))
+      assert(instance.modules.exists(_.path == "SemanticOriginAliasInstanceTop.z"))
+      assert(!instance.modules.exists(_.path == "SemanticOriginAliasInstanceTop.a"))
+
+    test("inherited allocations retain the declaring constructor source"):
+      val snapshot = ConstructionKernel.inspect(new SemanticOriginInheritedDerived)
+      val source = snapshot.sourceMap
+        .find(_.semanticPath.endsWith(".inheritedChild_instance"))
+        .map(_.source)
+        .get
+
+      assert(source.path.endsWith("SemanticOriginInheritedBase.scala"))

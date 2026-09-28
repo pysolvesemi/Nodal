@@ -592,6 +592,19 @@ def check_repository(root: Path) -> None:
         "NODAL-INC34-021",
         "control-flow construction bridge",
     )
+    inspection = construction.partition(
+        "private[nodal] object AnalogControlFlowInspection:"
+    )[2]
+    require(
+        re.search(
+            r"val construction = ConstructionKernel\.inspect\(top, options\)\s+"
+            r"AnalogControlFlowConstruction\.Inspection\(\s*construction,\s*"
+            r"construction\.analogProcedural\.flatMap\(_\.controlFlow\)\s*\)",
+            inspection,
+        ) is not None,
+        "NODAL-INC34-021: control-flow inspection must retain all control trees "
+        "from its returned canonical construction snapshot",
+    )
     require_tokens(
         procedural,
         (
@@ -611,7 +624,7 @@ def check_repository(root: Path) -> None:
             "controlFlow = snapshot.controlFlow.map(_.remapOwner(owner))",
             "module.controlSnapshot",
             "retained.controlFlow.nonEmpty",
-            "def controlSnapshots",
+            "def snapshots(",
         ),
         "NODAL-INC34-022",
         "procedural construction integration",

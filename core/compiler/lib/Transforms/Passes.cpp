@@ -15,6 +15,7 @@
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
+#include "nodal/Support/HierarchyOrder.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -25,11 +26,14 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Casting.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 using namespace mlir;
 
@@ -370,44 +374,111 @@ LogicalResult verifyHierarchy(mlir::ModuleOp module) {
   if (failed(result))
     return failure();
 
-  llvm::StringMap<llvm::SmallVector<std::string, 4>> edges;
-  for (const auto &entry : definitions) {
-    Operation *definition = entry.getValue();
-    definition->walk([&](Operation *operation) {
-      if (!isNamed(operation, "nodal.instance"))
-        return;
-      FlatSymbolRefAttr target = flatReference(operation, "module");
-      if (!target || !definitions.contains(target.getValue())) {
-        result = emitFailure(operation, "NODAL-VERIFY-HIERARCHY-004",
-                             llvm::Twine("instance references unknown module '") +
-                                 (target ? target.getValue() : llvm::StringRef("")) + "'");
-        return;
-      }
-      edges[entry.getKey()].push_back(target.getValue().str());
-    });
-  }
-  if (failed(result))
-    return failure();
+  // StringMap iteration must not choose which cycle or unresolved binding is
+  // diagnosed. Sort definitions and instance names, retaining every edge and its
+  // source operation. Ordering the graph never reorders the user's IR or state.
+  std::vector<Operation *> ordered;
+  ordered.reserve(definitions.size());
+  for (const auto &entry : definitions)
+    ordered.push_back(entry.getValue());
+  std::sort(ordered.begin(), ordered.end(),
+            [](Operation *left, Operation *right) { return symbolName(left) < symbolName(right); });
+  llvm::StringMap<std::size_t> indices;
+  for (std::size_t index = 0; index < ordered.size(); ++index)
+    indices.try_emplace(symbolName(ordered[index]), index);
 
-  llvm::StringMap<unsigned> colors;
-  std::function<LogicalResult(llvm::StringRef)> visit = [&](llvm::StringRef name) {
-    unsigned &color = colors[name];
-    if (color == 1)
-      return emitFailure(definitions[name], "NODAL-VERIFY-HIERARCHY-005",
-                         llvm::Twine("recursive module hierarchy includes '") + name + "'");
-    if (color == 2)
-      return success();
-    color = 1;
-    for (const std::string &child : edges[name]) {
-      if (failed(visit(child)))
-        return failure();
+  std::vector<llvm::StringMap<Operation *>> boundaryPorts(ordered.size());
+  for (std::size_t index = 0; index < ordered.size(); ++index) {
+    Block &body = ordered[index]->getRegion(0).front();
+    for (Operation &candidate : body) {
+      if (!isNamed(&candidate, "nodal.terminal"))
+        continue;
+      auto name = candidate.getAttrOfType<StringAttr>("name");
+      auto direction = candidate.getAttrOfType<StringAttr>("direction");
+      if (!name || !direction)
+        continue;
+      if (!boundaryPorts[index].try_emplace(name.getValue(), &candidate).second)
+        return emitFailure(&candidate, "NODAL-VERIFY-HIERARCHY-011",
+                           llvm::Twine("duplicate boundary terminal name '") + name.getValue() +
+                               "'");
     }
-    color = 2;
-    return success();
-  };
-  for (const auto &entry : definitions) {
-    if (failed(visit(entry.getKey())))
-      return failure();
+  }
+
+  std::vector<std::vector<std::size_t>> edges(ordered.size());
+  std::vector<std::vector<Operation *>> sites(ordered.size());
+  for (std::size_t index = 0; index < ordered.size(); ++index) {
+    auto &instances = sites[index];
+    ordered[index]->walk([&](Operation *operation) {
+      if (isNamed(operation, "nodal.instance"))
+        instances.push_back(operation);
+    });
+    std::sort(instances.begin(), instances.end(), [](Operation *left, Operation *right) {
+      return symbolName(left) < symbolName(right);
+    });
+    edges[index].reserve(instances.size());
+    llvm::StringMap<Operation *> instanceByName;
+    for (Operation *instance : instances) {
+      FlatSymbolRefAttr target = flatReference(instance, "module");
+      auto child = target ? indices.find(target.getValue()) : indices.end();
+      if (child == indices.end())
+        return emitFailure(instance, "NODAL-VERIFY-HIERARCHY-004",
+                           llvm::Twine("instance references unknown module '") +
+                               (target ? target.getValue() : llvm::StringRef("")) + "'");
+      edges[index].push_back(child->getValue());
+      instanceByName.try_emplace(symbolName(instance), instance);
+    }
+
+    llvm::StringMap<llvm::StringSet<>> referencedPorts;
+    Block &body = ordered[index]->getRegion(0).front();
+    for (Operation &endpoint : body) {
+      if (!isNamed(&endpoint, "nodal.instance_terminal"))
+        continue;
+      FlatSymbolRefAttr instanceReference = flatReference(&endpoint, "instance");
+      auto foundInstance = instanceReference ? instanceByName.find(instanceReference.getValue())
+                                             : instanceByName.end();
+      if (foundInstance == instanceByName.end())
+        return emitFailure(&endpoint, "NODAL-VERIFY-HIERARCHY-006",
+                           "child terminal references an unknown direct instance");
+      Operation *instance = foundInstance->getValue();
+      FlatSymbolRefAttr target = flatReference(instance, "module");
+      auto childDefinition = target ? indices.find(target.getValue()) : indices.end();
+      auto port = endpoint.getAttrOfType<StringAttr>("port");
+      Operation *childTerminal =
+          childDefinition != indices.end() && port
+              ? boundaryPorts[childDefinition->getValue()].lookup(port.getValue())
+              : nullptr;
+      if (!childTerminal)
+        return emitFailure(&endpoint, "NODAL-VERIFY-HIERARCHY-007",
+                           llvm::Twine("instance target has no boundary terminal '") +
+                               (port ? port.getValue() : llvm::StringRef("")) + "'");
+      if (!referencedPorts[instanceReference.getValue()].insert(port.getValue()).second)
+        return emitFailure(&endpoint, "NODAL-VERIFY-HIERARCHY-010",
+                           llvm::Twine("duplicate child terminal reference for instance '") +
+                               instanceReference.getValue() + "' port '" + port.getValue() + "'");
+      if (endpoint.getNumResults() != 1 || childTerminal->getNumResults() != 1 ||
+          endpoint.getResult(0).getType() != childTerminal->getResult(0).getType())
+        return emitFailure(&endpoint, "NODAL-VERIFY-HIERARCHY-008",
+                           "child terminal reference has an incompatible conservative type");
+      if (endpoint.getAttrOfType<StringAttr>("direction") !=
+          childTerminal->getAttrOfType<StringAttr>("direction"))
+        return emitFailure(&endpoint, "NODAL-VERIFY-HIERARCHY-009",
+                           "child terminal reference has an incompatible direction");
+    }
+  }
+
+  // One definition can have many instances. This is a definition-dependency
+  // check, not expansion or specialization; its call stack is independent of
+  // hierarchy depth. All disconnected components remain mandatory.
+  const HierarchyOrder order = orderHierarchy(edges);
+  if (order.status == HierarchyOrder::Status::UnknownTarget)
+    return emitFailure(module, "NODAL-VERIFY-HIERARCHY-004", "invalid module dependency index");
+  if (order.status == HierarchyOrder::Status::Cycle) {
+    const auto &children = edges[order.source];
+    const auto closing = std::find(children.begin(), children.end(), order.target);
+    const auto offset = static_cast<std::size_t>(closing - children.begin());
+    return emitFailure(sites[order.source][offset], "NODAL-VERIFY-HIERARCHY-005",
+                       llvm::Twine("recursive module hierarchy includes '") +
+                           symbolName(ordered[order.target]) + "'");
   }
   return success();
 }
@@ -485,6 +556,27 @@ LogicalResult verifyParameters(mlir::ModuleOp module) {
   llvm::StringMap<Operation *> definitions = collectModuleDefinitions(module, result);
   if (failed(result))
     return failure();
+
+  auto root = module->getAttrOfType<FlatSymbolRefAttr>("nodal.root.module");
+  auto rootBindings = module->getAttrOfType<DictionaryAttr>("nodal.root.parameter_bindings");
+  if (root || rootBindings) {
+    Operation *rootModule = root ? definitions.lookup(root.getValue()) : nullptr;
+    if (!rootModule || !rootBindings)
+      return emitFailure(module, "NODAL-VERIFY-PARAMETER-007",
+                         "root parameter bindings require a resolved root Module");
+    // verifyParameterModel above enforces variability, unit normalization,
+    // ranges, and exclusions. Retain the staged verifier's resolved-name and
+    // exact storage-type diagnostics at this serialization boundary.
+    for (NamedAttribute binding : rootBindings) {
+      Operation *parameter =
+          findDirectSymbol(rootModule, "nodal.parameter", binding.getName().getValue());
+      auto type = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
+      if (!type || !bindingFits(binding.getValue(), type.getValue()))
+        return emitFailure(rootModule, "NODAL-VERIFY-PARAMETER-008",
+                           llvm::Twine("incompatible root parameter binding '") +
+                               binding.getName().getValue() + "'");
+    }
+  }
 
   for (const auto &entry : definitions) {
     Operation *owner = entry.getValue();
@@ -877,28 +969,30 @@ LogicalResult verifyAnalog(mlir::ModuleOp module) {
     auto observed = proceduralTerminalUses(owner);
     owner->walk([&](Operation *operation) {
       llvm::StringRef name = operation->getName().getStringRef();
-      if (name == "nodal.component_contract" || name == "nodal.terminal" || name == "nodal.node" ||
-          name == "nodal.connect" || name == "nodal.alias" || name == "nodal.reference" ||
-          name == "nodal.branch" || name == "nodal.connection_set" ||
-          name == "nodal.potential_equality" || name == "nodal.reference_potential" ||
-          name == "nodal.flow_conservation" || name == "nodal.access" ||
-          name == "nodal.terminal_access" || name == "nodal.port_flow_access" ||
-          name == "nodal.probe" || name == "nodal.analog" || name == "nodal.real_literal" ||
-          name == "nodal.analog_integer_literal" || name == "nodal.parameter_ref" ||
-          name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
-          name == "nodal.analog_div" || name == "nodal.analog_neg" ||
-          name == "nodal.analog_function" || name == "nodal.analog_analysis" ||
-          name == "nodal.analog_noise" || name == "nodal.analog_compare" ||
-          name == "nodal.analog_logic" || name == "nodal.analog_select" ||
-          name == "nodal.analog_ddt" || name == "nodal.analog_idt" || name == "nodal.contribute")
+      if (name == "nodal.component_contract" || name == "nodal.terminal" ||
+          name == "nodal.instance_terminal" || name == "nodal.node" || name == "nodal.connect" ||
+          name == "nodal.alias" || name == "nodal.reference" || name == "nodal.branch" ||
+          name == "nodal.connection_set" || name == "nodal.potential_equality" ||
+          name == "nodal.reference_potential" || name == "nodal.flow_conservation" ||
+          name == "nodal.access" || name == "nodal.terminal_access" ||
+          name == "nodal.port_flow_access" || name == "nodal.probe" || name == "nodal.analog" ||
+          name == "nodal.real_literal" || name == "nodal.analog_integer_literal" ||
+          name == "nodal.parameter_ref" || name == "nodal.analog_add" ||
+          name == "nodal.analog_sub" || name == "nodal.analog_mul" || name == "nodal.analog_div" ||
+          name == "nodal.analog_neg" || name == "nodal.analog_function" ||
+          name == "nodal.analog_analysis" || name == "nodal.analog_noise" ||
+          name == "nodal.analog_compare" || name == "nodal.analog_logic" ||
+          name == "nodal.analog_select" || name == "nodal.analog_ddt" ||
+          name == "nodal.analog_idt" || name == "nodal.contribute")
         analog = true;
       if (name == "nodal.port" || name == "nodal.resolved_net" || name == "nodal.net_drive" ||
           name == "nodal.crossing")
         digital = true;
       if (name == "nodal.bridge")
         bridge = true;
-      if ((name == "nodal.terminal" || name == "nodal.node") && operation->getNumResults() == 1 &&
-          operation->getResult(0).use_empty() && !observed.contains(operation) && !partial &&
+      if ((name == "nodal.terminal" || name == "nodal.instance_terminal" || name == "nodal.node") &&
+          operation->getNumResults() == 1 && operation->getResult(0).use_empty() &&
+          !observed.contains(operation) && !partial &&
           booleanMetadata(operation, "allow_floating") != std::optional<bool>(true))
         result = emitFailure(operation, "NODAL-VERIFY-ANALOG-003",
                              "floating conservative terminal requires explicit approval");
@@ -927,16 +1021,17 @@ LogicalResult verifyCapabilities(mlir::ModuleOp module) {
   module.walk([&](Operation *operation) {
     llvm::StringRef name = operation->getName().getStringRef();
     const bool analog =
-        name == "nodal.component_contract" || name == "nodal.terminal" || name == "nodal.node" ||
-        name == "nodal.connect" || name == "nodal.alias" || name == "nodal.reference" ||
-        name == "nodal.branch" || name == "nodal.connection_set" ||
-        name == "nodal.potential_equality" || name == "nodal.reference_potential" ||
-        name == "nodal.flow_conservation" || name == "nodal.access" ||
-        name == "nodal.terminal_access" || name == "nodal.port_flow_access" ||
-        name == "nodal.probe" || name == "nodal.bridge" || name == "nodal.analog" ||
-        name == "nodal.real_literal" || name == "nodal.analog_integer_literal" ||
-        name == "nodal.parameter_ref" || name == "nodal.analog_add" || name == "nodal.analog_sub" ||
-        name == "nodal.analog_mul" || name == "nodal.analog_div" || name == "nodal.analog_neg" ||
+        name == "nodal.component_contract" || name == "nodal.terminal" ||
+        name == "nodal.instance_terminal" || name == "nodal.node" || name == "nodal.connect" ||
+        name == "nodal.alias" || name == "nodal.reference" || name == "nodal.branch" ||
+        name == "nodal.connection_set" || name == "nodal.potential_equality" ||
+        name == "nodal.reference_potential" || name == "nodal.flow_conservation" ||
+        name == "nodal.access" || name == "nodal.terminal_access" ||
+        name == "nodal.port_flow_access" || name == "nodal.probe" || name == "nodal.bridge" ||
+        name == "nodal.analog" || name == "nodal.real_literal" ||
+        name == "nodal.analog_integer_literal" || name == "nodal.parameter_ref" ||
+        name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
+        name == "nodal.analog_div" || name == "nodal.analog_neg" ||
         name == "nodal.analog_function" || name == "nodal.analog_analysis" ||
         name == "nodal.analog_noise" || name == "nodal.analog_compare" ||
         name == "nodal.analog_logic" || name == "nodal.analog_select" ||

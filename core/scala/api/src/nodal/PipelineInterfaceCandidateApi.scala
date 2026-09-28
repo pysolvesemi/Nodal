@@ -442,7 +442,7 @@ final class Terminal[D <: Discipline] private[nodal] (
     this,
     KernelSignalKind.ConservativeTerminal,
     explicitName = Some(name),
-    attributes = Vector("discipline" -> discipline)
+    attributes = CandidateRuntime.conservativeAttributes(discipline)
   )
 
 sealed trait ConservativeAccess

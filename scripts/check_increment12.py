@@ -642,7 +642,7 @@ def check_repository(root: Path) -> list[Problem]:
     _require(
         build,
         (
-            "object clockResetApi extends NodalScalaModule:",
+            "object clockResetApi extends NodalScalaModule with ConstructorCapturedProducer:",
             "def moduleDeps = Seq(core.scala.api, externalLibrary)",
         ),
         problems,

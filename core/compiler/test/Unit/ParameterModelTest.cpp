@@ -45,6 +45,21 @@ module {
     %eight = "nodal.const_literal"() <{metadata = {}, spelling = "8", value = 8 : i64}> : () -> i64
     "nodal.parameter_constraint"(%one, %eight) <{constraint_kind = "range", lower_inclusive = true, metadata = {}, parameter = @COUNT, upper_inclusive = true}> : (i64, i64) -> ()
     "nodal.parameter_envelope"() <{effects = ["topology"], metadata = {}, parameter = @COUNT, policy = "static_generate"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = true, metadata = {}, parameter_kind = "boolean", sym_name = "ENABLED", type = i1, variability = "symbolic"}> : () -> ()
+    %one_real = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1.0 : f64}> : () -> f64
+    %zero_real = "nodal.const_literal"() <{metadata = {}, spelling = "0", value = 0.0 : f64}> : () -> f64
+    %ordered = "nodal.const_expr"(%one_real, %zero_real) <{metadata = {}, operator_name = "gt"}> : (f64, f64) -> i1
+    %truth = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = true}> : () -> i1
+    %truth_bits = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = true}> : () -> !nodal.bits<1>
+    %enabled_value = "nodal.const_expr"(%ordered, %truth) <{metadata = {}, operator_name = "and"}> : (i1, i1) -> i1
+    "nodal.parameter_value"(%enabled_value) <{metadata = {}, parameter = @ENABLED}> : (i1) -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = true, metadata = {}, parameter_kind = "boolean", sym_name = "NEAR_ORDERED", type = i1, variability = "symbolic"}> : () -> ()
+    %near_left = "nodal.const_literal"() <{metadata = {}, spelling = "1.0000000000005", value = 1.0000000000005 : f64}> : () -> f64
+    %near_right = "nodal.const_literal"() <{metadata = {}, spelling = "1.0", value = 1.0 : f64}> : () -> f64
+    %near_ordered = "nodal.const_expr"(%near_left, %near_right) <{metadata = {}, operator_name = "gt"}> : (f64, f64) -> i1
+    %false = "nodal.const_literal"() <{metadata = {}, spelling = "0", value = false}> : () -> i1
+    "nodal.parameter_value"(%near_ordered) <{metadata = {}, parameter = @NEAR_ORDERED}> : (i1) -> ()
+    "nodal.parameter_constraint"(%false) <{constraint_kind = "exclude", lower_inclusive = false, metadata = {}, parameter = @NEAR_ORDERED, upper_inclusive = false}> : (i1) -> ()
   }) : () -> ()
 }
 )mlir";
@@ -119,6 +134,44 @@ module {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kFixedRootBinding = R"mlir(
+module attributes {nodal.root.module = @Fixture, nodal.root.parameter_bindings = {CONST = 4 : i64}} {
+  "nodal.module"() <{metadata = {}, sym_name = "Fixture"}> ({
+  ^bb0:
+    "nodal.parameter"() <{classification = "ordinary", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "CONST", type = i64, variability = "fixed"}> : () -> ()
+    %four = "nodal.const_literal"() <{metadata = {}, spelling = "4", value = 4 : i64}> : () -> i64
+    "nodal.parameter_value"(%four) <{metadata = {}, parameter = @CONST}> : (i64) -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kOutOfRangeRootBinding = R"mlir(
+module attributes {nodal.root.module = @Fixture, nodal.root.parameter_bindings = {COUNT = 12 : i64}} {
+  "nodal.module"() <{metadata = {}, sym_name = "Fixture"}> ({
+  ^bb0:
+    "nodal.parameter"() <{classification = "ordinary", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "COUNT", type = i64, variability = "symbolic"}> : () -> ()
+    %four = "nodal.const_literal"() <{metadata = {}, spelling = "4", value = 4 : i64}> : () -> i64
+    "nodal.parameter_value"(%four) <{metadata = {}, parameter = @COUNT}> : (i64) -> ()
+    %one = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %eight = "nodal.const_literal"() <{metadata = {}, spelling = "8", value = 8 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%one, %eight) <{constraint_kind = "range", lower_inclusive = true, metadata = {}, parameter = @COUNT, upper_inclusive = true}> : (i64, i64) -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kExcludedRootBinding = R"mlir(
+module attributes {nodal.root.module = @Fixture, nodal.root.parameter_bindings = {COUNT = 5 : i64}} {
+  "nodal.module"() <{metadata = {}, sym_name = "Fixture"}> ({
+  ^bb0:
+    "nodal.parameter"() <{classification = "ordinary", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "COUNT", type = i64, variability = "symbolic"}> : () -> ()
+    %four = "nodal.const_literal"() <{metadata = {}, spelling = "4", value = 4 : i64}> : () -> i64
+    "nodal.parameter_value"(%four) <{metadata = {}, parameter = @COUNT}> : (i64) -> ()
+    %five = "nodal.const_literal"() <{metadata = {}, spelling = "5", value = 5 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%five) <{constraint_kind = "exclude", lower_inclusive = false, metadata = {}, parameter = @COUNT, upper_inclusive = false}> : (i64) -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kFixedExplicitOverride = R"mlir(
 module {
   "nodal.module"() <{metadata = {}, sym_name = "Child"}> ({
@@ -151,6 +204,7 @@ int main() {
 
   bool sawLossless = false;
   bool sawTargetUnit = false;
+  bool sawBooleanDag = false;
   valid->walk([&](nodal::ParameterValueOp value) {
     auto parameter = value->getAttrOfType<mlir::FlatSymbolRefAttr>("parameter");
     if (!parameter)
@@ -168,11 +222,17 @@ int main() {
       auto rendered = nodal::renderParameterConstantExpression(value->getOperand(0), declaration);
       sawTargetUnit = mlir::succeeded(rendered) && *rendered == "1k";
     }
+    if (parameter.getValue() == "ENABLED") {
+      auto rendered = nodal::renderParameterConstantExpression(value->getOperand(0));
+      sawBooleanDag = mlir::succeeded(rendered) && *rendered == "((1 > 0) && 1)";
+    }
   });
   if (!sawLossless)
     return fail("constant expression did not preserve native spelling");
   if (!sawTargetUnit)
     return fail("bare parameter magnitude did not inherit target unit");
+  if (!sawBooleanDag)
+    return fail("Boolean comparison and logical expression did not retain structure");
 
   auto badConstraint = mlir::parseSourceString<mlir::ModuleOp>(kBadConstraint, &context);
   if (!badConstraint || mlir::succeeded(nodal::verifyParameterModel(*badConstraint)))
@@ -193,6 +253,21 @@ int main() {
   auto fixedBinding = mlir::parseSourceString<mlir::ModuleOp>(kFixedBinding, &context);
   if (!fixedBinding || mlir::succeeded(nodal::verifyParameterModel(*fixedBinding)))
     return fail("fixed parameter dictionary binding was accepted");
+
+  auto fixedRootBinding = mlir::parseSourceString<mlir::ModuleOp>(kFixedRootBinding, &context);
+  if (!fixedRootBinding || mlir::succeeded(nodal::verifyParameterModel(*fixedRootBinding)))
+    return fail("fixed root parameter binding was accepted");
+
+  auto outOfRangeRootBinding =
+      mlir::parseSourceString<mlir::ModuleOp>(kOutOfRangeRootBinding, &context);
+  if (!outOfRangeRootBinding ||
+      mlir::succeeded(nodal::verifyParameterModel(*outOfRangeRootBinding)))
+    return fail("out-of-range root parameter binding was accepted");
+
+  auto excludedRootBinding =
+      mlir::parseSourceString<mlir::ModuleOp>(kExcludedRootBinding, &context);
+  if (!excludedRootBinding || mlir::succeeded(nodal::verifyParameterModel(*excludedRootBinding)))
+    return fail("excluded root parameter binding was accepted");
 
   auto fixedExplicitOverride =
       mlir::parseSourceString<mlir::ModuleOp>(kFixedExplicitOverride, &context);

@@ -1281,6 +1281,22 @@ LogicalResult nodal::InstanceOp::verify() {
   return success();
 }
 
+LogicalResult nodal::InstanceTerminalOp::verify() {
+  auto instance = getOperation()->getAttrOfType<FlatSymbolRefAttr>("instance");
+  if (!instance || instance.getValue().empty())
+    return emitOpError("requires a direct child instance symbol");
+  if (failed(requireText(getOperation(), "port", "child terminal name")) ||
+      failed(requireText(getOperation(), "name", "parent endpoint name")) ||
+      failed(requireText(getOperation(), "source_path", "child terminal source path")))
+    return failure();
+  const llvm::StringRef direction = textAttr(getOperation(), "direction");
+  if (!oneOf(direction, {"input", "output", "inout"}))
+    return emitOpError() << "unsupported child terminal direction '" << direction << "'";
+  if (textAttr(getOperation(), "flow_orientation") != "out_of_component")
+    return emitOpError("child terminal flow must be oriented out of the parent component");
+  return success();
+}
+
 LogicalResult nodal::InterfaceOp::verify() {
   if (failed(
           requireText(getOperation(), mlir::SymbolTable::getSymbolAttrName(), "interface symbol")))

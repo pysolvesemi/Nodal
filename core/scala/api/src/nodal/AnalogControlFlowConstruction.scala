@@ -514,5 +514,5 @@ private[nodal] object AnalogControlFlowInspection:
     val construction = ConstructionKernel.inspect(top, options)
     AnalogControlFlowConstruction.Inspection(
       construction,
-      AnalogProceduralConstruction.controlSnapshots
+      construction.analogProcedural.flatMap(_.controlFlow)
     )

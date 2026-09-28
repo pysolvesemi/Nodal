@@ -58,6 +58,58 @@ checkpoint, and may resume already-authorized work only when it will not compete
 with an active worker. The same continuation transitions to CI monitoring after
 the first targeted launch; never create a second monitor for the CI phase.
 
+## Shared infrastructure and maintainable implementation
+
+For every new or in-progress implementation increment, sub-increment and repair,
+apply this rule during the readiness review and verify it again against the
+implemented production path before claiming completion. Revisit the decision
+when relevant requirements, dependencies or the implementation change.
+
+Choose the simplest maintainable design that meets the required semantics and
+scale for current and known forthcoming consumers. Fix underlying problems at
+the narrowest correct shared layer; do not accumulate increment-specific
+workarounds around a missing or incorrect base implementation.
+
+1. Inspect the live base, canonical representations, existing algorithms and
+   actual call sites. Compare reuse, a focused shared-layer correction/refactor,
+   and a new component when justified. Record the owning layer, alternatives,
+   known consumers and rationale; existing infrastructure may be sufficient.
+2. Keep one authoritative owner for each semantic representation and mutable
+   registry, with narrow interfaces and explicit dependency direction. Preserve
+   ownership, types, effects, source identity and capability boundaries. Avoid
+   duplicate engines, copied policy, fixture recognizers and special cases that
+   bypass the shared contract. Independent verification at trust boundaries
+   remains required; shared semantics do not justify deleting native checks.
+3. Integrate the selected design into the real production path. Uncalled helpers,
+   parallel registries and example-only success do not establish implementation.
+   Preserve supported old and new consumers with applicable positive, negative,
+   predecessor and source/output-parity tests. Remove superseded internal paths
+   only with evidence; do not weaken tests to accommodate the new design.
+4. Review relevant time/memory growth, repeated traversals, copies, recursion,
+   graph expansion and coupling. Use proportionate representative measurements
+   when performance or scale may change; distinguish measured results from
+   expectations. File length, language choice and transport inconvenience alone
+   are not performance evidence. No universal speedup or full benchmark program
+   is required for every increment.
+5. Keep the work bounded. A small correct shared-layer patch is welcome; do not
+   require a speculative framework, broad rewrite or language migration. If a
+   prerequisite correction is essential, record its owner and dependency through
+   the readiness/scope process. Assign optional improvements to their existing
+   owners without reverse dependencies or silently deferring required work.
+6. Retain one concise decision and outcome record in the existing PR/readiness
+   or implementation document, linked to the relevant code and validation. Use
+   existing architecture, implementation, review and scale obligations rather
+   than copying a generic checkbox into every increment or creating a second
+   progress ledger. Before completion, confirm that the actual implementation
+   still satisfies the recorded decision and applicable evidence requirements;
+   a design proposal alone is not completion evidence.
+
+Apply this prospectively; do not reopen historically accepted increments merely
+to impose the new process. Documentation-only and architecture-only changes
+record proportionate applicability, not artificial production or benchmark work.
+This rule does not replace approved design gates, qualification, scope controls
+or existing feature-specific acceptance requirements.
+
 ## Targeted CI before full CI
 
 For every increment, sub-increment, repair and accepted-evidence closure, qualify

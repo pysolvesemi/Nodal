@@ -96,6 +96,16 @@ jobs:
           python3 tests/compiler/fixtures/increment41/run_native_matrix.py \
             --nodalc "$nodalc" --translate "$translate" --source "$PWD/evidence/public.mlir" 2>&1 | tee evidence/source-matrix.log
           "$translate" --nodal-to-verilog-a evidence/public.mlir > evidence/public.va
+      - name: Retain native hierarchy regression evidence when produced
+        if: always()
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import shutil
+          source = Path('out/native/release/increment42-hierarchy-evidence')
+          if source.is_dir():
+              shutil.copytree(source, Path('evidence/increment42-hierarchy'), dirs_exist_ok=True)
+          PYTHON
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -1,6 +1,7 @@
 package nodal
 
 import scala.annotation.targetName
+import scala.language.implicitConversions
 
 /** Public marker hierarchy frozen by Nodal API v0.2. Implementations remain inert. */
 sealed trait Data
@@ -79,16 +80,27 @@ def discipline(name: String, potential: Nature, flow: Nature): NamedDiscipline =
   new NamedDiscipline(name, potential, flow)
 
 /** Candidate module parameter. */
-final class Param[A <: Data] private[nodal] (val default: Expr[A]) extends Expr[A]:
-  CandidateRuntime.declare(
-    this,
-    KernelSignalKind.Parameter,
-    dataType = CandidateRuntime.expressionDataType(default),
-    attributes = Vector(
-      "default" -> default,
-      "unit" -> CandidateRuntime.expressionUnit(default).getOrElse("")
-    )
-  )
+final class Param[A <: Data] private[nodal] (
+    val default: Expr[A],
+    private[nodal] val constructorName: Option[String] = None,
+    private[nodal] val constructorActual: Option[Expr[A]] = None,
+    private[nodal] val omittedConstructorDefault: Boolean = false,
+    private[nodal] val inertConstructorActual: Boolean = false
+) extends Expr[A]:
+  if constructorName.isEmpty && !omittedConstructorDefault && !inertConstructorActual then
+    CandidateRuntime.declareParameter(this, default)
+
+object Param:
+  /** Compiler-recognized lifting for the bounded constructor-parameter profile. */
+  implicit def liftReal(value: Double): Param[Real] =
+    CandidateRuntime.constructorRealActual(value)
+
+private[nodal] final case class ConstructorCapturedParameter(
+    name: String,
+    default: Expr[Real],
+    actual: Option[Expr[Real]],
+    carrier: Param[Real]
+)
 
 /** Candidate digital signal or port. */
 final class Signal[A <: Data] private[nodal] (
@@ -131,8 +143,10 @@ final class Node[D <: Discipline] private[nodal] (
   CandidateRuntime.declare(
     this,
     kind,
-    attributes = Vector("discipline" -> discipline)
+    attributes = CandidateRuntime.conservativeAttributes(discipline)
   )
+
+  infix def <>(other: Node[?]): Unit = CandidateRuntime.connectNodes(this, other)
 
 /** Frequency metadata carried by a clock-domain declaration. */
 sealed trait Frequency
@@ -252,7 +266,6 @@ object ClockDomain:
 
 /** Child-instance handle with typed selector-based overrides and domain bindings. */
 final class Instance[M <: Module] private[nodal] (private[nodal] val module: M):
-  CandidateRuntime.attachInstance(this, module)
 
   def apply[A](select: M => A): A = select(module)
 
@@ -305,12 +318,12 @@ abstract class Module:
     new Variable(dataType, None)
 
   protected final def instance[M <: Module](module: M): Instance[M] =
-    new Instance(module)
+    CandidateRuntime.instance(module)
 
   protected final def connect[A <: Data](left: Signal[A], right: Signal[A]): Unit =
     CandidateRuntime.connectValues(left, right)
 
-  protected final def connect[D <: Discipline](left: Node[D], right: Node[D]): Unit =
+  protected final def connect[D <: Discipline](left: Node[? <: D], right: Node[? <: D]): Unit =
     CandidateRuntime.connectNodes(left, right)
 
 /** Domain-owned state captured at its lexical construction point. */
@@ -696,7 +709,174 @@ extension (value: Boolean)
 private[nodal] def realLiteral(value: Double, unit: String): Expr[Real] =
   CandidateRuntime.literalReal(value, unit)
 
+/** Runtime half of the compiler-owned constructor protocol.
+  *
+  * The compiler preserves ordinary Scala argument evaluation outside `allocate`. The pending frame
+  * therefore starts only after every argument has completed, while `guard` still poisons the
+  * construction transaction if argument evaluation fails after producing earlier effects.
+  */
+private[nodal] object ConstructorCaptureRuntime:
+  private final class Pending(
+      val classId: String,
+      val site: String,
+      val encoded: String,
+      val stackDepth: Int
+  ):
+    val parameters = scala.collection.mutable.ArrayBuffer.empty[ConstructorCapturedParameter]
+    var module: Option[Module] = None
+
+  private final class State:
+    var stack: List[Pending] = Nil
+    var recoverableFailures: List[Throwable] = Nil
+
+  private val Current = new ThreadLocal[State]
+
+  def withSession[A](body: => A): A =
+    val previous = Option(Current.get())
+    Current.set(new State)
+    try body
+    finally
+      previous match
+        case Some(outer) => Current.set(outer)
+        case None => Current.remove()
+
+  private def state: State = Option(Current.get()).getOrElse(
+    scala.util.Failure[Nothing](
+      new IllegalStateException("constructor capture requires an active elaboration")
+    ).get
+  )
+
+  def guard[A](site: String, thunk: () => A): A =
+    try thunk()
+    catch
+      case failure: Throwable =>
+        val active = state
+        val recoverable = active.recoverableFailures.exists(_ eq failure)
+        if recoverable then
+          active.recoverableFailures = active.recoverableFailures.filterNot(_ eq failure)
+        else ConstructionKernel.poisonConstructor(failure, site)
+        scala.util.Failure[Nothing](failure).get
+
+  def omittedReal(defaultValue: Double): Param[Real] =
+    new Param(
+      CandidateRuntime.constructorRealLiteral(defaultValue),
+      omittedConstructorDefault = true
+    )
+
+  def carrierReal(
+      name: String,
+      defaultValue: Double,
+      actual: Param[Real]
+  ): Param[Real] =
+    val pending = state.stack.headOption.getOrElse(
+      scala.util.Failure[Nothing](
+        new IllegalStateException("constructor parameter has no pending allocation")
+      ).get
+    )
+    if pending.module.nonEmpty then
+      scala.util.Failure[Nothing](
+        new IllegalStateException("constructor parameters must precede Module.begin")
+      ).get
+    if pending.parameters.exists(_.name == name) then
+      scala.util.Failure[Nothing](
+        new IllegalArgumentException(s"duplicate constructor parameter '$name'")
+      ).get
+    val default = CandidateRuntime.constructorRealLiteral(defaultValue)
+    val resolvedActual =
+      if actual.omittedConstructorDefault then None
+      else actual.constructorActual.orElse(Some(actual))
+    val carrier = new Param[Real](
+      default,
+      constructorName = Some(name)
+    )
+    pending.parameters += ConstructorCapturedParameter(name, default, resolvedActual, carrier)
+    carrier
+
+  def begin(module: Module): Unit =
+    val metadata = Option(module.getClass.getDeclaredAnnotation(classOf[ConstructorSchema]))
+    state.stack.headOption.filter(_.module.isEmpty) match
+      case Some(pending) =>
+        val schema = metadata.getOrElse(
+          ConstructionKernel.failConstructor(
+            "NODAL-CONSTRUCTOR-ABI-016",
+            "captured allocation entered a Module without compiler metadata",
+            pending.site
+          )
+        )
+        if schema.version() != 1 || schema.encoded() != pending.encoded ||
+          module.getClass.getName != pending.classId
+        then
+          ConstructionKernel.failConstructor(
+            "NODAL-CONSTRUCTOR-ABI-017",
+            "constructor metadata does not match the exact allocated class",
+            pending.site
+          )
+        if pending.module.nonEmpty then
+          ConstructionKernel.failConstructor(
+            "NODAL-CONSTRUCTOR-LIFECYCLE-016",
+            "one captured allocation entered Module.begin twice",
+            pending.site
+          )
+        pending.module = Some(module)
+        ConstructionKernel.bindConstructorParameters(module, pending.parameters.toVector)
+      case None =>
+        metadata.foreach: _ =>
+          ConstructionKernel.failConstructor(
+            "NODAL-CONSTRUCTOR-MISSING-016",
+            "Module allocation was compiled without the required constructor capture plugin",
+            module.getClass.getName
+          )
+
+  def allocate[A <: Module](
+      classId: String,
+      site: String,
+      encoded: String,
+      thunk: () => A
+  ): A =
+    val active = state
+    val previous = active.stack
+    val pending = new Pending(
+      classId,
+      site,
+      encoded,
+      ConstructionKernel.prepareConstructorAllocation(site)
+    )
+    active.stack = pending :: previous
+    try
+      val result = thunk()
+      if !pending.module.exists(_ eq result) then
+        ConstructionKernel.failConstructor(
+          "NODAL-CONSTRUCTOR-LIFECYCLE-017",
+          "captured allocation returned a different Module",
+          site
+        )
+      CandidateRuntime.commitConstructorAllocation(result, pending.parameters.toVector)
+      result
+    catch
+      case failure: Throwable =>
+        val recoverable = pending.module.isEmpty &&
+          ConstructionKernel.constructorDepth == pending.stackDepth
+        if recoverable then active.recoverableFailures = failure :: active.recoverableFailures
+        ConstructionKernel.abortConstructorAllocation(
+          pending.stackDepth,
+          failure,
+          site,
+          invalidate = !recoverable
+        )
+        scala.util.Failure[Nothing](failure).get
+    finally active.stack = previous
+
 private[nodal] object CandidateRuntime:
+  def conservativeAttributes(discipline: Discipline): Vector[(String, Any)] =
+    val (declared, potential, flow) = discipline match
+      case Electrical => ("electrical", Voltage.name, Current.name)
+      case named: NamedDiscipline => (named.name, named.potential.name, named.flow.name)
+    Vector(
+      "discipline" -> declared,
+      "potential_nature" -> potential,
+      "flow_nature" -> flow
+    )
+
   def dataType[A <: Data](kind: String, arguments: Any*): DataType[A] =
     new KernelDataType[A](KernelTypeDescriptor(kind, arguments.toVector))
 
@@ -715,6 +895,52 @@ private[nodal] object CandidateRuntime:
       module,
       ConstructionKernel.currentModulePath
     )
+    ConstructorCaptureRuntime.begin(module)
+
+  private def constructorParameterAttributes[A <: Data](
+      default: Expr[A]
+  ): Vector[(String, Any)] =
+    Vector(
+      "default" -> default,
+      "unit" -> expressionUnit(default).getOrElse("")
+    )
+
+  def declareParameter[A <: Data](parameter: Param[A], default: Expr[A]): Unit =
+    declare(
+      parameter,
+      KernelSignalKind.Parameter,
+      dataType = expressionDataType(default),
+      attributes = constructorParameterAttributes(default)
+    )
+
+  def constructorRealLiteral(value: Double): KernelExpr[Real] =
+    new KernelExpr[Real](
+      Vector(value, ""),
+      resultType = Some(KernelTypeDescriptor("Real")),
+      literal = Some(
+        KernelLiteral("real", java.lang.Double.toString(value), KernelTypeDescriptor("Real"))
+      )
+    )
+
+  def constructorRealActual(value: Double): Param[Real] =
+    val literal = constructorRealLiteral(value)
+    new Param(
+      literal,
+      constructorActual = Some(literal),
+      inertConstructorActual = true
+    )
+
+  def instance[M <: Module](module: M): Instance[M] =
+    val (instance, attached) = ConstructionKernel.instance(module)
+    if attached then AnalogProceduralConstruction.attachInstance(module)
+    instance
+
+  def commitConstructorAllocation(
+      module: Module,
+      parameters: Vector[ConstructorCapturedParameter]
+  ): Unit =
+    if ConstructionKernel.commitConstructorAllocation(module, parameters) then
+      AnalogProceduralConstruction.attachInstance(module)
 
   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
     ConstructionKernel.registerDomain(domain, kind)
@@ -828,6 +1054,7 @@ private[nodal] object CandidateRuntime:
   def analogExpr(operation: String, values: Any*): Expr[Real] =
     val expression = new KernelExpr[Real](
       values.toVector,
+      resultType = Some(KernelTypeDescriptor("Real")),
       operation = Some(operation)
     )
     ConstructionKernel.expression(expression)
@@ -928,7 +1155,7 @@ private[nodal] object CandidateRuntime:
 
   def connectNodes(left: AnyRef, right: AnyRef): Unit =
     AnalogProceduralConstruction.requireContinuousContext("conservative connection")
-    ConstructionKernel.operation("node-connect", left, right)
+    ConstructionKernel.connectNodes(left, right)
 
   def attachInstance(instance: Instance[? <: Module], module: Module): Unit =
     ConstructionKernel.attachInstance(instance, module)

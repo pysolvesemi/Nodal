@@ -24,6 +24,26 @@ trait NodalScalaModule extends ScalaModule:
     "-Werror",
   )
 
+trait ConstructorCapturedProducer extends ScalaModule:
+  def constructorPluginJar = Task {
+    core.scala.constructorPlugin.jar()
+  }
+
+  override def scalacPluginClasspath = Task {
+    super.scalacPluginClasspath() ++ Seq(constructorPluginJar())
+  }
+
+  override def scalacOptions = Task {
+    super.scalacOptions() ++ Seq(
+      s"-Xplugin:${constructorPluginJar().path}",
+      "-Xplugin-require:nodal-constructor",
+    )
+  }
+
+// Standalone positive/negative fixtures need formatting, not ordinary module compilation.
+object constructorCaptureSources extends Module:
+  def sources = Task.Sources(BuildCtx.workspaceRoot / "tests" / "scala" / "constructor-capture")
+
 object scalafix extends JavaModule:
   def scalafixClasspath: T[Seq[PathRef]] = Task {
     defaultResolver().classpath(
@@ -42,6 +62,7 @@ object scalafix extends JavaModule:
       "core/scala",
       "core/integrations",
       "examples",
+      "tests/scala/constructor-capture",
     )
 
   private def invoke(
@@ -77,6 +98,17 @@ object core extends Module:
   object scala extends Module:
     object api extends NodalScalaModule
 
+    object constructorPlugin extends NodalScalaModule:
+      def sources = Task.Sources(
+        BuildCtx.workspaceRoot / "core" / "scala" / "frontend" / "plugin" / "src"
+      )
+
+      def resources = Task.Sources(
+        BuildCtx.workspaceRoot / "core" / "scala" / "frontend" / "plugin" / "resources"
+      )
+
+      def mvnDeps = Seq(mvn"org.scala-lang::scala3-compiler:${Versions.scala3}")
+
     object frontend extends NodalScalaModule:
       def moduleDeps = Seq(api)
 
@@ -92,44 +124,44 @@ object core extends Module:
     object testkit extends NodalScalaModule:
       def moduleDeps = Seq(cli, sim, bridge, frontend, api)
 
-      object test extends ScalaTests:
+      object test extends ScalaTests with ConstructorCapturedProducer:
         override def moduleDeps = super.moduleDeps ++ Seq(examples.continuousTimeApi)
         def mvnDeps = Seq(mvn"com.lihaoyi::utest:0.9.1")
         def testFramework = "utest.runner.Framework"
 
 object examples extends Module:
-  object externalLibrary extends NodalScalaModule:
+  object externalLibrary extends NodalScalaModule with ConstructorCapturedProducer:
     def moduleDeps = Seq(core.scala.api)
 
-  object publicApiCandidates extends NodalScalaModule:
+  object publicApiCandidates extends NodalScalaModule with ConstructorCapturedProducer:
     def moduleDeps = Seq(core.scala.api, externalLibrary)
 
-  object clockResetApi extends NodalScalaModule:
+  object clockResetApi extends NodalScalaModule with ConstructorCapturedProducer:
     def moduleDeps = Seq(core.scala.api, externalLibrary)
 
-  object coreSemanticsExternal extends NodalScalaModule:
+  object coreSemanticsExternal extends NodalScalaModule with ConstructorCapturedProducer:
     def moduleDeps = Seq(core.scala.api)
 
-  object coreSemanticsApi extends NodalScalaModule:
+  object coreSemanticsApi extends NodalScalaModule with ConstructorCapturedProducer:
     def moduleDeps = Seq(core.scala.api, coreSemanticsExternal)
 
-  object interfacePipelineExternal extends NodalScalaModule:
+  object interfacePipelineExternal extends NodalScalaModule with ConstructorCapturedProducer:
     def moduleDeps = Seq(core.scala.api)
 
-  object interfacePipelineApi extends NodalScalaModule:
+  object interfacePipelineApi extends NodalScalaModule with ConstructorCapturedProducer:
     def moduleDeps = Seq(core.scala.api, interfacePipelineExternal)
 
-  object publicApiV03External extends NodalScalaModule:
+  object publicApiV03External extends NodalScalaModule with ConstructorCapturedProducer:
     def moduleDeps = Seq(core.scala.api)
 
-  object publicApiV03 extends NodalScalaModule:
+  object publicApiV03 extends NodalScalaModule with ConstructorCapturedProducer:
     def moduleDeps = Seq(core.scala.api, publicApiV03External)
 
-  object publicApiV03Migration extends NodalScalaModule:
+  object publicApiV03Migration extends NodalScalaModule with ConstructorCapturedProducer:
     def moduleDeps = Seq(core.scala.api)
 
-  object continuousTimeExternal extends NodalScalaModule:
+  object continuousTimeExternal extends NodalScalaModule with ConstructorCapturedProducer:
     def moduleDeps = Seq(core.scala.api)
 
-  object continuousTimeApi extends NodalScalaModule:
+  object continuousTimeApi extends NodalScalaModule with ConstructorCapturedProducer:
     def moduleDeps = Seq(core.scala.api, continuousTimeExternal)

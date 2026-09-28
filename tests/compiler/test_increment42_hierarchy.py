@@ -1,0 +1,194 @@
+"""Controls for the native hierarchy harness; these are not compiler qualification."""
+
+from pathlib import Path
+import importlib.util
+import subprocess
+import tempfile
+import unittest
+from unittest import mock
+
+
+ROOT = Path(__file__).resolve().parents[2]
+PATH = ROOT / "tests/compiler/fixtures/increment42/run_hierarchy_matrix.py"
+SPEC = importlib.util.spec_from_file_location("increment42_hierarchy_matrix", PATH)
+MATRIX = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(MATRIX)
+
+
+class HierarchyHarnessTests(unittest.TestCase):
+    def record(self, returncode, stdout=b"", stderr=b"", **expected):
+        with tempfile.TemporaryDirectory() as temporary:
+            matrix = MATRIX.Matrix(Path("/unused-test-compiler"), Path(temporary))
+            result = subprocess.CompletedProcess([], returncode, stdout, stderr)
+            with mock.patch.object(MATRIX.subprocess, "run", return_value=result):
+                matrix.check("control", "module {}\n", **expected)
+            return matrix.records[0]
+
+    def test_independent_reference_includes_self_edges_and_duplicates(self):
+        self.assertTrue(MATRIX.acyclic([[], []]))
+        self.assertTrue(MATRIX.acyclic([[1, 1], []]))
+        self.assertFalse(MATRIX.acyclic([[0]]))
+        self.assertFalse(MATRIX.acyclic([[], [2], [1]]))
+
+    def test_all_three_vertex_graphs_have_known_acyclic_count(self):
+        arcs = [(a, b) for a in range(3) for b in range(3)]
+        count = 0
+        for bits in range(512):
+            edges = [[], [], []]
+            for index, (a, b) in enumerate(arcs):
+                if bits & (1 << index):
+                    edges[a].append(b)
+            count += MATRIX.acyclic(edges)
+        # 25 labeled DAGs on three vertices, independently enumerable by hand.
+        self.assertEqual(count, 25)
+
+    def test_success_requires_output(self):
+        self.assertFalse(self.record(0)["passed"])
+        self.assertTrue(self.record(0, b"module {}\n")["passed"])
+
+    def test_success_cannot_drop_definitions(self):
+        self.assertFalse(self.record(0, b"module {}\n", expected_modules=2)["passed"])
+
+    def test_crash_is_not_a_diagnostic_rejection(self):
+        self.assertFalse(self.record(-11, stderr=b"NODAL-VERIFY-HIERARCHY-005",
+                                     code="NODAL-VERIFY-HIERARCHY-005")["passed"])
+
+    def test_wrong_diagnostic_is_not_a_rejection(self):
+        self.assertFalse(self.record(1, stderr=b"parser failure",
+                                     code="NODAL-VERIFY-HIERARCHY-005")["passed"])
+
+    def test_negative_requires_failure_not_a_printed_code(self):
+        self.assertFalse(self.record(0, stderr=b"NODAL-VERIFY-HIERARCHY-005",
+                                     code="NODAL-VERIFY-HIERARCHY-005")["passed"])
+
+    def test_negative_cannot_publish_partial_ir(self):
+        self.assertFalse(self.record(1, b"module {}", b"NODAL-VERIFY-HIERARCHY-005",
+                                     code="NODAL-VERIFY-HIERARCHY-005")["passed"])
+
+    def test_location_must_be_primary_error(self):
+        diagnostic = b"Other.scala:1:1: error: NODAL-VERIFY-HIERARCHY-005\nHierarchy42.scala:80:7"
+        self.assertFalse(self.record(1, stderr=diagnostic,
+                                     code="NODAL-VERIFY-HIERARCHY-005",
+                                     location="Hierarchy42.scala:80:7")["passed"])
+        diagnostic = b"Hierarchy42.scala:80:7: error: NODAL-VERIFY-HIERARCHY-005"
+        self.assertTrue(self.record(1, stderr=diagnostic,
+                                    code="NODAL-VERIFY-HIERARCHY-005",
+                                    location="Hierarchy42.scala:80:7")["passed"])
+
+    def test_repeat_must_be_byte_identical(self):
+        self.assertFalse(self.record(0, b"module {}", same_output=b"module {}\n")["passed"])
+
+    def test_timeout_is_recorded_as_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            matrix = MATRIX.Matrix(Path("/unused-test-compiler"), Path(temporary))
+            with mock.patch.object(MATRIX.subprocess, "run",
+                                   side_effect=subprocess.TimeoutExpired("nodalc", 60)):
+                matrix.check("timeout-control", "module {}")
+            self.assertFalse(matrix.records[0]["passed"])
+
+    def test_production_integration_and_ctest_are_not_optional(self):
+        production = (ROOT / "core/compiler/lib/Transforms/Passes.cpp").read_text()
+        begin = production.index("LogicalResult verifyHierarchy(")
+        end = production.index("LogicalResult verifyTypes(", begin)
+        hierarchy = production[begin:end]
+        self.assertIn("orderHierarchy(edges)", hierarchy)
+        self.assertIn("nodal.verify.hierarchy_closed", hierarchy)
+        self.assertIn("NODAL-VERIFY-HIERARCHY-004", hierarchy)
+        self.assertIn("NODAL-VERIFY-HIERARCHY-005", hierarchy)
+        self.assertNotIn("std::function", hierarchy)
+        cmake = (ROOT / "core/compiler/test/Unit/CMakeLists.txt").read_text()
+        self.assertIn("nodal.native.hierarchy-integration", cmake)
+        self.assertIn("run_hierarchy_matrix.py", cmake)
+        self.assertIn("$<TARGET_FILE:nodalc>", cmake)
+
+    def test_bridge_module_and_topology_resolution_are_indexed_once(self):
+        bridge = (ROOT / "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala").read_text()
+        renderer = bridge[bridge.index("private final class Renderer"):]
+        self.assertEqual(renderer.count("private val modulesByPath ="), 1)
+        self.assertEqual(renderer.count("private val parameterExpressionsByOwner ="), 1)
+        self.assertEqual(renderer.count("private val topologyByOwner ="), 1)
+        self.assertEqual(renderer.count("private val topologyEndpointOwners ="), 1)
+        self.assertEqual(renderer.count("private val externallyBoundTerminalsByModule ="), 1)
+        self.assertNotIn("modules.find(", renderer)
+        self.assertNotIn("module.instances.find(_.childModule == owner)", renderer)
+        self.assertNotIn("snapshot.parameterExpressions\n        .filter(_.owner == module.path)", renderer)
+        self.assertNotIn("snapshot.topology.flatMap:", renderer)
+        self.assertNotIn("sortBy(module => -module.path.length)", renderer)
+        self.assertGreaterEqual(renderer.count("modulesByPath.getOrElse("), 3)
+        self.assertIn("instancesByChildModule.getOrElse(", renderer)
+        self.assertIn("parameterExpressionsByOwner.getOrElse(module.path, Map.empty)", renderer)
+        self.assertIn("topologyByOwner.getOrElse(module.path, Vector.empty)", renderer)
+
+    def test_hierarchy_syntax_accepts_scale_suffix_after_exponent(self):
+        syntax = (
+            ROOT / "core/compiler/include/nodal/Support/AnalogHierarchySyntax.h"
+        ).read_text()
+        begin = syntax.index("  bool number() {")
+        end = syntax.index("  std::optional<std::string> constant(", begin)
+        number = syntax[begin:end]
+        exponent = number.index(
+            "if (position < text.size() && (text[position] == 'e'"
+        )
+        suffix = number.index('std::string_view("TGMKkmunpfa")', exponent)
+        self.assertGreater(suffix, exponent)
+        self.assertNotIn("} else if", number[exponent:suffix])
+        fixture = (
+            ROOT / "core/compiler/test/Unit/AnalogHierarchySyntaxTest.cpp"
+        ).read_text()
+        self.assertIn(
+            '"Cell #(.R(1e-3k), .N(2E+4M)) scaled();"',
+            fixture,
+        )
+
+    def test_native_hierarchy_rejects_duplicate_child_port_references(self):
+        production = (ROOT / "core/compiler/lib/Transforms/Passes.cpp").read_text()
+        begin = production.index("LogicalResult verifyHierarchy(")
+        end = production.index("LogicalResult verifyTypes(", begin)
+        hierarchy = production[begin:end]
+        self.assertIn("llvm::StringMap<llvm::StringSet<>> referencedPorts;", hierarchy)
+        self.assertIn("NODAL-VERIFY-HIERARCHY-010", hierarchy)
+        fixture = (ROOT / "tests/compiler/fixtures/increment42/run_hierarchy_matrix.py").read_text()
+        self.assertIn('"child-terminal-duplicate-reference"', fixture)
+
+    def test_native_hierarchy_rejects_duplicate_boundary_port_names(self):
+        production = (ROOT / "core/compiler/lib/Transforms/Passes.cpp").read_text()
+        begin = production.index("LogicalResult verifyHierarchy(")
+        end = production.index("LogicalResult verifyTypes(", begin)
+        hierarchy = production[begin:end]
+        self.assertIn("boundaryPorts", hierarchy)
+        self.assertIn("NODAL-VERIFY-HIERARCHY-011", hierarchy)
+        self.assertNotIn("for (Operation &candidate : childModule->getRegion", hierarchy)
+        fixture = (ROOT / "tests/compiler/fixtures/increment42/run_hierarchy_matrix.py").read_text()
+        self.assertIn('"child-terminal-duplicate-boundary-name"', fixture)
+
+    def test_root_export_compares_typed_values_not_rendered_spelling(self):
+        production = (
+            ROOT / "core/compiler/lib/Backend/AnalogVerticalSlice.cpp"
+        ).read_text()
+        begin = production.index("FailureOr<bool> parameterBindingsEqual(")
+        end = production.index("struct HierarchyInstanceRender", begin)
+        comparison = production[begin:end]
+        self.assertIn("llvm::APFloat::cmpEqual", comparison)
+        root_begin = production.index("LogicalResult verifyRootExport(")
+        root_end = production.index("LogicalResult renderAnalog(", root_begin)
+        root_export = production[root_begin:root_end]
+        self.assertIn("parameterBindingsEqual", root_export)
+        self.assertNotIn("*actual != *authored", root_export)
+        fixture = (ROOT / "core/compiler/test/Unit/BackendTest.cpp").read_text()
+        self.assertIn("numerically equal signed-zero root actual was rejected", fixture)
+
+    def test_target_visible_real_ordering_is_exact(self):
+        production = (ROOT / "core/compiler/lib/Dialect/Nodal/ParameterModel.cpp").read_text()
+        begin = production.index('if (name == "gt" || name == "ge"')
+        end = production.index('if (name == "and" || name == "or")', begin)
+        comparison = production[begin:end]
+        self.assertIn("lhs->realValue < rhs->realValue", comparison)
+        self.assertIn("lhs->realValue > rhs->realValue", comparison)
+        self.assertNotIn("const int comparison = compareConstants(*lhs, *rhs);", comparison)
+        fixture = (ROOT / "core/compiler/test/Unit/ParameterModelTest.cpp").read_text()
+        self.assertIn('sym_name = "NEAR_ORDERED"', fixture)
+        self.assertIn("1.0000000000005", fixture)
+
+
+if __name__ == "__main__":
+    unittest.main()

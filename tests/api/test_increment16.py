@@ -22,6 +22,41 @@ class Increment16ContractTests(unittest.TestCase):
         problems = MODULE.validate_files(ROOT)
         self.assertEqual([], problems, "\n".join(f"{p.code}: {p.message}" for p in problems))
 
+    def test_canonical_instance_successor_requires_explicit_path(self) -> None:
+        candidate = (ROOT / "core/scala/api/src/nodal/CandidateApi.scala").read_text(
+            encoding="utf-8"
+        )
+        kernel = (ROOT / "core/scala/api/src/nodal/ElaborationConstructionKernel.scala").read_text(
+            encoding="utf-8"
+        )
+        self.assertTrue(MODULE.has_canonical_instance_successor(candidate, kernel))
+        self.assertFalse(
+            MODULE.has_canonical_instance_successor(
+                candidate.replace(
+                    "CandidateRuntime.instance(module)",
+                    "CandidateRuntime.statement(module)",
+                ),
+                kernel,
+            )
+        )
+
+    def test_canonical_instance_successor_requires_captured_path(self) -> None:
+        candidate = (ROOT / "core/scala/api/src/nodal/CandidateApi.scala").read_text(
+            encoding="utf-8"
+        )
+        kernel = (ROOT / "core/scala/api/src/nodal/ElaborationConstructionKernel.scala").read_text(
+            encoding="utf-8"
+        )
+        self.assertFalse(
+            MODULE.has_canonical_instance_successor(
+                candidate,
+                kernel.replace(
+                    "this.instance(module, captured = true)",
+                    "this.instance(module, false)",
+                ),
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

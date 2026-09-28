@@ -78,6 +78,46 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kHierarchyModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.root.module = @Top,
+  nodal.root.parameter_bindings = {rootGain = 4.0 : f64},
+  nodal.target.profile = "analog"
+} {
+  "nodal.nature"() <{abstol = 1.0e-6 : f64, access = "V", metadata = {}, sym_name = "Voltage", units = "V"}> : () -> ()
+  "nodal.nature"() <{abstol = 1.0e-12 : f64, access = "I", metadata = {}, sym_name = "Current", units = "A"}> : () -> ()
+  "nodal.discipline"() <{domain = "continuous", flow = @Current, metadata = {}, potential = @Voltage, sym_name = "electrical"}> : () -> ()
+  "nodal.module"() <{metadata = {}, sym_name = "Child"}> ({
+  ^bb0:
+    %child_vin = "nodal.terminal"() <{direction = "input", flow_orientation = "into_component", metadata = {allow_floating = true, declaration_kind = "analog-input"}, name = "vin", source_path = "Child.vin"}> : () -> !nodal.terminal<"electrical">
+    %child_vout = "nodal.terminal"() <{direction = "output", flow_orientation = "into_component", metadata = {allow_floating = true, declaration_kind = "analog-output"}, name = "vout", source_path = "Child.vout"}> : () -> !nodal.terminal<"electrical">
+    "nodal.parameter"() <{classification = "ordinary", default_value = 2.0 : f64, metadata = {}, parameter_kind = "real", sym_name = "gain", type = f64, variability = "symbolic"}> : () -> ()
+    %child_default = "nodal.const_literal"() <{metadata = {}, spelling = "2.0", value = 2.0 : f64}> : () -> f64
+    "nodal.parameter_value"(%child_default) <{metadata = {}, parameter = @gain}> : (f64) -> ()
+  }) : () -> ()
+  "nodal.module"() <{metadata = {}, sym_name = "Top"}> ({
+  ^bb0:
+    %top_vin = "nodal.terminal"() <{direction = "input", flow_orientation = "into_component", metadata = {declaration_kind = "analog-input"}, name = "vin", source_path = "Top.vin"}> : () -> !nodal.terminal<"electrical">
+    %top_vout = "nodal.terminal"() <{direction = "output", flow_orientation = "into_component", metadata = {declaration_kind = "analog-output"}, name = "vout", source_path = "Top.vout"}> : () -> !nodal.terminal<"electrical">
+    "nodal.parameter"() <{classification = "ordinary", default_value = 4.0 : f64, metadata = {}, parameter_kind = "real", sym_name = "rootGain", type = f64, variability = "symbolic"}> : () -> ()
+    %top_default = "nodal.const_literal"() <{metadata = {}, spelling = "4.0", value = 4.0 : f64}> : () -> f64
+    "nodal.parameter_value"(%top_default) <{metadata = {}, parameter = @rootGain}> : (f64) -> ()
+    "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Child, parameter_bindings = {}, sym_name = "child"}> : () -> ()
+    %child_vin_ref = "nodal.instance_terminal"() <{direction = "input", flow_orientation = "out_of_component", instance = @child, metadata = {}, name = "child.vin", port = "vin", source_path = "Top.child.vin"}> : () -> !nodal.terminal<"electrical">
+    %child_vout_ref = "nodal.instance_terminal"() <{direction = "output", flow_orientation = "out_of_component", instance = @child, metadata = {}, name = "child.vout", port = "vout", source_path = "Top.child.vout"}> : () -> !nodal.terminal<"electrical">
+    "nodal.connect"(%top_vin, %child_vin_ref) <{connection_id = "vin", metadata = {}, source_path = "Top.vin-child.vin"}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> ()
+    "nodal.connect"(%child_vout_ref, %top_vout) <{connection_id = "vout", metadata = {}, source_path = "Top.child.vout-vout"}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> ()
+    %root_gain = "nodal.const_parameter_ref"() <{metadata = {}, parameter = @rootGain}> : () -> f64
+    "nodal.parameter_override"(%root_gain) <{instance = @child, metadata = {}, parameter = @gain}> : (f64) -> ()
+  }) : () -> ()
+}
+)mlir";
+
 class RejectingReparseHooks final : public nodal::TargetVerificationHooks {
 public:
   mlir::LogicalResult verifyTarget(llvm::StringRef,
@@ -159,6 +199,69 @@ int main() {
   if (alpha == std::string::npos || zeta == std::string::npos || alpha >= zeta)
     return fail("module output is not sorted by semantic name");
 
+  auto hierarchy = parse(context, kHierarchyModule);
+  if (!hierarchy)
+    return fail("could not parse the hierarchy backend fixture");
+  std::string hierarchyOutput;
+  llvm::raw_string_ostream hierarchyStream(hierarchyOutput);
+  if (mlir::failed(nodal::emitBackend(*hierarchy, nodal::BackendKind::VerilogA, hierarchyStream)))
+    return fail("named symbolic hierarchy emission failed");
+  hierarchyStream.flush();
+  constexpr llvm::StringLiteral childDefinition = "module Child(vin, vout);";
+  const size_t firstChildDefinition = hierarchyOutput.find(childDefinition.str());
+  if (hierarchyOutput.find("Child #(.gain(rootGain)) child(.vin(vin), .vout(vout));") ==
+          std::string::npos ||
+      firstChildDefinition == std::string::npos ||
+      hierarchyOutput.find(childDefinition.str(), firstChildDefinition + 1) != std::string::npos)
+    return fail("hierarchy output lost symbolic overrides, names, or definition reuse");
+
+  std::string signedZeroRootSource = kHierarchyModule.str();
+  const std::string signedZeroBinding = "nodal.root.parameter_bindings = {rootGain = 4.0 : f64}";
+  const size_t signedZeroBindingPosition = signedZeroRootSource.find(signedZeroBinding);
+  const std::string rootDefault = "default_value = 4.0 : f64";
+  const size_t rootDefaultPosition = signedZeroRootSource.find(rootDefault);
+  const std::string rootDefaultLiteral = "spelling = \"4.0\", value = 4.0 : f64";
+  const size_t rootDefaultLiteralPosition = signedZeroRootSource.find(rootDefaultLiteral);
+  if (signedZeroBindingPosition == std::string::npos || rootDefaultPosition == std::string::npos ||
+      rootDefaultLiteralPosition == std::string::npos)
+    return fail("signed-zero root-actual mutation anchors missing");
+  signedZeroRootSource.replace(rootDefaultLiteralPosition, rootDefaultLiteral.size(),
+                               "spelling = \"0.0\", value = 0.0 : f64");
+  signedZeroRootSource.replace(rootDefaultPosition, rootDefault.size(),
+                               "default_value = 0.0 : f64");
+  signedZeroRootSource.replace(signedZeroBindingPosition, signedZeroBinding.size(),
+                               "nodal.root.parameter_bindings = {rootGain = -0.0 : f64}");
+  auto signedZeroRoot = parse(context, signedZeroRootSource);
+  if (!signedZeroRoot)
+    return fail("could not parse the signed-zero root-actual fixture");
+  std::string signedZeroRootOutput;
+  llvm::raw_string_ostream signedZeroRootStream(signedZeroRootOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*signedZeroRoot, nodal::BackendKind::VerilogA, signedZeroRootStream)))
+    return fail("numerically equal signed-zero root actual was rejected");
+  signedZeroRootStream.flush();
+  if (signedZeroRootOutput.find("parameter real rootGain = 0.0;") == std::string::npos)
+    return fail("signed-zero root fixture lost the authored declaration default");
+
+  std::string mismatchedRootSource = kHierarchyModule.str();
+  const std::string matchingRoot = "nodal.root.parameter_bindings = {rootGain = 4.0 : f64}";
+  const size_t matchingRootPosition = mismatchedRootSource.find(matchingRoot);
+  if (matchingRootPosition == std::string::npos)
+    return fail("root-actual mutation anchor missing");
+  mismatchedRootSource.replace(matchingRootPosition, matchingRoot.size(),
+                               "nodal.root.parameter_bindings = {rootGain = 6.0 : f64}");
+  auto mismatchedRoot = parse(context, mismatchedRootSource);
+  if (!mismatchedRoot)
+    return fail("could not parse the non-default root-actual fixture");
+  std::string rejectedRootOutput = "sentinel";
+  llvm::raw_string_ostream rejectedRootStream(rejectedRootOutput);
+  if (mlir::succeeded(
+          nodal::emitBackend(*mismatchedRoot, nodal::BackendKind::VerilogA, rejectedRootStream)))
+    return fail("non-default root actual was silently discarded");
+  rejectedRootStream.flush();
+  if (rejectedRootOutput != "sentinel")
+    return fail("root-actual rejection published partial output");
+
   auto configuration = nodal::resolveBackendConfiguration(*analog, nodal::BackendKind::VerilogA);
   if (mlir::failed(configuration))
     return fail("could not resolve waveform reparse configuration");
@@ -226,6 +329,30 @@ int main() {
     invalid.replace(position, std::string(mutation.first).size(), mutation.second);
     if (mlir::succeeded(nodal::reparseBackendTarget(invalid, *configuration)))
       return fail("reserved or empty target declaration passed independent reparse");
+  }
+
+  const std::string hierarchyTarget =
+      "module Leaf(vin, vout);\ninput vin;\noutput vout;\nelectrical vin, vout;\n"
+      "parameter real gain = 2;\nendmodule\n"
+      "module Top(vin, vout);\ninput vin;\noutput vout;\nelectrical vin, vout;\n"
+      "parameter real rootGain = 4;\n"
+      "Leaf #(.gain(((rootGain + 1) * 2))) child(.vin(vin), .vout(vout));\nendmodule\n";
+  if (mlir::failed(nodal::reparseBackendTarget(hierarchyTarget, *configuration)))
+    return fail("valid named scalar hierarchy failed independent reparse");
+  for (const auto &mutation :
+       {std::make_pair(".vout(vout)", ".unknown(vout)"), std::make_pair(", .vout(vout)", ""),
+        std::make_pair(".vin(vin)", ".vin(foreign)"),
+        std::make_pair(".gain(((rootGain + 1) * 2))", ".missing(rootGain)"),
+        std::make_pair("parameter real gain = 2", "localparam real gain = 2"),
+        std::make_pair("Leaf #(", "Top #("),
+        std::make_pair("module Leaf(vin, vout);", "module Missing(vin, vout);")}) {
+    std::string invalid = hierarchyTarget;
+    auto position = invalid.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("hierarchy target mutation anchor missing");
+    invalid.replace(position, std::string(mutation.first).size(), mutation.second);
+    if (mlir::succeeded(nodal::reparseBackendTarget(invalid, *configuration)))
+      return fail("malformed hierarchy passed independent reparse");
   }
 
   auto reserved = parse(context, kReservedModule);

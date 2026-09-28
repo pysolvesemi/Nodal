@@ -136,6 +136,27 @@ def Nodal_InstanceOp : Nodal_Op<"instance",
   let hasVerifier = 1;
 }
 
+def Nodal_InstanceTerminalOp : Nodal_Op<"instance_terminal",
+    [HasParent<"ModuleOp">]> {
+  let summary = "Typed immediate-child conservative terminal reference";
+  let description = [{
+    Resolves one declared boundary terminal of one direct child instance. The
+    result is a parent-owned connectivity endpoint; it never exposes child
+    internal nodes or descendant terminals.
+  }];
+  let arguments = (ins
+    FlatSymbolRefAttr:$instance,
+    StrAttr:$port,
+    StrAttr:$name,
+    StrAttr:$direction,
+    StrAttr:$flow_orientation,
+    StrAttr:$source_path,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs Nodal_TerminalType:$result);
+  let hasVerifier = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // Interface, role, protocol, and logical ABI model
 //===----------------------------------------------------------------------===//

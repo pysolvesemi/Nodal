@@ -1,6 +1,7 @@
 package nodal.internal.testkit
 
 import nodal.*
+import nodal.increment42fixture.*
 import nodal.internal.bridge.*
 
 import java.nio.file.Files
@@ -57,6 +58,45 @@ final class BridgeTop extends Module:
     child.domain(root)
     child.param(_.width, 12.U(8))
     output := input
+
+final class BridgeHierarchyLeaf(gain: Param[Real] = 2.0) extends Module:
+  def parameter: Param[Real] = gain
+  val vin: Node[Electrical.type] = in(Electrical)
+  val vout: Node[Electrical.type] = out(Electrical)
+
+final class BridgeHierarchyTop(rootGain: Param[Real] = 4.0) extends Module:
+  val parameter: Param[Real] = rootGain
+  val vin: Node[Electrical.type] = in(Electrical)
+  val vout: Node[Electrical.type] = out(Electrical)
+  val child: BridgeHierarchyLeaf = new BridgeHierarchyLeaf(gain = rootGain)
+  vin <> child.vin
+  child.vout <> vout
+
+final class BridgeHierarchyExpressionLeaf extends Module:
+  val gain: Param[Real] = param(2.0.real)
+
+final class BridgeHierarchyExpressionTop extends Module:
+  val rootGain: Param[Real] = param(4.0.real)
+  val child: Instance[BridgeHierarchyExpressionLeaf] = instance(new BridgeHierarchyExpressionLeaf)
+  child.param(_.gain, (rootGain + 1.0.real) * 2.0.real)
+
+final class BridgeBooleanExpressionLeaf extends Module:
+  val enabled: Param[Bool] = param(false.B)
+
+final class BridgeBooleanExpressionTop extends Module:
+  val threshold: Param[Real] = param(4.0.real)
+  val child: Instance[BridgeBooleanExpressionLeaf] = instance(new BridgeBooleanExpressionLeaf)
+  child.param(_.enabled, (threshold > 1.0.real) && true.B)
+
+final class BridgeNamedDisciplineLeaf extends Module:
+  val declared: NamedDiscipline = discipline("leaf_electrical", Voltage, Current)
+  val port: Node[NamedDiscipline] = in(declared)
+
+final class BridgeNamedDisciplineTop extends Module:
+  val declared: NamedDiscipline = discipline("top_electrical", Voltage, Current)
+  val port: Node[NamedDiscipline] = in(declared)
+  val child: BridgeNamedDisciplineLeaf = new BridgeNamedDisciplineLeaf
+  port <> child.port
 
 final class BridgeProceduralTop extends Module:
   val accumulator: Variable[Real] = variable(Real, 1.0.V)
@@ -135,11 +175,165 @@ object ScalaToMlirBridgeTests extends TestSuite:
       assert(first.text.contains("\"nodal.module\""))
       assert(first.text.contains("\"nodal.parameter\""))
       assert(first.text.contains("parameter_bindings"))
+      assert(first.text.contains("domain_bindings = {core = @root}"))
+      assert(!first.text.contains("\"nodal.domain_bind\""))
       assert(first.text.contains("nodal.bridge.declarations"))
       assert(first.text.contains("nodal.bridge.origins"))
       assert(first.text.contains("loc(\""))
       assert(first.text.endsWith("\n"))
       assert(!first.text.contains("\r"))
+
+    test("hierarchy bridge retains typed root actuals, symbolic overrides, and child ports"):
+      val snapshot = ConstructionKernel.inspect(new BridgeHierarchyTop(rootGain = 6.0))
+      val first = ScalaToMlirBridge.fromSnapshot(snapshot)
+      val second = ScalaToMlirBridge.fromSnapshot(snapshot)
+
+      assert(first == second)
+      assert(snapshot.rootParameterBindings == Vector("rootGain" -> "6.0"))
+      assert(snapshot.topology.forall(_.owner == snapshot.root))
+      assert(first.text.contains("nodal.root.module = @BridgeHierarchyTop"))
+      assert(first.text.contains("nodal.root.parameter_bindings = {rootGain = 6.0 : f64}"))
+      assert(occurrences(first.text, "\"nodal.nature\"") == 2)
+      assert(occurrences(first.text, "\"nodal.discipline\"") == 1)
+      assert(first.text.contains("sym_name = \"electrical\""))
+      assert(first.text.contains("potential = @Voltage"))
+      assert(first.text.contains("flow = @Current"))
+      assert(first.text.contains("parameter_bindings = {}"))
+      assert(first.text.contains("\"nodal.const_parameter_ref\""))
+      assert(first.text.contains("parameter = @rootGain"))
+      assert(first.text.contains("\"nodal.parameter_override\""))
+      assert(first.text.contains("parameter = @gain"))
+      assert(occurrences(first.text, "\"nodal.instance_terminal\"") == 2)
+      assert(occurrences(first.text, "\"nodal.connect\"") == 2)
+      assert(occurrences(first.text, "allow_floating = true") == 2)
+      assert(first.text.contains("module = @child"))
+      assert(first.text.contains("instance = @child_instance"))
+      assert(first.text.contains("port = \"vin\""))
+      assert(first.text.contains("port = \"vout\""))
+      assert(!first.text.contains("NODAL-BRIDGE"))
+
+    test("hierarchy composes deterministically with equations events and local functions"):
+      val equation = ScalaToMlirBridge.lower(new HierarchyEquationTop)
+      val event = ScalaToMlirBridge.lower(new HierarchyEventTop)
+      val function = ScalaToMlirBridge.lower(new HierarchyFunctionTop)
+
+      Vector(
+        equation -> ScalaToMlirBridge.lower(new HierarchyEquationTop),
+        event -> ScalaToMlirBridge.lower(new HierarchyEventTop),
+        function -> ScalaToMlirBridge.lower(new HierarchyFunctionTop)
+      ).foreach: (first, second) =>
+        assert(first == second)
+        assert(occurrences(first.text, "\"nodal.instance_terminal\"") == 2)
+        assert(occurrences(first.text, "\"nodal.connect\"") == 2)
+        assert(first.text.contains("\"nodal.parameter_override\""))
+        assert(first.text.contains("parameter = @gain"))
+        assert(first.text.contains("module = @child"))
+        assert(!first.text.contains("NODAL-BRIDGE"))
+
+      assert(equation.text.contains("nodal.bridge.analog_semantics"))
+      assert(equation.text.contains("lhs-minus-rhs-equals-zero"))
+      assert(event.text.contains("\"nodal.analog_initial_step\""))
+      assert(event.text.contains("\"nodal.analog_on\""))
+      assert(function.text.contains("nodal.bridge.analog_functions"))
+      assert(function.text.contains("\"nodal.analog_user_call\""))
+      assert(function.text.contains("callee = @scaleSignal"))
+
+    test("hierarchy scale witnesses retain repeated identities and bounded depth"):
+      val repeated = ScalaToMlirBridge.lower(new HierarchyRepeatedTop)
+      val nested = ScalaToMlirBridge.lower(new HierarchyNestedTop)
+
+      assert(repeated == ScalaToMlirBridge.lower(new HierarchyRepeatedTop))
+      assert(nested == ScalaToMlirBridge.lower(new HierarchyNestedTop))
+      assert(occurrences(repeated.text, "\"nodal.module\"") == 2)
+      assert(occurrences(repeated.text, "\"nodal.instance\"") == 4)
+      assert(occurrences(repeated.text, "\"nodal.instance_terminal\"") == 8)
+      assert(occurrences(repeated.text, "\"nodal.connect\"") == 8)
+      assert(occurrences(repeated.text, "\"nodal.parameter_override\"") == 2)
+      Vector("first", "second", "third", "fourth").foreach: name =>
+        assert(repeated.text.contains(s"child_path = \"HierarchyRepeatedTop.$name\""))
+      assert(occurrences(repeated.text, "module = @first") == 4)
+      assert(!repeated.text.contains("sym_name = \"second\""))
+      assert(!repeated.text.contains("sym_name = \"third\""))
+      assert(!repeated.text.contains("sym_name = \"fourth\""))
+      assert(repeated.text.contains("3.0 : f64"))
+      assert(repeated.text.contains("5.0 : f64"))
+
+      assert(occurrences(nested.text, "\"nodal.module\"") == 3)
+      assert(occurrences(nested.text, "\"nodal.instance\"") == 3)
+      assert(occurrences(nested.text, "\"nodal.instance_terminal\"") == 6)
+      assert(occurrences(nested.text, "\"nodal.connect\"") == 6)
+      assert(occurrences(nested.text, "module = @firstBranch") == 2)
+      assert(nested.text.contains("module = @leaf"))
+      assert(nested.text.contains("child_path = \"HierarchyNestedTop.firstBranch\""))
+      assert(nested.text.contains("child_path = \"HierarchyNestedTop.secondBranch\""))
+      assert(
+        nested.text.contains("child_path = \"HierarchyNestedTop.firstBranch.leaf\"")
+      )
+      assert(!nested.text.contains("sym_name = \"secondBranch\""))
+
+      val repeatedSnapshot = ConstructionKernel.inspect(new HierarchyRepeatedTop)
+      val distinctDefault = repeatedSnapshot.copy(
+        modules = repeatedSnapshot.modules.map: module =>
+          if module.path == "HierarchyRepeatedTop.second" then
+            module.copy(
+              declarations = module.declarations.map: declaration =>
+                if declaration.kind == "parameter" then
+                  declaration.copy(
+                    attributes = declaration.attributes.map:
+                      case ("default", _) => "default" -> "7.0"
+                      case entry => entry
+                  )
+                else declaration
+            )
+          else module
+      )
+      val distinct = ScalaToMlirBridge.fromSnapshot(distinctDefault)
+      assert(occurrences(distinct.text, "\"nodal.module\"") == 3)
+      assert(distinct.text.contains("module = @second"))
+      assert(distinct.text.contains("sym_name = \"second\""))
+
+    test("hierarchy bridge canonicalizes compatible named conservative disciplines"):
+      val document = ScalaToMlirBridge.lower(new BridgeNamedDisciplineTop)
+
+      assert(occurrences(document.text, "\"nodal.instance_terminal\"") == 1)
+      assert(occurrences(document.text, "\"nodal.connect\"") == 1)
+      assert(document.text.contains("!nodal.terminal<\"electrical\">"))
+      assert(!document.text.contains("!nodal.terminal<\"top_electrical\">"))
+      assert(!document.text.contains("!nodal.terminal<\"leaf_electrical\">"))
+      assert(document.text.contains("declared_discipline = \"top_electrical\""))
+      assert(document.text.contains("declared_discipline = \"leaf_electrical\""))
+
+    test("hierarchy bridge serializes parent-owned static override expression DAGs"):
+      val arithmeticSnapshot = ConstructionKernel.inspect(new BridgeHierarchyExpressionTop)
+      val arithmetic = ScalaToMlirBridge.fromSnapshot(arithmeticSnapshot)
+      val operations = arithmeticSnapshot.parameterExpressions.map(_.operation)
+
+      assert(operations == Vector("real_literal", "analog_add", "real_literal", "analog_mul"))
+      assert(arithmeticSnapshot.parameterExpressions.forall(
+        _.owner == "BridgeHierarchyExpressionTop"
+      ))
+      assert(arithmetic.text.contains("\"nodal.const_parameter_ref\""))
+      assert(occurrences(arithmetic.text, "\"nodal.const_literal\"") == 2)
+      assert(occurrences(arithmetic.text, "\"nodal.const_expr\"") == 2)
+      assert(arithmetic.text.contains("operator_name = \"add\""))
+      assert(arithmetic.text.contains("operator_name = \"mul\""))
+      assert(arithmetic.text.contains(
+        s"source_value = \"${arithmeticSnapshot.parameterExpressions.last.path}\""
+      ))
+
+      val booleanSnapshot = ConstructionKernel.inspect(new BridgeBooleanExpressionTop)
+      val boolean = ScalaToMlirBridge.fromSnapshot(booleanSnapshot)
+      assert(booleanSnapshot.parameterExpressions.map(_.operation) == Vector(
+        "real_literal",
+        "real_gt",
+        "boolean",
+        "bool_and"
+      ))
+      assert(boolean.text.contains("operator_name = \"gt\""))
+      assert(boolean.text.contains("operator_name = \"and\""))
+      assert(boolean.text.contains("-> !nodal.bits<1>"))
+      assert(!arithmetic.text.contains("NODAL-BRIDGE"))
+      assert(!boolean.text.contains("NODAL-BRIDGE"))
 
     test("analog procedural IR retains order, source locations, and serialization"):
       val first = ScalaToMlirBridge.lower(new BridgeProceduralTop)
@@ -474,7 +668,7 @@ object ScalaToMlirBridgeTests extends TestSuite:
           val directory = workDirectory()
           try
             val document = ScalaToMlirBridge.lower(new BridgeTop)
-            val success = NativeCompilerClient
+            val result = NativeCompilerClient
               .run(
                 document,
                 NativeCompilerRequest(
@@ -484,7 +678,180 @@ object ScalaToMlirBridgeTests extends TestSuite:
                   timeout = Duration.ofSeconds(30)
                 )
               )
-              .asInstanceOf[NativeCompilerSuccess]
-            assert(success.normalizedMlir.contains("nodal.bridge.schema"))
-            assert(success.normalizedMlir.contains("\"nodal.module\""))
+            result match
+              case success: NativeCompilerSuccess =>
+                assert(success.normalizedMlir.contains("nodal.bridge.schema"))
+                assert(success.normalizedMlir.contains("\"nodal.module\""))
+              case failure: NativeCompilerFailure =>
+                scala.Predef.assert(
+                  false,
+                  s"${failure.diagnostic}\n${failure.standardError}"
+                )
           finally delete(directory)
+
+    test("locked nodalc verifies static hierarchy override DAGs when configured"):
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          Vector(
+            ScalaToMlirBridge.lower(new BridgeHierarchyExpressionTop),
+            ScalaToMlirBridge.lower(new BridgeBooleanExpressionTop)
+          ).foreach: document =>
+            val directory = workDirectory()
+            try
+              NativeCompilerClient.run(
+                document,
+                NativeCompilerRequest(
+                  executable = Path.of(executable).toAbsolutePath,
+                  arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
+                  workingDirectory = directory,
+                  timeout = Duration.ofSeconds(30)
+                )
+              ) match
+                case success: NativeCompilerSuccess =>
+                  assert(success.normalizedMlir.contains("\"nodal.parameter_override\""))
+                  assert(success.normalizedMlir.contains("\"nodal.const_expr\""))
+                case failure: NativeCompilerFailure =>
+                  scala.Predef.assert(
+                    false,
+                    s"${failure.diagnostic}\n${failure.standardError}"
+                  )
+            finally delete(directory)
+
+    test("public Scala hierarchy compiles to reusable named Verilog-A instances when configured"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new BridgeHierarchyTop,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.verilogA.contains("module child(vin, vout);"))
+            assert(result.verilogA.contains("module BridgeHierarchyTop(vin, vout);"))
+            assert(
+              result.verilogA.contains(
+                "child #(.gain(rootGain)) child_instance(.vin(vin), .vout(vout));"
+              )
+            )
+            assert(occurrences(result.verilogA, "module child") == 1)
+            assert(!result.verilogA.contains("module child_gain"))
+
+            val combinations = Vector[(String, () => Module, String, String)](
+              (
+                "HierarchyEquationTop",
+                () => new HierarchyEquationTop,
+                "nodal.bridge.analog_semantics",
+                "child #(.gain(rootGain)) child_instance(.vin(vin), .vout(vout));"
+              ),
+              (
+                "HierarchyEventTop",
+                () => new HierarchyEventTop,
+                "\"nodal.analog_initial_step\"",
+                "@(initial_step)"
+              ),
+              (
+                "HierarchyFunctionTop",
+                () => new HierarchyFunctionTop,
+                "\"nodal.analog_user_call\"",
+                "analog function real scaleSignal;"
+              )
+            )
+            combinations.foreach: (name, construct, mlirWitness, targetWitness) =>
+              val combinationDirectory = Files.createDirectory(directory.resolve(name))
+              val combination = ScalaToMlirBridge
+                .compileToVerilogA(
+                  construct(),
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  combinationDirectory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+              assert(combination.mlir.contains(mlirWitness))
+              assert(combination.verilogA.contains(s"module $name(vin, vout);"))
+              assert(
+                combination.verilogA.contains(
+                  "child #(.gain(rootGain)) child_instance(.vin(vin), .vout(vout));"
+                )
+              )
+              assert(combination.verilogA.contains(targetWitness))
+              assert(occurrences(combination.verilogA, "module child") == 1)
+              assert(!combination.verilogA.contains("module child_gain"))
+
+            val repeatedDirectory = Files.createDirectory(directory.resolve("repeated"))
+            val repeated = ScalaToMlirBridge
+              .compileToVerilogA(
+                new HierarchyRepeatedTop,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                repeatedDirectory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(occurrences(repeated.verilogA, "module first") == 1)
+            assert(!repeated.verilogA.contains("module second"))
+            assert(!repeated.verilogA.contains("module third"))
+            assert(!repeated.verilogA.contains("module fourth"))
+            assert(occurrences(repeated.verilogA, "first #(") == 4)
+            assert(repeated.verilogA.contains(".gain(rootGain)"))
+            assert(repeated.verilogA.contains(".gain(3)"))
+            assert(repeated.verilogA.contains(".gain(5)"))
+
+            val nestedDirectory = Files.createDirectory(directory.resolve("nested"))
+            val nested = ScalaToMlirBridge
+              .compileToVerilogA(
+                new HierarchyNestedTop,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                nestedDirectory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(nested.verilogA.contains("module leaf(vin, vout);"))
+            assert(nested.verilogA.contains("module firstBranch(vin, vout);"))
+            assert(nested.verilogA.contains("module HierarchyNestedTop(vin0, vin1, vout0, vout1);"))
+            assert(nested.verilogA.contains("leaf #(.gain(branchGain)) leaf_instance"))
+            assert(occurrences(nested.verilogA, "firstBranch #(") == 2)
+            assert(nested.verilogA.contains(".branchGain(rootGain)"))
+            assert(nested.verilogA.contains(".branchGain(6)"))
+
+            val rejectedDirectory = Files.createDirectory(directory.resolve("non-default-root"))
+            ScalaToMlirBridge.compileToVerilogA(
+              new BridgeHierarchyTop(rootGain = 6.0),
+              Path.of(nodalc).toAbsolutePath,
+              Path.of(translator).toAbsolutePath,
+              rejectedDirectory,
+              Duration.ofSeconds(60)
+            ) match
+              case Left(failure) =>
+                assert(
+                  s"${failure.diagnostic}\n${failure.standardError}".contains(
+                    "NODAL-BACKEND-HIERARCHY-010"
+                  )
+                )
+              case Right(_) =>
+                scala.Predef.assert(false, "non-default root actual was silently discarded")
+          finally delete(directory)
+        case _ => assert(true)

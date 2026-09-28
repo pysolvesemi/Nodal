@@ -14,7 +14,9 @@
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
 #include "nodal/Dialect/Nodal/TimeWaveform.h"
+#include "nodal/Support/AnalogHierarchySyntax.h"
 
+#include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -30,6 +32,9 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <map>
+#include <optional>
+#include <set>
 #include <string>
 #include <system_error>
 
@@ -52,8 +57,12 @@ constexpr llvm::StringLiteral kSupportedOperations[] = {
     "nodal.parameter_value",
     "nodal.parameter_constraint",
     "nodal.parameter_envelope",
+    "nodal.parameter_override",
     "nodal.terminal",
+    "nodal.instance",
+    "nodal.instance_terminal",
     "nodal.node",
+    "nodal.connect",
     "nodal.branch",
     "nodal.analog",
     "nodal.real_literal",
@@ -688,6 +697,320 @@ FailureOr<std::string> legacyParameterInitializer(Operation *parameter) {
   return failure();
 }
 
+Operation *findDirectDefinition(Operation *definition, llvm::StringRef name) {
+  auto outer = definition->getParentOfType<mlir::ModuleOp>();
+  if (!outer)
+    return nullptr;
+  for (Operation &candidate : outer.getBody()->getOperations())
+    if (candidate.getName().getStringRef() == "nodal.module" && symbolName(&candidate) == name)
+      return &candidate;
+  return nullptr;
+}
+
+Operation *findDirectParameter(Operation *definition, llvm::StringRef name) {
+  if (!definition || definition->getNumRegions() != 1 ||
+      !llvm::hasSingleElement(definition->getRegion(0)))
+    return nullptr;
+  for (Operation &candidate : definition->getRegion(0).front())
+    if (candidate.getName().getStringRef() == "nodal.parameter" && symbolName(&candidate) == name)
+      return &candidate;
+  return nullptr;
+}
+
+FailureOr<std::string> renderParameterBinding(Attribute value, Operation *parameter) {
+  llvm::StringRef kind = nodal::getParameterKind(parameter);
+  if (kind == "real") {
+    auto real = llvm::dyn_cast<FloatAttr>(value);
+    if (!real || !std::isfinite(real.getValueAsDouble()))
+      return failure();
+    return formatReal(real.getValueAsDouble()) + nodal::getParameterUnitNativeSuffix(parameter);
+  }
+  if (kind == "integer") {
+    auto integer = llvm::dyn_cast<IntegerAttr>(value);
+    return integer ? renderIntegerAttribute(integer, parameter) : FailureOr<std::string>(failure());
+  }
+  if (kind == "boolean") {
+    if (auto boolean = llvm::dyn_cast<BoolAttr>(value))
+      return boolean.getValue() ? std::string("1") : std::string("0");
+    if (auto integer = llvm::dyn_cast<IntegerAttr>(value))
+      return integer.getInt() == 0 ? std::string("0") : std::string("1");
+  }
+  return failure();
+}
+
+FailureOr<bool> parameterBindingsEqual(Attribute actual, Attribute authored, Operation *parameter) {
+  llvm::StringRef kind = nodal::getParameterKind(parameter);
+  if (kind == "real") {
+    auto actualReal = llvm::dyn_cast<FloatAttr>(actual);
+    auto authoredReal = llvm::dyn_cast<FloatAttr>(authored);
+    if (!actualReal || !authoredReal || !std::isfinite(actualReal.getValueAsDouble()) ||
+        !std::isfinite(authoredReal.getValueAsDouble()))
+      return failure();
+    return actualReal.getValue().compare(authoredReal.getValue()) == llvm::APFloat::cmpEqual;
+  }
+  if (kind == "integer") {
+    auto actualInteger = llvm::dyn_cast<IntegerAttr>(actual);
+    auto authoredInteger = llvm::dyn_cast<IntegerAttr>(authored);
+    if (!actualInteger || !authoredInteger)
+      return failure();
+    return actualInteger.getValue() == authoredInteger.getValue();
+  }
+  if (kind == "boolean") {
+    auto booleanValue = [](Attribute value) -> std::optional<bool> {
+      if (auto boolean = llvm::dyn_cast<BoolAttr>(value))
+        return boolean.getValue();
+      if (auto integer = llvm::dyn_cast<IntegerAttr>(value))
+        return integer.getInt() != 0;
+      return std::nullopt;
+    };
+    auto actualBoolean = booleanValue(actual);
+    auto authoredBoolean = booleanValue(authored);
+    if (!actualBoolean || !authoredBoolean)
+      return failure();
+    return *actualBoolean == *authoredBoolean;
+  }
+  return failure();
+}
+
+struct HierarchyInstanceRender {
+  Operation *child = nullptr;
+  std::map<std::string, std::string> ports;
+  std::map<std::string, std::string> parameters;
+};
+
+LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
+                              llvm::raw_ostream &output) {
+  Region &region = definition->getRegion(0);
+  if (!llvm::hasSingleElement(region))
+    return failure();
+
+  llvm::SmallVector<Operation *, 8> instances;
+  llvm::SmallVector<Operation *, 16> instanceTerminals;
+  llvm::SmallVector<Operation *, 16> connections;
+  llvm::SmallVector<Operation *, 8> overrides;
+  for (Operation &operation : region.front()) {
+    llvm::StringRef name = operation.getName().getStringRef();
+    if (name == "nodal.instance")
+      instances.push_back(&operation);
+    else if (name == "nodal.instance_terminal")
+      instanceTerminals.push_back(&operation);
+    else if (name == "nodal.connect")
+      connections.push_back(&operation);
+    else if (name == "nodal.parameter_override")
+      overrides.push_back(&operation);
+  }
+  if (instances.empty() && instanceTerminals.empty() && connections.empty() && overrides.empty())
+    return success();
+
+  llvm::sort(instances, [](Operation *left, Operation *right) {
+    return symbolName(left) < symbolName(right);
+  });
+  llvm::StringMap<Operation *> instancesByName;
+  llvm::DenseMap<Operation *, HierarchyInstanceRender> rendered;
+  for (Operation *instance : instances) {
+    llvm::StringRef name = symbolName(instance);
+    auto target = instance->getAttrOfType<FlatSymbolRefAttr>("module");
+    Operation *child = target ? findDirectDefinition(definition, target.getValue()) : nullptr;
+    auto domains = instance->getAttrOfType<DictionaryAttr>("domain_bindings");
+    if (name.empty() || !isPortableVerilogIdentifier(name) || !child ||
+        (domains && !domains.empty()) || !instancesByName.try_emplace(name, instance).second)
+      return emitMappedFailure(instance, "NODAL-BACKEND-HIERARCHY-001",
+                               "instance identity, target, or domain profile is unsupported");
+    rendered[instance] = HierarchyInstanceRender{child, {}, {}};
+  }
+  if (instances.empty())
+    return emitMappedFailure(definition, "NODAL-BACKEND-HIERARCHY-002",
+                             "hierarchy endpoints or connections require an instance");
+
+  llvm::SmallVector<Value, 32> endpoints;
+  llvm::DenseMap<Value, unsigned> endpointIndices;
+  auto addEndpoint = [&](Value value) {
+    if (!endpointIndices.count(value)) {
+      endpointIndices[value] = static_cast<unsigned>(endpoints.size());
+      endpoints.push_back(value);
+    }
+  };
+  for (const auto &entry : state.terminals)
+    addEndpoint(entry.first);
+  for (Operation *terminal : instanceTerminals) {
+    if (terminal->getNumResults() != 1)
+      return emitMappedFailure(terminal, "NODAL-BACKEND-HIERARCHY-002",
+                               "child terminal must produce one conservative endpoint");
+    addEndpoint(terminal->getResult(0));
+  }
+  llvm::SmallVector<unsigned, 32> parent(endpoints.size());
+  for (unsigned index = 0; index < parent.size(); ++index)
+    parent[index] = index;
+  auto root = [&](unsigned index) {
+    while (parent[index] != index) {
+      parent[index] = parent[parent[index]];
+      index = parent[index];
+    }
+    return index;
+  };
+  auto unite = [&](unsigned left, unsigned right) {
+    left = root(left);
+    right = root(right);
+    if (left != right)
+      parent[right] = left;
+  };
+  for (Operation *connection : connections) {
+    if (connection->getNumOperands() < 2)
+      return emitMappedFailure(connection, "NODAL-BACKEND-HIERARCHY-002",
+                               "connection requires at least two known endpoints");
+    auto first = endpointIndices.find(connection->getOperand(0));
+    if (first == endpointIndices.end())
+      return failure();
+    for (Value operand : connection->getOperands()) {
+      auto found = endpointIndices.find(operand);
+      if (found == endpointIndices.end())
+        return emitMappedFailure(connection, "NODAL-BACKEND-HIERARCHY-002",
+                                 "connection references an unsupported endpoint");
+      unite(first->second, found->second);
+    }
+  }
+
+  llvm::DenseSet<unsigned> childRoots;
+  for (Operation *terminal : instanceTerminals) {
+    auto instanceReference = terminal->getAttrOfType<FlatSymbolRefAttr>("instance");
+    auto port = terminal->getAttrOfType<StringAttr>("port");
+    Operation *instance =
+        instanceReference ? instancesByName.lookup(instanceReference.getValue()) : nullptr;
+    if (!instance || !port || !isPortableVerilogIdentifier(port.getValue()))
+      return emitMappedFailure(terminal, "NODAL-BACKEND-HIERARCHY-003",
+                               "child terminal does not resolve to a portable instance port");
+    const unsigned terminalRoot = root(endpointIndices.lookup(terminal->getResult(0)));
+    childRoots.insert(terminalRoot);
+    std::set<std::string> anchors;
+    for (const auto &entry : state.terminals)
+      if (root(endpointIndices.lookup(entry.first)) == terminalRoot)
+        anchors.insert(entry.second);
+    if (anchors.size() != 1)
+      return emitMappedFailure(terminal, "NODAL-BACKEND-HIERARCHY-004",
+                               "child port requires exactly one parent-local net anchor");
+    auto &ports = rendered[instance].ports;
+    if (!ports.emplace(port.getValue().str(), *anchors.begin()).second)
+      return emitMappedFailure(terminal, "NODAL-BACKEND-HIERARCHY-003",
+                               "child port is bound more than once");
+  }
+  for (Operation *connection : connections)
+    if (!childRoots.count(root(endpointIndices.lookup(connection->getOperand(0)))))
+      return emitMappedFailure(connection, "NODAL-BACKEND-HIERARCHY-005",
+                               "parent-only connection is not representable by the scalar "
+                               "instance profile");
+
+  for (Operation *instance : instances) {
+    auto &entry = rendered[instance];
+    std::set<std::string> childPorts;
+    for (Operation &operation : entry.child->getRegion(0).front())
+      if (operation.getName().getStringRef() == "nodal.terminal") {
+        auto name = operation.getAttrOfType<StringAttr>("name");
+        if (!name || !isPortableVerilogIdentifier(name.getValue()) ||
+            !childPorts.insert(name.getValue().str()).second)
+          return emitMappedFailure(&operation, "NODAL-BACKEND-HIERARCHY-003",
+                                   "child module has an invalid or duplicate boundary port");
+      }
+    if (entry.ports.size() != childPorts.size())
+      return emitMappedFailure(instance, "NODAL-BACKEND-HIERARCHY-006",
+                               "instance must bind every child boundary port exactly once");
+    for (const auto &port : childPorts)
+      if (!entry.ports.count(port))
+        return emitMappedFailure(instance, "NODAL-BACKEND-HIERARCHY-006",
+                                 "instance is missing a child boundary port binding");
+
+    auto bindings = instance->getAttrOfType<DictionaryAttr>("parameter_bindings");
+    if (!bindings)
+      return emitMappedFailure(instance, "NODAL-BACKEND-HIERARCHY-007",
+                               "instance parameter bindings are unavailable");
+    for (NamedAttribute binding : bindings) {
+      Operation *parameter = findDirectParameter(entry.child, binding.getName().getValue());
+      auto variability =
+          parameter ? parameter->getAttrOfType<StringAttr>("variability") : StringAttr();
+      auto value = parameter ? renderParameterBinding(binding.getValue(), parameter)
+                             : FailureOr<std::string>(failure());
+      if (!parameter || (variability && variability.getValue() == "fixed") || failed(value) ||
+          !entry.parameters.emplace(binding.getName().getValue().str(), *value).second)
+        return emitMappedFailure(instance, "NODAL-BACKEND-HIERARCHY-007",
+                                 "literal parameter binding is not losslessly renderable");
+    }
+  }
+
+  for (Operation *override : overrides) {
+    auto instanceReference = override->getAttrOfType<FlatSymbolRefAttr>("instance");
+    auto parameterReference = override->getAttrOfType<FlatSymbolRefAttr>("parameter");
+    Operation *instance =
+        instanceReference ? instancesByName.lookup(instanceReference.getValue()) : nullptr;
+    Operation *parameter =
+        instance && parameterReference
+            ? findDirectParameter(rendered[instance].child, parameterReference.getValue())
+            : nullptr;
+    auto variability =
+        parameter ? parameter->getAttrOfType<StringAttr>("variability") : StringAttr();
+    auto value = parameter && override->getNumOperands() == 1
+                     ? nodal::renderParameterConstantExpression(override->getOperand(0), parameter)
+                     : FailureOr<std::string>(failure());
+    if (!instance || !parameter || (variability && variability.getValue() == "fixed") ||
+        failed(value) ||
+        !rendered[instance].parameters.emplace(parameterReference.getValue().str(), *value).second)
+      return emitMappedFailure(override, "NODAL-BACKEND-HIERARCHY-008",
+                               "symbolic parameter override is not uniquely renderable");
+  }
+
+  for (Operation *instance : instances) {
+    const auto &entry = rendered[instance];
+    output << "  " << symbolName(entry.child);
+    if (!entry.parameters.empty()) {
+      output << " #(";
+      bool first = true;
+      for (const auto &[name, value] : entry.parameters) {
+        output << (first ? "" : ", ") << "." << name << "(" << value << ")";
+        first = false;
+      }
+      output << ")";
+    }
+    output << " " << symbolName(instance) << "(";
+    bool first = true;
+    for (const auto &[port, actual] : entry.ports) {
+      output << (first ? "" : ", ") << "." << port << "(" << actual << ")";
+      first = false;
+    }
+    output << ");\n";
+  }
+  return success();
+}
+
+LogicalResult verifyRootExport(llvm::ArrayRef<Operation *> definitions) {
+  if (definitions.empty())
+    return failure();
+  auto outer = definitions.front()->getParentOfType<mlir::ModuleOp>();
+  if (!outer)
+    return failure();
+  auto rootReference = outer->getAttrOfType<FlatSymbolRefAttr>("nodal.root.module");
+  auto bindings = outer->getAttrOfType<DictionaryAttr>("nodal.root.parameter_bindings");
+  if (!rootReference && !bindings)
+    return success();
+  Operation *root = nullptr;
+  for (Operation *definition : definitions)
+    if (rootReference && symbolName(definition) == rootReference.getValue())
+      root = definition;
+  if (!root || !bindings)
+    return emitMappedFailure(outer.getOperation(), "NODAL-BACKEND-HIERARCHY-009",
+                             "root parameter bindings require one resolved root definition");
+
+  for (NamedAttribute binding : bindings) {
+    Operation *parameter = findDirectParameter(root, binding.getName().getValue());
+    auto matches = parameter
+                       ? parameterBindingsEqual(binding.getValue(),
+                                                parameter->getAttr("default_value"), parameter)
+                       : FailureOr<bool>(failure());
+    if (!parameter || failed(matches) || !*matches)
+      return emitMappedFailure(
+          parameter ? parameter : root, "NODAL-BACKEND-HIERARCHY-010",
+          "non-default root actual requires an external top-binding adapter and is unsupported");
+  }
+  return success();
+}
+
 LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::raw_ostream &output,
                            bool wrapped = true, bool skipProcedures = false) {
   Region &region = analog->getRegion(0);
@@ -933,6 +1256,9 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
     output << "\n";
   }
 
+  if (failed(renderHierarchy(definition, state, output)))
+    return failure();
+
   if (hasAnalogEvents(definition) &&
       failed(prepareAnalogEventBackend(definition, state.eventState, output)))
     return failure();
@@ -1063,6 +1389,8 @@ LogicalResult verifyBackendOperations(mlir::ModuleOp module, const BackendProfil
 LogicalResult renderBackendCandidate(llvm::ArrayRef<Operation *> definitions,
                                      const BackendConfiguration &configuration,
                                      llvm::raw_ostream &output) {
+  if (failed(verifyRootExport(definitions)))
+    return failure();
   output << "/* Nodal backend framework v1\n";
   output << " * profile: " << configuration.profile->id << "\n";
   output << " * check-profile: " << stringifyGateProfile(configuration.checkProfile) << "\n";
@@ -1170,6 +1498,29 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       return false;
     return true;
   };
+  auto parameterDeclarationName =
+      [](llvm::StringRef line) -> std::optional<std::pair<std::string, bool>> {
+    llvm::StringRef code = line;
+    if (size_t comment = code.find("//"); comment != llvm::StringRef::npos)
+      code = code.take_front(comment).rtrim();
+    if (!code.ends_with(";"))
+      return std::nullopt;
+    code = code.drop_back().trim();
+    bool fixed = false;
+    if (code.consume_front("parameter real ") || code.consume_front("parameter integer ")) {
+    } else if (code.consume_front("localparam real ") ||
+               code.consume_front("localparam integer ")) {
+      fixed = true;
+    } else {
+      return std::nullopt;
+    }
+    size_t equals = code.find(" = ");
+    llvm::StringRef name =
+        equals == llvm::StringRef::npos ? llvm::StringRef() : code.take_front(equals).trim();
+    if (!isPortableVerilogIdentifier(name))
+      return std::nullopt;
+    return std::make_pair(name.str(), fixed);
+  };
 
   // Recognize only emitted waveform calls, retaining arity and balanced arguments.
   // This is the existing structural reparse gate, not a general Verilog-A parser.
@@ -1217,6 +1568,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
   llvm::StringSet<> realNames;
   llvm::StringSet<> assignedRealNames;
   llvm::StringSet<> eventNames;
+  std::vector<HierarchyModuleSyntax> hierarchyModules;
+  std::optional<std::size_t> currentHierarchyModule;
   auto identifierEventDeclaration = [&](llvm::StringRef name) {
     return !name.contains(',') && validIdentifierList(name) && eventNames.insert(name).second;
   };
@@ -1234,14 +1587,24 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
     if (!insideModule && line.starts_with("module ") && line.ends_with(";")) {
       llvm::StringRef declaration = line.drop_front(sizeof("module ") - 1).drop_back();
       size_t open = declaration.find('(');
+      llvm::SmallVector<llvm::StringRef, 8> headerPorts;
       if (open != llvm::StringRef::npos) {
         if (!declaration.ends_with(")") ||
             !validIdentifierList(declaration.slice(open + 1, declaration.size() - 1)))
           return failure();
+        declaration.slice(open + 1, declaration.size() - 1).split(headerPorts, ',', -1, true);
         declaration = declaration.take_front(open);
       }
       if (!validIdentifierList(declaration))
         return failure();
+      HierarchyModuleSyntax hierarchy;
+      hierarchy.name = declaration.str();
+      for (llvm::StringRef port : headerPorts) {
+        hierarchy.ports.insert(port.trim().str());
+        hierarchy.nodes.insert(port.trim().str());
+      }
+      hierarchyModules.push_back(std::move(hierarchy));
+      currentHierarchyModule = hierarchyModules.size() - 1;
       realNames.clear();
       assignedRealNames.clear();
       eventNames.clear();
@@ -1283,6 +1646,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       if (insideAnalog || assignedRealNames.size() != realNames.size())
         return failure();
       insideModule = false;
+      currentHierarchyModule.reset();
       continue;
     }
     if (insideAnalog) {
@@ -1356,15 +1720,43 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
         return failure();
       continue;
     }
-    if ((line.starts_with("input ") || line.starts_with("output ") || line.starts_with("inout ") ||
-         line.starts_with("electrical ")) &&
-        line.ends_with(";") && validIdentifierList(line.drop_front(line.find(' ') + 1).drop_back()))
+    if ((line.starts_with("input ") || line.starts_with("output ") || line.starts_with("inout ")) &&
+        line.ends_with(";") &&
+        validIdentifierList(line.drop_front(line.find(' ') + 1).drop_back())) {
+      llvm::SmallVector<llvm::StringRef, 8> names;
+      line.drop_front(line.find(' ') + 1).drop_back().split(names, ',', -1, true);
+      for (llvm::StringRef name : names) {
+        hierarchyModules[*currentHierarchyModule].ports.insert(name.trim().str());
+        hierarchyModules[*currentHierarchyModule].nodes.insert(name.trim().str());
+      }
       continue;
-    if (validParameterDeclaration(line))
+    }
+    if (line.starts_with("electrical ") && line.ends_with(";") &&
+        validIdentifierList(line.drop_front(line.find(' ') + 1).drop_back())) {
+      llvm::SmallVector<llvm::StringRef, 8> names;
+      line.drop_front(line.find(' ') + 1).drop_back().split(names, ',', -1, true);
+      for (llvm::StringRef name : names)
+        hierarchyModules[*currentHierarchyModule].nodes.insert(name.trim().str());
       continue;
+    }
+    if (validParameterDeclaration(line)) {
+      auto parameter = parameterDeclarationName(line);
+      if (!parameter)
+        return failure();
+      hierarchyModules[*currentHierarchyModule].parameters.insert(parameter->first);
+      if (parameter->second)
+        hierarchyModules[*currentHierarchyModule].fixedParameters.insert(parameter->first);
+      continue;
+    }
+    if (auto instance = parseHierarchyInstance(line.str())) {
+      hierarchyModules[*currentHierarchyModule].instances.push_back(std::move(*instance));
+      continue;
+    }
     return failure();
   }
-  return sawModule && !insideModule && !insideAnalog ? success() : failure();
+  return sawModule && !insideModule && !insideAnalog && verifyHierarchySyntax(hierarchyModules)
+             ? success()
+             : failure();
 }
 
 } // namespace nodal

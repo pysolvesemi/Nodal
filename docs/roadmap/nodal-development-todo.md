@@ -1,8 +1,8 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.53
+**Revision:** 1.55
 **Created:** 2026-08-20
-**Updated:** 2026-09-22
+**Updated:** 2026-09-27
 **Status:** Active roadmap
 **Primary language target:** Verilog-AMS 2023
 **Analog-only compatibility target:** Verilog-A
@@ -1064,19 +1064,27 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
 
 - [ ] **Increment 42 — Analog hierarchy and parameterized instances**
   - Original scope retained: Implement instances, named ports, symbolic overrides, legal arrays, hierarchy verification, and recursion errors.
-  - [ ] **F-042.A — Architecture, scope and extensibility.** Reuse module, instance, parameter and conservative-terminal ownership from 19/28/29/41; distinguish module-local function calls from hierarchical connectivity.
-  - [ ] **F-042.B — Implementation and integration**
-    - [ ] **F-042.B.1** Implement public construction and frontend ownership for instances, named ports, symbolic parameter overrides and the legal instance-array forms.
-    - [ ] **F-042.B.2** Carry hierarchy, ports, overrides and ownership through the bridge/native IR; verify bindings and reject recursive or cross-owner construction with source locations.
-    - [ ] **F-042.B.3** Lower the supported hierarchical Verilog-A profile with retained symbolic overrides and stable module/instance identity; document unsupported cases rather than prototype-only success.
-  - [ ] **F-042.C — Correctness, rejection and predecessor regression.** Exercise named-port mismatch, illegal overrides, cross-owner terminals and recursion; combine hierarchy with equations, events and module-local functions.
-  - [ ] **F-042.D — Independent validation and applicability**
-    - [ ] **F-042.D.1** Compiler witnesses: Retain actual public Scala, normalized IR and generated Verilog-A witnesses for the supported compiler profile; distinguish internal reparse from independent OpenVAF compilation.
-    - [ ] **F-042.D.2** Later tool qualification: Identify the applicable witness cases for 48 compile and 49/52 numerical qualification, with required analyses, references and tolerances. Preserve compiler-only acceptance limits; unavailable required execution remains blocked, not passed or N/A.
-  - [ ] **F-042.E — Optimization review and output quality.** Review duplicate module emission, preserved symbolic overrides and hierarchy-derived names without clone-per-default specialization. Apply the proportionate review rule above; document no new optimization required when justified.
-  - [ ] **F-042.F — Scale, determinism and compatibility.** Vary hierarchy depth, repeated instance count and non-default parameter combinations; compare deterministic instance/source paths.
+  - [x] **F-042.A — Architecture, scope and extensibility.** Reuse module, instance, parameter and conservative-terminal ownership from 19/28/29/41; distinguish module-local function calls from hierarchical connectivity.
+    - Evidence: exact source `7ab7ec09f70e7928118857231da6f8a8c0c99fe4` reuses the construction transaction, canonical hierarchy MLIR operations, native verifier and backend pipeline; no parallel registry or clone-per-value engine was added. Exact-head Core and predecessor workflows are recorded in [PR #134](https://github.com/pysolvesemi/Nodal/pull/134#issuecomment-5857885496).
+  - [x] **F-042.B — Implementation and integration**
+    - [x] **F-042.B.1** Implement public construction and frontend ownership for instances, named ports, symbolic parameter overrides and the legal instance-array forms.
+      - Evidence: exact-head Core run [36292225388](https://github.com/pysolvesemi/Nodal/actions/runs/36292225388) on `7bee1fa9c6035f3df6e933de04f73e89b03e3188` passed all 212 Scala tests and required aggregation, including 20 constructor, 12 conservative-connection and 17 override regressions. The linked [lightweight hierarchy plan](lightweight-hierarchy-iteration-v0.1-plan.md) retains the complete B.1.1-B.1.5 matrix and scope limit.
+    - [x] **F-042.B.2** Carry hierarchy, ports, overrides and ownership through the bridge/native IR; verify bindings and reject recursive or cross-owner construction with source locations.
+      - Evidence: exact-head Core run [36332604210](https://github.com/pysolvesemi/Nodal/actions/runs/36332604210) passed the typed root-binding, symbolic-override, immediate-child terminal/connection and source-located ownership/type/direction verifier matrix, including all 137 native CTests twice and 19 configured bridge tests.
+    - [x] **F-042.B.3** Lower the supported hierarchical Verilog-A profile with retained symbolic overrides and stable module/instance identity; document unsupported cases rather than prototype-only success.
+      - Evidence: exact-head Increment 37 retry run [36334138396](https://github.com/pysolvesemi/Nodal/actions/runs/36334138396) retained normalized IR and generated Verilog-A for reusable named modules, symbolic/literal actuals and predecessor combinations; strict target reparse and the explicit non-default-root-actual rejection passed.
+  - [x] **F-042.C — Correctness, rejection and predecessor regression.** Exercise named-port mismatch, illegal overrides, cross-owner terminals and recursion; combine hierarchy with equations, events and module-local functions.
+    - Evidence: exact-head Core and Increment 37 cover named-port/owner/type/direction/duplicate/effect/cycle negatives plus separately compiled equation, event and module-local-function sources; exact-head Increment 23/25/28/29/41 runs [36332616923](https://github.com/pysolvesemi/Nodal/actions/runs/36332616923), [36332627314](https://github.com/pysolvesemi/Nodal/actions/runs/36332627314), [36332644101](https://github.com/pysolvesemi/Nodal/actions/runs/36332644101), [36332654703](https://github.com/pysolvesemi/Nodal/actions/runs/36332654703) and [36332684933](https://github.com/pysolvesemi/Nodal/actions/runs/36332684933) preserve predecessor behavior.
+  - [x] **F-042.D — Independent validation and applicability**
+    - [x] **F-042.D.1** Compiler witnesses: Retain actual public Scala, normalized IR and generated Verilog-A witnesses for the supported compiler profile; distinguish internal reparse from independent OpenVAF compilation.
+      - Evidence: exact-head Core run [36332604210](https://github.com/pysolvesemi/Nodal/actions/runs/36332604210) executes the public hierarchy sources and checks their actual normalized MLIR and generated Verilog-A; Increment 37 run [36334138396](https://github.com/pysolvesemi/Nodal/actions/runs/36334138396) repeats the predecessor/event path and artifact `10937037949` retains seven event-source MLIR/Verilog-A files with matching logged hashes. Strict internal reparse is compiler evidence, not independent OpenVAF execution.
+    - [x] **F-042.D.2** Later tool qualification: Identify the applicable witness cases for 48 compile and 49/52 numerical qualification, with required analyses, references and tolerances. Preserve compiler-only acceptance limits; unavailable required execution remains blocked, not passed or N/A.
+      - Evidence: the [later-tool qualification handoff](../implementation/increment42-later-tool-handoff.md) names five positive and one compiler-negative hierarchy cases, pins the 48 compile/load boundary, defines DC/transient references and tolerances for 49/52, capability-gates event execution, and explicitly keeps structure-only repeated/nested witnesses from becoming numerical claims.
+  - [x] **F-042.E — Optimization review and output quality.** Review duplicate module emission, preserved symbolic overrides and hierarchy-derived names without clone-per-default specialization. Apply the proportionate review rule above; document no new optimization required when justified.
+    - Evidence: the public repeated/nested witnesses select one exact structural definition bottom-up, retain per-instance handles, names, paths and actuals, and emit one reusable definition per compatible structure without specializing on actual values.
+  - [x] **F-042.F — Scale, determinism and compatibility.** Vary hierarchy depth, repeated instance count and non-default parameter combinations; compare deterministic instance/source paths.
+    - Evidence: the production verifier passes the 50,000-definition bounded-stack cases; public repeated and nested witnesses cover symbolic and distinct literal actuals, stable indexed paths and repeat-identical normalized documents/targets on the exact qualified head.
   - [ ] **F-042.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 42; complete review, verified integration and any separate closure under the centralized Foundation acceptance rules.
-
 - [ ] **Increment 43 — Analog arrays, shaped values, and elaboration-time generation**
   - Original scope retained: Implement legal fixed/symbolic analog arrays under ADR 0017 shape/index rules, analog-object capability restrictions, indexing/slices, Scala elaboration loops, target generate constructs, static bounds, target layout checks, and explicit rejection of illegal analog flattening or memory inference.
   - [ ] **F-043.A — Architecture, scope and extensibility.** Reuse ADR 0017 rank/index and 42 hierarchy contracts; make per-generated-instance storage ownership explicit rather than borrowing enclosing lexical storage.
@@ -2841,3 +2849,4 @@ When an increment is completed:
 - Accellera UVM / IEEE 1800.2 reference implementation: <https://www.accellera.org/downloads/standards/uvm>
 - Accellera UVM-MS 1.0: <https://www.accellera.org/downloads/standards/uvm-ms>
 - SystemVerilog-AMS working group: <https://accellera.org/activities/working-groups/systemverilog-ams>
+

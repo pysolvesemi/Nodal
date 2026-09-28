@@ -61,6 +61,10 @@ class RecordingRunner:
             )
             nodalc.parent.mkdir(parents=True, exist_ok=True)
             nodalc.write_text("compiler\n", encoding="utf-8")
+            translator = nodalc.with_name(
+                "nodal-translate.exe" if os.name == "nt" else "nodal-translate"
+            )
+            translator.write_text("translator\n", encoding="utf-8")
         return subprocess.CompletedProcess(normalized, 0, stdout=stdout, stderr="")
 
 
@@ -119,6 +123,33 @@ class UnifiedDeveloperCommandTests(unittest.TestCase):
         wrapper = str(root / ("mill.bat" if os.name == "nt" else "mill"))
         self.assertEqual(runner.calls[0][0], (wrapper, "__.compile"))
         self.assertEqual(runner.calls[1][0], (wrapper, "core.scala.testkit.test"))
+        self.assertEqual(
+            runner.calls[2][0],
+            (
+                sys.executable,
+                str(root / "tests" / "scala" / "constructor-capture" / "run.py"),
+                "--repo",
+                str(root),
+                "--out-parent",
+                str(root / ".validation" / "constructor-capture"),
+            ),
+        )
+        self.assertEqual(len(runner.calls), 3)
+
+    def test_core_scala_propagates_constructor_probe_failure(self) -> None:
+        temporary, root = self.temporary_root()
+        self.addCleanup(temporary.cleanup)
+
+        class FailingProbeRunner(RecordingRunner):
+            def run(self, command: Sequence[str], **kwargs) -> subprocess.CompletedProcess[str]:
+                if any("constructor-capture" in str(part) for part in command):
+                    raise subprocess.CalledProcessError(7, command)
+                return super().run(command, **kwargs)
+
+        self.assertEqual(
+            COMMANDS.main(["core", "scala"], root=root, runner=FailingProbeRunner(root)),
+            7,
+        )
 
     def test_core_native_uses_managed_toolchain(self) -> None:
         temporary, root = self.temporary_root()
@@ -156,6 +187,10 @@ class UnifiedDeveloperCommandTests(unittest.TestCase):
         ]
         self.assertEqual(len(bridge_calls), 1)
         self.assertEqual(bridge_calls[0][1]["NODAL_NODALC"], str(nodalc))
+        self.assertEqual(
+            bridge_calls[0][1]["NODAL_TRANSLATE"],
+            str(nodalc.with_name("nodal-translate.exe" if os.name == "nt" else "nodal-translate")),
+        )
         self.assertEqual(
             bridge_calls[0][1]["NODAL_NATIVE_TOOLCHAIN"], str(native)
         )

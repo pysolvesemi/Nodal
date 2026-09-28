@@ -155,6 +155,16 @@ def command_bootstrap(args: argparse.Namespace, root: Path, runner: Runner) -> i
 def command_core_scala(_args: argparse.Namespace, root: Path, runner: Runner) -> int:
     runner.run(_mill(root, "__.compile"))
     runner.run(_mill(root, "core.scala.testkit.test"))
+    runner.run(
+        (
+            sys.executable,
+            str(root / "tests" / "scala" / "constructor-capture" / "run.py"),
+            "--repo",
+            str(root),
+            "--out-parent",
+            str(root / ".validation" / "constructor-capture"),
+        )
+    )
     return 0
 
 
@@ -193,6 +203,19 @@ def command_core_native(args: argparse.Namespace, root: Path, runner: Runner) ->
             "NODAL-DEV-009",
             f"native build did not produce the compiler executable: {nodalc}",
         )
+    translator = (
+        root
+        / "out"
+        / "native"
+        / "release"
+        / "bin"
+        / ("nodal-translate.exe" if os.name == "nt" else "nodal-translate")
+    )
+    if not translator.is_file():
+        raise DeveloperCommandError(
+            "NODAL-DEV-009",
+            f"native build did not produce the translator executable: {translator}",
+        )
     runner.run(
         _mill(
             root,
@@ -200,7 +223,11 @@ def command_core_native(args: argparse.Namespace, root: Path, runner: Runner) ->
             "core.scala.testkit.test.testOnly",
             "nodal.internal.testkit.ScalaToMlirBridgeTests",
         ),
-        env={**env, "NODAL_NODALC": str(nodalc)},
+        env={
+            **env,
+            "NODAL_NODALC": str(nodalc),
+            "NODAL_TRANSLATE": str(translator),
+        },
     )
     lint_toolchain = _managed_lint_toolchain(
         root,

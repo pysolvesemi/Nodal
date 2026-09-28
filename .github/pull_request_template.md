@@ -10,6 +10,8 @@
 - [ ] `./nodal style check --base-ref origin/dev`
 - [ ] `./nodal check --online-toolchain --base-ref origin/dev`
 - [ ] Required Core CI is green
+- [ ] Codex review completed under AGENTS.md; final candidate coverage
+      and finding dispositions are linked.
 
 ## Design gate
 

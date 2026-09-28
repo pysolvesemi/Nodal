@@ -110,6 +110,47 @@ record proportionate applicability, not artificial production or benchmark work.
 This rule does not replace approved design gates, qualification, scope controls
 or existing feature-specific acceptance requirements.
 
+## Independent Codex review before merge
+
+Apply this prospectively to implementation, sub-increment, repair and
+accepted-evidence closure PRs. Do not reopen historically accepted increments
+or copy a generic Codex checkbox into every roadmap increment. This section
+owns the policy; the PR template links the review evidence.
+
+1. Request an independent Codex review once implementation is coherent,
+   preferably alongside targeted CI and before the expensive full-CI phase.
+   Complete the review, address confirmed findings and qualify resulting
+   repairs with targeted CI before starting full CI.
+2. Record the review reference, reviewed head/tree, base/diff context and
+   finding dispositions in the existing PR or durable checkpoint. A request,
+   reaction, pending or failed review, reviewer unavailability or silence is not
+   completed review evidence. Report an unavailable review as a blocker; do not
+   invent approval or silently substitute self-review.
+3. Validate findings against the actual production path and acceptance contract.
+   Fix genuine correctness, compatibility, safety and material scalability
+   defects. Explain false positives or optional suggestions with evidence and
+   retain their disposition. Do not weaken tests or expand scope indefinitely
+   to implement every suggestion; use the existing scope controls. Resolve
+   actionable threads only after the fix and applicable validation are complete.
+4. Subsequent substantive source, test, workflow, manifest or review-contract
+   changes require review of the changed scope and affected interactions plus
+   applicable CI. Preserve completed independent review of unchanged scope; do
+   not request another identical review merely because CI finished.
+5. Before merge, verify completed review covers the final candidate, its
+   integration context and all substantive changes, with no unresolved
+   actionable findings. A tree-identical successor may reuse completed review
+   only after verifying tree equality and unchanged base, effective diff and
+   relevant review context. Link the original reviewed SHA, final SHA, tree
+   proof and rationale; never claim a new review ran. Changed integration
+   context needs reconciliation and renewed review as appropriate. This
+   review-only reuse does not relabel CI, waive required protection contexts
+   or override stricter feature-specific acceptance gates.
+
+Codex review complements tests, design gates and required human approvals; it
+does not replace them. The existing explicit user-authorized documentation-only
+direct-update exception still applies: do not create a PR, run CI or reopen an
+accepted increment solely to apply this prospective policy.
+
 ## Targeted CI before full CI
 
 For every increment, sub-increment, repair and accepted-evidence closure, qualify

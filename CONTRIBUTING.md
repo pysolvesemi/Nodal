@@ -23,6 +23,10 @@ qualify affected workflows on the exact head, then qualify the complete applicab
 CI set. Local checks do not replace remote qualification. Full-CI failures return
 to targeted repair; do not repeatedly restart successful independent workflows.
 
+Follow the [independent Codex review gate](AGENTS.md#independent-codex-review-before-merge)
+before full CI and merge. Link completed review coverage and finding
+dispositions in the PR checklist; a review request alone is not completion.
+
 Enable one hourly continuation immediately after the first targeted launch and
 keep it enabled through repairs, full CI, review, merge and accepted-evidence
 closure. Disable it only after the increment's closure obligations and completion

@@ -1,0 +1,90 @@
+{
+  "schema": 2,
+  "increment": 42,
+  "profile": "compiler-structural-scalar-analog-hierarchy-verilog-a-v0.1",
+  "accepted_head": "fa921f95cc6aad9b1cb86e33edc7f09e53a7f4e4",
+  "accepted_tree": "e9b74f0a8963ecec76b7e68406e104beda08bf04",
+  "implementation_pr": 134,
+  "implementation_merge": "98085f79aeaef3a5c7eeabfda462afa7299cbaf7",
+  "implementation_merge_tree": "e9b74f0a8963ecec76b7e68406e104beda08bf04",
+  "preserved_dev_parent": "c3ea7cbf0432de7143a08b4431d51708c307d67e",
+  "qualification": {
+    "pull_request_workflow_count": 31,
+    "total_run_count": 32,
+    "successful_job_count": 38,
+    "attempt": 1,
+    "push_core_run": 36396069440,
+    "pull_request_core_run": 36396075706,
+    "increment17_run": 36396075697,
+    "increment33_run": 36396075748,
+    "increment34_run": 36396075733,
+    "core_required_status": "success",
+    "all_latest_attempt_jobs_succeeded": true,
+    "inventory_page_2_empty": true
+  },
+  "targeted_repair_qualification": {
+    "head": "0befa54b8acf8261c3e71c6143694d66c337d061",
+    "tree": "e9b74f0a8963ecec76b7e68406e104beda08bf04",
+    "runs": {
+      "core": 36393366474,
+      "increment20": 36393399779,
+      "increment23": 36393426608,
+      "increment28": 36393452982,
+      "increment29": 36393481325
+    },
+    "constructor_artifact_id": 10957640896,
+    "constructor_artifact_sha256": "1da3fe76ede6ff3081e26ca0e288e974177fbf479cedb5e7b5cf01ee99e3f20c"
+  },
+  "review": {
+    "comment_id": 5866190034,
+    "reviewed_commit": "fa921f95cc6aad9b1cb86e33edc7f09e53a7f4e4",
+    "result": "completed-with-no-major-issues",
+    "review_thread_count": 12,
+    "unresolved_threads": 0
+  },
+  "post_merge_ci": {
+    "status": "skipped",
+    "reason": "qualified-identical-tree-merge",
+    "merge_commit": "98085f79aeaef3a5c7eeabfda462afa7299cbaf7",
+    "merge_tree": "e9b74f0a8963ecec76b7e68406e104beda08bf04",
+    "inventory_pages": [1, 2],
+    "unexpected_runs": []
+  },
+  "closure_witness": {
+    "pull_request": 135,
+    "source_commit": "aa201f415a1d139948d24351c86862078cd101d2",
+    "source_tree": "e785dcb4d061642573cdcba6b00cf5680573140e",
+    "core_run": 36403338628,
+    "dedicated_run": 36403361696,
+    "artifact_id": 10962330727,
+    "artifact_sha256": "e2e39ff57c79904ba6987baf369e7bda09cb6aa375bda1d5bd055eaafa886ea8",
+    "source_sha256": {
+      "core/scala/testkit/test/src/nodal/internal/testkit/Increment42MlirCheck.scala": "ff89deaeb40609b1db513c360eeb177b25185f211658a9841ce824146281b6d4",
+      "examples/continuousTimeApi/src/nodal/increment42fixture/Increment42PredecessorCombinations.scala": "f0100d687147208c3c84ccd2644813c3391750b97bdf84705ea654ec9e9e6e25",
+      ".github/workflows/increment-41-analog-functions.yml": "0cfecfd99f61cdc5752be18bf3fb996a445b38d597c3ab5a93f96c43fef56b07"
+    },
+    "output_sha256": {
+      "increment42-public.mlir": "eb09715fc24d2049c8f2e145c554efa0fa1a22fcf5d8b040ecb964d01acc21eb",
+      "increment42-normalized.mlir": "5de89d136c6a30fae9e1b39b2b802281fad7d72265039a9a256a78871910a9de",
+      "increment42-public.va": "d78386b05efc24318374a97cad60a78787dd88a1a96ad71ecb359e0d02fb86bd"
+    },
+    "native_matrix": {
+      "schema": "nodal.increment42.native-hierarchy-matrix.v1",
+      "case_count": 572,
+      "failure_count": 0,
+      "compiler_sha256": "d6b17a9d9b5c923f896fdfd0730bceca9e3beb54e2653520d56890e0f6a8a9c2"
+    }
+  },
+  "predecessor_evidence": {
+    "path": "docs/implementation/increment41-accepted-evidence.json",
+    "sha256": "177082f5edac85be80541384d94529c6fd8f82fe1cdbc39cd87b771398d81f32"
+  },
+  "numerical_simulator_execution_claimed": false,
+  "independent_openvaf_execution_claimed": false,
+  "general_verilog_ams_claimed": false,
+  "synthesis_claimed": false,
+  "demonstration_sha256": {
+    "scala": ["2362e12f7a2a15650cd0646294fcfa5016476996c86a0a6d1d94e9c97f3e420f"],
+    "verilog": ["6877f77d081402e695cb274f5ee969a41858239abc1359fb9c9ea832abd3710d"]
+  }
+}

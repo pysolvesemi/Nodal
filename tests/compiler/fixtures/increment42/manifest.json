@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "increment": 42,
+  "contract_version": "1",
+  "status": "validated-analog-hierarchy",
+  "profile": "compiler-structural-scalar-analog-hierarchy-verilog-a",
+  "operations": [
+    "nodal.instance",
+    "nodal.instance_terminal",
+    "nodal.connect",
+    "nodal.parameter_override"
+  ],
+  "root_actual_policy": "default-equal-only-without-external-top-binding",
+  "qualification": "compiler-structural-not-independent-tool-or-numerical-simulation",
+  "accepted_evidence": {
+    "path": "docs/implementation/increment42-accepted-evidence.json",
+    "sha256": "bca7844471f7298c128bc2d015dd4158edefc198627a99dd36468a1855b30b52"
+  },
+  "remaining": [],
+  "deferred": [
+    "non-default root actual export without an external top-binding adapter",
+    "symbolic target generation and analog shaped values owned by Increment 43",
+    "independent OpenVAF compilation owned by Increment 48",
+    "numerical simulation owned by Increments 49 and 52",
+    "general Verilog-AMS and synthesis"
+  ],
+  "semantics": {
+    "canonical_construction_and_hierarchy_ownership": true,
+    "constructor_default_and_actual_separation": true,
+    "typed_child_parameter_overrides": true,
+    "immediate_child_terminal_identity": true,
+    "symmetric_conservative_connectivity": true,
+    "source_located_hierarchy_rejection": true,
+    "deterministic_reusable_module_definitions": true,
+    "symbolic_override_retention": true,
+    "bounded_stack_hierarchy_verification": true,
+    "predecessor_equation_event_function_compatibility": true,
+    "target_reparse": true,
+    "no_partial_target_on_error": true
+  }
+}

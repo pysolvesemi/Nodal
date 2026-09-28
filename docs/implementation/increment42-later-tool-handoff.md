@@ -135,6 +135,6 @@ cases as numerical evidence.
 This mapping completes F-042.D.2 only. It records selected cases, analyses,
 references, units, tolerances, capability gates and negative boundaries. It does
 not complete any F-048, F-049 or F-052 checkbox and does not claim OpenVAF,
-OSDI, ngspice or numerical execution. Increment 42 still requires F-042.G,
-full applicable CI on its exact final head, review, verified integration, merge
-and separate accepted-evidence closure.
+OSDI, ngspice or numerical execution. Increment 42 subsequently completed
+F-042.G, full applicable CI, review, verified integration, merge and separate
+accepted-evidence closure without changing these later-owner obligations.

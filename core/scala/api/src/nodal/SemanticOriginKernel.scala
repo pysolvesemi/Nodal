@@ -548,19 +548,28 @@ private[nodal] final class SemanticOriginBuilder:
   private def discoverMemberNames(): IdentityHashMap[AnyRef, String] =
     val discovered = new IdentityHashMap[AnyRef, String]()
     val semanticObjects = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+    val preferredNames = new IdentityHashMap[AnyRef, String]()
     modules.foreach(capture => semanticObjects.put(capture.module, java.lang.Boolean.TRUE))
     domains.foreach(capture => semanticObjects.put(capture.domain, java.lang.Boolean.TRUE))
-    declarations.foreach(capture => semanticObjects.put(capture.value, java.lang.Boolean.TRUE))
+    declarations.foreach: capture =>
+      semanticObjects.put(capture.value, java.lang.Boolean.TRUE)
+      declarationBinding(capture.site, capture.kind).foreach: name =>
+        preferredNames.put(capture.value, name)
     expressions.foreach(capture => semanticObjects.put(capture.value, java.lang.Boolean.TRUE))
     instances.foreach: capture =>
       semanticObjects.put(capture.instance, java.lang.Boolean.TRUE)
       semanticObjects.put(capture.childModule, java.lang.Boolean.TRUE)
+      instanceBinding(capture.site).foreach: name =>
+        preferredNames.put(capture.instance, name)
 
     def retain(value: AnyRef, candidate: String): Unit =
       if semanticObjects.containsKey(value) then
+        val preferred = Option(preferredNames.get(value))
         Option(discovered.get(value)) match
           case Some(existing) =>
-            if candidate < existing then discovered.put(value, candidate)
+            if preferred.contains(candidate) ||
+              (!preferred.contains(existing) && candidate < existing)
+            then discovered.put(value, candidate)
           case None => discovered.put(value, candidate)
 
     def visit(value: Any, candidate: String): Unit = value match
@@ -675,17 +684,6 @@ private[nodal] final class SemanticOriginBuilder:
   ): Option[String] =
     Option(members.get(value)).map(cleanIdentifier(_, "value"))
 
-  private def authoredOrProjectedBinding(
-      authored: Option[String],
-      member: Option[String]
-  ): Option[String] =
-    authored match
-      case Some(name) =>
-        member
-          .filter(candidate => candidate == name || candidate.startsWith(s"${name}_"))
-          .orElse(Some(name))
-      case None => member
-
   private def allocate(
       candidates: Vector[NameCandidate],
       reserved: Set[String] = Set.empty
@@ -776,11 +774,9 @@ private[nodal] final class SemanticOriginBuilder:
     val instanceByChild = instances.iterator.map(capture => capture.child -> capture).toMap
     val instanceCandidates = instances.toVector.map: capture =>
       val childClass = moduleByHandle(capture.child).className
-      val direct = authoredOrProjectedBinding(
-        instanceBinding(capture.site),
-        memberBinding(members, capture.instance)
-          .orElse(memberBinding(members, capture.childModule))
-      )
+      val direct = memberBinding(members, capture.instance)
+        .orElse(memberBinding(members, capture.childModule))
+        .orElse(instanceBinding(capture.site))
       val base = direct.getOrElse(
         s"${lowerInitial(cleanIdentifier(childClass, "module"))}_${sourceSuffix(capture.site)}"
       )
@@ -857,12 +853,8 @@ private[nodal] final class SemanticOriginBuilder:
     declarations.foreach: capture =>
       capture.explicitName
         .map(cleanIdentifier(_, capture.kind))
-        .orElse(
-          authoredOrProjectedBinding(
-            declarationBinding(capture.site, capture.kind),
-            memberBinding(members, capture.value)
-          )
-        )
+        .orElse(memberBinding(members, capture.value))
+        .orElse(declarationBinding(capture.site, capture.kind))
         .foreach(name => directDeclarationNames.put(capture.value, name))
 
     val sinkHints = new IdentityHashMap[AnyRef, String]()
@@ -901,10 +893,9 @@ private[nodal] final class SemanticOriginBuilder:
           val binding =
             if explicit.nonEmpty then None
             else
-              authoredOrProjectedBinding(
-                declarationBinding(capture.site, capture.kind),
-                memberBinding(members, capture.value)
-              ).filter(claimedBindings.add)
+              memberBinding(members, capture.value)
+                .orElse(declarationBinding(capture.site, capture.kind))
+                .filter(claimedBindings.add)
           val sink = Option(sinkHints.get(capture.value)).map(name => s"${name}_source")
           val selected = explicit
             .map(_ -> "explicit")

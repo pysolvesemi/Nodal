@@ -165,4 +165,3 @@ object SemanticOriginTests extends TestSuite:
         .get
 
       assert(source.path.endsWith("SemanticOriginInheritedBase.scala"))
-

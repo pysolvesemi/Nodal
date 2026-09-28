@@ -55,6 +55,7 @@ jobs:
           ./nodal core scala 2>&1 | tee evidence/scala.log
           ./mill -i examples.continuousTimeApi.runMain nodal.increment41fixture.Increment41ConstructionCheck 2>&1 | tee evidence/public-scala.log
           ./mill -i core.scala.testkit.test.runMain nodal.internal.testkit.Increment41MlirCheck "$PWD/evidence/public.mlir"
+          ./mill -i core.scala.testkit.test.runMain nodal.internal.testkit.Increment42MlirCheck "$PWD/evidence/increment42-public.mlir"
       - name: Locked native build and tests
         id: native
         run: |
@@ -96,6 +97,18 @@ jobs:
           python3 tests/compiler/fixtures/increment41/run_native_matrix.py \
             --nodalc "$nodalc" --translate "$translate" --source "$PWD/evidence/public.mlir" 2>&1 | tee evidence/source-matrix.log
           "$translate" --nodal-to-verilog-a evidence/public.mlir > evidence/public.va
+          "$nodalc" --pass-pipeline=builtin.module\(nodal-gate-default\) \
+            evidence/increment42-public.mlir > evidence/increment42-normalized.mlir
+          "$translate" --nodal-to-verilog-a \
+            evidence/increment42-normalized.mlir > evidence/increment42-public.va
+          grep -F 'module HierarchyEquationTop(vin, vout);' evidence/increment42-public.va
+          grep -F 'module child(vin, vout);' evidence/increment42-public.va
+          grep -F 'child #(.gain(rootGain)) child_instance(.vin(vin), .vout(vout));' \
+            evidence/increment42-public.va
+          sha256sum \
+            evidence/increment42-public.mlir \
+            evidence/increment42-normalized.mlir \
+            evidence/increment42-public.va > evidence/increment42-public.sha256
       - name: Retain native hierarchy regression evidence when produced
         if: always()
         run: |

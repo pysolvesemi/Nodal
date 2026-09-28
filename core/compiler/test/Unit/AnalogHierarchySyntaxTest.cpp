@@ -10,6 +10,7 @@ int main() {
       "Empty x();",
       "Cell #(.R((R * 2)), .N(-3)) a(.p(mid), .n(gnd));",
       "Cell #(.R((2.5e-12 + 1p) / (-R)), .N(3 % 2)) a(.p(mid), .n(gnd));",
+      "Cell #(.R(1e-3k), .N(2E+4M)) scaled();",
       "Cell #(.R(((R >= 1) && !(R < 4))), .N((R > 0) || (R <= 2))) a();",
       "Cell #(.R(+-+-1), .N((2))) array_3(.p(mid), .n(gnd));"};
   std::vector<std::string> negative;

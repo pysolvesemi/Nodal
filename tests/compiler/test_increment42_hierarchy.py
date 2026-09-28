@@ -119,6 +119,27 @@ class HierarchyHarnessTests(unittest.TestCase):
         self.assertIn("parameterExpressionsByOwner.getOrElse(module.path, Map.empty)", renderer)
         self.assertIn("topologyByOwner.getOrElse(module.path, Vector.empty)", renderer)
 
+    def test_hierarchy_syntax_accepts_scale_suffix_after_exponent(self):
+        syntax = (
+            ROOT / "core/compiler/include/nodal/Support/AnalogHierarchySyntax.h"
+        ).read_text()
+        begin = syntax.index("  bool number() {")
+        end = syntax.index("  std::optional<std::string> constant(", begin)
+        number = syntax[begin:end]
+        exponent = number.index(
+            "if (position < text.size() && (text[position] == 'e'"
+        )
+        suffix = number.index('std::string_view("TGMKkmunpfa")', exponent)
+        self.assertGreater(suffix, exponent)
+        self.assertNotIn("} else if", number[exponent:suffix])
+        fixture = (
+            ROOT / "core/compiler/test/Unit/AnalogHierarchySyntaxTest.cpp"
+        ).read_text()
+        self.assertIn(
+            '"Cell #(.R(1e-3k), .N(2E+4M)) scaled();"',
+            fixture,
+        )
+
     def test_native_hierarchy_rejects_duplicate_child_port_references(self):
         production = (ROOT / "core/compiler/lib/Transforms/Passes.cpp").read_text()
         begin = production.index("LogicalResult verifyHierarchy(")

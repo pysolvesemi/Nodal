@@ -129,8 +129,9 @@ private:
         ++position;
       if (position == exponent)
         return false;
-    } else if (position < text.size() &&
-               std::string_view("TGMKkmunpfa").find(text[position]) != std::string_view::npos) {
+    }
+    if (position < text.size() &&
+        std::string_view("TGMKkmunpfa").find(text[position]) != std::string_view::npos) {
       ++position;
     }
     return true;

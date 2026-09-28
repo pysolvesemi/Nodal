@@ -1,6 +1,13 @@
 # Increment 42 - Analog hierarchy and parameterized instances
 
-**Status:** Compiler implementation and later-tool handoff complete; full acceptance and merge remain open.
+**Status:** Validated
+
+The accepted compiler-structural Verilog-A profile, exact qualification,
+verified merge, intentionally skipped post-merge CI, public Scala/MLIR/target
+witnesses and capability limits are recorded in the
+[accepted-evidence closure](increment42-evidence-closure.md). Historical
+checkpoints below are retained as implementation history and are not newer
+acceptance boundaries.
 
 ## Current production boundary
 
@@ -171,8 +178,10 @@ That record selects the 48 compile/load and 49/52 numerical cases, pins analyses
 independent references, units and tolerances, capability-gates event execution,
 and prevents structure-only witnesses from becoming numerical claims. Strict
 internal target reparse remains distinct from independent OpenVAF execution.
-F-042.G and the Increment 42 parent remain open pending final full applicable
-CI, review, verified integration, merge and separate accepted-evidence closure.
+At this 2026-09-27 checkpoint, F-042.G and the Increment 42 parent remained
+open pending final full applicable CI, review, verified integration, merge and
+separate accepted-evidence closure. Those gates subsequently completed in the
+accepted-evidence closure linked above.
 
 ## Published checkpoint 1
 
@@ -292,17 +301,19 @@ python3 tests/compiler/fixtures/increment42/run_hierarchy_matrix.py \
   --work-dir out/native/release/increment42-hierarchy-evidence
 ```
 
-## Remaining implementation and acceptance
+## Accepted implementation and historical acceptance notes
 
-The compiler implementation scope through F-042.A/B/C/D.1/E/F is complete and
-targeted-green on `7ab7ec09f70e7928118857231da6f8a8c0c99fe4`. Do not reopen
-that scope without a concrete defect. Preserve the qualified public Scala,
-normalized MLIR, generated Verilog-A, negative mutations, source maps, scale and
-determinism evidence.
+The compiler implementation scope through F-042.A-G is accepted on
+`fa921f95cc6aad9b1cb86e33edc7f09e53a7f4e4`, tree
+`e9b74f0a8963ecec76b7e68406e104beda08bf04`, and merged as
+`98085f79aeaef3a5c7eeabfda462afa7299cbaf7`. Do not reopen that scope without
+a concrete defect. Preserve the qualified public Scala, normalized MLIR,
+generated Verilog-A, negative mutations, source maps, scale and determinism
+evidence.
 
-The [F-042.D.2 handoff](increment42-later-tool-handoff.md) now maps concrete
+The [F-042.D.2 handoff](increment42-later-tool-handoff.md) maps concrete
 hierarchy witnesses into the later Increment 48 OpenVAF compile and Increment
-49/52 numerical owners without claiming their execution. F-042.G requires final
-full applicable CI on the exact final head, review, verified integration,
-squash merge and separate accepted-evidence closure. Unavailable independent or
-numerical execution remains open, not passed or N/A.
+49/52 numerical owners without claiming their execution. Those later-tool
+obligations remain open under their own increments; they are not relabeled as
+Increment 42 execution or made reverse prerequisites for this accepted compiler
+profile.

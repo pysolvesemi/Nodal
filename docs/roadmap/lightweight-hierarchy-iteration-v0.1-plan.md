@@ -2,8 +2,8 @@
 
 **Revision:** 0.2
 **Approved direction:** 2026-09-24
-**Updated:** 2026-09-27
-**Status:** Roadmap amendment; Increment 42 compiler implementation is targeted-green while later acceptance remains open.
+**Updated:** 2026-09-28
+**Status:** Roadmap amendment; Increment 42 compiler profile is accepted and later-tool execution remains with its named owners.
 
 ## Authority, scope and progress
 
@@ -82,9 +82,10 @@ The pinned Scala 3.8.4 artifact also passed separate
 definition/factory/consumer compilation, raw-factory rejection, 11 prototype
 cases with 169 assertions and six compiler negatives. This completes F-042.B.1 and its descendants. The later exact-head compiler
 implementation and qualification recorded in the authoritative roadmap also
-complete F-042.A, B.2, B.3, C, D, E and F. The explicit 48/49/52 handoff now
-completes D.2 without claiming later-tool execution; G and the Increment 42
-parent remain open.
+complete F-042.A, B.2, B.3, C, D, E and F. The explicit 48/49/52 handoff
+completes D.2 without claiming later-tool execution. Exact final qualification,
+review, verified merge and the separate accepted-evidence closure complete G
+and the Increment 42 parent while preserving those later owners.
 
 **F-042.A/B.2:** Reuse transaction-owned IDs, declarations and the existing bridge
 and native verifier. Most new policy should be in focused private helpers; use
@@ -109,7 +110,9 @@ strict internal reparse, reproduction commands and capability limits. Internal
 reparse is not independent tool execution. The completed F-042.D.2 handoff preserves
 48/49/52 case, analysis, reference and tolerance obligations without making
 their entire later parents reverse prerequisites for compiler-only 42
-acceptance. No feature box is completed merely by this plan text.
+acceptance. The accepted-evidence closure pins the actual public source/target
+demonstration, complete applicable CI, review and exact-tree merge; no later
+owner is marked complete by this plan text.
 
 ## One target-visible iteration domain
 
@@ -239,4 +242,3 @@ Implement in the existing owning increments, keep actual source/IR/HDL witnesses
 and retain targeted-first/full qualification, review, verified integration and
 separate accepted-evidence closure. `AGENTS.md` is unchanged. The user waived CI
 for this roadmap publication only; compiler changes still require qualification.
-

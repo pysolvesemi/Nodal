@@ -1,8 +1,8 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.55
+**Revision:** 1.56
 **Created:** 2026-08-20
-**Updated:** 2026-09-27
+**Updated:** 2026-09-28
 **Status:** Active roadmap
 **Primary language target:** Verilog-AMS 2023
 **Analog-only compatibility target:** Verilog-A
@@ -1062,7 +1062,7 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
     - [x] **F-041.H.2 — Historical merge and demonstration evidence.** The existing closure retains the accepted source/tree, actual merge, executed historical CI and actual public Scala/Verilog-A witnesses. Its review is direct implementation-agent review, not independent automated review.
   - Historical profile limit: compiler/Verilog-A only; numerical analog simulation, general Verilog-AMS, synthesis and broader function/optimization forms remain outside this acceptance.
 
-- [ ] **Increment 42 — Analog hierarchy and parameterized instances**
+- [x] **Increment 42 — Analog hierarchy and parameterized instances**
   - Original scope retained: Implement instances, named ports, symbolic overrides, legal arrays, hierarchy verification, and recursion errors.
   - [x] **F-042.A — Architecture, scope and extensibility.** Reuse module, instance, parameter and conservative-terminal ownership from 19/28/29/41; distinguish module-local function calls from hierarchical connectivity.
     - Evidence: exact source `7ab7ec09f70e7928118857231da6f8a8c0c99fe4` reuses the construction transaction, canonical hierarchy MLIR operations, native verifier and backend pipeline; no parallel registry or clone-per-value engine was added. Exact-head Core and predecessor workflows are recorded in [PR #134](https://github.com/pysolvesemi/Nodal/pull/134#issuecomment-5857885496).
@@ -1084,7 +1084,8 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
     - Evidence: the public repeated/nested witnesses select one exact structural definition bottom-up, retain per-instance handles, names, paths and actuals, and emit one reusable definition per compatible structure without specializing on actual values.
   - [x] **F-042.F — Scale, determinism and compatibility.** Vary hierarchy depth, repeated instance count and non-default parameter combinations; compare deterministic instance/source paths.
     - Evidence: the production verifier passes the 50,000-definition bounded-stack cases; public repeated and nested witnesses cover symbolic and distinct literal actuals, stable indexed paths and repeat-identical normalized documents/targets on the exact qualified head.
-  - [ ] **F-042.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 42; complete review, verified integration and any separate closure under the centralized Foundation acceptance rules.
+  - [x] **F-042.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 42; complete review, verified integration and any separate closure under the centralized Foundation acceptance rules.
+    - Evidence: implementation PR [#134](https://github.com/pysolvesemi/Nodal/pull/134) accepted head `fa921f95cc6aad9b1cb86e33edc7f09e53a7f4e4`, tree `e9b74f0a8963ecec76b7e68406e104beda08bf04`, passed all 31 PR workflows plus push Core and fresh review, then squash-merged as `98085f79aeaef3a5c7eeabfda462afa7299cbaf7` with exact tested-tree equality. Separate closure PR [#135](https://github.com/pysolvesemi/Nodal/pull/135) retains the actual public Scala → normalized MLIR → generated Verilog-A witness and the [accepted-evidence record](../implementation/increment42-evidence-closure.md). Post-merge CI was intentionally skipped for the qualified-identical-tree merge and is not reported as an executed pass.
 - [ ] **Increment 43 — Analog arrays, shaped values, and elaboration-time generation**
   - Original scope retained: Implement legal fixed/symbolic analog arrays under ADR 0017 shape/index rules, analog-object capability restrictions, indexing/slices, Scala elaboration loops, target generate constructs, static bounds, target layout checks, and explicit rejection of illegal analog flattening or memory inference.
   - [ ] **F-043.A — Architecture, scope and extensibility.** Reuse ADR 0017 rank/index and 42 hierarchy contracts; make per-generated-instance storage ownership explicit rather than borrowing enclosing lexical storage.
@@ -2849,4 +2850,3 @@ When an increment is completed:
 - Accellera UVM / IEEE 1800.2 reference implementation: <https://www.accellera.org/downloads/standards/uvm>
 - Accellera UVM-MS 1.0: <https://www.accellera.org/downloads/standards/uvm-ms>
 - SystemVerilog-AMS working group: <https://accellera.org/activities/working-groups/systemverilog-ams>
-

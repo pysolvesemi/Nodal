@@ -34,6 +34,13 @@ SOURCE_SHA256 = {
     PUBLIC_SOURCE: "f0100d687147208c3c84ccd2644813c3391750b97bdf84705ea654ec9e9e6e25",
     WORKFLOW: "0cfecfd99f61cdc5752be18bf3fb996a445b38d597c3ab5a93f96c43fef56b07",
 }
+# These closure-owned witness sources remain immutable in the live tree.  The
+# shared Increment 41 workflow hash above is historical artifact identity: its
+# current bytes may evolve independently while the evidence record stays pinned.
+LIVE_SOURCE_SHA256 = {
+    RUNNER: SOURCE_SHA256[RUNNER],
+    PUBLIC_SOURCE: SOURCE_SHA256[PUBLIC_SOURCE],
+}
 OPERATIONS = [
     "nodal.instance",
     "nodal.instance_terminal",
@@ -227,7 +234,7 @@ def check_repository(root: Path = ROOT):
             manifest.get("semantics") == dict.fromkeys(SEMANTICS, True),
             "manifest acceptance contract changed")
 
-    for relative, expected in SOURCE_SHA256.items():
+    for relative, expected in LIVE_SOURCE_SHA256.items():
         require(digest(root / relative) == expected,
                 f"qualified closure source changed: {relative}")
 

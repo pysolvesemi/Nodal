@@ -119,17 +119,23 @@ class Increment42ClosureTests(unittest.TestCase):
                 self.json_change(root, CHECK.MANIFEST, mutate)
                 self.rejected(root)
 
-    def test_predecessor_and_qualified_source_are_immutable(self):
+    def test_predecessor_and_closure_owned_source_are_immutable(self):
         root = self.fixture()
         self.json_change(root, CHECK.PREDECESSOR,
                          lambda x: x.update(accepted_head="0" * 40))
         self.rejected(root)
-        for relative in CHECK.SOURCE_SHA256:
+        for relative in CHECK.LIVE_SOURCE_SHA256:
             with self.subTest(relative=relative):
                 root = self.fixture()
                 target = root / relative
                 target.write_text(target.read_text() + "\n")
                 self.rejected(root)
+
+    def test_historical_workflow_hash_does_not_pin_live_shared_workflow(self):
+        root = self.fixture()
+        target = root / CHECK.WORKFLOW
+        target.write_text(target.read_text() + "\n# unrelated future maintenance\n")
+        CHECK.check_repository(root)
 
     def test_roadmap_document_and_demonstrations_agree(self):
         changes = (
@@ -160,7 +166,7 @@ class Increment42ClosureTests(unittest.TestCase):
                 root = self.fixture()
                 target = root / CHECK.WORKFLOW
                 self.assertIn(token, target.read_text())
-                target.write_text(target.read_text().replace(token, "removed", 1))
+                target.write_text(target.read_text().replace(token, "removed"))
                 self.rejected(root)
 
 

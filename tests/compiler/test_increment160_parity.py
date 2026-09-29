@@ -257,11 +257,12 @@ class ExperimentIntegrityTests(unittest.TestCase):
     def test_managed_java_compiler_plugin_and_runtime_hashes_remain_pinned(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            paths = {key: root / key for key in ("java", "compiler", "runtime", "plugin")}
+            paths = {key: root / key for key in ("java", "compiler", "runtime", "fixture", "plugin")}
             for key, path in paths.items():
                 path.write_text(key)
             build = {"java": PARITY.path_digest(paths["java"]),
                      "compiler_classpath": [PARITY.path_digest(paths["compiler"])],
+                     "fixture_classpath": [PARITY.path_digest(paths["fixture"])],
                      "classpath": [PARITY.path_digest(paths["runtime"])],
                      "plugin": PARITY.path_digest(paths["plugin"])}
             PARITY.validate_build_identity(build)
@@ -271,6 +272,36 @@ class ExperimentIntegrityTests(unittest.TestCase):
                     with self.assertRaises(PARITY.EvidenceError):
                         PARITY.validate_build_identity(build)
                     path.write_text(key)
+
+    def test_clean_compilation_uses_owner_compile_dependencies_and_new_classes_execute_first(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = PARITY.ExperimentRunner(root / "evidence")
+            experiment = PARITY.read_experiment()
+            build = {"java": {"path": "synthetic-java"}, "env": {},
+                     "compiler_classpath": [{"path": "compiler-tools.jar"}],
+                     "fixture_classpath": [{"path": "owner-compile-dependencies.jar"}],
+                     "classpath": [{"path": "owner-runtime-dependencies.jar"}],
+                     "plugin": {"path": "constructor-plugin.jar"}}
+
+            def compile_control(label, argv, cwd, **options):
+                self.assertEqual(argv[argv.index("-classpath") + 1], "owner-compile-dependencies.jar")
+                self.assertIn("-Werror", argv)
+                self.assertIn("-Xplugin-require:nodal-constructor", argv)
+                destination = Path(argv[argv.index("-d") + 1])
+                self.assertEqual(list(destination.iterdir()), [])
+                classes = destination / "nodal/internal/testkit"
+                classes.mkdir(parents=True)
+                for filename in ("ConstructionParityProbe.class", "ConstructionParityProbe$.class",
+                                 "ConstructionRecordJson$.class", "ParityDeepHierarchy.class"):
+                    (classes / filename).write_bytes(b"synthetic command control; never executed")
+                return {"wall_nanos": 100, "peak_rss_bytes": 1024}
+
+            with mock.patch.object(runner, "command", side_effect=compile_control):
+                prefix = runner.clean_fixture_compile(0, 0, "candidate", root, build, experiment)
+            expected_first = runner.report["compile_trials"][0]["classes"]["path"]
+            self.assertEqual(prefix[prefix.index("-cp") + 1],
+                             expected_first + PARITY.os.pathsep + "owner-runtime-dependencies.jar")
 
 
 if __name__ == "__main__":

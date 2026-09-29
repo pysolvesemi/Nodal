@@ -213,7 +213,7 @@ def jar_content_digest(path: Path) -> str:
 def validate_build_identity(build: dict) -> None:
     require(path_digest(Path(build["java"]["path"])) == build["java"],
             "managed Java changed during experiment")
-    for key in ("classpath", "compiler_classpath"):
+    for key in ("classpath", "compiler_classpath", "fixture_classpath"):
         require([path_digest(Path(entry["path"])) for entry in build[key]] == build[key],
                 f"pinned {key} changed during experiment")
     require(sha256(Path(build["plugin"]["path"])) == build["plugin"]["sha256"],
@@ -508,6 +508,12 @@ class ExperimentRunner:
         classpath = decode_mill_paths(cp["output"].decode())
         require(any(path.is_relative_to(root / "out") for path in classpath),
                 "testkit classpath lacks this role's compiled classes")
+        fixture_paths = []
+        for target in ("compileClasspath", "localRunClasspath"):
+            result = self.command(f"{role}-fixture-{target}", [str(root / "mill"), "-i", "show",
+                                  f"core.scala.testkit.test.{target}"], root, env=env)
+            fixture_paths.extend(decode_mill_paths(result["output"].decode()))
+        fixture_paths = list(dict.fromkeys(fixture_paths))
         compiler = self.command(f"{role}-compiler-classpath", [str(root / "mill"), "-i", "show",
                                 "core.scala.api.scalaCompilerClasspath"], root, env=env)
         compiler_paths = decode_mill_paths(compiler["output"].decode())
@@ -536,6 +542,7 @@ class ExperimentRunner:
                 "compiled probe/workload manifest disagree")
         return {"prefix": prefix, "env": env, "java": path_digest(java),
                 "classpath": [path_digest(path) for path in classpath],
+                "fixture_classpath": [path_digest(path) for path in fixture_paths],
                 "compiler_classpath": [path_digest(path) for path in compiler_paths], "plugin": plugin,
                 "setup_limit": "Mill/dependency resolution timings are setup, not compared compile measurements."}
 
@@ -546,9 +553,10 @@ class ExperimentRunner:
         require(not directory.exists(), "timed compilation output must be new and empty")
         directory.mkdir(parents=True)
         runtime_cp = os.pathsep.join(entry["path"] for entry in build["classpath"])
+        fixture_cp = os.pathsep.join(entry["path"] for entry in build["fixture_classpath"])
         compiler_cp = os.pathsep.join(entry["path"] for entry in build["compiler_classpath"])
         argv = [build["java"]["path"], *experiment["jvm_options"], "-cp", compiler_cp,
-                "dotty.tools.dotc.Main", "-classpath", runtime_cp, "-d", str(directory),
+                "dotty.tools.dotc.Main", "-classpath", fixture_cp, "-d", str(directory),
                 "-deprecation", "-feature", "-unchecked", "-Wunused:all", "-Werror",
                 f"-Xplugin:{build['plugin']['path']}", "-Xplugin-require:nodal-constructor",
                 *[str(root / path) for path in experiment["overlay_files"]]]

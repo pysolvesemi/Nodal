@@ -273,35 +273,156 @@ class ExperimentIntegrityTests(unittest.TestCase):
                         PARITY.validate_build_identity(build)
                     path.write_text(key)
 
-    def test_clean_compilation_uses_owner_compile_dependencies_and_new_classes_execute_first(self):
+    def synthetic_builds(self, directory):
+        experiment = PARITY.read_experiment()
+        paths = {name: directory / name for name in ("java", "compiler", "fixture", "runtime")}
+        for name, path in paths.items():
+            path.write_text("synthetic " + name + "; never executed")
+        builds, roots = {}, {}
+        for role in ("baseline", "candidate"):
+            root = directory / role
+            root.mkdir()
+            roots[role] = root
+            sources = []
+            for name in experiment["overlay_files"] + ["core/scala/testkit/test/src/Provider.scala"]:
+                source = root / name
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text("synthetic Scala source; never compiled")
+                sources.append(source)
+            plugin = root / "constructor-plugin.jar"
+            with zipfile.ZipFile(plugin, "w") as bundle:
+                bundle.writestr("Plugin.class", role + " source-path-dependent setup control")
+            builds[role] = {
+                "java": PARITY.path_digest(paths["java"]), "env": {"NODAL_WORKSPACE": str(root)},
+                "compiler_classpath": [PARITY.path_digest(paths["compiler"])],
+                "fixture_classpath": [PARITY.path_digest(paths["fixture"])],
+                "classpath": [PARITY.path_digest(paths["runtime"])],
+                "plugin": {**PARITY.path_digest(plugin), "source_tree": "a" * 40,
+                           "entry_content_sha256": PARITY.jar_content_digest(plugin)},
+                "testkit_sources": PARITY.testkit_source_inventory(root, sources, experiment),
+            }
+        return experiment, roots, builds
+
+    def test_owner_source_inventory_rejects_missing_duplicate_escaping_and_symlinked_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            experiment, roots, builds = self.synthetic_builds(Path(directory))
+            root = roots["baseline"]
+            sources = [root / entry["path"] for entry in builds["baseline"]["testkit_sources"]]
+            self.assertEqual(PARITY.testkit_source_inventory(root, sources, experiment),
+                             builds["baseline"]["testkit_sources"])
+            escaped = sources[0].parent / ".." / sources[0].parent.name / sources[0].name
+            for invalid in (sources[:-1], sources + [sources[0]], [escaped, *sources[1:]],
+                            [Path("relative.scala"), *sources[1:]]):
+                raw = json.dumps(["ref:v0:123:" + str(path) for path in invalid])
+                with self.assertRaises(PARITY.EvidenceError):
+                    parsed = PARITY.decode_mill_paths(raw, source_inputs=True)
+                    PARITY.testkit_source_inventory(root, parsed, experiment)
+            source = sources[0]
+            original = source.read_bytes()
+            source.unlink()
+            source.symlink_to(roots["candidate"] / source.relative_to(root))
+            with self.assertRaises(PARITY.EvidenceError):
+                PARITY.testkit_source_inventory(root, sources, experiment)
+            source.unlink()
+            source.write_bytes(original)
+            (source.parent / "unexpected.txt").write_text("unapproved source input")
+            with self.assertRaises(PARITY.EvidenceError):
+                PARITY.testkit_source_inventory(root, sources, experiment)
+
+    def test_shared_plugin_is_exact_baseline_copy_and_original_role_artifacts_remain_pinned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, _, builds = self.synthetic_builds(Path(directory))
+            runner = PARITY.ExperimentRunner(Path(directory) / "evidence")
+            original = copy.deepcopy(builds)
+            shared = runner.prepare_shared_plugin(builds, {"build.mill": "synthetic configuration control"})
+            selected = Path(shared["jar"]["path"])
+            self.assertEqual(selected.read_bytes(), Path(builds["baseline"]["plugin"]["path"]).read_bytes())
+            self.assertNotEqual(shared["jar"]["sha256"], builds["candidate"]["plugin"]["sha256"])
+            self.assertEqual(builds, original)
+            for path, check in (
+                (selected, lambda: PARITY.validate_shared_plugin(shared)),
+                (Path(builds["baseline"]["plugin"]["path"]), lambda: PARITY.validate_shared_plugin(shared)),
+                (Path(builds["candidate"]["plugin"]["path"]), lambda: PARITY.validate_build_identity(builds["candidate"])),
+            ):
+                content = path.read_bytes()
+                path.write_bytes(b"changed constructor plugin")
+                with self.assertRaises(PARITY.EvidenceError):
+                    check()
+                path.write_bytes(content)
+
+    def test_shared_plugin_rejects_source_compiler_jdk_or_provider_identity_differences(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            runner = PARITY.ExperimentRunner(root / "evidence")
-            experiment = PARITY.read_experiment()
-            build = {"java": {"path": "synthetic-java"}, "env": {},
-                     "compiler_classpath": [{"path": "compiler-tools.jar"}],
-                     "fixture_classpath": [{"path": "owner-compile-dependencies.jar"}],
-                     "classpath": [{"path": "owner-runtime-dependencies.jar"}],
-                     "plugin": {"path": "constructor-plugin.jar"}}
+            _, _, builds = self.synthetic_builds(root)
+            other = root / "different-tool"
+            other.write_text("different pinned tool")
+            changes = [lambda build: build["plugin"].update(source_tree="b" * 40),
+                       lambda build: build.update(java=PARITY.path_digest(other)),
+                       lambda build: build.update(compiler_classpath=[PARITY.path_digest(other)]),
+                       lambda build: build["testkit_sources"].pop()]
+            for index, change in enumerate(changes):
+                modified = copy.deepcopy(builds)
+                change(modified["candidate"])
+                runner = PARITY.ExperimentRunner(root / f"evidence-{index}")
+                with self.assertRaises(PARITY.EvidenceError):
+                    runner.prepare_shared_plugin(modified, {})
+
+    def test_relative_provider_setup_and_timed_compiles_share_tool_and_keep_fresh_class_precedence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            experiment, roots, builds = self.synthetic_builds(Path(directory))
+            runner = PARITY.ExperimentRunner(Path(directory) / "evidence")
+            runner.report["builds"] = builds
+            shared = runner.prepare_shared_plugin(builds, {})
 
             def compile_control(label, argv, cwd, **options):
-                self.assertEqual(argv[argv.index("-classpath") + 1], "owner-compile-dependencies.jar")
+                role = next(role for role, root in roots.items() if root == cwd)
+                build = builds[role]
+                provider_setup = label.endswith("relative-provider-setup")
+                fresh = [] if provider_setup else [build["provider_setup"]["classes"]["path"]]
+                self.assertEqual(argv[argv.index("-classpath") + 1], PARITY.os.pathsep.join(
+                    fresh + [entry["path"] for entry in build["fixture_classpath"]]))
                 self.assertIn("-Werror", argv)
-                self.assertIn("-Xplugin-require:nodal-constructor", argv)
+                self.assertEqual([arg for arg in argv if arg.startswith("-Xplugin:")],
+                                 ["-Xplugin:" + shared["jar"]["path"]])
+                sources = argv[argv.index("-Xplugin-require:nodal-constructor") + 1:]
+                self.assertEqual(sources, [entry["path"] for entry in build["testkit_sources"]
+                                          if entry["path"] not in experiment["overlay_files"]]
+                                 if provider_setup else experiment["overlay_files"])
+                self.assertTrue(all(not Path(source).is_absolute() for source in sources))
                 destination = Path(argv[argv.index("-d") + 1])
                 self.assertEqual(list(destination.iterdir()), [])
                 classes = destination / "nodal/internal/testkit"
                 classes.mkdir(parents=True)
-                for filename in ("ConstructionParityProbe.class", "ConstructionParityProbe$.class",
-                                 "ConstructionRecordJson$.class", "ParityDeepHierarchy.class"):
+                filenames = ["Provider.class"] if provider_setup else [
+                    "ConstructionParityProbe.class", "ConstructionParityProbe$.class",
+                    "ConstructionRecordJson$.class", "ParityDeepHierarchy.class"]
+                for filename in filenames:
                     (classes / filename).write_bytes(b"synthetic command control; never executed")
                 return {"wall_nanos": 100, "peak_rss_bytes": 1024}
 
             with mock.patch.object(runner, "command", side_effect=compile_control):
-                prefix = runner.clean_fixture_compile(0, 0, "candidate", root, build, experiment)
-            expected_first = runner.report["compile_trials"][0]["classes"]["path"]
-            self.assertEqual(prefix[prefix.index("-cp") + 1],
-                             expected_first + PARITY.os.pathsep + "owner-runtime-dependencies.jar")
+                for role, root in roots.items():
+                    runner.prepare_providers(role, root, builds[role], experiment)
+                self.assertNotIn("compile_trials", runner.report)
+                for role, root in roots.items():
+                    prefix = runner.clean_fixture_compile(0, 0, role, root, builds[role], experiment)
+                    record = runner.report["compile_trials"][-1]
+                    self.assertEqual(record["shared_plugin_sha256"], shared["jar"]["sha256"])
+                    self.assertEqual(prefix[prefix.index("-cp") + 1], PARITY.os.pathsep.join([
+                        record["classes"]["path"], builds[role]["provider_setup"]["classes"]["path"],
+                        *[entry["path"] for entry in builds[role]["classpath"]]]))
+            build, root = builds["baseline"], roots["baseline"]
+            source = root / build["provider_setup"]["sources"][0]["path"]
+            compiled = Path(build["provider_setup"]["classes"]["path"]) / "nodal/internal/testkit/Provider.class"
+            for path in (source, compiled):
+                original = path.read_bytes()
+                path.write_bytes(b"mutated provider")
+                with self.assertRaises(PARITY.EvidenceError):
+                    PARITY.validate_provider_identity(root, build, experiment)
+                path.write_bytes(original)
+            for unsafe in (["/absolute/Provider.scala"], ["../Provider.scala"]):
+                with self.assertRaises(PARITY.EvidenceError):
+                    runner.fixture_compiler_command(build, experiment, runner.out / "unused", unsafe)
 
 
 if __name__ == "__main__":

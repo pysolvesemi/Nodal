@@ -177,11 +177,32 @@ commands. The compared compilation boundary is consumer-fixture compilation:
 each paired trial starts a fresh pinned-JDK `dotc` process on the identical two
 probe/workload sources, with resolved compiler dependencies, the production
 constructor plugin and a new empty output directory. Record the emitted class
-inventory and execute those classes before the ordinary testkit classpath.
+inventory and execute those classes first on the runtime classpath.
 This does not measure a clean rebuild of the frontend compiler itself.
 Measure a separate empty-workload JVM startup once per role and pair. These
 six compilation and six startup observations are required alongside the
 construction trials; setup cache differences receive no performance credit.
+
+Separately built constructor-plugin JARs contain different absolute source
+paths in TASTy and its class-file linkage identifiers, even with identical
+plugin sources, compiler dependencies, JDK and build configuration. Preserve
+both original setup JAR records. Copy the original baseline JAR byte for byte
+into the experiment's tooling directory and use that single immutable plugin
+for both roles' provider setup and all timed compilations. Record its original
+source/tool provenance and recheck the original JARs and shared copy; do not
+normalize or reconstruct any JAR.
+
+The plugin also captures the raw compiler input path in constructor failure
+sites. Compile with repository-relative source arguments at each actual
+checkout, which preserves identical diagnostic paths without rewriting output.
+Mill's `core.scala.testkit.test.allSourceFiles` supplies the complete 37-file
+inventory: 35 unchanged accepted provider sources and the two identical
+overlays. Recompile all 35 providers once per role in unmeasured setup, then
+compile only the two overlays in each timed trial. Place the fresh provider
+classes before the original testkit classes on both the compiler and runtime
+classpaths; the newly timed overlay classes remain first at runtime. Retain
+and recheck the complete source and output-class inventories. These setup
+repairs preserve the workload, exact artifact comparisons and budgets below.
 
 The candidate median must stay within baseline plus the larger of:
 

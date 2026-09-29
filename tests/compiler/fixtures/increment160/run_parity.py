@@ -159,7 +159,7 @@ def metadata_value(value):
     return value
 
 
-def decode_mill_paths(raw: str) -> list[Path]:
+def decode_mill_paths(raw: str, *, source_inputs: bool = False) -> list[Path]:
     """Read Mill PathRefs, retaining directories and jars rather than guessing a classpath."""
     decoder = json.JSONDecoder()
 
@@ -167,8 +167,8 @@ def decode_mill_paths(raw: str) -> list[Path]:
         if isinstance(value, str):
             absolute = value[value.find("/"):] if "/" in value else value
             path = Path(absolute)
-            if path.is_absolute() and path.exists():
-                yield path.resolve()
+            if path.is_absolute() and (source_inputs or path.exists()):
+                yield path if source_inputs else path.resolve()
         elif isinstance(value, list):
             for item in value:
                 yield from paths(item)
@@ -184,10 +184,37 @@ def decode_mill_paths(raw: str) -> list[Path]:
             value, _ = decoder.raw_decode(raw[position.start():])
         except json.JSONDecodeError:
             continue
-        found = list(dict.fromkeys(paths(value)))
+        found = list(paths(value))
+        if not source_inputs:
+            found = list(dict.fromkeys(found))
         if found:
             return found
     raise EvidenceError("Mill did not return an existing classpath")
+
+
+def testkit_source_inventory(root: Path, sources: list[Path], experiment: dict) -> list[dict]:
+    """Keep the complete owner inventory; compiler inputs use its relative spelling."""
+    source_root = root / "core/scala/testkit/test/src"
+    require(source_root.is_dir() and source_root.resolve() == source_root,
+            "testkit source root is missing or symlinked")
+    expected = []
+    for path in sorted(source_root.rglob("*")):
+        require(not path.is_symlink(), f"symlinked testkit input: {path}")
+        if path.is_file():
+            require(path.suffix == ".scala", f"unexpected non-Scala testkit input: {path}")
+            expected.append(path)
+    for path in sources:
+        require(path.is_absolute() and path.resolve() == path and path.is_file() and
+                path.is_relative_to(source_root) and path.suffix == ".scala",
+                f"unsafe or unexpected testkit source input: {path}")
+    require(sources and len(sources) == len(set(sources)) and set(sources) == set(expected),
+            "Mill allSourceFiles does not equal the complete testkit source inventory")
+    records = [{"path": path.relative_to(root).as_posix(), "sha256": sha256(path)}
+               for path in sorted(sources)]
+    names = {entry["path"] for entry in records}
+    require(set(experiment["overlay_files"]).issubset(names) and
+            len(names) > len(experiment["overlay_files"]), "testkit provider/overlay inputs are incomplete")
+    return records
 
 
 def path_digest(path: Path) -> dict:
@@ -218,6 +245,29 @@ def validate_build_identity(build: dict) -> None:
                 f"pinned {key} changed during experiment")
     require(sha256(Path(build["plugin"]["path"])) == build["plugin"]["sha256"],
             "constructor plugin changed during experiment")
+
+
+def validate_shared_plugin(shared: dict) -> None:
+    original = shared["original_baseline_plugin"]
+    require(shared["selection"] == "unmodified-baseline-setup-artifact" and
+            shared["jar"]["sha256"] == original["sha256"],
+            "shared constructor plugin is not the original baseline artifact")
+    require(sha256(Path(original["path"])) == original["sha256"],
+            "original baseline plugin changed after shared tool selection")
+    require(path_digest(Path(shared["jar"]["path"])) == shared["jar"],
+            "shared constructor plugin changed during experiment")
+
+
+def validate_provider_identity(root: Path, build: dict, experiment: dict) -> None:
+    records = build["testkit_sources"]
+    observed = testkit_source_inventory(root, [root / entry["path"] for entry in records], experiment)
+    require(observed == records, "testkit provider or overlay source changed during experiment")
+    require(build["provider_setup"]["sources"] ==
+            [entry for entry in records if entry["path"] not in experiment["overlay_files"]],
+            "relative provider setup did not retain the complete accepted source inventory")
+    classes = build["provider_setup"]["classes"]
+    require(path_digest(Path(classes["path"])) == classes,
+            "relative provider classes changed during experiment")
 
 
 def artifact_names(case: dict, experiment: dict) -> list[str]:
@@ -514,6 +564,10 @@ class ExperimentRunner:
                                   f"core.scala.testkit.test.{target}"], root, env=env)
             fixture_paths.extend(decode_mill_paths(result["output"].decode()))
         fixture_paths = list(dict.fromkeys(fixture_paths))
+        sources_result = self.command(f"{role}-testkit-sources", [str(root / "mill"), "-i", "show",
+                                      "core.scala.testkit.test.allSourceFiles"], root, env=env)
+        sources = testkit_source_inventory(
+            root, decode_mill_paths(sources_result["output"].decode(), source_inputs=True), experiment)
         compiler = self.command(f"{role}-compiler-classpath", [str(root / "mill"), "-i", "show",
                                 "core.scala.api.scalaCompilerClasspath"], root, env=env)
         compiler_paths = decode_mill_paths(compiler["output"].decode())
@@ -544,7 +598,65 @@ class ExperimentRunner:
                 "classpath": [path_digest(path) for path in classpath],
                 "fixture_classpath": [path_digest(path) for path in fixture_paths],
                 "compiler_classpath": [path_digest(path) for path in compiler_paths], "plugin": plugin,
+                "testkit_sources": sources,
                 "setup_limit": "Mill/dependency resolution timings are setup, not compared compile measurements."}
+
+    def prepare_shared_plugin(self, builds: dict, invariant_hashes: dict) -> dict:
+        before, after = builds["baseline"], builds["candidate"]
+        for build in builds.values():
+            validate_build_identity(build)
+        require(before["java"] == after["java"], "roles use different managed JDK binaries")
+        require(before["compiler_classpath"] == after["compiler_classpath"],
+                "roles use different Scala compiler tools")
+        require(before["plugin"]["source_tree"] == after["plugin"]["source_tree"],
+                "roles use different constructor-plugin sources")
+        require(before["testkit_sources"] == after["testkit_sources"],
+                "roles use different accepted provider or overlay source inputs")
+        destination = self.out / "tooling" / "constructor-plugin.jar"
+        require(not destination.exists(), "shared plugin destination must be new")
+        destination.parent.mkdir(parents=True)
+        shutil.copyfile(before["plugin"]["path"], destination)
+        shared = {"selection": "unmodified-baseline-setup-artifact", "jar": path_digest(destination),
+                  "original_baseline_plugin": before["plugin"],
+                  "java": before["java"], "compiler_classpath": before["compiler_classpath"],
+                  "invariant_toolchain_sha256": invariant_hashes}
+        validate_shared_plugin(shared)
+        self.report["shared_plugin"] = shared
+        self.save()
+        return shared
+
+    def fixture_compiler_command(self, build: dict, experiment: dict, directory: Path,
+                                 sources: list[str], *, provider_classes: str | None = None) -> list[str]:
+        shared = self.report["shared_plugin"]
+        validate_shared_plugin(shared)
+        require(sources and all(not PurePosixPath(path).is_absolute() and ".." not in PurePosixPath(path).parts
+                                and path.endswith(".scala") for path in sources),
+                "fixture compiler inputs must have safe repository-relative spelling")
+        fixture_paths = ([provider_classes] if provider_classes is not None else []) + \
+                        [entry["path"] for entry in build["fixture_classpath"]]
+        compiler_cp = os.pathsep.join(entry["path"] for entry in build["compiler_classpath"])
+        return [build["java"]["path"], *experiment["jvm_options"], "-cp", compiler_cp,
+                "dotty.tools.dotc.Main", "-classpath", os.pathsep.join(fixture_paths), "-d", str(directory),
+                "-deprecation", "-feature", "-unchecked", "-Wunused:all", "-Werror",
+                f"-Xplugin:{shared['jar']['path']}", "-Xplugin-require:nodal-constructor", *sources]
+
+    def prepare_providers(self, role: str, root: Path, build: dict, experiment: dict) -> dict:
+        """Recompile every accepted testkit provider with stable raw source arguments."""
+        sources = [entry for entry in build["testkit_sources"] if entry["path"] not in experiment["overlay_files"]]
+        directory = self.out / "provider-classes" / role
+        require(not directory.exists(), "relative provider setup output must be new and empty")
+        directory.mkdir(parents=True)
+        argv = self.fixture_compiler_command(build, experiment, directory, [entry["path"] for entry in sources])
+        command = self.command(f"{role}-relative-provider-setup", argv, root, env=build["env"], peak_rss=True,
+                               timeout=experiment["timeouts_seconds"]["compile"])
+        record = {"sources": sources, "classes": path_digest(directory),
+                  "shared_plugin_sha256": self.report["shared_plugin"]["jar"]["sha256"],
+                  "wall_nanos": command["wall_nanos"], "peak_rss_bytes": command.get("peak_rss_bytes"),
+                  "boundary": "unmeasured setup; complete accepted testkit providers; relative source arguments"}
+        build["provider_setup"] = record
+        validate_provider_identity(root, build, experiment)
+        self.save()
+        return record
 
     def clean_fixture_compile(self, epoch: int, pair: int, role: str, root: Path,
                               build: dict, experiment: dict) -> list[str]:
@@ -552,14 +664,10 @@ class ExperimentRunner:
         directory = self.out / "compiled-fixtures" / f"epoch-{epoch}" / f"pair-{pair}" / role
         require(not directory.exists(), "timed compilation output must be new and empty")
         directory.mkdir(parents=True)
-        runtime_cp = os.pathsep.join(entry["path"] for entry in build["classpath"])
-        fixture_cp = os.pathsep.join(entry["path"] for entry in build["fixture_classpath"])
-        compiler_cp = os.pathsep.join(entry["path"] for entry in build["compiler_classpath"])
-        argv = [build["java"]["path"], *experiment["jvm_options"], "-cp", compiler_cp,
-                "dotty.tools.dotc.Main", "-classpath", fixture_cp, "-d", str(directory),
-                "-deprecation", "-feature", "-unchecked", "-Wunused:all", "-Werror",
-                f"-Xplugin:{build['plugin']['path']}", "-Xplugin-require:nodal-constructor",
-                *[str(root / path) for path in experiment["overlay_files"]]]
+        validate_provider_identity(root, build, experiment)
+        provider_classes = build["provider_setup"]["classes"]["path"]
+        argv = self.fixture_compiler_command(build, experiment, directory, experiment["overlay_files"],
+                                             provider_classes=provider_classes)
         command = self.command(label, argv, root, env=build["env"], peak_rss=True,
                                timeout=experiment["timeouts_seconds"]["compile"])
         for filename in ("ConstructionParityProbe.class", "ConstructionParityProbe$.class",
@@ -569,11 +677,13 @@ class ExperimentRunner:
         inventory = path_digest(directory)
         record = {"epoch": epoch, "pair": pair, "role": role, "wall_nanos": command["wall_nanos"],
                   "peak_rss_bytes": command.get("peak_rss_bytes"), "classes": inventory,
-                  "boundary": "fresh JVM dotc; identical probe sources; empty destination; resolved dependencies"}
+                  "shared_plugin_sha256": self.report["shared_plugin"]["jar"]["sha256"],
+                  "boundary": "fresh JVM dotc; identical relative probe sources; empty destination; resolved dependencies"}
         self.report.setdefault("compile_trials", []).append(record)
         self.save()
         return [build["java"]["path"], *experiment["jvm_options"], "-cp",
-                os.pathsep.join((str(directory), runtime_cp)), experiment["main_class"]]
+                os.pathsep.join([str(directory), provider_classes] +
+                                [entry["path"] for entry in build["classpath"]]), experiment["main_class"]]
 
     def execute_trials(self, epoch: int, roots: dict, builds: dict, native_env: dict,
                        tools: dict, experiment: dict) -> list[dict]:
@@ -744,14 +854,14 @@ def run(args) -> int:
         proof, native_env = validate_native_receipt(receipt.resolve(), args.native_artifact_receipt is not None,
                                                    candidate, baseline, identities, experiment, tools, artifact_zip)
         runner.report["native_provenance"] = proof
-        builds = {role: runner.prepare_build(role, roots[role], experiment) for role in ("baseline", "candidate")}
-        require(builds["baseline"]["java"] == builds["candidate"]["java"], "roles use different managed JDK binaries")
-        require(builds["baseline"]["compiler_classpath"] == builds["candidate"]["compiler_classpath"],
-                "roles use different Scala compiler tools")
-        require(builds["baseline"]["plugin"]["source_tree"] == builds["candidate"]["plugin"]["source_tree"] and
-                builds["baseline"]["plugin"]["entry_content_sha256"] == builds["candidate"]["plugin"]["entry_content_sha256"],
-                "roles use different constructor-plugin sources or executable jar contents")
+        builds = {}
         runner.report["builds"] = builds
+        for role, root in roots.items():
+            builds[role] = runner.prepare_build(role, root, experiment)
+            runner.save()
+        shared_plugin = runner.prepare_shared_plugin(builds, invariant_hashes)
+        for role, root in roots.items():
+            runner.prepare_providers(role, root, builds[role], experiment)
         runner.report["status"] = "running"
         runner.save()
         assessments = []
@@ -770,9 +880,15 @@ def run(args) -> int:
             require(all(sha256(root / name) == digest for name, digest in overlays.items()),
                     "harness overlay changed during experiment")
             validate_build_identity(builds[role])
+            validate_provider_identity(root, builds[role], experiment)
+            require(builds[role]["provider_setup"]["shared_plugin_sha256"] == shared_plugin["jar"]["sha256"],
+                    "provider setup used a different constructor plugin")
+        validate_shared_plugin(shared_plugin)
         for record in runner.report["compile_trials"]:
             require(path_digest(Path(record["classes"]["path"])) == record["classes"],
                     "freshly compiled workload classes changed during experiment")
+            require(record["shared_plugin_sha256"] == shared_plugin["jar"]["sha256"],
+                    "timed compilation used a different constructor plugin")
         require(sha256(EXPERIMENT) == inputs["experiment_sha256"] and sha256(Path(__file__)) == inputs["runner_sha256"],
                 "experiment definition changed after pinning")
         require(path_digest(rss_tool) == inputs["rss_measurement_tool"],

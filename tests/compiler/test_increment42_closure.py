@@ -142,7 +142,7 @@ class Increment42ClosureTests(unittest.TestCase):
             (CHECK.ROADMAP,
              "- [x] **Increment 42 — Analog hierarchy and parameterized instances**",
              "- [ ] **Increment 42 — Analog hierarchy and parameterized instances**"),
-            (CHECK.ROADMAP, "**Revision:** 1.56", "**Revision:** 1.55"),
+            (CHECK.ROADMAP, "**Revision:** 1.57", "**Revision:** 1.55"),
             (CHECK.IMPLEMENTATION, "**Status:** Validated", "**Status:** Candidate"),
             (CHECK.AMENDMENT, "Increment 42 compiler profile is accepted",
              "Increment 42 compiler profile is pending"),

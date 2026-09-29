@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "phase": "targeted",
+  "repository": "pysolvesemi/Nodal",
+  "repository_id": 1340301335,
+  "pull_request": 137,
+  "base": {
+    "ref": "dev",
+    "sha": "cafd52e5b7ea0d63b1eb503d281cf801bedd6808",
+    "tree": "f14dc1e38e08c07243fda52e61378b95c7bd19d9"
+  },
+  "integration": {
+    "ref": "dev",
+    "sha": "60d56be8dfcd0835ef6ddfa85cf9189dfdb1bb68",
+    "tree": "daba8506744845bb59aefd8d3442477c0809bfea"
+  },
+  "candidate": {
+    "ref": "increment/160-construction-frontend-modularization",
+    "sha": "789582614da0a876e58edbe106db10de4c47ee4c",
+    "tree": "1122c6e4c538a4a0004ddbc9a71f3ce905b8ff9c"
+  },
+  "default_branch": {
+    "ref": "main",
+    "sha": "73ff38315628783abd926909adc47f1d551637f6",
+    "tree": "075d8fe1e0560deceecc4691083a6a3602ccee7d"
+  },
+  "controller": {
+    "ref": "ci-control/f160-pr137-789582614da0-r2",
+    "script_sha256": "8059215d61d0cc0d8b16677ddeb8f5c18c0efe1c09e73e8ef73cd1a3c9b0f650",
+    "workflow_sha256": "f9d2c7483f389a800b73ed19a288673604198606ee13f1863bf59b44443e4882"
+  },
+  "workflows": [
+    {
+      "id": 338626156,
+      "path": ".github/workflows/ci.yml",
+      "sha256": "8e60508454a7d56af871e85cf92e54c608240f6fb156967563d90ac16dc12a20",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    }
+  ],
+  "prior_failure": {
+    "run_id": 36530686521,
+    "workflow_id": 338626156,
+    "workflow_path": ".github/workflows/ci.yml",
+    "run_attempt": 1,
+    "head_sha": "9f2fcda2b91688191aac8210ef10edc1f71879a4",
+    "tree_sha": "fccc0b2510b4f88147e23eab44da6d0ee8cf24d7",
+    "head_branch": "increment/160-construction-frontend-modularization",
+    "event": "workflow_dispatch",
+    "status": "completed",
+    "conclusion": "failure",
+    "job": {
+      "id": 109283469607,
+      "name": "native",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "number": 6,
+          "name": "Configure, build, lint, and test native core",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "number": 7,
+          "name": "Compare Foundation 160 construction with the accepted baseline",
+          "status": "completed",
+          "conclusion": "failure"
+        },
+        {
+          "number": 8,
+          "name": "Retain Foundation 160 comparison evidence",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    "artifact": {
+      "id": 11019085661,
+      "name": "foundation160-parity-9f2fcda2b91688191aac8210ef10edc1f71879a4-1",
+      "size_in_bytes": 13528865,
+      "sha256": "46b15bde8e01b711fb08a511b97f7003d3ab13ba50f8a4499319d7e1d372ed84"
+    }
+  }
+}

@@ -10,6 +10,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from construction_source_inventory import CONSTRUCTION_SOURCES, read_construction_sources
+
 
 # Immutable accepted Increment 35 closure, not values supplied by the manifest.
 INCREMENT35_CLOSURE_HEAD = "39915b984707f0396777cc69030dfec29aa2befe"
@@ -415,9 +421,8 @@ def check_repository(root: Path, compile_witnesses: bool = False) -> None:
         "NODAL-INC33-066: native witness does not prove combined operation order",
     )
 
-    construction_kernel = read_text(
-        root,
-        "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",
+    construction_kernel = read_construction_sources(
+        root, lambda relative: read_text(root, relative)
     )
     compatible_add_start = construction_kernel.index(
         "  def compatibleAdd(other: AnalogDimension): AnalogDimension =\n"

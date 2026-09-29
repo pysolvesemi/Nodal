@@ -1,0 +1,537 @@
+{
+  "schema": "nodal.increment160.experiment.v1",
+  "baseline_commit": "cafd52e5b7ea0d63b1eb503d281cf801bedd6808",
+  "baseline_tree": "f14dc1e38e08c07243fda52e61378b95c7bd19d9",
+  "owner": "F-160; bounded baseline handed to F-096 without a reverse dependency",
+  "main_class": "nodal.internal.testkit.ConstructionParityProbe",
+  "scala_version": "3.8.4",
+  "mill_version": "1.1.7",
+  "jdk_major": 25,
+  "compilation_boundary": "Three paired fresh pinned-JDK dotc processes compile the exact two overlay Scala sources into empty separate directories; dependencies and plugin are resolved by the ordinary Mill owner before measurement. Probe JVMs execute these new classes first on the runtime classpath.",
+  "startup_boundary": "Three paired fresh pinned-JDK --startup probe processes execute no construction factory. Launch wall time, JVM uptime and process RSS are retained independently of workload iterations.",
+  "overlay_files": [
+    "core/scala/testkit/test/src/nodal/ConstructionParityProbe.scala",
+    "core/scala/testkit/test/src/nodal/ConstructionParityProbeTests.scala"
+  ],
+  "fixture_source_roots": [
+    "core/scala/testkit/test/src",
+    "examples/continuousTimeApi/src"
+  ],
+  "invariant_toolchain_files": [
+    "build.mill",
+    ".mill-version",
+    "mill",
+    "toolchains/lock.json",
+    "toolchains/lint-lock.json"
+  ],
+  "native_source_roots": [
+    "core/compiler",
+    "cmake",
+    "toolchains",
+    "CMakeLists.txt",
+    "CMakePresets.json"
+  ],
+  "jvm_options": [
+    "-Xms128m",
+    "-Xmx2g",
+    "-XX:+UseG1GC"
+  ],
+  "protocol": {
+    "pair_order": [
+      [
+        "baseline",
+        "candidate"
+      ],
+      [
+        "candidate",
+        "baseline"
+      ],
+      [
+        "baseline",
+        "candidate"
+      ]
+    ],
+    "cold_iterations": 1,
+    "warmup_iterations": 2,
+    "warm_iterations": 5,
+    "max_noisy_repeats": 1,
+    "noise_mad_multiplier": 3
+  },
+  "budgets": {
+    "warm_wall_nanos": {
+      "relative": 0.25,
+      "absolute": 10000000
+    },
+    "cold_wall_nanos": {
+      "relative": 0.3,
+      "absolute": 100000000
+    },
+    "allocated_bytes": {
+      "relative": 0.15,
+      "absolute": 65536
+    },
+    "peak_rss_bytes": {
+      "relative": 0.2,
+      "absolute": 16777216
+    }
+  },
+  "timeouts_seconds": {
+    "compile": 1200,
+    "probe": 240,
+    "native": 60
+  },
+  "required_artifacts": [
+    "construction.full.json",
+    "construction.canonical.json",
+    "effects.json"
+  ],
+  "required_warm_metrics": [
+    "construction",
+    "lifecycleValidationSnapshot",
+    "fullRecordSerialization",
+    "canonicalSerialization"
+  ],
+  "external_tool_status": "Owned by existing F-048/F-049/F-052 capability profiles; no numerical execution or independent-tool credit claimed by this compiler parity harness.",
+  "cases": [
+    {
+      "id": "constructor-default",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "constructor-root-actual",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "constructor-omitted-equal",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "constructor-automatic",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "constructor-explicit",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "constructor-handle",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "domain-automatic",
+      "family": "accepted",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "domain-explicit",
+      "family": "accepted",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "factory-count",
+      "family": "accepted",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "fixed-replication",
+      "family": "accepted",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "symbolic-overrides",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "boolean-dimensions",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "interface-domain-layout",
+      "family": "accepted",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "waiver-origin",
+      "family": "accepted",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "hierarchy-equation",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "hierarchy-event",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "hierarchy-function",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "hierarchy-repeated",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "hierarchy-nested",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "integral-initial",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "integral-states",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "waveform",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "noise",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "transfer",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "user-function",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "duplicate-binding",
+      "family": "rejection",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": "NODAL-HIERARCHY-030"
+    },
+    {
+      "id": "foreign-target",
+      "family": "rejection",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": "NODAL-PARAMETER-BINDING-017"
+    },
+    {
+      "id": "sibling-actual",
+      "family": "rejection",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": "NODAL-HIERARCHY-031"
+    },
+    {
+      "id": "internal-endpoint",
+      "family": "rejection",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": "NODAL-HIERARCHY-040"
+    },
+    {
+      "id": "detached-endpoint",
+      "family": "rejection",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": "NODAL-HIERARCHY-038"
+    },
+    {
+      "id": "dynamic-actual",
+      "family": "rejection",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": "NODAL-HIERARCHY-032"
+    },
+    {
+      "id": "stateful-actual",
+      "family": "rejection",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": "NODAL-HIERARCHY-037"
+    },
+    {
+      "id": "width-mismatch",
+      "family": "rejection",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": "NODAL-HIERARCHY-034"
+    },
+    {
+      "id": "unit-mismatch",
+      "family": "rejection",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": "NODAL-HIERARCHY-036"
+    },
+    {
+      "id": "nested-unit-mismatch",
+      "family": "rejection",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": "NODAL-HIERARCHY-035"
+    },
+    {
+      "id": "boolean-unit-mismatch",
+      "family": "rejection",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": "NODAL-HIERARCHY-035"
+    },
+    {
+      "id": "double-attachment",
+      "family": "rejection",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": "NODAL-HIERARCHY-017"
+    },
+    {
+      "id": "caught-body-failure",
+      "family": "rejection",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": "NODAL-CONSTRUCTOR-LIFECYCLE-021"
+    },
+    {
+      "id": "caught-argument-failure",
+      "family": "rejection",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": "NODAL-CONSTRUCTOR-LIFECYCLE-021"
+    },
+    {
+      "id": "nested-session-success",
+      "family": "accepted",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "nested-session-failure",
+      "family": "accepted",
+      "size": 0,
+      "bridge": false,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "connect-form-0",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "connect-form-1",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "connect-form-2",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "connect-form-3",
+      "family": "accepted",
+      "size": 0,
+      "bridge": true,
+      "target": false,
+      "rejection": null
+    },
+    {
+      "id": "deep-4",
+      "family": "deep",
+      "size": 4,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "deep-24",
+      "family": "deep",
+      "size": 24,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "wide-8",
+      "family": "wide",
+      "size": 8,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "wide-128",
+      "family": "wide",
+      "size": 128,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "repeated-8",
+      "family": "repeated",
+      "size": 8,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "repeated-256",
+      "family": "repeated",
+      "size": 256,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "shared-dag-16",
+      "family": "shared-dag",
+      "size": 16,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "shared-dag-256",
+      "family": "shared-dag",
+      "size": 256,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "symbolic-8",
+      "family": "symbolic",
+      "size": 8,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    },
+    {
+      "id": "symbolic-128",
+      "family": "symbolic",
+      "size": 128,
+      "bridge": true,
+      "target": true,
+      "rejection": null
+    }
+  ]
+}

@@ -169,6 +169,20 @@ translation. Capture thread allocations, GC counts/time, JVM memory-pool peaks,
 process peak RSS and environment where the platform exposes them. Record
 unavailable counters and resource-limited cases honestly.
 
+The executable experiment is
+[`experiment.json`](../../tests/compiler/fixtures/increment160/experiment.json).
+It fixes 55 public-source cases, including the ten scale workloads above.
+Ordinary Mill compilation and dependency resolution are retained as setup
+commands. The compared compilation boundary is consumer-fixture compilation:
+each paired trial starts a fresh pinned-JDK `dotc` process on the identical two
+probe/workload sources, with resolved compiler dependencies, the production
+constructor plugin and a new empty output directory. Record the emitted class
+inventory and execute those classes before the ordinary testkit classpath.
+This does not measure a clean rebuild of the frontend compiler itself.
+Measure a separate empty-workload JVM startup once per role and pair. These
+six compilation and six startup observations are required alongside the
+construction trials; setup cache differences receive no performance credit.
+
 The candidate median must stay within baseline plus the larger of:
 
 - warm-stage wall time: 25 percent or 10 milliseconds;
@@ -183,6 +197,18 @@ as noisy/inconclusive and repeat the same paired experiment once. Never convert
 noise into an automatic pass. An unexplained persistent material regression
 remains open for repair or an explicit justified review decision. The original
 samples and predeclared budgets remain retained.
+
+The operational harness smoke took about 224 seconds for one 55-case pass on
+the local host. This is a capacity observation, not a before/after performance
+result: six such passes suggest about 22.4 minutes per epoch, or 44.8 minutes
+with the one permitted noisy repeat. Core therefore gives the new comparison
+step 60 minutes, including its predecessor checks, setup and clean fixture
+compilation. The original native validation keeps an absolute 50-minute
+deadline established before checkout and cache restoration; bootstrap and
+build commands consume its remaining time and fail if it expires. Only the
+F-160 branch/PR receives a 115-minute outer job allowance for those two bounded
+phases and artifact handling. Other branches retain the original 50-minute
+outer limit. No workload, per-command timeout or regression budget is relaxed.
 
 ## Publication, qualification and continuation
 
@@ -207,3 +233,54 @@ same-head runs. Merge/closure follow the current verified squash policy with
 current execution. Keep F-160 open and its continuation enabled until accepted
 evidence, the actual unchanged HDL demonstration and F-043 eligibility are
 complete.
+
+## Inherited equation-output limitation
+
+A [review posted after the F-042 closure merge](https://github.com/pysolvesemi/Nodal/pull/136#discussion_r4123215969)
+observed that its `HierarchyEquationTop` demonstration contains no executable
+analog equation body. The accepted
+[equation/contribution gate](../design-gates/NodalAnalogEquationContribution-DG-v1.0.md)
+explicitly defers equation-to-target legalization and Verilog-A/Verilog-AMS
+lowering. The current [Foundation roadmap](../roadmap/nodal-development-todo.md)
+assigns that capability to F-141.B.2, with source/residual work in F-134/F-135.
+
+For F-160, the equation fixture is a structural-record, hierarchy and exact
+output-parity witness. Its unchanged target cannot establish the numerical
+`H42-EQUATION-DC` handoff. That later numerical case needs a reviewed,
+behavior-bearing companion using the already supported contribution API, or
+the separately owned equation legalizer. The 48/49/52 validation owners must
+establish that prerequisite before claiming numerical execution. F-160 does
+not add equation lowering or rewrite the historical F-042 artifacts. Its
+waveform, event, function, noise and transfer fixtures independently exercise
+existing executable target behavior.
+
+## Reproduction entry points
+
+Run from a clean, published candidate with the unchanged pinned tools. Keep the
+baseline checkout and evidence directory outside the candidate source tree.
+
+```sh
+./nodal core scala
+python3 tests/compiler/fixtures/increment160/run_predecessors.py \
+  --out "$RUNNER_TEMP/nodal-f160-predecessors"
+python3 tests/compiler/fixtures/increment160/run_parity.py \
+  --candidate-root "$PWD" \
+  --baseline-root "$RUNNER_TEMP/nodal-f160-baseline" \
+  --out "$RUNNER_TEMP/nodal-f160-parity" \
+  --nodalc /absolute/path/to/nodalc \
+  --translate /absolute/path/to/nodal-translate \
+  --native-build-receipt /absolute/path/to/native-build.json
+```
+
+Core CI creates the fresh native receipt only after its actual native build
+succeeds. The receipt pins that checkout's commit/tree, unchanged compiler
+subtree, lock file and executable hashes. Local artifact reuse has a separate
+`--native-artifact-receipt` mode: it independently verifies the original source
+archive/tree, every native source file, executable and library, and records the
+original CI identity. That mode also requires `--native-artifact-zip` pointing
+to the authenticated original artifact, so receipt members are bound to the
+retained ZIP bytes. It provides fresh candidate-input execution using an
+unchanged compiler, without claiming a new native rebuild or candidate CI run.
+The experiment retains input identities before execution, all command outputs,
+raw samples, per-artifact hashes and any incomplete or failed result. Never
+reuse an existing results directory or replace differing expected output.

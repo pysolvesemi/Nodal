@@ -4,8 +4,15 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from construction_source_inventory import CONSTRUCTION_SOURCES, read_construction_sources
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -346,8 +353,8 @@ def check_repository(root: Path) -> None:
         "NODAL-INC35-013: the idt placeholder remains",
     )
 
-    construction = read_text(
-        root, "core/scala/api/src/nodal/ElaborationConstructionKernel.scala"
+    construction = read_construction_sources(
+        root, lambda relative: read_text(root, relative)
     )
     require_tokens(
         construction,

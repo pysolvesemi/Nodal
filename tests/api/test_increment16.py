@@ -26,9 +26,7 @@ class Increment16ContractTests(unittest.TestCase):
         candidate = (ROOT / "core/scala/api/src/nodal/CandidateApi.scala").read_text(
             encoding="utf-8"
         )
-        kernel = (ROOT / "core/scala/api/src/nodal/ElaborationConstructionKernel.scala").read_text(
-            encoding="utf-8"
-        )
+        kernel = MODULE.read_construction_sources(ROOT)
         self.assertTrue(MODULE.has_canonical_instance_successor(candidate, kernel))
         self.assertFalse(
             MODULE.has_canonical_instance_successor(
@@ -44,9 +42,7 @@ class Increment16ContractTests(unittest.TestCase):
         candidate = (ROOT / "core/scala/api/src/nodal/CandidateApi.scala").read_text(
             encoding="utf-8"
         )
-        kernel = (ROOT / "core/scala/api/src/nodal/ElaborationConstructionKernel.scala").read_text(
-            encoding="utf-8"
-        )
+        kernel = MODULE.read_construction_sources(ROOT)
         self.assertFalse(
             MODULE.has_canonical_instance_successor(
                 candidate,

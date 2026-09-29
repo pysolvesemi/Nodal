@@ -10,6 +10,12 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from construction_source_inventory import CONSTRUCTION_SOURCES, read_construction_sources
+
 
 @dataclass(frozen=True)
 class Problem:
@@ -20,10 +26,9 @@ class Problem:
         return f"{self.code}: {self.message}"
 
 
-EXPECTED_FILES = (
+EXPECTED_FILES = CONSTRUCTION_SOURCES + (
     "core/scala/api/src/nodal/CandidateApi.scala",
     "core/scala/api/src/nodal/SemanticOriginKernel.scala",
-    "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",
     "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala",
     "core/scala/testkit/test/src/nodal/internal/testkit/RcVerticalSliceTests.scala",
     "core/compiler/include/nodal/Backend/AnalogVerticalSlice.h",
@@ -85,7 +90,9 @@ def check_repository(root: Path) -> list[Problem]:
         problems,
         "NODAL-INC25-013",
     )
-    kernel = read(root / "core/scala/api/src/nodal/ElaborationConstructionKernel.scala", problems, "NODAL-INC25-004")
+    kernel = read_construction_sources(
+        root, lambda relative: read(root / relative, problems, "NODAL-INC25-004")
+    )
     bridge = read(root / "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala", problems, "NODAL-INC25-005")
     backend = read(root / "core/compiler/lib/Backend/AnalogVerticalSlice.cpp", problems, "NODAL-INC25-006")
     scala_test = read(root / "core/scala/testkit/test/src/nodal/internal/testkit/RcVerticalSliceTests.scala", problems, "NODAL-INC25-007")

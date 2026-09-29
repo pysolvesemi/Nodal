@@ -143,11 +143,19 @@ jobs:
   native:
     name: native
     runs-on: ubuntu-24.04
-    timeout-minutes: 50
+    # The original native gate retains its 50-minute deadline below. F160 adds
+    # a separate 60-minute comparison allowance and five minutes for artifacts.
+    timeout-minutes: ${{ (github.ref_name == 'increment/160-construction-frontend-modularization' || github.head_ref == 'increment/160-construction-frontend-modularization') && 115 || 50 }}
 
     steps:
+      - name: Preserve the existing native validation deadline
+        shell: bash
+        run: echo "NODAL_NATIVE_DEADLINE=$(( $(date +%s) + 3000 ))" >> "${GITHUB_ENV}"
+
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Restore locked native download cache
         uses: actions/cache@v5
@@ -157,17 +165,85 @@ jobs:
 
       - name: Install locked native and lint toolchains
         run: |
+          remaining=$(( NODAL_NATIVE_DEADLINE - $(date +%s) ))
+          test "${remaining}" -gt 0
+          timeout --kill-after=30s "${remaining}s" bash -euo pipefail <<'NATIVE_SETUP'
           ./nodal bootstrap \
             --mode prebuilt \
             --prefix "${RUNNER_TEMP}/nodal-native-toolchain"
           ./nodal style bootstrap \
             --prefix "${RUNNER_TEMP}/nodal-lint-toolchain"
+          NATIVE_SETUP
 
       - name: Configure, build, lint, and test native core
         run: |
-          ./nodal core native \
+          remaining=$(( NODAL_NATIVE_DEADLINE - $(date +%s) ))
+          test "${remaining}" -gt 0
+          timeout --kill-after=30s "${remaining}s" ./nodal core native \
             --toolchain "${RUNNER_TEMP}/nodal-native-toolchain" \
             --lint-toolchain "${RUNNER_TEMP}/nodal-lint-toolchain"
+
+      - name: Compare Foundation 160 construction with the accepted baseline
+        if: github.ref_name == 'increment/160-construction-frontend-modularization' || github.head_ref == 'increment/160-construction-frontend-modularization'
+        timeout-minutes: 60
+        shell: bash
+        run: |
+          evidence="${RUNNER_TEMP}/nodal-f160-parity"
+          mkdir -p "${evidence}"
+          python3 tests/compiler/fixtures/increment160/run_predecessors.py \
+            --out "${evidence}/predecessors"
+          python3 - "${evidence}/native-build.json" <<'PYTHON'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          def git(*arguments):
+              return subprocess.check_output(['git', *arguments], text=True).strip()
+
+          def sha256(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          tools = {}
+          for key, name in (('nodalc', 'nodalc'), ('translate', 'nodal-translate')):
+              candidates = [
+                  path.resolve() for path in Path('out/native/release').rglob(name)
+                  if path.is_file() and os.access(path, os.X_OK)
+              ]
+              if len(candidates) != 1:
+                  raise SystemExit(f'Expected exactly one freshly built {name}: {candidates}')
+              path = candidates[0]
+              tools[key] = {'path': str(path), 'sha256': sha256(path)}
+          receipt = {
+              'schema': 'nodal.increment160.native-build.v1',
+              'source_commit': git('rev-parse', 'HEAD'),
+              'source_tree': git('rev-parse', 'HEAD^{tree}'),
+              'compiler_source_tree': git('rev-parse', 'HEAD:core/compiler'),
+              'command': './nodal core native',
+              'lock_sha256': sha256(Path('toolchains/lock.json')),
+              'tools': tools,
+          }
+          Path(sys.argv[1]).write_text(json.dumps(receipt, indent=2) + '\n')
+          PYTHON
+          nodalc=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tools"]["nodalc"]["path"])' "${evidence}/native-build.json")
+          translate=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tools"]["translate"]["path"])' "${evidence}/native-build.json")
+          python3 tests/compiler/fixtures/increment160/run_parity.py \
+            --candidate-root "$PWD" \
+            --baseline-root "${RUNNER_TEMP}/nodal-f160-baseline" \
+            --out "${evidence}/comparison" \
+            --nodalc "${nodalc}" --translate "${translate}" \
+            --native-build-receipt "${evidence}/native-build.json"
+
+      - name: Retain Foundation 160 comparison evidence
+        if: always() && (github.ref_name == 'increment/160-construction-frontend-modularization' || github.head_ref == 'increment/160-construction-frontend-modularization')
+        uses: actions/upload-artifact@v4
+        with:
+          name: foundation160-parity-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nodal-f160-parity/
+          retention-days: 30
+          if-no-files-found: error
 
   required:
     name: required

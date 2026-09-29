@@ -6,10 +6,17 @@ import argparse
 import hashlib
 import re
 import json
+import sys
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from construction_source_inventory import CONSTRUCTION_SOURCES
+
 ROOT = Path(__file__).resolve().parents[1]
-FILES = (
+FILES = CONSTRUCTION_SOURCES + (
     "docs/implementation/increment37-accepted-evidence.json",
     "tests/compiler/fixtures/increment37/manifest.json",
     "docs/implementation/increment36-accepted-evidence.json",
@@ -17,7 +24,6 @@ FILES = (
     "build.mill",
     "core/scala/testkit/test/src/nodal/internal/testkit/Increment36MlirCheck.scala",
     "core/scala/api/src/nodal/CandidateApi.scala",
-    "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",
     "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala",
     "core/compiler/include/nodal/Dialect/Nodal/TimeWaveform.h",
     "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td",

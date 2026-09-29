@@ -13,6 +13,11 @@ on:
       - 'core/scala/api/src/nodal/CandidateApi.scala'
       - 'core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala'
       - 'core/scala/api/src/nodal/ElaborationConstructionKernel.scala'
+      - 'core/scala/api/src/nodal/ConstructionRecords.scala'
+      - 'core/scala/api/src/nodal/ConstructionSession.scala'
+      - 'core/scala/api/src/nodal/ConstructionExpressionFacts.scala'
+      - 'core/scala/api/src/nodal/ConstructionInterfaceLayout.scala'
+      - 'core/scala/api/src/nodal/SemanticOriginKernel.scala'
       - 'core/scala/bridge/src/nodal/bridge/AnalogProceduralEvidence.scala'
       - 'core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala'
       - 'core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala'
@@ -22,9 +27,11 @@ on:
       - 'docs/implementation/increment33-analog-variables-procedural-assignment.md'
       - 'examples/continuousTimeApi/src/nodal/increment33fixture/**'
       - 'scripts/check_increment33.py'
+      - 'scripts/construction_source_inventory.py'
       - 'tests/compiler/fixtures/increment32/manifest.json'
       - 'tests/compiler/fixtures/increment33/**'
       - 'tests/compiler/test_increment33.py'
+      - 'tests/compiler/test_increment160_source_contract.py'
       - 'docs/roadmap/nodal-development-todo.md'
   push:
     branches:

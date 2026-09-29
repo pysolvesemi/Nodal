@@ -7,9 +7,16 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from construction_source_inventory import read_construction_sources
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = Path("tests/compiler/fixtures/increment32/manifest.json")
@@ -19,7 +26,6 @@ SCALA_RUNTIME = Path("core/scala/api/src/nodal/AnalogEquationRuntime.scala")
 NATIVE_RUNTIME = Path("core/native/include/nodal/AnalogEquationRuntime.h")
 CONTINUOUS_API = Path("core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala")
 CANDIDATE_API = Path("core/scala/api/src/nodal/CandidateApi.scala")
-CONSTRUCTION_KERNEL = Path("core/scala/api/src/nodal/ElaborationConstructionKernel.scala")
 ORIGIN_KERNEL = Path("core/scala/api/src/nodal/SemanticOriginKernel.scala")
 SCALA_BRIDGE = Path("core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala")
 REPRODUCIBILITY = Path("core/scala/bridge/src/nodal/bridge/ReproducibilityContract.scala")
@@ -98,7 +104,9 @@ def validate_files(root: Path) -> list[Problem]:
     native_runtime = read(root, NATIVE_RUNTIME, problems, "NODAL-INC32-005")
     continuous_api = read(root, CONTINUOUS_API, problems, "NODAL-INC32-037")
     candidate_api = read(root, CANDIDATE_API, problems, "NODAL-INC32-038")
-    construction_kernel = read(root, CONSTRUCTION_KERNEL, problems, "NODAL-INC32-039")
+    construction_kernel = read_construction_sources(
+        root, lambda relative: read(root, Path(relative), problems, "NODAL-INC32-039")
+    )
     origin_kernel = read(root, ORIGIN_KERNEL, problems, "NODAL-INC32-040")
     scala_bridge = read(root, SCALA_BRIDGE, problems, "NODAL-INC32-041")
     reproducibility = read(root, REPRODUCIBILITY, problems, "NODAL-INC32-042")

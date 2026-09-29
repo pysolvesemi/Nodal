@@ -21,7 +21,7 @@ CHECKER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECKER)
 
 
-REQUIRED = (
+REQUIRED = CHECKER.CONSTRUCTION_SOURCES + (
     ".github/workflows/increment-33-analog-procedural-assignment.yml",
     "scripts/nodal.py",
     "core/compiler/diagnostics-v0.1.json",
@@ -35,7 +35,6 @@ REQUIRED = (
     "core/scala/api/src/nodal/AnalogProceduralRuntime.scala",
     "core/scala/api/src/nodal/CandidateApi.scala",
     "core/scala/api/src/nodal/ContinuousTimeCandidateApi.scala",
-    "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",
     "core/scala/bridge/src/nodal/bridge/AnalogProceduralMlir.scala",
     "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala",
     "core/scala/testkit/test/src/nodal/AnalogProceduralConstructionTests.scala",
@@ -348,11 +347,16 @@ class Increment33ContractTests(unittest.TestCase):
     def test_recursive_dimension_mismatch_mutation_is_rejected(self) -> None:
         temporary, root = self.fixture()
         with temporary:
-            path = root / "core/scala/api/src/nodal/ElaborationConstructionKernel.scala"
+            path = root / "core/scala/api/src/nodal/ConstructionExpressionFacts.scala"
+            original = path.read_text(encoding="utf-8")
+            guard = (
+                "  def compatibleAdd(other: AnalogDimension): AnalogDimension =\n"
+                "    if isUnknown || other.isUnknown then AnalogDimension.Unknown\n"
+            )
+            self.assertEqual(original.count(guard), 1)
             path.write_text(
-                path.read_text(encoding="utf-8").replace(
-                    "  def compatibleAdd(other: AnalogDimension): AnalogDimension =\n"
-                    "    if isUnknown || other.isUnknown then AnalogDimension.Unknown\n",
+                original.replace(
+                    guard,
                     "  def compatibleAdd(other: AnalogDimension): AnalogDimension =\n"
                     "    if isUnknown then other\n",
                     1,
@@ -426,9 +430,11 @@ class Increment33ContractTests(unittest.TestCase):
     def test_comparison_operand_dimension_validation_mutation_is_rejected(self) -> None:
         temporary, root = self.fixture()
         with temporary:
-            path = root / "core/scala/api/src/nodal/ElaborationConstructionKernel.scala"
+            path = root / "core/scala/api/src/nodal/ConstructionExpressionFacts.scala"
+            original = path.read_text(encoding="utf-8")
+            self.assertEqual(original.count("inferBooleanExpressionDimension(expression)"), 1)
             path.write_text(
-                path.read_text(encoding="utf-8").replace(
+                original.replace(
                     "inferBooleanExpressionDimension(expression)",
                     "AnalogDimension.Dimensionless",
                     1,

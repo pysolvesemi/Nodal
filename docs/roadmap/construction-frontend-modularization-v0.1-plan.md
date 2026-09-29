@@ -2,8 +2,12 @@
 
 **Revision:** 0.1
 **Approved scheduling and scope:** 2026-09-24
-**Status:** Planned; implementation, measurements and acceptance remain open.
+**Status:** In progress from 2026-09-29; implementation, measurements and acceptance remain open.
 **Track and identity:** Foundation Increment 160 (F-160).
+
+The current [readiness and implementation record](../implementation/increment160-readiness.md)
+pins the accepted F-042 baseline, selected internal boundaries, all child
+applicability, differential protocol and predeclared measurement budgets.
 
 ## Authority and execution order
 

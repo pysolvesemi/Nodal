@@ -8,8 +8,18 @@ import json
 import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from construction_source_inventory import (
+    missing_construction_source_exclusions,
+    read_construction_sources,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -111,11 +121,9 @@ def validate_increment18_successor_state(
 
 def validate_files(root: Path = ROOT) -> list[Problem]:
     problems: list[Problem] = []
-    kernel = text(
+    kernel = read_construction_sources(
         root,
-        "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",
-        problems,
-        "NODAL-INC17-001",
+        lambda relative: text(root, relative, problems, "NODAL-INC17-001"),
     )
     semantic = text(
         root,
@@ -210,6 +218,14 @@ def validate_files(root: Path = ROOT) -> list[Problem]:
         "NODAL-INC17-015",
         "construction-kernel integration",
     )
+    missing_exclusions = missing_construction_source_exclusions(semantic)
+    if missing_exclusions:
+        problems.append(
+            Problem(
+                "NODAL-INC17-041",
+                "construction source frames are not excluded: " + ", ".join(missing_exclusions),
+            )
+        )
     require(
         semantic,
         (

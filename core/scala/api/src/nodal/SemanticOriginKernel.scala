@@ -141,6 +141,10 @@ private[nodal] final class SemanticOriginBuilder:
 
   private val internalSourceFiles = Set(
     "ElaborationConstructionKernel.scala",
+    "ConstructionRecords.scala",
+    "ConstructionSession.scala",
+    "ConstructionExpressionFacts.scala",
+    "ConstructionInterfaceLayout.scala",
     "AnalogUserFunctionRuntime.scala",
     "SemanticOriginKernel.scala"
   )

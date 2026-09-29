@@ -21,10 +21,9 @@ CHECKER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECKER)
 
 
-REQUIRED = (
+REQUIRED = CHECKER.CONSTRUCTION_SOURCES + (
     ".github/workflows/increment-35-differential-integral-operators.yml",
     "core/scala/api/src/nodal/CandidateApi.scala",
-    "core/scala/api/src/nodal/ElaborationConstructionKernel.scala",
     "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala",
     "core/scala/testkit/test/src/nodal/DifferentialIntegralConstructionTests.scala",
     "core/scala/testkit/test/src/nodal/internal/testkit/DifferentialIntegralBridgeTests.scala",

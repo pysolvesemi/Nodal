@@ -1,0 +1,101 @@
+{
+  "schema": 1,
+  "phase": "targeted",
+  "repository": "pysolvesemi/Nodal",
+  "repository_id": 1340301335,
+  "pull_request": 137,
+  "base": {
+    "ref": "dev",
+    "sha": "cafd52e5b7ea0d63b1eb503d281cf801bedd6808",
+    "tree": "f14dc1e38e08c07243fda52e61378b95c7bd19d9"
+  },
+  "candidate": {
+    "ref": "increment/160-construction-frontend-modularization",
+    "sha": "82e97876854785abee7586170ff7c2fc69a79cfc",
+    "tree": "a6932a84dfa27dbfc0117a1a54c41892998ec7e4"
+  },
+  "default_branch": {
+    "ref": "main",
+    "sha": "73ff38315628783abd926909adc47f1d551637f6",
+    "tree": "075d8fe1e0560deceecc4691083a6a3602ccee7d"
+  },
+  "controller": {
+    "ref": "ci-control/f160-pr137-82e978768547",
+    "script_sha256": "df26c9e25aa25a7ba8911c4541262a592d8c6f15d4fec7de56bd7490e6bcd7c1",
+    "workflow_sha256": "1057c1b7b7beb0d75d60d4845c4ef1592f64b2f2d032c7cbe071e8eb4de5ddfa"
+  },
+  "workflows": [
+    {
+      "id": 338626156,
+      "path": ".github/workflows/ci.yml",
+      "sha256": "8e60508454a7d56af871e85cf92e54c608240f6fb156967563d90ac16dc12a20",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 343773940,
+      "path": ".github/workflows/increment-26-reproducibility-contract.yml",
+      "sha256": "cbee6bd628631d6b7f0fcdd69ba2c0dd25663a4b2dd43e6fc715f47a8e55a26c",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 350704824,
+      "path": ".github/workflows/increment-36-time-waveform-operators.yml",
+      "sha256": "a812d0e0b4b29330f05f14273b80b3d7da67850255ba2d2214351800beb66006",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 350854514,
+      "path": ".github/workflows/increment-37-analog-events.yml",
+      "sha256": "d1688942b13fa071ff280a84dc67533942cb4b62834e9ec2c762e97903cadd8f",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 351939507,
+      "path": ".github/workflows/increment-38-mathematical-functions.yml",
+      "sha256": "dd20eb590e8b709e7686948f39055ae2c24a39293586602349778277feb883c0",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 352225076,
+      "path": ".github/workflows/increment-39-noise-operators.yml",
+      "sha256": "38deca0f115878ccadee1738dffe483187c32f8b6f76044b27754e7e6b35041e",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 352544947,
+      "path": ".github/workflows/increment-40-transfer-operators.yml",
+      "sha256": "3bbce9f616d5a8d90d01386a18f0199ec3d4df976e2c52e1ab1e33944ee30597",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 352989730,
+      "path": ".github/workflows/increment-41-analog-functions.yml",
+      "sha256": "0cfecfd99f61cdc5752be18bf3fb996a445b38d597c3ab5a93f96c43fef56b07",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    }
+  ]
+}

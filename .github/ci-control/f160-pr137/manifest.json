@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "phase": "targeted",
+  "repository": "pysolvesemi/Nodal",
+  "repository_id": 1340301335,
+  "pull_request": 137,
+  "base": {
+    "ref": "dev",
+    "sha": "cafd52e5b7ea0d63b1eb503d281cf801bedd6808",
+    "tree": "f14dc1e38e08c07243fda52e61378b95c7bd19d9"
+  },
+  "candidate": {
+    "ref": "increment/160-construction-frontend-modularization",
+    "sha": "93fc152743ea00998583ef3ac701a0b2f2e2553e",
+    "tree": "fccc0b2510b4f88147e23eab44da6d0ee8cf24d7"
+  },
+  "default_branch": {
+    "ref": "main",
+    "sha": "73ff38315628783abd926909adc47f1d551637f6",
+    "tree": "075d8fe1e0560deceecc4691083a6a3602ccee7d"
+  },
+  "controller": {
+    "ref": "ci-control/f160-pr137-93fc152743ea",
+    "script_sha256": "4d541fc27235dd3bebf9e1c0350de686f47a1aa6cbeb8e5fb153d15609872e3c",
+    "workflow_sha256": "8e178f051fdf4ac551123d2f92bac14afb543415386b24351a36c70908b70de9"
+  },
+  "workflows": [
+    {
+      "id": 338626156,
+      "path": ".github/workflows/ci.yml",
+      "sha256": "8e60508454a7d56af871e85cf92e54c608240f6fb156967563d90ac16dc12a20",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    }
+  ],
+  "prior_failure": {
+    "run_id": 36521551190,
+    "workflow_id": 338626156,
+    "workflow_path": ".github/workflows/ci.yml",
+    "run_attempt": 1,
+    "head_sha": "82e97876854785abee7586170ff7c2fc69a79cfc",
+    "tree_sha": "a6932a84dfa27dbfc0117a1a54c41892998ec7e4",
+    "head_branch": "increment/160-construction-frontend-modularization",
+    "event": "workflow_dispatch",
+    "status": "completed",
+    "conclusion": "failure",
+    "job": {
+      "id": 109255317804,
+      "name": "native",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "number": 6,
+          "name": "Configure, build, lint, and test native core",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "number": 7,
+          "name": "Compare Foundation 160 construction with the accepted baseline",
+          "status": "completed",
+          "conclusion": "failure"
+        },
+        {
+          "number": 8,
+          "name": "Retain Foundation 160 comparison evidence",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    "artifact": {
+      "id": 11013213997,
+      "name": "foundation160-parity-82e97876854785abee7586170ff7c2fc69a79cfc-1",
+      "size_in_bytes": 33392,
+      "sha256": "5d5986bd438a91aa1478f09e7c447ff49b856f938169ffd4be0afa1c39e6d6c1"
+    }
+  }
+}

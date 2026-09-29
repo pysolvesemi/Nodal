@@ -1,0 +1,48 @@
+name: Foundation 160 PR137 targeted dispatcher
+on:
+  push:
+    branches:
+      - 'ci-control/f160-pr137-9b1b53987b23'
+    paths:
+      - '.github/workflows/f160-pr137-dispatch.yml'
+      - '.github/ci-control/f160-pr137/dispatch.py'
+      - '.github/ci-control/f160-pr137/manifest.json'
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: 'f160-pr137-dispatch-9b1b53987b23bf3c79d82ffc41481b86751ee4fd'
+  cancel-in-progress: false
+jobs:
+  dispatch:
+    if: github.event_name == 'push' && github.repository == 'pysolvesemi/Nodal' && github.ref == 'refs/heads/ci-control/f160-pr137-9b1b53987b23'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out only the reviewed controller at the pushed commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/workflows/f160-pr137-dispatch.yml
+            /.github/ci-control/f160-pr137/
+      - name: Validate pins, retain existing runs, and dispatch the affected set serially
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: >-
+          python3 .github/ci-control/f160-pr137/dispatch.py
+          --manifest .github/ci-control/f160-pr137/manifest.json
+          --ledger "$RUNNER_TEMP/f160-pr137-dispatch-ledger"
+          --execute
+      - name: Preserve the intent and observation ledger
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: f160-pr137-dispatch-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/f160-pr137-dispatch-ledger/
+          if-no-files-found: warn
+          retention-days: 30

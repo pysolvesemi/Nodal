@@ -1,0 +1,164 @@
+{
+  "schema": 1,
+  "phase": "targeted",
+  "repository": "pysolvesemi/Nodal",
+  "repository_id": 1340301335,
+  "pull_request": 137,
+  "base": {
+    "ref": "dev",
+    "sha": "60d56be8dfcd0835ef6ddfa85cf9189dfdb1bb68",
+    "tree": "daba8506744845bb59aefd8d3442477c0809bfea"
+  },
+  "candidate": {
+    "ref": "increment/160-construction-frontend-modularization",
+    "sha": "9b1b53987b23bf3c79d82ffc41481b86751ee4fd",
+    "tree": "62d425c5954feeb13e661d86c78f90adf5959b1a"
+  },
+  "default_branch": {
+    "ref": "main",
+    "sha": "73ff38315628783abd926909adc47f1d551637f6",
+    "tree": "075d8fe1e0560deceecc4691083a6a3602ccee7d"
+  },
+  "controller": {
+    "ref": "ci-control/f160-pr137-9b1b53987b23",
+    "script_sha256": "e332f13e8b07177543af4bcdd4570fb9ddfd56fccbae98f6d3ed3a1ccb5ace45",
+    "workflow_sha256": "01f126e8de821c45c29befe50f0b2a827e37a3cf1aae337b847a2208d4341535"
+  },
+  "workflows": [
+    {
+      "id": 338626156,
+      "path": ".github/workflows/ci.yml",
+      "sha256": "8e60508454a7d56af871e85cf92e54c608240f6fb156967563d90ac16dc12a20",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 341491170,
+      "path": ".github/workflows/increment-18-mlir-dialect-skeleton.yml",
+      "sha256": "9edac479a5e552298382e85be06e5370cebd6dff1aa2bb31e8cf324c275d3884",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 341834362,
+      "path": ".github/workflows/increment-19-core-mlir-model.yml",
+      "sha256": "045bafab7b9774fd294b7aac03fc6c50021c8ec81f12823ee1aa3d66b1545c3a",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 342056804,
+      "path": ".github/workflows/increment-20-scala-mlir-bridge.yml",
+      "sha256": "72589312a568704f6a68a008cd5ea67af1b6ff4c1ff1817aa3c6180d8099fc4e",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 342183625,
+      "path": ".github/workflows/increment-21-native-semantic-pipeline.yml",
+      "sha256": "3a26ba42e2140b3f8802a7dec8572e01f97ba2fd9fb87939beef6aa42b125931",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 342322970,
+      "path": ".github/workflows/increment-22-cross-layer-diagnostics.yml",
+      "sha256": "ab2e6d0e6bcc8b10ad69bc88b89b2398090346b7c13c932b3fa231bc93d53cbf",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 342865392,
+      "path": ".github/workflows/increment-23-backend-framework.yml",
+      "sha256": "6451dee023216644c33748ad149d4d636a95ab5c7fe5c0606d07c1eb4f812087",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 343459476,
+      "path": ".github/workflows/increment-24-minimal-analog-ir.yml",
+      "sha256": "bf6e67058101adc62212906ba1ef5b9cbe82ecd19afac95c78c6f12476fe02dc",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 343681746,
+      "path": ".github/workflows/increment-25-rc-filter-vertical-slice.yml",
+      "sha256": "0d48b24e041611b264994036f7708aa38984dd08769257d249498ec846fc6f32",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 343773940,
+      "path": ".github/workflows/increment-26-reproducibility-contract.yml",
+      "sha256": "cbee6bd628631d6b7f0fcdd69ba2c0dd25663a4b2dd43e6fc715f47a8e55a26c",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 343872225,
+      "path": ".github/workflows/increment-27-natures-disciplines.yml",
+      "sha256": "2b69512bd138e5b4f082f9a3982b81db438e216b4fd73b58f4d077ee799eea99",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 344284403,
+      "path": ".github/workflows/increment-28-electrical-connectivity.yml",
+      "sha256": "a70851c22b0f8c2d104a3a5500998e08f20f48bd3560794a2ae831516f513c8e",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 344342524,
+      "path": ".github/workflows/increment-29-parameters-units.yml",
+      "sha256": "f69d4c5e57791839e3654292d90c6cbea92760797914d93c564abe04b75f16b4",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 344526606,
+      "path": ".github/workflows/increment-30-analog-numeric-types.yml",
+      "sha256": "05439bb368ec193557cc165526e0fbc0901c521a6fafc1dd9b0636fd5ee7b84c",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    },
+    {
+      "id": 344854895,
+      "path": ".github/workflows/increment-31-potential-flow-access.yml",
+      "sha256": "2bda9d3cee71107c554f300f91c1590f71b2c33417194f9fa0aa64d259207891",
+      "inputs": {},
+      "payload": {
+        "ref": "increment/160-construction-frontend-modularization"
+      }
+    }
+  ]
+}

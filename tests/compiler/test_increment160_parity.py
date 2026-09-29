@@ -78,6 +78,36 @@ class ExperimentIntegrityTests(unittest.TestCase):
         self.assertEqual(result["status"], "noisy")
         self.assertEqual(result["baseline_samples"], [90, 100, 110])
 
+    def test_overlapping_allocation_plateaus_are_noisy_but_stable_regressions_remain_regressions(self):
+        budget = {"relative": 0.15, "absolute": 65536}
+        baseline = [86442912, 86442912, 86442984, 86442984, 86442984,
+                    86442856, 86443072, 86442984, 86443144, 86442984,
+                    100281104, 100281264, 100281264, 100281176, 100281120]
+        candidate = [100281048, 100281264, 100281336, 100281176, 100281120,
+                     100182464, 100182464, 100182536, 100182536, 100182536,
+                     86574816, 86574600, 86574728, 86574728, 86574888]
+        self.assertEqual(PARITY.assess_budget(
+            baseline, candidate, budget, overlapping_samples_are_noisy=True)["status"], "noisy")
+        self.assertEqual(PARITY.assess_budget(
+            [69711736, 69711680, 69711896, 69711808, 69711752] * 3,
+            [81099896, 81099736, 81099680, 81099752, 81099968] * 3, budget,
+            overlapping_samples_are_noisy=True)["status"], "regression")
+
+    def test_retry_scope_requires_noise_and_retains_every_nonpassing_case(self):
+        measurements = [
+            {"case": "wide-128", "phase": "fullRecordSerialization",
+             "metric": "allocatedBytes", "status": "regression"},
+            {"case": "symbolic-128", "phase": "process", "metric": "peak_rss_bytes", "status": "noisy"},
+            {"case": "tiny", "phase": "construction", "metric": "wallNanos", "status": "pass"},
+        ]
+        scope = PARITY.retry_scope({"measurements": measurements})
+        self.assertEqual(scope["case_ids"], ["symbolic-128", "wide-128"])
+        self.assertFalse(scope["assess_stages"])
+        self.assertIsNone(PARITY.retry_scope({"measurements": [measurements[0]]}))
+        stages = measurements + [{"case": "paired-setup", "phase": "empty-jvm-startup",
+                                   "metric": "peak_rss_bytes", "status": "noisy"}]
+        self.assertTrue(PARITY.retry_scope({"measurements": stages})["assess_stages"])
+
     def test_artifacts_preserve_order_paths_and_exact_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
             left, right = Path(directory) / "left", Path(directory) / "right"
@@ -158,6 +188,14 @@ class ExperimentIntegrityTests(unittest.TestCase):
             stages = [{"pair": pair, "role": role, "wall_nanos": 100, "peak_rss_bytes": 1024}
                       for pair in range(3) for role in ("baseline", "candidate")]
             self.assertEqual(PARITY.assess_trials(trials, experiment, out, stages, stages)["status"], "pass")
+            selected = {experiment["cases"][0]["id"]}
+            selected_trials = [trial for trial in trials if trial["case"] in selected]
+            scoped = PARITY.assess_trials(selected_trials, experiment, out, case_ids=selected,
+                                          assess_stages=False)
+            self.assertEqual(scoped["status"], "pass")
+            with self.assertRaises(PARITY.EvidenceError):
+                PARITY.assess_trials(selected_trials[:-1], experiment, out, case_ids=selected,
+                                     assess_stages=False)
             for compile_trials, startup_trials in ((stages[:-1], stages), (stages, stages[:-1])):
                 with self.assertRaises(PARITY.EvidenceError):
                     PARITY.assess_trials(trials, experiment, out, compile_trials, startup_trials)

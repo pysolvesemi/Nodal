@@ -219,6 +219,18 @@ noise into an automatic pass. An unexplained persistent material regression
 remains open for repair or an explicit justified review decision. The original
 samples and predeclared budgets remain retained.
 
+Thread-allocation samples can also expose two discrete JIT plateaus while the
+retained artifacts and inputs remain identical. For that metric only, an
+over-budget median whose actual baseline and candidate sample ranges overlap is
+noisy rather than a stable regression. Separated ranges remain a regression.
+If an epoch contains noise, its single permitted repeat covers every
+non-passing case (including a regression observed beside the noise), or every
+non-passing setup stage. The repeat retains the same three role-ordered pairs,
+fresh compilation/startup provenance and eight iterations for each selected
+case. It does not repeat already-passing cases, alter a limit or omit anything
+from the mandatory initial 55-case epoch. A repeated noisy result is incomplete
+and a repeated regression fails; only a passing confirmation can qualify.
+
 The operational harness smoke took about 224 seconds for one 55-case pass on
 the local host. This is a capacity observation, not a before/after performance
 result: six such passes suggest about 22.4 minutes per epoch, or 44.8 minutes
@@ -230,6 +242,28 @@ build commands consume its remaining time and fail if it expires. Only the
 F-160 branch/PR receives a 115-minute outer job allowance for those two bounded
 phases and artifact handling. Other branches retain the original 50-minute
 outer limit. No workload, per-command timeout or regression budget is relaxed.
+
+### Full-CI measurement diagnosis and bounded repair
+
+The first complete final-tree Core executions on 2026-09-29 retained all 330
+case trials and exact artifacts, then failed only in the comparison assessment:
+[push run 36530686521](https://github.com/pysolvesemi/Nodal/actions/runs/36530686521)
+reported one overlapping allocation-plateau exceedance for `symbolic-128`;
+[PR run 36530690359](https://github.com/pysolvesemi/Nodal/actions/runs/36530690359)
+reported a separated allocation exceedance for `wide-128` beside a noisy
+`symbolic-128` process-RSS result. Both runs had already passed the unchanged
+native build, lint, native tests, predecessor witnesses, contracts and Scala
+suites. The prior exact-tree targeted Core execution had the same affected
+allocation measurements within budget. Across the three executions, baseline
+and candidate roles occupied both allocation plateaus; no source, classpath,
+provider, normalized IR, Verilog-A or diagnostic artifact differed.
+
+The repair above therefore preserves each failed record and the fixed
+experiment definition, recognizes only observed overlapping allocation samples
+as noise, and makes the already-authorized repeat case-scoped so it fits the
+unchanged 60-minute comparison deadline. It does not turn either historical
+failure into acceptance evidence. The changed runner and controls require fresh
+review, affected Core targeting and a new complete final-head CI matrix.
 
 ## Publication, qualification and continuation
 

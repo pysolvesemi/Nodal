@@ -294,7 +294,7 @@ def compare_artifacts(first: Path, second: Path, names: list[str]) -> list[dict]
 
 
 def assess_budget(before: list[float], after: list[float], budget: dict,
-                  noise_multiplier: int = 3) -> dict:
+                  noise_multiplier: int = 3, overlapping_samples_are_noisy: bool = False) -> dict:
     if not before or not after or any(value is None or type(value) not in (int, float) or
                                      not math.isfinite(value) or value < 0
                                      for value in before + after):
@@ -306,6 +306,13 @@ def assess_budget(before: list[float], after: list[float], budget: dict,
     status = "pass"
     if b > limit:
         status = "noisy" if b - limit <= noise_multiplier * max(mad_a, mad_b) else "regression"
+        # Thread allocation counters can occupy distinct JIT plateaus.  Treat an
+        # over-budget median as noisy only when the retained role samples
+        # actually overlap; a separated, stable candidate increase remains a
+        # regression.  Noise never passes: it permits the single bounded repeat.
+        if status == "regression" and overlapping_samples_are_noisy and \
+                max(before) >= min(after) and max(after) >= min(before):
+            status = "noisy"
     return {"status": status, "baseline_median": a, "candidate_median": b,
             "baseline_mad": mad_a, "candidate_mad": mad_b, "limit": limit,
             "baseline_samples": before, "candidate_samples": after}
@@ -686,8 +693,12 @@ class ExperimentRunner:
                                 [entry["path"] for entry in build["classpath"]]), experiment["main_class"]]
 
     def execute_trials(self, epoch: int, roots: dict, builds: dict, native_env: dict,
-                       tools: dict, experiment: dict) -> list[dict]:
+                       tools: dict, experiment: dict, case_ids: set[str] | None = None) -> list[dict]:
         trials = []
+        cases = experiment["cases"] if case_ids is None else [
+            case for case in experiment["cases"] if case["id"] in case_ids]
+        if case_ids is not None:
+            require({case["id"] for case in cases} == case_ids, "retry requested an unknown case")
         for pair, order in enumerate(experiment["protocol"]["pair_order"]):
             prefixes = {}
             for role in order:
@@ -702,7 +713,7 @@ class ExperimentRunner:
                     "epoch": epoch, "pair": pair, "role": role, "wall_nanos": startup["wall_nanos"],
                     "peak_rss_bytes": startup.get("peak_rss_bytes"), "jvm_uptime_millis": int(sentinel.group(1))})
                 self.save()
-            for case in experiment["cases"]:
+            for case in cases:
                 for role in order:
                     prefix = prefixes[role]
                     label = f"e{epoch}-p{pair}-{role}-{case['id']}"
@@ -738,13 +749,18 @@ class ExperimentRunner:
 
 
 def assess_trials(trials: list[dict], experiment: dict, out: Path,
-                  compile_trials: list[dict] | None = None, startup_trials: list[dict] | None = None) -> dict:
+                  compile_trials: list[dict] | None = None, startup_trials: list[dict] | None = None,
+                  case_ids: set[str] | None = None, assess_stages: bool = True) -> dict:
+    cases = experiment["cases"] if case_ids is None else [
+        case for case in experiment["cases"] if case["id"] in case_ids]
+    if case_ids is not None:
+        require({case["id"] for case in cases} == case_ids, "assessment requested an unknown case")
     expected = {(pair, role, case["id"]) for pair in range(3)
-                for role in ("baseline", "candidate") for case in experiment["cases"]}
+                for role in ("baseline", "candidate") for case in cases}
     observed = [(trial["pair"], trial["role"], trial["case"]) for trial in trials]
     require(set(observed) == expected and len(observed) == len(expected), "trial inventory is incomplete")
     comparisons, measurements = [], []
-    for case in experiment["cases"]:
+    for case in cases:
         group = {role: [trial for trial in trials if trial["case"] == case["id"] and trial["role"] == role]
                  for role in ("baseline", "candidate")}
         reference = out / group["baseline"][0]["directory"]
@@ -763,7 +779,9 @@ def assess_trials(trials: list[dict], experiment: dict, out: Path,
                     for role, runs in group.items():
                         samples[role] = [sample[phase][metric] for trial in runs
                                          for sample in trial["probe"]["samples"] if sample["kind"] == kind]
-                    result = assess_budget(samples["baseline"], samples["candidate"], experiment["budgets"][budget])
+                    result = assess_budget(samples["baseline"], samples["candidate"],
+                                           experiment["budgets"][budget],
+                                           overlapping_samples_are_noisy=metric == "allocatedBytes")
                     measurements.append({"case": case["id"], "kind": kind, "phase": phase,
                                          "metric": metric, **result})
         for metric, budget in (("peak_rss_bytes", "peak_rss_bytes"),
@@ -777,22 +795,39 @@ def assess_trials(trials: list[dict], experiment: dict, out: Path,
                                        [trial["native"].get(metric) for trial in group["candidate"]],
                                        experiment["budgets"]["cold_wall_nanos"])
                 measurements.append({"case": case["id"], "phase": "native", "metric": metric, **result})
-    expected_stages = {(pair, role) for pair in range(3) for role in ("baseline", "candidate")}
-    for phase, records in (("clean-fixture-compilation", compile_trials), ("empty-jvm-startup", startup_trials)):
-        records = records or []
-        observed_stages = [(record["pair"], record["role"]) for record in records]
-        require(set(observed_stages) == expected_stages and len(observed_stages) == len(expected_stages),
-                f"{phase} measurement inventory is incomplete")
-        for metric, budget in (("wall_nanos", "cold_wall_nanos"), ("peak_rss_bytes", "peak_rss_bytes")):
-            result = assess_budget([record.get(metric) for record in records if record["role"] == "baseline"],
-                                   [record.get(metric) for record in records if record["role"] == "candidate"],
-                                   experiment["budgets"][budget])
-            measurements.append({"case": "paired-setup", "phase": phase, "metric": metric, **result})
+    if assess_stages:
+        expected_stages = {(pair, role) for pair in range(3) for role in ("baseline", "candidate")}
+        for phase, records in (("clean-fixture-compilation", compile_trials),
+                               ("empty-jvm-startup", startup_trials)):
+            records = records or []
+            observed_stages = [(record["pair"], record["role"]) for record in records]
+            require(set(observed_stages) == expected_stages and len(observed_stages) == len(expected_stages),
+                    f"{phase} measurement inventory is incomplete")
+            for metric, budget in (("wall_nanos", "cold_wall_nanos"),
+                                   ("peak_rss_bytes", "peak_rss_bytes")):
+                result = assess_budget([record.get(metric) for record in records if record["role"] == "baseline"],
+                                       [record.get(metric) for record in records if record["role"] == "candidate"],
+                                       experiment["budgets"][budget])
+                measurements.append({"case": "paired-setup", "phase": phase, "metric": metric, **result})
     statuses = {entry["status"] for entry in measurements}
     status = "incomplete" if "incomplete" in statuses else "regression" if "regression" in statuses else \
              "noisy" if "noisy" in statuses else "pass"
     require(bool(measurements), "no before/after measurements were assessed")
     return {"status": status, "comparisons": comparisons, "measurements": measurements}
+
+
+def retry_scope(assessment: dict) -> dict | None:
+    nonpassing = [entry for entry in assessment["measurements"] if entry["status"] != "pass"]
+    if not any(entry["status"] == "noisy" for entry in nonpassing):
+        return None
+    return {
+        "case_ids": sorted({entry["case"] for entry in nonpassing if entry["case"] != "paired-setup"}),
+        "assess_stages": any(entry["case"] == "paired-setup" for entry in nonpassing),
+        "trigger_measurements": [
+            {key: entry[key] for key in ("case", "phase", "metric", "status")}
+            for entry in nonpassing
+        ],
+    }
 
 
 def run(args) -> int:
@@ -865,15 +900,21 @@ def run(args) -> int:
         runner.report["status"] = "running"
         runner.save()
         assessments = []
+        scope = None
         for epoch in range(1 + experiment["protocol"]["max_noisy_repeats"]):
-            trials = runner.execute_trials(epoch, roots, builds, native_env, tools, experiment)
+            case_ids = None if scope is None else set(scope["case_ids"])
+            trials = runner.execute_trials(epoch, roots, builds, native_env, tools, experiment, case_ids)
             compile_trials = [record for record in runner.report["compile_trials"] if record["epoch"] == epoch]
             startup_trials = [record for record in runner.report["startup_trials"] if record["epoch"] == epoch]
-            assessment = assess_trials(trials, experiment, out, compile_trials, startup_trials)
+            assessment = assess_trials(trials, experiment, out, compile_trials, startup_trials,
+                                       case_ids, True if scope is None else scope["assess_stages"])
+            assessment["scope"] = {"kind": "full"} if scope is None else {
+                "kind": "bounded-noise-repeat", **scope}
             assessments.append(assessment)
             runner.report["assessments"] = assessments
             runner.save()
-            if assessment["status"] != "noisy":
+            scope = retry_scope(assessment)
+            if scope is None:
                 break
         for role, root in roots.items():
             require(source_identity(root) == identities[role], "source identity changed during experiment")

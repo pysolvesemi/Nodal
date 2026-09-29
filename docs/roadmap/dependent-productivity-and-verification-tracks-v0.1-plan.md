@@ -1,8 +1,8 @@
 # Foundation-gated FPGA and verification tracks v0.1 plan
 
 **Status:** Normative roadmap target
-**Revision:** 0.5
-**Updated:** 2026-09-05
+**Revision:** 0.6
+**Updated:** 2026-09-29
 **Foundation:** the main Nodal incremental roadmap
 **Dependent tracks:** FPGA Productivity, Digital Verification, Analog/Mixed-Signal Verification
 **Verification architecture:** [ADR 0023](../architecture/0023-unified-hvl-native-sim-uvm-uvmms-architecture.md)
@@ -69,21 +69,22 @@ The detailed capability, dependency and independent analog/mixed-signal release 
 ## Foundation additions
 
 - [ ] **Foundation Increment 143 — Comment/documentation IR architecture and public API gate**
-  - Freeze automatic capture policy for ScalaDoc and unambiguous leading Scala comments plus an explicit target-neutral comment/documentation API for guaranteed placement.
+  - Freeze automatic capture policy for ScalaDoc and unambiguous leading Scala comments plus a lightweight target-neutral explicit API: prefer `@doc("...")` for declarations and `target.comment(text)` for programmatic attachment. Validate exact signatures, text rules, targets and placement in 143 using the [lightweight comment frontend contract](#lightweight-comment-frontend).
   - Define `Comment`/documentation IR with stable ID, kind, text, source span, semantic anchor, intended audience, placement/propagation policy, and original-versus-explicit provenance.
   - Separate ordinary comments from typed synthesis directives, lint waivers, attributes, pragmas, simulation exclusions, and tool commands so preserved user text cannot accidentally change hardware behavior.
   - Define semantic-design hash, presentation/comment hash, and final-artifact hash behavior; comment-only changes must not invalidate logic-equivalence evidence.
   - Define propagation through inlining, elimination, hierarchy/generate expansion, source maps, orphan-comment reporting, generated-instance duplication limits, and output profiles.
+  - Define literal/constant annotation versus computed API text, aliases/helper ownership, deterministic multiline/duplicate/precedence handling and optional region semantics. Require single evaluation, precise target types, preserved naming and no comment-induced hardware materialization.
 
 - [ ] **Foundation Increment 144 — Scala source-comment capture and Comment IR propagation**
   - Implement Scala 3 source-position/comment extraction for module/interface/port/parameter/state/memory/instance/generate/analog/constraint/verification declarations where association is unambiguous.
-  - Implement the explicit comment/documentation API, stable semantic anchors, deterministic ordering, transformation propagation, source correlation, and orphan diagnostics.
-  - Add negative tests for accidental directive interpretation, ambiguous ownership, eliminated anchors, and nondeterministic macro/source expansion.
+  - Implement accepted automatic capture, `@doc` metadata and `.comment` syntax through one comment attachment operation with stable semantic anchors, deterministic ordering, transformation propagation, source correlation, original-versus-explicit provenance and orphan diagnostics. Reuse existing Scala 3 frontend integration; any internal `addComment` or public alias shares this path.
+  - Add negative tests for accidental directive interpretation, ambiguous ownership, eliminated anchors, and nondeterministic macro/source expansion. Add focused source-form/IR parity, literal/computed/multiline text, duplicate, alias/helper, single-evaluation, precise-type and naming-preservation fixtures; 145 owns generated-HDL parity.
 
 - [ ] **Foundation Increment 145 — Verilog-family comment and documentation lowering**
-  - Emit deterministic comments for portable Verilog, SystemVerilog, Verilog-A, and Verilog-AMS from the same Comment IR.
+  - Emit deterministic comments for supported portable Verilog, Verilog-A, Verilog-AMS and capability-gated SystemVerilog from the same Comment IR, sharing each backend's renderer across the accepted frontend forms.
   - Support module/interface/port/parameter/signal/state/instance/generate/process/analog-island/node/branch/equation/contribution/event/constraint anchors where the target has a legal stable placement.
-  - Generate documentation/source-correlation artifacts and comment mapping manifests; verify that comment-only changes do not alter semantic HDL hashes.
+  - Generate documentation/source-correlation artifacts and comment mapping manifests; verify that comment-only changes do not alter semantic HDL hashes. Retain matched automatic/annotation/method source examples with actual output, multiline/duplicate/orphan coverage and parsed semantic parity; preserve differing provenance.
   - Keep vendor directives and constraints typed and separate from ordinary emitted comments.
 
 - [ ] **Foundation Increment 146 — FPGA productivity architecture readiness**
@@ -136,6 +137,115 @@ The detailed capability, dependency and independent analog/mixed-signal release 
   - Make Icarus the required event-driven reference for portable Verilog testbenches and Verilator a separately qualified subset.
   - Distinguish full Verilog-AMS testbench source generation from the practical open AMS harness based on Verilog-A/OSDI, SPICE/XSPICE, and digital co-simulation adapters. Open-source Verilog-AMS execution is enabled only after exact capability conformance.
   - Do not implement Verilog/Verilog-AMS testbench generation, replay lowering, simulator runners, open AMS co-simulation, UVM/UVM-MS generation, or verification libraries in Foundation.
+
+## Lightweight comment frontend
+
+The preferred direction for Foundation 143-145 is automatic source-comment capture,
+`@doc("...")` for explicit declaration documentation, and `target.comment(text)`
+for programmatic attachment. Increment 143 still owns compile-positive/negative
+evaluation and the final public signatures, supported targets and placement
+contract; these examples are roadmap candidates, not implemented API or generated
+HDL evidence. Progress remains in the main Foundation checklist.
+
+### Everyday syntax
+
+| Form | Intended use | Attachment |
+| --- | --- | --- |
+| ScalaDoc `/** ... */` | Normal declaration documentation, including multiline descriptions. | The unambiguous documented declaration. |
+| Leading `// ...` | Short source comments under the capture policy. | The unambiguous following declaration in the same relevant source scope. |
+| `@doc("...")` | Explicit declaration documentation with literal or compile-time-constant text. | The annotated declaration's semantic anchor. |
+| `target.comment(text)` | Helper/generator descriptions computed during elaboration. | The explicitly supplied supported target. |
+
+These are alternative declarations inside a `Module` body:
+
+```scala
+/** Input payload */
+val data = in(Bits(32))
+```
+
+```scala
+@doc("Input payload")
+val data = in(Bits(32))
+```
+
+```scala
+val data = in(Bits(32))
+data.comment("Input payload")
+```
+
+The frontend may lower the annotation to the same attachment operation as the
+method call, retaining the original declaration's binder and source location.
+Support fluent `in(Bits(32)).comment("Input payload")` only with the same target
+identity and precise type as the unannotated construction.
+
+For computed text, a Scala elaboration value can be interpolated explicitly:
+
+```scala
+val laneIndex = 3
+val data = in(Bits(32))
+data.comment(s"Input payload for lane $laneIndex")
+```
+
+Automatic comments remain literal text: `$laneIndex` in a source comment is not
+interpolated. The constant-text rule for `@doc` is a Nodal API contract to validate
+in 143. `.comment` evaluates its string during elaboration; interpolating a
+hardware expression must not be presented as observing its simulated value.
+Any future symbolic-reference formatting needs an explicit metadata contract
+and must preserve overridable HDL parameter identity rather than substitute its
+default as an immutable hardware fact.
+
+### Shared attachment and preservation rules
+
+- Use one canonical Comment IR attachment operation. Internal `addComment` or
+  `attachComment` spellings and any approved public aliases share that operation;
+  automatic capture, annotations and method syntax do not own separate registries
+  or backend implementations.
+- Consume source/annotation metadata through Scala 3 frontend mechanisms and
+  existing Nodal compiler integration seams. An annotation class alone does not
+  execute the attachment. Keep the accepted syntax valid Scala 3 and preserve
+  comment records through separate compilation without reading source files at
+  elaboration time.
+- Resolve declaration ownership using stable semantic/source anchors, independent
+  of emitted names. Define behavior for aliases, helper results and pure
+  expressions without renaming shared hardware or forcing a new wire. Diagnose
+  unsupported explicit targets; ordinary comments outside the capture policy
+  remain Scala source documentation.
+- Evaluate the target, computed text and any supported wrapper body exactly once,
+  preserving construction order. Fluent forms return the original target with
+  its precise type. Generated helper temporaries must not become user naming
+  hints, hierarchy or hardware objects.
+- Define deterministic multiline normalization, ordering and automatic/explicit
+  precedence. Distinguish repeated capture of the same source record from an
+  intentional additional description; preserve provenance and avoid accidental
+  duplicate output.
+- Propagate attachments through inlining, elimination and hierarchy/generate
+  expansion under the existing placement/orphan policy. Documentation must not
+  prevent legal optimization, change semantic hardware hashes or create hardware
+  solely to provide a printed comment location. Report unsupported guaranteed
+  placements rather than silently attaching text to unrelated logic.
+- Retain the existing separation between ordinary documentation and typed
+  synthesis directives, attributes, waivers, pragmas and tool commands.
+
+### Region syntax and validation ownership
+
+Forms such as `doc("Receive path") { ... }` or standalone `comment("Receive path")`
+are optional candidates, not prerequisites for the initial declaration forms.
+Before accepting either, 143 must define an explicit module/process/documentation
+region anchor and rendering policy, including transformations that make the
+source region non-contiguous. Never implement an implicit queue that attaches a
+comment to the next constructed hardware object. A block retains normal Scala
+lexical visibility and must not introduce hardware hierarchy merely for
+documentation; declarations local to that block do not become outer members.
+
+143 owns the ergonomic API/ownership gate. 144 owns frontend capture, shared
+attachment, single-evaluation/type/naming checks, provenance and IR propagation,
+including positive/negative fixtures for aliases, helpers, duplicates, invalid
+targets and unavailable source files. 145 owns matched source-form rendering
+examples, actual generated comments/source maps, escaping and parsed HDL semantic
+parity across supported profiles. Distinct provenance is expected; source forms
+with equivalent text and targets must agree on attachment and hardware meaning.
+Keep SystemVerilog emission capability-gated and do not add artificial analog
+simulation, synthesis or formal obligations solely for comment syntax.
 
 ## Foundation completion barrier
 

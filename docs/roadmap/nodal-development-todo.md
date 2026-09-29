@@ -1,8 +1,8 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.56
+**Revision:** 1.57
 **Created:** 2026-08-20
-**Updated:** 2026-09-28
+**Updated:** 2026-09-29
 **Status:** Active roadmap
 **Primary language target:** Verilog-AMS 2023
 **Analog-only compatibility target:** Verilog-A
@@ -2501,11 +2501,13 @@ Detailed rationale and dependent-track plans are in [`dependent-productivity-and
 - [ ] **Foundation Increment 143 — Comment/documentation IR architecture and public API gate**
   - [ ] **F-143.A — Architecture, scope and extensibility.** Freeze target-neutral Comment IR anchors and separate presentation from semantic/directive identity.
   - [ ] **F-143.B — Implementation and integration**
-    - [ ] **F-143.B.1** Freeze automatic ScalaDoc/unambiguous leading-comment capture plus an explicit target-neutral comment/documentation API for guaranteed placement.
-    - [ ] **F-143.B.2** Define stable Comment IR anchors, propagation/orphan policy, directive separation, and semantic-versus-presentation hashing.
-  - [ ] **F-143.C — Correctness, rejection and predecessor regression.** Compile positive/negative automatic and explicit placement candidates; reject ambiguity and directive confusion.
+    - [ ] **F-143.B.1** Freeze automatic ScalaDoc/unambiguous leading-comment capture plus a lightweight explicit frontend: prefer `@doc("...")` on declarations and `target.comment(text)` for programmatic attachment, with exact signatures and supported targets decided by this gate. Follow the [frontend syntax and attachment contract](dependent-productivity-and-verification-tracks-v0.1-plan.md#lightweight-comment-frontend).
+    - [ ] **F-143.B.2** Define stable Comment IR anchors, propagation/orphan policy, directive separation, and semantic-versus-presentation hashing. All accepted source forms use one attachment operation while retaining automatic-versus-explicit provenance.
+    - [ ] **F-143.B.3** Define literal/compile-time-constant annotation text, literal automatic comments, and elaboration-time API strings, including interpolation and multiline normalization. Comment interpolation must not sample hardware values or collapse symbolic HDL parameters to their defaults.
+    - [ ] **F-143.B.4** Define declaration-versus-region ownership, aliases/helper results, duplicate/precedence policy, unsupported targets and removed-anchor fallback. Region/block/standalone syntax remains optional pending its own placement rules; it must not attach implicitly to the next constructed object or change ordinary Scala scoping.
+  - [ ] **F-143.C — Correctness, rejection and predecessor regression.** Compile positive/negative automatic, annotation and method placement candidates; reject ambiguity and directive confusion, and exercise text restrictions and ownership through aliases/helpers.
   - [ ] **F-143.D — Independent validation and applicability.** Gate validation and applicability: Retain actual compile-positive/negative public or schema candidates and independent design review where required by the existing gate. Record that unimplemented backend/simulator/synthesis behavior receives no execution credit; documentation-only boundaries acquire no artificial HDL tests.
-  - [ ] **F-143.E — Optimization review and output quality.** Review capture/propagation complexity without imposing HDL wires or changing semantic hashes. Apply the proportionate review rule above; document no new optimization required when justified.
+  - [ ] **F-143.E — Optimization review and output quality.** Review capture/propagation complexity without imposing HDL wires or changing semantic hashes. Require fluent forms to preserve target type/identity, single evaluation and source-derived naming; comment metadata must not force materialization or add hardware hierarchy. Apply the proportionate review rule above; document no new optimization required when justified.
   - [ ] **F-143.F — Scale, determinism and compatibility.** Exercise nested/leading/ScalaDoc candidate locations and API-version compatibility.
   - [ ] **F-143.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 143; complete review, verified integration and any separate closure under the centralized Foundation acceptance rules.
 
@@ -2513,9 +2515,13 @@ Detailed rationale and dependent-track plans are in [`dependent-productivity-and
   - Original scope retained: Implement Scala 3 source/comment extraction, explicit comment APIs, stable anchors, deterministic propagation, source correlation, and ambiguity/directive diagnostics.
   - [ ] **F-144.A — Architecture, scope and extensibility.** Capture comments at Scala compile time and propagate stable anchors independently of generated HDL names.
   - [ ] **F-144.B — Implementation and integration**
-    - [ ] **F-144.B.1** Implement Scala source/ScalaDoc and explicit comment capture into stable target-neutral Comment IR anchors.
+    - [ ] **F-144.B.1** Implement the accepted Scala source/ScalaDoc capture, `@doc` declaration metadata and `.comment` API through one attachment operation with stable target-neutral Comment IR anchors; retain automatic-versus-explicit provenance.
     - [ ] **F-144.B.2** Propagate anchors through the frontend/bridge/native transformations with deterministic orphan/ambiguity/directive diagnostics.
+    - [ ] **F-144.B.3** Reuse Scala 3 annotation/source capture and the existing frontend integration seams to consume declaration metadata and register attachments. Any internal `addComment`/attachment routine or accepted public alias shares this implementation; syntax variants must not introduce separate registries or backend paths.
+    - [ ] **F-144.B.4** Evaluate each API target and text once; supported fluent calls return the same target with its precise type. Preserve construction order, lexical binder/helper naming and hardware identity.
   - [ ] **F-144.C — Correctness, rejection and predecessor regression.** Test ambiguous, orphaned and directive-like comments, separate compilation and unavailable source files.
+    - [ ] **F-144.C.1** Compare attachment/IR semantics across accepted automatic, annotation and method forms while retaining their distinct provenance. Exercise literal/computed/multiline text, repeated capture versus intentional additions, aliases/helper calls and supported declaration anchors.
+    - [ ] **F-144.C.2** Use focused construction/text side-effect counters to prove single evaluation; verify precise target types, lexical naming and hardware identity through inlining/elimination without comment-induced nets or hierarchy. Assign emitted-HDL parity to 145.
   - [ ] **F-144.D — Independent validation and applicability**
     - [ ] **F-144.D.1** Representation evidence: Validate actual serialized/native IR and manifests against independently specified semantic expectations and malformed-input controls; compiler parse/print alone is not generated-HDL behavioral proof.
     - [ ] **F-144.D.2** Consumer qualification boundary: Retain source-correlated witnesses for the already assigned lowering/tool consumers and identify their later execution obligations without a reverse dependency. Do not claim unimplemented target behavior here.
@@ -2527,11 +2533,11 @@ Detailed rationale and dependent-track plans are in [`dependent-productivity-and
   - Original scope retained: Emit the same Comment IR deterministically to Verilog, SystemVerilog, Verilog-A, and Verilog-AMS plus documentation/source-map manifests without changing semantic HDL identity.
   - [ ] **F-145.A — Architecture, scope and extensibility.** Lower one Comment IR through supported backend profiles, retaining semantic-versus-presentation hash separation.
   - [ ] **F-145.B — Implementation and integration**
-    - [ ] **F-145.B.1** Implement supported Verilog-family renderers from the same Comment IR, retaining backend-specific placement and escaping.
+    - [ ] **F-145.B.1** Implement supported Verilog-family renderers from the same Comment IR for accepted automatic, annotation and method forms, retaining backend-specific placement and escaping.
     - [ ] **F-145.B.2** Produce documentation/source-map sidecars and semantic-versus-presentation hashes; future SystemVerilog support remains capability-gated.
-  - [ ] **F-145.C — Correctness, rejection and predecessor regression.** Test reserved text, escaping, moved/orphaned anchors and cross-backend location correlation.
+  - [ ] **F-145.C — Correctness, rejection and predecessor regression.** Test reserved text, multiline escaping, duplicate handling, moved/orphaned anchors and cross-backend location correlation across the accepted frontend forms.
   - [ ] **F-145.D — Independent validation and applicability**
-    - [ ] **F-145.D.1** Rendered artifact validation: Compare actual generated comments, documentation and source maps across the supported backend profiles, then check parsed semantic identity with comments removed using the applicable independent parser.
+    - [ ] **F-145.D.1** Rendered artifact validation: Compare actual generated comments, documentation and source maps across the supported backend profiles, then check parsed semantic identity with comments removed using the applicable independent parser. Retain matched ScalaDoc/leading-comment, `@doc` and `.comment` source examples with actual output; provenance fields may differ while attachment and HDL semantics agree.
     - [ ] **F-145.D.2** Semantic preservation boundary: Record unchanged semantic hashes and any genuinely applicable behavioral parity checks; do not invent analog simulation, synthesis or formal requirements solely for comment placement.
   - [ ] **F-145.E — Optimization review and output quality.** Review readability and duplicate comments; formatting must not change parsed HDL meaning. Apply the proportionate review rule above; document no new optimization required when justified.
   - [ ] **F-145.F — Scale, determinism and compatibility.** Exercise large generated files and repeatable documentation/source-map manifests across supported profiles.

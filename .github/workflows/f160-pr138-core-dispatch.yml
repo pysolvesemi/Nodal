@@ -1,0 +1,139 @@
+name: F160 PR138 Core targeted dispatcher
+
+on:
+  push:
+    branches:
+      - ci-control/f160-pr138-core-4ce4314
+    paths:
+      - .github/workflows/f160-pr138-core-dispatch.yml
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: f160-pr138-core-dispatch-4ce4314
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    if: >-
+      github.repository == 'pysolvesemi/Nodal' &&
+      github.ref == 'refs/heads/ci-control/f160-pr138-core-4ce4314'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Validate exact identities and dispatch Core once
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_REPOSITORY: pysolvesemi/Nodal
+          EXPECTED_CONTROL_REF: refs/heads/ci-control/f160-pr138-core-4ce4314
+          EXPECTED_PR: '138'
+          EXPECTED_BASE_REF: dev
+          EXPECTED_BASE_SHA: ee6e919510e95a8e267c676a9724ec1bae86f348
+          EXPECTED_CANDIDATE_REF: increment/160-evidence-closure
+          EXPECTED_CANDIDATE_SHA: 4ce431418434685e0d74f3af3ab2f8a2c4cd740f
+          EXPECTED_CANDIDATE_TREE: fc54c2a712e8bf1bdf213a9b23e1ffa7a52a9ca2
+          EXPECTED_WORKFLOW_ID: '338626156'
+          EXPECTED_WORKFLOW_PATH: .github/workflows/ci.yml
+          EXPECTED_WORKFLOW_SHA256: 8e60508454a7d56af871e85cf92e54c608240f6fb156967563d90ac16dc12a20
+        run: |
+          set -euo pipefail
+
+          test "${GITHUB_REPOSITORY}" = "${EXPECTED_REPOSITORY}"
+          test "${GITHUB_REF}" = "${EXPECTED_CONTROL_REF}"
+          test "${GITHUB_EVENT_NAME}" = push
+
+          repository=$(gh api "repos/${EXPECTED_REPOSITORY}" --jq .full_name)
+          test "${repository}" = "${EXPECTED_REPOSITORY}"
+
+          pr=$(gh api "repos/${EXPECTED_REPOSITORY}/pulls/${EXPECTED_PR}")
+          test "$(jq -r .state <<<"${pr}")" = open
+          test "$(jq -r .draft <<<"${pr}")" = true
+          test "$(jq -r .base.ref <<<"${pr}")" = "${EXPECTED_BASE_REF}"
+          test "$(jq -r .base.sha <<<"${pr}")" = "${EXPECTED_BASE_SHA}"
+          test "$(jq -r .head.ref <<<"${pr}")" = "${EXPECTED_CANDIDATE_REF}"
+          test "$(jq -r .head.sha <<<"${pr}")" = "${EXPECTED_CANDIDATE_SHA}"
+
+          base_sha=$(gh api \
+            "repos/${EXPECTED_REPOSITORY}/git/ref/heads/${EXPECTED_BASE_REF}" \
+            --jq .object.sha)
+          candidate_sha=$(gh api \
+            "repos/${EXPECTED_REPOSITORY}/git/ref/heads/${EXPECTED_CANDIDATE_REF}" \
+            --jq .object.sha)
+          test "${base_sha}" = "${EXPECTED_BASE_SHA}"
+          test "${candidate_sha}" = "${EXPECTED_CANDIDATE_SHA}"
+
+          candidate_tree=$(gh api \
+            "repos/${EXPECTED_REPOSITORY}/git/commits/${EXPECTED_CANDIDATE_SHA}" \
+            --jq .tree.sha)
+          test "${candidate_tree}" = "${EXPECTED_CANDIDATE_TREE}"
+
+          workflow=$(gh api \
+            "repos/${EXPECTED_REPOSITORY}/actions/workflows/${EXPECTED_WORKFLOW_ID}")
+          test "$(jq -r .path <<<"${workflow}")" = "${EXPECTED_WORKFLOW_PATH}"
+          test "$(jq -r .state <<<"${workflow}")" = active
+
+          workflow_file=$(mktemp)
+          trap 'rm -f "${workflow_file}"' EXIT
+          gh api \
+            "repos/${EXPECTED_REPOSITORY}/contents/${EXPECTED_WORKFLOW_PATH}?ref=${EXPECTED_CANDIDATE_SHA}" \
+            --jq .content | tr -d '\n' | base64 --decode > "${workflow_file}"
+          workflow_sha256=$(sha256sum "${workflow_file}" | awk '{print $1}')
+          test "${workflow_sha256}" = "${EXPECTED_WORKFLOW_SHA256}"
+          grep -Eq '^  workflow_dispatch:' "${workflow_file}"
+
+          runs=$(gh api \
+            "repos/${EXPECTED_REPOSITORY}/actions/workflows/${EXPECTED_WORKFLOW_ID}/runs?event=workflow_dispatch&branch=increment%2F160-evidence-closure&per_page=100")
+          matching=$(jq \
+            --arg sha "${EXPECTED_CANDIDATE_SHA}" \
+            '[.workflow_runs[] | select(.head_sha == $sha)] | length' \
+            <<<"${runs}")
+          if [ "${matching}" -ne 0 ]; then
+            echo "Refusing duplicate dispatch: ${matching} exact-head run(s) already exist." >&2
+            jq -r \
+              --arg sha "${EXPECTED_CANDIDATE_SHA}" \
+              '.workflow_runs[] | select(.head_sha == $sha) | [.id, .status, (.conclusion // "null"), .html_url] | @tsv' \
+              <<<"${runs}" >&2
+            exit 1
+          fi
+
+          {
+            echo "## Foundation 160 PR138 targeted dispatch intent"
+            echo "- candidate: \`${EXPECTED_CANDIDATE_SHA}\`"
+            echo "- tree: \`${EXPECTED_CANDIDATE_TREE}\`"
+            echo "- workflow: \`${EXPECTED_WORKFLOW_ID}\` (\`${EXPECTED_WORKFLOW_PATH}\`)"
+            echo "- ref: \`${EXPECTED_CANDIDATE_REF}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          gh api --method POST \
+            "repos/${EXPECTED_REPOSITORY}/actions/workflows/${EXPECTED_WORKFLOW_ID}/dispatches" \
+            -f "ref=${EXPECTED_CANDIDATE_REF}"
+
+          observed=''
+          for _ in $(seq 1 18); do
+            sleep 5
+            runs=$(gh api \
+              "repos/${EXPECTED_REPOSITORY}/actions/workflows/${EXPECTED_WORKFLOW_ID}/runs?event=workflow_dispatch&branch=increment%2F160-evidence-closure&per_page=20")
+            observed=$(jq -c \
+              --arg sha "${EXPECTED_CANDIDATE_SHA}" \
+              '[.workflow_runs[] | select(.head_sha == $sha)] | if length == 1 then .[0] else empty end' \
+              <<<"${runs}")
+            if [ -n "${observed}" ]; then
+              break
+            fi
+          done
+
+          if [ -z "${observed}" ]; then
+            echo "Dispatch response was accepted, but no exact-head run was observed; reconcile before retrying." >&2
+            exit 1
+          fi
+          test "$(jq -r .event <<<"${observed}")" = workflow_dispatch
+          test "$(jq -r .head_branch <<<"${observed}")" = "${EXPECTED_CANDIDATE_REF}"
+          test "$(jq -r .head_sha <<<"${observed}")" = "${EXPECTED_CANDIDATE_SHA}"
+          test "$(jq -r .workflow_id <<<"${observed}")" = "${EXPECTED_WORKFLOW_ID}"
+          run_id=$(jq -r .id <<<"${observed}")
+          run_url=$(jq -r .html_url <<<"${observed}")
+          echo "Observed exact targeted run ${run_id}: ${run_url}"
+          echo "- run: [${run_id}](${run_url})" >> "${GITHUB_STEP_SUMMARY}"

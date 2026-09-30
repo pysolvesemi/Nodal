@@ -168,7 +168,7 @@ F-043 remains open and unstarted.
 ./nodal core native
 python3 scripts/check_increment160.py
 python3 -m unittest tests.compiler.test_increment160_parity tests.compiler.test_increment160_closure
-python3 tests/compiler/run_increment160_parity.py \
+python3 tests/compiler/fixtures/increment160/run_parity.py \
   --candidate-root "$PWD" \
   --baseline-root /absolute/path/to/accepted-cafd52e5-checkout \
   --out /new/empty/evidence/directory \

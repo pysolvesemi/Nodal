@@ -70,7 +70,7 @@
   },
   "experiment": {
     "path": "tests/compiler/fixtures/increment160/experiment.json",
-    "file_sha256": "1ca86acd7c3b20bf016b7bf6dd0d54898f5b0ee86234fb4f23ac52393cc324dd",
+    "file_sha256": "9a4604927592ab773c8930ac53012fbdb1c3da6365832792ad0d5a7f20026406",
     "definition_sha256": "9a4604927592ab773c8930ac53012fbdb1c3da6365832792ad0d5a7f20026406",
     "ordering": [
       "AB",
@@ -116,7 +116,7 @@
   },
   "demonstration": {
     "scala_source_path": "examples/continuousTimeApi/src/nodal/increment42fixture/Increment42PredecessorCombinations.scala",
-    "scala_source_file_sha256": "4c141d54b9a56917180adbd8bed25b14148b377aba473a23eb579ba36dc78d4f",
+    "scala_source_file_sha256": "f0100d687147208c3c84ccd2644813c3391750b97bdf84705ea654ec9e9e6e25",
     "scala_block_sha256": "afe10f6bfcaf4c75aa8eb906a62ae5083487b623f380da48fc42412a80836236",
     "verilog_a_block_sha256": "fc44e7165956051c95fc26aaa7dc868a798ac701f56f2e0f7b170201c8196111",
     "verilog_a_artifact_sha256": "a94fc9fb2904d73a28c433817c09c2bf1373ab2a8a6650dd1dc8867d685ca612",

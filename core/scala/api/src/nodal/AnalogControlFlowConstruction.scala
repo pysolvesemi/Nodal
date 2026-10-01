@@ -472,6 +472,32 @@ private[nodal] object AnalogControlFlowConstruction:
     )(body: String => A): A =
       requireStatementPosition()
       val identity = nextIdentity("loop")
+      val retainedStaticTripCount = stage match
+        case LoopStage.Static =>
+          val domain = IterationDomain.repeat(minimumIterations).fold(
+            problem => AnalogControlFlowRuntime.fail(
+              "NODAL-ANALOG-034-008",
+              problem.message,
+              Some(identity)
+            ),
+            value => value
+          )
+          if maximumIterations < domain.tripCount then
+            AnalogControlFlowRuntime.fail(
+              "NODAL-ANALOG-034-008",
+              "bounded loop requires 0 <= minimum <= maximum",
+              Some(identity)
+            )
+          if maximumIterations != domain.tripCount || boundReads.nonEmpty ||
+            !staticTripCount.contains(domain.tripCount)
+          then
+            AnalogControlFlowRuntime.fail(
+              "NODAL-ANALOG-034-009",
+              "static loop requires one exact compile-time trip count",
+              Some(identity)
+            )
+          Some(domain.tripCount)
+        case LoopStage.RuntimeBounded => staticTripCount
       structured = true
       val (block, result) = captureBlock(s"$identity.body", source)(body)
       append(
@@ -483,7 +509,7 @@ private[nodal] object AnalogControlFlowConstruction:
           boundReads,
           block,
           boundValueType,
-          staticTripCount,
+          retainedStaticTripCount,
           source
         )
       )

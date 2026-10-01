@@ -177,3 +177,27 @@ Use focused helpers and minimum necessary transaction integration, without
 promising a fixed line count. Any later Rust adoption or broader boundary change
 needs its own measured rationale and applicable gate. `AGENTS.md` and historical
 qualification/evidence policies are unchanged.
+
+
+## Foundation 43 static-domain checkpoint - 2026-10-01
+
+The first implementation checkpoint adds private concrete half-open domain
+arithmetic and integrates exact repetition into the existing control-flow
+construction owner. It uses wide intermediates and an explicit 32-bit trip-count
+limit matching the current loop metadata. Empty iteration and invalid negative
+repetition counts remain distinct; a maximum is checked, never used to clamp.
+The first excluded induction value remains wide instead of wrapping an Int.
+
+The public `analogRepeat` signature and retained procedural staging are unchanged.
+Its body is still captured once, including a zero-count loop; it is not unrolled
+and does not allocate generated topology. The builder rejects invalid static
+counts and conflicting supplied metadata before invoking the body. The existing
+immutable runtime, bridge and native verifiers remain independent and unchanged.
+No private factory can be used to repair or accept a conflicting static witness.
+
+This is a bounded implementation of the already-approved range direction, not a
+new public API approval, complete `hdlRange` capture, shape support or F-043
+acceptance. Symbolic parameter domains, induction/generated-state ownership,
+analog layouts and actual generated target witnesses remain required. The
+[readiness record](../implementation/increment43-readiness.md) records that
+boundary; the existing roadmap and amendment own all unfinished checkboxes.

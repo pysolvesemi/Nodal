@@ -85,7 +85,8 @@ object IterationDomainTests extends TestSuite:
 
     test("invalid steps are rejected even for otherwise empty domains"):
       for step <- Seq(0, -1, Int.MinValue) do
-        assert(IterationDomain.halfOpen(0, 0, step).left.toOption.get.kind == ProblemKind.InvalidStep)
+        assert(IterationDomain.halfOpen(0, 0, step).left.toOption.get.kind ==
+          ProblemKind.InvalidStep)
 
     test("maximum is a checked envelope and never clamps the domain"):
       assert(domain(-5, 6, step = 3, maximum = Some(4)).tripCount == 4)
@@ -121,7 +122,9 @@ object IterationDomainTests extends TestSuite:
           _.isInstanceOf[AnalogControlFlowRuntime.Statement.Assign]
         ) == 1)
 
-    test("invalid public repetition rejects before invoking its body and leaves fresh capture clean"):
+    test(
+      "invalid public repetition rejects before invoking its body and leaves fresh capture clean"
+    ):
       var captures = 0
       val error = scala.util.Try(AnalogControlFlowInspection.inspect(
         new DomainRepeatProcedure(-1, () => captures += 1)

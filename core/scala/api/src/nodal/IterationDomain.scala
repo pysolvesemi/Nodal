@@ -32,7 +32,8 @@ private[nodal] object IterationDomain:
         Left(Problem(ProblemKind.OrdinalOutOfBounds, "iteration ordinal is outside the domain"))
       else Right((lower.toLong + ordinal.toLong * step.toLong).toInt)
 
-  /** Positive steps only. Equal or reversed bounds are legal empty iteration domains, not shapes. */
+  /** Positive steps only. Equal or reversed bounds are legal empty iteration domains, not shapes.
+    */
   def halfOpen(
       lower: Int,
       upperExclusive: Int,

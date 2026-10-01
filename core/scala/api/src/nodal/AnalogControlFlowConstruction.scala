@@ -475,11 +475,12 @@ private[nodal] object AnalogControlFlowConstruction:
       val retainedStaticTripCount = stage match
         case LoopStage.Static =>
           val domain = IterationDomain.repeat(minimumIterations).fold(
-            problem => AnalogControlFlowRuntime.fail(
-              "NODAL-ANALOG-034-008",
-              problem.message,
-              Some(identity)
-            ),
+            problem =>
+              AnalogControlFlowRuntime.fail(
+                "NODAL-ANALOG-034-008",
+                problem.message,
+                Some(identity)
+              ),
             value => value
           )
           if maximumIterations < domain.tripCount then

@@ -19,6 +19,22 @@ SCALA_SOURCE = (
     "examples/continuousTimeApi/src/nodal/increment42fixture/"
     "Increment42PredecessorCombinations.scala"
 )
+# Bind the finalized implementation record outside its editable manifest, as in
+# the predecessor closure checker. A coordinated rehash must not invent evidence.
+ACCEPTED_EVIDENCE_SHA256 = (
+    "e5cffda99b998807290de05d6cab2e1f4bf2ed7ceeeefa345e72e3c94de8e01f"
+)
+# Stable identities and indentation are the sole checklist's parent/child shape.
+CHECKLIST_NODES = (
+    (0, "Foundation Increment 160"),
+    (2, "F-160.A"), (4, "F-160.A.1"), (4, "F-160.A.2"),
+    (2, "F-160.B"), (4, "F-160.B.1"), (4, "F-160.B.2"),
+    (2, "F-160.C"), (4, "F-160.C.1"), (4, "F-160.C.2"),
+    (2, "F-160.D"), (4, "F-160.D.1"), (4, "F-160.D.2"),
+    (2, "F-160.E"),
+    (2, "F-160.F"), (4, "F-160.F.1"), (4, "F-160.F.2"),
+    (2, "F-160.G"), (4, "F-160.G.1"), (4, "F-160.G.2"),
+)
 FENCE = chr(96) * 3
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
@@ -40,7 +56,10 @@ def check_sha(value: object, label: str, pattern: re.Pattern[str] = HEX64) -> st
 
 
 def check_repository(root: Path = ROOT) -> None:
-    accepted = json.loads((root / EVIDENCE).read_text())
+    raw_evidence = (root / EVIDENCE).read_bytes()
+    require(hashlib.sha256(raw_evidence).hexdigest() == ACCEPTED_EVIDENCE_SHA256,
+            "accepted implementation evidence checksum changed")
+    accepted = json.loads(raw_evidence)
     manifest = json.loads((root / MANIFEST).read_text())
     closure = (root / CLOSURE).read_text()
     readiness = (root / READINESS).read_text()
@@ -61,6 +80,12 @@ def check_repository(root: Path = ROOT) -> None:
         require(sha256(root / path) == check_sha(record["sha256"], entry),
                 f"{entry} digest changed")
 
+    require(manifest["sole_checklist"]["path"] == PLAN,
+            "sole checklist path changed")
+    require(manifest["checker"] == "scripts/check_increment160.py" and
+            manifest["mutation_tests"] == "tests/compiler/test_increment160_closure.py",
+            "closure validation owner changed")
+
     immutable = manifest["immutable_experiment"]
     require(immutable["path"] == EXPERIMENT, "experiment path changed")
     require(sha256(root / EXPERIMENT) == check_sha(immutable["file_sha256"], "experiment file"),
@@ -68,6 +93,8 @@ def check_repository(root: Path = ROOT) -> None:
     require(immutable["definition_sha256"] ==
             "9a4604927592ab773c8930ac53012fbdb1c3da6365832792ad0d5a7f20026406",
             "immutable experiment definition changed")
+    require(immutable["file_sha256"] == immutable["definition_sha256"],
+            "experiment file is not the pinned definition")
     require(accepted["experiment"] == {
         "path": EXPERIMENT,
         "file_sha256": immutable["file_sha256"],
@@ -241,6 +268,14 @@ def check_repository(root: Path = ROOT) -> None:
     require(handoff["equation_legalization_owner"] == "F-141" and
             handoff["equation_source_residual_owners"] == ["F-134", "F-135"],
             "equation handoff changed")
+
+    nodes = re.findall(
+        r"^( *)- \[([ x])\] \*\*(Foundation Increment 160|F-160\.[A-Z](?:\.\d+)*)"
+        r"(?=\*\*| - )", plan, re.M)
+    require(tuple((len(indent), identifier) for indent, _, identifier in nodes) ==
+            CHECKLIST_NODES, "F-160 checklist identity/order/nesting changed")
+    require(all(state == "x" for _, state, _ in nodes),
+            "F-160 checklist contains an incomplete child")
 
     checked = re.findall(
         r"^\s*- \[x\] \*\*(?:Foundation Increment 160|F-160)", plan, re.M)

@@ -2,12 +2,15 @@
 
 **Revision:** 0.1
 **Approved scheduling and scope:** 2026-09-24
-**Status:** In progress from 2026-09-29; implementation, measurements and acceptance remain open.
+**Status:** Accepted 2026-09-29; implementation, qualification, verified integration and separate evidence closure complete.
 **Track and identity:** Foundation Increment 160 (F-160).
 
 The current [readiness and implementation record](../implementation/increment160-readiness.md)
 pins the accepted F-042 baseline, selected internal boundaries, all child
 applicability, differential protocol and predeclared measurement budgets.
+The separate [accepted-evidence closure](../implementation/increment160-evidence-closure.md)
+and its [machine-readable record](../implementation/increment160-accepted-evidence.json)
+bind the qualified implementation, retained parity artifact and capability limits.
 
 ## Authority and execution order
 
@@ -82,29 +85,30 @@ first extraction still needs a safe, byte-preserving edit of existing source.
 
 ## Foundation checklist
 
-- [ ] **Foundation Increment 160 - Construction frontend modularization and scalability baseline**
-  - [ ] **F-160.A - Architecture, baseline and bounded plan**
-    - [ ] **F-160.A.1** Re-read live instructions, the accepted 42 source/tree and evidence, the complete 43 dependency boundary and actual construction consumers. Map responsibilities, dependency direction and each registry's sole owner. Select and justify a bounded production-used extraction set; preserve existing stable IDs and capability limits.
-    - [ ] **F-160.A.2** Record the exact before-state fixtures, source/toolchain identities, internal interface contracts, invariants and work packages. Obtain any versioned design gate required by protected paths before implementation; roadmap approval is not automatic approval of an unspecified API/boundary change. Set measurement methodology and justified regression budgets before judging results.
-  - [ ] **F-160.B - Production modularization**
-    - [ ] **F-160.B.1** Separate the selected facade, lifecycle, records/ownership, hierarchy, expression, analog and snapshot responsibilities into focused components with narrow interfaces. Keep a single coordinated transaction and canonical registry ownership; no duplicate state, circular imports or uncalled extraction facades. Do not require every suggested component to become a separate file.
-    - [ ] **F-160.B.2** Integrate every extracted component into the actual construction path, preserving public entry points, ordering, source provenance and the existing bridge. Remove superseded duplicate internal paths only with parity evidence. Publish coherent behavior-preserving checkpoints, not a broken multi-file intermediate state.
-  - [ ] **F-160.C - Correctness, failure safety and predecessor regression**
-    - [ ] **F-160.C.1** Exercise accepted 42 constructors/defaults, symbolic/explicit overrides, direct child ports, conservative connect/operator parity and fixed replication, plus relevant existing domain, expression and analog operator/function cases. Preserve type/unit/static-effect, duplicate and foreign/internal/detached ownership rejection and source-located diagnostics.
-    - [ ] **F-160.C.2** Test failed-construction cleanup and successful fresh elaboration after failure, constructor/factory evaluation counts, nested/isolated sessions and supported separate-compilation behavior. Preserve lifecycle and transaction isolation without introducing global state or claiming unsupported parallelism.
-  - [ ] **F-160.D - Differential evidence and applicable validation**
-    - [ ] **F-160.D.1** Run identical public Scala fixtures through the retained qualified baseline and the refactored candidate with the same pinned tools/options. Compare construction records, normalized IR, generated HDL and diagnostic identities. Require byte-identical deterministic IR/HDL and stable semantic/source paths; investigate every difference rather than normalize it away or replace expected outputs to pass.
-    - [ ] **F-160.D.2** Retain separate baseline/candidate source, tool, command, result and artifact hashes. Execute affected public/frontend/bridge/native and available target checks, preserving their original strength. A required unavailable lane remains blocked; internal reparse or old-head receipts are not fresh execution. Reuse existing per-profile validation owners without a reverse dependency on entire later tool-integration increments.
-  - [ ] **F-160.E - Maintainability and output review.** Review the selected boundary map, coupling and production call paths. Show that hierarchy/ownership changes can be reasoned about without unrelated operator logic, and that no duplicate semantic model or registry was introduced. Require output parity, not new HDL optimization or a file-size quota; separately approve any intentional externally visible change instead of hiding it in the refactor.
-  - [ ] **F-160.F - Proportionate scalability and compatibility baseline**
-    - [ ] **F-160.F.1** Measure representative small and large deep/wide/repeated hierarchies, shared expression DAGs and symbolic parameter combinations before and after. Separate Scala compilation/startup, cold/warm construction, snapshot/serialization, bridge/native and external-tool time; retain allocation/GC, peak memory, environment and repeated-run variability where available. Keep workloads semantically identical and record resource-limited cases honestly.
-    - [ ] **F-160.F.2** Compare results against the predeclared methodology/budgets; resolve unexplained material regressions or obtain an explicit justified review decision. Require no arbitrary speedup and make no frontier-performance claim. Hand the workload definitions and baseline to 96; completing the full 10K/100K/1M program or a Rust prototype is not a prerequisite of 160 or 43.
-  - [ ] **F-160.G - Qualification, evidence and acceptance**
-    - [ ] **F-160.G.1** Complete affected targeted-first and full applicable qualification, review, verified integration and any separate accepted-evidence closure under current contribution policy. Keep historical accepted records immutable, update required manifest references without creating a second status ledger, and keep this parent open until all children and closure obligations are satisfied.
-    - [ ] **F-160.G.2** Deliver the boundary/dependency documentation, before/after validation and measurement record, reproduction commands, capability limits and actual public Scala/unchanged generated-HDL demonstration. Record verified merge/source/tree identities and explicitly establish that 43's added prerequisite is satisfied; a file split or a green helper test alone cannot close 160.
+- [x] **Foundation Increment 160 - Construction frontend modularization and scalability baseline**
+  - [x] **F-160.A - Architecture, baseline and bounded plan**
+    - [x] **F-160.A.1** Re-read live instructions, the accepted 42 source/tree and evidence, the complete 43 dependency boundary and actual construction consumers. Map responsibilities, dependency direction and each registry's sole owner. Select and justify a bounded production-used extraction set; preserve existing stable IDs and capability limits.
+    - [x] **F-160.A.2** Record the exact before-state fixtures, source/toolchain identities, internal interface contracts, invariants and work packages. Obtain any versioned design gate required by protected paths before implementation; roadmap approval is not automatic approval of an unspecified API/boundary change. Set measurement methodology and justified regression budgets before judging results.
+  - [x] **F-160.B - Production modularization**
+    - [x] **F-160.B.1** Separate the selected facade, lifecycle, records/ownership, hierarchy, expression, analog and snapshot responsibilities into focused components with narrow interfaces. Keep a single coordinated transaction and canonical registry ownership; no duplicate state, circular imports or uncalled extraction facades. Do not require every suggested component to become a separate file.
+    - [x] **F-160.B.2** Integrate every extracted component into the actual construction path, preserving public entry points, ordering, source provenance and the existing bridge. Remove superseded duplicate internal paths only with parity evidence. Publish coherent behavior-preserving checkpoints, not a broken multi-file intermediate state.
+  - [x] **F-160.C - Correctness, failure safety and predecessor regression**
+    - [x] **F-160.C.1** Exercise accepted 42 constructors/defaults, symbolic/explicit overrides, direct child ports, conservative connect/operator parity and fixed replication, plus relevant existing domain, expression and analog operator/function cases. Preserve type/unit/static-effect, duplicate and foreign/internal/detached ownership rejection and source-located diagnostics.
+    - [x] **F-160.C.2** Test failed-construction cleanup and successful fresh elaboration after failure, constructor/factory evaluation counts, nested/isolated sessions and supported separate-compilation behavior. Preserve lifecycle and transaction isolation without introducing global state or claiming unsupported parallelism.
+  - [x] **F-160.D - Differential evidence and applicable validation**
+    - [x] **F-160.D.1** Run identical public Scala fixtures through the retained qualified baseline and the refactored candidate with the same pinned tools/options. Compare construction records, normalized IR, generated HDL and diagnostic identities. Require byte-identical deterministic IR/HDL and stable semantic/source paths; investigate every difference rather than normalize it away or replace expected outputs to pass.
+    - [x] **F-160.D.2** Retain separate baseline/candidate source, tool, command, result and artifact hashes. Execute affected public/frontend/bridge/native and available target checks, preserving their original strength. A required unavailable lane remains blocked; internal reparse or old-head receipts are not fresh execution. Reuse existing per-profile validation owners without a reverse dependency on entire later tool-integration increments.
+  - [x] **F-160.E - Maintainability and output review.** Review the selected boundary map, coupling and production call paths. Show that hierarchy/ownership changes can be reasoned about without unrelated operator logic, and that no duplicate semantic model or registry was introduced. Require output parity, not new HDL optimization or a file-size quota; separately approve any intentional externally visible change instead of hiding it in the refactor.
+  - [x] **F-160.F - Proportionate scalability and compatibility baseline**
+    - [x] **F-160.F.1** Measure representative small and large deep/wide/repeated hierarchies, shared expression DAGs and symbolic parameter combinations before and after. Separate Scala compilation/startup, cold/warm construction, snapshot/serialization, bridge/native and external-tool time; retain allocation/GC, peak memory, environment and repeated-run variability where available. Keep workloads semantically identical and record resource-limited cases honestly.
+    - [x] **F-160.F.2** Compare results against the predeclared methodology/budgets; resolve unexplained material regressions or obtain an explicit justified review decision. Require no arbitrary speedup and make no frontier-performance claim. Hand the workload definitions and baseline to 96; completing the full 10K/100K/1M program or a Rust prototype is not a prerequisite of 160 or 43.
+  - [x] **F-160.G - Qualification, evidence and acceptance**
+    - [x] **F-160.G.1** Complete affected targeted-first and full applicable qualification, review, verified integration and any separate accepted-evidence closure under current contribution policy. Keep historical accepted records immutable, update required manifest references without creating a second status ledger, and keep this parent open until all children and closure obligations are satisfied.
+    - [x] **F-160.G.2** Deliver the boundary/dependency documentation, before/after validation and measurement record, reproduction commands, capability limits and actual public Scala/unchanged generated-HDL demonstration. Record verified merge/source/tree identities and explicitly establish that 43's added prerequisite is satisfied; a file split or a green helper test alone cannot close 160.
 
-All checkboxes above start open. Adding this plan does not mark any part of 42,
-43, 96 or 160 complete and does not change historical acceptance.
+All 20 parent and child boxes are supported by the accepted-evidence record and
+closure report. F-043's added F-160 prerequisite is satisfied; F-043 remains
+open and no F-043 implementation is started by this acceptance update.
 
 ## Ownership split with Increment 96
 

@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "increment": 160,
+  "status": "validated",
+  "accepted_evidence": {
+    "path": "docs/implementation/increment160-accepted-evidence.json",
+    "sha256": "e5cffda99b998807290de05d6cab2e1f4bf2ed7ceeeefa345e72e3c94de8e01f"
+  },
+  "closure_report": {
+    "path": "docs/implementation/increment160-evidence-closure.md",
+    "sha256": "16814d9d5166006d030f1440ec42f4078e6869abdb98e82674e132b43c6d339b"
+  },
+  "immutable_experiment": {
+    "path": "tests/compiler/fixtures/increment160/experiment.json",
+    "file_sha256": "9a4604927592ab773c8930ac53012fbdb1c3da6365832792ad0d5a7f20026406",
+    "definition_sha256": "9a4604927592ab773c8930ac53012fbdb1c3da6365832792ad0d5a7f20026406"
+  },
+  "sole_checklist": {
+    "path": "docs/roadmap/construction-frontend-modularization-v0.1-plan.md",
+    "checked_box_count": 20,
+    "open_box_count": 0
+  },
+  "checker": "scripts/check_increment160.py",
+  "mutation_tests": "tests/compiler/test_increment160_closure.py"
+}
+

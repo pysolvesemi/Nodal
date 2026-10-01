@@ -1,9 +1,9 @@
 # Foundation 160 readiness and implementation record
 
 **Date:** 2026-09-29
-**Status:** Readiness recorded; implementation and qualification in progress.
+**Status:** Accepted; implementation, qualification, verified integration and separate evidence closure complete.
 **Scope:** Foundation 160, construction frontend modularization only.
-**Branch:** `increment/160-construction-frontend-modularization`, targeting `dev`.
+**Implementation branch:** `increment/160-construction-frontend-modularization`, squash-merged into `dev`.
 
 ## Authority, baseline and dependency
 
@@ -339,3 +339,70 @@ unchanged compiler, without claiming a new native rebuild or candidate CI run.
 The experiment retains input identities before execution, all command outputs,
 raw samples, per-artifact hashes and any incomplete or failed result. Never
 reuse an existing results directory or replace differing expected output.
+
+## Accepted outcome and evidence closure
+
+Implementation PR [#137](https://github.com/pysolvesemi/Nodal/pull/137)
+qualified exact head `a792cf2616936b78efac2079cba1749e38e504a2`,
+tree `62d425c5954feeb13e661d86c78f90adf5959b1a`, and squash-merged as
+`ee6e919510e95a8e267c676a9724ec1bae86f348`. The merge has sole parent
+`60d56be8dfcd0835ef6ddfa85cf9189dfdb1bb68`, the exact qualified tree and
+a `[skip ci]` message. The merge SHA has zero workflow runs, so post-merge CI
+is recorded as skipped for a qualified-identical-tree merge, not as an executed
+pass.
+
+The final-head inventory contains 30 successful pull-request workflows plus the
+separate push Core workflow, 31 successful runs and 37 successful check runs.
+Push Core run
+[36588957739](https://github.com/pysolvesemi/Nodal/actions/runs/36588957739)
+passed on attempt 2, including native job `109506326985` and required aggregate
+`109529105560`; `core-ci/required` is successful. Parallel PR Core run
+[36588963275](https://github.com/pysolvesemi/Nodal/actions/runs/36588963275)
+also passed. Increment 34 correctly did not trigger because its paths were not
+changed; Core retained its predecessor witness.
+
+The retained final push artifact is `11049554512`, 13,528,329 bytes, ZIP
+SHA-256 `df7cb86a20e5207f8f5e416b349b99ab239b856e7cc464a0e40a1ffc9b799950`.
+Its `results.json` SHA-256 is
+`d4e88278041e33a60a4d767c6e90f9d255883b6e297465e9b4b8660e398ee774`
+and reports `passed`: all 55 fixed cases, 330 mandatory role/case trials, six
+fresh fixture compiles, six startup trials, 912 passing measurements and 1,500
+independently rehashed artifacts. The inventory remains 41 accepted and 14
+rejection/recovery cases, including 10 scale, 33 source-MLIR and 19
+native/Verilog-A cases. The immutable experiment SHA-256 remains
+`9a4604927592ab773c8930ac53012fbdb1c3da6365832792ad0d5a7f20026406`.
+
+The repaired-head targeted phase passed Core run
+[36561903660](https://github.com/pysolvesemi/Nodal/actions/runs/36561903660)
+on attempt 2 and all 14 specialized Increment 18-31 workflows on exact head
+`9b1b53987b23bf3c79d82ffc41481b86751ee4fd`, the same accepted tree. Its
+successful parity artifact `11040216375` has ZIP SHA-256
+`e82c2777a2348d18ac24795cde443ce9c4141d90a228e2953afdd24d6039b55a`.
+Independent Codex review comment
+[5889249936](https://github.com/pysolvesemi/Nodal/pull/137#issuecomment-5889249936)
+covers the last substantive fixture repair; earlier completed reviews cover the
+unchanged production and qualification scope. The final CI child is tree
+identical to that reviewed repaired head.
+
+The public `HierarchyEventTop` fixture and every one of its six paired target
+outputs are retained byte-identically between baseline and candidate. The
+generated Verilog-A SHA-256 is
+`a94fc9fb2904d73a28c433817c09c2bf1373ab2a8a6650dd1dc8867d685ca612`
+and contains `initial_step`, `transition` and a contribution `<+`.
+The exact source and target are reproduced in
+[the accepted-evidence closure](increment160-evidence-closure.md); the
+[machine-readable record](increment160-accepted-evidence.json) and
+`tests/compiler/fixtures/increment160/closure-manifest.json` guard all
+identities above.
+
+This acceptance is a bounded construction/frontend maintainability and
+scalability baseline. It makes no numerical simulator, independent OpenVAF,
+general Verilog-AMS, synthesis or broad frontier-performance claim. The late
+equation-only numerical handoff remains with F-141 for legalization and with
+F-134/F-135 for source/residual work; it is not rewritten as repaired here.
+The fixed workloads and measurements are handed to F-096 for later comprehensive
+10K/100K/1M profiling and optional Rust evaluation.
+
+All 20 F-160 boxes in the sole-owner companion plan are now supported and
+closed. The added F-160 prerequisite for F-043 is satisfied. F-043 remains open
+and unstarted; this record establishes eligibility only.

@@ -1,0 +1,150 @@
+{
+  "schema": 1,
+  "increment": 160,
+  "status": "validated",
+  "profile": "construction-frontend-modularization-parity-scale-verilog-a-v0.1",
+  "accepted_head": "a792cf2616936b78efac2079cba1749e38e504a2",
+  "accepted_tree": "62d425c5954feeb13e661d86c78f90adf5959b1a",
+  "implementation_pr": 137,
+  "implementation_merge": "ee6e919510e95a8e267c676a9724ec1bae86f348",
+  "implementation_merge_tree": "62d425c5954feeb13e661d86c78f90adf5959b1a",
+  "preserved_dev_parent": "60d56be8dfcd0835ef6ddfa85cf9189dfdb1bb68",
+  "qualification": {
+    "targeted": {
+      "head": "9b1b53987b23bf3c79d82ffc41481b86751ee4fd",
+      "tree": "62d425c5954feeb13e661d86c78f90adf5959b1a",
+      "core_run": 36561903660,
+      "core_attempt": 2,
+      "core_conclusion": "success",
+      "specialized_workflow_count": 14,
+      "specialized_conclusion": "success",
+      "specialized_runs": [
+        36561916359,
+        36561928226,
+        36561941952,
+        36561960249,
+        36561978499,
+        36561998530,
+        36562020889,
+        36562043549,
+        36562055639,
+        36562078281,
+        36562098567,
+        36562110837,
+        36562134470,
+        36562147949
+      ],
+      "artifact_id": 11040216375,
+      "artifact_zip_sha256": "e82c2777a2348d18ac24795cde443ce9c4141d90a228e2953afdd24d6039b55a"
+    },
+    "full": {
+      "head": "a792cf2616936b78efac2079cba1749e38e504a2",
+      "tree": "62d425c5954feeb13e661d86c78f90adf5959b1a",
+      "direct_parent": "9b1b53987b23bf3c79d82ffc41481b86751ee4fd",
+      "parent_child_changed_file_count": 0,
+      "pull_request_workflow_count": 30,
+      "total_run_count": 31,
+      "successful_run_count": 31,
+      "successful_check_run_count": 37,
+      "push_core_run": 36588957739,
+      "push_core_attempt": 2,
+      "push_native_job": 109506326985,
+      "required_aggregate_job": 109529105560,
+      "pull_request_core_run": 36588963275,
+      "required_check": "core-ci/required",
+      "required_check_conclusion": "success",
+      "increment34_triggered": false
+    }
+  },
+  "review": {
+    "substantive_head": "9b1b53987b23bf3c79d82ffc41481b86751ee4fd",
+    "comment_id": 5889249936,
+    "conclusion": "no findings",
+    "final_head_tree_identical": true
+  },
+  "post_merge_ci": {
+    "status": "skipped",
+    "reason": "qualified-identical-tree-merge",
+    "merge_sha": "ee6e919510e95a8e267c676a9724ec1bae86f348",
+    "run_count": 0
+  },
+  "experiment": {
+    "path": "tests/compiler/fixtures/increment160/experiment.json",
+    "file_sha256": "9a4604927592ab773c8930ac53012fbdb1c3da6365832792ad0d5a7f20026406",
+    "definition_sha256": "9a4604927592ab773c8930ac53012fbdb1c3da6365832792ad0d5a7f20026406",
+    "ordering": [
+      "AB",
+      "BA",
+      "AB"
+    ],
+    "cold_samples_per_case": 1,
+    "warmups_per_case": 2,
+    "warm_samples_per_case": 5,
+    "bounded_noisy_repeat_mad_multiplier": 3
+  },
+  "final_parity": {
+    "run_id": 36588957739,
+    "attempt": 2,
+    "artifact_id": 11049554512,
+    "artifact_size_bytes": 13528329,
+    "artifact_zip_sha256": "df7cb86a20e5207f8f5e416b349b99ab239b856e7cc464a0e40a1ffc9b799950",
+    "results_sha256": "d4e88278041e33a60a4d767c6e90f9d255883b6e297465e9b4b8660e398ee774",
+    "status": "passed",
+    "case_count": 55,
+    "accepted_case_count": 41,
+    "rejection_recovery_case_count": 14,
+    "scale_case_count": 10,
+    "source_mlir_case_count": 33,
+    "native_verilog_a_case_count": 19,
+    "mandatory_trial_count": 330,
+    "compile_trial_count": 6,
+    "startup_trial_count": 6,
+    "command_count": 593,
+    "measurement_count": 912,
+    "nonpassing_measurement_count": 0,
+    "artifact_record_count": 1500,
+    "artifact_rehash_mismatch_count": 0
+  },
+  "implementation_contract": {
+    "production_file_count": 6,
+    "construction_file_count": 5,
+    "construction_session_count": 1,
+    "canonical_registry_owners_preserved": true,
+    "frozen_increment16_validator_byte_identical": true,
+    "scala_test_count": 226,
+    "scala_suite_count": 26
+  },
+  "demonstration": {
+    "scala_source_path": "examples/continuousTimeApi/src/nodal/increment42fixture/Increment42PredecessorCombinations.scala",
+    "scala_source_file_sha256": "f0100d687147208c3c84ccd2644813c3391750b97bdf84705ea654ec9e9e6e25",
+    "scala_block_sha256": "afe10f6bfcaf4c75aa8eb906a62ae5083487b623f380da48fc42412a80836236",
+    "verilog_a_block_sha256": "fc44e7165956051c95fc26aaa7dc868a798ac701f56f2e0f7b170201c8196111",
+    "verilog_a_artifact_sha256": "a94fc9fb2904d73a28c433817c09c2bf1373ab2a8a6650dd1dc8867d685ca612",
+    "baseline_copy_count": 3,
+    "candidate_copy_count": 3,
+    "all_copies_equal": true,
+    "required_tokens": [
+      "initial_step",
+      "transition",
+      "<+"
+    ]
+  },
+  "capability_claims": {
+    "numerical_simulator_execution": false,
+    "independent_openvaf_execution": false,
+    "general_verilog_ams": false,
+    "synthesis": false,
+    "broad_frontier_performance": false
+  },
+  "handoff": {
+    "f096_workloads_and_measurements": true,
+    "f043_prerequisite_satisfied": true,
+    "f043_started": false,
+    "equation_legalization_owner": "F-141",
+    "equation_source_residual_owners": [
+      "F-134",
+      "F-135"
+    ]
+  }
+}
+

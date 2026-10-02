@@ -889,13 +889,14 @@ private final class ConstructionSession(val options: EmitOptions):
       case (lhs: AnyRef, rhs: AnyRef) => lhs eq rhs
       case _ => false
 
+  // Replicating analog nodes changes topology; generate is a construct, not an effect.
   private def markStructuralParameter(reference: DeclarationRef): Unit =
     val module = records(reference.module)
     val declaration = module.declarations(reference.index)
     val previousEffects = declaration.attributes.collectFirst:
       case ("structural_effects", value: String) => value
     val effects =
-      (previousEffects.toVector.flatMap(_.split(",")).map(_.trim).filter(_.nonEmpty) :+ "generate")
+      (previousEffects.toVector.flatMap(_.split(",")).map(_.trim).filter(_.nonEmpty) :+ "topology")
         .distinct
         .sorted
         .mkString(",")

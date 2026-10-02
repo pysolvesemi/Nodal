@@ -1661,13 +1661,27 @@ ${indent(body, 2)}
           semanticPath = s"${declaration.path}.range"
         )
         val effects = attributes
-          .getOrElse("structural_effects", "generate")
+          .getOrElse(
+            "structural_effects",
+            fail(
+              "NODAL-BRIDGE-043",
+              "structural parameter has no declared effects",
+              Some(declaration.path)
+            )
+          )
           .split(",")
           .toVector
           .map(_.trim)
           .filter(_.nonEmpty)
           .distinct
           .sorted
+        val allowedEffects = Set("topology", "component_count", "equation_count", "shape", "rank")
+        if effects.isEmpty || effects.exists(effect => !allowedEffects.contains(effect)) then
+          fail(
+            "NODAL-BRIDGE-043",
+            "structural parameter effects must use the native envelope vocabulary",
+            Some(declaration.path)
+          )
         rendered += operation(
           "nodal.parameter_envelope",
           attributes = Vector(

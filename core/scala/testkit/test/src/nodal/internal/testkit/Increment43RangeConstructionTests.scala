@@ -1,7 +1,9 @@
 package nodal.internal.testkit
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.security.MessageDigest
 import java.time.Duration
 
 import nodal.*
@@ -47,6 +49,20 @@ final class Increment43UnsupportedGeneratedWire extends Module:
     val _ = generatedWire
     ()
 
+final class Increment43RepeatedSymbolicGeneratedNodes extends Module:
+  val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
+
+  hdlRange(0, lanes): _ =>
+    val first = node(Electrical)
+    val _ = first
+    ()
+
+  hdlRange(0, lanes): _ =>
+    hdlRange(0, lanes): _ =>
+      val nested = node(Electrical)
+      val _ = nested
+      ()
+
 object Increment43RangeConstructionTests extends TestSuite:
   private def workDirectory(): Path =
     Files.createTempDirectory("nodal-increment43-range-")
@@ -86,7 +102,7 @@ object Increment43RangeConstructionTests extends TestSuite:
       assert(attributes("integer_range_lower") == "1")
       assert(attributes("integer_range_upper") == "4")
       assert(attributes("classification") == "structural")
-      assert(attributes("structural_effects") == "generate")
+      assert(attributes("structural_effects") == "topology")
 
     test("literal hdlRange retains a concrete finite envelope"):
       val snapshot = ConstructionKernel.inspect(new Increment43LiteralGeneratedNode)
@@ -105,11 +121,55 @@ object Increment43RangeConstructionTests extends TestSuite:
       assert(first.text.contains("\"nodal.parameter_envelope\""))
       assert(first.text.contains("classification = \"structural\""))
       assert(first.text.contains("policy = \"static_generate\""))
+      assert(first.text.contains("effects = [\"topology\"]"))
+      assert(!first.text.contains("effects = [\"generate\"]"))
       assert(first.text.contains("\"nodal.generate\""))
       assert(first.text.contains("\"nodal.node\""))
       assert(first.text.contains("maximum_trip_count = 4 : i64"))
       assert(first.text.contains("upper = @lanes"))
       assert(first.text.indexOf("\"nodal.generate\"") < first.text.indexOf("\"nodal.node\""))
+
+    test("repeated nested generation retains one canonical topology effect"):
+      val first = ConstructionKernel.inspect(new Increment43RepeatedSymbolicGeneratedNodes)
+      val second = ConstructionKernel.inspect(new Increment43RepeatedSymbolicGeneratedNodes)
+      assert(first == second)
+      assert(first.generatedRegions.size == 3)
+      assert(first.generatedRegions.count(_.parent.nonEmpty) == 1)
+      assert(first.generatedRegions.flatMap(_.declarations).distinct.size == 2)
+      val parameter = first.modules.head.declarations.find(_.name == "lanes").get
+      assert(parameter.attributes.toMap.apply("structural_effects") == "topology")
+      val document = ScalaToMlirBridge.fromSnapshot(first)
+      assert(document.text.contains("effects = [\"topology\"]"))
+      assert(!document.text.contains("effects = [\"generate\"]"))
+
+    test("bridge rejects missing empty and unsupported structural effects"):
+      val snapshot = ConstructionKernel.inspect(new Increment43SymbolicGeneratedNode)
+      val parameter = snapshot.modules.head.declarations.find(_.name == "lanes").get
+      val invalidEffects = Vector(
+        None,
+        Some(""),
+        Some(" , "),
+        Some("generate"),
+        Some("topology,generate")
+      )
+      for effect <- invalidEffects do
+        val declarations = snapshot.modules.head.declarations.map: declaration =>
+          if declaration.path != parameter.path then declaration
+          else
+            declaration.copy(
+              attributes = declaration.attributes.filterNot(_._1 == "structural_effects") ++
+                effect.toVector.map(value => "structural_effects" -> value)
+            )
+        val forged = snapshot.copy(
+          modules = snapshot.modules.updated(
+            0,
+            snapshot.modules.head.copy(declarations = declarations)
+          )
+        )
+        val failure = scala.util.Try(ScalaToMlirBridge.fromSnapshot(forged))
+          .failed.get.asInstanceOf[BridgeException]
+        assert(failure.diagnostic.code == "NODAL-BRIDGE-043")
+        assert(failure.diagnostic.semanticPath.contains(parameter.path))
 
     test("symbolic generation rejects missing finite parameter ranges"):
       val failure = constructionFailure(
@@ -159,4 +219,38 @@ object Increment43RangeConstructionTests extends TestSuite:
                   false,
                   s"${failure.diagnostic}\n${failure.standardError}"
                 )
+          finally delete(directory)
+
+    test("native independently rejects forged envelope effects when configured"):
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          val directory = workDirectory()
+          try
+            val document = ScalaToMlirBridge.lower(new Increment43SymbolicGeneratedNode)
+            assert(document.text.contains("effects = [\"topology\"]"))
+            for replacement <- Vector("effects = [\"generate\"]", "effects = []") do
+              val text = document.text.replace("effects = [\"topology\"]", replacement)
+              assert(text != document.text)
+              val hash = MessageDigest.getInstance("SHA-256")
+                .digest(text.getBytes(StandardCharsets.UTF_8))
+                .map(value => f"${value & 0xff}%02x").mkString
+              val forged = document.copy(text = text, sha256 = hash)
+              NativeCompilerClient.run(
+                forged,
+                NativeCompilerRequest(
+                  executable = Path.of(executable).toAbsolutePath,
+                  arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
+                  workingDirectory = directory,
+                  timeout = Duration.ofSeconds(30)
+                )
+              ) match
+                case failure: NativeCompilerFailure =>
+                  assert(failure.exitCode.contains(1))
+                  assert(failure.diagnostic.code == "NODAL-PARAMETER-ENVELOPE-001")
+                case success: NativeCompilerSuccess =>
+                  scala.Predef.assert(
+                    false,
+                    s"invalid envelope accepted: ${success.normalizedMlir}"
+                  )
           finally delete(directory)

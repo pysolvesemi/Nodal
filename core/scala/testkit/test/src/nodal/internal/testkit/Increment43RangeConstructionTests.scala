@@ -270,7 +270,6 @@ object Increment43RangeConstructionTests extends TestSuite:
                   )
           finally delete(directory)
 
-
     test("native independently rejects forged generated ownership when configured"):
       sys.env.get("NODAL_NODALC") match
         case None => assert(true)

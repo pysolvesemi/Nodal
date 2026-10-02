@@ -68,9 +68,9 @@ private[nodal] object IterationDomain:
   /** Prove a positive, finite half-open structural domain without substituting parameter defaults.
     *
     * The outer endpoints are conservative: the smallest possible lower bound, largest possible
-    * upper bound, and smallest possible positive step establish the maximum materialized count.
-    * A finite parameter range is therefore enough to prove an envelope even when maximum is
-    * omitted. identicalBounds preserves the legal always-empty hdlRange(p, p) case.
+    * upper bound, and smallest possible positive step establish the maximum materialized count. A
+    * finite parameter range is therefore enough to prove an envelope even when maximum is omitted.
+    * identicalBounds preserves the legal always-empty hdlRange(p, p) case.
     */
   def structural(
       lower: Bounds,

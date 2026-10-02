@@ -14,11 +14,13 @@ final class Increment43SymbolicGeneratedNode extends Module:
 
   hdlRange(0, lanes): _ =>
     val tap = node(Electrical)
+    val _ = tap
     ()
 
 final class Increment43LiteralGeneratedNode extends Module:
   hdlRange(0, 3): _ =>
     val tap = node(Electrical)
+    val _ = tap
     ()
 
 final class Increment43MissingRange extends Module:
@@ -42,6 +44,7 @@ final class Increment43MaximumTooSmall extends Module:
 final class Increment43UnsupportedGeneratedWire extends Module:
   hdlRange(0, 2): _ =>
     val generatedWire = wire(UInt(1))
+    val _ = generatedWire
     ()
 
 object Increment43RangeConstructionTests extends TestSuite:

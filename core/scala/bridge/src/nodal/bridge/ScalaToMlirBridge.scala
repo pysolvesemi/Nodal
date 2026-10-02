@@ -125,6 +125,11 @@ private[nodal] object ScalaToMlirBridge:
       .view
       .mapValues(_.map(expression => expression.path -> expression).toMap)
       .toMap
+    private val generatedRegionsByOwner = snapshot.generatedRegions
+      .groupBy(_.owner)
+      .view
+      .mapValues(_.sortBy(_.path))
+      .toMap
     private val topologyByOwner = snapshot.topology
       .groupBy(_.owner)
       .view
@@ -728,7 +733,7 @@ ${indent(body, 2)}
           case "input" | "output" =>
             body += renderPort(module, declaration, localDomains)
           case "parameter" =>
-            body += renderParameter(declaration)
+            body ++= renderParameter(declaration)
           case _ => ()
 
       module.instances.sortBy(_.path).zipWithIndex.foreach: (instance, index) =>
@@ -788,49 +793,58 @@ ${indent(body, 2)}
 
       val externallyBoundTerminals =
         externallyBoundTerminalsByModule.getOrElse(module.path, Set.empty)
-      terminalDeclarations(module).zipWithIndex.foreach: (declaration, index) =>
-        val discipline = conservativeDiscipline(declaration)
-        val resultType = s"""!nodal.terminal<${quoted(discipline)}>"""
-        val result = s"%terminal_$index"
-        val opName =
-          if declaration.kind == "analog-node" then "nodal.node"
-          else "nodal.terminal"
-        val boundaryAttributes = declaration.kind match
-          case "analog-input" => Vector(
-              "direction" -> quoted("input"),
-              "flow_orientation" -> quoted("into_component")
-            )
-          case "analog-output" => Vector(
-              "direction" -> quoted("output"),
-              "flow_orientation" -> quoted("into_component")
-            )
-          case "analog-inout" | "conservative-terminal" => Vector(
-              "direction" -> quoted("inout"),
-              "flow_orientation" -> quoted("into_component")
-            )
-          case _ => Vector.empty
-        body += operation(
-          opName,
-          results = Vector(result),
-          resultTypes = Vector(resultType),
-          attributes = Vector(
-            "name" -> quoted(declaration.name),
-            "source_path" -> quoted(declaration.path),
-            "metadata" -> bridgeMetadata(
-              declaration.path,
-              Vector(
-                "declaration_kind" -> quoted(declaration.kind),
-                "declared_discipline" -> quoted(
-                  declaration.attributes.toMap.getOrElse("discipline", discipline)
-                )
-              ) ++ Option.when(externallyBoundTerminals.contains(declaration.path))(
-                "allow_floating" -> boolean(true)
+      val generatedDeclarationPaths =
+        generatedRegionsFor(module).flatMap(_.declarations).toSet
+      terminalDeclarations(module)
+        .filterNot(declaration => generatedDeclarationPaths.contains(declaration.path))
+        .zipWithIndex
+        .foreach: (declaration, index) =>
+          val discipline = conservativeDiscipline(declaration)
+          val resultType = s"""!nodal.terminal<${quoted(discipline)}>"""
+          val result = s"%terminal_$index"
+          val opName =
+            if declaration.kind == "analog-node" then "nodal.node"
+            else "nodal.terminal"
+          val boundaryAttributes = declaration.kind match
+            case "analog-input" => Vector(
+                "direction" -> quoted("input"),
+                "flow_orientation" -> quoted("into_component")
               )
-            )
-          ) ++ boundaryAttributes,
-          semanticPath = declaration.path
-        )
-        values.update(declaration.path, result -> resultType)
+            case "analog-output" => Vector(
+                "direction" -> quoted("output"),
+                "flow_orientation" -> quoted("into_component")
+              )
+            case "analog-inout" | "conservative-terminal" => Vector(
+                "direction" -> quoted("inout"),
+                "flow_orientation" -> quoted("into_component")
+              )
+            case _ => Vector.empty
+          body += operation(
+            opName,
+            results = Vector(result),
+            resultTypes = Vector(resultType),
+            attributes = Vector(
+              "name" -> quoted(declaration.name),
+              "source_path" -> quoted(declaration.path),
+              "metadata" -> bridgeMetadata(
+                declaration.path,
+                Vector(
+                  "declaration_kind" -> quoted(declaration.kind),
+                  "declared_discipline" -> quoted(
+                    declaration.attributes.toMap.getOrElse("discipline", discipline)
+                  )
+                ) ++ Option.when(externallyBoundTerminals.contains(declaration.path))(
+                  "allow_floating" -> boolean(true)
+                )
+              )
+            ) ++ boundaryAttributes,
+            semanticPath = declaration.path
+          )
+          values.update(declaration.path, result -> resultType)
+
+      generatedRegionsFor(module)
+        .filter(_.parent.isEmpty)
+        .foreach(region => body += renderGeneratedRegion(module, region, declarationsByPath))
 
       val topology = topologyEntries(module)
       val childEndpoints = topology
@@ -1548,7 +1562,7 @@ ${indent(body, 2)}
 
     private def renderParameter(
         declaration: KernelDeclarationSnapshot
-    ): String =
+    ): Vector[String] =
       val dataType = declaration.dataType
         .map(parseType(_, declaration.path))
         .getOrElse(
@@ -1566,22 +1580,105 @@ ${indent(body, 2)}
           Some(declaration.path)
         )
       )
-      operation(
-        "nodal.parameter",
-        attributes = Vector(
-          "sym_name" -> quoted(stableLocalSymbol("parameter", declaration.name)),
-          "type" -> dataType,
-          "default_value" -> typedLiteral(defaultValue, dataType, declaration.path),
-          "variability" -> quoted("symbolic"),
-          "metadata" -> bridgeMetadata(
-            declaration.path,
-            declaration.attributes
-              .filterNot(_._1 == "default")
-              .map((key, value) => normalizeKey(key) -> quoted(value))
-          )
-        ),
-        semanticPath = declaration.path
+      val classification = attributes.getOrElse("classification", "ordinary")
+      val parameterSymbol = stableLocalSymbol("parameter", declaration.name)
+      val rendered = mutable.ArrayBuffer(
+        operation(
+          "nodal.parameter",
+          attributes = Vector(
+            "sym_name" -> quoted(parameterSymbol),
+            "type" -> dataType,
+            "default_value" -> typedLiteral(defaultValue, dataType, declaration.path),
+            "variability" -> quoted("symbolic"),
+            "classification" -> quoted(classification),
+            "metadata" -> bridgeMetadata(
+              declaration.path,
+              declaration.attributes
+                .filterNot(_._1 == "default")
+                .map((key, value) => normalizeKey(key) -> quoted(value))
+            )
+          ),
+          semanticPath = declaration.path
+        )
       )
+      if classification == "structural" then
+        if dataType != "i64" then
+          fail(
+            "NODAL-BRIDGE-043",
+            "structural hdlRange parameters currently require Integer type",
+            Some(declaration.path)
+          )
+        val lower = attributes.get("integer_range_lower").flatMap(_.toIntOption).getOrElse(
+          fail(
+            "NODAL-BRIDGE-043",
+            "structural hdlRange parameter has no finite lower range",
+            Some(declaration.path)
+          )
+        )
+        val upper = attributes.get("integer_range_upper").flatMap(_.toIntOption).getOrElse(
+          fail(
+            "NODAL-BRIDGE-043",
+            "structural hdlRange parameter has no finite upper range",
+            Some(declaration.path)
+          )
+        )
+        val prefix = stableLocalSymbol("parameter_range", declaration.path)
+        val lowerResult = s"%${prefix}_lower"
+        val upperResult = s"%${prefix}_upper"
+        rendered += operation(
+          "nodal.const_literal",
+          results = Vector(lowerResult),
+          resultTypes = Vector("i64"),
+          attributes = Vector(
+            "value" -> integer(lower),
+            "spelling" -> quoted(lower.toString),
+            "metadata" -> bridgeMetadata(s"${declaration.path}.range.lower", Vector.empty)
+          ),
+          semanticPath = s"${declaration.path}.range.lower"
+        )
+        rendered += operation(
+          "nodal.const_literal",
+          results = Vector(upperResult),
+          resultTypes = Vector("i64"),
+          attributes = Vector(
+            "value" -> integer(upper),
+            "spelling" -> quoted(upper.toString),
+            "metadata" -> bridgeMetadata(s"${declaration.path}.range.upper", Vector.empty)
+          ),
+          semanticPath = s"${declaration.path}.range.upper"
+        )
+        rendered += operation(
+          "nodal.parameter_constraint",
+          operands = Vector(lowerResult, upperResult),
+          operandTypes = Vector("i64", "i64"),
+          attributes = Vector(
+            "parameter" -> symbolReference(parameterSymbol),
+            "constraint_kind" -> quoted("range"),
+            "lower_inclusive" -> boolean(true),
+            "upper_inclusive" -> boolean(true),
+            "metadata" -> bridgeMetadata(s"${declaration.path}.range", Vector.empty)
+          ),
+          semanticPath = s"${declaration.path}.range"
+        )
+        val effects = attributes
+          .getOrElse("structural_effects", "generate")
+          .split(",")
+          .toVector
+          .map(_.trim)
+          .filter(_.nonEmpty)
+          .distinct
+          .sorted
+        rendered += operation(
+          "nodal.parameter_envelope",
+          attributes = Vector(
+            "parameter" -> symbolReference(parameterSymbol),
+            "effects" -> array(effects.map(quoted)),
+            "policy" -> quoted("static_generate"),
+            "metadata" -> bridgeMetadata(s"${declaration.path}.envelope", Vector.empty)
+          ),
+          semanticPath = s"${declaration.path}.envelope"
+        )
+      rendered.toVector
 
     private def renderInstance(
         instance: KernelInstanceSnapshot,
@@ -1851,6 +1948,102 @@ ${indent(body, 2)}
       module.declarations.filter(declaration =>
         terminalKinds.contains(declaration.kind)
       ).sortBy(_.path)
+
+    private def generatedRegionsFor(
+        module: KernelModuleSnapshot
+    ): Vector[KernelGeneratedRegionSnapshot] =
+      generatedRegionsByOwner.getOrElse(module.path, Vector.empty)
+
+    private def generatedBoundAttribute(
+        module: KernelModuleSnapshot,
+        value: String,
+        path: String
+    ): String =
+      value.toIntOption match
+        case Some(literal) => integer(literal)
+        case None =>
+          val declaration = module.declarations.find(_.path == value).getOrElse(
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated symbolic bound has no Module parameter declaration",
+              Some(path)
+            )
+          )
+          if declaration.kind != "parameter" ||
+            declaration.attributes.toMap.get("classification") != Some("structural")
+          then
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated symbolic bound must reference a structural parameter",
+              Some(path)
+            )
+          symbolReference(stableLocalSymbol("parameter", declaration.name))
+
+    private def renderGeneratedRegion(
+        module: KernelModuleSnapshot,
+        region: KernelGeneratedRegionSnapshot,
+        declarationsByPath: Map[String, KernelDeclarationSnapshot]
+    ): String =
+      val nested = mutable.ArrayBuffer.empty[String]
+      region.declarations.sorted.foreach: declarationPath =>
+        val declaration = declarationsByPath.getOrElse(
+          declarationPath,
+          fail(
+            "NODAL-BRIDGE-043",
+            "generated declaration is absent from its owning Module",
+            Some(region.path)
+          )
+        )
+        if declaration.kind != "analog-node" then
+          fail(
+            "NODAL-BRIDGE-043",
+            s"generated declaration kind '${declaration.kind}' is not enabled by this F-043 stage",
+            Some(declaration.path)
+          )
+        val discipline = conservativeDiscipline(declaration)
+        val resultType = s"""!nodal.terminal<${quoted(discipline)}>"""
+        val result = s"%${stableLocalSymbol("generated_node", declaration.path)}"
+        nested += operation(
+          "nodal.node",
+          results = Vector(result),
+          resultTypes = Vector(resultType),
+          attributes = Vector(
+            "name" -> quoted(declaration.name),
+            "source_path" -> quoted(declaration.path),
+            "metadata" -> bridgeMetadata(
+              declaration.path,
+              Vector(
+                "declaration_kind" -> quoted(declaration.kind),
+                "generated_owner" -> quoted(region.path),
+                "induction" -> quoted(region.induction)
+              )
+            )
+          ),
+          semanticPath = declaration.path
+        )
+
+      generatedRegionsFor(module)
+        .filter(_.parent.contains(region.path))
+        .sortBy(_.path)
+        .foreach(child => nested += renderGeneratedRegion(module, child, declarationsByPath))
+
+      operation(
+        "nodal.generate",
+        attributes = Vector(
+          "induction" -> quoted(stableLocalSymbol("induction", lastSegment(region.induction))),
+          "lower" -> generatedBoundAttribute(module, region.lower, region.path),
+          "upper" -> generatedBoundAttribute(module, region.upperExclusive, region.path),
+          "step" -> generatedBoundAttribute(module, region.step, region.path),
+          "metadata" -> bridgeMetadata(
+            region.path,
+            Vector(
+              "maximum_trip_count" -> integer(region.maximumTripCount)
+            ) ++ region.maximum.toVector.map(value => "declared_maximum" -> integer(value))
+          )
+        ),
+        regions = Vector(nested.mkString("\n")),
+        semanticPath = region.path
+      )
 
     private def topologyEntries(
         module: KernelModuleSnapshot

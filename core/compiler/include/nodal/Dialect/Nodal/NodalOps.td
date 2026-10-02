@@ -609,7 +609,7 @@ def Nodal_TerminalOp : Nodal_Op<"terminal", [HasParent<"ModuleOp">]> {
   let hasVerifier = 1;
 }
 
-def Nodal_NodeOp : Nodal_Op<"node", [HasParent<"ModuleOp">]> {
+def Nodal_NodeOp : Nodal_Op<"node", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Internal conservative node";
   let arguments = (ins
     StrAttr:$name,

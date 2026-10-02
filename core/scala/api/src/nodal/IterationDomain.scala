@@ -8,7 +8,7 @@ package nodal
 private[nodal] object IterationDomain:
   enum ProblemKind:
     case InvalidStep, NegativeMaximum, NegativeCount, CountOverflow, MaximumExceeded
-    case OrdinalOutOfBounds
+    case InvalidDirection, UnboundedSymbolicDomain, OrdinalOutOfBounds
 
   final case class Problem(kind: ProblemKind, message: String)
 
@@ -52,6 +52,56 @@ private[nodal] object IterationDomain:
       else if maximum.exists(limit => count > limit.toLong) then
         Left(Problem(ProblemKind.MaximumExceeded, "iteration count exceeds its declared maximum"))
       else Right(new Static(lower, upperExclusive, step, count.toInt))
+
+  /** Closed interval used only for proving the finite envelope of a symbolic structural bound. */
+  final case class Bounds(lower: Int, upper: Int):
+    require(lower <= upper, "iteration bound interval must be ordered")
+
+  final case class Structural(
+      lower: Bounds,
+      upperExclusive: Bounds,
+      step: Bounds,
+      maximum: Option[Int],
+      maximumTripCount: Int
+  )
+
+  /** Prove a positive, finite half-open structural domain without substituting parameter defaults.
+    *
+    * The outer endpoints are conservative: the smallest possible lower bound, largest possible
+    * upper bound, and smallest possible positive step establish the maximum materialized count.
+    * A finite parameter range is therefore enough to prove an envelope even when maximum is
+    * omitted. identicalBounds preserves the legal always-empty hdlRange(p, p) case.
+    */
+  def structural(
+      lower: Bounds,
+      upperExclusive: Bounds,
+      step: Bounds,
+      maximum: Option[Int],
+      identicalBounds: Boolean = false
+  ): Either[Problem, Structural] =
+    if step.lower <= 0 then
+      Left(Problem(ProblemKind.InvalidStep, "structural iteration step must stay positive"))
+    else if maximum.exists(_ < 0) then
+      Left(Problem(ProblemKind.NegativeMaximum, "iteration maximum must be non-negative"))
+    else if !identicalBounds && lower.upper > upperExclusive.lower then
+      Left(
+        Problem(
+          ProblemKind.InvalidDirection,
+          "symbolic structural bounds do not prove one half-open direction for every legal setting"
+        )
+      )
+    else
+      val distance =
+        if identicalBounds then 0L
+        else upperExclusive.upper.toLong - lower.lower.toLong
+      val count =
+        if distance <= 0L then 0L
+        else 1L + (distance - 1L) / step.lower.toLong
+      if count > Int.MaxValue.toLong then
+        Left(Problem(ProblemKind.CountOverflow, "iteration count exceeds 32-bit loop metadata"))
+      else if maximum.exists(limit => count > limit.toLong) then
+        Left(Problem(ProblemKind.MaximumExceeded, "iteration count exceeds its declared maximum"))
+      else Right(Structural(lower, upperExclusive, step, maximum, count.toInt))
 
   /** Repetition has an explicit count: a negative count is invalid, not an empty range. */
   def repeat(iterations: Int): Either[Problem, Static] =

@@ -55,12 +55,31 @@ through their existing obligations; they are not reverse prerequisites.
 No new numbered increment, F-043 prerequisite or implementation start is added.
 The versioned additive API gate and actual compiler/HDL parity are still required.
 
+### Portable Verilog Vec layouts and constant preservation
+
+[Portable Verilog Vec layouts and constant-preserving emission](portable-verilog-vec-layout-v0.1-plan.md)
+records the owner's 2026-10-02 request for packed or multidimensional unpacked
+internal arrays within the existing IEEE 1364-2005 target. Ports retain flat
+packed carriers, including the selected recursive named-field-vector ABI.
+The amendment adds concrete/symbolic factor preservation and the proposed
+`preserveConstantVecs`, `preserveConstantLoops` and internal `vecLayout` options.
+Loop preservation uses the approved unified `hdlRange` mixed-effect contract;
+it does not restore a requirement to choose separate range APIs.
+
+Its 18 new descendants belong to existing 54/58/65-67/159 obligations and live
+only in that plan. Existing 55-56 semantics, 83-88 optimization preservation,
+92 documentation and 97 final API review consume their applicable contracts
+without duplicate status or reverse parent dependencies. The bounded additive
+configuration gate is owned by 65. No new numbered increment, 43 prerequisite,
+SystemVerilog dependency, implementation start or completed checkbox is added.
+
 ## Ownership and status
 
 The main file owns its existing states, the lightweight amendment owns its
 previously added descendants, the modularization plan owns only F-160 and its
-descendants, and the compact scalar declaration amendment owns only its listed
-new F-097 descendants.
+descendants, the compact scalar declaration amendment owns only its listed
+new F-097 descendants, and the portable-Verilog Vec amendment owns only its
+listed new 54/58/65-67/159 descendants.
 Parent completion requires all applicable children and explicit prerequisites
 across these linked documents. Planning updates do not complete checkboxes;
 existing IDs and accepted evidence remain unchanged.
@@ -68,7 +87,9 @@ existing IDs and accepted evidence remain unchanged.
 Owners are 42 (hierarchy), 160 (pre-43 modularization), 43 (analog generation and
 shared capture), 55-58/159 (digital semantics and unified iteration), 96
 (measured performance and optional Rust), and 97 (compact declaration API
-refinement). No new repository, mandatory Rust rewrite, semantic redesign or
-reverse prerequisite for 42 is introduced. `AGENTS.md` is unchanged.
+refinement). Portable-Verilog Vec work additionally belongs to 54/58/65-67/159,
+with 83-88 preservation and 92 documentation through their existing obligations.
+No new repository, mandatory Rust rewrite, semantic redesign or reverse
+prerequisite for 42 is introduced. `AGENTS.md` is unchanged.
 These planning amendments are not implementation or acceptance evidence;
 future implementation and closure still require their applicable qualification.

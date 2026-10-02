@@ -438,7 +438,8 @@ object Rdc:
       reset: Expr[Reset],
       to: ClockDomain,
       stages: Int = 2
-  ): Expr[Reset] = CandidateRuntime.expr(reset, to, stages)
+  ): Expr[Reset] =
+    CandidateRuntime.expr(reset, to, stages)
 
 object ResetController:
   def combine(resets: Expr[Reset]*): Expr[Reset] = CandidateRuntime.expr(resets)
@@ -685,6 +686,22 @@ extension (left: Expr[Real])
     CandidateRuntime.booleanExpr("real_le", left, right)
   infix def <+(value: Expr[Real]): Unit =
     CandidateRuntime.analogContribution(left, value)
+
+extension (left: Expr[Integer])
+  @targetName("integerAddition")
+  def +(right: Expr[Integer]): Expr[Integer] =
+    CandidateRuntime.integerExpr("analog_add", left, right)
+  @targetName("integerSubtraction")
+  def -(right: Expr[Integer]): Expr[Integer] =
+    CandidateRuntime.integerExpr("analog_sub", left, right)
+  @targetName("integerMultiplication")
+  def *(right: Expr[Integer]): Expr[Integer] =
+    CandidateRuntime.integerExpr("analog_mul", left, right)
+  @targetName("integerDivision")
+  def /(right: Expr[Integer]): Expr[Integer] =
+    CandidateRuntime.integerExpr("analog_div", left, right)
+  @targetName("integerNegation")
+  def unary_- : Expr[Integer] = CandidateRuntime.integerExpr("analog_neg", left)
 
 extension (left: Expr[UInt])
   @targetName("uintAddition")
@@ -1100,6 +1117,15 @@ private[nodal] object CandidateRuntime:
     val expression = new KernelExpr[Bool](
       values.toVector,
       resultType = Some(KernelTypeDescriptor("Bool")),
+      operation = Some(operation)
+    )
+    ConstructionKernel.expression(expression)
+    expression
+
+  def integerExpr(operation: String, values: Expr[Integer]*): Expr[Integer] =
+    val expression = new KernelExpr[Integer](
+      values.toVector,
+      resultType = Some(KernelTypeDescriptor("Integer")),
       operation = Some(operation)
     )
     ConstructionKernel.expression(expression)

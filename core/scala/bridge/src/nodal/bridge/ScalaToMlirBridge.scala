@@ -561,6 +561,74 @@ ${indent(body, 2)}
         "NODAL-BRIDGE-034",
         "parameter-expression semantic path"
       )
+      requireUnique(
+        snapshot.generatedRegions.map(_.path),
+        "NODAL-BRIDGE-043",
+        "generated-region semantic path"
+      )
+      requireUnique(
+        snapshot.generatedRegions.map(_.induction),
+        "NODAL-BRIDGE-043",
+        "generated induction identity"
+      )
+      requireUnique(
+        snapshot.generatedRegions.flatMap(_.declarations),
+        "NODAL-BRIDGE-043",
+        "generated declaration ownership"
+      )
+      val generatedByPath =
+        snapshot.generatedRegions.map(region => region.path -> region).toMap
+      snapshot.generatedRegions.foreach: region =>
+        val module = modulesByPath.getOrElse(
+          region.owner,
+          fail(
+            "NODAL-BRIDGE-043",
+            "generated region has no owning Module",
+            Some(region.path)
+          )
+        )
+        def owned(path: String): Boolean =
+          path.startsWith(s"${region.owner}.")
+        if !owned(region.path) || !owned(region.induction) then
+          fail(
+            "NODAL-BRIDGE-043",
+            "generated region or induction identity escapes its owning Module",
+            Some(region.path)
+          )
+        val declarationPaths = module.declarations.map(_.path).toSet
+        region.declarations.foreach: declaration =>
+          if !declarationPaths.contains(declaration) then
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated declaration is absent from its owning Module",
+              Some(declaration)
+            )
+        val seen = mutable.HashSet(region.path)
+        var parentPath = region.parent
+        while parentPath.nonEmpty do
+          val parent = generatedByPath.getOrElse(
+            parentPath.get,
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated parent region is absent",
+              Some(region.path)
+            )
+          )
+          if !seen.add(parent.path) then
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated parent chain contains a cycle",
+              Some(region.path)
+            )
+          if parent.owner != region.owner ||
+            !region.path.startsWith(s"${parent.path}.")
+          then
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated parent does not own the nested region",
+              Some(region.path)
+            )
+          parentPath = parent.parent
       snapshot.parameterExpressions.foreach: expression =>
         if !moduleSymbols.contains(expression.owner) then
           fail(
@@ -2024,6 +2092,8 @@ ${indent(body, 2)}
           attributes = Vector(
             "name" -> quoted(declaration.name),
             "source_path" -> quoted(declaration.path),
+            "generated_owner" -> quoted(region.path),
+            "generated_induction" -> quoted(region.induction),
             "metadata" -> bridgeMetadata(
               declaration.path,
               Vector(
@@ -2048,6 +2118,8 @@ ${indent(body, 2)}
           "lower" -> generatedBoundAttribute(module, region.lower, region.path),
           "upper" -> generatedBoundAttribute(module, region.upperExclusive, region.path),
           "step" -> generatedBoundAttribute(module, region.step, region.path),
+          "region_id" -> quoted(region.path),
+          "induction_path" -> quoted(region.induction),
           "metadata" -> bridgeMetadata(
             region.path,
             Vector(

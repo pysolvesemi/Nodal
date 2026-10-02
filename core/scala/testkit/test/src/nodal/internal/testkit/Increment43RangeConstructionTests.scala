@@ -171,6 +171,21 @@ object Increment43RangeConstructionTests extends TestSuite:
         assert(failure.diagnostic.code == "NODAL-BRIDGE-043")
         assert(failure.diagnostic.semanticPath.contains(parameter.path))
 
+    test("bridge rejects forged generated ownership and parent cycles"):
+      val snapshot = ConstructionKernel.inspect(new Increment43SymbolicGeneratedNode)
+      val region = snapshot.generatedRegions.head
+      val forgeries = Vector(
+        region.copy(owner = "ForeignModule"),
+        region.copy(induction = "ForeignModule.expr_0"),
+        region.copy(declarations = Vector("ForeignModule.tap")),
+        region.copy(parent = Some(region.path))
+      )
+      for forgedRegion <- forgeries do
+        val forged = snapshot.copy(generatedRegions = Vector(forgedRegion))
+        val failure = scala.util.Try(ScalaToMlirBridge.fromSnapshot(forged))
+          .failed.get.asInstanceOf[BridgeException]
+        assert(failure.diagnostic.code == "NODAL-BRIDGE-043")
+
     test("symbolic generation rejects missing finite parameter ranges"):
       val failure = constructionFailure(
         ConstructionKernel.inspect(new Increment43MissingRange)
@@ -252,5 +267,47 @@ object Increment43RangeConstructionTests extends TestSuite:
                   scala.Predef.assert(
                     false,
                     s"invalid envelope accepted: ${success.normalizedMlir}"
+                  )
+          finally delete(directory)
+
+
+    test("native independently rejects forged generated ownership when configured"):
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          val directory = workDirectory()
+          try
+            val snapshot = ConstructionKernel.inspect(new Increment43SymbolicGeneratedNode)
+            val region = snapshot.generatedRegions.head
+            val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+            val forgeries = Vector(
+              s"""generated_owner = "${region.path}"""" ->
+                s"""generated_owner = "${region.path}.forged"""",
+              s"""generated_induction = "${region.induction}"""" ->
+                s"""generated_induction = "${region.induction}.forged""""
+            )
+            for (needle, replacement) <- forgeries do
+              assert(document.text.contains(needle))
+              val text = document.text.replace(needle, replacement)
+              val hash = MessageDigest.getInstance("SHA-256")
+                .digest(text.getBytes(StandardCharsets.UTF_8))
+                .map(value => f"${value & 0xff}%02x").mkString
+              val forged = document.copy(text = text, sha256 = hash)
+              NativeCompilerClient.run(
+                forged,
+                NativeCompilerRequest(
+                  executable = Path.of(executable).toAbsolutePath,
+                  arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
+                  workingDirectory = directory,
+                  timeout = Duration.ofSeconds(30)
+                )
+              ) match
+                case failure: NativeCompilerFailure =>
+                  assert(failure.exitCode.contains(1))
+                  assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
+                case success: NativeCompilerSuccess =>
+                  scala.Predef.assert(
+                    false,
+                    s"forged generated ownership accepted: ${success.normalizedMlir}"
                   )
           finally delete(directory)

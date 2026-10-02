@@ -449,6 +449,8 @@ def Nodal_GenerateOp : Nodal_Op<"generate", [NoTerminator]> {
     AnyAttr:$lower,
     AnyAttr:$upper,
     AnyAttr:$step,
+    OptionalAttr<StrAttr>:$region_id,
+    OptionalAttr<StrAttr>:$induction_path,
     DictionaryAttr:$metadata
   );
   let regions = (region SizedRegion<1>:$body);
@@ -614,6 +616,8 @@ def Nodal_NodeOp : Nodal_Op<"node", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let arguments = (ins
     StrAttr:$name,
     OptionalAttr<StrAttr>:$source_path,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs Nodal_TerminalType:$result);

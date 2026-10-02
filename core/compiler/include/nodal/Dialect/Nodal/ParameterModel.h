@@ -8,6 +8,7 @@
 
 #include "llvm/ADT/StringRef.h"
 
+#include <cstdint>
 #include <string>
 
 namespace nodal {
@@ -19,6 +20,20 @@ mlir::LogicalResult verifyParameterDeclaration(mlir::Operation *operation);
 /// Verify cross-operation constant folding, constraints, overrides,
 /// structural envelopes, and dynamic-value exclusion for the whole design.
 mlir::LogicalResult verifyParameterModel(mlir::ModuleOp module);
+
+/// Conservative closed bounds over every legal parameter setting. These are
+/// mathematical integers, not evaluated defaults or a wrapping target value.
+struct ParameterIntegerBounds {
+  int64_t lower;
+  int64_t upper;
+};
+
+/// Analyze the canonical integer constant-expression DAG without substituting
+/// overridable defaults. Requires explicit finite ranges for symbolic parameters;
+/// fixed parameters retain the variability of their default expression. Unknown,
+/// cyclic, non-integer, overflowing or unsupported proofs fail closed. This
+/// bounded profile represents endpoints in signed 64-bit host metadata only.
+mlir::FailureOr<ParameterIntegerBounds> inferParameterIntegerBounds(mlir::Value value);
 
 /// Render a compile-time expression using retained literal spellings.
 mlir::FailureOr<std::string> renderParameterConstantExpression(mlir::Value value);

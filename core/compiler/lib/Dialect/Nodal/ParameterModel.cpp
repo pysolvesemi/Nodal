@@ -850,15 +850,17 @@ public:
     if (!input)
       return failure();
     auto cached = values.find(input);
-    if (cached != values.end())
-      return cached->second ? FailureOr<IntegerBounds>(*cached->second) : failure();
-    if (activeValues.size() + activeParameters.size() >= 512 ||
-        !activeValues.insert(input).second)
+    if (cached != values.end()) {
+      if (!cached->second)
+        return failure();
+      return *cached->second;
+    }
+    if (activeValues.size() + activeParameters.size() >= 512 || !activeValues.insert(input).second)
       return failure();
     auto result = analyzeValue(input);
     activeValues.erase(input);
-    values.try_emplace(input, succeeded(result) ? std::optional<IntegerBounds>(*result)
-                                               : std::nullopt);
+    values.try_emplace(input,
+                       succeeded(result) ? std::optional<IntegerBounds>(*result) : std::nullopt);
     return result;
   }
 
@@ -866,15 +868,18 @@ public:
     if (!input)
       return failure();
     auto cached = parameters.find(input);
-    if (cached != parameters.end())
-      return cached->second ? FailureOr<IntegerBounds>(*cached->second) : failure();
+    if (cached != parameters.end()) {
+      if (!cached->second)
+        return failure();
+      return *cached->second;
+    }
     if (activeValues.size() + activeParameters.size() >= 512 ||
         !activeParameters.insert(input).second)
       return failure();
     auto result = analyzeParameter(input);
     activeParameters.erase(input);
     parameters.try_emplace(input, succeeded(result) ? std::optional<IntegerBounds>(*result)
-                                                   : std::nullopt);
+                                                    : std::nullopt);
     return result;
   }
 
@@ -893,11 +898,13 @@ public:
 private:
   FailureOr<IntegerBounds> literal(Attribute attribute, Type type) {
     auto constant = constantFromAttribute(attribute, type);
-    if (failed(constant) || constant->kind != ConstantKind::Integer ||
-        !constant->integerIsNarrow || !constant->dimension.empty())
+    if (failed(constant) || constant->kind != ConstantKind::Integer || !constant->integerIsNarrow ||
+        !constant->dimension.empty())
       return failure();
     IntegerBounds result{constant->integerValue, constant->integerValue};
-    return boundsFitType(result, type) ? FailureOr<IntegerBounds>(result) : failure();
+    if (!boundsFitType(result, type))
+      return failure();
+    return result;
   }
 
   FailureOr<IntegerBounds> analyzeParameter(Operation *input) {
@@ -953,7 +960,9 @@ private:
         return failure();
       intersection = candidate;
     }
-    return intersection ? FailureOr<IntegerBounds>(*intersection) : failure();
+    if (!intersection)
+      return failure();
+    return *intersection;
   }
 
   FailureOr<IntegerBounds> analyzeValue(Value input) {
@@ -1001,8 +1010,8 @@ private:
       const IntegerBounds right = operands[1];
       if (operationName == "div" || operationName == "mod") {
         if ((right.lower <= 0 && right.upper >= 0) ||
-            (left.lower == std::numeric_limits<int64_t>::min() &&
-             right.lower <= -1 && right.upper >= -1))
+            (left.lower == std::numeric_limits<int64_t>::min() && right.lower <= -1 &&
+             right.upper >= -1))
           return failure();
       }
       if (operationName == "mod") {
@@ -1010,15 +1019,14 @@ private:
         // magnitude bound is sound even when the divisor itself varies.
         llvm::APInt lowerMagnitude = wideInteger(right.lower).abs();
         llvm::APInt upperMagnitude = wideInteger(right.upper).abs();
-        llvm::APInt magnitude = lowerMagnitude.ugt(upperMagnitude) ? lowerMagnitude
-                                                                 : upperMagnitude;
+        llvm::APInt magnitude =
+            lowerMagnitude.ugt(upperMagnitude) ? lowerMagnitude : upperMagnitude;
         auto maximum = narrowInteger(magnitude - llvm::APInt(128, 1));
         if (failed(maximum))
           return failure();
         result = {left.lower < 0 ? std::max(left.lower, -*maximum) : 0,
                   left.upper > 0 ? std::min(left.upper, *maximum) : 0};
-      } else if (operationName == "sub" &&
-                 operation->getOperand(0) == operation->getOperand(1)) {
+      } else if (operationName == "sub" && operation->getOperand(0) == operation->getOperand(1)) {
         result = {0, 0};
       } else {
         bool first = true;
@@ -1026,7 +1034,7 @@ private:
           for (int64_t b : {right.lower, right.upper}) {
             llvm::APInt lhs = wideInteger(a);
             llvm::APInt rhs = wideInteger(b);
-            llvm::APInt computed = operationName == "add" ? lhs + rhs
+            llvm::APInt computed = operationName == "add"   ? lhs + rhs
                                    : operationName == "sub" ? lhs - rhs
                                    : operationName == "mul" ? lhs * rhs
                                                             : lhs.sdiv(rhs);
@@ -1044,7 +1052,9 @@ private:
         }
       }
     }
-    return boundsFitType(result, input.getType()) ? FailureOr<IntegerBounds>(result) : failure();
+    if (!boundsFitType(result, input.getType()))
+      return failure();
+    return result;
   }
 
   Operation *owner;
@@ -1062,8 +1072,8 @@ LogicalResult verifyGeneratedIntegerBounds(Operation *owner) {
     if (failed(result) || enclosingNodalModule(operation) != owner)
       return;
     bool symbolic = false;
-    for (llvm::StringRef name : {llvm::StringRef("lower"), llvm::StringRef("upper"),
-                                 llvm::StringRef("step")}) {
+    for (llvm::StringRef name :
+         {llvm::StringRef("lower"), llvm::StringRef("upper"), llvm::StringRef("step")}) {
       Attribute attribute = operation->getAttr(name);
       if (auto reference = llvm::dyn_cast_or_null<FlatSymbolRefAttr>(attribute)) {
         symbolic = true;
@@ -1104,7 +1114,7 @@ LogicalResult verifyGeneratedIntegerBounds(Operation *owner) {
     }
     bool identicalBounds = operation->getAttr("lower") == operation->getAttr("upper");
     if (!identicalBounds && ((step->lower > 0 && lower->upper > upper->lower) ||
-                            (step->upper < 0 && lower->lower < upper->upper)))
+                             (step->upper < 0 && lower->lower < upper->upper)))
       result = operation->emitOpError(
           "NODAL-ITERATION-043-003: generate direction is not proven for every legal parameter "
           "setting");

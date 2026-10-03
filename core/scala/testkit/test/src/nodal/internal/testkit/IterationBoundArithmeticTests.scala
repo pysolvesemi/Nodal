@@ -148,11 +148,12 @@ object IterationBoundArithmeticTests extends TestSuite:
       do
         val steps = Bounds(stepLower.toLong, stepUpper.toLong)
         val actual = IterationDomain.structural(lower, upper, steps, None).toOption.get
-        val counts = for
-          first <- lower.lower.toInt to lower.upper.toInt
-          end <- upper.lower.toInt to upper.upper.toInt
-          step <- stepLower to stepUpper
-        yield (first until end by step).size
+        val counts =
+          for
+            first <- lower.lower.toInt to lower.upper.toInt
+            end <- upper.lower.toInt to upper.upper.toInt
+            step <- stepLower to stepUpper
+          yield (first until end by step).size
         assert(actual.maximumTripCount == counts.max)
         assert(IterationDomain.structural(lower, upper, steps, Some(counts.max)).isRight)
         if counts.max > 0 then

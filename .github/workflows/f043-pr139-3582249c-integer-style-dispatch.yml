@@ -1,0 +1,279 @@
+name: F043 PR139 exact Integer style repair qualification
+on:
+  push:
+    branches: ['ci-control/f043-pr139-3582249c-integer-style-v1']
+    paths: ['.github/workflows/f043-pr139-3582249c-integer-style-dispatch.yml']
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: f043-pr139-3582249c-integer-style-dispatch
+  cancel-in-progress: false
+jobs:
+  dispatch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - name: Verify repaired candidate and dispatch three affected checks once
+        shell: python
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          import base64
+          import hashlib
+          import json
+          import os
+          import re
+          import time
+          import urllib.request
+          from pathlib import Path
+          
+          REPO = 'pysolvesemi/Nodal'
+          REPO_ID = 1340301335
+          PR = 139
+          TARGET = '3d5a6f259505ea5084cf7606c0cfeb92e5843e41'
+          TARGET_TREE = 'ac138f1d24e30671937a7e1b973618d5d10d8ec4'
+          HEAD = '3582249cff7ba5cb9dfa3a638f64c42713575d9b'
+          TREE = '50f4ffa9a1f1c42bb85d6298130b50d0a1c3f426'
+          PARENT = 'c8aadd29b6ba47464dce651163ea95ee82ba3785'
+          PARENT_TREE = 'a069f1448e8f0fa3a4322f5ee98432c7634d6824'
+          GITHUB_TREE = '61e6829f2a84dbc35aff1091ffcaed027449314c'
+          REF = 'increment/43-analog-arrays-generation'
+          CONTROL = 'ci-control/f043-pr139-3582249c-integer-style-v1'
+          FILE = '.github/workflows/f043-pr139-3582249c-integer-style-dispatch.yml'
+          TEST_FILE = 'core/scala/testkit/test/src/nodal/internal/testkit/Increment43IntegerExpressionTests.scala'
+          SOURCE_FILES = {TEST_FILE: ('744e7e68fc1aedcfe5210953614080a7c27bd5d7', 'modified')}
+          WORKFLOWS = {
+              338626156: ('.github/workflows/ci.yml', '906f29eff255f820b540e13111d4494e872daccf',
+                          '8e60508454a7d56af871e85cf92e54c608240f6fb156967563d90ac16dc12a20'),
+              342056804: ('.github/workflows/increment-20-scala-mlir-bridge.yml', '6408a35a0353adaefc3d85a08246d5238e302a0e',
+                          '72589312a568704f6a68a008cd5ea67af1b6ff4c1ff1817aa3c6180d8099fc4e'),
+              344342524: ('.github/workflows/increment-29-parameters-units.yml', 'b05c9bac999a55b824584287502bd24b5395f026',
+                          'f69d4c5e57791839e3654292d90c6cbea92760797914d93c564abe04b75f16b4'),
+          }
+          PRIOR = {
+              37010316208: (338626156, {
+                  110848215925: ('failure', 'Validate contracts, style, and online provenance'),
+                  110848216075: ('success', None),
+                  110848216720: ('success', None),
+                  110851603648: ('failure', 'Require every Core CI job'),
+              }),
+              37010339850: (342056804, {110848295185: ('failure', 'Validate bridge and predecessor contracts')}),
+              37010363635: (344342524, {110848370092: ('failure', 'Validate contracts and mutation tests')}),
+          }
+          PREFIX = '/repos/' + REPO
+          POSTS = {PREFIX + f'/actions/workflows/{workflow}/dispatches' for workflow in WORKFLOWS}
+          ACTIVE = {'queued', 'in_progress', 'waiting', 'pending', 'requested'}
+          
+          
+          def require(condition, message):
+              if not condition:
+                  raise RuntimeError(message)
+          
+          
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  raise RuntimeError('API redirect refused')
+          
+          
+          class Api:
+              def __init__(self, token):
+                  self.token = token
+                  self.posts = set()
+                  self.opener = urllib.request.build_opener(NoRedirect())
+          
+              def __call__(self, method, path, payload=None):
+                  require(path.startswith(PREFIX + '/') and '..' not in path and
+                          not any(c in path for c in '\r\n#'), 'unexpected API destination')
+                  if method == 'POST':
+                      require(path in POSTS and payload == {'ref': REF} and path not in self.posts,
+                              'write is not a fresh allowlisted dispatch')
+                      self.posts.add(path)
+                  else:
+                      require(method == 'GET' and payload is None, 'unexpected operation')
+                  request = urllib.request.Request(
+                      'https://api.github.com' + path, method=method,
+                      data=None if payload is None else json.dumps(payload).encode(),
+                      headers={'Authorization': 'Bearer ' + self.token, 'Accept': 'application/vnd.github+json',
+                               'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json'})
+                  with self.opener.open(request, timeout=30) as response:
+                      if method == 'POST':
+                          require(response.status == 204, 'dispatch not acknowledged')
+                          return None
+                      raw = response.read(2 * 1024 * 1024 + 1)
+                      require(len(raw) <= 2 * 1024 * 1024, 'API response exceeds bound')
+                      return json.loads(raw)
+          
+          
+          def pages(api, path, key):
+              result = []
+              total = None
+              separator = '&' if '?' in path else '?'
+              for page in range(1, 21):
+                  response = api('GET', path + separator + f'per_page=100&page={page}')
+                  count = response['total_count']
+                  require(type(count) is int and 0 <= count <= 2000, 'invalid inventory count')
+                  require(total is None or total == count, 'inventory moved during pagination')
+                  total = count
+                  batch = response[key]
+                  require(isinstance(batch, list) and len(batch) == min(100, total - len(result)),
+                          'incomplete inventory page')
+                  result.extend(batch)
+                  if len(result) == total:
+                      require(len({entry['id'] for entry in result}) == len(result), 'duplicate inventory identities')
+                      return result
+              raise RuntimeError('inventory pagination exceeded bound')
+          
+          
+          def identities(api, environment, workflow):
+              require(environment['GITHUB_REPOSITORY'] == REPO and
+                      environment['GITHUB_REPOSITORY_ID'] == str(REPO_ID) and
+                      environment['GITHUB_REF'] == 'refs/heads/' + CONTROL and
+                      environment['GITHUB_EVENT_NAME'] == 'push' and
+                      environment['GITHUB_RUN_ATTEMPT'] == '1' and
+                      re.fullmatch(r'[0-9a-f]{40}', environment['GITHUB_SHA']), 'wrong controller context or repeat')
+              controller = api('GET', PREFIX + '/commits/' + environment['GITHUB_SHA'])
+              require([p['sha'] for p in controller['parents']] == [TARGET] and
+                      [f['filename'] for f in controller['files']] == [FILE] and
+                      controller['files'][0]['status'] == 'added', 'controller scope changed')
+              for ref, sha in ((CONTROL, environment['GITHUB_SHA']), ('dev', TARGET), (REF, HEAD)):
+                  require(api('GET', PREFIX + '/git/ref/heads/' + ref)['object']['sha'] == sha, 'live ref moved')
+              for revision, tree in ((TARGET, TARGET_TREE), (PARENT, PARENT_TREE)):
+                  require(api('GET', PREFIX + '/git/commits/' + revision)['tree']['sha'] == tree, 'tree moved')
+              pr = api('GET', PREFIX + f'/pulls/{PR}')
+              require(pr['state'] == 'open' and pr['merged'] is False and pr['draft'] is True, 'PR state changed')
+              require(pr['base']['ref'] == 'dev' and pr['base']['sha'] == TARGET and
+                      pr['head']['ref'] == REF and pr['head']['sha'] == HEAD and
+                      pr['base']['repo']['id'] == REPO_ID and pr['head']['repo']['id'] == REPO_ID,
+                      'PR identities changed')
+              commit = api('GET', PREFIX + '/commits/' + HEAD)
+              require(commit['commit']['tree']['sha'] == TREE and
+                      [p['sha'] for p in commit['parents']] == [PARENT] and
+                      {f['filename']: (f['sha'], f['status']) for f in commit['files']} == SOURCE_FILES and
+                      len(commit['files']) == len(SOURCE_FILES) and
+                      commit['files'][0]['additions'] == 5 and commit['files'][0]['deletions'] == 1 and
+                      '[skip ci]' in commit['commit']['message'], 'candidate identity or scope changed')
+              path, blob, digest = WORKFLOWS[workflow]
+              registered = api('GET', PREFIX + f'/actions/workflows/{workflow}')
+              require(registered['id'] == workflow and registered['state'] == 'active' and registered['path'] == path,
+                      'wrong registered workflow')
+              for revision, tree in ((HEAD, TREE), (TARGET, TARGET_TREE)):
+                  top = api('GET', PREFIX + '/git/trees/' + tree)
+                  require(top.get('truncated') is False and
+                          [entry['sha'] for entry in top['tree'] if entry['path'] == '.github' and
+                           entry['type'] == 'tree'] == [GITHUB_TREE], 'audited inherited workflow tree changed')
+                  content = api('GET', PREFIX + '/contents/' + path + '?ref=' + revision)
+                  require(content['encoding'] == 'base64' and content['sha'] == blob, 'workflow blob changed')
+                  definition = base64.b64decode(content['content'])
+                  require(hashlib.sha256(definition).hexdigest() == digest and b'\n  workflow_dispatch:' in definition,
+                          'workflow definition changed')
+          
+          
+          def diagnosed_parent(api):
+              for run_id, (workflow, expected_jobs) in PRIOR.items():
+                  run = api('GET', PREFIX + f'/actions/runs/{run_id}')
+                  require(run['id'] == run_id and run['workflow_id'] == workflow and
+                          run['head_sha'] == PARENT and run['head_branch'] == REF and
+                          run['event'] == 'workflow_dispatch' and run['run_attempt'] == 1 and
+                          run['status'] == 'completed' and run['conclusion'] == 'failure', 'diagnosed parent run changed')
+                  jobs = pages(api, PREFIX + f'/actions/runs/{run_id}/jobs?filter=latest', 'jobs')
+                  require({job['id'] for job in jobs} == set(expected_jobs), 'diagnosed parent job identities changed')
+                  for job in jobs:
+                      conclusion, failed_step = expected_jobs[job['id']]
+                      require(job['run_id'] == run_id and job['head_sha'] == PARENT and job['run_attempt'] == 1 and
+                              job['status'] == 'completed' and job['conclusion'] == conclusion, 'parent job result changed')
+                      failures = [step['name'] for step in job['steps'] if step['conclusion'] == 'failure']
+                      require(failures == ([] if failed_step is None else [failed_step]), 'parent failure changed')
+          
+          
+          def inventory(api):
+              runs = pages(api, PREFIX + '/actions/runs?head_sha=' + HEAD, 'workflow_runs')
+              require(all(run['head_sha'] == HEAD for run in runs), 'wrong-head inventory')
+              return runs
+          
+          
+          def retain(runs, workflow, record):
+              matching = [run for run in runs if run['workflow_id'] == workflow]
+              if not matching:
+                  return False
+              require(len(matching) == 1, 'duplicate existing candidate runs')
+              run = matching[0]
+              require(run['head_branch'] == REF and run['event'] in {'workflow_dispatch', 'push', 'pull_request'},
+                      'existing run has unexpected context')
+              require(run['status'] in ACTIVE or (run['status'] == 'completed' and run['conclusion'] == 'success'),
+                      'existing candidate requires diagnosis, not another dispatch')
+              record('retained', workflow=workflow, run=run['id'], status=run['status'])
+              return True
+          
+          
+          def branch_idle(api, workflow):
+              runs = pages(api, PREFIX + '/actions/runs?branch=' + REF, 'workflow_runs')
+              require(not any(run['workflow_id'] == workflow and run['head_sha'] != HEAD and
+                              run['status'] in ACTIVE for run in runs), 'predecessor work remains active')
+          
+          
+          def observed(api, workflow, previous, record, sleep):
+              for _ in range(12):
+                  found = [r for r in inventory(api) if r['workflow_id'] == workflow and r['id'] not in previous]
+                  if found:
+                      require(len(found) == 1, 'ambiguous new dispatch')
+                      run = found[0]
+                      require(run['head_sha'] == HEAD and run['head_branch'] == REF and
+                              run['event'] == 'workflow_dispatch' and run['run_attempt'] == 1, 'wrong observed run')
+                      record('observed', workflow=workflow, run=run['id'], head=run['head_sha'])
+                      return run['id']
+                  sleep(2)
+              raise RuntimeError('dispatch acknowledgement has no observed candidate run; do not retry')
+          
+          
+          def execute(api, environment, record, sleep=time.sleep):
+              record('start', head=HEAD, tree=TREE, parent=PARENT, target=TARGET)
+              diagnosed_parent(api)
+              for workflow in WORKFLOWS:
+                  identities(api, environment, workflow)
+                  runs = inventory(api)
+                  if retain(runs, workflow, record):
+                      continue
+                  branch_idle(api, workflow)
+                  identities(api, environment, workflow)
+                  runs = inventory(api)
+                  if retain(runs, workflow, record):
+                      continue
+                  previous = {run['id'] for run in runs}
+                  record('intent', workflow=workflow, ref=REF, head=HEAD)
+                  try:
+                      api('POST', PREFIX + f'/actions/workflows/{workflow}/dispatches', {'ref': REF})
+                  except Exception:
+                      record('uncertain', workflow=workflow, head=HEAD)
+                      observed(api, workflow, previous, record, sleep)
+                      raise RuntimeError('uncertain dispatch reconciled read-only; no retry authorized') from None
+                  record('acknowledged', workflow=workflow, status=204)
+                  observed(api, workflow, previous, record, sleep)
+          
+          
+          def main():
+              path = Path('dispatch-ledger.jsonl')
+              previous = '0' * 64
+              def record(event, **fields):
+                  nonlocal previous
+                  entry = {'event': event, 'previous': previous, **fields}
+                  encoded = json.dumps(entry, sort_keys=True, separators=(',', ':')).encode()
+                  previous = hashlib.sha256(encoded).hexdigest()
+                  with path.open('a') as output:
+                      output.write(json.dumps({**entry, 'sha256': previous}, sort_keys=True) + '\n')
+                      output.flush()
+                      os.fsync(output.fileno())
+                  print(event, fields.get('workflow', ''), fields.get('run', ''), flush=True)
+              execute(Api(os.environ['GITHUB_TOKEN']), os.environ, record)
+          
+          
+          if __name__ == '__main__':
+              main()
+      - name: Retain dispatch intent and observed identities
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: f043-3582249c-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dispatch-ledger.jsonl
+          retention-days: 30
+          if-no-files-found: error

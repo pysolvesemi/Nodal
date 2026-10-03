@@ -1064,6 +1064,76 @@ private:
   llvm::DenseSet<Operation *> activeParameters;
 };
 
+// Count in mathematical unsigned distance, not signed subtraction: the ordered
+// span of two int64_t endpoints fits uint64_t even when it exceeds INT64_MAX.
+// Subtract before dividing so rounding up never overflows at UINT64_MAX.
+std::optional<uint64_t> positiveGenerateMaximumCount(int64_t lower, int64_t upper,
+                                                     int64_t minimumStep, bool identicalBounds) {
+  if (minimumStep <= 0)
+    return std::nullopt;
+  if (identicalBounds || upper <= lower)
+    return uint64_t{0};
+  const uint64_t distance = static_cast<uint64_t>(upper) - static_cast<uint64_t>(lower);
+  return uint64_t{1} + (distance - uint64_t{1}) / static_cast<uint64_t>(minimumStep);
+}
+
+bool hasGeneratedCountContract(Operation *operation) {
+  auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata");
+  return operation->hasAttr("region_id") || operation->hasAttr("induction_path") ||
+         (metadata && (metadata.get("maximum_trip_count") || metadata.get("declared_maximum")));
+}
+
+LogicalResult verifyGeneratedCountContract(Operation *operation, IntegerBounds lower,
+                                          IntegerBounds upper, IntegerBounds step,
+                                          bool identicalBounds) {
+  auto region = operation->getAttrOfType<StringAttr>("region_id");
+  auto induction = operation->getAttrOfType<StringAttr>("induction_path");
+  auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata");
+  if (!region || !induction || !metadata || region.getValue().trim().empty() ||
+      induction.getValue().trim().empty())
+    return operation->emitOpError(
+        "NODAL-ITERATION-043-001: captured generate count requires its region, induction, and "
+        "metadata contract");
+
+  // This is the public positive-step, half-open profile. Legacy native
+  // directional loops without this capture contract retain their old rules.
+  auto expected = positiveGenerateMaximumCount(lower.lower, upper.upper, step.lower,
+                                               identicalBounds);
+  if (!expected)
+    return operation->emitOpError(
+        "NODAL-ITERATION-043-002: captured hdlRange step must stay positive");
+  const uint64_t limit = static_cast<uint64_t>(std::numeric_limits<int32_t>::max());
+  if (*expected > limit)
+    return operation->emitOpError(
+        "NODAL-ITERATION-043-001: captured generate count exceeds 32-bit loop metadata");
+
+  // The bridge emits signless i64 metadata containing a nonnegative Int.
+  // Reject malformed or narrowed attributes rather than trusting getInt().
+  auto readCount = [&](llvm::StringRef name) -> std::optional<uint64_t> {
+    auto value = llvm::dyn_cast_or_null<IntegerAttr>(metadata.get(name));
+    auto type = llvm::dyn_cast_or_null<IntegerType>(value ? value.getType() : Type());
+    if (!type || !type.isSignless() || type.getWidth() != 64)
+      return std::nullopt;
+    const int64_t number = value.getInt();
+    if (number < 0 || static_cast<uint64_t>(number) > limit)
+      return std::nullopt;
+    return static_cast<uint64_t>(number);
+  };
+
+  auto retained = readCount("maximum_trip_count");
+  if (!retained || *retained != *expected)
+    return operation->emitOpError(
+        "NODAL-ITERATION-043-001: maximum_trip_count must equal the independently proven "
+        "generate envelope, not a default-value count");
+  if (metadata.get("declared_maximum")) {
+    auto declared = readCount("declared_maximum");
+    if (!declared || *expected > *declared)
+      return operation->emitOpError(
+          "NODAL-ITERATION-043-001: declared_maximum must contain the whole generate envelope");
+  }
+  return success();
+}
+
 LogicalResult verifyGeneratedIntegerBounds(Operation *owner) {
   IntegerBoundsAnalysis analysis(owner);
   LogicalResult result = success();
@@ -1094,9 +1164,10 @@ LogicalResult verifyGeneratedIntegerBounds(Operation *owner) {
         }
       }
     }
-    // Retain the existing concrete/directional loop contract. The new public
-    // half-open hdlRange surface and target layouts are separate F-043 work.
-    if (!symbolic)
+    // Legacy concrete loops keep their existing directional contract. Captured
+    // hdlRange loops, including literal and empty ones, require a count proof.
+    const bool capturedCount = hasGeneratedCountContract(operation);
+    if (!symbolic && !capturedCount)
       return;
     auto lower = analysis.bound(operation->getAttr("lower"));
     auto upper = analysis.bound(operation->getAttr("upper"));
@@ -1114,10 +1185,14 @@ LogicalResult verifyGeneratedIntegerBounds(Operation *owner) {
     }
     bool identicalBounds = operation->getAttr("lower") == operation->getAttr("upper");
     if (!identicalBounds && ((step->lower > 0 && lower->upper > upper->lower) ||
-                             (step->upper < 0 && lower->lower < upper->upper)))
+                             (step->upper < 0 && lower->lower < upper->upper))) {
       result = operation->emitOpError(
           "NODAL-ITERATION-043-003: generate direction is not proven for every legal parameter "
           "setting");
+      return;
+    }
+    if (capturedCount)
+      result = verifyGeneratedCountContract(operation, *lower, *upper, *step, identicalBounds);
   });
   return result;
 }

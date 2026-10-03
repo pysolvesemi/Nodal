@@ -267,3 +267,11 @@ add_test(NAME nodal.native.iteration-envelope-integration
     --work-dir "${CMAKE_BINARY_DIR}/increment43-integer-bounds-evidence"
 )
 set_tests_properties(nodal.native.iteration-envelope-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.generate-count-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_generate_count_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-generate-count-evidence"
+)
+set_tests_properties(nodal.native.generate-count-integration PROPERTIES TIMEOUT 60)

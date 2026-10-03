@@ -85,6 +85,24 @@ object Increment43IntegerExpressionTests extends TestSuite:
       timeout = Duration.ofSeconds(30)
     )
 
+  private def withInstanceBindings(
+      text: String,
+      instance: String,
+      bindings: Vector[String]
+  ): String =
+    val lines = text.split("\n", -1).toVector
+    val symbol = s"""sym_name = "$instance""""
+    val selected = lines.zipWithIndex.filter: (line, _) =>
+      line.trim.startsWith("\"nodal.instance\"(") && line.contains(symbol)
+    assert(selected.size == 1)
+    val (line, index) = selected.head
+    val marker = "parameter_bindings = {}"
+    assert(line.sliding(marker.length).count(_ == marker) == 1)
+    lines.updated(
+      index,
+      line.replace(marker, s"parameter_bindings = {${bindings.mkString(", ")}}")
+    ).mkString("\n")
+
   val tests: Tests = Tests:
     test("integer arithmetic retains canonical typed expression nodes"):
       val snapshot = ConstructionKernel.inspect(new Increment43IntegerExpressionTop(7))
@@ -175,6 +193,35 @@ object Increment43IntegerExpressionTests extends TestSuite:
       )
       assert(ConstructionKernel.inspect(new Increment43IntegerExpressionTop(7)).modules.nonEmpty)
 
+    test("literal oracle changes only the selected instance bindings"):
+      val text = ScalaToMlirBridge.lower(new Increment43IntegerExpressionTop(7)).text
+      val before = text.split("\n", -1).toVector
+      val updated = withInstanceBindings(text, "child", Vector("difference = -2 : i64"))
+      val after = updated.split("\n", -1).toVector
+      assert(before.size == after.size)
+      val changed = before.zip(after).filter((original, replacement) => original != replacement)
+      assert(changed.size == 1)
+      assert(changed.head._1.trim.startsWith("\"nodal.instance\"("))
+      assert(before.head == after.head)
+      assert(text.contains("nodal.root.parameter_bindings = {}"))
+      assert(updated.contains("nodal.root.parameter_bindings = {}"))
+      assert(updated.contains("parameter_bindings = {difference = -2 : i64}"))
+
+    test("literal oracle rejects absent ambiguous or already bound instances"):
+      val text = ScalaToMlirBridge.lower(new Increment43IntegerExpressionTop(7)).text
+      val instanceLine = text.linesIterator.find(_.trim.startsWith("\"nodal.instance\"(")).get
+      val invalid = Vector(
+        text.replace(instanceLine, ""),
+        s"$text\n$instanceLine\n",
+        text.replace("sym_name = \"child\"", "sym_name = \"other\""),
+        withInstanceBindings(text, "child", Vector("sum = 8 : i64"))
+      )
+      for candidate <- invalid do
+        val rejected = scala.util.Try(
+          withInstanceBindings(candidate, "child", Vector("sum = 8 : i64"))
+        ).failed.get
+        assert(rejected.isInstanceOf[utest.AssertionError])
+
     test("configured native compiler checks arithmetic against independent literal bindings"):
       sys.env.get("NODAL_NODALC") match
         case None => assert(true)
@@ -201,16 +248,11 @@ object Increment43IntegerExpressionTests extends TestSuite:
                 "repeated" -> ((count + 1) * (count + 1)),
                 "cancellation" -> 0
               )
-              val marker = "parameter_bindings = {}"
-              assert(document.text.sliding(marker.length).count(_ == marker) == 1)
               for wrong <- Vector(false, true) do
                 val bindings = expected.map: (name, value) =>
                   val literal = if wrong && name == "quotient" then value - 1 else value
                   s"$name = $literal : i64"
-                val text = document.text.replace(
-                  marker,
-                  s"parameter_bindings = {${bindings.mkString(", ")}}"
-                )
+                val text = withInstanceBindings(document.text, "child", bindings)
                 val checked = document.copy(text = text, sha256 = digest(text))
                 NativeCompilerClient.run(checked, nativeRequest) match
                   case success: NativeCompilerSuccess =>

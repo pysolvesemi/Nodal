@@ -127,3 +127,47 @@ legal emitted arrays/generation, scale tests and the 48/49/52 tool handoff remai
 required F-043 work. No independent OpenVAF, numerical simulation, synthesis,
 whole-child completion, reviewed approval, merge or accepted-evidence closure is
 claimed here.
+
+## Shared frontend interval and count checkpoint - 2026-10-03
+
+The next bounded change extends the existing private `IterationDomain`, rather
+than adding another source-expression graph or parameter registry. Its closed
+interval endpoints now retain signed 64-bit values. Checked addition,
+subtraction, multiplication, division and negation use exact `BigInt`
+intermediates, reject a possible zero divisor and reject any result outside the
+signed endpoint range. Division truncates toward zero. Equal intervals do not
+establish identity of two independently overridable parameters.
+
+The existing production structural-domain proof consumes the same wide
+subtraction primitive to bound its distance. Concrete `analogRepeat` and
+structural capture now share one positive-trip-count check. The existing
+32-bit count limit, explicit maximum enforcement, positive-step policy,
+rejection order, once-only body capture and wide concrete exit value remain
+unchanged. A proof distance can exceed signed 64 bits even when its count is
+small; that does not make overflowing signed expression arithmetic legal.
+These are bounded arithmetic operations, never iteration or lane allocation.
+
+This arithmetic substrate is not complete compound `hdlRange` support. The
+current public construction path still accepts literals and directly bounded
+owned Integer parameters. Capturing compound `KernelExpr` bounds, retaining
+reachable canonical DAG nodes, checking dependencies and lowering them through
+the bridge/native boundary remain required. The wider private interval type
+does not introduce a new public Long-literal API or certify target induction
+storage. Native `ParameterModel` stays the independent semantic authority; no
+native verifier, diagnostic, expected result or signed/unsigned distinction is
+removed. No user expression is replaced by a default or a made-up parameter.
+
+`IterationBoundArithmeticTests` independently enumerates every concrete result
+for small operand intervals and every legal small structural domain. Separate
+controls cover signed extremes, precision above the floating-point integer
+limit, zero divisors, malformed arities, independent equal-range parameters,
+maximum/count overflow and a distance wider than 64 bits. Existing public
+repetition, range-capture and configured Integer/native suites remain intact.
+The focused changed-source qualification is Core CI plus the configured
+Increment 20 bridge workflow, including their inherited control-flow tests.
+The distinct Increment 34 PR-only witness is not dispatchable and remains a
+separate full-phase obligation, not claimed as executed by these workflows.
+The earlier native-bound checkpoint's Increment 29 qualification is preserved
+as historical evidence, not transferred to a new source head. Pinned execution
+results and any required repairs belong in the live PR/continuation checkpoint;
+this paragraph records the design and test scope, not a passing CI receipt.

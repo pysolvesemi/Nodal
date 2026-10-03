@@ -92,7 +92,11 @@ object Increment43IntegerExpressionTests extends TestSuite:
       val operations = expressions.filter(_.literal.isEmpty)
       assert(
         operations.map(_.operation).toSet == Set(
-          "analog_add", "analog_sub", "analog_mul", "analog_div", "analog_neg"
+          "analog_add",
+          "analog_sub",
+          "analog_mul",
+          "analog_div",
+          "analog_neg"
         )
       )
       assert(expressions.forall(_.dataType == "Integer"))

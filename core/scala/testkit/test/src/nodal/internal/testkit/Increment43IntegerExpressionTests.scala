@@ -188,7 +188,10 @@ object Increment43IntegerExpressionTests extends TestSuite:
                 case success: NativeCompilerSuccess =>
                   assert(success.normalizedMlir.contains("\"nodal.const_expr\""))
                 case rejected: NativeCompilerFailure =>
-                  scala.Predef.assert(false, s"${rejected.diagnostic}\n${rejected.standardError}")
+                  scala.Predef.assert(
+                    false,
+                    s"${rejected.diagnostic}\n${rejected.standardError}\nGenerated input:\n${document.text}"
+                  )
               val expected = Vector(
                 "sum" -> (count + 1),
                 "difference" -> (count - 9),

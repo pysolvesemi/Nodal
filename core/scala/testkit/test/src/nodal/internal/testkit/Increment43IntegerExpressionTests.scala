@@ -85,15 +85,21 @@ object Increment43IntegerExpressionTests extends TestSuite:
       timeout = Duration.ofSeconds(30)
     )
 
+  private def integerFixture(count: Int): (NodalMlirDocument, String) =
+    val snapshot = ConstructionKernel.inspect(new Increment43IntegerExpressionTop(count))
+    val root = snapshot.modules.find(_.path == snapshot.root).get
+    assert(root.instances.size == 1)
+    (ScalaToMlirBridge.fromSnapshot(snapshot), root.instances.head.path)
+
   private def withInstanceBindings(
       text: String,
-      instance: String,
+      instancePath: String,
       bindings: Vector[String]
   ): String =
     val lines = text.split("\n", -1).toVector
-    val symbol = s"""sym_name = "$instance""""
+    val semanticPath = s"""semantic_path = "$instancePath""""
     val selected = lines.zipWithIndex.filter: (line, _) =>
-      line.trim.startsWith("\"nodal.instance\"(") && line.contains(symbol)
+      line.trim.startsWith("\"nodal.instance\"(") && line.contains(semanticPath)
     assert(selected.size == 1)
     val (line, index) = selected.head
     val marker = "parameter_bindings = {}"
@@ -194,9 +200,10 @@ object Increment43IntegerExpressionTests extends TestSuite:
       assert(ConstructionKernel.inspect(new Increment43IntegerExpressionTop(7)).modules.nonEmpty)
 
     test("literal oracle changes only the selected instance bindings"):
-      val text = ScalaToMlirBridge.lower(new Increment43IntegerExpressionTop(7)).text
+      val (document, instancePath) = integerFixture(7)
+      val text = document.text
       val before = text.split("\n", -1).toVector
-      val updated = withInstanceBindings(text, "child", Vector("difference = -2 : i64"))
+      val updated = withInstanceBindings(text, instancePath, Vector("difference = -2 : i64"))
       val after = updated.split("\n", -1).toVector
       assert(before.size == after.size)
       val changed = before.zip(after).filter((original, replacement) => original != replacement)
@@ -208,17 +215,20 @@ object Increment43IntegerExpressionTests extends TestSuite:
       assert(updated.contains("parameter_bindings = {difference = -2 : i64}"))
 
     test("literal oracle rejects absent ambiguous or already bound instances"):
-      val text = ScalaToMlirBridge.lower(new Increment43IntegerExpressionTop(7)).text
+      val (document, instancePath) = integerFixture(7)
+      val text = document.text
       val instanceLine = text.linesIterator.find(_.trim.startsWith("\"nodal.instance\"(")).get
+      val semanticPath = s"""semantic_path = "$instancePath""""
+      assert(instanceLine.contains(semanticPath))
       val invalid = Vector(
         text.replace(instanceLine, ""),
         s"$text\n$instanceLine\n",
-        text.replace("sym_name = \"child\"", "sym_name = \"other\""),
-        withInstanceBindings(text, "child", Vector("sum = 8 : i64"))
+        text.replace(semanticPath, s"""semantic_path = "${instancePath}.other""""),
+        withInstanceBindings(text, instancePath, Vector("sum = 8 : i64"))
       )
       for candidate <- invalid do
         val rejected = scala.util.Try(
-          withInstanceBindings(candidate, "child", Vector("sum = 8 : i64"))
+          withInstanceBindings(candidate, instancePath, Vector("sum = 8 : i64"))
         ).failed.get
         assert(rejected.isInstanceOf[utest.AssertionError])
 
@@ -229,7 +239,7 @@ object Increment43IntegerExpressionTests extends TestSuite:
           val directory = Files.createTempDirectory("nodal-increment43-integer-")
           try
             for count <- Vector(7, 11) do
-              val document = ScalaToMlirBridge.lower(new Increment43IntegerExpressionTop(count))
+              val (document, instancePath) = integerFixture(count)
               val nativeRequest = request(executable, directory)
               NativeCompilerClient.run(document, nativeRequest) match
                 case success: NativeCompilerSuccess =>
@@ -252,7 +262,7 @@ object Increment43IntegerExpressionTests extends TestSuite:
                 val bindings = expected.map: (name, value) =>
                   val literal = if wrong && name == "quotient" then value - 1 else value
                   s"$name = $literal : i64"
-                val text = withInstanceBindings(document.text, "child", bindings)
+                val text = withInstanceBindings(document.text, instancePath, bindings)
                 val checked = document.copy(text = text, sha256 = digest(text))
                 NativeCompilerClient.run(checked, nativeRequest) match
                   case success: NativeCompilerSuccess =>

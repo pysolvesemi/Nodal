@@ -1084,8 +1084,8 @@ bool hasGeneratedCountContract(Operation *operation) {
 }
 
 LogicalResult verifyGeneratedCountContract(Operation *operation, IntegerBounds lower,
-                                          IntegerBounds upper, IntegerBounds step,
-                                          bool identicalBounds) {
+                                           IntegerBounds upper, IntegerBounds step,
+                                           bool identicalBounds) {
   auto region = operation->getAttrOfType<StringAttr>("region_id");
   auto induction = operation->getAttrOfType<StringAttr>("induction_path");
   auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata");
@@ -1097,8 +1097,8 @@ LogicalResult verifyGeneratedCountContract(Operation *operation, IntegerBounds l
 
   // This is the public positive-step, half-open profile. Legacy native
   // directional loops without this capture contract retain their old rules.
-  auto expected = positiveGenerateMaximumCount(lower.lower, upper.upper, step.lower,
-                                               identicalBounds);
+  auto expected =
+      positiveGenerateMaximumCount(lower.lower, upper.upper, step.lower, identicalBounds);
   if (!expected)
     return operation->emitOpError(
         "NODAL-ITERATION-043-002: captured hdlRange step must stay positive");

@@ -449,6 +449,8 @@ def Nodal_GenerateOp : Nodal_Op<"generate", [NoTerminator]> {
     AnyAttr:$lower,
     AnyAttr:$upper,
     AnyAttr:$step,
+    OptionalAttr<StrAttr>:$region_id,
+    OptionalAttr<StrAttr>:$induction_path,
     DictionaryAttr:$metadata
   );
   let regions = (region SizedRegion<1>:$body);
@@ -609,11 +611,13 @@ def Nodal_TerminalOp : Nodal_Op<"terminal", [HasParent<"ModuleOp">]> {
   let hasVerifier = 1;
 }
 
-def Nodal_NodeOp : Nodal_Op<"node", [HasParent<"ModuleOp">]> {
+def Nodal_NodeOp : Nodal_Op<"node", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Internal conservative node";
   let arguments = (ins
     StrAttr:$name,
     OptionalAttr<StrAttr>:$source_path,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs Nodal_TerminalType:$result);

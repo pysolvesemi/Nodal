@@ -1420,7 +1420,22 @@ LogicalResult nodal::ShapeViewOp::verify() {
   return success();
 }
 
-LogicalResult nodal::GenerateOp::verify() { return verifyLoop(getOperation()); }
+LogicalResult nodal::GenerateOp::verify() {
+  if (failed(verifyLoop(getOperation())))
+    return failure();
+
+  auto regionId = getOperation()->getAttrOfType<StringAttr>("region_id");
+  auto inductionPath = getOperation()->getAttrOfType<StringAttr>("induction_path");
+  if (static_cast<bool>(regionId) != static_cast<bool>(inductionPath))
+    return emitOpError(
+        "NODAL-ITERATION-043-004: generated region identity and induction path must be provided "
+        "together");
+  if ((regionId && regionId.getValue().trim().empty()) ||
+      (inductionPath && inductionPath.getValue().trim().empty()))
+    return emitOpError(
+        "NODAL-ITERATION-043-004: generated region identity and induction path must be non-empty");
+  return success();
+}
 
 LogicalResult nodal::HardwareLoopOp::verify() {
   if (failed(verifyLoop(getOperation())))
@@ -1465,7 +1480,34 @@ LogicalResult nodal::TerminalOp::verify() {
   return requireText(getOperation(), "name", "terminal name");
 }
 
-LogicalResult nodal::NodeOp::verify() { return requireText(getOperation(), "name", "node name"); }
+LogicalResult nodal::NodeOp::verify() {
+  if (failed(requireText(getOperation(), "name", "node name")))
+    return failure();
+
+  auto generatedOwner = getOperation()->getAttrOfType<StringAttr>("generated_owner");
+  auto generatedInduction = getOperation()->getAttrOfType<StringAttr>("generated_induction");
+  auto generated = getOperation()->getParentOfType<nodal::GenerateOp>();
+  StringAttr regionId;
+  StringAttr inductionPath;
+  if (generated) {
+    regionId = generated->getAttrOfType<StringAttr>("region_id");
+    inductionPath = generated->getAttrOfType<StringAttr>("induction_path");
+  }
+
+  const bool hasGeneratedContract =
+      generatedOwner || generatedInduction || regionId || inductionPath;
+  if (!hasGeneratedContract)
+    return success();
+  if (!generated || !generatedOwner || !generatedInduction || !regionId || !inductionPath)
+    return emitOpError(
+        "NODAL-ITERATION-043-004: generated node requires complete enclosing ownership metadata");
+  if (generatedOwner.getValue() != regionId.getValue() ||
+      generatedInduction.getValue() != inductionPath.getValue())
+    return emitOpError(
+        "NODAL-ITERATION-043-004: generated node ownership or induction metadata does not match "
+        "its enclosing generate region");
+  return success();
+}
 
 LogicalResult nodal::BranchOp::verify() {
   auto positive = llvm::cast<nodal::TerminalType>(getOperation()->getOperand(0).getType());

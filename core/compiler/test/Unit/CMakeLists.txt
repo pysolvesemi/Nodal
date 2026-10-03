@@ -251,3 +251,19 @@ add_test(
     --work-dir "${CMAKE_BINARY_DIR}/increment42-hierarchy-evidence"
 )
 set_tests_properties(nodal.native.hierarchy-integration PROPERTIES TIMEOUT 180)
+
+add_executable(nodal-parameter-integer-bounds-unit-tests ParameterIntegerBoundsTest.cpp)
+llvm_update_compile_flags(nodal-parameter-integer-bounds-unit-tests)
+target_link_libraries(nodal-parameter-integer-bounds-unit-tests
+  PRIVATE NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport
+)
+add_test(NAME nodal.native.parameter-integer-bounds
+  COMMAND nodal-parameter-integer-bounds-unit-tests
+)
+add_test(NAME nodal.native.iteration-envelope-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_integer_bounds_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-integer-bounds-evidence"
+)
+set_tests_properties(nodal.native.iteration-envelope-integration PROPERTIES TIMEOUT 60)

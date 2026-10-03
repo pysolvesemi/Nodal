@@ -7,6 +7,7 @@
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
@@ -802,6 +803,325 @@ bool hasBoundedRange(Operation *parameter) {
   return false;
 }
 
+// Abstract interpretation of the existing constant-expression representation.
+// Default folding above answers a different question and must never be used to
+// bound an independently overridable parameter. The analysis is read-only and
+// memoized per module; it neither expands iterations nor owns another IR graph.
+using IntegerBounds = nodal::ParameterIntegerBounds;
+
+llvm::APInt wideInteger(int64_t value) {
+  return llvm::APInt(64, static_cast<uint64_t>(value), true).sext(128);
+}
+
+FailureOr<int64_t> narrowInteger(const llvm::APInt &value) {
+  if (!value.isSignedIntN(64))
+    return failure();
+  return value.getSExtValue();
+}
+
+bool boundsFitType(IntegerBounds bounds, Type type) {
+  auto attributeType = IntegerType::get(type.getContext(), 64);
+  return integerFits(IntegerAttr::get(attributeType, bounds.lower), type) &&
+         integerFits(IntegerAttr::get(attributeType, bounds.upper), type);
+}
+
+FailureOr<int64_t> integerBoundLiteral(IntegerAttr attribute) {
+  auto type = llvm::dyn_cast_or_null<IntegerType>(attribute ? attribute.getType() : Type());
+  if (!type || kindForType(type) != ConstantKind::Integer)
+    return failure();
+  const llvm::APInt &bits = attribute.getValue();
+  if (type.isUnsigned()) {
+    if (bits.getActiveBits() > 63)
+      return failure();
+    return static_cast<int64_t>(bits.getZExtValue());
+  }
+  // Signless attributes retain the established signed mathematical loop
+  // spelling, including -1 : i64; explicit unsigned types are never sign cast.
+  if (!bits.isSignedIntN(64))
+    return failure();
+  return bits.getSExtValue();
+}
+
+class IntegerBoundsAnalysis {
+public:
+  explicit IntegerBoundsAnalysis(Operation *owner) : owner(owner) {}
+
+  FailureOr<IntegerBounds> value(Value input) {
+    if (!input)
+      return failure();
+    auto cached = values.find(input);
+    if (cached != values.end()) {
+      if (!cached->second)
+        return failure();
+      return *cached->second;
+    }
+    if (activeValues.size() + activeParameters.size() >= 512 || !activeValues.insert(input).second)
+      return failure();
+    auto result = analyzeValue(input);
+    activeValues.erase(input);
+    values.try_emplace(input,
+                       succeeded(result) ? std::optional<IntegerBounds>(*result) : std::nullopt);
+    return result;
+  }
+
+  FailureOr<IntegerBounds> parameter(Operation *input) {
+    if (!input)
+      return failure();
+    auto cached = parameters.find(input);
+    if (cached != parameters.end()) {
+      if (!cached->second)
+        return failure();
+      return *cached->second;
+    }
+    if (activeValues.size() + activeParameters.size() >= 512 ||
+        !activeParameters.insert(input).second)
+      return failure();
+    auto result = analyzeParameter(input);
+    activeParameters.erase(input);
+    parameters.try_emplace(input, succeeded(result) ? std::optional<IntegerBounds>(*result)
+                                                    : std::nullopt);
+    return result;
+  }
+
+  FailureOr<IntegerBounds> bound(Attribute attribute) {
+    if (auto integer = llvm::dyn_cast_or_null<IntegerAttr>(attribute)) {
+      auto number = integerBoundLiteral(integer);
+      if (failed(number))
+        return failure();
+      return IntegerBounds{*number, *number};
+    }
+    if (auto reference = llvm::dyn_cast_or_null<FlatSymbolRefAttr>(attribute))
+      return parameter(findDirectSymbol(owner, reference.getValue(), "nodal.parameter"));
+    return failure();
+  }
+
+private:
+  FailureOr<IntegerBounds> literal(Attribute attribute, Type type) {
+    auto constant = constantFromAttribute(attribute, type);
+    if (failed(constant) || constant->kind != ConstantKind::Integer || !constant->integerIsNarrow ||
+        !constant->dimension.empty())
+      return failure();
+    IntegerBounds result{constant->integerValue, constant->integerValue};
+    if (!boundsFitType(result, type))
+      return failure();
+    return result;
+  }
+
+  FailureOr<IntegerBounds> analyzeParameter(Operation *input) {
+    if (!input || !isNamed(input, "nodal.parameter") || input->getParentOp() != owner ||
+        nodal::getParameterKind(input) != "integer" || input->hasAttr("unit") ||
+        hasDuplicateParameterValue(owner, symbolName(input)))
+      return failure();
+    auto type = input->getAttrOfType<TypeAttr>("type");
+    if (!type || kindForType(type.getValue()) != ConstantKind::Integer)
+      return failure();
+    if (textAttr(input, "variability") == "fixed") {
+      Operation *expression = findParameterValue(owner, symbolName(input));
+      if (!expression)
+        return literal(input->getAttr("default_value"), type.getValue());
+      if (expression->getNumOperands() != 1 ||
+          expression->getOperand(0).getType() != type.getValue())
+        return failure();
+      return value(expression->getOperand(0));
+    }
+    if (textAttr(input, "variability") != "symbolic")
+      return failure();
+
+    std::optional<IntegerBounds> intersection;
+    for (Operation *constraint : findParameterConstraints(owner, symbolName(input))) {
+      // Exclusions can only shrink a legal set. Keeping their holes in the
+      // interval is conservative; it must not certify a zero-containing step.
+      if (textAttr(constraint, "constraint_kind") != "range")
+        continue;
+      if (constraint->getNumOperands() != 2 ||
+          constraint->getOperand(0).getType() != type.getValue() ||
+          constraint->getOperand(1).getType() != type.getValue())
+        return failure();
+      auto lowerInclusive = constraint->getAttrOfType<BoolAttr>("lower_inclusive");
+      auto upperInclusive = constraint->getAttrOfType<BoolAttr>("upper_inclusive");
+      auto lower = value(constraint->getOperand(0));
+      auto upper = value(constraint->getOperand(1));
+      if (!lowerInclusive || !upperInclusive || failed(lower) || failed(upper))
+        return failure();
+      // Use outer endpoints of varying constraints, never their defaults or
+      // inner endpoints: the result must contain the union of legal settings.
+      auto first = narrowInteger(wideInteger(lower->lower) +
+                                 llvm::APInt(128, lowerInclusive.getValue() ? 0 : 1));
+      auto last = narrowInteger(wideInteger(upper->upper) -
+                                llvm::APInt(128, upperInclusive.getValue() ? 0 : 1));
+      if (failed(first) || failed(last) || *first > *last)
+        return failure();
+      IntegerBounds candidate{*first, *last};
+      if (intersection) {
+        candidate.lower = std::max(candidate.lower, intersection->lower);
+        candidate.upper = std::min(candidate.upper, intersection->upper);
+      }
+      if (candidate.lower > candidate.upper || !boundsFitType(candidate, type.getValue()))
+        return failure();
+      intersection = candidate;
+    }
+    if (!intersection)
+      return failure();
+    return *intersection;
+  }
+
+  FailureOr<IntegerBounds> analyzeValue(Value input) {
+    Operation *operation = input.getDefiningOp();
+    if (!operation || enclosingNodalModule(operation) != owner ||
+        kindForType(input.getType()) != ConstantKind::Integer || operation->hasAttr("unit"))
+      return failure();
+    llvm::StringRef name = operation->getName().getStringRef();
+    if (name == "nodal.const_literal" || name == "nodal.constant")
+      return literal(operation->getAttr("value"), input.getType());
+    if (name == "nodal.const_parameter_ref") {
+      auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("parameter");
+      Operation *declaration =
+          reference ? findDirectSymbol(owner, reference.getValue(), "nodal.parameter") : nullptr;
+      auto type = declaration ? declaration->getAttrOfType<TypeAttr>("type") : TypeAttr();
+      if (!type || type.getValue() != input.getType())
+        return failure();
+      return parameter(declaration);
+    }
+    if (name != "nodal.const_expr")
+      return failure();
+    llvm::StringRef operationName = textAttr(operation, "operator_name");
+    unsigned arity = operationName == "neg" ? 1 : 2;
+    if (!oneOf(operationName, {"add", "sub", "mul", "div", "mod", "neg"}) ||
+        operation->getNumOperands() != arity)
+      return failure();
+    llvm::SmallVector<IntegerBounds, 2> operands;
+    for (Value operand : operation->getOperands()) {
+      if (operand.getType() != input.getType())
+        return failure();
+      auto interval = value(operand);
+      if (failed(interval))
+        return failure();
+      operands.push_back(*interval);
+    }
+    const IntegerBounds left = operands[0];
+    IntegerBounds result{};
+    if (operationName == "neg") {
+      auto lower = narrowInteger(-wideInteger(left.upper));
+      auto upper = narrowInteger(-wideInteger(left.lower));
+      if (failed(lower) || failed(upper))
+        return failure();
+      result = {*lower, *upper};
+    } else {
+      const IntegerBounds right = operands[1];
+      if (operationName == "div" || operationName == "mod") {
+        if ((right.lower <= 0 && right.upper >= 0) ||
+            (left.lower == std::numeric_limits<int64_t>::min() && right.lower <= -1 &&
+             right.upper >= -1))
+          return failure();
+      }
+      if (operationName == "mod") {
+        // C/Verilog integer remainder follows the dividend's sign. An outer
+        // magnitude bound is sound even when the divisor itself varies.
+        llvm::APInt lowerMagnitude = wideInteger(right.lower).abs();
+        llvm::APInt upperMagnitude = wideInteger(right.upper).abs();
+        llvm::APInt magnitude =
+            lowerMagnitude.ugt(upperMagnitude) ? lowerMagnitude : upperMagnitude;
+        auto maximum = narrowInteger(magnitude - llvm::APInt(128, 1));
+        if (failed(maximum))
+          return failure();
+        result = {left.lower < 0 ? std::max(left.lower, -*maximum) : 0,
+                  left.upper > 0 ? std::min(left.upper, *maximum) : 0};
+      } else if (operationName == "sub" && operation->getOperand(0) == operation->getOperand(1)) {
+        result = {0, 0};
+      } else {
+        bool first = true;
+        for (int64_t a : {left.lower, left.upper}) {
+          for (int64_t b : {right.lower, right.upper}) {
+            llvm::APInt lhs = wideInteger(a);
+            llvm::APInt rhs = wideInteger(b);
+            llvm::APInt computed = operationName == "add"   ? lhs + rhs
+                                   : operationName == "sub" ? lhs - rhs
+                                   : operationName == "mul" ? lhs * rhs
+                                                            : lhs.sdiv(rhs);
+            auto endpoint = narrowInteger(computed);
+            if (failed(endpoint))
+              return failure();
+            if (first)
+              result = {*endpoint, *endpoint};
+            else {
+              result.lower = std::min(result.lower, *endpoint);
+              result.upper = std::max(result.upper, *endpoint);
+            }
+            first = false;
+          }
+        }
+      }
+    }
+    if (!boundsFitType(result, input.getType()))
+      return failure();
+    return result;
+  }
+
+  Operation *owner;
+  llvm::DenseMap<Value, std::optional<IntegerBounds>> values;
+  llvm::DenseMap<Operation *, std::optional<IntegerBounds>> parameters;
+  llvm::DenseSet<Value> activeValues;
+  llvm::DenseSet<Operation *> activeParameters;
+};
+
+LogicalResult verifyGeneratedIntegerBounds(Operation *owner) {
+  IntegerBoundsAnalysis analysis(owner);
+  LogicalResult result = success();
+  owner->walk([&](nodal::GenerateOp generated) {
+    Operation *operation = generated.getOperation();
+    if (failed(result) || enclosingNodalModule(operation) != owner)
+      return;
+    bool symbolic = false;
+    for (llvm::StringRef name :
+         {llvm::StringRef("lower"), llvm::StringRef("upper"), llvm::StringRef("step")}) {
+      Attribute attribute = operation->getAttr(name);
+      if (auto reference = llvm::dyn_cast_or_null<FlatSymbolRefAttr>(attribute)) {
+        symbolic = true;
+        Operation *parameter = findDirectSymbol(owner, reference.getValue(), "nodal.parameter");
+        if (!parameter || !nodal::isStructuralParameter(parameter)) {
+          result = operation->emitOpError(
+              "NODAL-PARAMETER-STRUCTURAL-001: symbolic generate bounds require structural "
+              "parameters");
+          return;
+        }
+      } else {
+        auto integer = llvm::dyn_cast_or_null<IntegerAttr>(attribute);
+        if (!integer || failed(integerBoundLiteral(integer))) {
+          result = operation->emitOpError(
+              "NODAL-ITERATION-043-001: generate bounds require representable integer literals "
+              "or parameter references");
+          return;
+        }
+      }
+    }
+    // Retain the existing concrete/directional loop contract. The new public
+    // half-open hdlRange surface and target layouts are separate F-043 work.
+    if (!symbolic)
+      return;
+    auto lower = analysis.bound(operation->getAttr("lower"));
+    auto upper = analysis.bound(operation->getAttr("upper"));
+    auto step = analysis.bound(operation->getAttr("step"));
+    if (failed(lower) || failed(upper) || failed(step)) {
+      result = operation->emitOpError(
+          "NODAL-ITERATION-043-001: cannot prove finite integer generate bounds without "
+          "substituting parameter defaults");
+      return;
+    }
+    if (step->lower <= 0 && step->upper >= 0) {
+      result = operation->emitOpError(
+          "NODAL-ITERATION-043-002: symbolic generate step can include zero or change sign");
+      return;
+    }
+    bool identicalBounds = operation->getAttr("lower") == operation->getAttr("upper");
+    if (!identicalBounds && ((step->lower > 0 && lower->upper > upper->lower) ||
+                             (step->upper < 0 && lower->lower < upper->upper)))
+      result = operation->emitOpError(
+          "NODAL-ITERATION-043-003: generate direction is not proven for every legal parameter "
+          "setting");
+  });
+  return result;
+}
+
 FailureOr<std::string> renderValue(Value value, llvm::DenseSet<Operation *> &visited) {
   Operation *operation = value.getDefiningOp();
   if (!operation || !visited.insert(operation).second)
@@ -877,6 +1197,16 @@ FailureOr<std::string> renderValue(Value value, llvm::DenseSet<Operation *> &vis
 }
 
 } // namespace
+
+FailureOr<nodal::ParameterIntegerBounds> nodal::inferParameterIntegerBounds(Value value) {
+  if (!value)
+    return failure();
+  Operation *operation = value.getDefiningOp();
+  Operation *owner = enclosingNodalModule(operation);
+  if (!owner)
+    return failure();
+  return IntegerBoundsAnalysis(owner).value(value);
+}
 
 llvm::StringRef nodal::getParameterKind(Operation *parameter) {
   llvm::StringRef explicitKind = textAttr(parameter, "parameter_kind");
@@ -1226,6 +1556,9 @@ LogicalResult nodal::verifyParameterModel(mlir::ModuleOp module) {
             "NODAL-PARAMETER-ENVELOPE-001: ordinary parameter cannot change structural identity");
       }
     }
+
+    if (failed(verifyGeneratedIntegerBounds(owner)))
+      return failure();
 
     for (Operation &operation : *body) {
       if (isNamed(&operation, "nodal.generate")) {

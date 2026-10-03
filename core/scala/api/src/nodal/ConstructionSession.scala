@@ -61,6 +61,8 @@ private final class ConstructionSession(val options: EmitOptions):
   private var semanticResult: Option[SemanticOriginResult] = None
   private val rootParameterBindings: mutable.ArrayBuffer[(Any, Any)] =
     mutable.ArrayBuffer.empty
+  private val generationStack: mutable.ArrayBuffer[GeneratedRegionRecord] =
+    mutable.ArrayBuffer.empty
   private var constructorFailure: Option[(Throwable, String)] = None
 
   private def fail(code: String, message: String, path: Option[String] = None): Nothing =
@@ -187,6 +189,9 @@ private final class ConstructionSession(val options: EmitOptions):
       kind.label,
       explicitName
     )
+    generationStack.lastOption
+      .filter(_.owner == module.handle)
+      .foreach(_.declarations += reference)
 
   private def captureExpression(value: AnyRef): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>
@@ -803,6 +808,196 @@ private final class ConstructionSession(val options: EmitOptions):
       if removed ne domain then fail("NODAL-DOMAIN-019", "lexical domain stack is corrupt")
 
   def currentModulePath: String = provisionalModulePath(currentModule.handle)
+
+  private final case class StructuralBound(
+      value: Any,
+      bounds: IterationDomain.Bounds,
+      parameter: Option[DeclarationRef]
+  )
+
+  private def structuralRangeAttribute(
+      declaration: DeclarationRecord,
+      name: String
+  ): Option[Int] =
+    declaration.attributes.collectFirst:
+      case (key, value: Int) if key == name => value
+
+  private def structuralBound(value: Int | Expr[Integer], owner: Long): StructuralBound =
+    value match
+      case literal: Int =>
+        StructuralBound(literal, IterationDomain.Bounds(literal, literal), None)
+      case parameter: Param[?] =>
+        val reference = Option(declarationIds.get(parameter)).getOrElse(
+          fail(
+            "NODAL-ITERATION-043-001",
+            "symbolic hdlRange bound must be a parameter in the active construction transaction"
+          )
+        )
+        if reference.module != owner then
+          fail(
+            "NODAL-ITERATION-043-001",
+            "symbolic hdlRange bound must be owned by the generated region Module",
+            Some(declarationPath(reference))
+          )
+        val declaration = records(reference.module).declarations(reference.index)
+        val parameterType = declaration.dataType.map(renderType(_, owner))
+        if declaration.kind != KernelSignalKind.Parameter || !parameterType.contains("Integer") then
+          fail(
+            "NODAL-ITERATION-043-001",
+            "symbolic hdlRange bound must be an integer parameter",
+            Some(declarationPath(reference))
+          )
+        val lower = structuralRangeAttribute(declaration, "integer_range_lower").getOrElse(
+          fail(
+            "NODAL-ITERATION-043-001",
+            "symbolic hdlRange parameter requires a finite declared integer range",
+            Some(declarationPath(reference))
+          )
+        )
+        val upper = structuralRangeAttribute(declaration, "integer_range_upper").getOrElse(
+          fail(
+            "NODAL-ITERATION-043-001",
+            "symbolic hdlRange parameter requires a finite declared integer range",
+            Some(declarationPath(reference))
+          )
+        )
+        if lower > upper then
+          fail(
+            "NODAL-ITERATION-043-001",
+            "symbolic hdlRange parameter range is not ordered",
+            Some(declarationPath(reference))
+          )
+        StructuralBound(parameter, IterationDomain.Bounds(lower, upper), Some(reference))
+      case expression: KernelExpr[?] =>
+        expression.literal.flatMap(_.value.toIntOption) match
+          case Some(literal) if expression.literal.exists(_.kind == "integer") =>
+            StructuralBound(expression, IterationDomain.Bounds(literal, literal), None)
+          case _ =>
+            fail(
+              "NODAL-ITERATION-043-001",
+              "hdlRange bounds currently require integer literals or direct bounded integer parameters"
+            )
+      case _ =>
+        fail(
+          "NODAL-ITERATION-043-001",
+          "hdlRange bounds currently require integer literals or direct bounded integer parameters"
+        )
+
+  private def sameStructuralBound(left: Any, right: Any): Boolean =
+    (left, right) match
+      case (lhs: Int, rhs: Int) => lhs == rhs
+      case (lhs: AnyRef, rhs: AnyRef) => lhs eq rhs
+      case _ => false
+
+  // Replicating analog nodes changes topology; generate is a construct, not an effect.
+  private def markStructuralParameter(reference: DeclarationRef): Unit =
+    val module = records(reference.module)
+    val declaration = module.declarations(reference.index)
+    val previousEffects = declaration.attributes.collectFirst:
+      case ("structural_effects", value: String) => value
+    val effects =
+      (previousEffects.toVector.flatMap(_.split(",")).map(_.trim).filter(_.nonEmpty) :+ "topology")
+        .distinct
+        .sorted
+        .mkString(",")
+    val retained = declaration.attributes.filterNot: (name, _) =>
+      name == "classification" || name == "structural_effects"
+    module.declarations.update(
+      reference.index,
+      declaration.copy(
+        attributes = retained ++ Vector(
+          "classification" -> "structural",
+          "structural_effects" -> effects
+        )
+      )
+    )
+
+  def withGeneratedRegion(
+      lower: Int | Expr[Integer],
+      upperExclusive: Int | Expr[Integer],
+      step: Int | Expr[Integer],
+      maximum: Option[Int]
+  )(body: Expr[Integer] => Unit): Unit =
+    val module = currentModule
+    val lowerBound = structuralBound(lower, module.handle)
+    val upperBound = structuralBound(upperExclusive, module.handle)
+    val stepBound = structuralBound(step, module.handle)
+    val envelope = IterationDomain
+      .structural(
+        lowerBound.bounds,
+        upperBound.bounds,
+        stepBound.bounds,
+        maximum,
+        identicalBounds = sameStructuralBound(lower, upperExclusive)
+      )
+      .fold(
+        problem =>
+          fail(
+            problem.kind match
+              case IterationDomain.ProblemKind.InvalidDirection => "NODAL-ITERATION-043-003"
+              case IterationDomain.ProblemKind.InvalidStep => "NODAL-ITERATION-043-002"
+              case _ => "NODAL-ITERATION-043-001",
+            problem.message,
+            Some(provisionalModulePath(module.handle))
+          ),
+        identity
+      )
+
+    Vector(lowerBound, upperBound, stepBound).flatMap(_.parameter).distinct.foreach(
+      markStructuralParameter
+    )
+
+    val induction = new KernelExpr[Integer](
+      Vector.empty,
+      resultType = Some(KernelTypeDescriptor("Integer")),
+      operation = Some("generate_index")
+    )
+    val inductionReference = captureExpression(induction).getOrElse(
+      fail("NODAL-ITERATION-043-001", "hdlRange induction has no active construction owner")
+    )
+    val parentOrdinal = generationStack.lastOption
+      .filter(_.owner == module.handle)
+      .map(_.ordinal)
+    val record = new GeneratedRegionRecord(
+      module.handle,
+      module.generatedRegions.size,
+      parentOrdinal,
+      inductionReference,
+      lower,
+      upperExclusive,
+      step,
+      maximum,
+      envelope.maximumTripCount
+    )
+    module.generatedRegions += record
+    generationStack += record
+    val domainCount = module.domains.size
+    val instanceCount = module.instances.size
+    val operationCount = operations.size
+    val analogRegionCount = analogRegions.size
+    try
+      body(induction)
+      val unsupportedDeclaration = record.declarations.iterator
+        .map(reference => module.declarations(reference.index))
+        .find(_.kind != KernelSignalKind.AnalogNode)
+      unsupportedDeclaration.foreach: declaration =>
+        fail(
+          "NODAL-ITERATION-043-004",
+          s"generated object kind '${declaration.kind.label}' is not enabled by the current F-043 checkpoint",
+          Some(declarationPath(declaration.reference))
+        )
+      if module.domains.size != domainCount || module.instances.size != instanceCount ||
+        operations.size != operationCount || analogRegions.size != analogRegionCount
+      then
+        fail(
+          "NODAL-ITERATION-043-004",
+          "generated domains, instances, connections, assignments, and analog regions require the next F-043 ownership stage",
+          Some(provisionalModulePath(module.handle))
+        )
+    finally
+      val removed = generationStack.remove(generationStack.size - 1)
+      if removed ne record then
+        fail("NODAL-ITERATION-043-004", "generated-region ownership stack is corrupt")
 
   def captureAnalogProceduralSource: Option[AnalogProceduralRuntime.Source] =
     semanticOrigin
@@ -1670,6 +1865,48 @@ private final class ConstructionSession(val options: EmitOptions):
         instances
       )
 
+  private def generatedBound(value: Any): String = value match
+    case literal: Int => literal.toString
+    case parameter: Param[?] =>
+      Option(declarationIds.get(parameter)).map(declarationPath).getOrElse(
+        fail("NODAL-ITERATION-043-001", "generated bound parameter has no semantic identity")
+      )
+    case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
+      expression.literal.map(_.value).getOrElse(
+        fail("NODAL-ITERATION-043-001", "generated integer literal has no value")
+      )
+    case _ =>
+      fail("NODAL-ITERATION-043-001", "generated bound has no canonical symbolic representation")
+
+  private def generatedRegionPath(record: GeneratedRegionRecord): String =
+    val module = records(record.owner)
+    val local = s"generate_${record.ordinal}"
+    record.parentOrdinal match
+      case None => s"${modulePath(record.owner)}.$local"
+      case Some(parent) =>
+        val parentRecord = module.generatedRegions(parent)
+        s"${generatedRegionPath(parentRecord)}.$local"
+
+  private def generatedSnapshots(): Vector[KernelGeneratedRegionSnapshot] =
+    records.values.toVector
+      .sortBy(record => modulePath(record.handle))
+      .flatMap: module =>
+        module.generatedRegions.toVector.map: region =>
+          KernelGeneratedRegionSnapshot(
+            path = generatedRegionPath(region),
+            owner = modulePath(region.owner),
+            parent = region.parentOrdinal.map(index =>
+              generatedRegionPath(module.generatedRegions(index))
+            ),
+            induction = expressionPath(region.induction),
+            lower = generatedBound(region.lower),
+            upperExclusive = generatedBound(region.upperExclusive),
+            step = generatedBound(region.step),
+            maximum = region.maximum,
+            maximumTripCount = region.maximumTripCount,
+            declarations = region.declarations.toVector.map(declarationPath)
+          )
+
   private def relationName(relation: ClockRelation): String =
     relationAttributes(relation).collectFirst:
       case ("clock_relation", value) => value
@@ -2038,7 +2275,8 @@ private final class ConstructionSession(val options: EmitOptions):
       analogProcedural = AnalogProceduralConstruction.snapshots(module =>
         modulePath(moduleHandle(module))
       ),
-      waivers = waiverSnapshots(semantic.sourceMap)
+      waivers = waiverSnapshots(semantic.sourceMap),
+      generatedRegions = generatedSnapshots()
     )
     val kind = classify(snapshot)
     val report = DesignReport(

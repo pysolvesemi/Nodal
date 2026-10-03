@@ -105,6 +105,20 @@ private[nodal] object ConstructionKernel:
       ).get
     )
 
+  def generatedRegion(
+      lower: Int | Expr[Integer],
+      upperExclusive: Int | Expr[Integer],
+      step: Int | Expr[Integer],
+      maximum: Option[Int]
+  )(body: Expr[Integer] => Unit): Unit =
+    active match
+      case Some(session) =>
+        session.withGeneratedRegion(lower, upperExclusive, step, maximum)(body)
+      case None =>
+        scala.util.Failure[Unit](
+          new IllegalStateException("hdlRange requires an active Module")
+        ).get
+
   def captureAnalogProceduralSource: Option[AnalogProceduralRuntime.Source] =
     active.flatMap(_.captureAnalogProceduralSource)
 

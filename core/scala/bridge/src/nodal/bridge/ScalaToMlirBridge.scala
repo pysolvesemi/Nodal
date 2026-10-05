@@ -589,10 +589,12 @@ ${indent(body, 2)}
         )
         def owned(path: String): Boolean =
           path.startsWith(s"${region.owner}.")
-        if !owned(region.path) || !owned(region.induction) then
+        if !owned(region.path) || !owned(region.induction) ||
+          region.path.trim != region.path || region.induction.trim != region.induction
+        then
           fail(
             "NODAL-BRIDGE-043",
-            "generated region or induction identity escapes its owning Module",
+            "generated region or induction identity is noncanonical or escapes its owning Module",
             Some(region.path)
           )
         val declarationPaths = module.declarations.map(_.path).toSet

@@ -95,3 +95,40 @@ The remaining main and descendant requirements, tool-qualification handoff,
 review, integration, accepted-evidence closure and completion demonstration
 remain required and unchecked. No independent OpenVAF or numerical result is
 claimed by internal native acceptance.
+
+## Captured ownership boundary repair
+
+The next native ownership audit reproduced three invalid inputs accepted by the
+qualified transport checkpoint: sibling regions with the same region identity,
+distinct regions sharing an induction identity, and a nested region outside its
+immediate parent's semantic path. The bridge already rejected those snapshots;
+native parsing must not rely on that upstream check.
+
+The existing module verifier now inventories captured region and induction keys
+once per module. Nested module definitions keep independent inventories. The
+generate verifier checks the immediate parent, canonical identity spelling and
+nested path ownership. A captured region cannot be placed inside an unrelated
+procedural loop or an uncaptured legacy region, and a captured child cannot lose
+its identity contract. Legacy uncaptured generation remains supported with its
+existing spelling and placement. The bridge also rejects trailing identity
+whitespace rather than emitting a document that fails native validation.
+
+This uses the existing IR ownership and verifiers; no new registry, path-derived
+staging heuristic or duplicate hierarchy representation is introduced. The
+inventory is one traversal with two string sets, linear in visited operations
+plus identity bytes. A 256-sibling fixture exercises the inventory without
+claiming a general performance benchmark or speedup.
+
+The new 31-case native ownership matrix reuses the strict count runner. Ten
+positive cases execute twice, retaining region/count, node-ownership and module
+inventories; 21 negative cases require normal exit 1 and the exact ownership
+diagnostic. Existing count and SSA fixture matrices and validators are unchanged.
+Additional checker mutation tests reject lost nodes/modules, altered ownership
+fields, crashes, timeouts and wrong diagnostics. A configured public Scala test
+first accepts the repeated/nested node source, then forges region, induction and
+parent identities in its emitted document and requires native rejection.
+
+This repair strengthens the existing trust boundary before target lowering. It
+does not implement arrays, generated lexical storage or target generation, and
+does not complete a whole F-043 child. Exact candidate qualification and current
+worker coordination remain in the PR checkpoint.

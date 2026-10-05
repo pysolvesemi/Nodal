@@ -29,6 +29,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace mlir;
@@ -1257,6 +1258,28 @@ LogicalResult nodal::ModuleOp::verify() {
     return failure();
   if (failed(requireSingleBlock(getOperation())))
     return failure();
+  // Captured region and induction identities are module-local semantic keys.
+  // Check each once; independent nested module definitions own their own keys.
+  llvm::StringSet<> generatedRegions;
+  llvm::StringSet<> generatedInductions;
+  auto ownership = getOperation()->walk<WalkOrder::PreOrder>([&](Operation *operation) {
+    if (operation != getOperation() && llvm::isa<nodal::ModuleOp>(operation))
+      return WalkResult::skip();
+    if (!llvm::isa<nodal::GenerateOp>(operation))
+      return WalkResult::advance();
+    for (auto [attribute, identities] : {std::pair{"region_id", &generatedRegions},
+                                         std::pair{"induction_path", &generatedInductions}}) {
+      auto value = operation->getAttrOfType<StringAttr>(attribute);
+      if (value && !identities->insert(value.getValue()).second) {
+        operation->emitOpError() << "NODAL-ITERATION-043-004: duplicate generated " << attribute
+                                 << " within its owning module";
+        return WalkResult::interrupt();
+      }
+    }
+    return WalkResult::advance();
+  });
+  if (ownership.wasInterrupted())
+    return failure();
   return verifySingleTopLevelProcedurePerModule(getOperation());
 }
 
@@ -1433,10 +1456,29 @@ LogicalResult nodal::GenerateOp::verify() {
     return emitOpError(
         "NODAL-ITERATION-043-004: generated region identity and induction path must be provided "
         "together");
-  if ((regionId && regionId.getValue().trim().empty()) ||
-      (inductionPath && inductionPath.getValue().trim().empty()))
+  if ((regionId &&
+       (regionId.getValue().trim().empty() || regionId.getValue().trim() != regionId.getValue())) ||
+      (inductionPath && (inductionPath.getValue().trim().empty() ||
+                         inductionPath.getValue().trim() != inductionPath.getValue())))
     return emitOpError(
-        "NODAL-ITERATION-043-004: generated region identity and induction path must be non-empty");
+        "NODAL-ITERATION-043-004: generated region identity and induction path must be canonical");
+
+  Operation *parent = getOperation()->getParentOp();
+  auto parentGenerate = llvm::dyn_cast_or_null<nodal::GenerateOp>(parent);
+  auto parentIdentity =
+      parentGenerate ? parentGenerate->getAttrOfType<StringAttr>("region_id") : StringAttr();
+  if (regionId) {
+    if (!llvm::isa_and_nonnull<nodal::ModuleOp>(parent) && !parentIdentity)
+      return emitOpError(
+          "NODAL-ITERATION-043-004: captured generation requires an immediate module or "
+          "captured generate parent");
+    if (parentIdentity && !regionId.getValue().starts_with((parentIdentity.getValue() + ".").str()))
+      return emitOpError(
+          "NODAL-ITERATION-043-004: nested generated identity escapes its immediate parent");
+  } else if (parentIdentity) {
+    return emitOpError(
+        "NODAL-ITERATION-043-004: nested captured generation cannot omit ownership identities");
+  }
   return success();
 }
 

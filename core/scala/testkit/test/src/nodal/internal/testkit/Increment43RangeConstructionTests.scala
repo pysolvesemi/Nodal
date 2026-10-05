@@ -177,6 +177,8 @@ object Increment43RangeConstructionTests extends TestSuite:
       val forgeries = Vector(
         region.copy(owner = "ForeignModule"),
         region.copy(induction = "ForeignModule.expr_0"),
+        region.copy(path = region.path + " "),
+        region.copy(induction = region.induction + " "),
         region.copy(declarations = Vector("ForeignModule.tap")),
         region.copy(parent = Some(region.path))
       )
@@ -234,6 +236,55 @@ object Increment43RangeConstructionTests extends TestSuite:
                   false,
                   s"${failure.diagnostic}\n${failure.standardError}"
                 )
+          finally delete(directory)
+
+    test(
+      "native preserves public nested generation and rejects aliased identities when configured"
+    ):
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          val directory = workDirectory()
+          try
+            val snapshot = ConstructionKernel.inspect(new Increment43RepeatedSymbolicGeneratedNodes)
+            val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+            val roots = snapshot.generatedRegions.filter(_.parent.isEmpty).sortBy(_.path)
+            val child = snapshot.generatedRegions.find(_.parent.nonEmpty).get
+            assert(roots.size == 2)
+            val request = NativeCompilerRequest(
+              executable = Path.of(executable).toAbsolutePath,
+              arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
+              workingDirectory = directory,
+              timeout = Duration.ofSeconds(30)
+            )
+            NativeCompilerClient.run(document, request) match
+              case success: NativeCompilerSuccess =>
+                snapshot.generatedRegions.foreach(region =>
+                  assert(success.normalizedMlir.contains(region.path))
+                )
+              case failure: NativeCompilerFailure =>
+                scala.Predef.assert(false, s"${failure.diagnostic}\n${failure.standardError}")
+
+            val forgeries = Vector(
+              roots(1).path -> roots.head.path,
+              roots(1).induction -> roots.head.induction,
+              child.path -> s"${snapshot.root}.orphan"
+            )
+            for (original, replacement) <- forgeries do
+              val text = document.text.replace(original, replacement)
+              assert(text != document.text)
+              val hash = MessageDigest.getInstance("SHA-256")
+                .digest(text.getBytes(StandardCharsets.UTF_8))
+                .map(value => f"${value & 0xff}%02x").mkString
+              NativeCompilerClient.run(document.copy(text = text, sha256 = hash), request) match
+                case failure: NativeCompilerFailure =>
+                  assert(failure.exitCode.contains(1))
+                  assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
+                case success: NativeCompilerSuccess =>
+                  scala.Predef.assert(
+                    false,
+                    s"aliased ownership accepted: ${success.normalizedMlir}"
+                  )
           finally delete(directory)
 
     test("native independently rejects forged envelope effects when configured"):

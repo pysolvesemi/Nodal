@@ -283,3 +283,11 @@ add_test(NAME nodal.native.generate-ssa-integration
     --work-dir "${CMAKE_BINARY_DIR}/increment43-generate-ssa-evidence"
 )
 set_tests_properties(nodal.native.generate-ssa-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.generate-ownership-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_generate_ownership_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-generate-ownership-evidence"
+)
+set_tests_properties(nodal.native.generate-ownership-integration PROPERTIES TIMEOUT 60)

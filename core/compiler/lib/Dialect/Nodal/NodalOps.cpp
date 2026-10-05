@@ -28,6 +28,7 @@
 
 #include <initializer_list>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <set>
 #include <string>
@@ -1630,6 +1631,50 @@ LogicalResult nodal::ShapeViewOp::verify() {
       failed(requireText(getOperation(), "materialization", "materialization")) ||
       failed(requireText(getOperation(), "observability", "observability")))
     return failure();
+
+  // Preserve the pre-existing synthetic fixture form. The production reshape
+  // carrier is deliberately distinguished by its exact materialization value.
+  if (textAttr(getOperation(), "materialization") != "view")
+    return success();
+
+  auto input = llvm::dyn_cast<nodal::ShapedType>(getOperation()->getOperand(0).getType());
+  auto result = llvm::dyn_cast<nodal::ShapedType>(getOperation()->getResult(0).getType());
+  if (!input || !result || input.getElementType() != result.getElementType())
+    return emitOpError(
+        "NODAL-SHAPE-043-003: fixed shape view requires shaped input/result with equal element "
+        "types");
+  if (textAttr(getOperation(), "dimensions") != result.getDimensions())
+    return emitOpError("NODAL-SHAPE-043-003: dimensions must exactly match the result shaped type");
+  if (textAttr(getOperation(), "observability") != "source_mapped")
+    return emitOpError(
+        "NODAL-SHAPE-043-003: fixed shape view requires source-mapped observability");
+  auto metadata = getOperation()->getAttrOfType<DictionaryAttr>("metadata");
+  auto storage = metadata ? metadata.getAs<StringAttr>("storage") : StringAttr();
+  if (!storage || storage.getValue() != "structural")
+    return emitOpError("NODAL-SHAPE-043-003: fixed shape view requires structural storage intent");
+
+  auto elementCount = [&](llvm::StringRef dimensions) -> std::optional<uint64_t> {
+    llvm::SmallVector<llvm::StringRef> tokens;
+    dimensions.split(tokens, ',', -1, true);
+    if (tokens.empty())
+      return std::nullopt;
+    uint64_t product = 1;
+    for (llvm::StringRef token : tokens) {
+      int64_t extent = 0;
+      token = token.trim();
+      if (token.empty() || token.getAsInteger(10, extent) || extent <= 0 ||
+          product > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
+                        static_cast<uint64_t>(extent))
+        return std::nullopt;
+      product *= static_cast<uint64_t>(extent);
+    }
+    return product;
+  };
+  auto inputCount = elementCount(input.getDimensions());
+  auto resultCount = elementCount(result.getDimensions());
+  if (!inputCount || !resultCount || *inputCount != *resultCount)
+    return emitOpError(
+        "NODAL-SHAPE-043-003: fixed shape view requires equal finite literal element counts");
   return success();
 }
 

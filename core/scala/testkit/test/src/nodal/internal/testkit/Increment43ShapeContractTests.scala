@@ -81,6 +81,27 @@ final class Increment43WireShapeIndex extends Module:
   val samples: Signal[Vec[Real]] = wire(Vec(Real, 2))
   val selected: Expr[Real] = samples.at(1)
 
+final class Increment43FixedShapeView extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
+  val transposedShape: Expr[Vec[Real]] = samples.reshape(3, 2)
+
+final class Increment43MismatchedShapeView extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
+  val invalid: Expr[Vec[Real]] = samples.reshape(2, 2)
+
+final class Increment43EmptyShapeView extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
+  val invalid: Expr[Vec[Real]] = samples.reshape()
+
+final class Increment43ZeroShapeView extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
+  val invalid: Expr[Vec[Real]] = samples.reshape(6, 0)
+
+final class Increment43SymbolicShapeView extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
+  val samples: Signal[Vec[Real]] = in(Vec(Real, lanes, 2))
+  val compatibilityOnly: Expr[Vec[Real]] = samples.reshape(2, lanes)
+
 object Increment43ShapeContractTests extends TestSuite:
   private def failure(top: => Module): ConstructionException =
     scala.util.Try(ConstructionKernel.inspect(top)).failed.get.asInstanceOf[ConstructionException]
@@ -248,4 +269,60 @@ object Increment43ShapeContractTests extends TestSuite:
                   assert(success.normalizedMlir.contains("nodal.shape_index"))
                 case failure: NativeCompilerFailure =>
                   scala.Predef.assert(false, s"${failure.diagnostic}\n${failure.standardError}")
+          finally delete(directory)
+
+    test("fixed reshape retains a source-correlated structural view"):
+      val snapshot = ConstructionKernel.inspect(new Increment43FixedShapeView)
+      assert(snapshot.shapeViews.size == 1)
+      assert(snapshot.shapeViews.head.input.endsWith(".samples"))
+      assert(snapshot.shapeViews.head.dimensions == Vector(3, 2))
+      assert(snapshot.sourceMap.exists(_.semanticPath == snapshot.shapeViews.head.path))
+      assert(ConstructionKernel.inspect(new Increment43SymbolicShapeView).shapeViews.isEmpty)
+      Vector(
+        failure(new Increment43MismatchedShapeView),
+        failure(new Increment43EmptyShapeView),
+        failure(new Increment43ZeroShapeView)
+      ).foreach(error => assert(error.diagnostic.code == "NODAL-SHAPE-043-003"))
+
+    test("bridge emits and independently validates fixed structural reshape"):
+      val document = ScalaToMlirBridge.lower(new Increment43FixedShapeView)
+      assert(document == ScalaToMlirBridge.lower(new Increment43FixedShapeView))
+      assert(document.text.contains("\"nodal.shape_view\""))
+      assert(document.text.contains("!nodal.shaped<\"2,3\", f64>"))
+      assert(document.text.contains("!nodal.shaped<\"3,2\", f64>"))
+      assert(document.text.contains("materialization = \"view\""))
+      assert(document.text.contains("storage = \"structural\""))
+
+      val snapshot = ConstructionKernel.inspect(new Increment43FixedShapeView)
+      Vector(
+        snapshot.copy(shapeViews = snapshot.shapeViews.map(_.copy(owner = "Missing"))),
+        snapshot.copy(shapeViews = snapshot.shapeViews.map(_.copy(input = "Missing.samples"))),
+        snapshot.copy(shapeViews = snapshot.shapeViews.map(_.copy(dimensions = Vector(2, 2)))),
+        snapshot.copy(shapeViews = snapshot.shapeViews ++ snapshot.shapeViews)
+      ).foreach: forged =>
+        val error = scala.util.Try(ScalaToMlirBridge.fromSnapshot(forged))
+          .failed.get.asInstanceOf[BridgeException]
+        assert(error.diagnostic.code == "NODAL-BRIDGE-045")
+
+    test("configured native accepts public fixed reshape transport"):
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          val directory = Files.createTempDirectory("nodal-increment43-shape-view-")
+          try
+            val request = NativeCompilerRequest(
+              executable = Path.of(executable).toAbsolutePath,
+              arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
+              workingDirectory = directory,
+              timeout = Duration.ofSeconds(30)
+            )
+            NativeCompilerClient.run(
+              ScalaToMlirBridge.lower(new Increment43FixedShapeView),
+              request
+            ) match
+              case success: NativeCompilerSuccess =>
+                assert(success.normalizedMlir.contains("nodal.shape_view"))
+                assert(success.normalizedMlir.contains("materialization = \"view\""))
+              case failure: NativeCompilerFailure =>
+                scala.Predef.assert(false, s"${failure.diagnostic}\n${failure.standardError}")
           finally delete(directory)

@@ -135,6 +135,11 @@ private[nodal] object ScalaToMlirBridge:
       .view
       .mapValues(_.sortBy(_.path))
       .toMap
+    private val shapeViewsByOwner = snapshot.shapeViews
+      .groupBy(_.owner)
+      .view
+      .mapValues(_.sortBy(_.path))
+      .toMap
     private val topologyByOwner = snapshot.topology
       .groupBy(_.owner)
       .view
@@ -648,6 +653,38 @@ ${indent(body, 2)}
             "parameter expression has no owning Module",
             Some(expression.path)
           )
+      snapshot.shapeViews.foreach: view =>
+        val module = modulesByPath.getOrElse(
+          view.owner,
+          fail("NODAL-BRIDGE-045", "shape view has no owning Module", Some(view.path))
+        )
+        if !view.path.startsWith(s"${view.owner}.") || view.path.trim != view.path ||
+          view.input.trim != view.input
+        then
+          fail(
+            "NODAL-BRIDGE-045",
+            "shape-view identity is noncanonical or escapes its owning Module",
+            Some(view.path)
+          )
+        if !sourceByPath.contains(view.path) then
+          fail("NODAL-BRIDGE-045", "shape-view identity has no source-map entry", Some(view.path))
+        val declaration = module.declarations.find(_.path == view.input).getOrElse(
+          fail("NODAL-BRIDGE-045", "shape-view input declaration is absent", Some(view.path))
+        )
+        if declaration.kind != "input" && declaration.kind != "output" then
+          fail("NODAL-BRIDGE-045", "shape-view input must be a module port", Some(view.path))
+        val dataType = declaration.dataType.getOrElse(
+          fail("NODAL-BRIDGE-045", "shape-view input type is absent", Some(view.path))
+        )
+        val (_, sourceDimensions) = vecTypeParts(dataType, view.path)
+        val sourceCount = fixedShapeProduct(sourceDimensions, view.path)
+        val targetCount = fixedShapeProduct(view.dimensions.map(_.toString), view.path)
+        if sourceCount != targetCount then
+          fail(
+            "NODAL-BRIDGE-045",
+            "shape-view source and result element counts differ",
+            Some(view.path)
+          )
       snapshot.shapeIndices.foreach: index =>
         val module = modulesByPath.getOrElse(
           index.owner,
@@ -696,6 +733,11 @@ ${indent(body, 2)}
         snapshot.sourceMap.map(_.semanticPath),
         "NODAL-BRIDGE-010",
         "source-map semantic path"
+      )
+      requireUnique(
+        snapshot.shapeViews.map(_.path),
+        "NODAL-BRIDGE-045",
+        "shape-view identity"
       )
       requireUnique(
         snapshot.continuousOperators.map(_.path),
@@ -866,6 +908,49 @@ ${indent(body, 2)}
         val result = s"%shape_index_static_$nextShapeStaticValue"
         nextShapeStaticValue += 1
         result
+
+      shapeViewsByOwner.getOrElse(module.path, Vector.empty).zipWithIndex.foreach:
+        (view, ordinal) =>
+          val declaration = declarationsByPath(view.input)
+          val sourceType = declaration.dataType.getOrElse(
+            fail("NODAL-BRIDGE-045", "shape-view input type is absent", Some(view.path))
+          )
+          val (elementText, _) = vecTypeParts(sourceType, view.path)
+          val inputType = parseType(sourceType, view.path)
+          val resultType =
+            s"!nodal.shaped<${quoted(view.dimensions.mkString(","))}, ${parseType(elementText, view.path)}>"
+          val inputValue = s"%shape_view_${ordinal}_input"
+          body += operation(
+            "nodal.port_value",
+            results = Vector(inputValue),
+            resultTypes = Vector(inputType),
+            attributes = Vector(
+              "port" -> symbolReference(stableLocalSymbol("port", declaration.name)),
+              "metadata" -> bridgeMetadata(view.input, Vector("use" -> quoted("shape_view")))
+            ),
+            semanticPath = view.input
+          )
+          body += operation(
+            "nodal.shape_view",
+            results = Vector(s"%shape_view_$ordinal"),
+            operands = Vector(inputValue),
+            operandTypes = Vector(inputType),
+            resultTypes = Vector(resultType),
+            attributes = Vector(
+              "dimensions" -> quoted(view.dimensions.mkString(",")),
+              "origin" -> quoted(view.input),
+              "materialization" -> quoted("view"),
+              "observability" -> quoted("source_mapped"),
+              "metadata" -> bridgeMetadata(
+                view.path,
+                Vector(
+                  "input_path" -> quoted(view.input),
+                  "storage" -> quoted("structural")
+                )
+              )
+            ),
+            semanticPath = view.path
+          )
 
       shapeIndicesByOwner.getOrElse(module.path, Vector.empty).zipWithIndex.foreach:
         (index, ordinal) =>
@@ -2523,6 +2608,22 @@ ${indent(body, 2)}
         attributes.get("integer_range_lower").flatMap(_.toIntOption).filter(_ > 0).getOrElse(
           fail("NODAL-BRIDGE-044", "symbolic shape extent has no positive minimum", Some(path))
         )
+
+    private def fixedShapeProduct(dimensions: Vector[String], path: String): BigInt =
+      if dimensions.isEmpty then
+        fail("NODAL-BRIDGE-045", "fixed shape view requires at least one dimension", Some(path))
+      dimensions.foldLeft(BigInt(1)): (product, dimension) =>
+        val value = dimension.toIntOption.filter(_ > 0).getOrElse(
+          fail(
+            "NODAL-BRIDGE-045",
+            "fixed shape view requires positive literal dimensions",
+            Some(path)
+          )
+        )
+        val next = product * BigInt(value)
+        if next > BigInt(Long.MaxValue) then
+          fail("NODAL-BRIDGE-045", "fixed shape view element count overflows", Some(path))
+        next
 
     private def shapeIndexBounds(
         module: KernelModuleSnapshot,

@@ -103,6 +103,13 @@ private[nodal] final case class KernelShapeIndexSnapshot(
     indices: Vector[String]
 )
 
+private[nodal] final case class KernelShapeViewSnapshot(
+    path: String,
+    owner: String,
+    input: String,
+    dimensions: Vector[Int]
+)
+
 private[nodal] final case class KernelModuleSnapshot(
     path: String,
     className: String,
@@ -234,7 +241,8 @@ private[nodal] final case class ConstructionSnapshot(
     analogProcedural: Vector[AnalogProceduralRuntime.Snapshot] = Vector.empty,
     waivers: Vector[KernelWaiverSnapshot] = Vector.empty,
     generatedRegions: Vector[KernelGeneratedRegionSnapshot] = Vector.empty,
-    shapeIndices: Vector[KernelShapeIndexSnapshot] = Vector.empty
+    shapeIndices: Vector[KernelShapeIndexSnapshot] = Vector.empty,
+    shapeViews: Vector[KernelShapeViewSnapshot] = Vector.empty
 )
 
 private final case class DomainRef(module: Long, index: Int)
@@ -275,6 +283,12 @@ private final case class ShapeIndexRecord(
     reference: ExpressionRef,
     input: DeclarationRef,
     indices: Vector[Int | Expr[Integer]]
+)
+
+private final case class ShapeViewRecord(
+    reference: ExpressionRef,
+    input: DeclarationRef,
+    dimensions: Vector[Int]
 )
 
 private final class InstanceRecord(

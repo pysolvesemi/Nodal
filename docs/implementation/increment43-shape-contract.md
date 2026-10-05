@@ -117,7 +117,43 @@ extents bound.
 Public tests exercise deterministic direct and compound expression transport,
 configured native execution, construction rejection of an unsafe symbolic
 endpoint, and bridge mutations for missing expression identity, changed
-arithmetic and ordinary parameter classification. This remains an indexing-only
-checkpoint: compound dimension DAGs, slices/views, l-value indexing, generated
-storage and target arrays/generation are still open, as are all parent and child
-F43 acceptance boxes.
+arithmetic and ordinary parameter classification. That checkpoint remains
+indexing-only; the fixed view profile below is separate. Compound dimension
+DAGs, general slices/views, l-value indexing, generated storage and target
+arrays/generation are still open, as are all parent and child F43 acceptance
+boxes.
+
+## Fixed structural reshape view checkpoint
+
+The already-frozen public `Vec.reshape(...)` surface now has a bounded production
+path for fixed positive dimensions on module input/output ports. Construction
+retains the source port, target dimensions and source-correlated expression
+identity, and accepts the view only when independently computed source and
+result element counts are equal and fit the supported signed 64-bit envelope.
+Unequal fixed counts reject transactionally with `NODAL-SHAPE-043-003`.
+
+The snapshot uses the existing construction expression identity and source map.
+The bridge independently resolves the owned port, rechecks positive literal
+dimensions and both products, and emits a typed `nodal.port_value` followed by
+the existing `nodal.shape_view`. The view carries exact result dimensions,
+`materialization = "view"`, source-mapped observability and structural storage
+intent. Native verification recognizes that production materialization value
+and independently requires shaped input/result types with equal element types,
+an exact dimensions/result-type match, structural storage, source-mapped
+observability and equal finite literal counts. The older `explicit_view`
+fixture carrier is preserved unchanged for predecessor native tests.
+
+A separate twelve-case native matrix runs four positives twice and requires
+eight exact-code rejections for count mismatch, symbolic extents, attribute/type
+forgeries and overflow. Three Python checker methods control inventory,
+preservation and normal exact-diagnostic rejection. Public tests cover snapshot,
+deterministic bridge output, four bridge forgeries and configured native
+execution. The full native suite contains 145 tests at this checkpoint.
+
+This is a structural view, not storage allocation, flattening, a memory, an
+l-value slice or target lowering. Symbolic reshape retains the exposed
+compatibility-only inert expression path until symbolic product equality can be
+proved; internal shaped wires retain their prior inert path. Slice selection,
+compound dimensions, generated lexical storage and legal Verilog-A
+array/generation lowering remain open. No F43 parent or descendant checkbox is
+complete.

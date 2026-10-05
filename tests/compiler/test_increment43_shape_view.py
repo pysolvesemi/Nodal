@@ -1,0 +1,45 @@
+"""Mutation controls for fixed shape-view native evidence."""
+
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent / "fixtures" / "increment43"))
+import run_generate_count_matrix as counts
+import run_shape_view_matrix as views
+
+
+class ShapeViewCheckerTests(unittest.TestCase):
+    def test_inventory_and_positive_preservation(self):
+        cases = views.cases()
+        self.assertEqual(len(cases), 12)
+        self.assertEqual(len({case.name for case in cases}), len(cases))
+        for case in cases:
+            if case.code is None:
+                data = counts.source(case).encode()
+                self.assertTrue(views.valid_output(case, data, 0, data, b""), case.name)
+
+    def test_contract_mutations_reject(self):
+        case = views.cases()[0]
+        data = counts.source(case).encode()
+        for old, new in [(b'"3,2"', b'"6"'),
+                         (b'source_path = "Fixture.result", storage = "structural"',
+                          b'source_path = "Fixture.result", storage = "memory"'),
+                         (b'storage = "structural"}, observability = "source_mapped", origin = "Fixture.samples"}> : (!nodal.shaped',
+                          b'storage = "structural"}, observability = "hidden", origin = "Fixture.samples"}> : (!nodal.shaped'),
+                         (b'!nodal.shaped<"3,2", f64>', b'!nodal.shaped<"2,3", f64>')]:
+            with self.subTest(old=old):
+                changed = data.replace(old, new, 1)
+                self.assertNotEqual(changed, data)
+                self.assertFalse(views.valid_output(case, data, 0, changed, b""))
+
+    def test_rejection_requires_normal_exit_and_exact_diagnostic(self):
+        case = next(case for case in views.cases() if case.code)
+        data = counts.source(case).encode()
+        self.assertTrue(views.valid_output(case, data, 1, b"", views.CODE.encode()))
+        for code in (0, -11, 124, None):
+            self.assertFalse(views.valid_output(case, data, code, b"", views.CODE.encode()))
+
+
+if __name__ == "__main__":
+    unittest.main()

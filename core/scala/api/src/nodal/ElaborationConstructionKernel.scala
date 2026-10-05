@@ -159,6 +159,14 @@ private[nodal] object ConstructionKernel:
     case Some(session) => session.registerShapeIndex(expression, input, indices)
     case None => ()
 
+  def shapeView[A <: Data](
+      expression: KernelExpr[Vec[A]],
+      input: Expr[Vec[A]],
+      dimensions: Vector[Dimension]
+  ): Unit = active match
+    case Some(session) => session.registerShapeView(expression, input, dimensions)
+    case None => ()
+
   def defineUserFunction[A <: Data](
       name: String,
       resultType: DataType[A],

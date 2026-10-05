@@ -60,7 +60,7 @@ extension [A <: Data](value: Expr[Vec[A]])
   def at(indices: Dimension*): Expr[A] = CandidateRuntime.shapeIndex(value, indices.toVector)
   def flatten: Expr[Vec[A]] = CandidateRuntime.expr(value, "flatten")
   def reshape(dimensions: Dimension*): Expr[Vec[A]] =
-    CandidateRuntime.expr(value, dimensions, "reshape")
+    CandidateRuntime.shapeView(value, dimensions.toVector)
   def map[B <: Data](function: Expr[A] => Expr[B]): Expr[Vec[B]] =
     CandidateRuntime.expr(value, function, "map")
   def zip[B <: Data](other: Expr[Vec[B]]): Expr[Vec[A]] =

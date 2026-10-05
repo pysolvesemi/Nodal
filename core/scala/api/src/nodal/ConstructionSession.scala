@@ -64,6 +64,7 @@ private final class ConstructionSession(val options: EmitOptions):
   private val generationStack: mutable.ArrayBuffer[GeneratedRegionRecord] =
     mutable.ArrayBuffer.empty
   private val shapeIndices: mutable.ArrayBuffer[ShapeIndexRecord] = mutable.ArrayBuffer.empty
+  private val shapeViews: mutable.ArrayBuffer[ShapeViewRecord] = mutable.ArrayBuffer.empty
   private var constructorFailure: Option[(Throwable, String)] = None
 
   private def fail(code: String, message: String, path: Option[String] = None): Nothing =
@@ -357,6 +358,88 @@ private final class ConstructionSession(val options: EmitOptions):
         fail("NODAL-SHAPE-043-002", "shape index requires an active Module")
       )
       shapeIndices += ShapeIndexRecord(reference, inputReference, positions.map(_._1))
+
+  private def fixedShapeExtent(value: Any): Option[Int] = value match
+    case literal: Int if literal > 0 => Some(literal)
+    case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
+      expression.literal.flatMap(_.value.toIntOption).filter(_ > 0)
+    case _ => None
+
+  def registerShapeView[A <: Data](
+      expression: KernelExpr[Vec[A]],
+      input: Expr[Vec[A]],
+      dimensions: Vector[Dimension]
+  ): Unit =
+    val module = currentModule
+    val inputReference = input match
+      case candidate: AnyRef => Option(declarationIds.get(candidate)).getOrElse(
+          fail("NODAL-SHAPE-043-003", "shape-view value has no declaration identity")
+        )
+    if inputReference.module != module.handle then
+      fail(
+        "NODAL-SHAPE-043-003",
+        "shape-view value must be owned by the active Module",
+        Some(declarationPath(inputReference))
+      )
+    val declaration = records(inputReference.module).declarations(inputReference.index)
+    if declaration.kind != KernelSignalKind.Input && declaration.kind != KernelSignalKind.Output
+    then
+      val _ = captureExpression(expression)
+    else
+      val descriptor = declaration.dataType
+        .map(CandidateRuntime.typeDescriptor)
+        .filter(_.kind == "Vec")
+        .getOrElse(
+          fail(
+            "NODAL-SHAPE-043-003",
+            "shape-view declaration must have Vec type",
+            Some(declarationPath(inputReference))
+          )
+        )
+      val source = descriptor.arguments.lift(1).toVector.flatMap:
+        case values: Seq[?] => values.toVector.map(fixedShapeExtent)
+        case _ => Vector.empty
+      if dimensions.isEmpty then
+        fail(
+          "NODAL-SHAPE-043-003",
+          "fixed shape view requires at least one result dimension",
+          Some(declarationPath(inputReference))
+        )
+      dimensions.foreach:
+        case value: Int if value <= 0 =>
+          fail(
+            "NODAL-SHAPE-043-003",
+            "fixed shape-view result dimensions must be positive",
+            Some(declarationPath(inputReference))
+          )
+        case value: KernelExpr[?]
+            if value.literal.exists(_.kind == "integer") &&
+              fixedShapeExtent(value).isEmpty =>
+          fail(
+            "NODAL-SHAPE-043-003",
+            "fixed shape-view result dimensions must be positive",
+            Some(declarationPath(inputReference))
+          )
+        case _ => ()
+      val target = dimensions.map(fixedShapeExtent)
+      if source.isEmpty || target.isEmpty || source.exists(_.isEmpty) || target.exists(_.isEmpty)
+      then
+        // The frozen compatibility surface remains inert outside this first
+        // fixed-dimension profile. Symbolic reshape needs an equality proof.
+        val _ = captureExpression(expression)
+      else
+        val sourceProduct = source.flatten.foldLeft(BigInt(1))(_ * _)
+        val targetProduct = target.flatten.foldLeft(BigInt(1))(_ * _)
+        if sourceProduct != targetProduct || sourceProduct > BigInt(Long.MaxValue) then
+          fail(
+            "NODAL-SHAPE-043-003",
+            "fixed shape view requires equal finite source and result element counts",
+            Some(declarationPath(inputReference))
+          )
+        val reference = captureExpression(expression).getOrElse(
+          fail("NODAL-SHAPE-043-003", "shape view requires an active Module")
+        )
+        shapeViews += ShapeViewRecord(reference, inputReference, target.flatten)
 
   private def captureExpression(value: AnyRef): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>
@@ -2182,6 +2265,15 @@ private final class ConstructionSession(val options: EmitOptions):
         indices = index.indices.map(generatedBound)
       )
 
+  private def shapeViewSnapshots(): Vector[KernelShapeViewSnapshot] =
+    shapeViews.toVector.map: view =>
+      KernelShapeViewSnapshot(
+        path = expressionPath(view.reference),
+        owner = modulePath(view.reference.module),
+        input = declarationPath(view.input),
+        dimensions = view.dimensions
+      )
+
   private def relationName(relation: ClockRelation): String =
     relationAttributes(relation).collectFirst:
       case ("clock_relation", value) => value
@@ -2558,7 +2650,8 @@ private final class ConstructionSession(val options: EmitOptions):
       ),
       waivers = waiverSnapshots(semantic.sourceMap),
       generatedRegions = generatedSnapshots(),
-      shapeIndices = shapeIndexSnapshots()
+      shapeIndices = shapeIndexSnapshots(),
+      shapeViews = shapeViewSnapshots()
     )
     val kind = classify(snapshot)
     val report = DesignReport(

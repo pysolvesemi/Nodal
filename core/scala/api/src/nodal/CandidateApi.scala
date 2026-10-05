@@ -1154,6 +1154,37 @@ private[nodal] object CandidateRuntime:
     ConstructionKernel.shapeIndex(expression, value, indices)
     expression
 
+  def shapeView[A <: Data](
+      value: Expr[Vec[A]],
+      dimensions: Vector[Dimension]
+  ): Expr[Vec[A]] =
+    val descriptor = expressionDataType(value)
+      .map(typeDescriptor)
+      .filter(_.kind == "Vec")
+      .getOrElse(
+        scala.util.Failure[KernelTypeDescriptor](
+          new ConstructionException(
+            KernelDiagnostic("NODAL-SHAPE-043-003", "shape view requires a Vec value")
+          )
+        ).get
+      )
+    val element = descriptor.arguments.headOption.collect:
+      case candidate: DataType[?] => candidate
+    .getOrElse(
+      scala.util.Failure[DataType[?]](
+        new ConstructionException(
+          KernelDiagnostic("NODAL-SHAPE-043-003", "shape view requires a Vec element type")
+        )
+      ).get
+    )
+    val result = new KernelExpr[Vec[A]](
+      value +: dimensions,
+      resultType = Some(KernelTypeDescriptor("Vec", Vector(element, dimensions))),
+      operation = Some("shape_view")
+    )
+    ConstructionKernel.shapeView(result, value, dimensions)
+    result
+
   def analogExpr(operation: String, values: Any*): Expr[Real] =
     val expression = new KernelExpr[Real](
       values.toVector,

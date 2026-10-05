@@ -18,6 +18,8 @@
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
@@ -151,6 +153,30 @@ bool parameterHasShapeEnvelope(Operation *module, llvm::StringRef symbol) {
         return true;
   }
   return false;
+}
+
+bool hasStaticShapeIndexDependencies(Value value, Operation *module,
+                                     llvm::SmallPtrSetImpl<Operation *> &active,
+                                     unsigned depth = 0) {
+  Operation *operation = value.getDefiningOp();
+  if (!operation || operation->getParentOfType<nodal::ModuleOp>() != module || depth >= 512 ||
+      !active.insert(operation).second)
+    return false;
+  const llvm::scope_exit remove([&] { active.erase(operation); });
+  if (llvm::isa<nodal::ConstLiteralOp>(operation))
+    return true;
+  if (llvm::isa<nodal::ConstParameterRefOp>(operation)) {
+    auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("parameter");
+    Operation *parameter =
+        reference ? findDirectModuleParameter(module, reference.getValue()) : nullptr;
+    return parameter && nodal::isStructuralParameter(parameter) &&
+           parameterHasShapeEnvelope(module, reference.getValue());
+  }
+  if (!llvm::isa<nodal::ConstExprOp>(operation))
+    return false;
+  return llvm::all_of(operation->getOperands(), [&](Value operand) {
+    return hasStaticShapeIndexDependencies(operand, module, active, depth + 1);
+  });
 }
 
 bool parameterHasPositiveFiniteRange(Operation *module, llvm::StringRef symbol) {
@@ -1555,16 +1581,36 @@ LogicalResult nodal::ShapeIndexOp::verify() {
         symbolicMinima.try_emplace(dimension, minimumExtent);
       }
     }
-    // The existing index-typed carrier currently supports literal static indices.
-    // Unknown values must not acquire a proof from metadata or a parameter default.
-    Operation *index = getOperation()->getOperand(axis + 1).getDefiningOp();
-    auto literal = index ? index->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
-    if (!llvm::isa_and_nonnull<nodal::ConstantOp>(index) ||
-        index->getParentOfType<nodal::ModuleOp>() != owner || index->hasAttr("unit") || !literal ||
-        !literal.getType().isIndex() || !literal.getValue().isSignedIntN(64))
-      return emitOpError("NODAL-SHAPE-043-002: index requires a proven static index literal");
-    const int64_t position = literal.getValue().getSExtValue();
-    if (minimumExtent <= 0 || position < 0 || position >= minimumExtent)
+    Value indexValue = getOperation()->getOperand(axis + 1);
+    Operation *index = indexValue.getDefiningOp();
+    if (!index || index->getParentOfType<nodal::ModuleOp>() != owner)
+      return emitOpError("NODAL-SHAPE-043-002: index requires direct-module static ownership");
+
+    int64_t lower = 0;
+    int64_t upper = 0;
+    if (indexValue.getType().isIndex()) {
+      // Preserve the legacy literal form exactly; metadata and runtime values do not prove it.
+      auto literal = index->getAttrOfType<IntegerAttr>("value");
+      if (!llvm::isa<nodal::ConstantOp>(index) || index->hasAttr("unit") || !literal ||
+          !literal.getType().isIndex() || !literal.getValue().isSignedIntN(64))
+        return emitOpError("NODAL-SHAPE-043-002: index requires a proven static index literal");
+      lower = upper = literal.getValue().getSExtValue();
+    } else if (indexValue.getType().isInteger(64)) {
+      llvm::SmallPtrSet<Operation *, 16> active;
+      if (!hasStaticShapeIndexDependencies(indexValue, owner, active))
+        return emitOpError(
+            "NODAL-SHAPE-043-002: Integer index requires structural shape dependencies");
+      auto bounds = nodal::inferParameterIntegerBounds(indexValue);
+      if (failed(bounds))
+        return emitOpError(
+            "NODAL-SHAPE-043-002: Integer index has no proven static expression bounds");
+      lower = bounds->lower;
+      upper = bounds->upper;
+    } else {
+      return emitOpError(
+          "NODAL-SHAPE-043-002: index must be an index literal or static i64 expression");
+    }
+    if (minimumExtent <= 0 || lower < 0 || upper >= minimumExtent)
       return emitOpError(
                  "NODAL-SHAPE-043-002: index is not in bounds for every legal shape at axis ")
              << axis;

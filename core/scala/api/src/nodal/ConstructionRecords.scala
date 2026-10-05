@@ -100,7 +100,7 @@ private[nodal] final case class KernelShapeIndexSnapshot(
     path: String,
     owner: String,
     input: String,
-    indices: Vector[Int]
+    indices: Vector[String]
 )
 
 private[nodal] final case class KernelModuleSnapshot(
@@ -274,7 +274,7 @@ private final class GeneratedRegionRecord(
 private final case class ShapeIndexRecord(
     reference: ExpressionRef,
     input: DeclarationRef,
-    indices: Vector[Int]
+    indices: Vector[Int | Expr[Integer]]
 )
 
 private final class InstanceRecord(

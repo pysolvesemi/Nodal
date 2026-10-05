@@ -63,6 +63,16 @@ final class Increment43RankShapeIndex extends Module, Increment43ShapeClock:
   val selected: Expr[Real] = samples.at(1)
 
 final class Increment43SymbolicIndex extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(2.integer, range = 1 to 3)
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 4))
+  val selected: Expr[Real] = samples.at(lanes)
+
+final class Increment43CompoundIndex extends Module, Increment43ShapeClock:
+  val lane: Param[Integer] = param(2.integer, range = 1 to 3)
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 3))
+  val selected: Expr[Real] = samples.at(lane - 1.integer)
+
+final class Increment43UnprovedSymbolicIndex extends Module, Increment43ShapeClock:
   val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
   val samples: Signal[Vec[Real]] = in(Vec(Real, 4))
   val selected: Expr[Real] = samples.at(lanes)
@@ -151,32 +161,40 @@ object Increment43ShapeContractTests extends TestSuite:
       val legacyWire = ConstructionKernel.inspect(new Increment43WireShapeIndex)
       assert(fixed.shapeIndices.size == 1)
       assert(fixed.shapeIndices.head.input.endsWith(".samples"))
-      assert(fixed.shapeIndices.head.indices == Vector(1, 2))
+      assert(fixed.shapeIndices.head.indices == Vector("1", "2"))
       assert(fixed.shapeIndices.head.path != fixed.shapeIndices.head.input)
       assert(fixed.sourceMap.exists(_.semanticPath == fixed.shapeIndices.head.path))
-      assert(symbolic.shapeIndices.head.indices == Vector(0, 1))
+      assert(symbolic.shapeIndices.head.indices == Vector("0", "1"))
       assert(legacyWire.shapeIndices.isEmpty)
 
     test("bridge transports public static indexing through typed port SSA"):
       val fixed = ScalaToMlirBridge.lower(new Increment43FixedShapeIndex)
       val symbolic = ScalaToMlirBridge.lower(new Increment43SymbolicShapeIndex)
+      val direct = ScalaToMlirBridge.lower(new Increment43SymbolicIndex)
+      val compound = ScalaToMlirBridge.lower(new Increment43CompoundIndex)
       assert(fixed == ScalaToMlirBridge.lower(new Increment43FixedShapeIndex))
       assert(fixed.text.contains("\"nodal.port_value\""))
       assert(fixed.text.contains("\"nodal.shape_index\""))
       assert(fixed.text.contains("value = 1 : index"))
       assert(fixed.text.contains("value = 2 : index"))
       assert(symbolic.text.contains("!nodal.shaped<\"lanes,2\", f64>"))
+      assert(direct.text.contains("\"nodal.const_parameter_ref\""))
+      assert(direct.text.contains("i64) -> f64"))
+      assert(compound.text.contains("\"nodal.const_expr\""))
+      assert(compound.text.contains("operator_name = \"sub\""))
 
-    test("public port indexing rejects unsafe literals rank and symbolic indices"):
+    test("public port indexing rejects unsafe literals rank and unproved symbolic indices"):
       Vector(
         failure(new Increment43NegativeShapeIndex),
         failure(new Increment43EndShapeIndex),
         failure(new Increment43RankShapeIndex),
-        failure(new Increment43SymbolicIndex)
+        failure(new Increment43UnprovedSymbolicIndex)
       ).foreach(error => assert(error.diagnostic.code == "NODAL-SHAPE-043-002"))
 
     test("bridge rejects forged static-index ownership rank and bounds"):
       val snapshot = ConstructionKernel.inspect(new Increment43FixedShapeIndex)
+      val compound = ConstructionKernel.inspect(new Increment43CompoundIndex)
+      val compoundIndex = compound.shapeIndices.head.indices.head
       val forged = Vector(
         snapshot.copy(shapeIndices = snapshot.shapeIndices.map(_.copy(owner = "Missing"))),
         snapshot.copy(shapeIndices = snapshot.shapeIndices.map(_.copy(input = "Missing.samples"))),
@@ -185,8 +203,21 @@ object Increment43ShapeContractTests extends TestSuite:
             _.copy(path = "Increment43FixedShapeIndex.missing")
           )
         ),
-        snapshot.copy(shapeIndices = snapshot.shapeIndices.map(_.copy(indices = Vector(1)))),
-        snapshot.copy(shapeIndices = snapshot.shapeIndices.map(_.copy(indices = Vector(2, 0))))
+        snapshot.copy(shapeIndices = snapshot.shapeIndices.map(_.copy(indices = Vector("1")))),
+        snapshot.copy(shapeIndices = snapshot.shapeIndices.map(_.copy(indices = Vector("2", "0")))),
+        compound.copy(
+          shapeIndices = compound.shapeIndices.map(_.copy(indices = Vector("Missing.index")))
+        ),
+        compound.copy(parameterExpressions = compound.parameterExpressions.map: expression =>
+          if expression.path == compoundIndex then expression.copy(operation = "analog_add")
+          else expression),
+        compound.copy(modules = compound.modules.map: module =>
+          module.copy(declarations = module.declarations.map: declaration =>
+            if declaration.name == "lane" then
+              declaration.copy(attributes = declaration.attributes.map:
+                case ("classification", _) => "classification" -> "ordinary"
+                case attribute => attribute)
+            else declaration))
       )
       forged.foreach: candidate =>
         val error = scala.util.Try(ScalaToMlirBridge.fromSnapshot(candidate))
@@ -207,7 +238,9 @@ object Increment43ShapeContractTests extends TestSuite:
             )
             Vector(
               ScalaToMlirBridge.lower(new Increment43FixedShapeIndex),
-              ScalaToMlirBridge.lower(new Increment43SymbolicShapeIndex)
+              ScalaToMlirBridge.lower(new Increment43SymbolicShapeIndex),
+              ScalaToMlirBridge.lower(new Increment43SymbolicIndex),
+              ScalaToMlirBridge.lower(new Increment43CompoundIndex)
             ).foreach: document =>
               NativeCompilerClient.run(document, request) match
                 case success: NativeCompilerSuccess =>

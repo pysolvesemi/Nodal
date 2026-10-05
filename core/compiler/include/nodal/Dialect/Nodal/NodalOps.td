@@ -420,7 +420,7 @@ def Nodal_ShapeIndexOp : Nodal_Op<"shape_index"> {
   let summary = "Canonical multidimensional shaped-value indexing";
   let arguments = (ins
     AnyType:$input,
-    Variadic<Index>:$indices,
+    Variadic<AnyType>:$indices,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);

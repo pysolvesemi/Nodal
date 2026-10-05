@@ -12,7 +12,7 @@ import run_shape_index_matrix as indexing
 class ShapeIndexCheckerTests(unittest.TestCase):
     def test_inventory_and_positive_preservation(self):
         cases = indexing.cases()
-        self.assertEqual(len(cases), 27)
+        self.assertEqual(len(cases), 34)
         self.assertEqual(len({case.name for case in cases}), len(cases))
         for case in cases:
             if case.code is None:
@@ -36,6 +36,15 @@ class ShapeIndexCheckerTests(unittest.TestCase):
         renamed = data.replace(b'%i0', b'%renamed0').replace(b'%i1', b'%renamed1')
         self.assertTrue(indexing.valid_output(case, data, 0, renamed, b""))
         self.assertFalse(indexing.valid_output(case, data, 0, b"", b""))
+
+        expression_case = next(case for case in indexing.cases()
+                               if case.name == "index_expression_compound")
+        expression_data = counts.source(expression_case).encode()
+        changed = expression_data.replace(b'operator_name = "sub"',
+                                          b'operator_name = "add"')
+        self.assertNotEqual(changed, expression_data)
+        self.assertFalse(indexing.valid_output(
+            expression_case, expression_data, 0, changed, b""))
 
     def test_rejection_requires_normal_exit_and_exact_diagnostic(self):
         case = next(case for case in indexing.cases() if case.code)

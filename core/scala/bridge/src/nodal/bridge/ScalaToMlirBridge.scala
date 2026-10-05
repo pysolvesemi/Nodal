@@ -685,7 +685,8 @@ ${indent(body, 2)}
         index.indices.zip(dimensions).zipWithIndex.foreach:
           case ((position, dimension), axis) =>
             val minimum = shapeDimensionMinimum(module, dimension, index.path)
-            if position < 0 || position >= minimum then
+            val bounds = shapeIndexBounds(module, position, index.path)
+            if bounds.lower < 0L || bounds.upper >= minimum.toLong then
               fail(
                 "NODAL-BRIDGE-044",
                 s"shape index is not valid for every legal extent at axis $axis",
@@ -859,6 +860,13 @@ ${indent(body, 2)}
             body ++= renderParameter(declaration)
           case _ => ()
 
+      val shapeStaticValues = mutable.LinkedHashMap.empty[String, (String, String)]
+      var nextShapeStaticValue = 0
+      def allocateShapeStaticValue(): String =
+        val result = s"%shape_index_static_$nextShapeStaticValue"
+        nextShapeStaticValue += 1
+        result
+
       shapeIndicesByOwner.getOrElse(module.path, Vector.empty).zipWithIndex.foreach:
         (index, ordinal) =>
           val declaration = declarationsByPath(index.input)
@@ -880,27 +888,47 @@ ${indent(body, 2)}
             semanticPath = index.input
           )
           val indexValues = index.indices.zipWithIndex.map: (position, axis) =>
-            val result = s"%shape_index_${ordinal}_index_$axis"
-            body += operation(
-              "nodal.constant",
-              results = Vector(result),
-              resultTypes = Vector("index"),
-              attributes = Vector(
-                "value" -> s"$position : index",
-                "metadata" -> bridgeMetadata(
-                  index.path,
-                  Vector("axis" -> integer(axis))
+            position.toIntOption match
+              case Some(literal) =>
+                val result = s"%shape_index_${ordinal}_index_$axis"
+                body += operation(
+                  "nodal.constant",
+                  results = Vector(result),
+                  resultTypes = Vector("index"),
+                  attributes = Vector(
+                    "value" -> s"$literal : index",
+                    "metadata" -> bridgeMetadata(
+                      index.path,
+                      Vector("axis" -> integer(axis))
+                    )
+                  ),
+                  semanticPath = index.path
                 )
-              ),
-              semanticPath = index.path
-            )
-            result
+                result -> "index"
+              case None =>
+                val value = emitStaticValue(
+                  position,
+                  parameterSymbols,
+                  declarationsByPath,
+                  expressionsByPath,
+                  body,
+                  shapeStaticValues,
+                  () => allocateShapeStaticValue(),
+                  requireStructural = true
+                )
+                if value._2 != "i64" then
+                  fail(
+                    "NODAL-BRIDGE-044",
+                    "shape index expression must have Integer type",
+                    Some(position)
+                  )
+                value
           val result = s"%shape_index_$ordinal"
           body += operation(
             "nodal.shape_index",
             results = Vector(result),
-            operands = inputValue +: indexValues,
-            operandTypes = shapedType +: Vector.fill(indexValues.size)("index"),
+            operands = inputValue +: indexValues.map(_._1),
+            operandTypes = shapedType +: indexValues.map(_._2),
             resultTypes = Vector(elementType),
             attributes = Vector(
               "metadata" -> bridgeMetadata(
@@ -2495,6 +2523,82 @@ ${indent(body, 2)}
         attributes.get("integer_range_lower").flatMap(_.toIntOption).filter(_ > 0).getOrElse(
           fail("NODAL-BRIDGE-044", "symbolic shape extent has no positive minimum", Some(path))
         )
+
+    private def shapeIndexBounds(
+        module: KernelModuleSnapshot,
+        value: String,
+        indexPath: String
+    ): IterationDomain.Bounds =
+      val expressions = parameterExpressionsByOwner.getOrElse(module.path, Map.empty)
+      val declarations =
+        module.declarations.map(declaration => declaration.path -> declaration).toMap
+      val cache = mutable.HashMap.empty[String, IterationDomain.Bounds]
+      val active = mutable.HashSet.empty[String]
+
+      def invalid(message: String, path: String): Nothing =
+        fail("NODAL-BRIDGE-044", message, Some(path))
+
+      if value.trim != value || value.isEmpty then
+        invalid("shape index identity is noncanonical", indexPath)
+
+      def analyze(path: String): IterationDomain.Bounds =
+        path.toLongOption.map(value => IterationDomain.Bounds(value, value)).getOrElse:
+          cache.getOrElseUpdate(
+            path, {
+              if active.size >= 512 || !active.add(path) then
+                invalid("shape index expression is cyclic or exceeds the depth limit", path)
+              try
+                declarations.get(path) match
+                  case Some(declaration) =>
+                    val attributes = declaration.attributes.toMap
+                    if declaration.kind != "parameter" ||
+                      !declaration.dataType.contains("Integer") ||
+                      attributes.get("classification") != Some("structural") ||
+                      !attributes
+                        .get("structural_effects")
+                        .exists(_.split(",").map(_.trim).contains("shape"))
+                    then invalid("shape index parameter is not structural Integer data", path)
+                    val lower = attributes.get("integer_range_lower").flatMap(_.toLongOption)
+                      .getOrElse(invalid("shape index parameter has no finite lower bound", path))
+                    val upper = attributes.get("integer_range_upper").flatMap(_.toLongOption)
+                      .getOrElse(invalid("shape index parameter has no finite upper bound", path))
+                    if lower > upper then
+                      invalid("shape index parameter range is not ordered", path)
+                    IterationDomain.Bounds(lower, upper)
+                  case None =>
+                    val expression = expressions.getOrElse(
+                      path,
+                      invalid("shape index has no canonical static expression", path)
+                    )
+                    if expression.owner != module.path || expression.dataType != "Integer" then
+                      invalid("shape index expression has invalid owner or type", path)
+                    expression.literal.flatMap(_.toLongOption) match
+                      case Some(literal) => IterationDomain.Bounds(literal, literal)
+                      case None =>
+                        val operation = expression.operation match
+                          case "analog_add" => IterationDomain.Arithmetic.Add
+                          case "analog_sub" => IterationDomain.Arithmetic.Subtract
+                          case "analog_mul" => IterationDomain.Arithmetic.Multiply
+                          case "analog_div" => IterationDomain.Arithmetic.Divide
+                          case "analog_neg" => IterationDomain.Arithmetic.Negate
+                          case _ => invalid("shape index uses unsupported Integer arithmetic", path)
+                        val bounds = expression.operands.map(analyze)
+                        if operation == IterationDomain.Arithmetic.Subtract &&
+                          expression.operands.size == 2 && expression.operands(
+                            0
+                          ) == expression.operands(1)
+                        then IterationDomain.Bounds(0L, 0L)
+                        else
+                          IterationDomain.arithmetic(operation, bounds).fold(
+                            problem => invalid(problem.message, path),
+                            identity
+                          )
+              finally
+                val _ = active.remove(path)
+            }
+          )
+
+      analyze(value)
 
     private def validShapeDimension(dimension: String, path: String): Boolean =
       dimension.matches("[1-9][0-9]*") ||

@@ -337,31 +337,26 @@ private final class ConstructionSession(val options: EmitOptions):
           "index rank does not match shaped rank",
           Some(declarationPath(inputReference))
         )
-      val positions = indices.map:
-        case value: Int => value
-        case value: KernelExpr[?] if value.literal.exists(_.kind == "integer") =>
-          value.literal.flatMap(_.value.toIntOption).getOrElse(
-            fail("NODAL-SHAPE-043-002", "static index literal is outside the supported range")
-          )
-        case _ =>
-          fail(
-            "NODAL-SHAPE-043-002",
-            "public shape indexing currently requires static integer literals",
-            Some(declarationPath(inputReference))
-          )
+      val analysis = new StructuralBoundAnalysis(
+        module.handle,
+        "NODAL-SHAPE-043-002",
+        "shape index"
+      )
+      val positions = indices.map(value => value -> analysis(value))
       positions.zip(dimensions).zipWithIndex.foreach:
-        case ((position, dimension), axis) =>
+        case (((_, position), dimension), axis) =>
           val minimum = minimumShapeExtent(dimension, module.handle)
-          if position < 0 || position >= minimum then
+          if position.bounds.lower < 0L || position.bounds.upper >= minimum.toLong then
             fail(
               "NODAL-SHAPE-043-002",
               s"index is not in bounds for every legal shape at axis $axis",
               Some(declarationPath(inputReference))
             )
+          position.parameters.foreach(markStructuralParameterEffect(_, "shape"))
       val reference = captureExpression(expression).getOrElse(
         fail("NODAL-SHAPE-043-002", "shape index requires an active Module")
       )
-      shapeIndices += ShapeIndexRecord(reference, inputReference, positions)
+      shapeIndices += ShapeIndexRecord(reference, inputReference, positions.map(_._1))
 
   private def captureExpression(value: AnyRef): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>
@@ -995,12 +990,16 @@ private final class ConstructionSession(val options: EmitOptions):
 
   // This analysis traverses captured expressions, not a second expression graph. Its cache lives
   // only for one generated domain, and arithmetic stays with the shared IterationDomain owner.
-  private final class StructuralBoundAnalysis(owner: Long):
+  private final class StructuralBoundAnalysis(
+      owner: Long,
+      diagnosticCode: String = "NODAL-ITERATION-043-001",
+      subject: String = "hdlRange"
+  ):
     private val cache = mutable.HashMap.empty[ExpressionRef, StructuralBound]
     private val active = mutable.HashSet.empty[ExpressionRef]
 
     private def invalid(message: String, path: Option[String] = None): Nothing =
-      fail("NODAL-ITERATION-043-001", message, path)
+      fail(diagnosticCode, message.replace("hdlRange", subject), path)
 
     private def expressionBound(expression: KernelExpr[?]): StructuralBound =
       val reference = Option(expressionIds.get(expression)).getOrElse(
@@ -1034,7 +1033,8 @@ private final class ConstructionSession(val options: EmitOptions):
                 if expression.operands.size != arity then
                   invalid("hdlRange Integer expression has invalid arity")
                 val operands = expression.operands.map:
-                  case parameter: Param[?] => parameterBound(parameter, owner)
+                  case parameter: Param[?] =>
+                    parameterBound(parameter, owner, diagnosticCode, subject)
                   case child: KernelExpr[?] => expressionBound(child)
                   case _ => invalid("hdlRange expression has a non-static or untyped operand")
                 // Correlation is valid only for the very same captured operand. Equal intervals
@@ -1068,52 +1068,57 @@ private final class ConstructionSession(val options: EmitOptions):
     def apply(value: Int | Expr[Integer]): StructuralBound = value match
       case literal: Int =>
         StructuralBound(literal, IterationDomain.Bounds(literal, literal), Vector.empty)
-      case parameter: Param[?] => parameterBound(parameter, owner)
+      case parameter: Param[?] => parameterBound(parameter, owner, diagnosticCode, subject)
       // Preserve the existing by-value handling of a direct immutable literal. A literal inside
       // an expression graph, in contrast, needs a captured owner for canonical serialization.
       case expression: KernelExpr[?] if expression.literal.nonEmpty => literalBound(expression)
       case expression: KernelExpr[?] => expressionBound(expression)
       case _ => invalid("hdlRange bound must be a static Integer expression")
 
-  private def parameterBound(parameter: Param[?], owner: Long): StructuralBound =
+  private def parameterBound(
+      parameter: Param[?],
+      owner: Long,
+      diagnosticCode: String,
+      subject: String
+  ): StructuralBound =
     val reference = Option(declarationIds.get(parameter)).getOrElse(
       fail(
-        "NODAL-ITERATION-043-001",
-        "symbolic hdlRange bound must be a parameter in the active construction transaction"
+        diagnosticCode,
+        s"symbolic $subject value must be a parameter in the active construction transaction"
       )
     )
     if reference.module != owner then
       fail(
-        "NODAL-ITERATION-043-001",
-        "symbolic hdlRange bound must be owned by the generated region Module",
+        diagnosticCode,
+        s"symbolic $subject value must be owned by the active Module",
         Some(declarationPath(reference))
       )
     val declaration = records(reference.module).declarations(reference.index)
     val parameterType = declaration.dataType.map(renderType(_, owner))
     if declaration.kind != KernelSignalKind.Parameter || !parameterType.contains("Integer") then
       fail(
-        "NODAL-ITERATION-043-001",
-        "symbolic hdlRange bound must be an integer parameter",
+        diagnosticCode,
+        s"symbolic $subject value must be an integer parameter",
         Some(declarationPath(reference))
       )
     val lower = structuralRangeAttribute(declaration, "integer_range_lower").getOrElse(
       fail(
-        "NODAL-ITERATION-043-001",
-        "symbolic hdlRange parameter requires a finite declared integer range",
+        diagnosticCode,
+        s"symbolic $subject parameter requires a finite declared integer range",
         Some(declarationPath(reference))
       )
     )
     val upper = structuralRangeAttribute(declaration, "integer_range_upper").getOrElse(
       fail(
-        "NODAL-ITERATION-043-001",
-        "symbolic hdlRange parameter requires a finite declared integer range",
+        diagnosticCode,
+        s"symbolic $subject parameter requires a finite declared integer range",
         Some(declarationPath(reference))
       )
     )
     if lower > upper then
       fail(
-        "NODAL-ITERATION-043-001",
-        "symbolic hdlRange parameter range is not ordered",
+        diagnosticCode,
+        s"symbolic $subject parameter range is not ordered",
         Some(declarationPath(reference))
       )
     StructuralBound(parameter, IterationDomain.Bounds(lower, upper), Vector(reference))
@@ -2174,7 +2179,7 @@ private final class ConstructionSession(val options: EmitOptions):
         path = expressionPath(index.reference),
         owner = modulePath(index.reference.module),
         input = declarationPath(index.input),
-        indices = index.indices
+        indices = index.indices.map(generatedBound)
       )
 
   private def relationName(relation: ClockRelation): String =
@@ -2420,7 +2425,8 @@ private final class ConstructionSession(val options: EmitOptions):
         Iterator(region.lower, region.upperExclusive, region.step)
       )
     )
-    (roots ++ generatedRoots).foreach:
+    val shapeIndexRoots = shapeIndices.iterator.flatMap(_.indices.iterator)
+    (roots ++ generatedRoots ++ shapeIndexRoots).foreach:
       case expression: KernelExpr[?] if expression.literal.isEmpty => visit(expression)
       case _ => ()
 

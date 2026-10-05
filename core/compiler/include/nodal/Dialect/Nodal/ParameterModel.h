@@ -38,6 +38,11 @@ struct ParameterIntegerBounds {
 /// bounded profile represents endpoints in signed 64-bit host metadata only.
 mlir::FailureOr<ParameterIntegerBounds> inferParameterIntegerBounds(mlir::Value value);
 
+/// Query the same conservative analysis for a canonical parameter declaration.
+/// Symbolic ranges, exclusive endpoints and intersecting constraints are retained;
+/// an overridable default alone is never a bound.
+mlir::FailureOr<ParameterIntegerBounds> inferParameterIntegerBounds(mlir::Operation *parameter);
+
 /// Render a compile-time expression using retained literal spellings.
 mlir::FailureOr<std::string> renderParameterConstantExpression(mlir::Value value);
 

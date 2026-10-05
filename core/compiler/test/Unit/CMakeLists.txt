@@ -299,3 +299,11 @@ add_test(NAME nodal.native.shape-contract-integration
     --work-dir "${CMAKE_BINARY_DIR}/increment43-shape-contract-evidence"
 )
 set_tests_properties(nodal.native.shape-contract-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.shape-index-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_shape_index_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-shape-index-evidence"
+)
+set_tests_properties(nodal.native.shape-index-integration PROPERTIES TIMEOUT 60)

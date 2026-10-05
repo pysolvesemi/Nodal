@@ -1502,12 +1502,49 @@ LogicalResult nodal::ConstantOp::verify() {
 LogicalResult nodal::ShapeIndexOp::verify() {
   auto shaped = llvm::dyn_cast<nodal::ShapedType>(getOperation()->getOperand(0).getType());
   if (!shaped)
-    return emitOpError("input must have !nodal.shaped type");
+    return emitOpError("NODAL-SHAPE-043-002: input must have !nodal.shaped type");
   const unsigned indices = getOperation()->getNumOperands() - 1;
   if (indices != shapedRank(shaped.getDimensions()))
-    return emitOpError("index rank does not match shaped rank");
+    return emitOpError("NODAL-SHAPE-043-002: index rank does not match shaped rank");
   if (getOperation()->getResult(0).getType() != shaped.getElementType())
-    return emitOpError("result must match shaped element type");
+    return emitOpError("NODAL-SHAPE-043-002: result must match shaped element type");
+
+  auto owner = getOperation()->getParentOfType<nodal::ModuleOp>();
+  if (!owner)
+    return emitOpError("NODAL-SHAPE-043-002: shaped indexing requires an owning module");
+  llvm::SmallVector<llvm::StringRef> dimensions;
+  shaped.getDimensions().split(dimensions, ',', -1, true);
+  llvm::StringMap<int64_t> symbolicMinima;
+  for (unsigned axis = 0; axis < indices; ++axis) {
+    int64_t minimumExtent = 0;
+    llvm::StringRef dimension = dimensions[axis].trim();
+    if (dimension.getAsInteger(10, minimumExtent)) {
+      auto cached = symbolicMinima.find(dimension);
+      if (cached != symbolicMinima.end()) {
+        minimumExtent = cached->second;
+      } else {
+        auto bounds =
+            nodal::inferParameterIntegerBounds(findDirectModuleParameter(owner, dimension));
+        if (failed(bounds))
+          return emitOpError("NODAL-SHAPE-043-002: dimension has no proven finite extent");
+        minimumExtent = bounds->lower;
+        symbolicMinima.try_emplace(dimension, minimumExtent);
+      }
+    }
+    // The existing index-typed carrier currently supports literal static indices.
+    // Unknown values must not acquire a proof from metadata or a parameter default.
+    Operation *index = getOperation()->getOperand(axis + 1).getDefiningOp();
+    auto literal = index ? index->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+    if (!llvm::isa_and_nonnull<nodal::ConstantOp>(index) ||
+        index->getParentOfType<nodal::ModuleOp>() != owner || index->hasAttr("unit") || !literal ||
+        !literal.getType().isIndex() || !literal.getValue().isSignedIntN(64))
+      return emitOpError("NODAL-SHAPE-043-002: index requires a proven static index literal");
+    const int64_t position = literal.getValue().getSExtValue();
+    if (minimumExtent <= 0 || position < 0 || position >= minimumExtent)
+      return emitOpError(
+                 "NODAL-SHAPE-043-002: index is not in bounds for every legal shape at axis ")
+             << axis;
+  }
   return success();
 }
 

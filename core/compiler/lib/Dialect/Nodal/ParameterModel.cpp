@@ -1444,6 +1444,13 @@ FailureOr<nodal::ParameterIntegerBounds> nodal::inferParameterIntegerBounds(Valu
   return IntegerBoundsAnalysis(owner).value(value);
 }
 
+FailureOr<nodal::ParameterIntegerBounds> nodal::inferParameterIntegerBounds(Operation *parameter) {
+  Operation *owner = enclosingNodalModule(parameter);
+  if (!owner)
+    return failure();
+  return IntegerBoundsAnalysis(owner).parameter(parameter);
+}
+
 llvm::StringRef nodal::getParameterKind(Operation *parameter) {
   llvm::StringRef explicitKind = textAttr(parameter, "parameter_kind");
   if (!explicitKind.empty())

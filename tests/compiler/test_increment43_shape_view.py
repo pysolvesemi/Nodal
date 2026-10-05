@@ -12,7 +12,7 @@ import run_shape_view_matrix as views
 class ShapeViewCheckerTests(unittest.TestCase):
     def test_inventory_and_positive_preservation(self):
         cases = views.cases()
-        self.assertEqual(len(cases), 12)
+        self.assertEqual(len(cases), 13)
         self.assertEqual(len({case.name for case in cases}), len(cases))
         for case in cases:
             if case.code is None:

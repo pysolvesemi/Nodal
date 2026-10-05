@@ -427,6 +427,7 @@ private final class ConstructionSession(val options: EmitOptions):
             Some(declarationPath(inputReference))
           )
         )
+      val path = declarationPath(inputReference)
       val sourceDimensions = descriptor.arguments.lift(1).toVector.flatMap:
         case values: Seq[?] =>
           values.toVector.map:
@@ -439,7 +440,6 @@ private final class ConstructionSession(val options: EmitOptions):
                 Some(path)
               )
         case _ => Vector.empty
-      val path = declarationPath(inputReference)
       val (sourceLiteralProduct, sourceSymbols, sourceWorstCase, _) =
         shapeViewSignature(sourceDimensions, module.handle, path)
       val (targetLiteralProduct, targetSymbols, targetWorstCase, targetRendered) =

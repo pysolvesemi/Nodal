@@ -29,6 +29,7 @@ def cases():
         Case("view_rank_reducing", view("2,2", "4")),
         Case("view_rank_expanding", view("6", "1,2,3")),
         Case("view_singleton", view("1", "1,1")),
+        Case("view_symbolic_permutation", view("lanes,2", "2,lanes")),
         Case("view_reject_count", view("2,3", "2,2"), CODE),
         Case("view_reject_symbolic_source", view("lanes,2", "2,2"), CODE),
         Case("view_reject_symbolic_result", view("2,2", "lanes,2"), CODE),

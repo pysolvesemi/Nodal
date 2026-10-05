@@ -1653,28 +1653,39 @@ LogicalResult nodal::ShapeViewOp::verify() {
   if (!storage || storage.getValue() != "structural")
     return emitOpError("NODAL-SHAPE-043-003: fixed shape view requires structural storage intent");
 
-  auto elementCount = [&](llvm::StringRef dimensions) -> std::optional<uint64_t> {
+  auto shapeSignature = [&](llvm::StringRef dimensions)
+      -> std::optional<std::pair<uint64_t, std::set<std::string>>> {
     llvm::SmallVector<llvm::StringRef> tokens;
     dimensions.split(tokens, ',', -1, true);
     if (tokens.empty())
       return std::nullopt;
-    uint64_t product = 1;
+    uint64_t literalProduct = 1;
+    std::set<std::string> symbols;
     for (llvm::StringRef token : tokens) {
-      int64_t extent = 0;
       token = token.trim();
-      if (token.empty() || token.getAsInteger(10, extent) || extent <= 0 ||
-          product > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
-                        static_cast<uint64_t>(extent))
+      if (token.empty())
         return std::nullopt;
-      product *= static_cast<uint64_t>(extent);
+      int64_t extent = 0;
+      if (!token.getAsInteger(10, extent)) {
+        if (extent <= 0 ||
+            literalProduct > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
+                                  static_cast<uint64_t>(extent))
+          return std::nullopt;
+        literalProduct *= static_cast<uint64_t>(extent);
+      } else {
+        if (token.contains(' ') || token.contains('\t') || token.contains('\n') ||
+            token.contains('\r'))
+          return std::nullopt;
+        symbols.insert(token.str());
+      }
     }
-    return product;
+    return std::make_pair(literalProduct, std::move(symbols));
   };
-  auto inputCount = elementCount(input.getDimensions());
-  auto resultCount = elementCount(result.getDimensions());
-  if (!inputCount || !resultCount || *inputCount != *resultCount)
+  auto inputSignature = shapeSignature(input.getDimensions());
+  auto resultSignature = shapeSignature(result.getDimensions());
+  if (!inputSignature || !resultSignature || *inputSignature != *resultSignature)
     return emitOpError(
-        "NODAL-SHAPE-043-003: fixed shape view requires equal finite literal element counts");
+        "NODAL-SHAPE-043-003: shape-view dimensions require equal literal product and symbolic parameter multiset");
   return success();
 }
 

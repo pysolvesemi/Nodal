@@ -100,7 +100,12 @@ final class Increment43ZeroShapeView extends Module, Increment43ShapeClock:
 final class Increment43SymbolicShapeView extends Module, Increment43ShapeClock:
   val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
   val samples: Signal[Vec[Real]] = in(Vec(Real, lanes, 2))
-  val compatibilityOnly: Expr[Vec[Real]] = samples.reshape(2, lanes)
+  val reshaped: Expr[Vec[Real]] = samples.reshape(2, lanes)
+
+final class Increment43SymbolicMismatchShapeView extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
+  val samples: Signal[Vec[Real]] = in(Vec(Real, lanes, 2))
+  val invalid: Expr[Vec[Real]] = samples.reshape(3, lanes)
 
 object Increment43ShapeContractTests extends TestSuite:
   private def failure(top: => Module): ConstructionException =
@@ -277,7 +282,11 @@ object Increment43ShapeContractTests extends TestSuite:
       assert(snapshot.shapeViews.head.input.endsWith(".samples"))
       assert(snapshot.shapeViews.head.dimensions == Vector(3, 2))
       assert(snapshot.sourceMap.exists(_.semanticPath == snapshot.shapeViews.head.path))
-      assert(ConstructionKernel.inspect(new Increment43SymbolicShapeView).shapeViews.isEmpty)
+      val symbolic = ConstructionKernel.inspect(new Increment43SymbolicShapeView)
+      assert(symbolic.shapeViews.size == 1)
+      assert(symbolic.shapeViews.head.dimensions == Vector("2", "lanes"))
+      val symbolicFailure = failure(new Increment43SymbolicMismatchShapeView)
+      assert(symbolicFailure.diagnostic.code == "NODAL-SHAPE-043-003")
       Vector(
         failure(new Increment43MismatchedShapeView),
         failure(new Increment43EmptyShapeView),
@@ -292,6 +301,9 @@ object Increment43ShapeContractTests extends TestSuite:
       assert(document.text.contains("!nodal.shaped<\"3,2\", f64>"))
       assert(document.text.contains("materialization = \"view\""))
       assert(document.text.contains("storage = \"structural\""))
+      val symbolicDocument = ScalaToMlirBridge.lower(new Increment43SymbolicShapeView)
+      assert(symbolicDocument.text.contains("!nodal.shaped<\"lanes,2\", f64>"))
+      assert(symbolicDocument.text.contains("!nodal.shaped<\"2,lanes\", f64>"))
 
       val snapshot = ConstructionKernel.inspect(new Increment43FixedShapeView)
       Vector(

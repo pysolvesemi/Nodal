@@ -107,7 +107,7 @@ private[nodal] final case class KernelShapeViewSnapshot(
     path: String,
     owner: String,
     input: String,
-    dimensions: Vector[Int]
+    dimensions: Vector[String]
 )
 
 private[nodal] final case class KernelModuleSnapshot(

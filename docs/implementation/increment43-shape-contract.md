@@ -125,6 +125,8 @@ boxes.
 
 ## Fixed structural reshape view checkpoint
 
+Symbolic reshape is admitted for bounded integer parameters when source and result dimensions have equal literal products and equal canonical parameter multisets, including repeated factors. Construction proves parameter ranges and the signed-64-bit worst-case element-count envelope; bridge and native verification independently recheck ownership/identity and structural equality. General expression DAG arithmetic remains inert.
+
 The already-frozen public `Vec.reshape(...)` surface now has a bounded production
 path for fixed positive dimensions on module input/output ports. Construction
 retains the source port, target dimensions and source-correlated expression

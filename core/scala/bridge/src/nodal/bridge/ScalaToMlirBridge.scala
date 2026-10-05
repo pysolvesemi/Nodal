@@ -677,14 +677,28 @@ ${indent(body, 2)}
           fail("NODAL-BRIDGE-045", "shape-view input type is absent", Some(view.path))
         )
         val (_, sourceDimensions) = vecTypeParts(dataType, view.path)
-        val sourceCount = fixedShapeProduct(sourceDimensions, view.path)
-        val targetCount = fixedShapeProduct(view.dimensions.map(_.toString), view.path)
-        if sourceCount != targetCount then
-          fail(
-            "NODAL-BRIDGE-045",
-            "shape-view source and result element counts differ",
-            Some(view.path)
-          )
+        val shapeSignature = (dimensions: Vector[String]) =>
+          if dimensions.isEmpty then
+            fail("NODAL-BRIDGE-045", "shape-view requires at least one dimension", Some(view.path))
+          else
+            val factors = dimensions.map(_.trim)
+            if factors.exists(_.isEmpty) then
+              fail("NODAL-BRIDGE-045", "shape-view dimensions must be canonical", Some(view.path))
+            val literalProduct = factors.filter(_.forall(_.isDigit)).foldLeft(BigInt(1)):
+              (product, text) =>
+                val value = text.toIntOption.filter(_ > 0).getOrElse(
+                  fail("NODAL-BRIDGE-045", "shape-view dimensions must be positive", Some(view.path))
+                )
+                product * BigInt(value)
+            val symbols = factors.filterNot(_.forall(_.isDigit)).sorted
+            factors.filterNot(_.forall(_.isDigit)).foreach: symbol =>
+              if !module.declarations.exists(d => d.kind == "parameter" && d.name == symbol) then
+                fail("NODAL-BRIDGE-045", "shape-view symbolic dimension must name an owned parameter", Some(view.path))
+            literalProduct -> symbols
+        val sourceSignature = shapeSignature(sourceDimensions)
+        val targetSignature = shapeSignature(view.dimensions)
+        if sourceSignature != targetSignature then
+          fail("NODAL-BRIDGE-045", "shape-view source and result dimensions are not canonically equal", Some(view.path))
       snapshot.shapeIndices.foreach: index =>
         val module = modulesByPath.getOrElse(
           index.owner,

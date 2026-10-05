@@ -33,6 +33,17 @@ def selection(dimensions="2,3", indices=(1, 2), element="f64", result=None,
     return body
 
 
+def port_selection(*, port="samples", port_type='!nodal.shaped<"2", f64>',
+                   result_type=None, reference=None):
+    reference = port if reference is None else reference
+    result_type = port_type if result_type is None else result_type
+    return f'''"nodal.port"() <{{direction = "input", domain = @root, metadata = {{}}, sym_name = "{port}", type = {port_type}}}> : () -> ()
+%shape = "nodal.port_value"() <{{metadata = {{}}, port = @{reference}}}> : () -> {result_type}
+%i0 = "nodal.constant"() <{{metadata = {{}}, value = 1 : index}}> : () -> index
+%selected = "nodal.shape_index"(%shape, %i0) <{{metadata = {{source_path = "Fixture.selected"}}}}> : ({result_type}, index) -> f64
+'''
+
+
 def cases():
     symbolic = parameter(lower=2, upper=4)
     exclusive = symbolic.replace("lower_inclusive = true", "lower_inclusive = false")
@@ -53,6 +64,7 @@ def cases():
         Case("index_symbolic_intersection", intersection + selection("lanes", (2,))),
         Case("index_repeated_symbolic_axes", symbolic + selection(",".join(["lanes"] * 64), (1,) * 64)),
         Case("index_large_extent", selection("9223372036854775807", (9223372036854775806,))),
+        Case("index_public_port_value", port_selection()),
         Case("index_reject_negative", selection(indices=(-1, 0)), CODE),
         Case("index_reject_first_axis_end", selection(indices=(2, 0)), CODE),
         Case("index_reject_last_axis_end", selection(indices=(0, 3)), CODE),
@@ -69,6 +81,8 @@ def cases():
         Case("index_reject_intersection_end", intersection + selection("lanes", (3,)), CODE),
         Case("index_reject_extreme_negative", selection("2", (-9223372036854775808,)), CODE),
         Case("index_reject_large_extent_end", selection("9223372036854775807", (9223372036854775807,)), CODE),
+        Case("index_reject_missing_port_value", port_selection(reference="missing"), CODE),
+        Case("index_reject_port_value_type", port_selection(result_type='!nodal.shaped<"3", f64>'), CODE),
     ]
 
 

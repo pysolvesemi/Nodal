@@ -16,7 +16,8 @@
       "NODAL-ITERATION-043-004"
     ],
     "shaped-values": [
-      "NODAL-SHAPE-043-001"
+      "NODAL-SHAPE-043-001",
+      "NODAL-SHAPE-043-002"
     ],
     "interface": [
       "NODAL-INTERFACE-STORAGE-001",

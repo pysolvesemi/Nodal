@@ -41,6 +41,36 @@ final class Increment43CompoundShape extends Module:
   val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
   val samples: Signal[Vec[Real]] = wire(Vec(Real, lanes + 1.integer))
 
+final class Increment43FixedShapeIndex extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
+  val selected: Expr[Real] = samples.at(1, 2.integer)
+
+final class Increment43SymbolicShapeIndex extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
+  val samples: Signal[Vec[Real]] = out(Vec(Real, lanes, 2))
+  val selected: Expr[Real] = samples.at(0, 1)
+
+final class Increment43NegativeShapeIndex extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2))
+  val selected: Expr[Real] = samples.at(-1)
+
+final class Increment43EndShapeIndex extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2))
+  val selected: Expr[Real] = samples.at(2)
+
+final class Increment43RankShapeIndex extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
+  val selected: Expr[Real] = samples.at(1)
+
+final class Increment43SymbolicIndex extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 4))
+  val selected: Expr[Real] = samples.at(lanes)
+
+final class Increment43WireShapeIndex extends Module:
+  val samples: Signal[Vec[Real]] = wire(Vec(Real, 2))
+  val selected: Expr[Real] = samples.at(1)
+
 object Increment43ShapeContractTests extends TestSuite:
   private def failure(top: => Module): ConstructionException =
     scala.util.Try(ConstructionKernel.inspect(top)).failed.get.asInstanceOf[ConstructionException]
@@ -111,6 +141,78 @@ object Increment43ShapeContractTests extends TestSuite:
               NativeCompilerClient.run(document, request) match
                 case success: NativeCompilerSuccess =>
                   assert(success.normalizedMlir.contains("!nodal.shaped"))
+                case failure: NativeCompilerFailure =>
+                  scala.Predef.assert(false, s"${failure.diagnostic}\n${failure.standardError}")
+          finally delete(directory)
+
+    test("public static indexing retains input identity literal order and semantic result"):
+      val fixed = ConstructionKernel.inspect(new Increment43FixedShapeIndex)
+      val symbolic = ConstructionKernel.inspect(new Increment43SymbolicShapeIndex)
+      val legacyWire = ConstructionKernel.inspect(new Increment43WireShapeIndex)
+      assert(fixed.shapeIndices.size == 1)
+      assert(fixed.shapeIndices.head.input.endsWith(".samples"))
+      assert(fixed.shapeIndices.head.indices == Vector(1, 2))
+      assert(fixed.shapeIndices.head.path != fixed.shapeIndices.head.input)
+      assert(fixed.sourceMap.exists(_.semanticPath == fixed.shapeIndices.head.path))
+      assert(symbolic.shapeIndices.head.indices == Vector(0, 1))
+      assert(legacyWire.shapeIndices.isEmpty)
+
+    test("bridge transports public static indexing through typed port SSA"):
+      val fixed = ScalaToMlirBridge.lower(new Increment43FixedShapeIndex)
+      val symbolic = ScalaToMlirBridge.lower(new Increment43SymbolicShapeIndex)
+      assert(fixed == ScalaToMlirBridge.lower(new Increment43FixedShapeIndex))
+      assert(fixed.text.contains("\"nodal.port_value\""))
+      assert(fixed.text.contains("\"nodal.shape_index\""))
+      assert(fixed.text.contains("value = 1 : index"))
+      assert(fixed.text.contains("value = 2 : index"))
+      assert(symbolic.text.contains("!nodal.shaped<\"lanes,2\", f64>"))
+
+    test("public port indexing rejects unsafe literals rank and symbolic indices"):
+      Vector(
+        failure(new Increment43NegativeShapeIndex),
+        failure(new Increment43EndShapeIndex),
+        failure(new Increment43RankShapeIndex),
+        failure(new Increment43SymbolicIndex)
+      ).foreach(error => assert(error.diagnostic.code == "NODAL-SHAPE-043-002"))
+
+    test("bridge rejects forged static-index ownership rank and bounds"):
+      val snapshot = ConstructionKernel.inspect(new Increment43FixedShapeIndex)
+      val forged = Vector(
+        snapshot.copy(shapeIndices = snapshot.shapeIndices.map(_.copy(owner = "Missing"))),
+        snapshot.copy(shapeIndices = snapshot.shapeIndices.map(_.copy(input = "Missing.samples"))),
+        snapshot.copy(
+          shapeIndices = snapshot.shapeIndices.map(
+            _.copy(path = "Increment43FixedShapeIndex.missing")
+          )
+        ),
+        snapshot.copy(shapeIndices = snapshot.shapeIndices.map(_.copy(indices = Vector(1)))),
+        snapshot.copy(shapeIndices = snapshot.shapeIndices.map(_.copy(indices = Vector(2, 0))))
+      )
+      forged.foreach: candidate =>
+        val error = scala.util.Try(ScalaToMlirBridge.fromSnapshot(candidate))
+          .failed.get.asInstanceOf[BridgeException]
+        assert(error.diagnostic.code == "NODAL-BRIDGE-044")
+
+    test("configured native accepts public static shape-index transport"):
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          val directory = Files.createTempDirectory("nodal-increment43-shape-index-")
+          try
+            val request = NativeCompilerRequest(
+              executable = Path.of(executable).toAbsolutePath,
+              arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
+              workingDirectory = directory,
+              timeout = Duration.ofSeconds(30)
+            )
+            Vector(
+              ScalaToMlirBridge.lower(new Increment43FixedShapeIndex),
+              ScalaToMlirBridge.lower(new Increment43SymbolicShapeIndex)
+            ).foreach: document =>
+              NativeCompilerClient.run(document, request) match
+                case success: NativeCompilerSuccess =>
+                  assert(success.normalizedMlir.contains("nodal.port_value"))
+                  assert(success.normalizedMlir.contains("nodal.shape_index"))
                 case failure: NativeCompilerFailure =>
                   scala.Predef.assert(false, s"${failure.diagnostic}\n${failure.standardError}")
           finally delete(directory)

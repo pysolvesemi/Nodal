@@ -130,6 +130,11 @@ private[nodal] object ScalaToMlirBridge:
       .view
       .mapValues(_.sortBy(_.path))
       .toMap
+    private val shapeIndicesByOwner = snapshot.shapeIndices
+      .groupBy(_.owner)
+      .view
+      .mapValues(_.sortBy(_.path))
+      .toMap
     private val topologyByOwner = snapshot.topology
       .groupBy(_.owner)
       .view
@@ -576,6 +581,11 @@ ${indent(body, 2)}
         "NODAL-BRIDGE-043",
         "generated declaration ownership"
       )
+      requireUnique(
+        snapshot.shapeIndices.map(_.path),
+        "NODAL-BRIDGE-044",
+        "shape-index semantic path"
+      )
       val generatedByPath =
         snapshot.generatedRegions.map(region => region.path -> region).toMap
       snapshot.generatedRegions.foreach: region =>
@@ -638,6 +648,49 @@ ${indent(body, 2)}
             "parameter expression has no owning Module",
             Some(expression.path)
           )
+      snapshot.shapeIndices.foreach: index =>
+        val module = modulesByPath.getOrElse(
+          index.owner,
+          fail("NODAL-BRIDGE-044", "shape index has no owning Module", Some(index.path))
+        )
+        if !index.path.startsWith(s"${index.owner}.") || index.path.trim != index.path ||
+          index.input.trim != index.input
+        then
+          fail(
+            "NODAL-BRIDGE-044",
+            "shape-index identity is noncanonical or escapes its owning Module",
+            Some(index.path)
+          )
+        if !sourceByPath.contains(index.path) then
+          fail(
+            "NODAL-BRIDGE-044",
+            "shape-index identity has no source-map entry",
+            Some(index.path)
+          )
+        val declaration = module.declarations.find(_.path == index.input).getOrElse(
+          fail("NODAL-BRIDGE-044", "shape-index input declaration is absent", Some(index.path))
+        )
+        if declaration.kind != "input" && declaration.kind != "output" then
+          fail(
+            "NODAL-BRIDGE-044",
+            "shape-index input must be a module port",
+            Some(index.path)
+          )
+        val dataType = declaration.dataType.getOrElse(
+          fail("NODAL-BRIDGE-044", "shape-index input type is absent", Some(index.path))
+        )
+        val (_, dimensions) = vecTypeParts(dataType, index.path)
+        if index.indices.size != dimensions.size then
+          fail("NODAL-BRIDGE-044", "shape-index rank does not match input rank", Some(index.path))
+        index.indices.zip(dimensions).zipWithIndex.foreach:
+          case ((position, dimension), axis) =>
+            val minimum = shapeDimensionMinimum(module, dimension, index.path)
+            if position < 0 || position >= minimum then
+              fail(
+                "NODAL-BRIDGE-044",
+                s"shape index is not valid for every legal extent at axis $axis",
+                Some(index.path)
+              )
       requireUnique(
         snapshot.sourceMap.map(_.semanticPath),
         "NODAL-BRIDGE-010",
@@ -805,6 +858,58 @@ ${indent(body, 2)}
           case "parameter" =>
             body ++= renderParameter(declaration)
           case _ => ()
+
+      shapeIndicesByOwner.getOrElse(module.path, Vector.empty).zipWithIndex.foreach:
+        (index, ordinal) =>
+          val declaration = declarationsByPath(index.input)
+          val sourceType = declaration.dataType.getOrElse(
+            fail("NODAL-BRIDGE-044", "shape-index input type is absent", Some(index.path))
+          )
+          val (elementText, _) = vecTypeParts(sourceType, index.path)
+          val shapedType = parseType(sourceType, index.path)
+          val elementType = parseType(elementText, index.path)
+          val inputValue = s"%shape_index_${ordinal}_input"
+          body += operation(
+            "nodal.port_value",
+            results = Vector(inputValue),
+            resultTypes = Vector(shapedType),
+            attributes = Vector(
+              "port" -> symbolReference(stableLocalSymbol("port", declaration.name)),
+              "metadata" -> bridgeMetadata(index.input, Vector("use" -> quoted("shape_index")))
+            ),
+            semanticPath = index.input
+          )
+          val indexValues = index.indices.zipWithIndex.map: (position, axis) =>
+            val result = s"%shape_index_${ordinal}_index_$axis"
+            body += operation(
+              "nodal.constant",
+              results = Vector(result),
+              resultTypes = Vector("index"),
+              attributes = Vector(
+                "value" -> s"$position : index",
+                "metadata" -> bridgeMetadata(
+                  index.path,
+                  Vector("axis" -> integer(axis))
+                )
+              ),
+              semanticPath = index.path
+            )
+            result
+          val result = s"%shape_index_$ordinal"
+          body += operation(
+            "nodal.shape_index",
+            results = Vector(result),
+            operands = inputValue +: indexValues,
+            operandTypes = shapedType +: Vector.fill(indexValues.size)("index"),
+            resultTypes = Vector(elementType),
+            attributes = Vector(
+              "metadata" -> bridgeMetadata(
+                index.path,
+                Vector("input_path" -> quoted(index.input))
+              )
+            ),
+            semanticPath = index.path
+          )
 
       module.instances.sortBy(_.path).zipWithIndex.foreach: (instance, index) =>
         body ++= renderInstance(
@@ -2342,19 +2447,15 @@ ${indent(body, 2)}
             case "UInt" => s"!nodal.uint<$width>"
             case "SInt" => s"!nodal.sint<$width>"
         case value if value.startsWith("Vec(") && value.endsWith(")") =>
-          val inside = value.drop(4).dropRight(1)
-          val split = inside.lastIndexOf(';')
-          if split <= 0 || split == inside.length - 1 then
-            fail("NODAL-BRIDGE-017", s"invalid Vec type '$value'", Some(path))
-          val element = parseType(inside.take(split), path)
-          val dimensions = inside.drop(split + 1).split("x").toVector
+          val (elementText, dimensions) = vecTypeParts(value, path)
+          val element = parseType(elementText, path)
           if dimensions.isEmpty || dimensions.exists(dimension =>
               !validShapeDimension(dimension, path)
             )
           then
             fail(
               "NODAL-BRIDGE-018",
-              s"invalid Vec dimensions '${inside.drop(split + 1)}'",
+              s"invalid Vec dimensions '${dimensions.mkString("x")}'",
               Some(path)
             )
           s"""!nodal.shaped<${quoted(dimensions.mkString(","))}, $element>"""
@@ -2364,6 +2465,36 @@ ${indent(body, 2)}
             s"unsupported exact MLIR type representation '$text'",
             Some(path)
           )
+
+    private def vecTypeParts(text: String, path: String): (String, Vector[String]) =
+      if !text.startsWith("Vec(") || !text.endsWith(")") then
+        fail("NODAL-BRIDGE-044", s"shape-index input is not Vec type '$text'", Some(path))
+      val inside = text.drop(4).dropRight(1)
+      val split = inside.lastIndexOf(';')
+      if split <= 0 || split == inside.length - 1 then
+        fail("NODAL-BRIDGE-017", s"invalid Vec type '$text'", Some(path))
+      inside.take(split) -> inside.drop(split + 1).split("x", -1).toVector
+
+    private def shapeDimensionMinimum(
+        module: KernelModuleSnapshot,
+        dimension: String,
+        path: String
+    ): Int =
+      dimension.toIntOption.filter(_ > 0).getOrElse:
+        val declaration = module.declarations.find(_.name == dimension).getOrElse(
+          fail("NODAL-BRIDGE-044", "symbolic shape extent is absent", Some(path))
+        )
+        val attributes = declaration.attributes.toMap
+        if declaration.kind != "parameter" || !declaration.dataType.contains("Integer") ||
+          !attributes.get("classification").contains("structural") ||
+          !attributes
+            .get("structural_effects")
+            .exists(_.split(",").map(_.trim).contains("shape"))
+        then
+          fail("NODAL-BRIDGE-044", "symbolic shape extent is not structural", Some(path))
+        attributes.get("integer_range_lower").flatMap(_.toIntOption).filter(_ > 0).getOrElse(
+          fail("NODAL-BRIDGE-044", "symbolic shape extent has no positive minimum", Some(path))
+        )
 
     private def validShapeDimension(dimension: String, path: String): Boolean =
       dimension.matches("[1-9][0-9]*") ||

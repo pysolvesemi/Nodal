@@ -63,6 +63,7 @@ private final class ConstructionSession(val options: EmitOptions):
     mutable.ArrayBuffer.empty
   private val generationStack: mutable.ArrayBuffer[GeneratedRegionRecord] =
     mutable.ArrayBuffer.empty
+  private val shapeIndices: mutable.ArrayBuffer[ShapeIndexRecord] = mutable.ArrayBuffer.empty
   private var constructorFailure: Option[(Throwable, String)] = None
 
   private def fail(code: String, message: String, path: Option[String] = None): Nothing =
@@ -261,6 +262,106 @@ private final class ConstructionSession(val options: EmitOptions):
         )
 
     validateShapeType(element.get, owner)
+
+  private def minimumShapeExtent(value: Any, owner: Long): Int = value match
+    case literal: Int if literal > 0 => literal
+    case parameter: Param[?] =>
+      val reference = Option(declarationIds.get(parameter)).getOrElse(
+        fail("NODAL-SHAPE-043-002", "symbolic shape extent has no parameter identity")
+      )
+      if reference.module != owner then
+        fail(
+          "NODAL-SHAPE-043-002",
+          "symbolic shape extent escapes its owning Module",
+          Some(declarationPath(reference))
+        )
+      val declaration = records(owner).declarations(reference.index)
+      structuralRangeAttribute(declaration, "integer_range_lower")
+        .filter(_ > 0)
+        .getOrElse(
+          fail(
+            "NODAL-SHAPE-043-002",
+            "symbolic shape extent has no positive finite minimum",
+            Some(declarationPath(reference))
+          )
+        )
+    case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
+      expression.literal
+        .flatMap(_.value.toIntOption)
+        .filter(_ > 0)
+        .getOrElse(
+          fail("NODAL-SHAPE-043-002", "literal shape extent must be positive")
+        )
+    case _ =>
+      fail("NODAL-SHAPE-043-002", "shape extent has no proven finite minimum")
+
+  def registerShapeIndex[A <: Data](
+      expression: KernelExpr[A],
+      input: Expr[Vec[A]],
+      indices: Vector[Dimension]
+  ): Unit =
+    val module = currentModule
+    val inputReference = input match
+      case candidate: AnyRef => Option(declarationIds.get(candidate)).getOrElse(
+          fail("NODAL-SHAPE-043-002", "indexed value has no declaration identity")
+        )
+    if inputReference.module != module.handle then
+      fail(
+        "NODAL-SHAPE-043-002",
+        "indexed value must be owned by the active Module",
+        Some(declarationPath(inputReference))
+      )
+    val declaration = records(inputReference.module).declarations(inputReference.index)
+    if declaration.kind != KernelSignalKind.Input && declaration.kind != KernelSignalKind.Output
+    then
+      // Preserve the previously exposed inert expression surface until shaped
+      // internal storage has an owned SSA carrier and lowering contract.
+      val _ = captureExpression(expression)
+    else
+      val descriptor = declaration.dataType
+        .map(CandidateRuntime.typeDescriptor)
+        .filter(_.kind == "Vec")
+        .getOrElse(
+          fail(
+            "NODAL-SHAPE-043-002",
+            "indexed declaration must have Vec type",
+            Some(declarationPath(inputReference))
+          )
+        )
+      val dimensions = descriptor.arguments.lift(1).toVector.flatMap:
+        case values: Seq[?] => values.toVector
+        case _ => Vector.empty
+      if indices.size != dimensions.size then
+        fail(
+          "NODAL-SHAPE-043-002",
+          "index rank does not match shaped rank",
+          Some(declarationPath(inputReference))
+        )
+      val positions = indices.map:
+        case value: Int => value
+        case value: KernelExpr[?] if value.literal.exists(_.kind == "integer") =>
+          value.literal.flatMap(_.value.toIntOption).getOrElse(
+            fail("NODAL-SHAPE-043-002", "static index literal is outside the supported range")
+          )
+        case _ =>
+          fail(
+            "NODAL-SHAPE-043-002",
+            "public shape indexing currently requires static integer literals",
+            Some(declarationPath(inputReference))
+          )
+      positions.zip(dimensions).zipWithIndex.foreach:
+        case ((position, dimension), axis) =>
+          val minimum = minimumShapeExtent(dimension, module.handle)
+          if position < 0 || position >= minimum then
+            fail(
+              "NODAL-SHAPE-043-002",
+              s"index is not in bounds for every legal shape at axis $axis",
+              Some(declarationPath(inputReference))
+            )
+      val reference = captureExpression(expression).getOrElse(
+        fail("NODAL-SHAPE-043-002", "shape index requires an active Module")
+      )
+      shapeIndices += ShapeIndexRecord(reference, inputReference, positions)
 
   private def captureExpression(value: AnyRef): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>
@@ -2067,6 +2168,15 @@ private final class ConstructionSession(val options: EmitOptions):
             declarations = region.declarations.toVector.map(declarationPath)
           )
 
+  private def shapeIndexSnapshots(): Vector[KernelShapeIndexSnapshot] =
+    shapeIndices.toVector.map: index =>
+      KernelShapeIndexSnapshot(
+        path = expressionPath(index.reference),
+        owner = modulePath(index.reference.module),
+        input = declarationPath(index.input),
+        indices = index.indices
+      )
+
   private def relationName(relation: ClockRelation): String =
     relationAttributes(relation).collectFirst:
       case ("clock_relation", value) => value
@@ -2441,7 +2551,8 @@ private final class ConstructionSession(val options: EmitOptions):
         modulePath(moduleHandle(module))
       ),
       waivers = waiverSnapshots(semantic.sourceMap),
-      generatedRegions = generatedSnapshots()
+      generatedRegions = generatedSnapshots(),
+      shapeIndices = shapeIndexSnapshots()
     )
     val kind = classify(snapshot)
     val report = DesignReport(

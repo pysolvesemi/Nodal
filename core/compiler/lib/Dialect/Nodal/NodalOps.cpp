@@ -1376,6 +1376,30 @@ LogicalResult nodal::PortOp::verify() {
   return success();
 }
 
+LogicalResult nodal::PortValueOp::verify() {
+  auto owner = getOperation()->getParentOfType<nodal::ModuleOp>();
+  auto reference = getOperation()->getAttrOfType<FlatSymbolRefAttr>("port");
+  if (!owner || !reference)
+    return emitOpError("NODAL-SHAPE-043-002: requires an owning module and direct port reference");
+  Operation *port = nullptr;
+  for (Operation &candidate : owner.getBody().front()) {
+    if (!llvm::isa<nodal::PortOp>(candidate))
+      continue;
+    auto name = candidate.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+    if (name && name.getValue() == reference.getValue()) {
+      port = &candidate;
+      break;
+    }
+  }
+  auto type = port ? port->getAttrOfType<TypeAttr>("type") : TypeAttr();
+  if (!port || !type)
+    return emitOpError(
+        "NODAL-SHAPE-043-002: referenced port is absent or untyped in the owning module");
+  if (getOperation()->getResult(0).getType() != type.getValue())
+    return emitOpError("NODAL-SHAPE-043-002: result type must match the referenced port type");
+  return success();
+}
+
 LogicalResult nodal::ParameterOp::verify() {
   return nodal::verifyParameterDeclaration(getOperation());
 }

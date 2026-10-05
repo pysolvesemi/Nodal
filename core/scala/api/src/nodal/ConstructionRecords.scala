@@ -96,6 +96,13 @@ private[nodal] final case class KernelGeneratedRegionSnapshot(
     declarations: Vector[String]
 )
 
+private[nodal] final case class KernelShapeIndexSnapshot(
+    path: String,
+    owner: String,
+    input: String,
+    indices: Vector[Int]
+)
+
 private[nodal] final case class KernelModuleSnapshot(
     path: String,
     className: String,
@@ -226,7 +233,8 @@ private[nodal] final case class ConstructionSnapshot(
       AnalogEquationRuntime.Snapshot(Vector.empty, Vector.empty),
     analogProcedural: Vector[AnalogProceduralRuntime.Snapshot] = Vector.empty,
     waivers: Vector[KernelWaiverSnapshot] = Vector.empty,
-    generatedRegions: Vector[KernelGeneratedRegionSnapshot] = Vector.empty
+    generatedRegions: Vector[KernelGeneratedRegionSnapshot] = Vector.empty,
+    shapeIndices: Vector[KernelShapeIndexSnapshot] = Vector.empty
 )
 
 private final case class DomainRef(module: Long, index: Int)
@@ -262,6 +270,12 @@ private final class GeneratedRegionRecord(
     val maximumTripCount: Int
 ):
   val declarations: mutable.ArrayBuffer[DeclarationRef] = mutable.ArrayBuffer.empty
+
+private final case class ShapeIndexRecord(
+    reference: ExpressionRef,
+    input: DeclarationRef,
+    indices: Vector[Int]
+)
 
 private final class InstanceRecord(
     val ordinal: Int,

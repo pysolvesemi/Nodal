@@ -1131,6 +1131,29 @@ private[nodal] object CandidateRuntime:
     ConstructionKernel.expression(expression)
     expression
 
+  def shapeIndex[A <: Data](
+      value: Expr[Vec[A]],
+      indices: Vector[Dimension]
+  ): Expr[A] =
+    val element = expressionDataType(value)
+      .map(typeDescriptor)
+      .filter(_.kind == "Vec")
+      .flatMap(_.arguments.headOption.collect { case candidate: DataType[?] => candidate })
+      .getOrElse(
+        scala.util.Failure[DataType[?]](
+          new ConstructionException(
+            KernelDiagnostic("NODAL-SHAPE-043-002", "shape indexing requires a Vec value")
+          )
+        ).get
+      )
+    val expression = new KernelExpr[A](
+      value +: indices,
+      resultType = Some(typeDescriptor(element)),
+      operation = Some("shape_index")
+    )
+    ConstructionKernel.shapeIndex(expression, value, indices)
+    expression
+
   def analogExpr(operation: String, values: Any*): Expr[Real] =
     val expression = new KernelExpr[Real](
       values.toVector,

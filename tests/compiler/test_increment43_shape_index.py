@@ -12,7 +12,7 @@ import run_shape_index_matrix as indexing
 class ShapeIndexCheckerTests(unittest.TestCase):
     def test_inventory_and_positive_preservation(self):
         cases = indexing.cases()
-        self.assertEqual(len(cases), 24)
+        self.assertEqual(len(cases), 27)
         self.assertEqual(len({case.name for case in cases}), len(cases))
         for case in cases:
             if case.code is None:

@@ -101,6 +101,16 @@ def Nodal_PortOp : Nodal_Op<"port", [HasParent<"ModuleOp">, Symbol]> {
   let hasVerifier = 1;
 }
 
+def Nodal_PortValueOp : Nodal_Op<"port_value", [HasParent<"ModuleOp">]> {
+  let summary = "Typed SSA use of one module port";
+  let arguments = (ins
+    FlatSymbolRefAttr:$port,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
 def Nodal_ParameterOp : Nodal_Op<"parameter",
     [HasParent<"ModuleOp">, Symbol]> {
   let summary = "Typed target-visible ordinary or structural parameter";

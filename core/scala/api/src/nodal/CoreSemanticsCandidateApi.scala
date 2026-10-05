@@ -57,7 +57,7 @@ object Vec:
     CandidateRuntime.dataType[Vec[A]]("Vec", element, dimensions.toSeq)
 
 extension [A <: Data](value: Expr[Vec[A]])
-  def at(indices: Dimension*): Expr[A] = CandidateRuntime.expr(value, indices)
+  def at(indices: Dimension*): Expr[A] = CandidateRuntime.shapeIndex(value, indices.toVector)
   def flatten: Expr[Vec[A]] = CandidateRuntime.expr(value, "flatten")
   def reshape(dimensions: Dimension*): Expr[Vec[A]] =
     CandidateRuntime.expr(value, dimensions, "reshape")

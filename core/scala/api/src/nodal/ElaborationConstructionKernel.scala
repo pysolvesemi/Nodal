@@ -151,6 +151,14 @@ private[nodal] object ConstructionKernel:
   def expression(value: AnyRef): Unit =
     if !AnalogUserFunctionRuntime.capture(value) then active.foreach(_.registerExpression(value))
 
+  def shapeIndex[A <: Data](
+      expression: KernelExpr[A],
+      input: Expr[Vec[A]],
+      indices: Vector[Dimension]
+  ): Unit = active match
+    case Some(session) => session.registerShapeIndex(expression, input, indices)
+    case None => ()
+
   def defineUserFunction[A <: Data](
       name: String,
       resultType: DataType[A],

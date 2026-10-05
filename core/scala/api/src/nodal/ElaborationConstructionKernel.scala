@@ -105,6 +105,9 @@ private[nodal] object ConstructionKernel:
       ).get
     )
 
+  def requireNoGeneratedEffect(role: String): Unit =
+    active.foreach(_.requireNoGeneratedEffect(role))
+
   def generatedRegion(
       lower: Int | Expr[Integer],
       upperExclusive: Int | Expr[Integer],
@@ -154,19 +157,25 @@ private[nodal] object ConstructionKernel:
       dimension: PhysicalDimension,
       body: AnalogFunctionBody => Expr[A]
   ): AnalogFunction[A] = active match
-    case Some(session) => session.defineUserFunction(name, resultType, dimension, body)
+    case Some(session) =>
+      session.requireNoGeneratedEffect("analog function definition")
+      session.defineUserFunction(name, resultType, dimension, body)
     case None => AnalogUserFunctionRuntime.fail(1, "analog function requires an active Module")
 
   def callUserFunction[A <: Data](
       function: AnalogFunction[A],
       arguments: Vector[Expr[?]]
   ): Expr[A] = active match
-    case Some(session) => session.callUserFunction(function, arguments)
+    case Some(session) =>
+      session.requireNoGeneratedEffect("analog function call")
+      session.callUserFunction(function, arguments)
     case None => AnalogUserFunctionRuntime.fail(1, "analog function call requires an active Module")
 
   def analogFunction(value: KernelExpr[Real], id: String): Unit =
     if !AnalogUserFunctionRuntime.capture(value) then
-      active.foreach(_.registerAnalogFunction(value, id))
+      active.foreach: session =>
+        session.requireNoGeneratedEffect("analog function expression")
+        session.registerAnalogFunction(value, id)
 
   def continuousOperator(
       value: KernelExpr[Real],
@@ -174,9 +183,9 @@ private[nodal] object ConstructionKernel:
       input: Expr[Real],
       initialValue: Option[Expr[Real]]
   ): Unit =
-    active.foreach(
-      _.registerContinuousOperator(value, operation, input, initialValue)
-    )
+    active.foreach: session =>
+      session.requireNoGeneratedEffect(s"continuous-time operator '$operation'")
+      session.registerContinuousOperator(value, operation, input, initialValue)
 
   def transferOperator(
       value: KernelExpr[Real],
@@ -186,6 +195,7 @@ private[nodal] object ConstructionKernel:
       inputs: Vector[Expr[Real]]
   ): Unit = active match
     case Some(session) =>
+      session.requireNoGeneratedEffect(s"analog transfer operator '$kind'")
       session.registerTransferOperator(value, kind, numeratorSize, denominatorSize, inputs)
     case None => AnalogTransferContract.fail(1, "transfer state requires an active Module")
 
@@ -195,7 +205,9 @@ private[nodal] object ConstructionKernel:
       label: String,
       inputs: Vector[Expr[Real]]
   ): Unit = active match
-    case Some(session) => session.registerNoiseOperator(value, kind, label, inputs)
+    case Some(session) =>
+      session.requireNoGeneratedEffect(s"analog noise operator '$kind'")
+      session.registerNoiseOperator(value, kind, label, inputs)
     case None => AnalogNoiseContract.fail(1, "noise sources require an active Module construction")
 
   def waveformOperator(
@@ -203,7 +215,9 @@ private[nodal] object ConstructionKernel:
       operation: String,
       inputs: Vector[Expr[Real]]
   ): Unit =
-    active.foreach(_.registerWaveformOperator(value, operation, inputs))
+    active.foreach: session =>
+      session.requireNoGeneratedEffect(s"analog waveform operator '$operation'")
+      session.registerWaveformOperator(value, operation, inputs)
 
   def waveformForbidden[A](body: => A): A = active match
     case Some(session) => session.withWaveformForbidden(body)
@@ -231,13 +245,17 @@ private[nodal] object ConstructionKernel:
   def block[A](body: => A): A = body
 
   def analogBlock[A](body: => A): A = active match
-    case Some(session) => session.withAnalogRegion(body)
+    case Some(session) =>
+      session.requireNoGeneratedEffect("analog continuous region")
+      session.withAnalogRegion(body)
     case None => body
 
   def analogSemanticBlock[A](
       kind: AnalogEquationRuntime.RegionKind
   )(body: => A): A = active match
-    case Some(session) => session.withAnalogSemanticRegion(kind)(body)
+    case Some(session) =>
+      session.requireNoGeneratedEffect(s"analog ${kind.toString.toLowerCase} region")
+      session.withAnalogSemanticRegion(kind)(body)
     case None => body
 
   def analogEquation(

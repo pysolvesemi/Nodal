@@ -49,6 +49,34 @@ final class Increment43UnsupportedGeneratedWire extends Module:
     val _ = generatedWire
     ()
 
+final class Increment43UnsupportedGeneratedVariable extends Module:
+  hdlRange(0, 2): _ =>
+    val state = variable(Real, 0.0.V)
+    val _ = state
+    ()
+
+final class Increment43UnsupportedGeneratedContinuousOperator extends Module:
+  hdlRange(0, 2): _ =>
+    val state = ddt(1.0.V)
+    val _ = state
+    ()
+
+final class Increment43UnsupportedGeneratedEvent extends Module:
+  hdlRange(0, 2): _ =>
+    val event = cross(1.0.V)
+    val _ = event
+    ()
+
+final class Increment43UnsupportedGeneratedAnalogRegion extends Module:
+  hdlRange(0, 2): _ =>
+    analog:
+      ()
+
+final class Increment43UnsupportedGeneratedProcedure extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      ()
+
 final class Increment43RepeatedSymbolicGeneratedNodes extends Module:
   val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
 
@@ -211,6 +239,21 @@ object Increment43RangeConstructionTests extends TestSuite:
         ConstructionKernel.inspect(new Increment43UnsupportedGeneratedWire)
       )
       assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
+
+    test("generated storage operators events and analog regions fail at their capture boundary"):
+      val cases = Vector[(String, () => Module)](
+        "variable" -> (() => new Increment43UnsupportedGeneratedVariable),
+        "continuous-time operator" ->
+          (() => new Increment43UnsupportedGeneratedContinuousOperator),
+        "analog event" -> (() => new Increment43UnsupportedGeneratedEvent),
+        "continuous region" -> (() => new Increment43UnsupportedGeneratedAnalogRegion),
+        "procedural region" -> (() => new Increment43UnsupportedGeneratedProcedure)
+      )
+      cases.foreach: (label, construct) =>
+        val failure = constructionFailure(ConstructionKernel.inspect(construct()))
+        assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
+        assert(failure.diagnostic.message.contains(label))
+        assert(failure.diagnostic.semanticPath.exists(_.contains("generate_0")))
 
     test("locked nodalc verifies public symbolic hdlRange when configured"):
       sys.env.get("NODAL_NODALC") match

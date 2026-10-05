@@ -78,6 +78,14 @@ private final class ConstructionSession(val options: EmitOptions):
     fail("NODAL-CONSTRUCT-016", "hardware construction has no active Module")
   )
 
+  def requireNoGeneratedEffect(role: String): Unit =
+    generationStack.lastOption.foreach: region =>
+      fail(
+        "NODAL-ITERATION-043-004",
+        s"$role is not permitted inside structural hdlRange until generated ownership and target lowering are available",
+        Some(generatedRegionPath(region))
+      )
+
   private def moduleHandle(module: Module): Long =
     Option(moduleIds.get(module)).map(_.longValue).getOrElse(
       fail("NODAL-OWNERSHIP-017", "Module is outside this construction transaction")
@@ -89,6 +97,7 @@ private final class ConstructionSession(val options: EmitOptions):
     )
 
   def beginModule(module: Module): Unit =
+    requireNoGeneratedEffect("child Module construction")
     if moduleIds.containsKey(module) then
       fail("NODAL-LIFECYCLE-016", "one Module entered construction twice")
     val handle = nextModule
@@ -150,6 +159,7 @@ private final class ConstructionSession(val options: EmitOptions):
       )
 
   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
+    requireNoGeneratedEffect(s"generated ${kind.label} domain declaration")
     val module = currentModule
     if domainIds.containsKey(domain) then
       fail("NODAL-DOMAIN-016", "one ClockDomain was registered twice")
@@ -168,6 +178,8 @@ private final class ConstructionSession(val options: EmitOptions):
       domain: Option[ClockDomain],
       attributes: Vector[(String, Any)]
   ): Unit =
+    if kind != KernelSignalKind.AnalogNode then
+      requireNoGeneratedEffect(s"generated ${kind.label} declaration")
     val module = currentModule
     if declarationIds.containsKey(value) then
       fail("NODAL-OWNERSHIP-016", s"${kind.label} was registered twice")
@@ -567,6 +579,7 @@ private final class ConstructionSession(val options: EmitOptions):
     record.namedBindings += requirement -> domain
 
   def connectNodes(left: AnyRef, right: AnyRef): Unit =
+    requireNoGeneratedEffect("generated conservative connection")
     val parent = currentModule
     val portKinds = Set(
       KernelSignalKind.AnalogInput,
@@ -1463,6 +1476,7 @@ private final class ConstructionSession(val options: EmitOptions):
     case other => other.toString
 
   def operation(kind: String, values: Any*): Unit =
+    requireNoGeneratedEffect(s"generated '$kind' effect")
     if kind == "assignment" then
       analogSemanticContext.foreach: context =>
         if context.kind != AnalogEquationRuntime.RegionKind.Procedural then

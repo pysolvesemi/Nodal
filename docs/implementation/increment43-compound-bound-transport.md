@@ -132,3 +132,28 @@ This repair strengthens the existing trust boundary before target lowering. It
 does not implement arrays, generated lexical storage or target generation, and
 does not complete a whole F-043 child. Exact candidate qualification and current
 worker coordination remain in the PR checkpoint.
+
+## Generated-effect capture boundary
+
+The ownership repair also exposed a separate capture gap: `hdlRange` rejected
+unknown generic operations after the body returned, but analog storage,
+continuous-time operators, events and analog regions use dedicated inventories.
+Those effects could therefore escape the generic operation-count check without
+acquiring generated-instance ownership. Accepting them at this stage would
+silently share state or place stateful behavior outside the generated region.
+
+Until generated-instance storage and target lowering own those inventories,
+construction now rejects them at the public capture boundary with
+`NODAL-ITERATION-043-004` and the generated region path. The same fail-closed
+boundary covers child modules, non-node declarations, domains, conservative
+connections, user functions, transfer/noise/waveform operators, event controls,
+and continuous or procedural analog regions. Generated analog nodes remain the
+only supported body effect, including the existing empty-body case; ordinary
+construction outside `hdlRange` is unchanged.
+
+Public Scala tests exercise generated variables, `ddt`, `cross`, continuous
+analog blocks and analog procedures and require the exact diagnostic family and
+generated semantic path. This is a restriction checkpoint, not implementation
+of generated lexical state or legal Verilog-A generation. Those requirements
+remain open and must replace these temporary rejections with explicit ownership,
+verification and target witnesses rather than weakening the boundary.

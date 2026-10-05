@@ -910,9 +910,29 @@ ${indent(body, 2)}
           )
           values.update(declaration.path, result -> resultType)
 
-      generatedRegionsFor(module)
+      val generatedStatic = mutable.ArrayBuffer.empty[String]
+      val generatedStaticValues = mutable.LinkedHashMap.empty[String, (String, String)]
+      var nextGeneratedStaticValue = 0
+      def allocateGeneratedStaticValue(): String =
+        val result = "%generated_bound_value_" + nextGeneratedStaticValue
+        nextGeneratedStaticValue += 1
+        result
+      val generatedBodies = generatedRegionsFor(module)
         .filter(_.parent.isEmpty)
-        .foreach(region => body += renderGeneratedRegion(module, region, declarationsByPath))
+        .map(region =>
+          renderGeneratedRegion(
+            module,
+            region,
+            declarationsByPath,
+            parameterSymbols,
+            expressionsByPath,
+            generatedStatic,
+            generatedStaticValues,
+            () => allocateGeneratedStaticValue()
+          )
+        )
+      body ++= generatedStatic
+      body ++= generatedBodies
 
       val topology = topologyEntries(module)
       val childEndpoints = topology
@@ -1762,6 +1782,187 @@ ${indent(body, 2)}
         )
       rendered.toVector
 
+    private def staticLiteralAttributes(
+        expression: KernelParameterExpressionSnapshot,
+        dataType: String
+    ): Vector[(String, String)] =
+      val value = expression.literal.getOrElse(
+        fail(
+          "NODAL-BRIDGE-034",
+          "parameter literal has no captured value",
+          Some(expression.path)
+        )
+      )
+      val spelling =
+        if Set("i1", "!nodal.bits<1>").contains(dataType) then
+          value.toBooleanOption
+            .map(if _ then "1" else "0")
+            .getOrElse(
+              fail(
+                "NODAL-BRIDGE-034",
+                "Boolean parameter literal has invalid spelling",
+                Some(expression.path)
+              )
+            )
+        else value
+      Vector(
+        "value" -> typedLiteral(value, dataType, expression.path),
+        "spelling" -> quoted(spelling),
+        "metadata" -> bridgeMetadata(
+          expression.path,
+          expression.unit.toVector.map(unit => "unit" -> quoted(unit))
+        )
+      )
+
+    private def staticConstantOperator(expression: KernelParameterExpressionSnapshot): String =
+      expression.operation match
+        case "analog_add" => "add"
+        case "analog_sub" => "sub"
+        case "analog_mul" => "mul"
+        case "analog_div" => "div"
+        case "analog_neg" => "neg"
+        case "real_gt" => "gt"
+        case "real_ge" => "ge"
+        case "real_lt" => "lt"
+        case "real_le" => "le"
+        case "bool_and" => "and"
+        case "bool_or" => "or"
+        case "bool_not" => "not"
+        case operation =>
+          fail(
+            "NODAL-BRIDGE-034",
+            s"unsupported static parameter operation '$operation'",
+            Some(expression.path)
+          )
+
+    private def emitStaticValue(
+        path: String,
+        parameterSymbols: Map[String, String],
+        declarationsByPath: Map[String, KernelDeclarationSnapshot],
+        expressionsByPath: Map[String, KernelParameterExpressionSnapshot],
+        rendered: mutable.ArrayBuffer[String],
+        staticValues: mutable.LinkedHashMap[String, (String, String)],
+        allocateStaticValue: () => String,
+        requireStructural: Boolean,
+        activeValues: mutable.Set[String] = mutable.Set.empty[String]
+    ): (String, String) =
+      if activeValues.size >= 512 || !activeValues.add(path) then
+        fail(
+          if requireStructural then "NODAL-BRIDGE-043" else "NODAL-BRIDGE-034",
+          "static expression is cyclic or exceeds the depth limit",
+          Some(path)
+        )
+      try
+        staticValues.getOrElseUpdate(
+          path,
+          parameterSymbols.get(path) match
+            case Some(symbol) =>
+              val declaration = declarationsByPath.getOrElse(
+                path,
+                fail(
+                  "NODAL-BRIDGE-034",
+                  "parameter reference has no declaration",
+                  Some(path)
+                )
+              )
+              if requireStructural &&
+                declaration.attributes.toMap.get("classification") != Some("structural")
+              then
+                fail(
+                  "NODAL-BRIDGE-043",
+                  "generated expression bound depends on a non-structural parameter",
+                  Some(path)
+                )
+              val dataType = declaration.dataType.map(parseType(_, path)).getOrElse(
+                fail("NODAL-BRIDGE-005", "parameter type is unavailable", Some(path))
+              )
+              val result = allocateStaticValue()
+              rendered += operation(
+                "nodal.const_parameter_ref",
+                results = Vector(result),
+                resultTypes = Vector(dataType),
+                attributes = Vector(
+                  "parameter" -> symbolReference(symbol),
+                  "metadata" -> bridgeMetadata(path, Vector.empty)
+                ),
+                semanticPath = path
+              )
+              result -> dataType
+            case None =>
+              val expression = expressionsByPath.getOrElse(
+                path,
+                fail(
+                  if requireStructural then "NODAL-BRIDGE-043" else "NODAL-BRIDGE-034",
+                  "static symbolic value has no canonical expression",
+                  Some(path)
+                )
+              )
+              val dataType = parseType(expression.dataType, expression.path)
+              val result = allocateStaticValue()
+              expression.literal match
+                case Some(_) =>
+                  rendered += operation(
+                    "nodal.const_literal",
+                    results = Vector(result),
+                    resultTypes = Vector(dataType),
+                    attributes = staticLiteralAttributes(expression, dataType),
+                    semanticPath = expression.path
+                  )
+                case None =>
+                  val operands = expression.operands.map(operand =>
+                    emitStaticValue(
+                      operand,
+                      parameterSymbols,
+                      declarationsByPath,
+                      expressionsByPath,
+                      rendered,
+                      staticValues,
+                      allocateStaticValue,
+                      requireStructural,
+                      activeValues
+                    )
+                  )
+                  val operatorName = staticConstantOperator(expression)
+                  val validTypes = operatorName match
+                    case "add" | "sub" | "mul" | "div" =>
+                      operands.size == 2 && Set("f64", "i64").contains(dataType) &&
+                      operands.forall(_._2 == dataType)
+                    case "neg" =>
+                      operands.size == 1 && Set("f64", "i64").contains(dataType) &&
+                      operands.head._2 == dataType
+                    case "gt" | "ge" | "lt" | "le" =>
+                      operands.size == 2 && Set("i1", "!nodal.bits<1>").contains(dataType) &&
+                      operands.map(_._2).distinct.size == 1 &&
+                      operands.forall(value => Set("f64", "i64").contains(value._2))
+                    case "and" | "or" =>
+                      operands.size == 2 && Set("i1", "!nodal.bits<1>").contains(dataType) &&
+                      operands.forall(_._2 == dataType)
+                    case "not" =>
+                      operands.size == 1 && Set("i1", "!nodal.bits<1>").contains(dataType) &&
+                      operands.head._2 == dataType
+                  if !validTypes then
+                    fail(
+                      "NODAL-BRIDGE-034",
+                      "static parameter expression has incompatible operand or result types",
+                      Some(expression.path)
+                    )
+                  rendered += operation(
+                    "nodal.const_expr",
+                    results = Vector(result),
+                    operands = operands.map(_._1),
+                    operandTypes = operands.map(_._2),
+                    resultTypes = Vector(dataType),
+                    attributes = Vector(
+                      "operator_name" -> quoted(operatorName),
+                      "metadata" -> bridgeMetadata(expression.path, Vector.empty)
+                    ),
+                    semanticPath = expression.path
+                  )
+              result -> dataType
+        )
+      finally
+        val _ = activeValues.remove(path)
+
     private def renderInstance(
         instance: KernelInstanceSnapshot,
         instanceIndex: Int,
@@ -1839,148 +2040,18 @@ ${indent(body, 2)}
         nextStaticValue += 1
         result
 
-      def literalAttributes(expression: KernelParameterExpressionSnapshot, dataType: String)
-          : Vector[(String, String)] =
-        val value = expression.literal.getOrElse(
-          fail(
-            "NODAL-BRIDGE-034",
-            "parameter literal has no captured value",
-            Some(expression.path)
-          )
-        )
-        val spelling =
-          if Set("i1", "!nodal.bits<1>").contains(dataType) then
-            value.toBooleanOption
-              .map(if _ then "1" else "0")
-              .getOrElse(
-                fail(
-                  "NODAL-BRIDGE-034",
-                  "Boolean parameter literal has invalid spelling",
-                  Some(expression.path)
-                )
-              )
-          else value
-        Vector(
-          "value" -> typedLiteral(value, dataType, expression.path),
-          "spelling" -> quoted(spelling),
-          "metadata" -> bridgeMetadata(
-            expression.path,
-            expression.unit.toVector.map(unit => "unit" -> quoted(unit))
-          )
-        )
-
-      def constantOperator(expression: KernelParameterExpressionSnapshot): String =
-        expression.operation match
-          case "analog_add" => "add"
-          case "analog_sub" => "sub"
-          case "analog_mul" => "mul"
-          case "analog_div" => "div"
-          case "analog_neg" => "neg"
-          case "real_gt" => "gt"
-          case "real_ge" => "ge"
-          case "real_lt" => "lt"
-          case "real_le" => "le"
-          case "bool_and" => "and"
-          case "bool_or" => "or"
-          case "bool_not" => "not"
-          case operation =>
-            fail(
-              "NODAL-BRIDGE-034",
-              s"unsupported static parameter operation '$operation'",
-              Some(expression.path)
-            )
-
-      def staticValue(path: String): (String, String) =
-        staticValues.getOrElseUpdate(
-          path,
-          parameterSymbols.get(path) match
-            case Some(symbol) =>
-              val declaration = declarationsByPath.getOrElse(
-                path,
-                fail(
-                  "NODAL-BRIDGE-034",
-                  "parameter reference has no declaration",
-                  Some(path)
-                )
-              )
-              val dataType = declaration.dataType.map(parseType(_, path)).getOrElse(
-                fail("NODAL-BRIDGE-005", "parameter type is unavailable", Some(path))
-              )
-              val result = allocateStaticValue()
-              rendered += operation(
-                "nodal.const_parameter_ref",
-                results = Vector(result),
-                resultTypes = Vector(dataType),
-                attributes = Vector(
-                  "parameter" -> symbolReference(symbol),
-                  "metadata" -> bridgeMetadata(path, Vector.empty)
-                ),
-                semanticPath = path
-              )
-              result -> dataType
-            case None =>
-              val expression = expressionsByPath.getOrElse(
-                path,
-                fail(
-                  "NODAL-BRIDGE-034",
-                  "symbolic parameter binding has no canonical expression",
-                  Some(path)
-                )
-              )
-              val dataType = parseType(expression.dataType, expression.path)
-              val result = allocateStaticValue()
-              expression.literal match
-                case Some(_) =>
-                  rendered += operation(
-                    "nodal.const_literal",
-                    results = Vector(result),
-                    resultTypes = Vector(dataType),
-                    attributes = literalAttributes(expression, dataType),
-                    semanticPath = expression.path
-                  )
-                case None =>
-                  val operands = expression.operands.map(staticValue)
-                  val operatorName = constantOperator(expression)
-                  val validTypes = operatorName match
-                    case "add" | "sub" | "mul" | "div" =>
-                      operands.size == 2 && Set("f64", "i64").contains(dataType) &&
-                      operands.forall(_._2 == dataType)
-                    case "neg" =>
-                      operands.size == 1 && Set("f64", "i64").contains(dataType) &&
-                      operands.head._2 == dataType
-                    case "gt" | "ge" | "lt" | "le" =>
-                      operands.size == 2 && Set("i1", "!nodal.bits<1>").contains(dataType) &&
-                      operands.map(_._2).distinct.size == 1 &&
-                      operands.forall(value => Set("f64", "i64").contains(value._2))
-                    case "and" | "or" =>
-                      operands.size == 2 && Set("i1", "!nodal.bits<1>").contains(dataType) &&
-                      operands.forall(_._2 == dataType)
-                    case "not" =>
-                      operands.size == 1 && Set("i1", "!nodal.bits<1>").contains(dataType) &&
-                      operands.head._2 == dataType
-                  if !validTypes then
-                    fail(
-                      "NODAL-BRIDGE-034",
-                      "static parameter expression has incompatible operand or result types",
-                      Some(expression.path)
-                    )
-                  rendered += operation(
-                    "nodal.const_expr",
-                    results = Vector(result),
-                    operands = operands.map(_._1),
-                    operandTypes = operands.map(_._2),
-                    resultTypes = Vector(dataType),
-                    attributes = Vector(
-                      "operator_name" -> quoted(operatorName),
-                      "metadata" -> bridgeMetadata(expression.path, Vector.empty)
-                    ),
-                    semanticPath = expression.path
-                  )
-              result -> dataType
-        )
       symbolicBindings.zipWithIndex.foreach: (binding, bindingIndex) =>
         val (name, sourcePath, dataType) = binding
-        val (value, sourceType) = staticValue(sourcePath)
+        val (value, sourceType) = emitStaticValue(
+          sourcePath,
+          parameterSymbols,
+          declarationsByPath,
+          expressionsByPath,
+          rendered,
+          staticValues,
+          () => allocateStaticValue(),
+          requireStructural = false
+        )
         if sourceType != dataType then
           fail(
             "NODAL-BRIDGE-034",
@@ -2061,10 +2132,72 @@ ${indent(body, 2)}
             )
           symbolReference(stableLocalSymbol("parameter", declaration.name))
 
+    private def generatedBoundValue(
+        value: String,
+        regionPath: String,
+        parameterSymbols: Map[String, String],
+        declarationsByPath: Map[String, KernelDeclarationSnapshot],
+        expressionsByPath: Map[String, KernelParameterExpressionSnapshot],
+        rendered: mutable.ArrayBuffer[String],
+        staticValues: mutable.LinkedHashMap[String, (String, String)],
+        allocateStaticValue: () => String
+    ): (String, String) =
+      value.toLongOption match
+        case Some(literal) =>
+          staticValues.getOrElseUpdate(
+            "literal:" + literal, {
+              val result = allocateStaticValue()
+              rendered += operation(
+                "nodal.const_literal",
+                results = Vector(result),
+                resultTypes = Vector("i64"),
+                attributes = Vector(
+                  "value" -> (literal.toString + " : i64"),
+                  "spelling" -> quoted(literal.toString),
+                  "metadata" -> bridgeMetadata(
+                    regionPath,
+                    Vector("generated_bound" -> boolean(true))
+                  )
+                ),
+                semanticPath = regionPath
+              )
+              result -> "i64"
+            }
+          )
+        case None =>
+          val result = emitStaticValue(
+            value,
+            parameterSymbols,
+            declarationsByPath,
+            expressionsByPath,
+            rendered,
+            staticValues,
+            allocateStaticValue,
+            requireStructural = true
+          )
+          if result._2 != "i64" then
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated expression bound must have Integer type, found '" + result._2 + "'",
+              Some(value)
+            )
+          result
+
+    private def isDirectGeneratedBound(module: KernelModuleSnapshot, value: String): Boolean =
+      value.toIntOption.nonEmpty ||
+        module.declarations.exists(declaration =>
+          declaration.path == value && declaration.kind == "parameter"
+        )
+
     private def renderGeneratedRegion(
         module: KernelModuleSnapshot,
         region: KernelGeneratedRegionSnapshot,
-        declarationsByPath: Map[String, KernelDeclarationSnapshot]
+        declarationsByPath: Map[String, KernelDeclarationSnapshot],
+        parameterSymbols: Map[String, String],
+        expressionsByPath: Map[String, KernelParameterExpressionSnapshot],
+        generatedStatic: mutable.ArrayBuffer[String],
+        generatedStaticValues: mutable.LinkedHashMap[String, (String, String)],
+        allocateGeneratedStaticValue: () => String
     ): String =
       val nested = mutable.ArrayBuffer.empty[String]
       region.declarations.sorted.foreach: declarationPath =>
@@ -2079,12 +2212,13 @@ ${indent(body, 2)}
         if declaration.kind != "analog-node" then
           fail(
             "NODAL-BRIDGE-043",
-            s"generated declaration kind '${declaration.kind}' is not enabled by this F-043 stage",
+            "generated declaration kind '" + declaration.kind +
+              "' is not enabled by this F-043 stage",
             Some(declaration.path)
           )
         val discipline = conservativeDiscipline(declaration)
-        val resultType = s"""!nodal.terminal<${quoted(discipline)}>"""
-        val result = s"%${stableLocalSymbol("generated_node", declaration.path)}"
+        val resultType = "!nodal.terminal<" + quoted(discipline) + ">"
+        val result = "%" + stableLocalSymbol("generated_node", declaration.path)
         nested += operation(
           "nodal.node",
           results = Vector(result),
@@ -2109,15 +2243,52 @@ ${indent(body, 2)}
       generatedRegionsFor(module)
         .filter(_.parent.contains(region.path))
         .sortBy(_.path)
-        .foreach(child => nested += renderGeneratedRegion(module, child, declarationsByPath))
+        .foreach(child =>
+          nested += renderGeneratedRegion(
+            module,
+            child,
+            declarationsByPath,
+            parameterSymbols,
+            expressionsByPath,
+            generatedStatic,
+            generatedStaticValues,
+            allocateGeneratedStaticValue
+          )
+        )
+
+      val bounds = Vector(region.lower, region.upperExclusive, region.step)
+      val operandForm = bounds.exists(value => !isDirectGeneratedBound(module, value))
+      val boundValues =
+        if !operandForm then Vector.empty
+        else
+          bounds.map(value =>
+            generatedBoundValue(
+              value,
+              region.path,
+              parameterSymbols,
+              declarationsByPath,
+              expressionsByPath,
+              generatedStatic,
+              generatedStaticValues,
+              allocateGeneratedStaticValue
+            )
+          )
+      val boundAttributes =
+        if operandForm then Vector.empty
+        else
+          Vector(
+            "lower" -> generatedBoundAttribute(module, region.lower, region.path),
+            "upper" -> generatedBoundAttribute(module, region.upperExclusive, region.path),
+            "step" -> generatedBoundAttribute(module, region.step, region.path)
+          )
 
       operation(
         "nodal.generate",
+        operands = boundValues.map(_._1),
+        operandTypes = boundValues.map(_._2),
         attributes = Vector(
-          "induction" -> quoted(stableLocalSymbol("induction", lastSegment(region.induction))),
-          "lower" -> generatedBoundAttribute(module, region.lower, region.path),
-          "upper" -> generatedBoundAttribute(module, region.upperExclusive, region.path),
-          "step" -> generatedBoundAttribute(module, region.step, region.path),
+          "induction" -> quoted(stableLocalSymbol("induction", lastSegment(region.induction)))
+        ) ++ boundAttributes ++ Vector(
           "region_id" -> quoted(region.path),
           "induction_path" -> quoted(region.induction),
           "metadata" -> bridgeMetadata(
@@ -2127,7 +2298,7 @@ ${indent(body, 2)}
             ) ++ region.maximum.toVector.map(value => "declared_maximum" -> integer(value))
           )
         ),
-        regions = Vector(nested.mkString("\n")),
+        regions = Vector(if nested.isEmpty then "^bb0:" else nested.mkString("\n")),
         semanticPath = region.path
       )
 

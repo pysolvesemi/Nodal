@@ -141,14 +141,15 @@ def valid_output(case: Case, data: bytes, exit_code: int, stdout: bytes, stderr:
             retained_contracts(stdout) == retained_contracts(data))
 
 
-def main() -> int:
+def main(matrix_factory=cases, validator=valid_output,
+         schema="nodal.f043.generate-count-matrix.v1") -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--nodalc", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
     args = parser.parse_args()
     compiler = args.nodalc.resolve(strict=True)
     args.work_dir.mkdir(parents=True, exist_ok=True)
-    matrix = cases()
+    matrix = matrix_factory()
     if len({case.name for case in matrix}) != len(matrix):
         raise ValueError("duplicate generate-count fixture identity")
     records = []
@@ -163,7 +164,7 @@ def main() -> int:
                 result = subprocess.run([str(compiler), PIPELINE, str(path.resolve())],
                                         capture_output=True, timeout=10, check=False)
                 stdout, stderr = result.stdout, result.stderr
-                valid = valid_output(case, data, result.returncode, stdout, stderr)
+                valid = validator(case, data, result.returncode, stdout, stderr)
                 exit_code = result.returncode
                 error = None
             except (subprocess.TimeoutExpired, OSError) as exception:
@@ -184,7 +185,7 @@ def main() -> int:
                         "valid": valid, "deterministic": deterministic, "runs": runs})
         failed |= not valid
         print(f"{'PASS' if valid else 'FAIL'} {case.name}", flush=True)
-    report = {"schema": "nodal.f043.generate-count-matrix.v1",
+    report = {"schema": schema,
               "compiler_sha256": digest(compiler.read_bytes()), "cases": records,
               "passed": not failed}
     (args.work_dir / "results.json").write_text(json.dumps(report, indent=2) + "\n")

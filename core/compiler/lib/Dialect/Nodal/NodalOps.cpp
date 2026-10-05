@@ -1424,6 +1424,9 @@ LogicalResult nodal::GenerateOp::verify() {
   if (failed(verifyLoop(getOperation())))
     return failure();
 
+  if (failed(verifyGeneratedBoundForm(getOperation())))
+    return failure();
+
   auto regionId = getOperation()->getAttrOfType<StringAttr>("region_id");
   auto inductionPath = getOperation()->getAttrOfType<StringAttr>("induction_path");
   if (static_cast<bool>(regionId) != static_cast<bool>(inductionPath))

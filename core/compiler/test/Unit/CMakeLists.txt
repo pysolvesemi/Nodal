@@ -275,3 +275,11 @@ add_test(NAME nodal.native.generate-count-integration
     --work-dir "${CMAKE_BINARY_DIR}/increment43-generate-count-evidence"
 )
 set_tests_properties(nodal.native.generate-count-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.generate-ssa-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_generate_ssa_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-generate-ssa-evidence"
+)
+set_tests_properties(nodal.native.generate-ssa-integration PROPERTIES TIMEOUT 60)

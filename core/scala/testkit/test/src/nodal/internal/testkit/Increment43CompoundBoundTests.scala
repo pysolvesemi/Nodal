@@ -1,5 +1,11 @@
 package nodal.internal.testkit
 
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import java.security.MessageDigest
+import java.time.Duration
+
 import nodal.*
 import nodal.internal.bridge.*
 
@@ -135,6 +141,30 @@ object Increment43CompoundBoundTests extends TestSuite:
       .failed.get.asInstanceOf[ConstructionException]
     assert(error.diagnostic.code == code)
 
+  private def bridgeFailure(snapshot: ConstructionSnapshot): Unit =
+    val error = scala.util.Try(ScalaToMlirBridge.fromSnapshot(snapshot))
+      .failed.get.asInstanceOf[BridgeException]
+    assert(error.diagnostic.code == "NODAL-BRIDGE-043")
+
+  private def delete(path: Path): Unit =
+    if Files.isDirectory(path) then
+      val stream = Files.list(path)
+      try
+        val iterator = stream.iterator()
+        while iterator.hasNext do delete(iterator.next())
+      finally stream.close()
+    val _ = Files.deleteIfExists(path)
+
+  private val transportFixtures: Vector[() => Module] = Vector(
+    () => new Increment43CompoundCapture(() => (), 2),
+    () => new Increment43CompoundCapture(() => (), 5),
+    () => new Increment43RepeatedCompound(() => ()),
+    () => new Increment43SignedCompound(() => ()),
+    () => new Increment43CompoundEmpty(() => ()),
+    () => new Increment43CompoundIdentity(true, () => ()),
+    () => new Increment43CompoundDepth(200, true, () => ())
+  )
+
   val tests: Tests = Tests:
     test("compound bounds capture once and retain canonical expressions rather than defaults"):
       var calls = 0
@@ -257,11 +287,84 @@ object Increment43CompoundBoundTests extends TestSuite:
         failure(new Increment43MalformedCompound(form, () => calls += 1), "NODAL-ITERATION-043-001")
       assert(calls == 0)
 
-    test("the not-yet-implemented native compound transport remains explicitly rejected"):
+    test(
+      "compound bounds have deterministic three-SSA transport and legacy bounds retain attributes"
+    ):
       val snapshot = inspect(() => ())
-      val error = scala.util.Try(ScalaToMlirBridge.fromSnapshot(snapshot))
-        .failed.get.asInstanceOf[BridgeException]
-      assert(error.diagnostic.code == "NODAL-BRIDGE-043")
+      val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+      assert(document == ScalaToMlirBridge.fromSnapshot(inspect(() => ())))
+      val line = document.text.linesIterator.find(_.contains("\"nodal.generate\"")).get
+      assert(line.contains("\"nodal.generate\"(%generated_bound_value_"))
+      assert(!line.contains("lower ="), !line.contains("upper ="), !line.contains("step ="))
+      assert(document.text.contains(": (i64, i64, i64) -> ()"))
+      assert(document.text.contains("operator_name = \"mul\""))
+      assert(document.text.contains("operator_name = \"add\""))
+      assert(document.text.contains("maximum_trip_count = 7 : i64"))
       val legacy = ScalaToMlirBridge.lower(new Increment43SymbolicGeneratedNode)
+      assert(legacy.text.contains("\"nodal.generate\"()"))
       assert(legacy.text.contains("upper = @lanes"))
       assert(legacy.text.contains("maximum_trip_count = 4 : i64"))
+
+    test("repeated generated regions reuse the canonical bound SSA graph"):
+      val snapshot = ConstructionKernel.inspect(new Increment43RepeatedCompound(() => ()))
+      val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+      assert(document.text.linesIterator.count(_.contains("\"nodal.generate\"")) == 3)
+      assert(document.text.linesIterator.count(_.contains("operator_name = \"add\"")) == 1)
+
+    test("missing expression DAG and nonstructural dependencies fail at the bridge"):
+      val snapshot = inspect(() => ())
+      bridgeFailure(snapshot.copy(parameterExpressions = Vector.empty))
+      val modules = snapshot.modules.map: module =>
+        module.copy(declarations = module.declarations.map: declaration =>
+          declaration.copy(attributes = declaration.attributes.map:
+            case ("classification", _) => "classification" -> "ordinary"
+            case other => other))
+      bridgeFailure(snapshot.copy(modules = modules))
+
+    test("forged cyclic expression graphs reject without recursive expansion"):
+      val snapshot = inspect(() => ())
+      val root = snapshot.generatedRegions.head.upperExclusive
+      val expressions = snapshot.parameterExpressions.map: expression =>
+        if expression.path == root then expression.copy(operands = Vector(root, root))
+        else expression
+      bridgeFailure(snapshot.copy(parameterExpressions = expressions))
+
+    test(
+      "configured native accepts public compound bounds and independently rejects forged counts"
+    ):
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          val directory = Files.createTempDirectory("nodal-increment43-compound-")
+          try
+            val request = NativeCompilerRequest(
+              executable = Path.of(executable).toAbsolutePath,
+              arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
+              workingDirectory = directory,
+              timeout = Duration.ofSeconds(30)
+            )
+            for factory <- transportFixtures do
+              val snapshot = ConstructionKernel.inspect(factory())
+              val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+              val first = NativeCompilerClient.run(document, request)
+              val second = NativeCompilerClient.run(document, request)
+              (first, second) match
+                case (left: NativeCompilerSuccess, right: NativeCompilerSuccess) =>
+                  assert(left.normalizedMlir == right.normalizedMlir)
+                  assert(left.normalizedMlir.contains("\"nodal.generate\""))
+                case _ => scala.Predef.assert(false, s"$first\n$second")
+              val count = snapshot.generatedRegions.head.maximumTripCount
+              val needle = s"maximum_trip_count = $count : i64"
+              assert(document.text.contains(needle))
+              val text = document.text.replace(needle, s"maximum_trip_count = ${count + 1} : i64")
+              val hash = MessageDigest.getInstance("SHA-256")
+                .digest(text.getBytes(StandardCharsets.UTF_8))
+                .map(value => f"${value & 0xff}%02x").mkString
+              val forged = document.copy(text = text, sha256 = hash)
+              NativeCompilerClient.run(forged, request) match
+                case rejected: NativeCompilerFailure =>
+                  assert(rejected.exitCode.contains(1))
+                  assert(rejected.diagnostic.code == "NODAL-ITERATION-043-001")
+                case success: NativeCompilerSuccess =>
+                  scala.Predef.assert(false, s"forged compound count accepted: $success")
+          finally delete(directory)

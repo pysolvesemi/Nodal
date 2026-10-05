@@ -21,6 +21,9 @@ mlir::LogicalResult verifyParameterDeclaration(mlir::Operation *operation);
 /// structural envelopes, and dynamic-value exclusion for the whole design.
 mlir::LogicalResult verifyParameterModel(mlir::ModuleOp module);
 
+/// Check the exclusive legacy-attribute or three-SSA-value generate bound form.
+mlir::LogicalResult verifyGeneratedBoundForm(mlir::Operation *operation);
+
 /// Conservative closed bounds over every legal parameter setting. These are
 /// mathematical integers, not evaluated defaults or a wrapping target value.
 struct ParameterIntegerBounds {

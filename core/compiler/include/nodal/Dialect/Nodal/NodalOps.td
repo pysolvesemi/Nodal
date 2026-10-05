@@ -445,10 +445,11 @@ def Nodal_ShapeViewOp : Nodal_Op<"shape_view"> {
 def Nodal_GenerateOp : Nodal_Op<"generate", [NoTerminator]> {
   let summary = "Symbolic structural generation region";
   let arguments = (ins
+    Variadic<I64>:$bounds,
     StrAttr:$induction,
-    AnyAttr:$lower,
-    AnyAttr:$upper,
-    AnyAttr:$step,
+    OptionalAttr<AnyAttr>:$lower,
+    OptionalAttr<AnyAttr>:$upper,
+    OptionalAttr<AnyAttr>:$step,
     OptionalAttr<StrAttr>:$region_id,
     OptionalAttr<StrAttr>:$induction_path,
     DictionaryAttr:$metadata

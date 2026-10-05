@@ -181,6 +181,7 @@ private final class ConstructionSession(val options: EmitOptions):
     if kind != KernelSignalKind.AnalogNode then
       requireNoGeneratedEffect(s"generated ${kind.label} declaration")
     val module = currentModule
+    dataType.foreach(validateShapeType(_, module.handle))
     if declarationIds.containsKey(value) then
       fail("NODAL-OWNERSHIP-016", s"${kind.label} was registered twice")
     val reference = DeclarationRef(module.handle, module.declarations.size)
@@ -204,6 +205,62 @@ private final class ConstructionSession(val options: EmitOptions):
     generationStack.lastOption
       .filter(_.owner == module.handle)
       .foreach(_.declarations += reference)
+
+  private def validateShapeType(dataType: DataType[?], owner: Long): Unit =
+    val descriptor = CandidateRuntime.typeDescriptor(dataType)
+    if descriptor.kind == "Vec" then validateShapeDescriptor(descriptor, owner)
+
+  private def validateShapeDescriptor(descriptor: KernelTypeDescriptor, owner: Long): Unit =
+    val element = descriptor.arguments.headOption.collect:
+      case candidate: DataType[?] => candidate
+    val dimensions = descriptor.arguments.lift(1).toVector.flatMap:
+      case values: Seq[?] => values.toVector
+      case _ => Vector.empty
+    if element.isEmpty || dimensions.isEmpty then
+      fail("NODAL-SHAPE-043-001", "Vec requires an element type and at least one dimension")
+
+    dimensions.foreach:
+      case value: Int if value > 0 => ()
+      case _: Int =>
+        fail("NODAL-SHAPE-043-001", "Vec dimensions must be positive")
+      case parameter: Param[?] =>
+        val reference = Option(declarationIds.get(parameter)).getOrElse(
+          fail("NODAL-SHAPE-043-001", "symbolic Vec dimension has no parameter identity")
+        )
+        if reference.module != owner then
+          fail(
+            "NODAL-SHAPE-043-001",
+            "symbolic Vec dimension must be owned by its declaring Module",
+            Some(declarationPath(reference))
+          )
+        val declaration = records(owner).declarations(reference.index)
+        val range =
+          for
+            lower <- structuralRangeAttribute(declaration, "integer_range_lower")
+            upper <- structuralRangeAttribute(declaration, "integer_range_upper")
+          yield lower -> upper
+        if declaration.kind != KernelSignalKind.Parameter ||
+          !declaration.dataType.map(renderType(_, owner)).contains("Integer") ||
+          range.forall((lower, upper) => lower <= 0 || lower > upper)
+        then
+          fail(
+            "NODAL-SHAPE-043-001",
+            "symbolic Vec dimension requires a positive finite Integer parameter range",
+            Some(declarationPath(reference))
+          )
+        markStructuralParameterEffect(reference, "shape")
+        markStructuralParameterEffect(reference, "rank")
+      case expression: KernelExpr[?]
+          if expression.literal.exists(value =>
+            value.kind == "integer" && value.value.toIntOption.exists(_ > 0)
+          ) => ()
+      case _ =>
+        fail(
+          "NODAL-SHAPE-043-001",
+          "Vec dimensions currently require a positive literal or directly bounded Integer parameter"
+        )
+
+    validateShapeType(element.get, owner)
 
   private def captureExpression(value: AnyRef): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>
@@ -967,13 +1024,13 @@ private final class ConstructionSession(val options: EmitOptions):
       case _ => false
 
   // Replicating analog nodes changes topology; generate is a construct, not an effect.
-  private def markStructuralParameter(reference: DeclarationRef): Unit =
+  private def markStructuralParameterEffect(reference: DeclarationRef, effect: String): Unit =
     val module = records(reference.module)
     val declaration = module.declarations(reference.index)
     val previousEffects = declaration.attributes.collectFirst:
       case ("structural_effects", value: String) => value
     val effects =
-      (previousEffects.toVector.flatMap(_.split(",")).map(_.trim).filter(_.nonEmpty) :+ "topology")
+      (previousEffects.toVector.flatMap(_.split(",")).map(_.trim).filter(_.nonEmpty) :+ effect)
         .distinct
         .sorted
         .mkString(",")
@@ -988,6 +1045,9 @@ private final class ConstructionSession(val options: EmitOptions):
         )
       )
     )
+
+  private def markStructuralParameter(reference: DeclarationRef): Unit =
+    markStructuralParameterEffect(reference, "topology")
 
   def withGeneratedRegion(
       lower: Int | Expr[Integer],
@@ -1613,12 +1673,29 @@ private final class ConstructionSession(val options: EmitOptions):
         val element = descriptor.arguments.headOption.collect:
           case value: DataType[?] => renderType(value, owner)
         val dimensions = descriptor.arguments.lift(1).toVector.flatMap:
-          case values: Seq[?] => values.map(renderAny(_, owner))
+          case values: Seq[?] => values.map(renderShapeDimension(_, owner))
           case _ => Vector.empty
         s"Vec(${element.getOrElse("unknown")};${dimensions.mkString("x")})"
       case kind if descriptor.arguments.nonEmpty =>
         s"$kind(${descriptor.arguments.map(renderAny(_, owner)).mkString(",")})"
       case kind => kind
+
+  private def renderShapeDimension(value: Any, owner: Long): String = value match
+    case literal: Int => literal.toString
+    case parameter: Param[?] =>
+      Option(declarationIds.get(parameter)) match
+        case Some(reference) if reference.module == owner => declarationName(reference)
+        case Some(reference) =>
+          fail(
+            "NODAL-SHAPE-043-001",
+            "symbolic Vec dimension escapes its owning Module",
+            Some(declarationPath(reference))
+          )
+        case None => fail("NODAL-SHAPE-043-001", "symbolic Vec dimension has no identity")
+    case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
+      expression.literal.map(_.value).getOrElse("")
+    case _ =>
+      fail("NODAL-SHAPE-043-001", "Vec dimension has no canonical static spelling")
 
   private def resolveDomains(): Map[DomainRef, String] =
     val resolved = mutable.LinkedHashMap.empty[DomainRef, String]

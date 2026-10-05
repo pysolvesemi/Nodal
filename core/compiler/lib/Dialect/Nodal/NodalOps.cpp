@@ -123,6 +123,82 @@ unsigned shapedRank(llvm::StringRef dimensions) {
   return rank;
 }
 
+Operation *findDirectModuleParameter(Operation *module, llvm::StringRef symbol) {
+  if (!module || module->getNumRegions() != 1 || !llvm::hasSingleElement(module->getRegion(0)))
+    return nullptr;
+  for (Operation &operation : module->getRegion(0).front()) {
+    if (!llvm::isa<nodal::ParameterOp>(operation))
+      continue;
+    auto name = operation.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+    if (name && name.getValue() == symbol)
+      return &operation;
+  }
+  return nullptr;
+}
+
+bool parameterHasShapeEnvelope(Operation *module, llvm::StringRef symbol) {
+  if (!module || module->getNumRegions() != 1 || !llvm::hasSingleElement(module->getRegion(0)))
+    return false;
+  for (Operation &operation : module->getRegion(0).front()) {
+    if (!llvm::isa<nodal::ParameterEnvelopeOp>(operation))
+      continue;
+    auto parameter = operation.getAttrOfType<FlatSymbolRefAttr>("parameter");
+    auto effects = operation.getAttrOfType<ArrayAttr>("effects");
+    if (!parameter || parameter.getValue() != symbol || !effects)
+      continue;
+    for (Attribute effect : effects)
+      if (auto value = llvm::dyn_cast<StringAttr>(effect); value && value.getValue() == "shape")
+        return true;
+  }
+  return false;
+}
+
+bool parameterHasPositiveFiniteRange(Operation *module, llvm::StringRef symbol) {
+  if (!module || module->getNumRegions() != 1 || !llvm::hasSingleElement(module->getRegion(0)))
+    return false;
+  for (Operation &operation : module->getRegion(0).front()) {
+    if (!llvm::isa<nodal::ParameterConstraintOp>(operation) ||
+        textAttr(&operation, "constraint_kind") != "range" || operation.getNumOperands() != 2)
+      continue;
+    auto parameter = operation.getAttrOfType<FlatSymbolRefAttr>("parameter");
+    if (!parameter || parameter.getValue() != symbol)
+      continue;
+    auto lower = nodal::inferParameterIntegerBounds(operation.getOperand(0));
+    auto upper = nodal::inferParameterIntegerBounds(operation.getOperand(1));
+    return succeeded(lower) && succeeded(upper) && lower->lower == lower->upper &&
+           upper->lower == upper->upper && lower->lower > 0 && lower->lower <= upper->upper;
+  }
+  return false;
+}
+
+LogicalResult verifyShapedTypeContract(Operation *module, Operation *owner, Type type) {
+  auto shaped = llvm::dyn_cast<nodal::ShapedType>(type);
+  if (!shaped)
+    return success();
+  llvm::SmallVector<llvm::StringRef> dimensions;
+  shaped.getDimensions().split(dimensions, ',', -1, false);
+  for (llvm::StringRef dimension : dimensions) {
+    dimension = dimension.trim();
+    int64_t literal = 0;
+    if (!dimension.getAsInteger(10, literal)) {
+      if (literal <= 0)
+        return owner->emitOpError(
+            "NODAL-SHAPE-043-001: shaped dimensions must be positive");
+      continue;
+    }
+    Operation *parameter = findDirectModuleParameter(module, dimension);
+    auto typeAttribute = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
+    if (!parameter || !typeAttribute || !typeAttribute.getValue().isInteger(64) ||
+        textAttr(parameter, "classification") != "structural" ||
+        !parameterHasShapeEnvelope(module, dimension) ||
+        !parameterHasPositiveFiniteRange(module, dimension))
+      return owner->emitOpError(
+          "NODAL-SHAPE-043-001: symbolic shaped dimension requires an owned positive finite "
+          "structural Integer parameter and shape envelope");
+  }
+  return verifyShapedTypeContract(module, owner, shaped.getElementType());
+}
+
 LogicalResult verifyLoop(Operation *operation) {
   if (failed(requireText(operation, "induction", "induction name")))
     return failure();
@@ -1280,6 +1356,14 @@ LogicalResult nodal::ModuleOp::verify() {
   });
   if (ownership.wasInterrupted())
     return failure();
+  for (Operation &operation : getOperation()->getRegion(0).front()) {
+    auto port = llvm::dyn_cast<nodal::PortOp>(&operation);
+    if (!port)
+      continue;
+    auto type = operation.getAttrOfType<TypeAttr>("type");
+    if (type && failed(verifyShapedTypeContract(getOperation(), &operation, type.getValue())))
+      return failure();
+  }
   return verifySingleTopLevelProcedurePerModule(getOperation());
 }
 

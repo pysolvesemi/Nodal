@@ -2349,7 +2349,7 @@ ${indent(body, 2)}
           val element = parseType(inside.take(split), path)
           val dimensions = inside.drop(split + 1).split("x").toVector
           if dimensions.isEmpty || dimensions.exists(dimension =>
-              !dimension.matches("[1-9][0-9]*|[A-Za-z_][A-Za-z0-9_]*")
+              !validShapeDimension(dimension, path)
             )
           then
             fail(
@@ -2364,6 +2364,24 @@ ${indent(body, 2)}
             s"unsupported exact MLIR type representation '$text'",
             Some(path)
           )
+
+    private def validShapeDimension(dimension: String, path: String): Boolean =
+      dimension.matches("[1-9][0-9]*") ||
+        (dimension.matches("[A-Za-z_][A-Za-z0-9_]*") &&
+          modulesByPath
+            .get(resolveOwningModule(path))
+            .flatMap(_.declarations.find(_.name == dimension))
+            .exists: declaration =>
+              val attributes = declaration.attributes.toMap
+              declaration.kind == "parameter" &&
+              declaration.dataType.contains("Integer") &&
+              attributes.get("classification").contains("structural") &&
+              attributes
+                .get("structural_effects")
+                .exists(_.split(",").map(_.trim).contains("shape")) &&
+              attributes.get("integer_range_lower").flatMap(_.toIntOption).exists(_ > 0) &&
+              attributes.get("integer_range_upper").flatMap(_.toIntOption).exists: upper =>
+                attributes.get("integer_range_lower").flatMap(_.toIntOption).exists(_ <= upper))
 
     private object WidthType:
       private val Pattern = raw"(Bits|UInt|SInt)\(([^)]+)\)".r

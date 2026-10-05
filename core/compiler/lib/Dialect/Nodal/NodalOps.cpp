@@ -182,8 +182,7 @@ LogicalResult verifyShapedTypeContract(Operation *module, Operation *owner, Type
     int64_t literal = 0;
     if (!dimension.getAsInteger(10, literal)) {
       if (literal <= 0)
-        return owner->emitOpError(
-            "NODAL-SHAPE-043-001: shaped dimensions must be positive");
+        return owner->emitOpError("NODAL-SHAPE-043-001: shaped dimensions must be positive");
       continue;
     }
     Operation *parameter = findDirectModuleParameter(module, dimension);

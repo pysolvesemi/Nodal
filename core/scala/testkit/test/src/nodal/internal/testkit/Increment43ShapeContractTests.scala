@@ -387,6 +387,7 @@ object Increment43ShapeContractTests extends TestSuite:
       val compoundPath = view.dimensions.last
       assert(view.dimensions.head == "2")
       assert(compoundPath.startsWith("Increment43CompoundShapeView."))
+      assert(compoundPath.contains("x"))
       assert(snapshot.parameterExpressions.exists(_.path == compoundPath))
       val document = ScalaToMlirBridge.fromSnapshot(snapshot)
       assert(document == ScalaToMlirBridge.lower(new Increment43CompoundShapeView))

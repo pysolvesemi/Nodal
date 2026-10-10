@@ -263,3 +263,15 @@ retain the expression inventory and configured-native path and reject a
 separately captured coincident expression. This remains reshape-only: general
 slices/views, l-value indexing, generated lexical storage and target
 array/generation lowering remain open, and no F43 checkbox is completed.
+
+### Compound-root dimension parsing repair
+
+The first exact-head Scala and configured-bridge runs exposed an ambiguity in
+the inherited internal `Vec(...;...x...)` snapshot spelling: splitting every
+lowercase `x` also split canonical expression identities such as `.extent`.
+The shared bridge parser now recognizes the longest owned declaration or static
+expression identity before consuming an axis separator. Unknown or empty
+dimensions still reach the existing fail-closed validation, and the snapshot
+spelling for established literal and direct-parameter dimensions is unchanged.
+The compound public witness explicitly retains an identity containing `x` so
+this transport regression cannot silently return.

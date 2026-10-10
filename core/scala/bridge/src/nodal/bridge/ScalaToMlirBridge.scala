@@ -2608,7 +2608,35 @@ ${indent(body, 2)}
       val split = inside.lastIndexOf(';')
       if split <= 0 || split == inside.length - 1 then
         fail("NODAL-BRIDGE-017", s"invalid Vec type '$text'", Some(path))
-      inside.take(split) -> inside.drop(split + 1).split("x", -1).toVector
+      inside.take(split) -> splitShapeDimensions(inside.drop(split + 1), path)
+
+    private def splitShapeDimensions(text: String, path: String): Vector[String] =
+      val staticIdentities = modulesByPath
+        .get(resolveOwningModule(path))
+        .toVector
+        .flatMap: module =>
+          module.declarations.map(_.name) ++
+            parameterExpressionsByOwner.getOrElse(module.path, Map.empty).keys
+        .distinct
+        .sortBy(identity => -identity.length)
+      val dimensions = Vector.newBuilder[String]
+      var offset = 0
+      while offset < text.length do
+        val identity = staticIdentities.find: candidate =>
+          text.startsWith(candidate, offset) &&
+          (offset + candidate.length == text.length ||
+            text.charAt(offset + candidate.length) == 'x')
+        identity match
+          case Some(candidate) =>
+            dimensions += candidate
+            offset += candidate.length
+          case None =>
+            val separator = text.indexOf('x', offset)
+            val end = if separator < 0 then text.length else separator
+            dimensions += text.substring(offset, end)
+            offset = end
+        if offset < text.length then offset += 1
+      dimensions.result()
 
     private def shapeDimensionMinimum(
         module: KernelModuleSnapshot,

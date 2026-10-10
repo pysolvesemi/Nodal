@@ -339,19 +339,19 @@ private final class ConstructionSession(val options: EmitOptions):
       parameters: Vector[DeclarationRef]
   )
 
-  private def shapeViewFactor(
+  private def shapeViewFactors(
       value: Any,
       owner: Long,
       path: String,
       analysis: StructuralBoundAnalysis
-  ): ShapeViewFactor = value match
+  ): Vector[ShapeViewFactor] = value match
     case literal: Int if literal > 0 =>
-      ShapeViewFactor(Some(literal.toLong), None, literal.toLong, Vector.empty)
+      Vector(ShapeViewFactor(Some(literal.toLong), None, literal.toLong, Vector.empty))
     case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
       val value = expression.literal.flatMap(_.value.toLongOption).filter(_ > 0).getOrElse(
         fail("NODAL-SHAPE-043-003", "fixed shape-view dimensions must be positive", Some(path))
       )
-      ShapeViewFactor(Some(value), None, value, Vector.empty)
+      Vector(ShapeViewFactor(Some(value), None, value, Vector.empty))
     case parameter: Param[?] =>
       val reference = Option(declarationIds.get(parameter)).getOrElse(
         fail(
@@ -373,11 +373,13 @@ private final class ConstructionSession(val options: EmitOptions):
           "symbolic shape-view dimension requires a positive finite parameter range",
           Some(declarationPath(reference))
         )
-      ShapeViewFactor(
-        None,
-        Some(s"parameter:${reference.module}:${reference.index}"),
-        bound.bounds.upper,
-        bound.parameters
+      Vector(
+        ShapeViewFactor(
+          None,
+          Some(s"parameter:${reference.module}:${reference.index}"),
+          bound.bounds.upper,
+          bound.parameters
+        )
       )
     case expression: KernelExpr[?] =>
       val reference = Option(expressionIds.get(expression)).getOrElse(
@@ -400,12 +402,33 @@ private final class ConstructionSession(val options: EmitOptions):
           "compound shape-view dimension requires a positive finite Integer proof",
           Some(expressionPath(reference))
         )
-      ShapeViewFactor(
-        None,
-        Some(s"expression:${reference.module}:${reference.index}"),
-        bound.bounds.upper,
-        bound.parameters
-      )
+      if expression.operation.contains("analog_mul") then
+        if expression.operands.size != 2 then
+          fail(
+            "NODAL-SHAPE-043-003",
+            "multiplicative shape-view dimension has invalid arity",
+            Some(expressionPath(reference))
+          )
+        expression.operands.flatMap:
+          case parameter: Param[?] =>
+            shapeViewFactors(parameter, owner, path, analysis)
+          case child: KernelExpr[?] =>
+            shapeViewFactors(child, owner, path, analysis)
+          case _ =>
+            fail(
+              "NODAL-SHAPE-043-003",
+              "multiplicative shape-view dimension has a non-static operand",
+              Some(expressionPath(reference))
+            )
+      else
+        Vector(
+          ShapeViewFactor(
+            None,
+            Some(s"expression:${reference.module}:${reference.index}"),
+            bound.bounds.upper,
+            bound.parameters
+          )
+        )
     case _ =>
       fail(
         "NODAL-SHAPE-043-003",
@@ -419,7 +442,7 @@ private final class ConstructionSession(val options: EmitOptions):
       path: String,
       analysis: StructuralBoundAnalysis
   ): (BigInt, Vector[String], BigInt, Vector[DeclarationRef]) =
-    val factors = dimensions.map(shapeViewFactor(_, owner, path, analysis))
+    val factors = dimensions.flatMap(shapeViewFactors(_, owner, path, analysis))
     if factors.isEmpty then
       fail(
         "NODAL-SHAPE-043-003",

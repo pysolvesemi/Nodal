@@ -288,12 +288,48 @@ structural-storage and source-mapped view checks. No new snapshot registry,
 native operation or layout engine is introduced.
 
 Public tests retain the exact `2 x 3` input and rank-one `6` result types,
-deterministic bridge text and configured-native execution. Symbolic flattening
-retains its prior compatibility-only inert capture until canonical product DAG
-equality can be proved without default substitution; this checkpoint does not
-pretend a parameter default is a fixed extent.
+deterministic bridge text and configured-native execution. The bounded symbolic
+extension below replaces the prior compatibility-only inert symbolic path; this
+fixed checkpoint does not pretend a parameter default is a fixed extent.
 
 This is a bounded fixed flatten view, not general slicing, l-value selection,
-target flattening, memory inference or generated-instance storage. Symbolic
-flatten, constant/symbolic slices and row/plane views remain open, and no F-043
-parent or descendant checkbox is complete.
+target flattening, memory inference or generated-instance storage. Constant and
+symbolic slices and row/plane views remain open, and no F-043 parent or
+descendant checkbox is complete.
+
+## Symbolic structural flatten multiplication proof
+
+The already-frozen `Vec.flatten` surface now retains a rank-one structural view
+for positive symbolic and compound source shapes. Construction forms one
+canonical Integer multiplication DAG from the authored dimension objects and
+records that root as the result dimension. It does not evaluate a parameter
+default, enumerate elements or introduce a second shape registry.
+
+Cardinality equality is deliberately narrower than general algebra. At
+construction, bridge and native trust boundaries, associative multiplication
+nodes are decomposed into their positive literal factors plus the multiset of
+owned parameter or non-multiplicative compound-expression roots. Repeated roots
+remain repeated, literal regrouping is canonical, and an independently captured
+addition/subtraction/division root is still identity-sensitive. This proves
+`Vec(Real, lanes, 2).flatten` has one dimension represented by the captured
+`lanes * 2` root without equating arbitrary coincident expressions.
+
+All three boundaries independently require module ownership, structural shape
+dependencies, positive finite bounds and a signed-64-bit worst-case count.
+Construction reuses `StructuralBoundAnalysis`; the bridge reuses its snapshot
+static-bound analysis; native follows the emitted `nodal.const_expr` operands
+and reuses `inferParameterIntegerBounds`. Cycles, over-depth graphs, malformed
+multiplication arity, missing factors, nonpositive leaves and overflow fail
+closed with the existing shape-view diagnostic families.
+
+Public tests cover direct symbolic, repeated-factor and compound-root flatten,
+deterministic bridge text, bridge mutations and configured native execution.
+The strict native matrix adds three deterministic positives and two exact-code
+rejections; its mutation checker changes multiplication to addition and replaces
+one factor without accepting changed output. Fixed flatten and every inherited
+reshape case remain intact.
+
+This remains structural Scala-to-IR view evidence. It does not implement
+constant/symbolic slices, row/plane views, l-value selection, generated lexical
+storage, Verilog-A arrays/generation or target source/index maps, and it does not
+complete any F-043 parent or descendant checkbox.

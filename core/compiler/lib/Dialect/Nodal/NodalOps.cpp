@@ -1704,7 +1704,6 @@ LogicalResult nodal::ShapeViewOp::verify() {
   auto owner = getOperation()->getParentOfType<nodal::ModuleOp>();
   if (!owner)
     return emitOpError("NODAL-SHAPE-043-003: shape view requires an owning module");
-  llvm::StringMap<uint64_t> symbolicMaxima;
   auto shapeSignature = [&](llvm::StringRef dimensions)
       -> std::optional<std::pair<uint64_t, std::multiset<std::string>>> {
     llvm::SmallVector<llvm::StringRef> tokens;
@@ -1714,6 +1713,70 @@ LogicalResult nodal::ShapeViewOp::verify() {
     uint64_t literalProduct = 1;
     uint64_t worstCase = 1;
     std::multiset<std::string> symbols;
+    llvm::SmallPtrSet<Operation *, 16> active;
+
+    auto multiply = [](uint64_t &product, int64_t factor) {
+      if (factor <= 0 ||
+          product > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
+                        static_cast<uint64_t>(factor))
+        return false;
+      product *= static_cast<uint64_t>(factor);
+      return true;
+    };
+
+    auto collectStaticFactor = [&](auto &&self, Value value, unsigned depth) -> bool {
+      Operation *operation = value.getDefiningOp();
+      if (!operation || operation->getParentOfType<nodal::ModuleOp>() != owner || depth >= 512 ||
+          !active.insert(operation).second || !value.getType().isInteger(64))
+        return false;
+      const llvm::scope_exit remove([&] { active.erase(operation); });
+      llvm::SmallPtrSet<Operation *, 16> dependencyActive;
+      if (!hasStaticShapeIndexDependencies(value, owner, dependencyActive))
+        return false;
+      auto bounds = nodal::inferParameterIntegerBounds(value);
+      if (failed(bounds) || bounds->lower <= 0)
+        return false;
+
+      if (llvm::isa<nodal::ConstLiteralOp>(operation)) {
+        if (bounds->lower != bounds->upper || !multiply(literalProduct, bounds->upper))
+          return false;
+        return multiply(worstCase, bounds->upper);
+      }
+      if (llvm::isa<nodal::ConstParameterRefOp>(operation)) {
+        auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("parameter");
+        Operation *parameter =
+            reference ? findDirectModuleParameter(owner, reference.getValue()) : nullptr;
+        if (!reference || !parameter)
+          return false;
+        auto type = parameter->getAttrOfType<TypeAttr>("type");
+        auto parameterBounds = nodal::inferParameterIntegerBounds(parameter);
+        if (!type || !type.getValue().isInteger(64) ||
+            !nodal::isStructuralParameter(parameter) ||
+            !parameterHasShapeEnvelope(owner, reference.getValue()) ||
+            !parameterHasPositiveFiniteRange(owner, reference.getValue()) ||
+            failed(parameterBounds) || parameterBounds->lower <= 0)
+          return false;
+        symbols.insert(reference.getValue().str());
+        return multiply(worstCase, parameterBounds->upper);
+      }
+      auto expression = llvm::dyn_cast<nodal::ConstExprOp>(operation);
+      if (!expression)
+        return false;
+      if (textAttr(operation, "operator_name") == "mul") {
+        if (operation->getNumOperands() != 2)
+          return false;
+        for (Value operand : operation->getOperands())
+          if (!self(self, operand, depth + 1))
+            return false;
+        return true;
+      }
+      llvm::StringRef semanticPath = metadataSemanticPath(operation);
+      if (semanticPath.empty())
+        return false;
+      symbols.insert(semanticPath.str());
+      return multiply(worstCase, bounds->upper);
+    };
+
     for (llvm::StringRef token : tokens) {
       if (token != token.trim())
         return std::nullopt;
@@ -1722,51 +1785,29 @@ LogicalResult nodal::ShapeViewOp::verify() {
         return std::nullopt;
       int64_t extent = 0;
       if (!token.getAsInteger(10, extent)) {
-        if (extent <= 0 ||
-            literalProduct > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
-                                 static_cast<uint64_t>(extent))
+        if (!multiply(literalProduct, extent) || !multiply(worstCase, extent))
           return std::nullopt;
-        literalProduct *= static_cast<uint64_t>(extent);
       } else {
         if (token.contains(' ') || token.contains('\t') || token.contains('\n') ||
             token.contains('\r'))
           return std::nullopt;
-        auto cached = symbolicMaxima.find(token);
-        if (cached != symbolicMaxima.end()) {
-          extent = static_cast<int64_t>(cached->second);
+        Operation *parameter = findDirectModuleParameter(owner, token);
+        if (parameter) {
+          auto type = parameter->getAttrOfType<TypeAttr>("type");
+          auto bounds = nodal::inferParameterIntegerBounds(parameter);
+          if (!type || !type.getValue().isInteger(64) || !nodal::isStructuralParameter(parameter) ||
+              !parameterHasShapeEnvelope(owner, token) ||
+              !parameterHasPositiveFiniteRange(owner, token) || failed(bounds) ||
+              bounds->lower <= 0 || !multiply(worstCase, bounds->upper))
+            return std::nullopt;
+          symbols.insert(token.str());
         } else {
-          Operation *parameter = findDirectModuleParameter(owner, token);
-          if (parameter) {
-            auto type = parameter->getAttrOfType<TypeAttr>("type");
-            auto bounds = nodal::inferParameterIntegerBounds(parameter);
-            if (!type || !type.getValue().isInteger(64) ||
-                !nodal::isStructuralParameter(parameter) ||
-                !parameterHasShapeEnvelope(owner, token) ||
-                !parameterHasPositiveFiniteRange(owner, token) || failed(bounds) ||
-                bounds->lower <= 0)
-              return std::nullopt;
-            extent = bounds->upper;
-          } else {
-            Value value = findDirectModuleStaticValue(owner, token);
-            if (!value || !value.getType().isInteger(64) ||
-                !llvm::isa_and_nonnull<nodal::ConstExprOp>(value.getDefiningOp()))
-              return std::nullopt;
-            llvm::SmallPtrSet<Operation *, 16> active;
-            if (!hasStaticShapeIndexDependencies(value, owner, active))
-              return std::nullopt;
-            auto bounds = nodal::inferParameterIntegerBounds(value);
-            if (failed(bounds) || bounds->lower <= 0)
-              return std::nullopt;
-            extent = bounds->upper;
-          }
-          symbolicMaxima.try_emplace(token, static_cast<uint64_t>(extent));
+          Value value = findDirectModuleStaticValue(owner, token);
+          if (!value || !llvm::isa_and_nonnull<nodal::ConstExprOp>(value.getDefiningOp()) ||
+              !collectStaticFactor(collectStaticFactor, value, 0))
+            return std::nullopt;
         }
-        symbols.insert(token.str());
       }
-      if (extent <= 0 || worstCase > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
-                                         static_cast<uint64_t>(extent))
-        return std::nullopt;
-      worstCase *= static_cast<uint64_t>(extent);
     }
     return std::make_pair(literalProduct, std::move(symbols));
   };

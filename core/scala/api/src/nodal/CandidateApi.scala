@@ -1179,6 +1179,22 @@ private[nodal] object CandidateRuntime:
             )
           )
         ).get
+    else if value.isInstanceOf[Signal[?]] && dimensions.nonEmpty then
+      val factors = dimensions.map:
+        case literal: Int => literalInteger(literal)
+        case parameter: Param[?] => parameter.asInstanceOf[Expr[Integer]]
+        case expression: KernelExpr[?] => expression.asInstanceOf[Expr[Integer]]
+        case _ =>
+          scala.util.Failure[Expr[Integer]](
+            new ConstructionException(
+              KernelDiagnostic(
+                "NODAL-SHAPE-043-003",
+                "symbolic shape flattening requires static Integer dimensions"
+              )
+            )
+          ).get
+      val count = factors.reduceLeft((left, right) => integerExpr("analog_mul", left, right))
+      shapeView(value, Vector(count))
     else expr(value, "flatten")
 
   def shapeView[A <: Data](

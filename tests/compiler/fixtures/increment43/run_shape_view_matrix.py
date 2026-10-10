@@ -26,6 +26,26 @@ def view(source="2,3", target="3,2", *, element="f64", result_element=None,
 
 def cases():
     compound = parameter() + reference() + literal() + expression()
+    symbolic_flatten = (parameter() + reference() + literal("two", 2) +
+                        expression("flattened", operator="mul",
+                                   operands=("lanes_ref", "two"),
+                                   semantic_path="Fixture.flattened"))
+    repeated_flatten = (parameter() + reference() +
+                        expression("square", operator="mul",
+                                   operands=("lanes_ref", "lanes_ref"),
+                                   semantic_path="Fixture.square") +
+                        literal("six", 6) +
+                        expression("flattened", operator="mul",
+                                   operands=("square", "six"),
+                                   semantic_path="Fixture.flattened"))
+    compound_flatten = (compound + literal("two", 2) +
+                        expression("flattened", operator="mul",
+                                   operands=("extent", "two"),
+                                   semantic_path="Fixture.flattened"))
+    nonmultiplicative_flatten = (parameter() + reference() + literal("two", 2) +
+                                 expression("flattened", operator="add",
+                                            operands=("lanes_ref", "two"),
+                                            semantic_path="Fixture.flattened"))
     distinct_compound = (compound + literal("two", 1) +
                          expression("other", operands=("lanes_ref", "two"),
                                     semantic_path="Fixture.other"))
@@ -49,6 +69,11 @@ def cases():
         Case("view_repeated_axes", parameter(lower=1, upper=2) + view(",".join(["lanes"] * 32), ",".join(["lanes"] * 32))),
         Case("view_compound_permutation", compound + view("Fixture.extent,2", "2,Fixture.extent")),
         Case("view_compound_repeated", compound + view("Fixture.extent,Fixture.extent,2", "2,Fixture.extent,Fixture.extent")),
+        Case("view_symbolic_flatten", symbolic_flatten + view("lanes,2", "Fixture.flattened")),
+        Case("view_repeated_symbolic_flatten", repeated_flatten + view(
+            "lanes,lanes,6", "Fixture.flattened")),
+        Case("view_compound_flatten", compound_flatten + view(
+            "Fixture.extent,2", "Fixture.flattened")),
         Case("view_reject_count", view("2,3", "2,2"), CODE),
         Case("view_reject_unknown_materialization", view(materialization="unknown"), CODE),
         Case("view_reject_materialization_whitespace", view(materialization="view "), CODE),
@@ -76,6 +101,10 @@ def cases():
         Case("view_reject_nonpositive_compound", nonpositive_compound + view("Fixture.extent,2", "2,Fixture.extent"), CODE),
         Case("view_reject_ordinary_compound_dependency", ordinary_compound + view("Fixture.extent,2", "2,Fixture.extent"), CODE),
         Case("view_reject_forged_compound_root", forged_compound + view("Fixture.extent,2", "2,Fixture.extent"), CODE),
+        Case("view_reject_nonmultiplicative_flatten", nonmultiplicative_flatten + view(
+            "lanes,2", "Fixture.flattened"), CODE),
+        Case("view_reject_flatten_missing_factor", symbolic_flatten + view(
+            "lanes,2,3", "Fixture.flattened"), CODE),
     ]
 
 
@@ -90,7 +119,10 @@ def contracts(data):
     ranges = re.findall(r'\b(value = -?[0-9]+ : i64|parameter = @[A-Za-z_0-9]+|effects = \[[^\]]*\])', text)
     origins = re.findall(
         r'\b(source_path|semantic_path|origin|dimensions) = "([^"]+)"', text)
-    return Counter(strict), Counter(parameters), Counter(ranges), Counter(origins)
+    expressions = re.findall(
+        r'"nodal\.const_expr"\(([^)]*)\).*?operator_name = "([^"]+)"', text)
+    return (Counter(strict), Counter(parameters), Counter(ranges), Counter(origins),
+            Counter(expressions))
 
 
 def valid_output(case, data, exit_code, stdout, stderr):

@@ -2670,7 +2670,9 @@ ${indent(body, 2)}
         module: KernelModuleSnapshot,
         dimension: String
     ): Option[String] =
-      module.declarations.find(_.name == dimension).map(_.path).orElse:
+      module.declarations.find(declaration =>
+        declaration.name == dimension || declaration.path == dimension
+      ).map(_.path).orElse:
         parameterExpressionsByOwner
           .getOrElse(module.path, Map.empty)
           .get(dimension)
@@ -2687,28 +2689,36 @@ ${indent(body, 2)}
       var literalProduct = BigInt(1)
       var worstCase = BigInt(1)
       val symbols = Vector.newBuilder[String]
-      dimensions.foreach: dimension =>
+      val active = mutable.HashSet.empty[String]
+
+      def factor(dimension: String, depth: Int = 0): Unit =
         if dimension.trim != dimension || dimension.isEmpty then
           fail(
             "NODAL-BRIDGE-045",
             "shape-view factor is not a canonical positive structural dimension",
             Some(path)
           )
-        val maximum =
-          if dimension.forall(_.isDigit) then
-            val value = dimension.toLongOption.filter(_ > 0).getOrElse(
-              fail(
-                "NODAL-BRIDGE-045",
-                "shape-view literal exceeds signed 64-bit bounds",
-                Some(path)
-              )
+        if dimension.forall(_.isDigit) then
+          val value = dimension.toLongOption.filter(_ > 0).getOrElse(
+            fail(
+              "NODAL-BRIDGE-045",
+              "shape-view literal exceeds signed 64-bit bounds",
+              Some(path)
             )
-            literalProduct *= BigInt(value)
-            value
-          else
-            val staticPath = shapeDimensionStaticPath(module, dimension).getOrElse(
-              fail("NODAL-BRIDGE-045", "shape-view factor is not module-owned", Some(path))
+          )
+          literalProduct *= BigInt(value)
+          worstCase *= BigInt(value)
+        else
+          val staticPath = shapeDimensionStaticPath(module, dimension).getOrElse(
+            fail("NODAL-BRIDGE-045", "shape-view factor is not module-owned", Some(path))
+          )
+          if depth >= 512 || !active.add(staticPath) then
+            fail(
+              "NODAL-BRIDGE-045",
+              "shape-view multiplication is cyclic or exceeds the supported depth",
+              Some(path)
             )
+          try
             val bounds = shapeStaticBounds(
               module,
               staticPath,
@@ -2722,11 +2732,36 @@ ${indent(body, 2)}
                 "shape-view factor lacks a positive finite structural proof",
                 Some(path)
               )
-            symbols += staticPath
-            bounds.upper
-        worstCase *= BigInt(maximum)
+            parameterExpressionsByOwner
+              .getOrElse(module.path, Map.empty)
+              .get(staticPath) match
+              case Some(expression) if expression.literal.nonEmpty =>
+                val value = expression.literal.flatMap(_.toLongOption).filter(_ > 0).getOrElse(
+                  fail(
+                    "NODAL-BRIDGE-045",
+                    "shape-view literal expression exceeds signed 64-bit bounds",
+                    Some(path)
+                  )
+                )
+                literalProduct *= BigInt(value)
+                worstCase *= BigInt(value)
+              case Some(expression) if expression.operation == "analog_mul" =>
+                if expression.operands.size != 2 then
+                  fail(
+                    "NODAL-BRIDGE-045",
+                    "shape-view multiplication has invalid arity",
+                    Some(path)
+                  )
+                expression.operands.foreach(factor(_, depth + 1))
+              case _ =>
+                symbols += staticPath
+                worstCase *= BigInt(bounds.upper)
+          finally
+            val _ = active.remove(staticPath)
         if worstCase > BigInt(Long.MaxValue) then
           fail("NODAL-BRIDGE-045", "shape-view worst-case element count overflows", Some(path))
+
+      dimensions.foreach(factor(_))
       literalProduct -> symbols.result().sorted
 
     private def shapeStaticBounds(

@@ -133,6 +133,19 @@ final class Increment43OverflowShapeView extends Module, Increment43ShapeClock:
   val samples: Signal[Vec[Real]] = in(Vec(Real, lanes, lanes, lanes))
   val invalid: Expr[Vec[Real]] = samples.reshape(lanes, lanes, lanes)
 
+final class Increment43CompoundShapeView extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
+  val extent: Expr[Integer] = lanes + 1.integer
+  val samples: Signal[Vec[Real]] = in(Vec(Real, extent, 2))
+  val reshaped: Expr[Vec[Real]] = samples.reshape(2, extent)
+
+final class Increment43DistinctCompoundShapeView extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
+  val sourceExtent: Expr[Integer] = lanes + 1.integer
+  val samples: Signal[Vec[Real]] = in(Vec(Real, sourceExtent, 2))
+  val targetExtent: Expr[Integer] = lanes + 1.integer
+  val invalid: Expr[Vec[Real]] = samples.reshape(2, targetExtent)
+
 object Increment43ShapeContractTests extends TestSuite:
   private def failure(top: => Module): ConstructionException =
     scala.util.Try(ConstructionKernel.inspect(top)).failed.get.asInstanceOf[ConstructionException]
@@ -368,6 +381,21 @@ object Increment43ShapeContractTests extends TestSuite:
         failure(new Increment43OverflowShapeView)
       ).foreach(error => assert(error.diagnostic.code == "NODAL-SHAPE-043-003"))
 
+    test("compound reshape preserves the canonical static expression root"):
+      val snapshot = ConstructionKernel.inspect(new Increment43CompoundShapeView)
+      val view = snapshot.shapeViews.head
+      val compoundPath = view.dimensions.last
+      assert(view.dimensions.head == "2")
+      assert(compoundPath.startsWith("Increment43CompoundShapeView."))
+      assert(snapshot.parameterExpressions.exists(_.path == compoundPath))
+      val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+      assert(document == ScalaToMlirBridge.lower(new Increment43CompoundShapeView))
+      assert(document.text.contains(s"!nodal.shaped<\"$compoundPath,2\", f64>"))
+      assert(document.text.contains(s"!nodal.shaped<\"2,$compoundPath\", f64>"))
+      assert(document.text.contains("operator_name = \"add\""))
+      val distinct = failure(new Increment43DistinctCompoundShapeView)
+      assert(distinct.diagnostic.code == "NODAL-SHAPE-043-003")
+
     test("bridge rejects forged symbolic reshape proofs and worst-case overflow"):
       val snapshot = ConstructionKernel.inspect(new Increment43SymbolicShapeView)
       def parameterAttribute(key: String, value: String): ConstructionSnapshot =
@@ -421,7 +449,8 @@ object Increment43ShapeContractTests extends TestSuite:
             Vector(
               ScalaToMlirBridge.lower(new Increment43FixedShapeView),
               ScalaToMlirBridge.lower(new Increment43SymbolicShapeView),
-              ScalaToMlirBridge.lower(new Increment43RepeatedShapeView)
+              ScalaToMlirBridge.lower(new Increment43RepeatedShapeView),
+              ScalaToMlirBridge.lower(new Increment43CompoundShapeView)
             ).foreach: document =>
               NativeCompilerClient.run(document, request) match
                 case success: NativeCompilerSuccess =>

@@ -2660,9 +2660,7 @@ ${indent(body, 2)}
       var worstCase = BigInt(1)
       val symbols = Vector.newBuilder[String]
       dimensions.foreach: dimension =>
-        val directDimension = dimension.matches("[1-9][0-9]*") ||
-          dimension.matches("[A-Za-z_][A-Za-z0-9_]*")
-        if dimension.trim != dimension || !directDimension then
+        if dimension.trim != dimension || dimension.isEmpty then
           fail(
             "NODAL-BRIDGE-045",
             "shape-view factor is not a canonical positive structural dimension",
@@ -2680,28 +2678,24 @@ ${indent(body, 2)}
             literalProduct *= BigInt(value)
             value
           else
-            val parameter = module.declarations.find(_.name == dimension).getOrElse(
+            val staticPath = shapeDimensionStaticPath(module, dimension).getOrElse(
               fail("NODAL-BRIDGE-045", "shape-view factor is not module-owned", Some(path))
             )
-            val attributes = parameter.attributes.toMap
-            val lower = attributes.get("integer_range_lower").flatMap(_.toLongOption)
-            val upper = attributes.get("integer_range_upper").flatMap(_.toLongOption)
-            if parameter.kind != "parameter" || !parameter.dataType.contains("Integer") ||
-              attributes.get("classification") != Some("structural") ||
-              !attributes
-                .get("structural_effects")
-                .exists(_.split(",").map(_.trim).contains("shape")) ||
-              lower.forall(_ <= 0L) || upper.isEmpty || lower.get > upper.get
-            then
+            val bounds = shapeStaticBounds(
+              module,
+              staticPath,
+              path,
+              "NODAL-BRIDGE-045",
+              "shape-view factor"
+            )
+            if bounds.lower <= 0L then
               fail(
                 "NODAL-BRIDGE-045",
                 "shape-view factor lacks a positive finite structural proof",
                 Some(path)
               )
-            symbols += parameter.path
-            upper.getOrElse(
-              fail("NODAL-BRIDGE-045", "shape-view factor has no finite maximum", Some(path))
-            )
+            symbols += staticPath
+            bounds.upper
         worstCase *= BigInt(maximum)
         if worstCase > BigInt(Long.MaxValue) then
           fail("NODAL-BRIDGE-045", "shape-view worst-case element count overflows", Some(path))

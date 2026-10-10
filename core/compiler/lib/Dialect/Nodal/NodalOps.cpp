@@ -1736,14 +1736,29 @@ LogicalResult nodal::ShapeViewOp::verify() {
           extent = static_cast<int64_t>(cached->second);
         } else {
           Operation *parameter = findDirectModuleParameter(owner, token);
-          auto type = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
-          auto bounds = nodal::inferParameterIntegerBounds(parameter);
-          if (!type || !type.getValue().isInteger(64) || !nodal::isStructuralParameter(parameter) ||
-              !parameterHasShapeEnvelope(owner, token) ||
-              !parameterHasPositiveFiniteRange(owner, token) || failed(bounds) ||
-              bounds->lower <= 0)
-            return std::nullopt;
-          extent = bounds->upper;
+          if (parameter) {
+            auto type = parameter->getAttrOfType<TypeAttr>("type");
+            auto bounds = nodal::inferParameterIntegerBounds(parameter);
+            if (!type || !type.getValue().isInteger(64) ||
+                !nodal::isStructuralParameter(parameter) ||
+                !parameterHasShapeEnvelope(owner, token) ||
+                !parameterHasPositiveFiniteRange(owner, token) || failed(bounds) ||
+                bounds->lower <= 0)
+              return std::nullopt;
+            extent = bounds->upper;
+          } else {
+            Value value = findDirectModuleStaticValue(owner, token);
+            if (!value || !value.getType().isInteger(64) ||
+                !llvm::isa_and_nonnull<nodal::ConstExprOp>(value.getDefiningOp()))
+              return std::nullopt;
+            llvm::SmallPtrSet<Operation *, 16> active;
+            if (!hasStaticShapeIndexDependencies(value, owner, active))
+              return std::nullopt;
+            auto bounds = nodal::inferParameterIntegerBounds(value);
+            if (failed(bounds) || bounds->lower <= 0)
+              return std::nullopt;
+            extent = bounds->upper;
+          }
           symbolicMaxima.try_emplace(token, static_cast<uint64_t>(extent));
         }
         symbols.insert(token.str());
@@ -1760,7 +1775,7 @@ LogicalResult nodal::ShapeViewOp::verify() {
   if (!inputSignature || !resultSignature || *inputSignature != *resultSignature)
     return emitOpError(
         "NODAL-SHAPE-043-003: shape view requires equal literal products and bounded structural "
-        "parameter multisets within signed 64-bit counts");
+        "static-expression root multisets within signed 64-bit counts");
   return success();
 }
 

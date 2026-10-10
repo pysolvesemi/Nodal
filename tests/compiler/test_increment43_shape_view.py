@@ -12,7 +12,7 @@ import run_shape_view_matrix as views
 class ShapeViewCheckerTests(unittest.TestCase):
     def test_inventory_and_positive_preservation(self):
         cases = views.cases()
-        self.assertEqual(len(cases), 31)
+        self.assertEqual(len(cases), 38)
         self.assertEqual(len({case.name for case in cases}), len(cases))
         for case in cases:
             if case.code is None:
@@ -56,6 +56,14 @@ class ShapeViewCheckerTests(unittest.TestCase):
                 changed = data.replace(old, new, 1)
                 self.assertNotEqual(changed, data)
                 self.assertFalse(views.valid_output(case, data, 0, changed, b""))
+
+        compound = next(case for case in views.cases()
+                        if case.name == "view_compound_permutation")
+        compound_data = counts.source(compound).encode()
+        changed = compound_data.replace(b'semantic_path = "Fixture.extent"',
+                                        b'semantic_path = "Fixture.other"', 1)
+        self.assertNotEqual(changed, compound_data)
+        self.assertFalse(views.valid_output(compound, compound_data, 0, changed, b""))
 
 
 if __name__ == "__main__":

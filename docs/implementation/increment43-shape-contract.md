@@ -222,9 +222,9 @@ Public tests retain fixed reshape, add repeated symbolic factors and literal
 regrouping, reject changed multiplicity, coincident defaults and overflow, mutate
 bridge proof metadata, and execute fixed and symbolic documents with a configured
 native compiler. These are Scala-to-IR witnesses; they do not produce target HDL.
-Compound dimension DAGs remain excluded from reshape, while general slices/views,
-generated storage and legal Verilog-A arrays/generation remain required unfinished
-work. No F43 checkbox is completed by this bounded repair.
+Compound dimension DAGs are covered by the bounded extension below. General
+slices/views, generated storage and legal Verilog-A arrays/generation remain
+required unfinished work. No F43 checkbox is completed by this bounded repair.
 
 ### Materialization downgrade rejection
 
@@ -237,3 +237,29 @@ legacy count bypass and legacy storage bypass; checker mutations independently
 reject changed materialization. Existing scalar legacy fixtures remain covered
 by the native predecessor suite. This repair changes no public API, parameter
 evaluation, target layout or acceptance scope.
+
+## Compound static reshape roots
+
+The bounded structural reshape profile also accepts positive compound Integer
+dimension DAGs when the source and result retain the same canonical root
+identities and literal product. Construction reuses the existing
+`StructuralBoundAnalysis`; the snapshot retains those expression paths in the
+same parameter-expression inventory used by declarations, generated bounds and
+indices. Distinct but coincident expressions are not treated as equal, and
+defaults are never substituted.
+
+The bridge independently proves each root through the shared static-bound
+analysis, requires owned structural shape dependencies, emits the existing i64
+constant-expression DAG, and enforces a signed-64-bit worst-case element count.
+Native verification resolves each dimension path by `semantic_path`, requires a
+direct-module `nodal.const_expr` DAG with structural shape dependencies, and
+independently infers a strictly positive finite interval before comparing the
+root multiset. Direct parameters and literals retain their established forms.
+
+The strict native matrix adds two deterministic compound positives and five
+exact-code negatives for distinct identities, missing roots, nonpositive
+bounds, ordinary dependencies and a forged direct-reference root. Public tests
+retain the expression inventory and configured-native path and reject a
+separately captured coincident expression. This remains reshape-only: general
+slices/views, l-value indexing, generated lexical storage and target
+array/generation lowering remain open, and no F43 checkbox is completed.

@@ -5,7 +5,7 @@ import re
 from collections import Counter
 
 from run_generate_count_matrix import Case, main
-from run_shape_contract_matrix import parameter
+from run_shape_contract_matrix import expression, literal, parameter, reference
 
 
 CODE = "NODAL-SHAPE-043-003"
@@ -25,6 +25,18 @@ def view(source="2,3", target="3,2", *, element="f64", result_element=None,
 
 
 def cases():
+    compound = parameter() + reference() + literal() + expression()
+    distinct_compound = (compound + literal("two", 1) +
+                         expression("other", operands=("lanes_ref", "two"),
+                                    semantic_path="Fixture.other"))
+    nonpositive_compound = (parameter() + reference() + literal() +
+                            expression(operator="sub"))
+    ordinary_compound = compound.replace('classification = "structural"',
+                                         'classification = "ordinary"')
+    forged_compound = (parameter() +
+                       '%extent = "nodal.const_parameter_ref"() '
+                       '<{metadata = {semantic_path = "Fixture.extent"}, '
+                       'parameter = @lanes}> : () -> i64\n')
     return [
         Case("view_rank_preserving", view()),
         Case("view_rank_reducing", view("2,2", "4")),
@@ -35,6 +47,8 @@ def cases():
         Case("view_distinct_symbols", parameter() + parameter("rows") + view("lanes,rows,2", "2,rows,lanes")),
         Case("view_symbolic_regroup_literals", parameter() + view("2,lanes,3", "lanes,6")),
         Case("view_repeated_axes", parameter(lower=1, upper=2) + view(",".join(["lanes"] * 32), ",".join(["lanes"] * 32))),
+        Case("view_compound_permutation", compound + view("Fixture.extent,2", "2,Fixture.extent")),
+        Case("view_compound_repeated", compound + view("Fixture.extent,Fixture.extent,2", "2,Fixture.extent,Fixture.extent")),
         Case("view_reject_count", view("2,3", "2,2"), CODE),
         Case("view_reject_unknown_materialization", view(materialization="unknown"), CODE),
         Case("view_reject_materialization_whitespace", view(materialization="view "), CODE),
@@ -57,6 +71,11 @@ def cases():
         Case("view_reject_unbounded_parameter", parameter(constraint=False) + view("lanes,2", "2,lanes"), CODE),
         Case("view_reject_zero_capable_parameter", parameter(lower=0) + view("lanes,2", "2,lanes"), CODE),
         Case("view_reject_foreign_parameter", parameter() + '"nodal.module"() <{metadata = {}, sym_name = "Child"}> ({\n' + view("lanes,2", "2,lanes") + '}) : () -> ()\n', CODE),
+        Case("view_reject_distinct_compound_identity", distinct_compound + view("Fixture.extent,2", "2,Fixture.other"), CODE),
+        Case("view_reject_missing_compound_root", view("Fixture.extent,2", "2,Fixture.extent"), CODE),
+        Case("view_reject_nonpositive_compound", nonpositive_compound + view("Fixture.extent,2", "2,Fixture.extent"), CODE),
+        Case("view_reject_ordinary_compound_dependency", ordinary_compound + view("Fixture.extent,2", "2,Fixture.extent"), CODE),
+        Case("view_reject_forged_compound_root", forged_compound + view("Fixture.extent,2", "2,Fixture.extent"), CODE),
     ]
 
 
@@ -69,7 +88,8 @@ def contracts(data):
         r'(!nodal\.shaped<[^\n]+>)', text)
     parameters = re.findall(r'\b(classification|parameter_kind|variability|sym_name) = "([^"]+)"', text)
     ranges = re.findall(r'\b(value = -?[0-9]+ : i64|parameter = @[A-Za-z_0-9]+|effects = \[[^\]]*\])', text)
-    origins = re.findall(r'\b(source_path|origin|dimensions) = "([^"]+)"', text)
+    origins = re.findall(
+        r'\b(source_path|semantic_path|origin|dimensions) = "([^"]+)"', text)
     return Counter(strict), Counter(parameters), Counter(ranges), Counter(origins)
 
 

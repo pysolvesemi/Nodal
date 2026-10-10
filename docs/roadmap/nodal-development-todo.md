@@ -1,11 +1,19 @@
 # Nodal Incremental Development TODO
 
-**Revision:** 1.57
+**Revision:** 1.58
 **Created:** 2026-08-20
-**Updated:** 2026-09-29
+**Updated:** 2026-10-10
 **Status:** Active roadmap
 **Primary language target:** Verilog-AMS 2023
 **Analog-only compatibility target:** Verilog-A
+
+> **Forward Area/conditional amendment (2026-10-10):** Read the
+> [Areas and symbolic structural conditionals plan](areas-symbolic-conditionals-v0.1-plan.md)
+> for approved `Area`/`hdlRange` collections, compiler-captured symbolic
+> `if/else` and parameter-aware behavioral `when`. For that bounded future
+> profile it extends older explicit-only structural-condition wording; host
+> Scala control and ordinary ranges retain their meaning. New descendants live
+> only in that plan; existing states/evidence and F-043 prerequisites are unchanged.
 
 ## Mission
 

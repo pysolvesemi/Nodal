@@ -2624,8 +2624,8 @@ ${indent(body, 2)}
       while offset < text.length do
         val identity = staticIdentities.find: candidate =>
           text.startsWith(candidate, offset) &&
-          (offset + candidate.length == text.length ||
-            text.charAt(offset + candidate.length) == 'x')
+            (offset + candidate.length == text.length ||
+              text.charAt(offset + candidate.length) == 'x')
         identity match
           case Some(candidate) =>
             dimensions += candidate

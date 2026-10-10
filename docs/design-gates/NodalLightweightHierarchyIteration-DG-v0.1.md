@@ -177,3 +177,60 @@ Use focused helpers and minimum necessary transaction integration, without
 promising a fixed line count. Any later Rust adoption or broader boundary change
 needs its own measured rationale and applicable gate. `AGENTS.md` and historical
 qualification/evidence policies are unchanged.
+
+
+## Foundation 43 static-domain checkpoint - 2026-10-01
+
+The first implementation checkpoint adds private concrete half-open domain
+arithmetic and integrates exact repetition into the existing control-flow
+construction owner. It uses wide intermediates and an explicit 32-bit trip-count
+limit matching the current loop metadata. Empty iteration and invalid negative
+repetition counts remain distinct; a maximum is checked, never used to clamp.
+The first excluded induction value remains wide instead of wrapping an Int.
+
+The public `analogRepeat` signature and retained procedural staging are unchanged.
+Its body is still captured once, including a zero-count loop; it is not unrolled
+and does not allocate generated topology. The builder rejects invalid static
+counts and conflicting supplied metadata before invoking the body. The existing
+immutable runtime, bridge and native verifiers remain independent and unchanged.
+No private factory can be used to repair or accept a conflicting static witness.
+
+This is a bounded implementation of the already-approved range direction, not a
+new public API approval, complete `hdlRange` capture, shape support or F-043
+acceptance. Symbolic parameter domains, induction/generated-state ownership,
+analog layouts and actual generated target witnesses remain required. The
+[readiness record](../implementation/increment43-readiness.md) records that
+boundary; the existing roadmap and amendment own all unfinished checkboxes.
+
+## Foundation 43 typed Integer expression checkpoint - 2026-10-02
+
+The next prerequisite adds `+`, binary `-`, `*`, `/` and unary `-` on
+`Expr[Integer]`. Both operands stay typed Integer expressions; no implicit
+Real, UInt or host-Int conversion is introduced. The implementation records
+existing `KernelExpr` arithmetic operations with the Integer result descriptor
+through the canonical construction session. It does not evaluate operands,
+copy shared subexpressions, substitute parameter defaults or add a second
+arithmetic representation. Existing Real and UInt operators are unchanged.
+
+The production consumer for this checkpoint is the existing static parameter
+override path: construction ownership/effect checks, parameter-expression
+snapshots, bridge `nodal.const_expr` serialization and native parameter
+verification. The tests exercise source-level composition, shared DAG identity,
+determinism across changed defaults, type/ownership/dynamic-source rejection,
+and configured native arithmetic against independent literal binding oracles.
+Wrong-result controls and zero-divisor/overflow cases must reject normally;
+a process failure or an unconfigured conditional branch is not native evidence.
+
+This is an implementation record within the approved typed symbolic-integer
+direction, not completed review or acceptance. In particular, `hdlRange` still
+admits only its implemented literal/direct bounded-parameter profile at this
+checkpoint. Arithmetic range transport, bound inference over captured DAGs,
+shapes/indexing/slices, generated-instance storage and legal target generation
+remain required F-043 work. The new syntax does not silently unroll or accept
+an expression-bound range by evaluating its default.
+
+No native verifier, historical test, API freeze, required gate or roadmap
+checkbox is weakened or relabelled. The existing main checklist and amendment
+remain the only progress owners. Fresh targeted Core, configured Bridge20 and
+parameter qualification must establish this source checkpoint; exact results
+and any repairs belong in the PR checkpoint rather than being predeclared here.

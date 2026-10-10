@@ -251,3 +251,67 @@ add_test(
     --work-dir "${CMAKE_BINARY_DIR}/increment42-hierarchy-evidence"
 )
 set_tests_properties(nodal.native.hierarchy-integration PROPERTIES TIMEOUT 180)
+
+add_executable(nodal-parameter-integer-bounds-unit-tests ParameterIntegerBoundsTest.cpp)
+llvm_update_compile_flags(nodal-parameter-integer-bounds-unit-tests)
+target_link_libraries(nodal-parameter-integer-bounds-unit-tests
+  PRIVATE NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport
+)
+add_test(NAME nodal.native.parameter-integer-bounds
+  COMMAND nodal-parameter-integer-bounds-unit-tests
+)
+add_test(NAME nodal.native.iteration-envelope-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_integer_bounds_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-integer-bounds-evidence"
+)
+set_tests_properties(nodal.native.iteration-envelope-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.generate-count-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_generate_count_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-generate-count-evidence"
+)
+set_tests_properties(nodal.native.generate-count-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.generate-ssa-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_generate_ssa_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-generate-ssa-evidence"
+)
+set_tests_properties(nodal.native.generate-ssa-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.generate-ownership-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_generate_ownership_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-generate-ownership-evidence"
+)
+set_tests_properties(nodal.native.generate-ownership-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.shape-contract-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_shape_contract_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-shape-contract-evidence"
+)
+set_tests_properties(nodal.native.shape-contract-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.shape-index-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_shape_index_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-shape-index-evidence"
+)
+set_tests_properties(nodal.native.shape-index-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.shape-view-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_shape_view_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-shape-view-evidence"
+)
+set_tests_properties(nodal.native.shape-view-integration PROPERTIES TIMEOUT 60)

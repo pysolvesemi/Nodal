@@ -101,6 +101,16 @@ def Nodal_PortOp : Nodal_Op<"port", [HasParent<"ModuleOp">, Symbol]> {
   let hasVerifier = 1;
 }
 
+def Nodal_PortValueOp : Nodal_Op<"port_value", [HasParent<"ModuleOp">]> {
+  let summary = "Typed SSA use of one module port";
+  let arguments = (ins
+    FlatSymbolRefAttr:$port,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
 def Nodal_ParameterOp : Nodal_Op<"parameter",
     [HasParent<"ModuleOp">, Symbol]> {
   let summary = "Typed target-visible ordinary or structural parameter";
@@ -410,7 +420,7 @@ def Nodal_ShapeIndexOp : Nodal_Op<"shape_index"> {
   let summary = "Canonical multidimensional shaped-value indexing";
   let arguments = (ins
     AnyType:$input,
-    Variadic<Index>:$indices,
+    Variadic<AnyType>:$indices,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
@@ -445,10 +455,13 @@ def Nodal_ShapeViewOp : Nodal_Op<"shape_view"> {
 def Nodal_GenerateOp : Nodal_Op<"generate", [NoTerminator]> {
   let summary = "Symbolic structural generation region";
   let arguments = (ins
+    Variadic<I64>:$bounds,
     StrAttr:$induction,
-    AnyAttr:$lower,
-    AnyAttr:$upper,
-    AnyAttr:$step,
+    OptionalAttr<AnyAttr>:$lower,
+    OptionalAttr<AnyAttr>:$upper,
+    OptionalAttr<AnyAttr>:$step,
+    OptionalAttr<StrAttr>:$region_id,
+    OptionalAttr<StrAttr>:$induction_path,
     DictionaryAttr:$metadata
   );
   let regions = (region SizedRegion<1>:$body);
@@ -609,11 +622,13 @@ def Nodal_TerminalOp : Nodal_Op<"terminal", [HasParent<"ModuleOp">]> {
   let hasVerifier = 1;
 }
 
-def Nodal_NodeOp : Nodal_Op<"node", [HasParent<"ModuleOp">]> {
+def Nodal_NodeOp : Nodal_Op<"node", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Internal conservative node";
   let arguments = (ins
     StrAttr:$name,
     OptionalAttr<StrAttr>:$source_path,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs Nodal_TerminalType:$result);

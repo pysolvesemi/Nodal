@@ -1,0 +1,277 @@
+# Increment 43 static shape and index contract
+
+**Status:** bounded implementation checkpoint; no F-043 child is complete.
+
+This checkpoint turns `Vec` declaration dimensions from inert spelling into a
+checked construction, bridge and native contract for fixed positive dimensions,
+directly referenced bounded `Integer` parameters, and the bounded compound DAG
+extension described below. A symbolic dimension is owned by the declaring
+module, has a finite range whose lower endpoint is strictly positive, and marks
+every canonical parameter dependency with `shape` and `rank` structural effects.
+
+Zero-sized shapes remain illegal even though an empty `hdlRange` remains legal.
+`Vec` remains structural data rather than implicit memory. General slices/views,
+generated lexical storage, and Verilog-A array/generation lowering remain open
+and must not be inferred from shaped port IR parsing.
+
+Public tests cover deterministic fixed, direct-symbolic and compound snapshots,
+bridge output, structural effect capture, configured native parsing when
+`NODAL_NODALC` is available, and transactional rejection of zero, unbounded,
+zero-capable and nonpositive compound dimensions.
+
+## Compound static dimension DAG checkpoint
+
+`Vec` declaration dimensions and their static indexing proof may now use a
+canonical captured `Integer` expression composed of `add`, `sub`, `mul`, `div`
+and `neg`. Construction reuses `StructuralBoundAnalysis` and the shared
+`IterationDomain` arithmetic. It requires the expression lower bound to remain
+strictly positive for every legal parameter setting, rejects overflow and
+zero-capable division, retains same-identity subtraction correlation, and marks
+all dependencies with the existing `shape` and `rank` effects. The serialized
+dimension token is the expression's canonical semantic path, not an arithmetic
+string or an evaluated default.
+
+The bridge independently resolves that path in the existing parameter-expression
+inventory, recomputes its interval, and emits the existing
+`nodal.const_parameter_ref`, `nodal.const_literal` and `nodal.const_expr` DAG.
+The shaped type retains the canonical expression path. Native verification finds
+the directly owned static value by its semantic-path metadata, requires i64 type
+and structural shape dependencies, and obtains the minimum through
+`inferParameterIntegerBounds`. `nodal.shape_index` uses the same independently
+verified minimum. No parallel registry, textual arithmetic parser, default
+specialization or eager array expansion is introduced.
+
+The declaration matrix has fourteen cases: four positives run twice and ten
+exact-code rejections, including a 64-axis repeated compound path, missing DAG,
+nonpositive result, ordinary dependency, wrong-typed carrier and a forged direct
+parameter reference relabeled as a compound root. Three Python
+mutation controls retain the dimension path, operator, dependency, envelope and
+exact diagnostic behavior. Public Scala checks cover deterministic capture,
+bridge SSA transport, configured native declaration and indexing execution, and
+nonpositive construction rejection.
+
+This extension deliberately does not admit compound factors to the current
+reshape/view signature. General views and slices, target lowering, generated
+storage and source/index maps for emitted Verilog-A remain later F43 work. No
+parent or descendant F43 checkbox is complete.
+
+## Native static indexing checkpoint
+
+The existing `nodal.shape_index` operation now checks each zero-based index
+against every legal shape, in addition to rank and exact element type. The
+bounded native profile accepts index-typed `nodal.constant` operands. Negative,
+out-of-range, unknown runtime and metadata-only claimed proofs fail with
+`NODAL-SHAPE-043-002`. Malformed empty dimension tokens also fail normally.
+
+For a symbolic extent, the verifier queries the existing parameter interval
+analysis through its canonical declaration. It uses the lower bound of the
+legal extent, preserves exclusive endpoints and intersecting constraints, and
+never substitutes an overridable default. This is a narrow query interface to
+the existing arithmetic owner, not another interval engine. Integer arithmetic,
+parameter folding and storage semantics are unchanged.
+
+The native matrix includes thirteen positives run twice and twenty-one
+exact-code rejections. In addition to the literal cases, it covers a direct
+ranged parameter, a parameter-minus-literal DAG and same-identity subtraction.
+Expression negatives cover an unsafe upper endpoint, ordinary dependencies,
+runtime values and a zero-capable divisor. The earlier first/last, singleton,
+multiple-axis, nested-element, symbolic-extent, signed-extreme, 64-axis and
+direct-port cases remain. Preservation checks retain the expression operators,
+parameter references and literal spellings as well as operand order,
+shape/element types, source identity and structural storage metadata. Mutation
+controls reject changed expression operators in addition to the earlier loss,
+type, value, axis, source, storage, abnormal-exit and diagnostic controls. SSA
+renaming is allowed. The registered CTest retains a 60-second deadline and the
+shared runner's deterministic two-execution check.
+
+Within one index operation, symbolic minima are cached per distinct dimension;
+repeated axes reuse the proof. Traversal is linear in rank plus the existing
+bounded parameter analysis for each distinct symbolic extent. This statement
+does not claim an optimization of unrelated module-wide shape verification.
+
+This section records the native trust boundary; the following checkpoints add
+bounded public `Vec.at` capture, bridge transport and static Integer expression
+indices. Slices/views, generated lexical storage and legal target
+array/generation lowering remain unfinished. Hand-authored MLIR must not be
+reported as generated-Verilog-A evidence. All F43 parent and descendant
+acceptance items remain open.
+
+## Public static port indexing checkpoint
+
+The existing public `Vec.at(...)` surface captures fixed literal indices on
+fixed or directly bounded symbolic shaped input/output ports. Construction
+checks rank and every literal against the minimum legal extent before publishing
+the expression. Negative, end and rank-mismatched indices fail with
+`NODAL-SHAPE-043-002`; no parameter default supplies an index proof.
+Existing internal-wire `.at` calls retain their compatibility-only inert
+expression capture and do not enter this port transport.
+
+The snapshot retains one source-correlated index identity, its module-owned port
+and ordered literals. The bridge independently rejects forged owner, input,
+rank, or bounds and emits a typed `nodal.port_value`, index-typed constants and
+the existing `nodal.shape_index`. Native verification resolves the direct port,
+checks its exact shaped type, and then applies the existing all-legal-extents
+index proof. This reuses the canonical declaration, parameter interval and
+`shape_index` owners rather than adding another shape engine or registry.
+
+This bounded profile does not yet accept internal shaped wires, slices/views,
+assignments through indexed l-values, generated-instance storage, or target
+array lowering. It is public Scala-to-normalized-IR evidence, not generated
+Verilog-A acceptance. Every F43 parent and descendant item remains open.
+
+## Static Integer expression index checkpoint
+
+Public port indexing now also accepts a canonical static `Integer` index DAG
+when its conservative interval is non-negative and strictly below the minimum
+legal extent. Construction reuses the same captured-expression traversal and
+`IterationDomain` arithmetic as compound `hdlRange` bounds. It supports direct
+ranged parameters and pure `add`, `sub`, `mul`, `div` and `neg` DAGs, including
+same-identity subtraction correlation. Zero-capable divisors, overflow,
+unbounded parameters, unsupported/runtime operations, foreign ownership and
+unsafe endpoints reject transactionally with `NODAL-SHAPE-043-002`. Parameters
+that participate are marked with the existing `shape` structural effect.
+
+Snapshots retain literal axes as canonical decimal strings and symbolic axes as
+canonical declaration/expression paths. Static index expressions are roots of
+the existing parameter-expression inventory; no parallel expression graph is
+created. The bridge independently traverses that inventory with the shared
+interval arithmetic, requires module-local structural shape dependencies, and
+emits the existing `nodal.const_parameter_ref`, `nodal.const_literal` and
+`nodal.const_expr` SSA DAG. Literal axes preserve their prior index-typed
+`nodal.constant` form. The native `nodal.shape_index` verifier accepts exactly
+those two carriers: a legacy index literal or an i64 static-expression DAG. For
+i64, it independently checks direct-module ownership, structural shape
+dependencies and `inferParameterIntegerBounds` before applying the all-legal-
+extents bound.
+
+Public tests exercise deterministic direct and compound expression transport,
+configured native execution, construction rejection of an unsafe symbolic
+endpoint, and bridge mutations for missing expression identity, changed
+arithmetic and ordinary parameter classification. That checkpoint remains
+indexing-only; the fixed view profile below is separate. Compound dimension
+dimension DAGs are now shared with declaration extents as described above.
+General slices/views, l-value indexing, generated storage and target
+arrays/generation are still open, as are all parent and child F43 acceptance boxes.
+
+## Fixed structural reshape view checkpoint
+
+The already-frozen public `Vec.reshape(...)` surface now has a bounded production
+path for fixed positive dimensions on module input/output ports. Construction
+retains the source port, target dimensions and source-correlated expression
+identity, and accepts the view only when independently computed source and
+result element counts are equal and fit the supported signed 64-bit envelope.
+Unequal fixed counts reject transactionally with `NODAL-SHAPE-043-003`.
+
+The snapshot uses the existing construction expression identity and source map.
+The bridge independently resolves the owned port, rechecks positive literal
+dimensions and both products, and emits a typed `nodal.port_value` followed by
+the existing `nodal.shape_view`. The view carries exact result dimensions,
+`materialization = "view"`, source-mapped observability and structural storage
+intent. Native verification recognizes that production materialization value
+and independently requires shaped input/result types with equal element types,
+an exact dimensions/result-type match, structural storage, source-mapped
+observability and equal finite literal counts. The older `explicit_view`
+fixture carrier is preserved unchanged for predecessor native tests.
+
+A separate twelve-case native matrix runs four positives twice and requires
+eight exact-code rejections for count mismatch, symbolic extents, attribute/type
+forgeries and overflow. Three Python checker methods control inventory,
+preservation and normal exact-diagnostic rejection. Public tests cover snapshot,
+deterministic bridge output, four bridge forgeries and configured native
+execution. The full native suite contains 145 tests at this checkpoint.
+
+This is a structural view, not storage allocation, flattening, a memory, an
+l-value slice or target lowering. At the fixed-only checkpoint, symbolic reshape
+retained the exposed inert compatibility path; the bounded symbolic extension below replaces that path.
+Internal shaped wires retain their prior inert path. Slice selection, compound
+reshape factors, generated lexical storage and legal Verilog-A array/generation
+lowering remain open. No F43 parent or descendant checkbox is complete.
+
+## Bounded symbolic reshape and proof repair
+
+Public port reshape supports directly owned bounded Integer parameter factors.
+Construction, bridge and native verification independently compare the positive
+literal product and the multiset of canonical parameter identities. Multiplicity
+matters: `lanes * lanes` is not equal to `lanes`. Distinct parameters with the
+same default and range are not interchangeable. Each boundary proves the maximum
+element count across all legal parameter settings fits signed 64-bit metadata.
+
+The published symbolic checkpoint required repair before qualification. Its
+construction record still held Integer dimensions after the snapshot changed to
+strings, preventing Scala compilation. Native proof used a set, lost repeated
+factors, and did not validate symbolic ownership/ranges or their worst-case
+product; the bridge also omitted the worst-case product bound. The repaired
+path retains typed factors in the construction record and renders canonical
+names only when the snapshot is finalized. Equality compares declaration
+identities, avoiding temporary names captured before constructor naming. It uses
+a multiset natively, and independently requires local structural Integer shape
+parameters with positive finite ranges at both downstream boundaries. Native
+bounds reuse `inferParameterIntegerBounds`; each distinct symbolic maximum is
+cached within a view. No defaults are substituted and no array is expanded.
+
+The strict native matrix now has 31 cases: nine positives run twice and twenty-two
+exact-code rejections. It preserves the fixed tests and adds repeated factors,
+distinct symbols, literal regrouping, 32 repeated axes, missing/foreign/ordinary
+parameters, absent shape envelopes/ranges, zero-capable dimensions, dropped or
+added factors and symbolic worst-case overflow. The former undeclared symbolic
+positive is retained as a negative; its valid counterpart declares its parameter.
+Four Python checker methods retain source/dimension/parameter/range metadata and
+reject mutations, abnormal exits, empty output and unrelated diagnostics.
+
+Public tests retain fixed reshape, add repeated symbolic factors and literal
+regrouping, reject changed multiplicity, coincident defaults and overflow, mutate
+bridge proof metadata, and execute fixed and symbolic documents with a configured
+native compiler. These are Scala-to-IR witnesses; they do not produce target HDL.
+Compound dimension DAGs are covered by the bounded extension below. General
+slices/views, generated storage and legal Verilog-A arrays/generation remain
+required unfinished work. No F43 checkbox is completed by this bounded repair.
+
+### Materialization downgrade rejection
+
+The native verifier accepts only `view` and the scalar-input legacy
+`explicit_view` carrier. Changing a shaped-to-shaped operation to an unknown
+materialization or relabeling it as `explicit_view` cannot skip the reshape
+proof. The previous early return accepted both bypasses, including mismatched
+element counts. Four added exact-code negatives cover unknown/whitespace tags,
+legacy count bypass and legacy storage bypass; checker mutations independently
+reject changed materialization. Existing scalar legacy fixtures remain covered
+by the native predecessor suite. This repair changes no public API, parameter
+evaluation, target layout or acceptance scope.
+
+## Compound static reshape roots
+
+The bounded structural reshape profile also accepts positive compound Integer
+dimension DAGs when the source and result retain the same canonical root
+identities and literal product. Construction reuses the existing
+`StructuralBoundAnalysis`; the snapshot retains those expression paths in the
+same parameter-expression inventory used by declarations, generated bounds and
+indices. Distinct but coincident expressions are not treated as equal, and
+defaults are never substituted.
+
+The bridge independently proves each root through the shared static-bound
+analysis, requires owned structural shape dependencies, emits the existing i64
+constant-expression DAG, and enforces a signed-64-bit worst-case element count.
+Native verification resolves each dimension path by `semantic_path`, requires a
+direct-module `nodal.const_expr` DAG with structural shape dependencies, and
+independently infers a strictly positive finite interval before comparing the
+root multiset. Direct parameters and literals retain their established forms.
+
+The strict native matrix adds two deterministic compound positives and five
+exact-code negatives for distinct identities, missing roots, nonpositive
+bounds, ordinary dependencies and a forged direct-reference root. Public tests
+retain the expression inventory and configured-native path and reject a
+separately captured coincident expression. This remains reshape-only: general
+slices/views, l-value indexing, generated lexical storage and target
+array/generation lowering remain open, and no F43 checkbox is completed.
+
+### Compound-root dimension parsing repair
+
+The first exact-head Scala and configured-bridge runs exposed an ambiguity in
+the inherited internal `Vec(...;...x...)` snapshot spelling: splitting every
+lowercase `x` also split canonical expression identities such as `.extent`.
+The shared bridge parser now recognizes the longest owned declaration or static
+expression identity before consuming an axis separator. Unknown or empty
+dimensions still reach the existing fail-closed validation, and the snapshot
+spelling for established literal and direct-parameter dimensions is unchanged.
+The compound public witness explicitly retains an identity containing `x` so
+this transport regression cannot silently return.

@@ -85,7 +85,8 @@ final class Param[A <: Data] private[nodal] (
     private[nodal] val constructorName: Option[String] = None,
     private[nodal] val constructorActual: Option[Expr[A]] = None,
     private[nodal] val omittedConstructorDefault: Boolean = false,
-    private[nodal] val inertConstructorActual: Boolean = false
+    private[nodal] val inertConstructorActual: Boolean = false,
+    private[nodal] val integerRange: Option[(Int, Int)] = None
 ) extends Expr[A]:
   if constructorName.isEmpty && !omittedConstructorDefault && !inertConstructorActual then
     CandidateRuntime.declareParameter(this, default)
@@ -288,6 +289,13 @@ abstract class Module:
 
   protected final def param[A <: Data](default: Expr[A]): Param[A] = new Param(default)
 
+  /** Bounded integer parameter candidate used by structural shape and generation contracts. */
+  protected final def param(
+      default: Expr[Integer],
+      range: Range.Inclusive
+  ): Param[Integer] =
+    CandidateRuntime.boundedIntegerParameter(default, range)
+
   protected final def in[A <: Data](dataType: DataType[A]): Signal[A] =
     new Signal(dataType, KernelSignalKind.Input)
 
@@ -430,7 +438,8 @@ object Rdc:
       reset: Expr[Reset],
       to: ClockDomain,
       stages: Int = 2
-  ): Expr[Reset] = CandidateRuntime.expr(reset, to, stages)
+  ): Expr[Reset] =
+    CandidateRuntime.expr(reset, to, stages)
 
 object ResetController:
   def combine(resets: Expr[Reset]*): Expr[Reset] = CandidateRuntime.expr(resets)
@@ -469,6 +478,23 @@ enum Edge:
   case Either, Rising, Falling
 
 def analog(body: => Unit): Unit = CandidateRuntime.analogBlock(body)
+
+/** Target-visible half-open structural generation. Ordinary Scala ranges remain host-only. */
+def hdlRange(
+    lower: Int | Expr[Integer],
+    upperExclusive: Int | Expr[Integer],
+    step: Int | Expr[Integer] = 1
+)(body: Expr[Integer] => Unit): Unit =
+  CandidateRuntime.hdlRange(lower, upperExclusive, step, None)(body)
+
+/** Structural generation with an explicit materialization-count envelope. */
+def hdlRange(
+    lower: Int | Expr[Integer],
+    upperExclusive: Int | Expr[Integer],
+    step: Int | Expr[Integer],
+    maximum: Int
+)(body: Expr[Integer] => Unit): Unit =
+  CandidateRuntime.hdlRange(lower, upperExclusive, step, Some(maximum))(body)
 
 def initial(body: => Unit): Unit =
   AnalogProceduralConstruction.requireContinuousContext("initial block")
@@ -660,6 +686,22 @@ extension (left: Expr[Real])
     CandidateRuntime.booleanExpr("real_le", left, right)
   infix def <+(value: Expr[Real]): Unit =
     CandidateRuntime.analogContribution(left, value)
+
+extension (left: Expr[Integer])
+  @targetName("integerAddition")
+  def +(right: Expr[Integer]): Expr[Integer] =
+    CandidateRuntime.integerExpr("analog_add", left, right)
+  @targetName("integerSubtraction")
+  def -(right: Expr[Integer]): Expr[Integer] =
+    CandidateRuntime.integerExpr("analog_sub", left, right)
+  @targetName("integerMultiplication")
+  def *(right: Expr[Integer]): Expr[Integer] =
+    CandidateRuntime.integerExpr("analog_mul", left, right)
+  @targetName("integerDivision")
+  def /(right: Expr[Integer]): Expr[Integer] =
+    CandidateRuntime.integerExpr("analog_div", left, right)
+  @targetName("integerNegation")
+  def unary_- : Expr[Integer] = CandidateRuntime.integerExpr("analog_neg", left)
 
 extension (left: Expr[UInt])
   @targetName("uintAddition")
@@ -898,20 +940,49 @@ private[nodal] object CandidateRuntime:
     ConstructorCaptureRuntime.begin(module)
 
   private def constructorParameterAttributes[A <: Data](
+      parameter: Param[A],
       default: Expr[A]
   ): Vector[(String, Any)] =
     Vector(
       "default" -> default,
       "unit" -> expressionUnit(default).getOrElse("")
-    )
+    ) ++ parameter.integerRange.toVector.flatMap: (lower, upper) =>
+      Vector(
+        "integer_range_lower" -> lower,
+        "integer_range_upper" -> upper
+      )
 
   def declareParameter[A <: Data](parameter: Param[A], default: Expr[A]): Unit =
     declare(
       parameter,
       KernelSignalKind.Parameter,
       dataType = expressionDataType(default),
-      attributes = constructorParameterAttributes(default)
+      attributes = constructorParameterAttributes(parameter, default)
     )
+
+  def boundedIntegerParameter(
+      default: Expr[Integer],
+      range: Range.Inclusive
+  ): Param[Integer] =
+    if range.isEmpty || range.step != 1 then
+      scala.util.Failure[Nothing](
+        new ConstructionException(
+          KernelDiagnostic(
+            "NODAL-PARAMETER-RANGE-043-001",
+            "bounded structural integer parameter range must be non-empty, ascending, and unit-step"
+          )
+        )
+      ).get
+    new Param(default, integerRange = Some(range.start -> range.end))
+
+  def hdlRange(
+      lower: Int | Expr[Integer],
+      upperExclusive: Int | Expr[Integer],
+      step: Int | Expr[Integer],
+      maximum: Option[Int]
+  )(body: Expr[Integer] => Unit): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("structural hdlRange")
+    ConstructionKernel.generatedRegion(lower, upperExclusive, step, maximum)(body)
 
   def constructorRealLiteral(value: Double): KernelExpr[Real] =
     new KernelExpr[Real](
@@ -1050,6 +1121,69 @@ private[nodal] object CandidateRuntime:
     )
     ConstructionKernel.expression(expression)
     expression
+
+  def integerExpr(operation: String, values: Expr[Integer]*): Expr[Integer] =
+    val expression = new KernelExpr[Integer](
+      values.toVector,
+      resultType = Some(KernelTypeDescriptor("Integer")),
+      operation = Some(operation)
+    )
+    ConstructionKernel.expression(expression)
+    expression
+
+  def shapeIndex[A <: Data](
+      value: Expr[Vec[A]],
+      indices: Vector[Dimension]
+  ): Expr[A] =
+    val element = expressionDataType(value)
+      .map(typeDescriptor)
+      .filter(_.kind == "Vec")
+      .flatMap(_.arguments.headOption.collect { case candidate: DataType[?] => candidate })
+      .getOrElse(
+        scala.util.Failure[DataType[?]](
+          new ConstructionException(
+            KernelDiagnostic("NODAL-SHAPE-043-002", "shape indexing requires a Vec value")
+          )
+        ).get
+      )
+    val expression = new KernelExpr[A](
+      value +: indices,
+      resultType = Some(typeDescriptor(element)),
+      operation = Some("shape_index")
+    )
+    ConstructionKernel.shapeIndex(expression, value, indices)
+    expression
+
+  def shapeView[A <: Data](
+      value: Expr[Vec[A]],
+      dimensions: Vector[Dimension]
+  ): Expr[Vec[A]] =
+    val descriptor = expressionDataType(value)
+      .map(typeDescriptor)
+      .filter(_.kind == "Vec")
+      .getOrElse(
+        scala.util.Failure[KernelTypeDescriptor](
+          new ConstructionException(
+            KernelDiagnostic("NODAL-SHAPE-043-003", "shape view requires a Vec value")
+          )
+        ).get
+      )
+    val element = descriptor.arguments.headOption.collect:
+      case candidate: DataType[?] => candidate
+    .getOrElse(
+      scala.util.Failure[DataType[?]](
+        new ConstructionException(
+          KernelDiagnostic("NODAL-SHAPE-043-003", "shape view requires a Vec element type")
+        )
+      ).get
+    )
+    val result = new KernelExpr[Vec[A]](
+      value +: dimensions,
+      resultType = Some(KernelTypeDescriptor("Vec", Vector(element, dimensions))),
+      operation = Some("shape_view")
+    )
+    ConstructionKernel.shapeView(result, value, dimensions)
+    result
 
   def analogExpr(operation: String, values: Any*): Expr[Real] =
     val expression = new KernelExpr[Real](

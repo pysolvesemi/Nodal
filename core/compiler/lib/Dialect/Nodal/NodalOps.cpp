@@ -18,6 +18,8 @@
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
@@ -26,9 +28,11 @@
 
 #include <initializer_list>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace mlir;
@@ -120,6 +124,149 @@ unsigned shapedRank(llvm::StringRef dimensions) {
       ++rank;
   }
   return rank;
+}
+
+Operation *findDirectModuleParameter(Operation *module, llvm::StringRef symbol) {
+  if (!module || module->getNumRegions() != 1 || !llvm::hasSingleElement(module->getRegion(0)))
+    return nullptr;
+  for (Operation &operation : module->getRegion(0).front()) {
+    if (!llvm::isa<nodal::ParameterOp>(operation))
+      continue;
+    auto name = operation.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+    if (name && name.getValue() == symbol)
+      return &operation;
+  }
+  return nullptr;
+}
+
+bool parameterHasShapeEnvelope(Operation *module, llvm::StringRef symbol) {
+  if (!module || module->getNumRegions() != 1 || !llvm::hasSingleElement(module->getRegion(0)))
+    return false;
+  for (Operation &operation : module->getRegion(0).front()) {
+    if (!llvm::isa<nodal::ParameterEnvelopeOp>(operation))
+      continue;
+    auto parameter = operation.getAttrOfType<FlatSymbolRefAttr>("parameter");
+    auto effects = operation.getAttrOfType<ArrayAttr>("effects");
+    if (!parameter || parameter.getValue() != symbol || !effects)
+      continue;
+    for (Attribute effect : effects)
+      if (auto value = llvm::dyn_cast<StringAttr>(effect); value && value.getValue() == "shape")
+        return true;
+  }
+  return false;
+}
+
+bool hasStaticShapeIndexDependencies(Value value, Operation *module,
+                                     llvm::SmallPtrSetImpl<Operation *> &active,
+                                     unsigned depth = 0) {
+  Operation *operation = value.getDefiningOp();
+  if (!operation || operation->getParentOfType<nodal::ModuleOp>() != module || depth >= 512 ||
+      !active.insert(operation).second)
+    return false;
+  const llvm::scope_exit remove([&] { active.erase(operation); });
+  if (llvm::isa<nodal::ConstLiteralOp>(operation))
+    return true;
+  if (llvm::isa<nodal::ConstParameterRefOp>(operation)) {
+    auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("parameter");
+    Operation *parameter =
+        reference ? findDirectModuleParameter(module, reference.getValue()) : nullptr;
+    return parameter && nodal::isStructuralParameter(parameter) &&
+           parameterHasShapeEnvelope(module, reference.getValue());
+  }
+  if (!llvm::isa<nodal::ConstExprOp>(operation))
+    return false;
+  return llvm::all_of(operation->getOperands(), [&](Value operand) {
+    return hasStaticShapeIndexDependencies(operand, module, active, depth + 1);
+  });
+}
+
+bool parameterHasPositiveFiniteRange(Operation *module, llvm::StringRef symbol) {
+  if (!module || module->getNumRegions() != 1 || !llvm::hasSingleElement(module->getRegion(0)))
+    return false;
+  for (Operation &operation : module->getRegion(0).front()) {
+    if (!llvm::isa<nodal::ParameterConstraintOp>(operation) ||
+        textAttr(&operation, "constraint_kind") != "range" || operation.getNumOperands() != 2)
+      continue;
+    auto parameter = operation.getAttrOfType<FlatSymbolRefAttr>("parameter");
+    if (!parameter || parameter.getValue() != symbol)
+      continue;
+    auto lower = nodal::inferParameterIntegerBounds(operation.getOperand(0));
+    auto upper = nodal::inferParameterIntegerBounds(operation.getOperand(1));
+    return succeeded(lower) && succeeded(upper) && lower->lower == lower->upper &&
+           upper->lower == upper->upper && lower->lower > 0 && lower->lower <= upper->upper;
+  }
+  return false;
+}
+
+llvm::StringRef metadataSemanticPath(Operation *operation) {
+  auto metadata =
+      operation ? operation->getAttrOfType<DictionaryAttr>("metadata") : DictionaryAttr();
+  auto path = metadata ? metadata.getAs<StringAttr>("semantic_path") : StringAttr();
+  return path ? path.getValue() : llvm::StringRef();
+}
+
+Value findDirectModuleStaticValue(Operation *module, llvm::StringRef sourcePath) {
+  if (!module || module->getNumRegions() != 1 || !llvm::hasSingleElement(module->getRegion(0)) ||
+      sourcePath.empty())
+    return {};
+  Value result;
+  for (Operation &operation : module->getRegion(0).front()) {
+    if (!llvm::isa<nodal::ConstLiteralOp, nodal::ConstParameterRefOp, nodal::ConstExprOp>(
+            operation) ||
+        metadataSemanticPath(&operation) != sourcePath || operation.getNumResults() != 1)
+      continue;
+    if (result)
+      return {};
+    result = operation.getResult(0);
+  }
+  return result;
+}
+
+FailureOr<int64_t> inferShapeDimensionMinimum(Operation *module, llvm::StringRef dimension) {
+  int64_t literal = 0;
+  if (!dimension.getAsInteger(10, literal)) {
+    if (literal <= 0)
+      return failure();
+    return literal;
+  }
+
+  if (Operation *parameter = findDirectModuleParameter(module, dimension)) {
+    auto type = parameter->getAttrOfType<TypeAttr>("type");
+    auto bounds = nodal::inferParameterIntegerBounds(parameter);
+    if (!type || !type.getValue().isInteger(64) || !nodal::isStructuralParameter(parameter) ||
+        !parameterHasShapeEnvelope(module, dimension) ||
+        !parameterHasPositiveFiniteRange(module, dimension) || failed(bounds) || bounds->lower <= 0)
+      return failure();
+    return bounds->lower;
+  }
+
+  Value value = findDirectModuleStaticValue(module, dimension);
+  if (!value || !value.getType().isInteger(64) ||
+      !llvm::isa_and_nonnull<nodal::ConstExprOp>(value.getDefiningOp()))
+    return failure();
+  llvm::SmallPtrSet<Operation *, 16> active;
+  if (!hasStaticShapeIndexDependencies(value, module, active))
+    return failure();
+  auto bounds = nodal::inferParameterIntegerBounds(value);
+  if (failed(bounds) || bounds->lower <= 0)
+    return failure();
+  return bounds->lower;
+}
+
+LogicalResult verifyShapedTypeContract(Operation *module, Operation *owner, Type type) {
+  auto shaped = llvm::dyn_cast<nodal::ShapedType>(type);
+  if (!shaped)
+    return success();
+  llvm::SmallVector<llvm::StringRef> dimensions;
+  shaped.getDimensions().split(dimensions, ',', -1, false);
+  for (llvm::StringRef dimension : dimensions) {
+    dimension = dimension.trim();
+    if (failed(inferShapeDimensionMinimum(module, dimension)))
+      return owner->emitOpError(
+          "NODAL-SHAPE-043-001: shaped dimension requires an owned positive finite static "
+          "Integer proof with structural shape dependencies");
+  }
+  return verifyShapedTypeContract(module, owner, shaped.getElementType());
 }
 
 LogicalResult verifyLoop(Operation *operation) {
@@ -1257,6 +1404,36 @@ LogicalResult nodal::ModuleOp::verify() {
     return failure();
   if (failed(requireSingleBlock(getOperation())))
     return failure();
+  // Captured region and induction identities are module-local semantic keys.
+  // Check each once; independent nested module definitions own their own keys.
+  llvm::StringSet<> generatedRegions;
+  llvm::StringSet<> generatedInductions;
+  auto ownership = getOperation()->walk<WalkOrder::PreOrder>([&](Operation *operation) {
+    if (operation != getOperation() && llvm::isa<nodal::ModuleOp>(operation))
+      return WalkResult::skip();
+    if (!llvm::isa<nodal::GenerateOp>(operation))
+      return WalkResult::advance();
+    for (auto [attribute, identities] : {std::pair{"region_id", &generatedRegions},
+                                         std::pair{"induction_path", &generatedInductions}}) {
+      auto value = operation->getAttrOfType<StringAttr>(attribute);
+      if (value && !identities->insert(value.getValue()).second) {
+        operation->emitOpError() << "NODAL-ITERATION-043-004: duplicate generated " << attribute
+                                 << " within its owning module";
+        return WalkResult::interrupt();
+      }
+    }
+    return WalkResult::advance();
+  });
+  if (ownership.wasInterrupted())
+    return failure();
+  for (Operation &operation : getOperation()->getRegion(0).front()) {
+    auto port = llvm::dyn_cast<nodal::PortOp>(&operation);
+    if (!port)
+      continue;
+    auto type = operation.getAttrOfType<TypeAttr>("type");
+    if (type && failed(verifyShapedTypeContract(getOperation(), &operation, type.getValue())))
+      return failure();
+  }
   return verifySingleTopLevelProcedurePerModule(getOperation());
 }
 
@@ -1267,6 +1444,30 @@ LogicalResult nodal::PortOp::verify() {
   if (!getOperation()->getAttrOfType<TypeAttr>("type") ||
       !getOperation()->getAttrOfType<FlatSymbolRefAttr>("domain"))
     return emitOpError("requires type and domain");
+  return success();
+}
+
+LogicalResult nodal::PortValueOp::verify() {
+  auto owner = getOperation()->getParentOfType<nodal::ModuleOp>();
+  auto reference = getOperation()->getAttrOfType<FlatSymbolRefAttr>("port");
+  if (!owner || !reference)
+    return emitOpError("NODAL-SHAPE-043-002: requires an owning module and direct port reference");
+  Operation *port = nullptr;
+  for (Operation &candidate : owner.getBody().front()) {
+    if (!llvm::isa<nodal::PortOp>(candidate))
+      continue;
+    auto name = candidate.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+    if (name && name.getValue() == reference.getValue()) {
+      port = &candidate;
+      break;
+    }
+  }
+  auto type = port ? port->getAttrOfType<TypeAttr>("type") : TypeAttr();
+  if (!port || !type)
+    return emitOpError(
+        "NODAL-SHAPE-043-002: referenced port is absent or untyped in the owning module");
+  if (getOperation()->getResult(0).getType() != type.getValue())
+    return emitOpError("NODAL-SHAPE-043-002: result type must match the referenced port type");
   return success();
 }
 
@@ -1396,12 +1597,66 @@ LogicalResult nodal::ConstantOp::verify() {
 LogicalResult nodal::ShapeIndexOp::verify() {
   auto shaped = llvm::dyn_cast<nodal::ShapedType>(getOperation()->getOperand(0).getType());
   if (!shaped)
-    return emitOpError("input must have !nodal.shaped type");
+    return emitOpError("NODAL-SHAPE-043-002: input must have !nodal.shaped type");
   const unsigned indices = getOperation()->getNumOperands() - 1;
   if (indices != shapedRank(shaped.getDimensions()))
-    return emitOpError("index rank does not match shaped rank");
+    return emitOpError("NODAL-SHAPE-043-002: index rank does not match shaped rank");
   if (getOperation()->getResult(0).getType() != shaped.getElementType())
-    return emitOpError("result must match shaped element type");
+    return emitOpError("NODAL-SHAPE-043-002: result must match shaped element type");
+
+  auto owner = getOperation()->getParentOfType<nodal::ModuleOp>();
+  if (!owner)
+    return emitOpError("NODAL-SHAPE-043-002: shaped indexing requires an owning module");
+  llvm::SmallVector<llvm::StringRef> dimensions;
+  shaped.getDimensions().split(dimensions, ',', -1, true);
+  llvm::StringMap<int64_t> symbolicMinima;
+  for (unsigned axis = 0; axis < indices; ++axis) {
+    llvm::StringRef dimension = dimensions[axis].trim();
+    int64_t minimumExtent = 0;
+    auto cached = symbolicMinima.find(dimension);
+    if (cached != symbolicMinima.end()) {
+      minimumExtent = cached->second;
+    } else {
+      auto inferred = inferShapeDimensionMinimum(owner, dimension);
+      if (failed(inferred))
+        return emitOpError("NODAL-SHAPE-043-002: dimension has no proven finite extent");
+      minimumExtent = *inferred;
+      symbolicMinima.try_emplace(dimension, minimumExtent);
+    }
+    Value indexValue = getOperation()->getOperand(axis + 1);
+    Operation *index = indexValue.getDefiningOp();
+    if (!index || index->getParentOfType<nodal::ModuleOp>() != owner)
+      return emitOpError("NODAL-SHAPE-043-002: index requires direct-module static ownership");
+
+    int64_t lower = 0;
+    int64_t upper = 0;
+    if (indexValue.getType().isIndex()) {
+      // Preserve the legacy literal form exactly; metadata and runtime values do not prove it.
+      auto literal = index->getAttrOfType<IntegerAttr>("value");
+      if (!llvm::isa<nodal::ConstantOp>(index) || index->hasAttr("unit") || !literal ||
+          !literal.getType().isIndex() || !literal.getValue().isSignedIntN(64))
+        return emitOpError("NODAL-SHAPE-043-002: index requires a proven static index literal");
+      lower = upper = literal.getValue().getSExtValue();
+    } else if (indexValue.getType().isInteger(64)) {
+      llvm::SmallPtrSet<Operation *, 16> active;
+      if (!hasStaticShapeIndexDependencies(indexValue, owner, active))
+        return emitOpError(
+            "NODAL-SHAPE-043-002: Integer index requires structural shape dependencies");
+      auto bounds = nodal::inferParameterIntegerBounds(indexValue);
+      if (failed(bounds))
+        return emitOpError(
+            "NODAL-SHAPE-043-002: Integer index has no proven static expression bounds");
+      lower = bounds->lower;
+      upper = bounds->upper;
+    } else {
+      return emitOpError(
+          "NODAL-SHAPE-043-002: index must be an index literal or static i64 expression");
+    }
+    if (minimumExtent <= 0 || lower < 0 || upper >= minimumExtent)
+      return emitOpError(
+                 "NODAL-SHAPE-043-002: index is not in bounds for every legal shape at axis ")
+             << axis;
+  }
   return success();
 }
 
@@ -1417,10 +1672,151 @@ LogicalResult nodal::ShapeViewOp::verify() {
       failed(requireText(getOperation(), "materialization", "materialization")) ||
       failed(requireText(getOperation(), "observability", "observability")))
     return failure();
+
+  // Preserve the scalar-input legacy carrier, but never allow a materialization
+  // tag to opt a shaped-to-shaped transformation out of reshape verification.
+  auto materialization = textAttr(getOperation(), "materialization");
+  if (materialization != "view" && materialization != "explicit_view")
+    return emitOpError("NODAL-SHAPE-043-003: unsupported shape-view materialization");
+  if (materialization == "explicit_view") {
+    if (llvm::isa<nodal::ShapedType>(getOperation()->getOperand(0).getType()))
+      return emitOpError(
+          "NODAL-SHAPE-043-003: shaped input requires verified view materialization");
+    return success();
+  }
+
+  auto input = llvm::dyn_cast<nodal::ShapedType>(getOperation()->getOperand(0).getType());
+  auto result = llvm::dyn_cast<nodal::ShapedType>(getOperation()->getResult(0).getType());
+  if (!input || !result || input.getElementType() != result.getElementType())
+    return emitOpError(
+        "NODAL-SHAPE-043-003: fixed shape view requires shaped input/result with equal element "
+        "types");
+  if (textAttr(getOperation(), "dimensions") != result.getDimensions())
+    return emitOpError("NODAL-SHAPE-043-003: dimensions must exactly match the result shaped type");
+  if (textAttr(getOperation(), "observability") != "source_mapped")
+    return emitOpError(
+        "NODAL-SHAPE-043-003: fixed shape view requires source-mapped observability");
+  auto metadata = getOperation()->getAttrOfType<DictionaryAttr>("metadata");
+  auto storage = metadata ? metadata.getAs<StringAttr>("storage") : StringAttr();
+  if (!storage || storage.getValue() != "structural")
+    return emitOpError("NODAL-SHAPE-043-003: fixed shape view requires structural storage intent");
+
+  auto owner = getOperation()->getParentOfType<nodal::ModuleOp>();
+  if (!owner)
+    return emitOpError("NODAL-SHAPE-043-003: shape view requires an owning module");
+  llvm::StringMap<uint64_t> symbolicMaxima;
+  auto shapeSignature = [&](llvm::StringRef dimensions)
+      -> std::optional<std::pair<uint64_t, std::multiset<std::string>>> {
+    llvm::SmallVector<llvm::StringRef> tokens;
+    dimensions.split(tokens, ',', -1, true);
+    if (tokens.empty())
+      return std::nullopt;
+    uint64_t literalProduct = 1;
+    uint64_t worstCase = 1;
+    std::multiset<std::string> symbols;
+    for (llvm::StringRef token : tokens) {
+      if (token != token.trim())
+        return std::nullopt;
+      token = token.trim();
+      if (token.empty())
+        return std::nullopt;
+      int64_t extent = 0;
+      if (!token.getAsInteger(10, extent)) {
+        if (extent <= 0 ||
+            literalProduct > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
+                                 static_cast<uint64_t>(extent))
+          return std::nullopt;
+        literalProduct *= static_cast<uint64_t>(extent);
+      } else {
+        if (token.contains(' ') || token.contains('\t') || token.contains('\n') ||
+            token.contains('\r'))
+          return std::nullopt;
+        auto cached = symbolicMaxima.find(token);
+        if (cached != symbolicMaxima.end()) {
+          extent = static_cast<int64_t>(cached->second);
+        } else {
+          Operation *parameter = findDirectModuleParameter(owner, token);
+          if (parameter) {
+            auto type = parameter->getAttrOfType<TypeAttr>("type");
+            auto bounds = nodal::inferParameterIntegerBounds(parameter);
+            if (!type || !type.getValue().isInteger(64) ||
+                !nodal::isStructuralParameter(parameter) ||
+                !parameterHasShapeEnvelope(owner, token) ||
+                !parameterHasPositiveFiniteRange(owner, token) || failed(bounds) ||
+                bounds->lower <= 0)
+              return std::nullopt;
+            extent = bounds->upper;
+          } else {
+            Value value = findDirectModuleStaticValue(owner, token);
+            if (!value || !value.getType().isInteger(64) ||
+                !llvm::isa_and_nonnull<nodal::ConstExprOp>(value.getDefiningOp()))
+              return std::nullopt;
+            llvm::SmallPtrSet<Operation *, 16> active;
+            if (!hasStaticShapeIndexDependencies(value, owner, active))
+              return std::nullopt;
+            auto bounds = nodal::inferParameterIntegerBounds(value);
+            if (failed(bounds) || bounds->lower <= 0)
+              return std::nullopt;
+            extent = bounds->upper;
+          }
+          symbolicMaxima.try_emplace(token, static_cast<uint64_t>(extent));
+        }
+        symbols.insert(token.str());
+      }
+      if (extent <= 0 || worstCase > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
+                                         static_cast<uint64_t>(extent))
+        return std::nullopt;
+      worstCase *= static_cast<uint64_t>(extent);
+    }
+    return std::make_pair(literalProduct, std::move(symbols));
+  };
+  auto inputSignature = shapeSignature(input.getDimensions());
+  auto resultSignature = shapeSignature(result.getDimensions());
+  if (!inputSignature || !resultSignature || *inputSignature != *resultSignature)
+    return emitOpError(
+        "NODAL-SHAPE-043-003: shape view requires equal literal products and bounded structural "
+        "static-expression root multisets within signed 64-bit counts");
   return success();
 }
 
-LogicalResult nodal::GenerateOp::verify() { return verifyLoop(getOperation()); }
+LogicalResult nodal::GenerateOp::verify() {
+  if (failed(verifyLoop(getOperation())))
+    return failure();
+
+  if (failed(verifyGeneratedBoundForm(getOperation())))
+    return failure();
+
+  auto regionId = getOperation()->getAttrOfType<StringAttr>("region_id");
+  auto inductionPath = getOperation()->getAttrOfType<StringAttr>("induction_path");
+  if (static_cast<bool>(regionId) != static_cast<bool>(inductionPath))
+    return emitOpError(
+        "NODAL-ITERATION-043-004: generated region identity and induction path must be provided "
+        "together");
+  if ((regionId &&
+       (regionId.getValue().trim().empty() || regionId.getValue().trim() != regionId.getValue())) ||
+      (inductionPath && (inductionPath.getValue().trim().empty() ||
+                         inductionPath.getValue().trim() != inductionPath.getValue())))
+    return emitOpError(
+        "NODAL-ITERATION-043-004: generated region identity and induction path must be canonical");
+
+  Operation *parent = getOperation()->getParentOp();
+  auto parentGenerate = llvm::dyn_cast_or_null<nodal::GenerateOp>(parent);
+  auto parentIdentity =
+      parentGenerate ? parentGenerate->getAttrOfType<StringAttr>("region_id") : StringAttr();
+  if (regionId) {
+    if (!llvm::isa_and_nonnull<nodal::ModuleOp>(parent) && !parentIdentity)
+      return emitOpError(
+          "NODAL-ITERATION-043-004: captured generation requires an immediate module or "
+          "captured generate parent");
+    if (parentIdentity && !regionId.getValue().starts_with((parentIdentity.getValue() + ".").str()))
+      return emitOpError(
+          "NODAL-ITERATION-043-004: nested generated identity escapes its immediate parent");
+  } else if (parentIdentity) {
+    return emitOpError(
+        "NODAL-ITERATION-043-004: nested captured generation cannot omit ownership identities");
+  }
+  return success();
+}
 
 LogicalResult nodal::HardwareLoopOp::verify() {
   if (failed(verifyLoop(getOperation())))
@@ -1465,7 +1861,34 @@ LogicalResult nodal::TerminalOp::verify() {
   return requireText(getOperation(), "name", "terminal name");
 }
 
-LogicalResult nodal::NodeOp::verify() { return requireText(getOperation(), "name", "node name"); }
+LogicalResult nodal::NodeOp::verify() {
+  if (failed(requireText(getOperation(), "name", "node name")))
+    return failure();
+
+  auto generatedOwner = getOperation()->getAttrOfType<StringAttr>("generated_owner");
+  auto generatedInduction = getOperation()->getAttrOfType<StringAttr>("generated_induction");
+  auto generated = getOperation()->getParentOfType<nodal::GenerateOp>();
+  StringAttr regionId;
+  StringAttr inductionPath;
+  if (generated) {
+    regionId = generated->getAttrOfType<StringAttr>("region_id");
+    inductionPath = generated->getAttrOfType<StringAttr>("induction_path");
+  }
+
+  const bool hasGeneratedContract =
+      generatedOwner || generatedInduction || regionId || inductionPath;
+  if (!hasGeneratedContract)
+    return success();
+  if (!generated || !generatedOwner || !generatedInduction || !regionId || !inductionPath)
+    return emitOpError(
+        "NODAL-ITERATION-043-004: generated node requires complete enclosing ownership metadata");
+  if (generatedOwner.getValue() != regionId.getValue() ||
+      generatedInduction.getValue() != inductionPath.getValue())
+    return emitOpError(
+        "NODAL-ITERATION-043-004: generated node ownership or induction metadata does not match "
+        "its enclosing generate region");
+  return success();
+}
 
 LogicalResult nodal::BranchOp::verify() {
   auto positive = llvm::cast<nodal::TerminalType>(getOperation()->getOperand(0).getType());

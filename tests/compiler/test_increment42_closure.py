@@ -142,7 +142,6 @@ class Increment42ClosureTests(unittest.TestCase):
             (CHECK.ROADMAP,
              "- [x] **Increment 42 — Analog hierarchy and parameterized instances**",
              "- [ ] **Increment 42 — Analog hierarchy and parameterized instances**"),
-            (CHECK.ROADMAP, "**Revision:** 1.57", "**Revision:** 1.55"),
             (CHECK.IMPLEMENTATION, "**Status:** Validated", "**Status:** Candidate"),
             (CHECK.AMENDMENT, "Increment 42 compiler profile is accepted",
              "Increment 42 compiler profile is pending"),
@@ -157,6 +156,22 @@ class Increment42ClosureTests(unittest.TestCase):
                 self.assertIn(old, target.read_text())
                 target.write_text(target.read_text().replace(old, new, 1))
                 self.rejected(root)
+
+        # Later roadmap amendments must not turn this mutation into a no-op.
+        # Preserve the production minimum; mutate the actual revision header.
+        root = self.fixture()
+        target = root / CHECK.ROADMAP
+        original = target.read_text()
+        pattern = r"^\*\*Revision:\*\* (\d+)\.(\d+)$"
+        revisions = re.findall(pattern, original, re.M)
+        self.assertEqual(len(revisions), 1)
+        major, minor = map(int, revisions[0])
+        target.write_text(re.sub(pattern, f"**Revision:** {major}.{minor + 1}",
+                                 original, count=1, flags=re.M))
+        CHECK.check_repository(root)
+        target.write_text(re.sub(pattern, "**Revision:** 1.55", original,
+                                 count=1, flags=re.M))
+        self.rejected(root)
 
     def test_workflow_cannot_drop_target_production_or_retention(self):
         for token in ("Increment42MlirCheck", "nodal-gate-default",

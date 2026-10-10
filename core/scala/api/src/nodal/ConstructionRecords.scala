@@ -83,6 +83,33 @@ private[nodal] final case class KernelParameterExpressionSnapshot(
     unit: Option[String]
 )
 
+private[nodal] final case class KernelGeneratedRegionSnapshot(
+    path: String,
+    owner: String,
+    parent: Option[String],
+    induction: String,
+    lower: String,
+    upperExclusive: String,
+    step: String,
+    maximum: Option[Int],
+    maximumTripCount: Int,
+    declarations: Vector[String]
+)
+
+private[nodal] final case class KernelShapeIndexSnapshot(
+    path: String,
+    owner: String,
+    input: String,
+    indices: Vector[String]
+)
+
+private[nodal] final case class KernelShapeViewSnapshot(
+    path: String,
+    owner: String,
+    input: String,
+    dimensions: Vector[String]
+)
+
 private[nodal] final case class KernelModuleSnapshot(
     path: String,
     className: String,
@@ -212,7 +239,10 @@ private[nodal] final case class ConstructionSnapshot(
     analogSemantics: AnalogEquationRuntime.Snapshot =
       AnalogEquationRuntime.Snapshot(Vector.empty, Vector.empty),
     analogProcedural: Vector[AnalogProceduralRuntime.Snapshot] = Vector.empty,
-    waivers: Vector[KernelWaiverSnapshot] = Vector.empty
+    waivers: Vector[KernelWaiverSnapshot] = Vector.empty,
+    generatedRegions: Vector[KernelGeneratedRegionSnapshot] = Vector.empty,
+    shapeIndices: Vector[KernelShapeIndexSnapshot] = Vector.empty,
+    shapeViews: Vector[KernelShapeViewSnapshot] = Vector.empty
 )
 
 private final case class DomainRef(module: Long, index: Int)
@@ -236,6 +266,31 @@ private final case class DeclarationRecord(
     attributes: Vector[(String, Any)]
 )
 
+private final class GeneratedRegionRecord(
+    val owner: Long,
+    val ordinal: Int,
+    val parentOrdinal: Option[Int],
+    val induction: ExpressionRef,
+    val lower: Any,
+    val upperExclusive: Any,
+    val step: Any,
+    val maximum: Option[Int],
+    val maximumTripCount: Int
+):
+  val declarations: mutable.ArrayBuffer[DeclarationRef] = mutable.ArrayBuffer.empty
+
+private final case class ShapeIndexRecord(
+    reference: ExpressionRef,
+    input: DeclarationRef,
+    indices: Vector[Int | Expr[Integer]]
+)
+
+private final case class ShapeViewRecord(
+    reference: ExpressionRef,
+    input: DeclarationRef,
+    dimensions: Vector[Int | Expr[Integer]]
+)
+
 private final class InstanceRecord(
     val ordinal: Int,
     val child: Long,
@@ -254,6 +309,7 @@ private final class ModuleRecord(
   val domains: mutable.ArrayBuffer[DomainRecord] = mutable.ArrayBuffer.empty
   val declarations: mutable.ArrayBuffer[DeclarationRecord] = mutable.ArrayBuffer.empty
   val instances: mutable.ArrayBuffer[InstanceRecord] = mutable.ArrayBuffer.empty
+  val generatedRegions: mutable.ArrayBuffer[GeneratedRegionRecord] = mutable.ArrayBuffer.empty
   var expressionCount: Int = 0
   var attached: Boolean = parentAtConstruction.isEmpty
 

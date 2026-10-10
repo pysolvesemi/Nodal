@@ -221,80 +221,48 @@ private final class ConstructionSession(val options: EmitOptions):
     if element.isEmpty || dimensions.isEmpty then
       fail("NODAL-SHAPE-043-001", "Vec requires an element type and at least one dimension")
 
-    dimensions.foreach:
-      case value: Int if value > 0 => ()
-      case _: Int =>
-        fail("NODAL-SHAPE-043-001", "Vec dimensions must be positive")
-      case parameter: Param[?] =>
-        val reference = Option(declarationIds.get(parameter)).getOrElse(
-          fail("NODAL-SHAPE-043-001", "symbolic Vec dimension has no parameter identity")
-        )
-        if reference.module != owner then
+    val analysis = new StructuralBoundAnalysis(owner, "NODAL-SHAPE-043-001", "Vec dimension")
+    dimensions.foreach: dimension =>
+      val bound = dimension match
+        case value: Int => analysis(value)
+        case value: Param[?] => analysis(value.asInstanceOf[Expr[Integer]])
+        case value: KernelExpr[?] => analysis(value.asInstanceOf[Expr[Integer]])
+        case _ =>
           fail(
             "NODAL-SHAPE-043-001",
-            "symbolic Vec dimension must be owned by its declaring Module",
-            Some(declarationPath(reference))
+            "Vec dimensions require a positive static Integer expression"
           )
-        val declaration = records(owner).declarations(reference.index)
-        val range =
-          for
-            lower <- structuralRangeAttribute(declaration, "integer_range_lower")
-            upper <- structuralRangeAttribute(declaration, "integer_range_upper")
-          yield lower -> upper
-        if declaration.kind != KernelSignalKind.Parameter ||
-          !declaration.dataType.map(renderType(_, owner)).contains("Integer") ||
-          range.forall((lower, upper) => lower <= 0 || lower > upper)
-        then
-          fail(
-            "NODAL-SHAPE-043-001",
-            "symbolic Vec dimension requires a positive finite Integer parameter range",
-            Some(declarationPath(reference))
-          )
-        markStructuralParameterEffect(reference, "shape")
-        markStructuralParameterEffect(reference, "rank")
-      case expression: KernelExpr[?]
-          if expression.literal.exists(value =>
-            value.kind == "integer" && value.value.toIntOption.exists(_ > 0)
-          ) => ()
-      case _ =>
+      if bound.bounds.lower <= 0L then
         fail(
           "NODAL-SHAPE-043-001",
-          "Vec dimensions currently require a positive literal or directly bounded Integer parameter"
+          "Vec dimension must be positive for every legal parameter setting"
         )
+      bound.parameters.foreach: reference =>
+        markStructuralParameterEffect(reference, "shape")
+        markStructuralParameterEffect(reference, "rank")
 
     validateShapeType(element.get, owner)
 
-  private def minimumShapeExtent(value: Any, owner: Long): Int = value match
-    case literal: Int if literal > 0 => literal
-    case parameter: Param[?] =>
-      val reference = Option(declarationIds.get(parameter)).getOrElse(
-        fail("NODAL-SHAPE-043-002", "symbolic shape extent has no parameter identity")
-      )
-      if reference.module != owner then
-        fail(
-          "NODAL-SHAPE-043-002",
-          "symbolic shape extent escapes its owning Module",
-          Some(declarationPath(reference))
-        )
-      val declaration = records(owner).declarations(reference.index)
-      structuralRangeAttribute(declaration, "integer_range_lower")
-        .filter(_ > 0)
-        .getOrElse(
-          fail(
-            "NODAL-SHAPE-043-002",
-            "symbolic shape extent has no positive finite minimum",
-            Some(declarationPath(reference))
-          )
-        )
-    case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
-      expression.literal
-        .flatMap(_.value.toIntOption)
-        .filter(_ > 0)
-        .getOrElse(
-          fail("NODAL-SHAPE-043-002", "literal shape extent must be positive")
-        )
-    case _ =>
-      fail("NODAL-SHAPE-043-002", "shape extent has no proven finite minimum")
+  private def minimumShapeExtent(
+      value: Any,
+      analysis: StructuralBoundAnalysis
+  ): Long = value match
+    case dimension: Int =>
+      val lower = analysis(dimension).bounds.lower
+      if lower <= 0L then
+        fail("NODAL-SHAPE-043-002", "shape extent has no positive finite minimum")
+      lower
+    case dimension: Param[?] =>
+      val lower = analysis(dimension.asInstanceOf[Expr[Integer]]).bounds.lower
+      if lower <= 0L then
+        fail("NODAL-SHAPE-043-002", "shape extent has no positive finite minimum")
+      lower
+    case dimension: KernelExpr[?] =>
+      val lower = analysis(dimension.asInstanceOf[Expr[Integer]]).bounds.lower
+      if lower <= 0L then
+        fail("NODAL-SHAPE-043-002", "shape extent has no positive finite minimum")
+      lower
+    case _ => fail("NODAL-SHAPE-043-002", "shape extent has no proven finite minimum")
 
   def registerShapeIndex[A <: Data](
       expression: KernelExpr[A],
@@ -343,11 +311,16 @@ private final class ConstructionSession(val options: EmitOptions):
         "NODAL-SHAPE-043-002",
         "shape index"
       )
+      val extentAnalysis = new StructuralBoundAnalysis(
+        module.handle,
+        "NODAL-SHAPE-043-002",
+        "shape extent"
+      )
       val positions = indices.map(value => value -> analysis(value))
       positions.zip(dimensions).zipWithIndex.foreach:
         case (((_, position), dimension), axis) =>
-          val minimum = minimumShapeExtent(dimension, module.handle)
-          if position.bounds.lower < 0L || position.bounds.upper >= minimum.toLong then
+          val minimum = minimumShapeExtent(dimension, extentAnalysis)
+          if position.bounds.lower < 0L || position.bounds.upper >= minimum then
             fail(
               "NODAL-SHAPE-043-002",
               s"index is not in bounds for every legal shape at axis $axis",
@@ -1924,6 +1897,17 @@ private final class ConstructionSession(val options: EmitOptions):
         case None => fail("NODAL-SHAPE-043-001", "symbolic Vec dimension has no identity")
     case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
       expression.literal.map(_.value).getOrElse("")
+    case expression: KernelExpr[?] =>
+      Option(expressionIds.get(expression)) match
+        case Some(reference) if reference.module == owner => expressionPath(reference)
+        case Some(reference) =>
+          fail(
+            "NODAL-SHAPE-043-001",
+            "compound Vec dimension escapes its owning Module",
+            Some(expressionPath(reference))
+          )
+        case None =>
+          fail("NODAL-SHAPE-043-001", "compound Vec dimension has no identity")
     case _ =>
       fail("NODAL-SHAPE-043-001", "Vec dimension has no canonical static spelling")
 
@@ -2559,7 +2543,21 @@ private final class ConstructionSession(val options: EmitOptions):
       )
     )
     val shapeIndexRoots = shapeIndices.iterator.flatMap(_.indices.iterator)
-    (roots ++ generatedRoots ++ shapeIndexRoots).foreach:
+    def shapeDimensionRoots(dataType: DataType[?]): Vector[Any] =
+      val descriptor = CandidateRuntime.typeDescriptor(dataType)
+      if descriptor.kind != "Vec" then Vector.empty
+      else
+        val nested = descriptor.arguments.headOption.collect:
+          case element: DataType[?] => shapeDimensionRoots(element)
+        val dimensions = descriptor.arguments.lift(1).toVector.flatMap:
+          case values: Seq[?] => values.toVector
+          case _ => Vector.empty
+        dimensions ++ nested.getOrElse(Vector.empty)
+
+    val shapeDimensionExpressionRoots = records.valuesIterator.flatMap(
+      _.declarations.iterator.flatMap(_.dataType.iterator.flatMap(shapeDimensionRoots))
+    )
+    (roots ++ generatedRoots ++ shapeIndexRoots ++ shapeDimensionExpressionRoots).foreach:
       case expression: KernelExpr[?] if expression.literal.isEmpty => visit(expression)
       case _ => ()
 

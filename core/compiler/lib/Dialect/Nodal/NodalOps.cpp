@@ -198,6 +198,61 @@ bool parameterHasPositiveFiniteRange(Operation *module, llvm::StringRef symbol) 
   return false;
 }
 
+llvm::StringRef metadataSourcePath(Operation *operation) {
+  auto metadata =
+      operation ? operation->getAttrOfType<DictionaryAttr>("metadata") : DictionaryAttr();
+  auto source = metadata ? metadata.getAs<StringAttr>("source_path") : StringAttr();
+  return source ? source.getValue() : llvm::StringRef();
+}
+
+Value findDirectModuleStaticValue(Operation *module, llvm::StringRef sourcePath) {
+  if (!module || module->getNumRegions() != 1 || !llvm::hasSingleElement(module->getRegion(0)) ||
+      sourcePath.empty())
+    return {};
+  Value result;
+  for (Operation &operation : module->getRegion(0).front()) {
+    if (!llvm::isa<nodal::ConstLiteralOp, nodal::ConstParameterRefOp, nodal::ConstExprOp>(
+            operation) ||
+        metadataSourcePath(&operation) != sourcePath || operation.getNumResults() != 1)
+      continue;
+    if (result)
+      return {};
+    result = operation.getResult(0);
+  }
+  return result;
+}
+
+FailureOr<int64_t> inferShapeDimensionMinimum(Operation *module, llvm::StringRef dimension) {
+  int64_t literal = 0;
+  if (!dimension.getAsInteger(10, literal)) {
+    if (literal <= 0)
+      return failure();
+    return literal;
+  }
+
+  if (Operation *parameter = findDirectModuleParameter(module, dimension)) {
+    auto type = parameter->getAttrOfType<TypeAttr>("type");
+    auto bounds = nodal::inferParameterIntegerBounds(parameter);
+    if (!type || !type.getValue().isInteger(64) || !nodal::isStructuralParameter(parameter) ||
+        !parameterHasShapeEnvelope(module, dimension) ||
+        !parameterHasPositiveFiniteRange(module, dimension) || failed(bounds) || bounds->lower <= 0)
+      return failure();
+    return bounds->lower;
+  }
+
+  Value value = findDirectModuleStaticValue(module, dimension);
+  if (!value || !value.getType().isInteger(64) ||
+      !llvm::isa_and_nonnull<nodal::ConstExprOp>(value.getDefiningOp()))
+    return failure();
+  llvm::SmallPtrSet<Operation *, 16> active;
+  if (!hasStaticShapeIndexDependencies(value, module, active))
+    return failure();
+  auto bounds = nodal::inferParameterIntegerBounds(value);
+  if (failed(bounds) || bounds->lower <= 0)
+    return failure();
+  return bounds->lower;
+}
+
 LogicalResult verifyShapedTypeContract(Operation *module, Operation *owner, Type type) {
   auto shaped = llvm::dyn_cast<nodal::ShapedType>(type);
   if (!shaped)
@@ -206,21 +261,10 @@ LogicalResult verifyShapedTypeContract(Operation *module, Operation *owner, Type
   shaped.getDimensions().split(dimensions, ',', -1, false);
   for (llvm::StringRef dimension : dimensions) {
     dimension = dimension.trim();
-    int64_t literal = 0;
-    if (!dimension.getAsInteger(10, literal)) {
-      if (literal <= 0)
-        return owner->emitOpError("NODAL-SHAPE-043-001: shaped dimensions must be positive");
-      continue;
-    }
-    Operation *parameter = findDirectModuleParameter(module, dimension);
-    auto typeAttribute = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
-    if (!parameter || !typeAttribute || !typeAttribute.getValue().isInteger(64) ||
-        textAttr(parameter, "classification") != "structural" ||
-        !parameterHasShapeEnvelope(module, dimension) ||
-        !parameterHasPositiveFiniteRange(module, dimension))
+    if (failed(inferShapeDimensionMinimum(module, dimension)))
       return owner->emitOpError(
-          "NODAL-SHAPE-043-001: symbolic shaped dimension requires an owned positive finite "
-          "structural Integer parameter and shape envelope");
+          "NODAL-SHAPE-043-001: shaped dimension requires an owned positive finite static "
+          "Integer proof with structural shape dependencies");
   }
   return verifyShapedTypeContract(module, owner, shaped.getElementType());
 }
@@ -1567,20 +1611,17 @@ LogicalResult nodal::ShapeIndexOp::verify() {
   shaped.getDimensions().split(dimensions, ',', -1, true);
   llvm::StringMap<int64_t> symbolicMinima;
   for (unsigned axis = 0; axis < indices; ++axis) {
-    int64_t minimumExtent = 0;
     llvm::StringRef dimension = dimensions[axis].trim();
-    if (dimension.getAsInteger(10, minimumExtent)) {
-      auto cached = symbolicMinima.find(dimension);
-      if (cached != symbolicMinima.end()) {
-        minimumExtent = cached->second;
-      } else {
-        auto bounds =
-            nodal::inferParameterIntegerBounds(findDirectModuleParameter(owner, dimension));
-        if (failed(bounds))
-          return emitOpError("NODAL-SHAPE-043-002: dimension has no proven finite extent");
-        minimumExtent = bounds->lower;
-        symbolicMinima.try_emplace(dimension, minimumExtent);
-      }
+    int64_t minimumExtent = 0;
+    auto cached = symbolicMinima.find(dimension);
+    if (cached != symbolicMinima.end()) {
+      minimumExtent = cached->second;
+    } else {
+      auto inferred = inferShapeDimensionMinimum(owner, dimension);
+      if (failed(inferred))
+        return emitOpError("NODAL-SHAPE-043-002: dimension has no proven finite extent");
+      minimumExtent = *inferred;
+      symbolicMinima.try_emplace(dimension, minimumExtent);
     }
     Value indexValue = getOperation()->getOperand(axis + 1);
     Operation *index = indexValue.getDefiningOp();

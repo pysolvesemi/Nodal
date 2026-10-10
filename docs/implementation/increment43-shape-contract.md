@@ -1,29 +1,59 @@
-# Increment 43 fixed and direct-symbolic shape contract
+# Increment 43 static shape and index contract
 
 **Status:** bounded implementation checkpoint; no F-043 child is complete.
 
 This checkpoint turns `Vec` declaration dimensions from inert spelling into a
-checked construction, bridge and native contract for fixed positive dimensions
-and directly referenced bounded `Integer` parameters. A symbolic dimension is
-owned by the declaring module, has a finite range whose lower endpoint is
-strictly positive, and marks its canonical parameter with `shape` and `rank`
-structural effects. The bridge retains the parameter name in
-`!nodal.shaped<...>` and rejects forged missing, ordinary, unbounded or
-zero-capable dimensions. Native module verification independently resolves the
-symbol, its structural classification, shape envelope and positive finite range.
+checked construction, bridge and native contract for fixed positive dimensions,
+directly referenced bounded `Integer` parameters, and the bounded compound DAG
+extension described below. A symbolic dimension is owned by the declaring
+module, has a finite range whose lower endpoint is strictly positive, and marks
+every canonical parameter dependency with `shape` and `rank` structural effects.
 
 Zero-sized shapes remain illegal even though an empty `hdlRange` remains legal.
-`Vec` remains structural data rather than implicit memory. This checkpoint does
-not accept compound dimension DAGs, implement index/slice/view transport, allow
-generated lexical storage, or lower arrays/generation to Verilog-A. Those
-capabilities remain open and must not be inferred from shaped port IR parsing.
+`Vec` remains structural data rather than implicit memory. General slices/views,
+generated lexical storage, and Verilog-A array/generation lowering remain open
+and must not be inferred from shaped port IR parsing.
 
-Public tests cover deterministic fixed and symbolic snapshots, bridge output,
-structural effect capture, configured native parsing when `NODAL_NODALC` is
-available, and transactional rejection of zero, unbounded, zero-capable and
-compound dimensions. The native matrix separately covers fixed and symbolic
-positives plus forged missing parameters, ordinary classification, missing
-shape envelopes and absent/zero-capable ranges.
+Public tests cover deterministic fixed, direct-symbolic and compound snapshots,
+bridge output, structural effect capture, configured native parsing when
+`NODAL_NODALC` is available, and transactional rejection of zero, unbounded,
+zero-capable and nonpositive compound dimensions.
+
+## Compound static dimension DAG checkpoint
+
+`Vec` declaration dimensions and their static indexing proof may now use a
+canonical captured `Integer` expression composed of `add`, `sub`, `mul`, `div`
+and `neg`. Construction reuses `StructuralBoundAnalysis` and the shared
+`IterationDomain` arithmetic. It requires the expression lower bound to remain
+strictly positive for every legal parameter setting, rejects overflow and
+zero-capable division, retains same-identity subtraction correlation, and marks
+all dependencies with the existing `shape` and `rank` effects. The serialized
+dimension token is the expression's canonical semantic path, not an arithmetic
+string or an evaluated default.
+
+The bridge independently resolves that path in the existing parameter-expression
+inventory, recomputes its interval, and emits the existing
+`nodal.const_parameter_ref`, `nodal.const_literal` and `nodal.const_expr` DAG.
+The shaped type retains the canonical expression path. Native verification finds
+the directly owned static value by its source-path metadata, requires i64 type
+and structural shape dependencies, and obtains the minimum through
+`inferParameterIntegerBounds`. `nodal.shape_index` uses the same independently
+verified minimum. No parallel registry, textual arithmetic parser, default
+specialization or eager array expansion is introduced.
+
+The declaration matrix has fourteen cases: four positives run twice and ten
+exact-code rejections, including a 64-axis repeated compound path, missing DAG,
+nonpositive result, ordinary dependency, wrong-typed carrier and a forged direct
+parameter reference relabeled as a compound root. Three Python
+mutation controls retain the dimension path, operator, dependency, envelope and
+exact diagnostic behavior. Public Scala checks cover deterministic capture,
+bridge SSA transport, configured native declaration and indexing execution, and
+nonpositive construction rejection.
+
+This extension deliberately does not admit compound factors to the current
+reshape/view signature. General views and slices, target lowering, generated
+storage and source/index maps for emitted Verilog-A remain later F43 work. No
+parent or descendant F43 checkbox is complete.
 
 ## Native static indexing checkpoint
 
@@ -119,9 +149,9 @@ configured native execution, construction rejection of an unsafe symbolic
 endpoint, and bridge mutations for missing expression identity, changed
 arithmetic and ordinary parameter classification. That checkpoint remains
 indexing-only; the fixed view profile below is separate. Compound dimension
-DAGs, general slices/views, l-value indexing, generated storage and target
-arrays/generation are still open, as are all parent and child F43 acceptance
-boxes.
+dimension DAGs are now shared with declaration extents as described above.
+General slices/views, l-value indexing, generated storage and target
+arrays/generation are still open, as are all parent and child F43 acceptance boxes.
 
 ## Fixed structural reshape view checkpoint
 
@@ -153,10 +183,9 @@ execution. The full native suite contains 145 tests at this checkpoint.
 This is a structural view, not storage allocation, flattening, a memory, an
 l-value slice or target lowering. At the fixed-only checkpoint, symbolic reshape
 retained the exposed inert compatibility path; the bounded symbolic extension below replaces that path.
-Internal shaped wires retain their prior inert path. Slice selection,
-compound dimensions, generated lexical storage and legal Verilog-A
-array/generation lowering remain open. No F43 parent or descendant checkbox is
-complete.
+Internal shaped wires retain their prior inert path. Slice selection, compound
+reshape factors, generated lexical storage and legal Verilog-A array/generation
+lowering remain open. No F43 parent or descendant checkbox is complete.
 
 ## Bounded symbolic reshape and proof repair
 
@@ -193,9 +222,9 @@ Public tests retain fixed reshape, add repeated symbolic factors and literal
 regrouping, reject changed multiplicity, coincident defaults and overflow, mutate
 bridge proof metadata, and execute fixed and symbolic documents with a configured
 native compiler. These are Scala-to-IR witnesses; they do not produce target HDL.
-Compound dimension DAGs, general slices/views, generated storage and legal
-Verilog-A arrays/generation remain required unfinished work. No F43 checkbox is
-completed by this bounded repair.
+Compound dimension DAGs remain excluded from reshape, while general slices/views,
+generated storage and legal Verilog-A arrays/generation remain required unfinished
+work. No F43 checkbox is completed by this bounded repair.
 
 ### Materialization downgrade rejection
 

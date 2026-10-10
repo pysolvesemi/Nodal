@@ -37,9 +37,14 @@ final class Increment43PossiblyEmptyShape extends Module:
   val lanes: Param[Integer] = param(2.integer, range = 0 to 4)
   val samples: Signal[Vec[Real]] = wire(Vec(Real, lanes))
 
-final class Increment43CompoundShape extends Module:
+final class Increment43CompoundShape extends Module, Increment43ShapeClock:
   val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
-  val samples: Signal[Vec[Real]] = wire(Vec(Real, lanes + 1.integer))
+  val samples: Signal[Vec[Real]] = in(Vec(Real, lanes + 1.integer))
+  val selected: Expr[Real] = samples.at(1)
+
+final class Increment43NonpositiveCompoundShape extends Module:
+  val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
+  val samples: Signal[Vec[Real]] = wire(Vec(Real, lanes - 1.integer))
 
 final class Increment43FixedShapeIndex extends Module, Increment43ShapeClock:
   val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
@@ -143,10 +148,16 @@ object Increment43ShapeContractTests extends TestSuite:
     test("fixed and direct symbolic shapes retain deterministic typed declarations"):
       val fixed = ConstructionKernel.inspect(new Increment43FixedShape)
       val symbolic = ConstructionKernel.inspect(new Increment43SymbolicShape)
+      val compound = ConstructionKernel.inspect(new Increment43CompoundShape)
       assert(fixed.modules.head.declarations.find(_.name == "samples").flatMap(_.dataType)
         .contains("Vec(Real;2x3)"))
       assert(symbolic.modules.head.declarations.find(_.name == "samples").flatMap(_.dataType)
         .contains("Vec(Real;lanesx2)"))
+      val compoundType = compound.modules.head.declarations
+        .find(_.name == "samples").flatMap(_.dataType).get
+      assert(compoundType.startsWith("Vec(Real;Increment43CompoundShape."))
+      val dimensionPath = compoundType.stripPrefix("Vec(Real;").stripSuffix(")")
+      assert(compound.parameterExpressions.exists(_.path == dimensionPath))
       val parameter = symbolic.modules.head.declarations.find(_.name == "lanes").get
       val attributes = parameter.attributes.toMap
       assert(attributes.get("classification").contains("structural"))
@@ -155,17 +166,23 @@ object Increment43ShapeContractTests extends TestSuite:
     test("bridge emits canonical shaped port types and parameter shape envelopes"):
       val fixed = ScalaToMlirBridge.lower(new Increment43FixedShape)
       val symbolic = ScalaToMlirBridge.lower(new Increment43SymbolicShape)
+      val compound = ScalaToMlirBridge.lower(new Increment43CompoundShape)
       assert(fixed == ScalaToMlirBridge.lower(new Increment43FixedShape))
       assert(fixed.text.contains("!nodal.shaped<\"2,3\", f64>"))
       assert(symbolic.text.contains("!nodal.shaped<\"lanes,2\", f64>"))
       assert(symbolic.text.contains("effects = [\"rank\", \"shape\"]"))
+      assert(compound.text.contains("!nodal.shaped<\"Increment43CompoundShape."))
+      assert(compound.text.contains("\"nodal.const_expr\""))
+      assert(compound.text.contains("operator_name = \"add\""))
 
-    test("zero unbounded possibly-empty and compound dimensions fail before publication"):
+    test(
+      "zero unbounded possibly-empty and nonpositive compound dimensions fail before publication"
+    ):
       Vector(
         failure(new Increment43ZeroShape),
         failure(new Increment43UnboundedShape),
         failure(new Increment43PossiblyEmptyShape),
-        failure(new Increment43CompoundShape)
+        failure(new Increment43NonpositiveCompoundShape)
       ).foreach(error => assert(error.diagnostic.code == "NODAL-SHAPE-043-001"))
 
     test("forged snapshot dimensions fail at the bridge"):
@@ -193,7 +210,8 @@ object Increment43ShapeContractTests extends TestSuite:
             )
             Vector(
               ScalaToMlirBridge.lower(new Increment43FixedShape),
-              ScalaToMlirBridge.lower(new Increment43SymbolicShape)
+              ScalaToMlirBridge.lower(new Increment43SymbolicShape),
+              ScalaToMlirBridge.lower(new Increment43CompoundShape)
             ).foreach: document =>
               NativeCompilerClient.run(document, request) match
                 case success: NativeCompilerSuccess =>

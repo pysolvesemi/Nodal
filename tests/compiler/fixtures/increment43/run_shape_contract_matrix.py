@@ -2,6 +2,7 @@
 """Exercise native fixed/direct-symbolic shaped declaration contracts."""
 
 import re
+from collections import Counter
 
 from run_generate_count_matrix import Case, main
 
@@ -29,10 +30,39 @@ def port(dimensions):
 '''
 
 
+def reference(name="lanes_ref", symbol="lanes"):
+    return (f'%{name} = "nodal.const_parameter_ref"() <{{metadata = {{}}, '
+            f'parameter = @{symbol}}}> : () -> i64\n')
+
+
+def literal(name="one", value=1):
+    return (f'%{name} = "nodal.const_literal"() <{{metadata = {{}}, spelling = "{value}", '
+            f'value = {value} : i64}}> : () -> i64\n')
+
+
+def expression(name="extent", operator="add", operands=("lanes_ref", "one"),
+               source_path="Fixture.extent"):
+    return (f'%{name} = "nodal.const_expr"({", ".join("%" + value for value in operands)}) '
+            f'<{{metadata = {{source_path = "{source_path}"}}, operator_name = "{operator}"}}> : '
+            f'({", ".join("i64" for _ in operands)}) -> i64\n')
+
+
 def cases():
+    compound = parameter() + reference() + literal() + expression()
+    ordinary = compound.replace('classification = "structural"',
+                                'classification = "ordinary"')
+    nonpositive = (parameter(lower=1, upper=4) + reference() + literal() +
+                   expression(operator="sub"))
+    wrong_type = '''%extent = "nodal.const_literal"() <{metadata = {source_path = "Fixture.extent"}, spelling = "2.0", value = 2.0 : f64}> : () -> f64
+'''
+    forged_reference = parameter() + '''%extent = "nodal.const_parameter_ref"() <{metadata = {source_path = "Fixture.extent"}, parameter = @lanes}> : () -> i64
+'''
     return [
         Case("shape_fixed", port("2,3")),
         Case("shape_symbolic", parameter() + port("lanes,2")),
+        Case("shape_compound", compound + port("Fixture.extent,2")),
+        Case("shape_compound_repeated_axes", compound + port(
+            ",".join(["Fixture.extent"] * 64))),
         Case("shape_reject_missing_parameter", port("missing,2"), CODE),
         Case("shape_reject_ordinary_parameter",
              parameter(classification="ordinary") + port("lanes"), CODE),
@@ -42,14 +72,38 @@ def cases():
              parameter(lower=0) + port("lanes"), CODE),
         Case("shape_reject_missing_range",
              parameter(constraint=False) + port("lanes"), CODE),
+        Case("shape_reject_missing_compound_value", port("Fixture.extent"), CODE),
+        Case("shape_reject_nonpositive_compound",
+             nonpositive + port("Fixture.extent"), CODE),
+        Case("shape_reject_ordinary_compound_dependency",
+             ordinary + port("Fixture.extent"), CODE),
+        Case("shape_reject_compound_wrong_type",
+             wrong_type + port("Fixture.extent"), CODE),
+        Case("shape_reject_direct_reference_as_compound_root",
+             forged_reference + port("Fixture.extent"), CODE),
     ]
+
+
+def contracts(data):
+    text = data.decode()
+    return (
+        Counter(re.findall(r'"(nodal\.(?:port|const_[a-z_]+))"\(', text)),
+        Counter(re.findall(r'!nodal\.shaped<"([^"]+)"', text)),
+        Counter(re.findall(r'operator_name\s*=\s*"([^"]+)"', text)),
+        Counter(re.findall(r'parameter\s*=\s*@([A-Za-z_][A-Za-z0-9_]*)', text)),
+        Counter(re.findall(r'source_path\s*=\s*"([^"]+)"', text)),
+        Counter(re.findall(r'spelling\s*=\s*"(-?\d+)"', text)),
+        Counter(re.findall(r'classification\s*=\s*"([^"]+)"', text)),
+        Counter(re.findall(r'effects\s*=\s*\[([^]]*)\]', text)),
+    )
 
 
 def valid_output(case, data, exit_code, stdout, stderr):
     codes = set(re.findall(rb"NODAL-[A-Z0-9]+(?:-[A-Z0-9]+)+", stderr))
     if case.code is not None:
         return exit_code == 1 and codes == {case.code.encode()}
-    return exit_code == 0 and not codes and b"!nodal.shaped" in stdout
+    return (exit_code == 0 and not codes and b"!nodal.shaped" in stdout
+            and contracts(data) == contracts(stdout))
 
 
 if __name__ == "__main__":

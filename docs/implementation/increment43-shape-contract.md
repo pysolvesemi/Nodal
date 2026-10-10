@@ -125,8 +125,6 @@ boxes.
 
 ## Fixed structural reshape view checkpoint
 
-Symbolic reshape is admitted for bounded integer parameters when source and result dimensions have equal literal products and equal canonical parameter multisets, including repeated factors. Construction proves parameter ranges and the signed-64-bit worst-case element-count envelope; bridge and native verification independently recheck ownership/identity and structural equality. General expression DAG arithmetic remains inert.
-
 The already-frozen public `Vec.reshape(...)` surface now has a bounded production
 path for fixed positive dimensions on module input/output ports. Construction
 retains the source port, target dimensions and source-correlated expression
@@ -153,9 +151,48 @@ deterministic bridge output, four bridge forgeries and configured native
 execution. The full native suite contains 145 tests at this checkpoint.
 
 This is a structural view, not storage allocation, flattening, a memory, an
-l-value slice or target lowering. Symbolic reshape retains the exposed
-compatibility-only inert expression path until symbolic product equality can be
-proved; internal shaped wires retain their prior inert path. Slice selection,
+l-value slice or target lowering. At the fixed-only checkpoint, symbolic reshape
+retained the exposed inert compatibility path; the bounded symbolic extension below replaces that path.
+Internal shaped wires retain their prior inert path. Slice selection,
 compound dimensions, generated lexical storage and legal Verilog-A
 array/generation lowering remain open. No F43 parent or descendant checkbox is
 complete.
+
+## Bounded symbolic reshape and proof repair
+
+Public port reshape supports directly owned bounded Integer parameter factors.
+Construction, bridge and native verification independently compare the positive
+literal product and the multiset of canonical parameter identities. Multiplicity
+matters: `lanes * lanes` is not equal to `lanes`. Distinct parameters with the
+same default and range are not interchangeable. Each boundary proves the maximum
+element count across all legal parameter settings fits signed 64-bit metadata.
+
+The published symbolic checkpoint required repair before qualification. Its
+construction record still held Integer dimensions after the snapshot changed to
+strings, preventing Scala compilation. Native proof used a set, lost repeated
+factors, and did not validate symbolic ownership/ranges or their worst-case
+product; the bridge also omitted the worst-case product bound. The repaired
+path retains typed factors in the construction record and renders canonical
+names only when the snapshot is finalized. Equality compares declaration
+identities, avoiding temporary names captured before constructor naming. It uses
+a multiset natively, and independently requires local structural Integer shape
+parameters with positive finite ranges at both downstream boundaries. Native
+bounds reuse `inferParameterIntegerBounds`; each distinct symbolic maximum is
+cached within a view. No defaults are substituted and no array is expanded.
+
+The strict native matrix now has 27 cases: nine positives run twice and eighteen
+exact-code rejections. It preserves the fixed tests and adds repeated factors,
+distinct symbols, literal regrouping, 32 repeated axes, missing/foreign/ordinary
+parameters, absent shape envelopes/ranges, zero-capable dimensions, dropped or
+added factors and symbolic worst-case overflow. The former undeclared symbolic
+positive is retained as a negative; its valid counterpart declares its parameter.
+Four Python checker methods retain source/dimension/parameter/range metadata and
+reject mutations, abnormal exits, empty output and unrelated diagnostics.
+
+Public tests retain fixed reshape, add repeated symbolic factors and literal
+regrouping, reject changed multiplicity, coincident defaults and overflow, mutate
+bridge proof metadata, and execute fixed and symbolic documents with a configured
+native compiler. These are Scala-to-IR witnesses; they do not produce target HDL.
+Compound dimension DAGs, general slices/views, generated storage and legal
+Verilog-A arrays/generation remain required unfinished work. No F43 checkbox is
+completed by this bounded repair.

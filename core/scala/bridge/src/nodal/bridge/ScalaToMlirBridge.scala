@@ -677,28 +677,14 @@ ${indent(body, 2)}
           fail("NODAL-BRIDGE-045", "shape-view input type is absent", Some(view.path))
         )
         val (_, sourceDimensions) = vecTypeParts(dataType, view.path)
-        val shapeSignature = (dimensions: Vector[String]) =>
-          if dimensions.isEmpty then
-            fail("NODAL-BRIDGE-045", "shape-view requires at least one dimension", Some(view.path))
-          else
-            val factors = dimensions.map(_.trim)
-            if factors.exists(_.isEmpty) then
-              fail("NODAL-BRIDGE-045", "shape-view dimensions must be canonical", Some(view.path))
-            val literalProduct = factors.filter(_.forall(_.isDigit)).foldLeft(BigInt(1)):
-              (product, text) =>
-                val value = text.toIntOption.filter(_ > 0).getOrElse(
-                  fail("NODAL-BRIDGE-045", "shape-view dimensions must be positive", Some(view.path))
-                )
-                product * BigInt(value)
-            val symbols = factors.filterNot(_.forall(_.isDigit)).sorted
-            factors.filterNot(_.forall(_.isDigit)).foreach: symbol =>
-              if !module.declarations.exists(d => d.kind == "parameter" && d.name == symbol) then
-                fail("NODAL-BRIDGE-045", "shape-view symbolic dimension must name an owned parameter", Some(view.path))
-            literalProduct -> symbols
-        val sourceSignature = shapeSignature(sourceDimensions)
-        val targetSignature = shapeSignature(view.dimensions)
+        val sourceSignature = shapeViewSignature(module, sourceDimensions, view.path)
+        val targetSignature = shapeViewSignature(module, view.dimensions, view.path)
         if sourceSignature != targetSignature then
-          fail("NODAL-BRIDGE-045", "shape-view source and result dimensions are not canonically equal", Some(view.path))
+          fail(
+            "NODAL-BRIDGE-045",
+            "shape-view source and result dimensions are not canonically equal",
+            Some(view.path)
+          )
       snapshot.shapeIndices.foreach: index =>
         val module = modulesByPath.getOrElse(
           index.owner,
@@ -2623,21 +2609,46 @@ ${indent(body, 2)}
           fail("NODAL-BRIDGE-044", "symbolic shape extent has no positive minimum", Some(path))
         )
 
-    private def fixedShapeProduct(dimensions: Vector[String], path: String): BigInt =
+    private def shapeViewSignature(
+        module: KernelModuleSnapshot,
+        dimensions: Vector[String],
+        path: String
+    ): (BigInt, Vector[String]) =
       if dimensions.isEmpty then
-        fail("NODAL-BRIDGE-045", "fixed shape view requires at least one dimension", Some(path))
-      dimensions.foldLeft(BigInt(1)): (product, dimension) =>
-        val value = dimension.toIntOption.filter(_ > 0).getOrElse(
+        fail("NODAL-BRIDGE-045", "shape view requires at least one dimension", Some(path))
+      var literalProduct = BigInt(1)
+      var worstCase = BigInt(1)
+      val symbols = Vector.newBuilder[String]
+      dimensions.foreach: dimension =>
+        if dimension.trim != dimension || !validShapeDimension(dimension, path) then
           fail(
             "NODAL-BRIDGE-045",
-            "fixed shape view requires positive literal dimensions",
+            "shape-view factor is not a canonical positive structural dimension",
             Some(path)
           )
-        )
-        val next = product * BigInt(value)
-        if next > BigInt(Long.MaxValue) then
-          fail("NODAL-BRIDGE-045", "fixed shape view element count overflows", Some(path))
-        next
+        val maximum =
+          if dimension.forall(_.isDigit) then
+            val value = dimension.toLongOption.filter(_ > 0).getOrElse(
+              fail(
+                "NODAL-BRIDGE-045",
+                "shape-view literal exceeds signed 64-bit bounds",
+                Some(path)
+              )
+            )
+            literalProduct *= BigInt(value)
+            value
+          else
+            val parameter = module.declarations.find(_.name == dimension).getOrElse(
+              fail("NODAL-BRIDGE-045", "shape-view factor is not module-owned", Some(path))
+            )
+            symbols += parameter.path
+            parameter.attributes.toMap.get("integer_range_upper").flatMap(_.toLongOption).getOrElse(
+              fail("NODAL-BRIDGE-045", "shape-view factor has no finite maximum", Some(path))
+            )
+        worstCase *= BigInt(maximum)
+        if worstCase > BigInt(Long.MaxValue) then
+          fail("NODAL-BRIDGE-045", "shape-view worst-case element count overflows", Some(path))
+      literalProduct -> symbols.result().sorted
 
     private def shapeIndexBounds(
         module: KernelModuleSnapshot,

@@ -1653,15 +1653,22 @@ LogicalResult nodal::ShapeViewOp::verify() {
   if (!storage || storage.getValue() != "structural")
     return emitOpError("NODAL-SHAPE-043-003: fixed shape view requires structural storage intent");
 
+  auto owner = getOperation()->getParentOfType<nodal::ModuleOp>();
+  if (!owner)
+    return emitOpError("NODAL-SHAPE-043-003: shape view requires an owning module");
+  llvm::StringMap<uint64_t> symbolicMaxima;
   auto shapeSignature = [&](llvm::StringRef dimensions)
-      -> std::optional<std::pair<uint64_t, std::set<std::string>>> {
+      -> std::optional<std::pair<uint64_t, std::multiset<std::string>>> {
     llvm::SmallVector<llvm::StringRef> tokens;
     dimensions.split(tokens, ',', -1, true);
     if (tokens.empty())
       return std::nullopt;
     uint64_t literalProduct = 1;
-    std::set<std::string> symbols;
+    uint64_t worstCase = 1;
+    std::multiset<std::string> symbols;
     for (llvm::StringRef token : tokens) {
+      if (token != token.trim())
+        return std::nullopt;
       token = token.trim();
       if (token.empty())
         return std::nullopt;
@@ -1669,15 +1676,34 @@ LogicalResult nodal::ShapeViewOp::verify() {
       if (!token.getAsInteger(10, extent)) {
         if (extent <= 0 ||
             literalProduct > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
-                                  static_cast<uint64_t>(extent))
+                                 static_cast<uint64_t>(extent))
           return std::nullopt;
         literalProduct *= static_cast<uint64_t>(extent);
       } else {
         if (token.contains(' ') || token.contains('\t') || token.contains('\n') ||
             token.contains('\r'))
           return std::nullopt;
+        auto cached = symbolicMaxima.find(token);
+        if (cached != symbolicMaxima.end()) {
+          extent = static_cast<int64_t>(cached->second);
+        } else {
+          Operation *parameter = findDirectModuleParameter(owner, token);
+          auto type = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
+          auto bounds = nodal::inferParameterIntegerBounds(parameter);
+          if (!type || !type.getValue().isInteger(64) || !nodal::isStructuralParameter(parameter) ||
+              !parameterHasShapeEnvelope(owner, token) ||
+              !parameterHasPositiveFiniteRange(owner, token) || failed(bounds) ||
+              bounds->lower <= 0)
+            return std::nullopt;
+          extent = bounds->upper;
+          symbolicMaxima.try_emplace(token, static_cast<uint64_t>(extent));
+        }
         symbols.insert(token.str());
       }
+      if (extent <= 0 || worstCase > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
+                                         static_cast<uint64_t>(extent))
+        return std::nullopt;
+      worstCase *= static_cast<uint64_t>(extent);
     }
     return std::make_pair(literalProduct, std::move(symbols));
   };
@@ -1685,7 +1711,8 @@ LogicalResult nodal::ShapeViewOp::verify() {
   auto resultSignature = shapeSignature(result.getDimensions());
   if (!inputSignature || !resultSignature || *inputSignature != *resultSignature)
     return emitOpError(
-        "NODAL-SHAPE-043-003: shape-view dimensions require equal literal product and symbolic parameter multiset");
+        "NODAL-SHAPE-043-003: shape view requires equal literal products and bounded structural "
+        "parameter multisets within signed 64-bit counts");
   return success();
 }
 

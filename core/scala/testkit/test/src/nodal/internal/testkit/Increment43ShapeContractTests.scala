@@ -107,6 +107,27 @@ final class Increment43SymbolicMismatchShapeView extends Module, Increment43Shap
   val samples: Signal[Vec[Real]] = in(Vec(Real, lanes, 2))
   val invalid: Expr[Vec[Real]] = samples.reshape(3, lanes)
 
+final class Increment43RepeatedShapeView extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
+  val samples: Signal[Vec[Real]] = in(Vec(Real, lanes, lanes, 6))
+  val reshaped: Expr[Vec[Real]] = samples.reshape(2, lanes, 3, lanes)
+
+final class Increment43DroppedShapeFactor extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
+  val samples: Signal[Vec[Real]] = in(Vec(Real, lanes, lanes))
+  val invalid: Expr[Vec[Real]] = samples.reshape(lanes)
+
+final class Increment43CoincidentShapeFactors extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
+  val rows: Param[Integer] = param(2.integer, range = 1 to 4)
+  val samples: Signal[Vec[Real]] = in(Vec(Real, lanes, 2))
+  val invalid: Expr[Vec[Real]] = samples.reshape(rows, 2)
+
+final class Increment43OverflowShapeView extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(2.integer, range = 1 to Int.MaxValue)
+  val samples: Signal[Vec[Real]] = in(Vec(Real, lanes, lanes, lanes))
+  val invalid: Expr[Vec[Real]] = samples.reshape(lanes, lanes, lanes)
+
 object Increment43ShapeContractTests extends TestSuite:
   private def failure(top: => Module): ConstructionException =
     scala.util.Try(ConstructionKernel.inspect(top)).failed.get.asInstanceOf[ConstructionException]
@@ -280,7 +301,7 @@ object Increment43ShapeContractTests extends TestSuite:
       val snapshot = ConstructionKernel.inspect(new Increment43FixedShapeView)
       assert(snapshot.shapeViews.size == 1)
       assert(snapshot.shapeViews.head.input.endsWith(".samples"))
-      assert(snapshot.shapeViews.head.dimensions == Vector(3, 2))
+      assert(snapshot.shapeViews.head.dimensions == Vector("3", "2"))
       assert(snapshot.sourceMap.exists(_.semanticPath == snapshot.shapeViews.head.path))
       val symbolic = ConstructionKernel.inspect(new Increment43SymbolicShapeView)
       assert(symbolic.shapeViews.size == 1)
@@ -309,14 +330,65 @@ object Increment43ShapeContractTests extends TestSuite:
       Vector(
         snapshot.copy(shapeViews = snapshot.shapeViews.map(_.copy(owner = "Missing"))),
         snapshot.copy(shapeViews = snapshot.shapeViews.map(_.copy(input = "Missing.samples"))),
-        snapshot.copy(shapeViews = snapshot.shapeViews.map(_.copy(dimensions = Vector(2, 2)))),
+        snapshot.copy(shapeViews = snapshot.shapeViews.map(_.copy(dimensions = Vector("2", "2")))),
         snapshot.copy(shapeViews = snapshot.shapeViews ++ snapshot.shapeViews)
       ).foreach: forged =>
         val error = scala.util.Try(ScalaToMlirBridge.fromSnapshot(forged))
           .failed.get.asInstanceOf[BridgeException]
         assert(error.diagnostic.code == "NODAL-BRIDGE-045")
 
-    test("configured native accepts public fixed reshape transport"):
+    test(
+      "symbolic reshape preserves repeated factors and rejects coincident defaults and overflow"
+    ):
+      val snapshot = ConstructionKernel.inspect(new Increment43RepeatedShapeView)
+      assert(snapshot.shapeViews.head.dimensions == Vector("2", "lanes", "3", "lanes"))
+      assert(ScalaToMlirBridge.fromSnapshot(snapshot) ==
+        ScalaToMlirBridge.lower(new Increment43RepeatedShapeView))
+      Vector(
+        failure(new Increment43DroppedShapeFactor),
+        failure(new Increment43CoincidentShapeFactors),
+        failure(new Increment43OverflowShapeView)
+      ).foreach(error => assert(error.diagnostic.code == "NODAL-SHAPE-043-003"))
+
+    test("bridge rejects forged symbolic reshape proofs and worst-case overflow"):
+      val snapshot = ConstructionKernel.inspect(new Increment43SymbolicShapeView)
+      def parameterAttribute(key: String, value: String): ConstructionSnapshot =
+        snapshot.copy(modules = snapshot.modules.map: module =>
+          module.copy(declarations = module.declarations.map: declaration =>
+            if declaration.name == "lanes" then
+              declaration.copy(attributes =
+                declaration.attributes.filterNot(_._1 == key) :+ (key -> value)
+              )
+            else declaration))
+      val overflow = parameterAttribute("integer_range_upper", Int.MaxValue.toString)
+      val overflowShape = overflow.copy(
+        modules = overflow.modules.map(module =>
+          module.copy(declarations = module.declarations.map: declaration =>
+            if declaration.name == "samples" then
+              declaration.copy(dataType = Some("Vec(Real;lanesxlanesxlanes)"))
+            else declaration)
+        ),
+        shapeViews = overflow.shapeViews.map(_.copy(dimensions = Vector("lanes", "lanes", "lanes")))
+      )
+      Vector(
+        snapshot.copy(shapeViews =
+          snapshot.shapeViews.map(_.copy(dimensions = Vector("2", " lanes")))
+        ),
+        snapshot.copy(shapeViews =
+          snapshot.shapeViews.map(_.copy(dimensions = Vector("2", "lanes", "lanes")))
+        ),
+        parameterAttribute("classification", "ordinary"),
+        parameterAttribute("structural_effects", "topology"),
+        parameterAttribute("integer_range_lower", "0"),
+        parameterAttribute("integer_range_upper", "unbounded"),
+        overflowShape
+      ).foreach: forged =>
+        val error = scala.util.Try(
+          ScalaToMlirBridge.fromSnapshot(forged)
+        ).failed.get.asInstanceOf[BridgeException]
+        assert(error.diagnostic.code == "NODAL-BRIDGE-045")
+
+    test("configured native accepts public fixed and symbolic reshape transport"):
       sys.env.get("NODAL_NODALC") match
         case None => assert(true)
         case Some(executable) =>
@@ -328,13 +400,15 @@ object Increment43ShapeContractTests extends TestSuite:
               workingDirectory = directory,
               timeout = Duration.ofSeconds(30)
             )
-            NativeCompilerClient.run(
+            Vector(
               ScalaToMlirBridge.lower(new Increment43FixedShapeView),
-              request
-            ) match
-              case success: NativeCompilerSuccess =>
-                assert(success.normalizedMlir.contains("nodal.shape_view"))
-                assert(success.normalizedMlir.contains("materialization = \"view\""))
-              case failure: NativeCompilerFailure =>
-                scala.Predef.assert(false, s"${failure.diagnostic}\n${failure.standardError}")
+              ScalaToMlirBridge.lower(new Increment43SymbolicShapeView),
+              ScalaToMlirBridge.lower(new Increment43RepeatedShapeView)
+            ).foreach: document =>
+              NativeCompilerClient.run(document, request) match
+                case success: NativeCompilerSuccess =>
+                  assert(success.normalizedMlir.contains("nodal.shape_view"))
+                  assert(success.normalizedMlir.contains("materialization = \"view\""))
+                case failure: NativeCompilerFailure =>
+                  scala.Predef.assert(false, s"${failure.diagnostic}\n${failure.standardError}")
           finally delete(directory)

@@ -12,7 +12,7 @@ import run_shape_view_matrix as views
 class ShapeViewCheckerTests(unittest.TestCase):
     def test_inventory_and_positive_preservation(self):
         cases = views.cases()
-        self.assertEqual(len(cases), 13)
+        self.assertEqual(len(cases), 27)
         self.assertEqual(len({case.name for case in cases}), len(cases))
         for case in cases:
             if case.code is None:
@@ -39,6 +39,21 @@ class ShapeViewCheckerTests(unittest.TestCase):
         self.assertTrue(views.valid_output(case, data, 1, b"", views.CODE.encode()))
         for code in (0, -11, 124, None):
             self.assertFalse(views.valid_output(case, data, code, b"", views.CODE.encode()))
+        for diagnostic in (b"", b"NODAL-WRONG-001", views.CODE.encode() + b" NODAL-WRONG-001"):
+            self.assertFalse(views.valid_output(case, data, 1, b"", diagnostic))
+
+    def test_symbolic_proof_and_origin_mutations_reject(self):
+        case = next(case for case in views.cases() if case.name == "view_repeated_symbol")
+        data = counts.source(case).encode()
+        for old, new in [(b'"lanes,lanes,2"', b'"lanes,2"'),
+                         (b'value = 4 : i64', b'value = 3 : i64'),
+                         (b'classification = "structural"', b'classification = "ordinary"'),
+                         (b'"Fixture.result"', b'"Fixture.other"'),
+                         (b'"Fixture.samples"', b'"Fixture.other"')]:
+            with self.subTest(old=old):
+                changed = data.replace(old, new, 1)
+                self.assertNotEqual(changed, data)
+                self.assertFalse(views.valid_output(case, data, 0, changed, b""))
 
 
 if __name__ == "__main__":

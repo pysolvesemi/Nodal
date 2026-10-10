@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Native fixed reshape proofs; these are not generated-target witnesses."""
+"""Native fixed/symbolic reshape proofs, not generated-target witnesses."""
 
 import re
 from collections import Counter
 
 from run_generate_count_matrix import Case, main
+from run_shape_contract_matrix import parameter
 
 
 CODE = "NODAL-SHAPE-043-003"
@@ -29,7 +30,11 @@ def cases():
         Case("view_rank_reducing", view("2,2", "4")),
         Case("view_rank_expanding", view("6", "1,2,3")),
         Case("view_singleton", view("1", "1,1")),
-        Case("view_symbolic_permutation", view("lanes,2", "2,lanes")),
+        Case("view_symbolic_permutation", parameter() + view("lanes,2", "2,lanes")),
+        Case("view_repeated_symbol", parameter() + view("lanes,lanes,2", "2,lanes,lanes")),
+        Case("view_distinct_symbols", parameter() + parameter("rows") + view("lanes,rows,2", "2,rows,lanes")),
+        Case("view_symbolic_regroup_literals", parameter() + view("2,lanes,3", "lanes,6")),
+        Case("view_repeated_axes", parameter(lower=1, upper=2) + view(",".join(["lanes"] * 32), ",".join(["lanes"] * 32))),
         Case("view_reject_count", view("2,3", "2,2"), CODE),
         Case("view_reject_symbolic_source", view("lanes,2", "2,2"), CODE),
         Case("view_reject_symbolic_result", view("2,2", "lanes,2"), CODE),
@@ -38,6 +43,16 @@ def cases():
         Case("view_reject_observability", view(observability="hidden"), CODE),
         Case("view_reject_storage", view(storage="memory"), CODE),
         Case("view_reject_overflow", view("9223372036854775807,2", "2,9223372036854775807"), CODE),
+        Case("view_reject_missing_parameter", view("lanes,2", "2,lanes"), CODE),
+        Case("view_reject_dropped_factor", parameter() + view("lanes,lanes,2", "lanes,2"), CODE),
+        Case("view_reject_added_factor", parameter() + view("lanes,2", "lanes,lanes,2"), CODE),
+        Case("view_reject_equal_default_different_identity", parameter() + parameter("rows") + view("lanes,2", "rows,2"), CODE),
+        Case("view_reject_symbolic_overflow", parameter(upper=2147483647) + view("lanes,lanes,lanes", "lanes,lanes,lanes"), CODE),
+        Case("view_reject_ordinary_parameter", parameter(classification="ordinary") + view("lanes,2", "2,lanes"), CODE),
+        Case("view_reject_missing_envelope", parameter(effects='["topology"]') + view("lanes,2", "2,lanes"), CODE),
+        Case("view_reject_unbounded_parameter", parameter(constraint=False) + view("lanes,2", "2,lanes"), CODE),
+        Case("view_reject_zero_capable_parameter", parameter(lower=0) + view("lanes,2", "2,lanes"), CODE),
+        Case("view_reject_foreign_parameter", parameter() + '"nodal.module"() <{metadata = {}, sym_name = "Child"}> ({\n' + view("lanes,2", "2,lanes") + '}) : () -> ()\n', CODE),
     ]
 
 
@@ -48,14 +63,17 @@ def contracts(data):
         r'materialization = "view".*?storage = "([^"]+)".*?'
         r'observability = "([^"]+)".*?: \((!nodal\.shaped<[^\n]+>)\) -> '
         r'(!nodal\.shaped<[^\n]+>)', text)
-    return Counter(strict)
+    parameters = re.findall(r'\b(classification|parameter_kind|variability|sym_name) = "([^"]+)"', text)
+    ranges = re.findall(r'\b(value = -?[0-9]+ : i64|parameter = @[A-Za-z_0-9]+|effects = \[[^\]]*\])', text)
+    origins = re.findall(r'\b(source_path|origin|dimensions) = "([^"]+)"', text)
+    return Counter(strict), Counter(parameters), Counter(ranges), Counter(origins)
 
 
 def valid_output(case, data, exit_code, stdout, stderr):
     codes = set(re.findall(rb"NODAL-[A-Z0-9]+(?:-[A-Z0-9]+)+", stderr))
     if case.code is not None:
         return exit_code == 1 and codes == {case.code.encode()}
-    return exit_code == 0 and not codes and contracts(data) == contracts(stdout) and bool(contracts(data))
+    return exit_code == 0 and not codes and contracts(data) == contracts(stdout) and bool(contracts(data)[0])
 
 
 if __name__ == "__main__":

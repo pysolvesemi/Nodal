@@ -180,7 +180,7 @@ parameters with positive finite ranges at both downstream boundaries. Native
 bounds reuse `inferParameterIntegerBounds`; each distinct symbolic maximum is
 cached within a view. No defaults are substituted and no array is expanded.
 
-The strict native matrix now has 27 cases: nine positives run twice and eighteen
+The strict native matrix now has 31 cases: nine positives run twice and twenty-two
 exact-code rejections. It preserves the fixed tests and adds repeated factors,
 distinct symbols, literal regrouping, 32 repeated axes, missing/foreign/ordinary
 parameters, absent shape envelopes/ranges, zero-capable dimensions, dropped or
@@ -196,3 +196,15 @@ native compiler. These are Scala-to-IR witnesses; they do not produce target HDL
 Compound dimension DAGs, general slices/views, generated storage and legal
 Verilog-A arrays/generation remain required unfinished work. No F43 checkbox is
 completed by this bounded repair.
+
+### Materialization downgrade rejection
+
+The native verifier accepts only `view` and the scalar-input legacy
+`explicit_view` carrier. Changing a shaped-to-shaped operation to an unknown
+materialization or relabeling it as `explicit_view` cannot skip the reshape
+proof. The previous early return accepted both bypasses, including mismatched
+element counts. Four added exact-code negatives cover unknown/whitespace tags,
+legacy count bypass and legacy storage bypass; checker mutations independently
+reject changed materialization. Existing scalar legacy fixtures remain covered
+by the native predecessor suite. This repair changes no public API, parameter
+evaluation, target layout or acceptance scope.

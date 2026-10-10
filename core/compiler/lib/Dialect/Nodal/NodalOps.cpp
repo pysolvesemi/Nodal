@@ -1632,10 +1632,17 @@ LogicalResult nodal::ShapeViewOp::verify() {
       failed(requireText(getOperation(), "observability", "observability")))
     return failure();
 
-  // Preserve the pre-existing synthetic fixture form. The production reshape
-  // carrier is deliberately distinguished by its exact materialization value.
-  if (textAttr(getOperation(), "materialization") != "view")
+  // Preserve the scalar-input legacy carrier, but never allow a materialization
+  // tag to opt a shaped-to-shaped transformation out of reshape verification.
+  auto materialization = textAttr(getOperation(), "materialization");
+  if (materialization != "view" && materialization != "explicit_view")
+    return emitOpError("NODAL-SHAPE-043-003: unsupported shape-view materialization");
+  if (materialization == "explicit_view") {
+    if (llvm::isa<nodal::ShapedType>(getOperation()->getOperand(0).getType()))
+      return emitOpError(
+          "NODAL-SHAPE-043-003: shaped input requires verified view materialization");
     return success();
+  }
 
   auto input = llvm::dyn_cast<nodal::ShapedType>(getOperation()->getOperand(0).getType());
   auto result = llvm::dyn_cast<nodal::ShapedType>(getOperation()->getResult(0).getType());

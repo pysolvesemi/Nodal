@@ -12,7 +12,7 @@ import run_shape_view_matrix as views
 class ShapeViewCheckerTests(unittest.TestCase):
     def test_inventory_and_positive_preservation(self):
         cases = views.cases()
-        self.assertEqual(len(cases), 27)
+        self.assertEqual(len(cases), 31)
         self.assertEqual(len({case.name for case in cases}), len(cases))
         for case in cases:
             if case.code is None:
@@ -23,6 +23,8 @@ class ShapeViewCheckerTests(unittest.TestCase):
         case = views.cases()[0]
         data = counts.source(case).encode()
         for old, new in [(b'"3,2"', b'"6"'),
+                         (b'materialization = "view"', b'materialization = "explicit_view"'),
+                         (b'materialization = "view"', b'materialization = "unknown"'),
                          (b'source_path = "Fixture.result", storage = "structural"',
                           b'source_path = "Fixture.result", storage = "memory"'),
                          (b'storage = "structural"}, observability = "source_mapped", origin = "Fixture.samples"}> : (!nodal.shaped',

@@ -23,6 +23,8 @@ class ShapeContractCheckerTests(unittest.TestCase):
         case = next(case for case in shapes.cases() if case.name == "shape_compound")
         data = counts.source(case).encode()
         for old, new in [(b'"Fixture.extent,2"', b'"Fixture.other,2"'),
+                         (b'semantic_path = "Fixture.extent"',
+                          b'source_path = "Fixture.extent"'),
                          (b'operator_name = "add"', b'operator_name = "sub"'),
                          (b'parameter = @lanes', b'parameter = @other'),
                          (b'classification = "structural"',

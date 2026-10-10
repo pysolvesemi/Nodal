@@ -198,11 +198,11 @@ bool parameterHasPositiveFiniteRange(Operation *module, llvm::StringRef symbol) 
   return false;
 }
 
-llvm::StringRef metadataSourcePath(Operation *operation) {
+llvm::StringRef metadataSemanticPath(Operation *operation) {
   auto metadata =
       operation ? operation->getAttrOfType<DictionaryAttr>("metadata") : DictionaryAttr();
-  auto source = metadata ? metadata.getAs<StringAttr>("source_path") : StringAttr();
-  return source ? source.getValue() : llvm::StringRef();
+  auto path = metadata ? metadata.getAs<StringAttr>("semantic_path") : StringAttr();
+  return path ? path.getValue() : llvm::StringRef();
 }
 
 Value findDirectModuleStaticValue(Operation *module, llvm::StringRef sourcePath) {
@@ -213,7 +213,7 @@ Value findDirectModuleStaticValue(Operation *module, llvm::StringRef sourcePath)
   for (Operation &operation : module->getRegion(0).front()) {
     if (!llvm::isa<nodal::ConstLiteralOp, nodal::ConstParameterRefOp, nodal::ConstExprOp>(
             operation) ||
-        metadataSourcePath(&operation) != sourcePath || operation.getNumResults() != 1)
+        metadataSemanticPath(&operation) != sourcePath || operation.getNumResults() != 1)
       continue;
     if (result)
       return {};

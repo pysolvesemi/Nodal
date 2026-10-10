@@ -41,9 +41,9 @@ def literal(name="one", value=1):
 
 
 def expression(name="extent", operator="add", operands=("lanes_ref", "one"),
-               source_path="Fixture.extent"):
+               semantic_path="Fixture.extent"):
     return (f'%{name} = "nodal.const_expr"({", ".join("%" + value for value in operands)}) '
-            f'<{{metadata = {{source_path = "{source_path}"}}, operator_name = "{operator}"}}> : '
+            f'<{{metadata = {{semantic_path = "{semantic_path}"}}, operator_name = "{operator}"}}> : '
             f'({", ".join("i64" for _ in operands)}) -> i64\n')
 
 
@@ -53,9 +53,9 @@ def cases():
                                 'classification = "ordinary"')
     nonpositive = (parameter(lower=1, upper=4) + reference() + literal() +
                    expression(operator="sub"))
-    wrong_type = '''%extent = "nodal.const_literal"() <{metadata = {source_path = "Fixture.extent"}, spelling = "2.0", value = 2.0 : f64}> : () -> f64
+    wrong_type = '''%extent = "nodal.const_literal"() <{metadata = {semantic_path = "Fixture.extent"}, spelling = "2.0", value = 2.0 : f64}> : () -> f64
 '''
-    forged_reference = parameter() + '''%extent = "nodal.const_parameter_ref"() <{metadata = {source_path = "Fixture.extent"}, parameter = @lanes}> : () -> i64
+    forged_reference = parameter() + '''%extent = "nodal.const_parameter_ref"() <{metadata = {semantic_path = "Fixture.extent"}, parameter = @lanes}> : () -> i64
 '''
     return [
         Case("shape_fixed", port("2,3")),
@@ -91,7 +91,7 @@ def contracts(data):
         Counter(re.findall(r'!nodal\.shaped<"([^"]+)"', text)),
         Counter(re.findall(r'operator_name\s*=\s*"([^"]+)"', text)),
         Counter(re.findall(r'parameter\s*=\s*@([A-Za-z_][A-Za-z0-9_]*)', text)),
-        Counter(re.findall(r'source_path\s*=\s*"([^"]+)"', text)),
+        Counter(re.findall(r'semantic_path\s*=\s*"([^"]+)"', text)),
         Counter(re.findall(r'spelling\s*=\s*"(-?\d+)"', text)),
         Counter(re.findall(r'classification\s*=\s*"([^"]+)"', text)),
         Counter(re.findall(r'effects\s*=\s*\[([^]]*)\]', text)),

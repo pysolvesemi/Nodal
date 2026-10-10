@@ -35,7 +35,7 @@ The bridge independently resolves that path in the existing parameter-expression
 inventory, recomputes its interval, and emits the existing
 `nodal.const_parameter_ref`, `nodal.const_literal` and `nodal.const_expr` DAG.
 The shaped type retains the canonical expression path. Native verification finds
-the directly owned static value by its source-path metadata, requires i64 type
+the directly owned static value by its semantic-path metadata, requires i64 type
 and structural shape dependencies, and obtains the minimum through
 `inferParameterIntegerBounds`. `nodal.shape_index` uses the same independently
 verified minimum. No parallel registry, textual arithmetic parser, default

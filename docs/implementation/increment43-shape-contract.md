@@ -275,3 +275,25 @@ dimensions still reach the existing fail-closed validation, and the snapshot
 spelling for established literal and direct-parameter dimensions is unchanged.
 The compound public witness explicitly retains an identity containing `x` so
 this transport regression cannot silently return.
+
+## Fixed structural flatten view checkpoint
+
+The already-frozen public `Vec.flatten` surface now reuses the verified
+structural `shape_view` path for fixed positive module-port shapes. Construction
+computes the row-major element count without expanding elements, requires the
+single result extent to fit the public signed 32-bit `Dimension` surface, and
+records a source-correlated rank-one view. The bridge and native verifier then
+independently apply the established equal-element-count, exact element-type,
+structural-storage and source-mapped view checks. No new snapshot registry,
+native operation or layout engine is introduced.
+
+Public tests retain the exact `2 x 3` input and rank-one `6` result types,
+deterministic bridge text and configured-native execution. Symbolic flattening
+retains its prior compatibility-only inert capture until canonical product DAG
+equality can be proved without default substitution; this checkpoint does not
+pretend a parameter default is a fixed extent.
+
+This is a bounded fixed flatten view, not general slicing, l-value selection,
+target flattening, memory inference or generated-instance storage. Symbolic
+flatten, constant/symbolic slices and row/plane views remain open, and no F-043
+parent or descendant checkbox is complete.

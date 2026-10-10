@@ -1154,6 +1154,33 @@ private[nodal] object CandidateRuntime:
     ConstructionKernel.shapeIndex(expression, value, indices)
     expression
 
+  def shapeFlatten[A <: Data](value: Expr[Vec[A]]): Expr[Vec[A]] =
+    val dimensions = expressionDataType(value)
+      .map(typeDescriptor)
+      .filter(_.kind == "Vec")
+      .flatMap(_.arguments.lift(1).collect { case values: Seq[?] => values.toVector })
+      .getOrElse(Vector.empty)
+    val fixedDimensions = dimensions.map:
+      case literal: Int if literal > 0 => Some(BigInt(literal))
+      case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
+        expression.literal.flatMap(_.value.toLongOption).filter(_ > 0).map(BigInt(_))
+      case _ => None
+    if value.isInstanceOf[Signal[?]] && fixedDimensions.nonEmpty &&
+      fixedDimensions.forall(_.nonEmpty)
+    then
+      val count = fixedDimensions.flatten.product
+      if count <= BigInt(Int.MaxValue) then shapeView(value, Vector(count.toInt))
+      else
+        scala.util.Failure[Expr[Vec[A]]](
+          new ConstructionException(
+            KernelDiagnostic(
+              "NODAL-SHAPE-043-003",
+              "fixed shape flattening exceeds the supported signed 32-bit result dimension"
+            )
+          )
+        ).get
+    else expr(value, "flatten")
+
   def shapeView[A <: Data](
       value: Expr[Vec[A]],
       dimensions: Vector[Dimension]

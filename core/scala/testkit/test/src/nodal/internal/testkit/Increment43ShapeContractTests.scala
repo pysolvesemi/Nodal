@@ -90,6 +90,19 @@ final class Increment43FixedShapeView extends Module, Increment43ShapeClock:
   val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
   val transposedShape: Expr[Vec[Real]] = samples.reshape(3, 2)
 
+final class Increment43FixedShapeFlatten extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
+  val flattened: Expr[Vec[Real]] = samples.flatten
+
+final class Increment43SymbolicShapeFlatten extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
+  val samples: Signal[Vec[Real]] = in(Vec(Real, lanes, 2))
+  val flattened: Expr[Vec[Real]] = samples.flatten
+
+final class Increment43OverflowShapeFlatten extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, Int.MaxValue, 2))
+  val invalid: Expr[Vec[Real]] = samples.flatten
+
 final class Increment43MismatchedShapeView extends Module, Increment43ShapeClock:
   val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
   val invalid: Expr[Vec[Real]] = samples.reshape(2, 2)
@@ -345,6 +358,21 @@ object Increment43ShapeContractTests extends TestSuite:
         failure(new Increment43ZeroShapeView)
       ).foreach(error => assert(error.diagnostic.code == "NODAL-SHAPE-043-003"))
 
+    test("fixed flatten reuses the structural shape-view proof"):
+      val snapshot = ConstructionKernel.inspect(new Increment43FixedShapeFlatten)
+      assert(snapshot.shapeViews.size == 1)
+      assert(snapshot.shapeViews.head.input.endsWith(".samples"))
+      assert(snapshot.shapeViews.head.dimensions == Vector("6"))
+      assert(snapshot.sourceMap.exists(_.semanticPath == snapshot.shapeViews.head.path))
+      assert(ConstructionKernel.inspect(new Increment43SymbolicShapeFlatten).shapeViews.isEmpty)
+      assert(failure(new Increment43OverflowShapeFlatten).diagnostic.code == "NODAL-SHAPE-043-003")
+
+      val document = ScalaToMlirBridge.lower(new Increment43FixedShapeFlatten)
+      assert(document == ScalaToMlirBridge.lower(new Increment43FixedShapeFlatten))
+      assert(document.text.contains("!nodal.shaped<\"2,3\", f64>"))
+      assert(document.text.contains("!nodal.shaped<\"6\", f64>"))
+      assert(document.text.contains("materialization = \"view\""))
+
     test("bridge emits and independently validates fixed structural reshape"):
       val document = ScalaToMlirBridge.lower(new Increment43FixedShapeView)
       assert(document == ScalaToMlirBridge.lower(new Increment43FixedShapeView))
@@ -449,6 +477,7 @@ object Increment43ShapeContractTests extends TestSuite:
             )
             Vector(
               ScalaToMlirBridge.lower(new Increment43FixedShapeView),
+              ScalaToMlirBridge.lower(new Increment43FixedShapeFlatten),
               ScalaToMlirBridge.lower(new Increment43SymbolicShapeView),
               ScalaToMlirBridge.lower(new Increment43RepeatedShapeView),
               ScalaToMlirBridge.lower(new Increment43CompoundShapeView)

@@ -333,3 +333,32 @@ This remains structural Scala-to-IR view evidence. It does not implement
 constant/symbolic slices, row/plane views, l-value selection, generated lexical
 storage, Verilog-A arrays/generation or target source/index maps, and it does not
 complete any F-043 parent or descendant checkbox.
+
+## Chained structural view checkpoint
+
+The frozen `reshape` and `flatten` surfaces now accept the result of an earlier
+verified structural view. Construction records the immediate predecessor view
+identity rather than collapsing the chain back to its port or inventing a new
+aggregate registry. Each step independently proves equal canonical cardinality
+with the existing literal/static-expression signature, structural parameter
+effects, ownership and signed-64-bit worst-case checks. A generic expression
+that merely claims `shape_view` spelling but has no captured view record remains
+rejected.
+
+The bridge validates views in capture order, requires every expression input to
+be an earlier view in the same module, and rejects missing, reordered, cyclic or
+cross-owner chains. It emits one `nodal.port_value` at the root followed by SSA-
+connected `nodal.shape_view` operations. Native verification therefore checks
+each actual shaped-to-shaped edge with the existing type, dimensions, storage,
+source-map and cardinality contract; no bridge-only proof replaces that trust
+boundary.
+
+Public tests cover fixed reshape-to-reshape, symbolic reshape-to-flatten, an
+unequal-count construction rejection, reordered snapshot rejection, retained
+immediate-input paths, deterministic emission and configured native execution.
+The implementation traverses the recorded chain once at bridge validation and
+emission and does not enumerate elements or specialize parameter defaults.
+
+This checkpoint does not add row/plane/slice syntax, l-value selection, target
+array lowering, generated lexical storage or Verilog-A generation. Those
+requirements and every F-043 parent/descendant checkbox remain open.

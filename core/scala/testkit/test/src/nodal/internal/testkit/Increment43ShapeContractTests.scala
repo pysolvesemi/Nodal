@@ -90,6 +90,22 @@ final class Increment43FixedShapeView extends Module, Increment43ShapeClock:
   val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
   val transposedShape: Expr[Vec[Real]] = samples.reshape(3, 2)
 
+final class Increment43ChainedShapeView extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
+  val first: Expr[Vec[Real]] = samples.reshape(3, 2)
+  val second: Expr[Vec[Real]] = first.reshape(1, 6)
+
+final class Increment43SymbolicChainedShapeFlatten extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
+  val samples: Signal[Vec[Real]] = in(Vec(Real, lanes, 2))
+  val first: Expr[Vec[Real]] = samples.reshape(2, lanes)
+  val flattened: Expr[Vec[Real]] = first.flatten
+
+final class Increment43InvalidChainedShapeView extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
+  val first: Expr[Vec[Real]] = samples.reshape(3, 2)
+  val invalid: Expr[Vec[Real]] = first.reshape(2, 2)
+
 final class Increment43FixedShapeFlatten extends Module, Increment43ShapeClock:
   val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
   val flattened: Expr[Vec[Real]] = samples.flatten
@@ -176,6 +192,9 @@ final class Increment43DistinctCompoundShapeView extends Module, Increment43Shap
   val invalid: Expr[Vec[Real]] = samples.reshape(2, targetExtent)
 
 object Increment43ShapeContractTests extends TestSuite:
+  private def occurrences(text: String, token: String): Int =
+    text.sliding(token.length).count(_ == token)
+
   private def failure(top: => Module): ConstructionException =
     scala.util.Try(ConstructionKernel.inspect(top)).failed.get.asInstanceOf[ConstructionException]
 
@@ -374,6 +393,34 @@ object Increment43ShapeContractTests extends TestSuite:
         failure(new Increment43ZeroShapeView)
       ).foreach(error => assert(error.diagnostic.code == "NODAL-SHAPE-043-003"))
 
+    test("chained reshape and flatten retain structural view ownership"):
+      val fixed = ConstructionKernel.inspect(new Increment43ChainedShapeView)
+      assert(fixed.shapeViews.size == 2)
+      assert(fixed.shapeViews.head.input.endsWith(".samples"))
+      assert(fixed.shapeViews(1).input == fixed.shapeViews.head.path)
+      assert(fixed.shapeViews(1).dimensions == Vector("1", "6"))
+      assert(failure(new Increment43InvalidChainedShapeView).diagnostic.code ==
+        "NODAL-SHAPE-043-003")
+
+      val symbolic = ConstructionKernel.inspect(new Increment43SymbolicChainedShapeFlatten)
+      assert(symbolic.shapeViews.size == 2)
+      assert(symbolic.shapeViews(1).input == symbolic.shapeViews.head.path)
+      assert(symbolic.shapeViews(1).dimensions.size == 1)
+      assert(symbolic.parameterExpressions.exists(
+        _.path == symbolic.shapeViews(1).dimensions.head
+      ))
+
+      Vector(fixed, symbolic).foreach: snapshot =>
+        val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+        assert(document == ScalaToMlirBridge.fromSnapshot(snapshot))
+        assert(occurrences(document.text, "\"nodal.shape_view\"") == 2)
+        assert(occurrences(document.text, "\"nodal.port_value\"") == 1)
+
+      val reordered = fixed.copy(shapeViews = fixed.shapeViews.reverse)
+      val reorderedError = scala.util.Try(ScalaToMlirBridge.fromSnapshot(reordered))
+        .failed.get.asInstanceOf[BridgeException]
+      assert(reorderedError.diagnostic.code == "NODAL-BRIDGE-045")
+
     test("fixed and symbolic flatten reuse the structural shape-view proof"):
       val snapshot = ConstructionKernel.inspect(new Increment43FixedShapeFlatten)
       assert(snapshot.shapeViews.size == 1)
@@ -532,7 +579,9 @@ object Increment43ShapeContractTests extends TestSuite:
               ScalaToMlirBridge.lower(new Increment43CompoundShapeFlatten),
               ScalaToMlirBridge.lower(new Increment43SymbolicShapeView),
               ScalaToMlirBridge.lower(new Increment43RepeatedShapeView),
-              ScalaToMlirBridge.lower(new Increment43CompoundShapeView)
+              ScalaToMlirBridge.lower(new Increment43CompoundShapeView),
+              ScalaToMlirBridge.lower(new Increment43ChainedShapeView),
+              ScalaToMlirBridge.lower(new Increment43SymbolicChainedShapeFlatten)
             ).foreach: document =>
               NativeCompilerClient.run(document, request) match
                 case success: NativeCompilerSuccess =>

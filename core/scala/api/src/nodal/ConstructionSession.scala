@@ -462,59 +462,83 @@ private final class ConstructionSession(val options: EmitOptions):
       dimensions: Vector[Dimension]
   ): Unit =
     val module = currentModule
-    val inputReference = input match
-      case candidate: AnyRef => Option(declarationIds.get(candidate)).getOrElse(
-          fail("NODAL-SHAPE-043-003", "shape-view value has no declaration identity")
-        )
-    if inputReference.module != module.handle then
+    val inputReference: DeclarationRef | ExpressionRef = input match
+      case candidate: AnyRef =>
+        Option(declarationIds.get(candidate))
+          .map(reference => reference: DeclarationRef | ExpressionRef)
+          .orElse(
+            Option(expressionIds.get(candidate)).map(reference =>
+              reference: DeclarationRef | ExpressionRef
+            )
+          )
+          .getOrElse(
+            fail("NODAL-SHAPE-043-003", "shape-view value has no structural identity")
+          )
+    val inputOwner = inputReference match
+      case reference: DeclarationRef => reference.module
+      case reference: ExpressionRef => reference.module
+    if inputOwner != module.handle then
       fail(
         "NODAL-SHAPE-043-003",
         "shape-view value must be owned by the active Module",
-        Some(declarationPath(inputReference))
+        Some(inputReference match
+          case reference: DeclarationRef => declarationPath(reference)
+          case reference: ExpressionRef => expressionPath(reference)
+        )
       )
-    val declaration = records(inputReference.module).declarations(inputReference.index)
-    if declaration.kind != KernelSignalKind.Input && declaration.kind != KernelSignalKind.Output
-    then
-      val _ = captureExpression(expression)
-    else
-      val descriptor = declaration.dataType
-        .map(CandidateRuntime.typeDescriptor)
-        .filter(_.kind == "Vec")
-        .getOrElse(
+    val path = inputReference match
+      case reference: DeclarationRef =>
+        val declaration = records(reference.module).declarations(reference.index)
+        if declaration.kind != KernelSignalKind.Input && declaration.kind != KernelSignalKind.Output
+        then
+          val _ = captureExpression(expression)
+          return
+        declarationPath(reference)
+      case reference: ExpressionRef =>
+        if !shapeViews.exists(_.reference == reference) then
           fail(
             "NODAL-SHAPE-043-003",
-            "shape-view declaration must have Vec type",
-            Some(declarationPath(inputReference))
+            "shape-view expression input is not a captured structural view",
+            Some(expressionPath(reference))
           )
-        )
-      val path = declarationPath(inputReference)
-      val sourceDimensions = descriptor.arguments.lift(1).toVector.flatMap:
-        case values: Seq[?] => values.toVector
-        case _ => Vector.empty
-      val analysis = new StructuralBoundAnalysis(
-        module.handle,
-        "NODAL-SHAPE-043-003",
-        "shape view"
-      )
-      val (sourceLiteralProduct, sourceRoots, sourceWorstCase, sourceParameters) =
-        shapeViewSignature(sourceDimensions, module.handle, path, analysis)
-      val (targetLiteralProduct, targetRoots, targetWorstCase, targetParameters) =
-        shapeViewSignature(dimensions, module.handle, path, analysis)
-      if sourceLiteralProduct != targetLiteralProduct || sourceRoots != targetRoots ||
-        sourceWorstCase > BigInt(Long.MaxValue) || targetWorstCase > BigInt(Long.MaxValue)
-      then
+        expressionPath(reference)
+    val descriptor = CandidateRuntime.expressionDataType(input)
+      .map(CandidateRuntime.typeDescriptor)
+      .filter(_.kind == "Vec")
+      .getOrElse(
         fail(
           "NODAL-SHAPE-043-003",
-          "shape view requires equal literal products and canonical static-expression root multisets within signed 64-bit bounds",
+          "shape-view input must have Vec type",
           Some(path)
         )
-      (sourceParameters ++ targetParameters).distinct.foreach(
-        markStructuralParameterEffect(_, "shape")
       )
-      val reference = captureExpression(expression).getOrElse(
-        fail("NODAL-SHAPE-043-003", "shape view requires an active Module")
+    val sourceDimensions = descriptor.arguments.lift(1).toVector.flatMap:
+      case values: Seq[?] => values.toVector
+      case _ => Vector.empty
+    val analysis = new StructuralBoundAnalysis(
+      module.handle,
+      "NODAL-SHAPE-043-003",
+      "shape view"
+    )
+    val (sourceLiteralProduct, sourceRoots, sourceWorstCase, sourceParameters) =
+      shapeViewSignature(sourceDimensions, module.handle, path, analysis)
+    val (targetLiteralProduct, targetRoots, targetWorstCase, targetParameters) =
+      shapeViewSignature(dimensions, module.handle, path, analysis)
+    if sourceLiteralProduct != targetLiteralProduct || sourceRoots != targetRoots ||
+      sourceWorstCase > BigInt(Long.MaxValue) || targetWorstCase > BigInt(Long.MaxValue)
+    then
+      fail(
+        "NODAL-SHAPE-043-003",
+        "shape view requires equal literal products and canonical static-expression root multisets within signed 64-bit bounds",
+        Some(path)
       )
-      shapeViews += ShapeViewRecord(reference, inputReference, dimensions)
+    (sourceParameters ++ targetParameters).distinct.foreach(
+      markStructuralParameterEffect(_, "shape")
+    )
+    val reference = captureExpression(expression).getOrElse(
+      fail("NODAL-SHAPE-043-003", "shape view requires an active Module")
+    )
+    shapeViews += ShapeViewRecord(reference, inputReference, dimensions)
 
   private def captureExpression(value: AnyRef): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>
@@ -2353,10 +2377,13 @@ private final class ConstructionSession(val options: EmitOptions):
 
   private def shapeViewSnapshots(): Vector[KernelShapeViewSnapshot] =
     shapeViews.toVector.map: view =>
+      val inputPath = view.input match
+        case reference: DeclarationRef => declarationPath(reference)
+        case reference: ExpressionRef => expressionPath(reference)
       KernelShapeViewSnapshot(
         path = expressionPath(view.reference),
         owner = modulePath(view.reference.module),
-        input = declarationPath(view.input),
+        input = inputPath,
         dimensions = view.dimensions.map(renderShapeDimension(_, view.reference.module))
       )
 

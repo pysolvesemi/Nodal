@@ -1165,7 +1165,12 @@ private[nodal] object CandidateRuntime:
       case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
         expression.literal.flatMap(_.value.toLongOption).filter(_ > 0).map(BigInt(_))
       case _ => None
-    if value.isInstanceOf[Signal[?]] && fixedDimensions.nonEmpty &&
+    val structuralCarrier =
+      value.isInstanceOf[Signal[?]] ||
+        (value match
+          case expression: KernelExpr[?] => expression.operation.contains("shape_view")
+          case _ => false)
+    if structuralCarrier && fixedDimensions.nonEmpty &&
       fixedDimensions.forall(_.nonEmpty)
     then
       val count = fixedDimensions.flatten.product
@@ -1179,7 +1184,7 @@ private[nodal] object CandidateRuntime:
             )
           )
         ).get
-    else if value.isInstanceOf[Signal[?]] && dimensions.nonEmpty then
+    else if structuralCarrier && dimensions.nonEmpty then
       val factors = dimensions.map:
         case literal: Int => literalInteger(literal)
         case parameter: Param[?] => parameter.asInstanceOf[Expr[Integer]]

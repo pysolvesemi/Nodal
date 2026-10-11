@@ -287,7 +287,7 @@ private final case class ShapeIndexRecord(
 
 private final case class ShapeViewRecord(
     reference: ExpressionRef,
-    input: DeclarationRef,
+    input: DeclarationRef | ExpressionRef,
     dimensions: Vector[Int | Expr[Integer]]
 )
 

@@ -470,7 +470,6 @@ object Increment43RangeConstructionTests extends TestSuite:
       val second = ConstructionKernel.inspect(new Increment43GeneratedWaveformOperator)
       assert(first == second)
       val generated = first.generatedRegions.head
-      val analog = first.analogRegions.head
       assert(first.waveformOperators.map(_.operation) ==
         Vector("analog_transition", "analog_slew", "analog_absdelay"))
       assert(first.waveformOperators.forall(_.generatedOwner.contains(generated.path)))

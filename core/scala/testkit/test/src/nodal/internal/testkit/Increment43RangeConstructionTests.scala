@@ -79,6 +79,26 @@ final class Increment43GeneratedLexicalStorage extends Module:
       val state = variable(Real, 0.0.V)
       state := state + 1.0.V
 
+final class Increment43GeneratedStructuredLexicalStorage extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val select = variable(Bool, false.B)
+      val mode = variable(Integer, 0.integer)
+      val iterations = variable(Integer, 1.integer)
+      val state = variable(Real, 0.0.real)
+      analogConditional:
+        analogWhen(select):
+          state := state + 1.0.real
+        analogOtherwise:
+          state := state + 2.0.real
+      analogCase(mode):
+        analogCaseArm(0):
+          state := state + 3.0.real
+        analogCaseDefault:
+          state := state + 4.0.real
+      analogLoop(iterations, maximumIterations = 2, minimumIterations = 1):
+        state := state + 5.0.real
+
 final class Increment43UnsupportedGeneratedContinuousOperator extends Module:
   hdlRange(0, 2): _ =>
     val state = ddt(1.0.V)
@@ -329,6 +349,53 @@ object Increment43RangeConstructionTests extends TestSuite:
       ).failed.get.asInstanceOf[BridgeException]
       assert(missingFailure.diagnostic.code == "NODAL-BRIDGE-043")
 
+    test("generated structured lexical storage preserves one owned control tree"):
+      val first = ConstructionKernel.inspect(new Increment43GeneratedStructuredLexicalStorage)
+      val second = ConstructionKernel.inspect(new Increment43GeneratedStructuredLexicalStorage)
+      assert(first == second)
+      assert(first.analogProcedural.size == 1)
+      val region = first.generatedRegions.head
+      val program = first.analogProcedural.head
+      assert(program.generatedOwner.contains(region.path))
+      assert(program.generatedInduction.contains(region.induction))
+      assert(program.variables.size == 4)
+      assert(program.assignments.isEmpty)
+      assert(program.controlFlow.nonEmpty)
+
+      val document = ScalaToMlirBridge.fromSnapshot(first)
+      for operation <- Vector(
+          "nodal.analog_if",
+          "nodal.analog_case",
+          "nodal.analog_loop",
+          "nodal.analog_variable",
+          "nodal.analog_variable_read",
+          "nodal.analog_assign"
+        )
+      do assert(document.text.contains(s"\"$operation\""))
+      val ownerMarker = s"generated_owner = \"${region.path}\""
+      val inductionMarker = s"generated_induction = \"${region.induction}\""
+      assert(document.text.sliding(ownerMarker.length).count(_ == ownerMarker) > 8)
+      assert(document.text.sliding(inductionMarker.length).count(_ == inductionMarker) > 8)
+
+      val control = program.controlFlow.get
+      val forgedEvent = AnalogControlFlowRuntime.Statement.EventControl(
+        identity = s"${program.owner}.forged_event",
+        event = AnalogEventRuntime.Expression(
+          operation = "analog_initial_step",
+          analyses = Vector("transient")
+        ),
+        body = AnalogControlFlowRuntime.Block(s"${program.owner}.forged_event.body", Vector.empty)
+      )
+      val forgedControl = control.copy(
+        root = control.root.copy(statements = control.root.statements :+ forgedEvent)
+      )
+      val forgedProgram = program.copy(controlFlow = Some(forgedControl))
+      val failure = scala.util.Try(
+        ScalaToMlirBridge.fromSnapshot(first.copy(analogProcedural = Vector(forgedProgram)))
+      ).failed.get.asInstanceOf[BridgeException]
+      assert(failure.diagnostic.code == "NODAL-BRIDGE-043")
+      assert(failure.diagnostic.message.contains("event profile"))
+
     test("unsupported generated effects still fail at their capture boundary"):
       val cases = Vector[(String, String, () => Module)](
         ("variable", "generate_0", () => new Increment43UnsupportedGeneratedVariable),
@@ -441,6 +508,48 @@ object Increment43RangeConstructionTests extends TestSuite:
                 scala.Predef.assert(false, "forged generated storage ownership was accepted")
               case failure: NativeCompilerFailure =>
                 assert(failure.standardError.contains("NODAL-ITERATION-043-004"))
+          finally delete(directory)
+
+    test("native verifies generated structured lexical storage when configured"):
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          val directory = workDirectory()
+          try
+            val snapshot = ConstructionKernel.inspect(
+              new Increment43GeneratedStructuredLexicalStorage
+            )
+            val region = snapshot.generatedRegions.head
+            val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+            val request = NativeCompilerRequest(
+              executable = Path.of(executable).toAbsolutePath,
+              arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
+              workingDirectory = directory,
+              timeout = Duration.ofSeconds(30)
+            )
+            NativeCompilerClient.run(document, request) match
+              case success: NativeCompilerSuccess =>
+                assert(success.normalizedMlir.contains("\"nodal.analog_if\""))
+                assert(success.normalizedMlir.contains("\"nodal.analog_case\""))
+                assert(success.normalizedMlir.contains("\"nodal.analog_loop\""))
+              case failure: NativeCompilerFailure =>
+                scala.Predef.assert(false, s"${failure.diagnostic}\n${failure.standardError}")
+
+            val marker = s"generated_owner = \"${region.path}\""
+            val assignmentOffset = document.text.indexOf("\"nodal.analog_assign\"")
+            val ownerOffset = document.text.indexOf(marker, assignmentOffset)
+            assert(assignmentOffset >= 0)
+            assert(ownerOffset >= assignmentOffset)
+            val forgedText = document.text.patch(
+              ownerOffset,
+              s"generated_owner = \"${region.path}.forged\"",
+              marker.length
+            )
+            NativeCompilerClient.run(document.copy(text = forgedText), request) match
+              case failure: NativeCompilerFailure =>
+                assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
+              case success: NativeCompilerSuccess =>
+                scala.Predef.assert(false, s"forged structured ownership accepted: $success")
           finally delete(directory)
 
     test(

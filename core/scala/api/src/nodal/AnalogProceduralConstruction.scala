@@ -600,10 +600,6 @@ private[nodal] object AnalogProceduralConstruction:
           ConstructionKernel.requireNoGeneratedEffect(
             "analog procedural region without generated lexical storage"
           )
-        if generatedContext.nonEmpty && builder.hasStructuredControl then
-          ConstructionKernel.requireNoGeneratedEffect(
-            "structured analog procedural control"
-          )
         if builder.hasStructuredControl then module.controlSnapshot = Some(snapshot)
         module.procedureComplete = true
         result

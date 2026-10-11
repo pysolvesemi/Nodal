@@ -118,6 +118,23 @@ private[nodal] object ScalaToMlirBridge:
     bytes.map(value => f"${value & 0xff}%02x").mkString
 
   private final class Renderer(snapshot: ConstructionSnapshot, backend: Backend):
+    private def generatedControlHasEvent(
+        control: AnalogControlFlowConstruction.Snapshot
+    ): Boolean =
+      def block(value: AnalogControlFlowRuntime.Block): Boolean =
+        value.statements.exists:
+          case _: AnalogControlFlowRuntime.Statement.EventControl => true
+          case scope: AnalogControlFlowRuntime.Statement.Scope => block(scope.body)
+          case conditional: AnalogControlFlowRuntime.Statement.IfThenElse =>
+            conditional.branches.exists(branch => block(branch.body)) ||
+              conditional.otherwise.exists(block)
+          case selection: AnalogControlFlowRuntime.Statement.CaseStatement =>
+            selection.arms.exists(arm => block(arm.body)) || selection.default.exists(block)
+          case loop: AnalogControlFlowRuntime.Statement.Loop => block(loop.body)
+          case _ => false
+
+      block(control.root)
+
     private val modules = snapshot.modules.sortBy(_.path)
     private val modulesByPath = modules.map(module => module.path -> module).toMap
     private val parameterExpressionsByOwner = snapshot.parameterExpressions
@@ -705,11 +722,11 @@ ${indent(body, 2)}
             )
           if region.owner != program.owner ||
             !program.generatedInduction.contains(region.induction) ||
-            program.controlFlow.nonEmpty
+            program.controlFlow.exists(generatedControlHasEvent)
           then
             fail(
               "NODAL-BRIDGE-043",
-              "generated analog procedure ownership, induction, or control profile is invalid",
+              "generated analog procedure ownership, induction, or event profile is invalid",
               Some(generatedOwner)
             )
       snapshot.parameterExpressions.foreach: expression =>

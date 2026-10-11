@@ -436,7 +436,8 @@ private[nodal] object AnalogProceduralMlir:
           resultTypes = Vector(resultType),
           attributes = Vector(
             "read_id" -> quoted(readPath),
-            "owner" -> quoted(program.owner),
+            "owner" -> quoted(program.owner)
+          ) ++ generatedAttributes(program) ++ Vector(
             "metadata" -> metadata(readPath, source)
           ),
           source = source
@@ -516,7 +517,8 @@ private[nodal] object AnalogProceduralMlir:
               "statement_id" -> quoted(assignment.identity),
               "authored_order" -> integer(order),
               "operation_order" -> integer(order),
-              "owner" -> quoted(program.owner),
+              "owner" -> quoted(program.owner)
+            ) ++ generatedAttributes(program) ++ Vector(
               "value_kind" -> quoted(payload.value.valueType.kind.label),
               "value_dimension" -> quoted(
                 canonicalDimension(payload.value.valueType.dimension)
@@ -560,7 +562,8 @@ private[nodal] object AnalogProceduralMlir:
               resultTypes = Vector(valueType(variable.valueType)),
               attributes = Vector(
                 "read_id" -> quoted(read.identity),
-                "owner" -> quoted(program.owner),
+                "owner" -> quoted(program.owner)
+              ) ++ generatedAttributes(program) ++ Vector(
                 "metadata" -> metadata(read.identity, read.source)
               ),
               source = read.source

@@ -207,3 +207,30 @@ only when the same procedure retained that exact object under the current
 region and induction identities. A raw variable-kind declaration forged inside
 an otherwise valid generated procedure therefore still rejects, as do variables
 outside a procedure and every other generated declaration kind.
+
+## Generated structured lexical-storage checkpoint
+
+The next bounded storage checkpoint extends the same owned generated procedure
+to the already-canonical Increment 34 conditional, case and runtime-bounded loop
+tree. Construction still captures one procedure under one immediate generated
+region and induction; it no longer rejects that procedure merely because its
+retained assignments are structured rather than straight-line. It does not
+unroll a branch or loop and does not create a second control-flow owner.
+
+The bridge accepts structured control only after the existing generated-region,
+variable-declaration and induction checks pass. Every emitted variable, read and
+assignment carries the same generated ownership pair. A bridge-local recursive
+check continues to reject an event-controlled statement even if a snapshot is
+forged after construction. Native verification admits only the established
+`analog_if`, `analog_case`, runtime/static analog-loop, lexical-scope and
+break/continue operations under the generated procedure. It independently
+checks the ownership attributes on each storage operation; event and continuous
+operations remain outside the allowlist.
+
+Public regression covers one deterministic procedure containing conditional,
+case and runtime-loop updates, forged event injection at the bridge boundary,
+and forged assignment ownership at the configured native boundary. The earlier
+straight-line case and every capture-boundary negative remain. This is still
+normalized-IR ownership evidence only: generated events and operators, legal
+Verilog-A generation, arrays/slices, source/index maps and all F-043 acceptance
+boxes remain open.

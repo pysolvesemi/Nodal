@@ -2079,13 +2079,15 @@ LogicalResult nodal::AnalogProcedureOp::verify() {
       if (nested == getOperation() || unsupported)
         return;
       if (!llvm::isa<nodal::AnalogVariableOp, nodal::AnalogVariableReadOp, nodal::AnalogAssignOp,
-                     nodal::AnalogScopeOp>(nested))
+                     nodal::AnalogScopeOp, nodal::AnalogIfOp, nodal::AnalogIfArmOp,
+                     nodal::AnalogCaseOp, nodal::AnalogCaseArmOp, nodal::AnalogLoopOp,
+                     nodal::AnalogBreakOp, nodal::AnalogContinueOp>(nested))
         unsupported = nested;
     });
     if (unsupported)
       return unsupported->emitOpError(
-          "NODAL-ITERATION-043-004: generated analog procedures support only straight-line "
-          "lexical storage");
+          "NODAL-ITERATION-043-004: generated analog procedures do not support event or "
+          "continuous effects");
   }
   if (failed(verifyAnalogProcedure(getOperation())))
     return failure();

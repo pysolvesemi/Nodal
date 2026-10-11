@@ -298,6 +298,7 @@ object Increment43RangeConstructionTests extends TestSuite:
       val document = ScalaToMlirBridge.fromSnapshot(first)
       assert(document.text.contains("\"nodal.generate\""))
       assert(document.text.contains("\"nodal.analog_procedure\""))
+      assert(document.text.contains("\"nodal.analog_variable\""))
       assert(document.text.indexOf("\"nodal.generate\"") <
         document.text.indexOf("\"nodal.analog_procedure\""))
       assert(document.text.contains(s"generated_owner = \"${region.path}\""))
@@ -306,13 +307,27 @@ object Increment43RangeConstructionTests extends TestSuite:
       val forgedPrograms = Vector(
         program.copy(generatedOwner = None),
         program.copy(generatedOwner = Some(region.path + ".forged")),
-        program.copy(generatedInduction = Some(region.induction + ".forged"))
+        program.copy(generatedInduction = Some(region.induction + ".forged")),
+        program.copy(variables = program.variables.map(_.copy(authoredPath = None))),
+        program.copy(variables =
+          program.variables.map(
+            _.copy(authoredPath = Some(region.path + ".forged"))
+          )
+        )
       )
       forgedPrograms.foreach: forgedProgram =>
         val forged = first.copy(analogProcedural = Vector(forgedProgram))
         val failure = scala.util.Try(ScalaToMlirBridge.fromSnapshot(forged)).failed.get
           .asInstanceOf[BridgeException]
         assert(failure.diagnostic.code == "NODAL-BRIDGE-043")
+
+      val missingVariableDeclaration = first.copy(
+        generatedRegions = Vector(region.copy(declarations = Vector.empty))
+      )
+      val missingFailure = scala.util.Try(
+        ScalaToMlirBridge.fromSnapshot(missingVariableDeclaration)
+      ).failed.get.asInstanceOf[BridgeException]
+      assert(missingFailure.diagnostic.code == "NODAL-BRIDGE-043")
 
     test("unsupported generated effects still fail at their capture boundary"):
       val cases = Vector[(String, String, () => Module)](

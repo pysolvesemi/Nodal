@@ -668,6 +668,41 @@ ${indent(body, 2)}
               Some(generatedOwner)
             )
           )
+          val module = modulesByPath(region.owner)
+          val declarationsByPath = module.declarations.map(declaration =>
+            declaration.path -> declaration
+          ).toMap
+          val generatedVariables = program.variables.map: record =>
+            val path = record.authoredPath.getOrElse(
+              fail(
+                "NODAL-BRIDGE-043",
+                "generated analog variable has no authored declaration identity",
+                Some(record.variable.identity)
+              )
+            )
+            if record.variable.owner != program.owner ||
+              !declarationsByPath.get(path).exists(_.kind == "variable")
+            then
+              fail(
+                "NODAL-BRIDGE-043",
+                "generated analog variable does not match an owned variable declaration",
+                Some(path)
+              )
+            path
+          requireUnique(
+            generatedVariables,
+            "NODAL-BRIDGE-043",
+            "generated analog variable declaration"
+          )
+          val regionVariables = region.declarations.filter(path =>
+            declarationsByPath.get(path).exists(_.kind == "variable")
+          )
+          if generatedVariables.toSet != regionVariables.toSet then
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated variable declarations do not match their procedural ownership",
+              Some(generatedOwner)
+            )
           if region.owner != program.owner ||
             !program.generatedInduction.contains(region.induction) ||
             program.controlFlow.nonEmpty
@@ -2543,36 +2578,45 @@ ${indent(body, 2)}
             Some(region.path)
           )
         )
-        if declaration.kind != "analog-node" then
-          fail(
-            "NODAL-BRIDGE-043",
-            "generated declaration kind '" + declaration.kind +
-              "' is not enabled by this F-043 stage",
-            Some(declaration.path)
-          )
-        val discipline = conservativeDiscipline(declaration)
-        val resultType = "!nodal.terminal<" + quoted(discipline) + ">"
-        val result = "%" + stableLocalSymbol("generated_node", declaration.path)
-        nested += operation(
-          "nodal.node",
-          results = Vector(result),
-          resultTypes = Vector(resultType),
-          attributes = Vector(
-            "name" -> quoted(declaration.name),
-            "source_path" -> quoted(declaration.path),
-            "generated_owner" -> quoted(region.path),
-            "generated_induction" -> quoted(region.induction),
-            "metadata" -> bridgeMetadata(
-              declaration.path,
-              Vector(
-                "declaration_kind" -> quoted(declaration.kind),
+        declaration.kind match
+          case "analog-node" =>
+            val discipline = conservativeDiscipline(declaration)
+            val resultType = "!nodal.terminal<" + quoted(discipline) + ">"
+            val result = "%" + stableLocalSymbol("generated_node", declaration.path)
+            nested += operation(
+              "nodal.node",
+              results = Vector(result),
+              resultTypes = Vector(resultType),
+              attributes = Vector(
+                "name" -> quoted(declaration.name),
+                "source_path" -> quoted(declaration.path),
                 "generated_owner" -> quoted(region.path),
-                "induction" -> quoted(region.induction)
-              )
+                "generated_induction" -> quoted(region.induction),
+                "metadata" -> bridgeMetadata(
+                  declaration.path,
+                  Vector(
+                    "declaration_kind" -> quoted(declaration.kind),
+                    "generated_owner" -> quoted(region.path),
+                    "induction" -> quoted(region.induction)
+                  )
+                )
+              ),
+              semanticPath = declaration.path
             )
-          ),
-          semanticPath = declaration.path
-        )
+          case "variable"
+              if snapshot.analogProcedural.exists(program =>
+                program.owner == module.path &&
+                  program.generatedOwner.contains(region.path) &&
+                  program.generatedInduction.contains(region.induction) &&
+                  program.variables.exists(_.authoredPath.contains(declaration.path))
+              ) => ()
+          case _ =>
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated declaration kind '" + declaration.kind +
+                "' is not enabled by this F-043 stage",
+              Some(declaration.path)
+            )
 
       nested ++= AnalogProceduralMlir.renderGenerated(snapshot, module.path, region.path)
 

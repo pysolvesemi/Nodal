@@ -2,6 +2,21 @@
 
 **Status:** bounded implementation checkpoint; no F-043 child is complete.
 
+## Generated procedural assignment capture repair
+
+The bounded generated lexical-storage checkpoint now routes an assignment made
+through the public `Variable.:=` surface directly to the canonical analog
+procedural recorder while an owned generated procedure is active. This avoids
+misclassifying the same assignment as a generic generated effect before the
+procedural owner can retain it. The generated-region inventory remains
+fail-closed: a raw generic assignment still rejects at its capture boundary,
+and a forged variable declaration is still rejected when the completed region
+is reconciled with the exact retained procedural variable inventory.
+
+This repair adds no new effect kind, structured procedural control, event or
+operator placement, target lowering, eager unrolling, storage inference, or
+roadmap completion. Every F-043 parent and descendant remains open.
+
 This checkpoint turns `Vec` declaration dimensions from inert spelling into a
 checked construction, bridge and native contract for fixed positive dimensions,
 directly referenced bounded `Integer` parameters, and the bounded compound DAG

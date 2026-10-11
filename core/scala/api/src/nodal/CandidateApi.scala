@@ -1320,12 +1320,19 @@ private[nodal] object CandidateRuntime:
       left: Variable[A],
       right: Expr[A]
   ): Unit =
-    ConstructionKernel.operation("assignment", left, right)
-    AnalogProceduralConstruction.assign(
-      left,
-      right,
-      ConstructionKernel.captureAnalogProceduralSource
-    )
+    if AnalogProceduralConstruction.generatedProcedureActive then
+      AnalogProceduralConstruction.assign(
+        left,
+        right,
+        ConstructionKernel.captureAnalogProceduralSource
+      )
+    else
+      ConstructionKernel.operation("assignment", left, right)
+      AnalogProceduralConstruction.assign(
+        left,
+        right,
+        ConstructionKernel.captureAnalogProceduralSource
+      )
 
   def assign(left: AnyRef, right: Any): Unit =
     AnalogProceduralConstruction.requireContinuousContext("digital assignment")

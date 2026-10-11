@@ -67,6 +67,12 @@ final class Increment43ForgedGeneratedVariableCarrier extends Module:
       )
       state := state + 1.0.V
 
+final class Increment43ForgedGeneratedAssignmentCarrier extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val state = variable(Real, 0.0.V)
+      ConstructionKernel.operation("assignment", state, state)
+
 final class Increment43GeneratedLexicalStorage extends Module:
   hdlRange(0, 2): _ =>
     analogProcedure:
@@ -312,6 +318,7 @@ object Increment43RangeConstructionTests extends TestSuite:
       val cases = Vector[(String, () => Module)](
         "variable" -> (() => new Increment43UnsupportedGeneratedVariable),
         "variable" -> (() => new Increment43ForgedGeneratedVariableCarrier),
+        "assignment" -> (() => new Increment43ForgedGeneratedAssignmentCarrier),
         "continuous-time operator" ->
           (() => new Increment43UnsupportedGeneratedContinuousOperator),
         "analog event" -> (() => new Increment43UnsupportedGeneratedEvent),

@@ -127,6 +127,17 @@ final class Increment43GeneratedWaveformOperator extends Module:
       val delayed = absdelay(1.0.V, 1.0.ns)
       val _ = (smoothed, limited, delayed)
 
+final class Increment43UnsupportedGeneratedAbstime extends Module:
+  hdlRange(0, 2): _ =>
+    analog:
+      val currentTime = abstime
+      val _ = currentTime
+
+final class Increment43UnsupportedGeneratedBoundStep extends Module:
+  hdlRange(0, 2): _ =>
+    analog:
+      boundStep(1.0.ns)
+
 final class Increment43UnsupportedGeneratedEvent extends Module:
   hdlRange(0, 2): _ =>
     val event = cross(1.0.V)
@@ -552,6 +563,16 @@ object Increment43RangeConstructionTests extends TestSuite:
           "continuous-time operator",
           "generate_0",
           () => new Increment43UnsupportedGeneratedContinuousOperator
+        ),
+        (
+          "analog waveform operator",
+          "generate_0",
+          () => new Increment43UnsupportedGeneratedAbstime
+        ),
+        (
+          "analog waveform operator",
+          "generate_0",
+          () => new Increment43UnsupportedGeneratedBoundStep
         ),
         ("analog event", "generate_0", () => new Increment43UnsupportedGeneratedEvent),
         (

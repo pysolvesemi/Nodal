@@ -236,7 +236,11 @@ private[nodal] object ConstructionKernel:
       inputs: Vector[Expr[Real]]
   ): Unit =
     active.foreach: session =>
-      session.requireNoGeneratedEffect(s"analog waveform operator '$operation'")
+      val ownedGeneratedWaveform =
+        session.generatedContinuousRegionActive &&
+          Set("analog_transition", "analog_slew", "analog_absdelay").contains(operation)
+      if !ownedGeneratedWaveform then
+        session.requireNoGeneratedEffect(s"analog waveform operator '$operation'")
       session.registerWaveformOperator(value, operation, inputs)
 
   def waveformForbidden[A](body: => A): A = active match

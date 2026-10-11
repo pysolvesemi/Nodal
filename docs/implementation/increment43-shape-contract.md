@@ -362,3 +362,29 @@ emission and does not enumerate elements or specialize parameter defaults.
 This checkpoint does not add row/plane/slice syntax, l-value selection, target
 array lowering, generated lexical storage or Verilog-A generation. Those
 requirements and every F-043 parent/descendant checkbox remain open.
+
+## Structural view indexing checkpoint
+
+The frozen public `Vec.at(...)` surface now accepts an earlier verified
+structural reshape or flatten result in the same module. Construction retains
+that immediate view identity, checks rank and every literal/static Integer
+index against the view's result dimensions, and records the index only after
+the predecessor has passed the existing cardinality, ownership and parameter
+proofs. A generic expression that merely has `Vec` type is not promoted to a
+structural carrier, and internal shaped wires keep their compatibility-only
+inert path.
+
+The bridge independently requires the input identity to name a captured view
+owned by the same module, uses its verified result dimensions for the all-legal-
+extents index proof, and emits `nodal.shape_index` directly from the already
+emitted `nodal.shape_view` SSA result. It does not reread the root port or
+collapse the view chain. Native verification therefore checks the actual
+shaped SSA edge with the existing `shape_index` verifier. Fixed and symbolic
+public witnesses cover deterministic capture/emission, exact view-to-index SSA
+connectivity, configured native execution, bounds rejection, and missing-view
+snapshot rejection.
+
+This is element indexing across an existing structural view, not a row/plane
+or general slice result, l-value selection, target array lowering, generated
+lexical storage or Verilog-A generation. Those requirements and every F-043
+parent/descendant checkbox remain open.

@@ -714,19 +714,27 @@ ${indent(body, 2)}
             "shape-index identity has no source-map entry",
             Some(index.path)
           )
-        val declaration = module.declarations.find(_.path == index.input).getOrElse(
-          fail("NODAL-BRIDGE-044", "shape-index input declaration is absent", Some(index.path))
-        )
-        if declaration.kind != "input" && declaration.kind != "output" then
-          fail(
-            "NODAL-BRIDGE-044",
-            "shape-index input must be a module port",
-            Some(index.path)
-          )
-        val dataType = declaration.dataType.getOrElse(
-          fail("NODAL-BRIDGE-044", "shape-index input type is absent", Some(index.path))
-        )
-        val (_, dimensions) = vecTypeParts(dataType, index.path)
+        val dimensions = module.declarations.find(_.path == index.input) match
+          case Some(declaration) =>
+            if declaration.kind != "input" && declaration.kind != "output" then
+              fail(
+                "NODAL-BRIDGE-044",
+                "shape-index input must be a module port or structural view",
+                Some(index.path)
+              )
+            val dataType = declaration.dataType.getOrElse(
+              fail("NODAL-BRIDGE-044", "shape-index input type is absent", Some(index.path))
+            )
+            vecTypeParts(dataType, index.path)._2
+          case None =>
+            validatedShapeViews.get(index.input) match
+              case Some(inputView) if inputView.owner == index.owner => inputView.dimensions
+              case _ =>
+                fail(
+                  "NODAL-BRIDGE-044",
+                  "shape-index input must be a captured structural view in the same Module",
+                  Some(index.path)
+                )
         if index.indices.size != dimensions.size then
           fail("NODAL-BRIDGE-044", "shape-index rank does not match input rank", Some(index.path))
         index.indices.zip(dimensions).zipWithIndex.foreach:
@@ -1018,24 +1026,35 @@ ${indent(body, 2)}
 
       shapeIndicesByOwner.getOrElse(module.path, Vector.empty).zipWithIndex.foreach:
         (index, ordinal) =>
-          val declaration = declarationsByPath(index.input)
-          val sourceType = declaration.dataType.getOrElse(
-            fail("NODAL-BRIDGE-044", "shape-index input type is absent", Some(index.path))
-          )
-          val (elementText, _) = vecTypeParts(sourceType, index.path)
-          val shapedType = parseType(sourceType, index.path)
+          val (inputValue, shapedType, elementText) = declarationsByPath.get(index.input) match
+            case Some(declaration) =>
+              val sourceType = declaration.dataType.getOrElse(
+                fail("NODAL-BRIDGE-044", "shape-index input type is absent", Some(index.path))
+              )
+              val (element, _) = vecTypeParts(sourceType, index.path)
+              val sourceShapedType = parseType(sourceType, index.path)
+              val portValue = s"%shape_index_${ordinal}_input"
+              body += operation(
+                "nodal.port_value",
+                results = Vector(portValue),
+                resultTypes = Vector(sourceShapedType),
+                attributes = Vector(
+                  "port" -> symbolReference(stableLocalSymbol("port", declaration.name)),
+                  "metadata" -> bridgeMetadata(index.input, Vector("use" -> quoted("shape_index")))
+                ),
+                semanticPath = index.input
+              )
+              (portValue, sourceShapedType, element)
+            case None =>
+              emittedShapeViews.getOrElse(
+                index.input,
+                fail(
+                  "NODAL-BRIDGE-044",
+                  "shape-index input structural view was not emitted before its consumer",
+                  Some(index.path)
+                )
+              )
           val elementType = parseType(elementText, index.path)
-          val inputValue = s"%shape_index_${ordinal}_input"
-          body += operation(
-            "nodal.port_value",
-            results = Vector(inputValue),
-            resultTypes = Vector(shapedType),
-            attributes = Vector(
-              "port" -> symbolReference(stableLocalSymbol("port", declaration.name)),
-              "metadata" -> bridgeMetadata(index.input, Vector("use" -> quoted("shape_index")))
-            ),
-            semanticPath = index.input
-          )
           val indexValues = index.indices.zipWithIndex.map: (position, axis) =>
             position.toIntOption match
               case Some(literal) =>

@@ -95,6 +95,22 @@ final class Increment43ChainedShapeView extends Module, Increment43ShapeClock:
   val first: Expr[Vec[Real]] = samples.reshape(3, 2)
   val second: Expr[Vec[Real]] = first.reshape(1, 6)
 
+final class Increment43IndexedShapeView extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
+  val view: Expr[Vec[Real]] = samples.reshape(3, 2)
+  val selected: Expr[Real] = view.at(2, 1)
+
+final class Increment43SymbolicIndexedShapeView extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
+  val samples: Signal[Vec[Real]] = in(Vec(Real, lanes, 2))
+  val view: Expr[Vec[Real]] = samples.reshape(2, lanes)
+  val selected: Expr[Real] = view.at(1, 0)
+
+final class Increment43InvalidIndexedShapeView extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
+  val view: Expr[Vec[Real]] = samples.reshape(3, 2)
+  val selected: Expr[Real] = view.at(3, 0)
+
 final class Increment43SymbolicChainedShapeFlatten extends Module, Increment43ShapeClock:
   val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
   val samples: Signal[Vec[Real]] = in(Vec(Real, lanes, 2))
@@ -421,6 +437,36 @@ object Increment43ShapeContractTests extends TestSuite:
         .failed.get.asInstanceOf[BridgeException]
       assert(reorderedError.diagnostic.code == "NODAL-BRIDGE-045")
 
+    test("indexing a structural view retains its immediate SSA predecessor"):
+      val fixed = ConstructionKernel.inspect(new Increment43IndexedShapeView)
+      assert(fixed.shapeViews.size == 1)
+      assert(fixed.shapeIndices.size == 1)
+      assert(fixed.shapeIndices.head.input == fixed.shapeViews.head.path)
+      assert(fixed.shapeIndices.head.indices == Vector("2", "1"))
+      assert(failure(new Increment43InvalidIndexedShapeView).diagnostic.code ==
+        "NODAL-SHAPE-043-002")
+
+      val symbolic = ConstructionKernel.inspect(new Increment43SymbolicIndexedShapeView)
+      assert(symbolic.shapeIndices.head.input == symbolic.shapeViews.head.path)
+      assert(symbolic.shapeIndices.head.indices == Vector("1", "0"))
+      assert(symbolic.shapeViews.head.dimensions == Vector("2", "lanes"))
+
+      Vector(fixed, symbolic).foreach: snapshot =>
+        val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+        assert(document == ScalaToMlirBridge.fromSnapshot(snapshot))
+        assert(occurrences(document.text, "\"nodal.port_value\"") == 1)
+        assert(occurrences(document.text, "\"nodal.shape_view\"") == 1)
+        assert(occurrences(document.text, "\"nodal.shape_index\"") == 1)
+        assert(document.text.contains("\"nodal.shape_index\"(%shape_view_0"))
+
+      Vector(
+        fixed.copy(shapeViews = Vector.empty),
+        fixed.copy(shapeIndices = fixed.shapeIndices.map(_.copy(input = "Missing.view")))
+      ).foreach: mutated =>
+        val error = scala.util.Try(ScalaToMlirBridge.fromSnapshot(mutated))
+          .failed.get.asInstanceOf[BridgeException]
+        assert(error.diagnostic.code == "NODAL-BRIDGE-044")
+
     test("fixed and symbolic flatten reuse the structural shape-view proof"):
       val snapshot = ConstructionKernel.inspect(new Increment43FixedShapeFlatten)
       assert(snapshot.shapeViews.size == 1)
@@ -581,12 +627,16 @@ object Increment43ShapeContractTests extends TestSuite:
               ScalaToMlirBridge.lower(new Increment43RepeatedShapeView),
               ScalaToMlirBridge.lower(new Increment43CompoundShapeView),
               ScalaToMlirBridge.lower(new Increment43ChainedShapeView),
-              ScalaToMlirBridge.lower(new Increment43SymbolicChainedShapeFlatten)
+              ScalaToMlirBridge.lower(new Increment43SymbolicChainedShapeFlatten),
+              ScalaToMlirBridge.lower(new Increment43IndexedShapeView),
+              ScalaToMlirBridge.lower(new Increment43SymbolicIndexedShapeView)
             ).foreach: document =>
               NativeCompilerClient.run(document, request) match
                 case success: NativeCompilerSuccess =>
                   assert(success.normalizedMlir.contains("nodal.shape_view"))
                   assert(success.normalizedMlir.contains("materialization = \"view\""))
+                  if document.text.contains("nodal.shape_index") then
+                    assert(success.normalizedMlir.contains("nodal.shape_index"))
                 case failure: NativeCompilerFailure =>
                   scala.Predef.assert(false, s"${failure.diagnostic}\n${failure.standardError}")
           finally delete(directory)

@@ -281,7 +281,7 @@ private final class GeneratedRegionRecord(
 
 private final case class ShapeIndexRecord(
     reference: ExpressionRef,
-    input: DeclarationRef,
+    input: DeclarationRef | ExpressionRef,
     indices: Vector[Int | Expr[Integer]]
 )
 

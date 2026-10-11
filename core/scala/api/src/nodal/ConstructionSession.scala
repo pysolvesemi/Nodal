@@ -270,67 +270,93 @@ private final class ConstructionSession(val options: EmitOptions):
       indices: Vector[Dimension]
   ): Unit =
     val module = currentModule
-    val inputReference = input match
-      case candidate: AnyRef => Option(declarationIds.get(candidate)).getOrElse(
-          fail("NODAL-SHAPE-043-002", "indexed value has no declaration identity")
-        )
-    if inputReference.module != module.handle then
+    val inputReference: DeclarationRef | ExpressionRef = input match
+      case candidate: AnyRef =>
+        Option(declarationIds.get(candidate))
+          .map(reference => reference: DeclarationRef | ExpressionRef)
+          .orElse(
+            Option(expressionIds.get(candidate)).map(reference =>
+              reference: DeclarationRef | ExpressionRef
+            )
+          )
+          .getOrElse(
+            fail("NODAL-SHAPE-043-002", "indexed value has no structural identity")
+          )
+    val inputOwner = inputReference match
+      case reference: DeclarationRef => reference.module
+      case reference: ExpressionRef => reference.module
+    val inputPath = inputReference match
+      case reference: DeclarationRef => declarationPath(reference)
+      case reference: ExpressionRef => expressionPath(reference)
+    if inputOwner != module.handle then
       fail(
         "NODAL-SHAPE-043-002",
         "indexed value must be owned by the active Module",
-        Some(declarationPath(inputReference))
+        Some(inputPath)
       )
-    val declaration = records(inputReference.module).declarations(inputReference.index)
-    if declaration.kind != KernelSignalKind.Input && declaration.kind != KernelSignalKind.Output
-    then
-      // Preserve the previously exposed inert expression surface until shaped
-      // internal storage has an owned SSA carrier and lowering contract.
-      val _ = captureExpression(expression)
-    else
-      val descriptor = declaration.dataType
-        .map(CandidateRuntime.typeDescriptor)
-        .filter(_.kind == "Vec")
-        .getOrElse(
+    val structuralInput = inputReference match
+      case reference: DeclarationRef =>
+        val declaration = records(reference.module).declarations(reference.index)
+        if declaration.kind != KernelSignalKind.Input && declaration.kind != KernelSignalKind.Output
+        then None
+        else declaration.dataType
+      case reference: ExpressionRef =>
+        if !shapeViews.exists(_.reference == reference) then
           fail(
             "NODAL-SHAPE-043-002",
-            "indexed declaration must have Vec type",
-            Some(declarationPath(inputReference))
+            "indexed expression input is not a captured structural view",
+            Some(inputPath)
           )
-        )
-      val dimensions = descriptor.arguments.lift(1).toVector.flatMap:
-        case values: Seq[?] => values.toVector
-        case _ => Vector.empty
-      if indices.size != dimensions.size then
-        fail(
-          "NODAL-SHAPE-043-002",
-          "index rank does not match shaped rank",
-          Some(declarationPath(inputReference))
-        )
-      val analysis = new StructuralBoundAnalysis(
-        module.handle,
-        "NODAL-SHAPE-043-002",
-        "shape index"
-      )
-      val extentAnalysis = new StructuralBoundAnalysis(
-        module.handle,
-        "NODAL-SHAPE-043-002",
-        "shape extent"
-      )
-      val positions = indices.map(value => value -> analysis(value))
-      positions.zip(dimensions).zipWithIndex.foreach:
-        case (((_, position), dimension), axis) =>
-          val minimum = minimumShapeExtent(dimension, extentAnalysis)
-          if position.bounds.lower < 0L || position.bounds.upper >= minimum then
+        CandidateRuntime.expressionDataType(input)
+    structuralInput match
+      case None =>
+        // Preserve the previously exposed inert expression surface until shaped
+        // internal storage has an owned SSA carrier and lowering contract.
+        val _ = captureExpression(expression)
+      case Some(dataType) =>
+        val descriptor = Option(CandidateRuntime.typeDescriptor(dataType))
+          .filter(_.kind == "Vec")
+          .getOrElse(
             fail(
               "NODAL-SHAPE-043-002",
-              s"index is not in bounds for every legal shape at axis $axis",
-              Some(declarationPath(inputReference))
+              "indexed structural value must have Vec type",
+              Some(inputPath)
             )
-          position.parameters.foreach(markStructuralParameterEffect(_, "shape"))
-      val reference = captureExpression(expression).getOrElse(
-        fail("NODAL-SHAPE-043-002", "shape index requires an active Module")
-      )
-      shapeIndices += ShapeIndexRecord(reference, inputReference, positions.map(_._1))
+          )
+        val dimensions = descriptor.arguments.lift(1).toVector.flatMap:
+          case values: Seq[?] => values.toVector
+          case _ => Vector.empty
+        if indices.size != dimensions.size then
+          fail(
+            "NODAL-SHAPE-043-002",
+            "index rank does not match shaped rank",
+            Some(inputPath)
+          )
+        val analysis = new StructuralBoundAnalysis(
+          module.handle,
+          "NODAL-SHAPE-043-002",
+          "shape index"
+        )
+        val extentAnalysis = new StructuralBoundAnalysis(
+          module.handle,
+          "NODAL-SHAPE-043-002",
+          "shape extent"
+        )
+        val positions = indices.map(value => value -> analysis(value))
+        positions.zip(dimensions).zipWithIndex.foreach:
+          case (((_, position), dimension), axis) =>
+            val minimum = minimumShapeExtent(dimension, extentAnalysis)
+            if position.bounds.lower < 0L || position.bounds.upper >= minimum then
+              fail(
+                "NODAL-SHAPE-043-002",
+                s"index is not in bounds for every legal shape at axis $axis",
+                Some(inputPath)
+              )
+            position.parameters.foreach(markStructuralParameterEffect(_, "shape"))
+        val reference = captureExpression(expression).getOrElse(
+          fail("NODAL-SHAPE-043-002", "shape index requires an active Module")
+        )
+        shapeIndices += ShapeIndexRecord(reference, inputReference, positions.map(_._1))
 
   private final case class ShapeViewFactor(
       literal: Option[Long],
@@ -2368,10 +2394,13 @@ private final class ConstructionSession(val options: EmitOptions):
 
   private def shapeIndexSnapshots(): Vector[KernelShapeIndexSnapshot] =
     shapeIndices.toVector.map: index =>
+      val inputPath = index.input match
+        case reference: DeclarationRef => declarationPath(reference)
+        case reference: ExpressionRef => expressionPath(reference)
       KernelShapeIndexSnapshot(
         path = expressionPath(index.reference),
         owner = modulePath(index.reference.module),
-        input = declarationPath(index.input),
+        input = inputPath,
         indices = index.indices.map(generatedBound)
       )
 

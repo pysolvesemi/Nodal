@@ -483,8 +483,7 @@ private final class ConstructionSession(val options: EmitOptions):
         "shape-view value must be owned by the active Module",
         Some(inputReference match
           case reference: DeclarationRef => declarationPath(reference)
-          case reference: ExpressionRef => expressionPath(reference)
-        )
+          case reference: ExpressionRef => expressionPath(reference))
       )
     val path = inputReference match
       case reference: DeclarationRef =>
@@ -492,8 +491,8 @@ private final class ConstructionSession(val options: EmitOptions):
         if declaration.kind != KernelSignalKind.Input && declaration.kind != KernelSignalKind.Output
         then
           val _ = captureExpression(expression)
-          return
-        declarationPath(reference)
+          None
+        else Some(declarationPath(reference))
       case reference: ExpressionRef =>
         if !shapeViews.exists(_.reference == reference) then
           fail(
@@ -501,44 +500,45 @@ private final class ConstructionSession(val options: EmitOptions):
             "shape-view expression input is not a captured structural view",
             Some(expressionPath(reference))
           )
-        expressionPath(reference)
-    val descriptor = CandidateRuntime.expressionDataType(input)
-      .map(CandidateRuntime.typeDescriptor)
-      .filter(_.kind == "Vec")
-      .getOrElse(
+        Some(expressionPath(reference))
+    path.foreach: path =>
+      val descriptor = CandidateRuntime.expressionDataType(input)
+        .map(CandidateRuntime.typeDescriptor)
+        .filter(_.kind == "Vec")
+        .getOrElse(
+          fail(
+            "NODAL-SHAPE-043-003",
+            "shape-view input must have Vec type",
+            Some(path)
+          )
+        )
+      val sourceDimensions = descriptor.arguments.lift(1).toVector.flatMap:
+        case values: Seq[?] => values.toVector
+        case _ => Vector.empty
+      val analysis = new StructuralBoundAnalysis(
+        module.handle,
+        "NODAL-SHAPE-043-003",
+        "shape view"
+      )
+      val (sourceLiteralProduct, sourceRoots, sourceWorstCase, sourceParameters) =
+        shapeViewSignature(sourceDimensions, module.handle, path, analysis)
+      val (targetLiteralProduct, targetRoots, targetWorstCase, targetParameters) =
+        shapeViewSignature(dimensions, module.handle, path, analysis)
+      if sourceLiteralProduct != targetLiteralProduct || sourceRoots != targetRoots ||
+        sourceWorstCase > BigInt(Long.MaxValue) || targetWorstCase > BigInt(Long.MaxValue)
+      then
         fail(
           "NODAL-SHAPE-043-003",
-          "shape-view input must have Vec type",
+          "shape view requires equal literal products and canonical static-expression root multisets within signed 64-bit bounds",
           Some(path)
         )
+      (sourceParameters ++ targetParameters).distinct.foreach(
+        markStructuralParameterEffect(_, "shape")
       )
-    val sourceDimensions = descriptor.arguments.lift(1).toVector.flatMap:
-      case values: Seq[?] => values.toVector
-      case _ => Vector.empty
-    val analysis = new StructuralBoundAnalysis(
-      module.handle,
-      "NODAL-SHAPE-043-003",
-      "shape view"
-    )
-    val (sourceLiteralProduct, sourceRoots, sourceWorstCase, sourceParameters) =
-      shapeViewSignature(sourceDimensions, module.handle, path, analysis)
-    val (targetLiteralProduct, targetRoots, targetWorstCase, targetParameters) =
-      shapeViewSignature(dimensions, module.handle, path, analysis)
-    if sourceLiteralProduct != targetLiteralProduct || sourceRoots != targetRoots ||
-      sourceWorstCase > BigInt(Long.MaxValue) || targetWorstCase > BigInt(Long.MaxValue)
-    then
-      fail(
-        "NODAL-SHAPE-043-003",
-        "shape view requires equal literal products and canonical static-expression root multisets within signed 64-bit bounds",
-        Some(path)
+      val reference = captureExpression(expression).getOrElse(
+        fail("NODAL-SHAPE-043-003", "shape view requires an active Module")
       )
-    (sourceParameters ++ targetParameters).distinct.foreach(
-      markStructuralParameterEffect(_, "shape")
-    )
-    val reference = captureExpression(expression).getOrElse(
-      fail("NODAL-SHAPE-043-003", "shape view requires an active Module")
-    )
-    shapeViews += ShapeViewRecord(reference, inputReference, dimensions)
+      shapeViews += ShapeViewRecord(reference, inputReference, dimensions)
 
   private def captureExpression(value: AnyRef): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>

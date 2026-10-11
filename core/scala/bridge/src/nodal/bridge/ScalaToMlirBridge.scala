@@ -933,6 +933,23 @@ ${indent(body, 2)}
 
       shapeViewsByOwner.getOrElse(module.path, Vector.empty).zipWithIndex.foreach:
         (view, ordinal) =>
+          view.dimensions.distinct.filter(expressionsByPath.contains).foreach: dimensionPath =>
+            val (_, dataType) = emitStaticValue(
+              dimensionPath,
+              parameterSymbols,
+              declarationsByPath,
+              expressionsByPath,
+              body,
+              shapeStaticValues,
+              () => allocateShapeStaticValue(),
+              requireStructural = true
+            )
+            if dataType != "i64" then
+              fail(
+                "NODAL-BRIDGE-045",
+                "shape-view expression dimension must have Integer type",
+                Some(dimensionPath)
+              )
           val declaration = declarationsByPath(view.input)
           val sourceType = declaration.dataType.getOrElse(
             fail("NODAL-BRIDGE-045", "shape-view input type is absent", Some(view.path))

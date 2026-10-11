@@ -1716,9 +1716,8 @@ LogicalResult nodal::ShapeViewOp::verify() {
     llvm::SmallPtrSet<Operation *, 16> active;
 
     auto multiply = [](uint64_t &product, int64_t factor) {
-      if (factor <= 0 ||
-          product > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
-                        static_cast<uint64_t>(factor))
+      if (factor <= 0 || product > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
+                                       static_cast<uint64_t>(factor))
         return false;
       product *= static_cast<uint64_t>(factor);
       return true;
@@ -1726,8 +1725,8 @@ LogicalResult nodal::ShapeViewOp::verify() {
 
     auto collectStaticFactor = [&](auto &&self, Value value, unsigned depth) -> bool {
       Operation *operation = value.getDefiningOp();
-      if (!operation || operation->getParentOfType<nodal::ModuleOp>() != owner || depth >= 512 ||
-          !active.insert(operation).second || !value.getType().isInteger(64))
+      if (!operation || depth >= 512 || !active.insert(operation).second ||
+          !value.getType().isInteger(64))
         return false;
       const llvm::scope_exit remove([&] { active.erase(operation); });
       llvm::SmallPtrSet<Operation *, 16> dependencyActive;
@@ -1750,8 +1749,7 @@ LogicalResult nodal::ShapeViewOp::verify() {
           return false;
         auto type = parameter->getAttrOfType<TypeAttr>("type");
         auto parameterBounds = nodal::inferParameterIntegerBounds(parameter);
-        if (!type || !type.getValue().isInteger(64) ||
-            !nodal::isStructuralParameter(parameter) ||
+        if (!type || !type.getValue().isInteger(64) || !nodal::isStructuralParameter(parameter) ||
             !parameterHasShapeEnvelope(owner, reference.getValue()) ||
             !parameterHasPositiveFiniteRange(owner, reference.getValue()) ||
             failed(parameterBounds) || parameterBounds->lower <= 0)
@@ -1803,9 +1801,25 @@ LogicalResult nodal::ShapeViewOp::verify() {
           symbols.insert(token.str());
         } else {
           Value value = findDirectModuleStaticValue(owner, token);
-          if (!value || !llvm::isa_and_nonnull<nodal::ConstExprOp>(value.getDefiningOp()) ||
-              !collectStaticFactor(collectStaticFactor, value, 0))
+          if (!value || !value.getType().isInteger(64))
             return std::nullopt;
+          auto expression = llvm::dyn_cast<nodal::ConstExprOp>(value.getDefiningOp());
+          llvm::SmallPtrSet<Operation *, 16> dependencyActive;
+          auto bounds = nodal::inferParameterIntegerBounds(value);
+          if (!expression || !hasStaticShapeIndexDependencies(value, owner, dependencyActive) ||
+              failed(bounds) || bounds->lower <= 0)
+            return std::nullopt;
+          if (textAttr(expression, "operator_name") == "mul") {
+            if (expression->getNumOperands() != 2)
+              return std::nullopt;
+            for (Value operand : expression->getOperands())
+              if (!collectStaticFactor(collectStaticFactor, operand, 1))
+                return std::nullopt;
+          } else {
+            symbols.insert(token.str());
+            if (!multiply(worstCase, bounds->upper))
+              return std::nullopt;
+          }
         }
       }
     }

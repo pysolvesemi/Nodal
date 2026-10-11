@@ -90,6 +90,14 @@ private final class ConstructionSession(val options: EmitOptions):
         Some(generatedRegionPath(region))
       )
 
+  def generatedRegionActive: Boolean = generationStack.nonEmpty
+
+  def generatedContinuousRegionActive: Boolean =
+    generationStack.lastOption.exists: generated =>
+      analogStack.lastOption.exists(_.generatedOwnership.contains(
+        generatedRegionPath(generated) -> expressionPath(generated.induction)
+      ))
+
   def generatedRegionOwnership: Option[(String, String)] =
     generationStack.lastOption.map: region =>
       generatedRegionPath(region) -> expressionPath(region.induction)
@@ -1439,6 +1447,7 @@ private final class ConstructionSession(val options: EmitOptions):
     val instanceCount = module.instances.size
     val operationCount = operations.size
     val analogRegionCount = analogRegions.size
+    val continuousOperatorCount = continuousOperators.size
     try
       body(induction)
       val generatedContext =
@@ -1458,12 +1467,36 @@ private final class ConstructionSession(val options: EmitOptions):
           s"generated object kind '${declaration.kind.label}' is not enabled by the current F-043 checkpoint",
           Some(declarationPath(declaration.reference))
         )
+      val generatedAnalogRegions = analogRegions.drop(analogRegionCount)
+        .filter(_.generatedOwnership.contains(generatedContext))
+      val generatedOperators = continuousOperators.drop(continuousOperatorCount).filter: operator =>
+        generatedAnalogRegions.exists(_.expressions.contains(operator.reference))
+      val generatedOperatorReferences = generatedOperators.map(_.reference).toSet
+      val supportedGeneratedAnalog =
+        generatedAnalogRegions.nonEmpty &&
+          generatedAnalogRegions.forall: analog =>
+            analog.generatedOwnership.contains(generatedContext) &&
+              analog.contributions.isEmpty &&
+              analog.expressions.exists(generatedOperatorReferences.contains) &&
+              analog.expressions.forall: reference =>
+                !generatedOperatorReferences.contains(reference) ||
+                  generatedOperators.exists(operator =>
+                    operator.reference == reference &&
+                      Set("analog_ddt", "analog_idt").contains(operator.operation)
+                  )
+      val changedAnalog = generatedAnalogRegions.nonEmpty || generatedOperators.nonEmpty
+      if changedAnalog && !supportedGeneratedAnalog then
+        fail(
+          "NODAL-ITERATION-043-004",
+          "generated continuous regions require an owned ddt or idt expression and no contributions",
+          Some(generatedRegionPath(record))
+        )
       if module.domains.size != domainCount || module.instances.size != instanceCount ||
-        operations.size != operationCount || analogRegions.size != analogRegionCount
+        operations.size != operationCount
       then
         fail(
           "NODAL-ITERATION-043-004",
-          "generated domains, instances, connections, assignments, and analog regions require the next F-043 ownership stage",
+          "generated domains, instances, connections, assignments, and unsupported analog effects require the next F-043 ownership stage",
           Some(provisionalModulePath(module.handle))
         )
     finally
@@ -1486,8 +1519,15 @@ private final class ConstructionSession(val options: EmitOptions):
 
   def withAnalogRegion[A](body: => A): A =
     val module = currentModule
+    val generatedOwnership = generationStack.lastOption
+      .filter(_.owner == module.handle)
+      .map(region => generatedRegionPath(region) -> expressionPath(region.induction))
     val record =
-      new AnalogRegionRecord(module.handle, analogRegions.count(_.module == module.handle))
+      new AnalogRegionRecord(
+        module.handle,
+        analogRegions.count(_.module == module.handle),
+        generatedOwnership
+      )
     analogRegions += record
     analogStack += record
     try body
@@ -2522,7 +2562,11 @@ private final class ConstructionSession(val options: EmitOptions):
         stateId = stateId,
         initialization = initialization,
         analyses = allAnalyses,
-        source = sourceByPath.get(path)
+        source = sourceByPath.get(path),
+        generatedOwner = analogRegions.find(_.expressions.contains(record.reference))
+          .flatMap(_.generatedOwnership.map(_._1)),
+        generatedInduction = analogRegions.find(_.expressions.contains(record.reference))
+          .flatMap(_.generatedOwnership.map(_._2))
       )
     .sortBy(_.path)
 
@@ -2663,7 +2707,9 @@ private final class ConstructionSession(val options: EmitOptions):
           s"${modulePath(region.module)}.analog_${region.ordinal}",
           modulePath(region.module),
           expressions,
-          contributions
+          contributions,
+          region.generatedOwnership.map(_._1),
+          region.generatedOwnership.map(_._2)
         )
 
   private def parameterExpressionSnapshots(): Vector[KernelParameterExpressionSnapshot] =

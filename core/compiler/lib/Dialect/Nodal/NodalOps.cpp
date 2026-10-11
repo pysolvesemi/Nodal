@@ -2032,11 +2032,18 @@ LogicalResult nodal::AnalogOp::verify() {
   if (failed(verifyGeneratedAnalogOwnership(getOperation())))
     return failure();
   const bool generated = static_cast<bool>(getOperation()->getParentOfType<nodal::GenerateOp>());
+  bool generatedProcedure = false;
+  bool generatedContinuous = false;
   for (Operation &operation : getOperation()->getRegion(0).front()) {
-    if (generated && !llvm::isa<nodal::AnalogProcedureOp>(operation))
+    generatedProcedure |= llvm::isa<nodal::AnalogProcedureOp>(operation);
+    generatedContinuous |= llvm::isa<nodal::AnalogDdtOp, nodal::AnalogIdtOp>(operation);
+    if (generated &&
+        !llvm::isa<nodal::RealLiteralOp, nodal::ParameterRefOp, nodal::AnalogAddOp,
+                   nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp, nodal::AnalogNegOp,
+                   nodal::AnalogDdtOp, nodal::AnalogIdtOp, nodal::AnalogProcedureOp>(operation))
       return operation.emitOpError(
-          "NODAL-ITERATION-043-004: generated analog regions support only straight-line "
-          "procedural storage");
+          "NODAL-ITERATION-043-004: generated analog regions support only owned ddt/idt "
+          "expressions or generated procedural storage");
     if (llvm::isa<nodal::ConstLiteralOp>(operation) && operation.getNumResults() == 1 &&
         operation.getResult(0).getType().isInteger(1))
       continue;
@@ -2053,6 +2060,10 @@ LogicalResult nodal::AnalogOp::verify() {
       return operation.emitOpError(
           "NODAL-ANALOG-REGION-002: operation is not legal in the analog numeric region");
   }
+  if (generated && generatedProcedure == generatedContinuous)
+    return emitOpError(
+        "NODAL-ITERATION-043-004: generated analog region requires exactly one procedural or "
+        "continuous ownership profile");
   return success();
 }
 
@@ -2475,9 +2486,13 @@ LogicalResult nodal::AnalogSelectOp::verify() {
   return nodal::verifyAnalogNumericOperation(getOperation());
 }
 LogicalResult nodal::AnalogDdtOp::verify() {
+  if (failed(verifyGeneratedAnalogOwnership(getOperation())))
+    return failure();
   return nodal::verifyAnalogNumericOperation(getOperation());
 }
 LogicalResult nodal::AnalogIdtOp::verify() {
+  if (failed(verifyGeneratedAnalogOwnership(getOperation())))
+    return failure();
   return nodal::verifyAnalogNumericOperation(getOperation());
 }
 LogicalResult nodal::ContributeOp::verify() {

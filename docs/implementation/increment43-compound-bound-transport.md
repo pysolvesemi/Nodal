@@ -271,3 +271,25 @@ requires the pair on each operation's own authored line and again after native
 parse/print normalization, rather than accepting a later operation's attributes
 as evidence for an earlier event expression. Ordinary events continue to omit
 the pair, and partial, detached or forged ownership remains rejected.
+
+## Generated continuous-operator ownership checkpoint
+
+The next bounded continuous checkpoint admits `ddt` and `idt` only inside an
+explicit legacy `analog` region owned by the active `hdlRange`. Construction
+records the immediate generated region and induction on both the analog region
+and each canonical continuous-operator contract. The generated-region
+reconciliation requires at least one such operator, permits no contribution,
+and still rejects a direct operator or an empty continuous region.
+
+The bridge requires the paired identities to resolve to the same-module
+generated region, emits the analog region beneath that exact `nodal.generate`,
+and preserves the pair on `nodal.analog`, `nodal.analog_ddt` and
+`nodal.analog_idt`. Native verification independently matches every pair to the
+immediate generate and analog owners. The generated analog allowlist remains
+limited to literals, parameter references, basic numeric composition and the
+two differential/integral operators; waveform, transfer, noise, equation,
+contribution and target-lowering effects remain rejected.
+
+This checkpoint proves normalized-IR occurrence ownership only. It does not
+lower generated operators or storage to Verilog-A, add arrays or slices, or
+complete any F-043 parent or descendant acceptance box.

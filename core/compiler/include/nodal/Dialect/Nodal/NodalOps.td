@@ -1173,6 +1173,8 @@ def Nodal_AnalogDdtOp : Nodal_Op<"analog_ddt", [HasParent<"AnalogOp">]> {
     OptionalAttr<StrAttr>:$result_dimension,
     OptionalAttr<StrAttr>:$initialization,
     OptionalAttr<ArrayAttr>:$analyses,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
@@ -1193,6 +1195,8 @@ def Nodal_AnalogIdtOp : Nodal_Op<"analog_idt", [HasParent<"AnalogOp">]> {
     OptionalAttr<StrAttr>:$initialization,
     OptionalAttr<StrAttr>:$initial_dimension,
     OptionalAttr<ArrayAttr>:$analyses,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);

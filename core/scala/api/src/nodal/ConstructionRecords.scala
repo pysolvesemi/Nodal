@@ -153,7 +153,9 @@ private[nodal] final case class KernelAnalogRegionSnapshot(
     path: String,
     module: String,
     expressions: Vector[KernelAnalogExpressionSnapshot],
-    contributions: Vector[KernelAnalogContributionSnapshot]
+    contributions: Vector[KernelAnalogContributionSnapshot],
+    generatedOwner: Option[String] = None,
+    generatedInduction: Option[String] = None
 )
 
 private[nodal] final case class KernelContinuousOperatorSnapshot(
@@ -168,7 +170,9 @@ private[nodal] final case class KernelContinuousOperatorSnapshot(
     stateId: Option[String],
     initialization: String,
     analyses: Vector[String],
-    source: Option[SourceSpan]
+    source: Option[SourceSpan],
+    generatedOwner: Option[String] = None,
+    generatedInduction: Option[String] = None
 )
 
 private[nodal] final case class KernelWaveformOperatorSnapshot(
@@ -315,7 +319,11 @@ private final class ModuleRecord(
 
 private final case class Operation(owner: Long, kind: String, values: Vector[Any])
 
-private final class AnalogRegionRecord(val module: Long, val ordinal: Int):
+private final class AnalogRegionRecord(
+    val module: Long,
+    val ordinal: Int,
+    val generatedOwnership: Option[(String, String)]
+):
   val expressions: mutable.ArrayBuffer[ExpressionRef] = mutable.ArrayBuffer.empty
   val contributions: mutable.ArrayBuffer[(Any, Any)] = mutable.ArrayBuffer.empty
 

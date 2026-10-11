@@ -112,6 +112,13 @@ final class Increment43UnsupportedGeneratedContinuousOperator extends Module:
     val _ = state
     ()
 
+final class Increment43GeneratedContinuousOperator extends Module:
+  hdlRange(0, 2): _ =>
+    analog:
+      val derivative = ddt(1.0.V)
+      val integral = idt(1.0.V)
+      val _ = (derivative, integral)
+
 final class Increment43UnsupportedGeneratedEvent extends Module:
   hdlRange(0, 2): _ =>
     val event = cross(1.0.V)
@@ -409,6 +416,46 @@ object Increment43RangeConstructionTests extends TestSuite:
         val line = document.text.linesIterator.find(_.contains(s"\"$operation\"")).get
         assert(line.contains(s"generated_owner = \"${region.path}\""))
         assert(line.contains(s"generated_induction = \"${region.induction}\""))
+
+    test("generated continuous operators retain exact region ownership"):
+      val first = ConstructionKernel.inspect(new Increment43GeneratedContinuousOperator)
+      val second = ConstructionKernel.inspect(new Increment43GeneratedContinuousOperator)
+      assert(first == second)
+      val generated = first.generatedRegions.head
+      val analog = first.analogRegions.head
+      assert(analog.generatedOwner.contains(generated.path))
+      assert(analog.generatedInduction.contains(generated.induction))
+      assert(first.continuousOperators.map(_.operation) == Vector("analog_ddt", "analog_idt"))
+      assert(first.continuousOperators.forall(_.generatedOwner.contains(generated.path)))
+      assert(first.continuousOperators.forall(
+        _.generatedInduction.contains(generated.induction)
+      ))
+
+      val document = ScalaToMlirBridge.fromSnapshot(first)
+      assert(document.text.indexOf("\"nodal.generate\"") <
+        document.text.indexOf("\"nodal.analog\""))
+      for operation <- Vector("nodal.analog", "nodal.analog_ddt", "nodal.analog_idt") do
+        val line = document.text.linesIterator.find(_.contains(s"\"$operation\"")).get
+        assert(line.contains(s"generated_owner = \"${generated.path}\""))
+        assert(line.contains(s"generated_induction = \"${generated.induction}\""))
+
+      val forgedOperator = first.continuousOperators.head.copy(generatedOwner = None)
+      val forged = first.copy(
+        continuousOperators = forgedOperator +: first.continuousOperators.tail
+      )
+      val forgeries = Vector(
+        forged,
+        first.copy(analogRegions = Vector(analog.copy(generatedOwner = None))),
+        first.copy(analogRegions =
+          Vector(
+            analog.copy(generatedOwner = Some(generated.path + ".forged"))
+          )
+        )
+      )
+      forgeries.foreach: candidate =>
+        val failure = scala.util.Try(ScalaToMlirBridge.fromSnapshot(candidate)).failed.get
+          .asInstanceOf[BridgeException]
+        assert(failure.diagnostic.code == "NODAL-BRIDGE-043")
 
     test("unsupported generated effects still fail at their capture boundary"):
       val cases = Vector[(String, String, () => Module)](

@@ -203,7 +203,8 @@ private[nodal] object ConstructionKernel:
       initialValue: Option[Expr[Real]]
   ): Unit =
     active.foreach: session =>
-      session.requireNoGeneratedEffect(s"continuous-time operator '$operation'")
+      if !session.generatedContinuousRegionActive then
+        session.requireNoGeneratedEffect(s"continuous-time operator '$operation'")
       session.registerContinuousOperator(value, operation, input, initialValue)
 
   def transferOperator(
@@ -265,7 +266,8 @@ private[nodal] object ConstructionKernel:
 
   def analogBlock[A](body: => A): A = active match
     case Some(session) =>
-      session.requireNoGeneratedEffect("analog continuous region")
+      if !session.generatedRegionActive then
+        session.requireNoGeneratedEffect("analog continuous region")
       session.withAnalogRegion(body)
     case None => body
 

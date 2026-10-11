@@ -1450,14 +1450,15 @@ ${indent(body, 2)}
 
       body ++= AnalogUserFunctionMlir.renderModule(snapshot, module.path)
 
-      analogRegionsFor(module).zipWithIndex.foreach: (region, regionIndex) =>
-        body += renderAnalogRegion(
-          region,
-          regionIndex,
-          declarationsByPath,
-          parameterSymbols,
-          accessBranches
-        )
+      analogRegionsFor(module).filter(_.generatedOwner.isEmpty).zipWithIndex.foreach:
+        (region, regionIndex) =>
+          body += renderAnalogRegion(
+            region,
+            regionIndex,
+            declarationsByPath,
+            parameterSymbols,
+            accessBranches
+          )
 
       body ++= AnalogProceduralMlir.renderModule(snapshot, module.path)
 
@@ -1477,7 +1478,44 @@ ${indent(body, 2)}
     private def analogRegionsFor(
         module: KernelModuleSnapshot
     ): Vector[KernelAnalogRegionSnapshot] =
-      snapshot.analogRegions.filter(_.module == module.path).sortBy(_.path)
+      val regions = snapshot.analogRegions.filter(_.module == module.path).sortBy(_.path)
+      regions.foreach: analog =>
+        if analog.generatedOwner.isDefined != analog.generatedInduction.isDefined then
+          fail(
+            "NODAL-BRIDGE-043",
+            "generated continuous region requires paired owner and induction identities",
+            Some(analog.path)
+          )
+        analog.generatedOwner.foreach: owner =>
+          val generated = snapshot.generatedRegions.find(_.path == owner).getOrElse(
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated continuous region has no owning generated region",
+              Some(analog.path)
+            )
+          )
+          if generated.owner != module.path ||
+            !analog.generatedInduction.contains(generated.induction)
+          then
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated continuous region ownership or induction is invalid",
+              Some(analog.path)
+            )
+        val operators = snapshot.continuousOperators.filter(operator =>
+          analog.expressions.exists(_.path == operator.path)
+        )
+        if operators.exists(operator =>
+            operator.generatedOwner != analog.generatedOwner ||
+              operator.generatedInduction != analog.generatedInduction
+          )
+        then
+          fail(
+            "NODAL-BRIDGE-043",
+            "continuous operator ownership differs from its analog region",
+            Some(analog.path)
+          )
+      regions
 
     private def continuousOperator(
         path: String,
@@ -1513,6 +1551,9 @@ ${indent(body, 2)}
       ) ++ value.stateId.toVector.map(state => "state_id" -> quoted(state)) ++
         value.initialCondition.toVector.map(_ =>
           "initial_dimension" -> quoted(value.resultDimension)
+        ) ++ value.generatedOwner.toVector.map(owner => "generated_owner" -> quoted(owner)) ++
+        value.generatedInduction.toVector.map(induction =>
+          "generated_induction" -> quoted(induction)
         )
 
     private def renderAnalogRegion(
@@ -1948,7 +1989,11 @@ ${indent(body, 2)}
 
       operation(
         "nodal.analog",
-        attributes = Vector(
+        attributes = region.generatedOwner.toVector.map(owner =>
+          "generated_owner" -> quoted(owner)
+        ) ++ region.generatedInduction.toVector.map(induction =>
+          "generated_induction" -> quoted(induction)
+        ) ++ Vector(
           "metadata" -> bridgeMetadata(
             region.path,
             Vector("vertical_slice" -> quoted("rc"))
@@ -2618,6 +2663,35 @@ ${indent(body, 2)}
             )
 
       nested ++= AnalogProceduralMlir.renderGenerated(snapshot, module.path, region.path)
+
+      snapshot.analogRegions.filter(_.generatedOwner.contains(region.path)).zipWithIndex.foreach:
+        (analog, index) =>
+          if !analog.generatedInduction.contains(region.induction) then
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated continuous region ownership or induction is invalid",
+              Some(analog.path)
+            )
+          val operators = snapshot.continuousOperators.filter(operator =>
+            analog.expressions.exists(_.path == operator.path)
+          )
+          if operators.isEmpty || operators.exists(operator =>
+              !operator.generatedOwner.contains(region.path) ||
+                !operator.generatedInduction.contains(region.induction)
+            )
+          then
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated continuous operator ownership is incomplete",
+              Some(analog.path)
+            )
+          nested += renderAnalogRegion(
+            analog,
+            index,
+            declarationsByPath,
+            parameterSymbols,
+            mutable.LinkedHashMap.empty
+          )
 
       generatedRegionsFor(module)
         .filter(_.parent.contains(region.path))

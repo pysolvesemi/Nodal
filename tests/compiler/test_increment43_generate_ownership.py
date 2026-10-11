@@ -26,6 +26,36 @@ class GeneratedOwnershipCheckerTests(unittest.TestCase):
                 self.assertIn("OptionalAttr<StrAttr>:$generated_owner", section)
                 self.assertIn("OptionalAttr<StrAttr>:$generated_induction", section)
 
+    def test_generated_continuous_operator_schemas_retain_paired_ownership(self):
+        operations = (
+            ROOT / "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td"
+        ).read_text()
+        for start, end in (
+            ("def Nodal_AnalogDdtOp", "def Nodal_AnalogIdtOp"),
+            ("def Nodal_AnalogIdtOp", "def Nodal_AnalogTransitionOp"),
+        ):
+            with self.subTest(operation=start):
+                section = operations[operations.index(start):operations.index(end)]
+                self.assertIn("OptionalAttr<StrAttr>:$generated_owner", section)
+                self.assertIn("OptionalAttr<StrAttr>:$generated_induction", section)
+
+        verifier = (
+            ROOT / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
+        ).read_text()
+        for start, end in (
+            (
+                "LogicalResult nodal::AnalogDdtOp::verify()",
+                "LogicalResult nodal::AnalogIdtOp::verify()",
+            ),
+            (
+                "LogicalResult nodal::AnalogIdtOp::verify()",
+                "LogicalResult nodal::ContributeOp::verify()",
+            ),
+        ):
+            with self.subTest(verifier=start):
+                section = verifier[verifier.index(start):verifier.index(end)]
+                self.assertIn("verifyGeneratedAnalogOwnership", section)
+
     def test_inventory_and_positive_preservation(self):
         cases = ownership.cases()
         self.assertEqual(len(cases), 31)

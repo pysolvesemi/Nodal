@@ -4,12 +4,28 @@ import sys
 import unittest
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[2]
+
 sys.path.insert(0, str(Path(__file__).parent / "fixtures" / "increment43"))
 import run_generate_count_matrix as counts
 import run_generate_ownership_matrix as ownership
 
 
 class GeneratedOwnershipCheckerTests(unittest.TestCase):
+    def test_generated_event_operation_schemas_retain_paired_ownership(self):
+        operations = (
+            ROOT / "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td"
+        ).read_text()
+        for start, end in (
+            ("class Nodal_AnalogEventOp", "def Nodal_AnalogCrossOp"),
+            ("def Nodal_AnalogEventOrOp", "def Nodal_AnalogOnOp"),
+            ("def Nodal_AnalogOnOp", "def Nodal_AnalogVariableOp"),
+        ):
+            with self.subTest(operation=start):
+                section = operations[operations.index(start):operations.index(end)]
+                self.assertIn("OptionalAttr<StrAttr>:$generated_owner", section)
+                self.assertIn("OptionalAttr<StrAttr>:$generated_induction", section)
+
     def test_inventory_and_positive_preservation(self):
         cases = ownership.cases()
         self.assertEqual(len(cases), 31)

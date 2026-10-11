@@ -847,7 +847,8 @@ def Nodal_AnalogHeldReadOp : Nodal_Op<"analog_held_read", [HasParent<"AnalogOp">
 class Nodal_AnalogEventOp<string mnemonic> : Nodal_Op<mnemonic> {
   let summary = "Source-semantic analog event monitor or analysis lifecycle event";
   let arguments = (ins StrAttr:$event_id, StrAttr:$owner, StrAttr:$contract,
-    StrAttr:$name, ArrayAttr:$arguments, ArrayAttr:$analyses,
+    StrAttr:$name, OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction, ArrayAttr:$arguments, ArrayAttr:$analyses,
     ArrayAttr:$event_reads, DictionaryAttr:$metadata);
   let results = (outs Nodal_AnalogEventType:$result);
   let hasVerifier = 1;
@@ -862,7 +863,8 @@ def Nodal_AnalogEventOrOp : Nodal_Op<"analog_event_or"> {
   let summary = "Any-of event composition with one controlled body evaluation";
   let arguments = (ins Variadic<Nodal_AnalogEventType>:$events,
     StrAttr:$event_id, StrAttr:$owner, StrAttr:$contract, StrAttr:$name,
-    DictionaryAttr:$metadata);
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction, DictionaryAttr:$metadata);
   let results = (outs Nodal_AnalogEventType:$result);
   let hasVerifier = 1;
 }
@@ -870,7 +872,8 @@ def Nodal_AnalogEventOrOp : Nodal_Op<"analog_event_or"> {
 def Nodal_AnalogOnOp : Nodal_Op<"analog_on", [NoTerminator]> {
   let summary = "Nonblocking analog event-controlled statement region";
   let arguments = (ins Nodal_AnalogEventType:$event,
-    StrAttr:$statement_id, StrAttr:$owner, DictionaryAttr:$metadata);
+    StrAttr:$statement_id, StrAttr:$owner, OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction, DictionaryAttr:$metadata);
   let regions = (region SizedRegion<1>:$body);
   let hasVerifier = 1;
 }

@@ -258,3 +258,16 @@ This is normalized-IR ownership evidence. It does not enable generated
 continuous-time operators, contributions or nested event controls, and it does
 not lower generated procedures, storage or events to Verilog-A. General slices,
 legal target generation/source maps and all F-043 acceptance boxes remain open.
+
+### Generated event operation-schema repair
+
+Configured bridge qualification exposed that the textual bridge emitted the
+generated ownership pair, but the native operation schema had not declared the
+pair on event expressions, event composition or `nodal.analog_on`. Those fields
+were consequently absent after parsing, and the independent native verifier
+correctly rejected the generated event. The operation definitions now retain
+the same optional pair already checked by the verifier. Focused Scala coverage
+requires the pair on each operation's own authored line and again after native
+parse/print normalization, rather than accepting a later operation's attributes
+as evidence for an earlier event expression. Ordinary events continue to omit
+the pair, and partial, detached or forged ownership remains rejected.

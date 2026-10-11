@@ -406,11 +406,9 @@ object Increment43RangeConstructionTests extends TestSuite:
 
       val document = ScalaToMlirBridge.fromSnapshot(first)
       for operation <- Vector("nodal.analog_cross", "nodal.analog_on") do
-        val offset = document.text.indexOf(s"\"$operation\"")
-        assert(offset >= 0)
-        val tail = document.text.substring(offset)
-        assert(tail.contains(s"generated_owner = \"${region.path}\""))
-        assert(tail.contains(s"generated_induction = \"${region.induction}\""))
+        val line = document.text.linesIterator.find(_.contains(s"\"$operation\"")).get
+        assert(line.contains(s"generated_owner = \"${region.path}\""))
+        assert(line.contains(s"generated_induction = \"${region.induction}\""))
 
     test("unsupported generated effects still fail at their capture boundary"):
       val cases = Vector[(String, String, () => Module)](
@@ -587,6 +585,12 @@ object Increment43RangeConstructionTests extends TestSuite:
               case success: NativeCompilerSuccess =>
                 assert(success.normalizedMlir.contains("\"nodal.analog_cross\""))
                 assert(success.normalizedMlir.contains("\"nodal.analog_on\""))
+                for operation <- Vector("nodal.analog_cross", "nodal.analog_on") do
+                  val line = success.normalizedMlir.linesIterator
+                    .find(_.contains(s"\"$operation\""))
+                    .get
+                  assert(line.contains(s"generated_owner = \"${region.path}\""))
+                  assert(line.contains(s"generated_induction = \"${region.induction}\""))
               case failure: NativeCompilerFailure =>
                 scala.Predef.assert(false, s"${failure.diagnostic}\n${failure.standardError}")
 

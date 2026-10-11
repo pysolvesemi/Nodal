@@ -187,7 +187,9 @@ private[nodal] final case class KernelWaveformOperatorSnapshot(
     outputContinuity: String,
     stateId: Option[String],
     analyses: Vector[String],
-    source: Option[SourceSpan]
+    source: Option[SourceSpan],
+    generatedOwner: Option[String] = None,
+    generatedInduction: Option[String] = None
 )
 
 private[nodal] final case class KernelTransferOperatorSnapshot(

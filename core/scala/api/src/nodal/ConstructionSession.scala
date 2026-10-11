@@ -1448,6 +1448,7 @@ private final class ConstructionSession(val options: EmitOptions):
     val operationCount = operations.size
     val analogRegionCount = analogRegions.size
     val continuousOperatorCount = continuousOperators.size
+    val waveformOperatorCount = waveformOperators.size
     try
       body(induction)
       val generatedContext =
@@ -1471,24 +1472,35 @@ private final class ConstructionSession(val options: EmitOptions):
         .filter(_.generatedOwnership.contains(generatedContext))
       val generatedOperators = continuousOperators.drop(continuousOperatorCount).filter: operator =>
         generatedAnalogRegions.exists(_.expressions.contains(operator.reference))
+      val generatedWaveforms = waveformOperators.drop(waveformOperatorCount).filter:
+        case (reference, _, _, _, _, _, _, _) =>
+          generatedAnalogRegions.exists(_.expressions.contains(reference))
       val generatedOperatorReferences = generatedOperators.map(_.reference).toSet
+      val generatedWaveformReferences = generatedWaveforms.map(_._1).toSet
+      val generatedExpressionReferences =
+        generatedOperatorReferences ++ generatedWaveformReferences
       val supportedGeneratedAnalog =
         generatedAnalogRegions.nonEmpty &&
           generatedAnalogRegions.forall: analog =>
             analog.generatedOwnership.contains(generatedContext) &&
               analog.contributions.isEmpty &&
-              analog.expressions.exists(generatedOperatorReferences.contains) &&
+              analog.expressions.exists(generatedExpressionReferences.contains) &&
               analog.expressions.forall: reference =>
-                !generatedOperatorReferences.contains(reference) ||
+                !generatedExpressionReferences.contains(reference) ||
                   generatedOperators.exists(operator =>
                     operator.reference == reference &&
                       Set("analog_ddt", "analog_idt").contains(operator.operation)
+                  ) || generatedWaveforms.exists(waveform =>
+                    waveform._1 == reference &&
+                      Set("analog_transition", "analog_slew", "analog_absdelay")
+                        .contains(waveform._2)
                   )
-      val changedAnalog = generatedAnalogRegions.nonEmpty || generatedOperators.nonEmpty
+      val changedAnalog = generatedAnalogRegions.nonEmpty || generatedOperators.nonEmpty ||
+        generatedWaveforms.nonEmpty
       if changedAnalog && !supportedGeneratedAnalog then
         fail(
           "NODAL-ITERATION-043-004",
-          "generated continuous regions require an owned ddt or idt expression and no contributions",
+          "generated continuous regions require an owned ddt, idt, transition, slew, or absdelay expression and no contributions",
           Some(generatedRegionPath(record))
         )
       if module.domains.size != domainCount || module.instances.size != instanceCount ||
@@ -2629,6 +2641,9 @@ private final class ConstructionSession(val options: EmitOptions):
           ) =>
         val path = expressionPath(reference)
         val state = Set("analog_transition", "analog_slew", "analog_absdelay").contains(operation)
+        val generatedOwnership = analogRegions.find(_.expressions.contains(reference))
+          .flatMap(_.generatedOwnership)
+          .map(canonicalGeneratedOwnership)
         KernelWaveformOperatorSnapshot(
           path,
           operation,
@@ -2646,7 +2661,9 @@ private final class ConstructionSession(val options: EmitOptions):
           if state then Some(s"$path.state") else None,
           if operation == "analog_bound_step" then Vector("transient")
           else Vector("ac", "dc", "initialization", "noise", "operating-point", "transient"),
-          sources.get(path)
+          sources.get(path),
+          generatedOwnership.map(_._1),
+          generatedOwnership.map(_._2)
         )
     .sortBy(_.path)
 

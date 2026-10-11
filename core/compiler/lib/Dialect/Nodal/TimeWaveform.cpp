@@ -222,6 +222,33 @@ LogicalResult verifyTimeWaveformOperation(Operation *op) {
   const bool slew = n == "nodal.analog_slew";
   const bool delay = n == "nodal.analog_absdelay";
   const bool transition = n == "nodal.analog_transition";
+  auto generatedOwner = op->getAttrOfType<StringAttr>("generated_owner");
+  auto generatedInduction = op->getAttrOfType<StringAttr>("generated_induction");
+  auto generated = op->getParentOfType<nodal::GenerateOp>();
+  if (static_cast<bool>(generatedOwner) != static_cast<bool>(generatedInduction))
+    return emitMappedFailure(
+        op, "NODAL-ITERATION-043-004",
+        "generated waveform ownership requires paired owner and induction identities");
+  if (!generated && generatedOwner)
+    return emitMappedFailure(op, "NODAL-ITERATION-043-004",
+                             "ordinary waveform operation cannot claim generated ownership");
+  if (generated) {
+    auto regionId = generated->getAttrOfType<StringAttr>("region_id");
+    auto inductionPath = generated->getAttrOfType<StringAttr>("induction_path");
+    Operation *analog = op->getParentOfType<nodal::AnalogOp>();
+    if (!generatedOwner || !regionId || !inductionPath || !analog ||
+        generatedOwner.getValue() != regionId.getValue() ||
+        generatedInduction.getValue() != inductionPath.getValue() ||
+        analog->getAttr("generated_owner") != generatedOwner ||
+        analog->getAttr("generated_induction") != generatedInduction)
+      return emitMappedFailure(
+          op, "NODAL-ITERATION-043-004",
+          "generated waveform ownership does not match its analog and generate owners");
+    if (!isStatefulWaveformOperation(op))
+      return emitMappedFailure(
+          op, "NODAL-ITERATION-043-004",
+          "generated waveform profile admits only transition, slew, and absdelay");
+  }
   const unsigned count = op->getNumOperands();
   if ((transition && (count < 1 || count > 5)) || (slew && (count < 1 || count > 3)) ||
       (delay && (count < 2 || count > 3)) || (clock && count != 0) || (effect && count != 1) ||

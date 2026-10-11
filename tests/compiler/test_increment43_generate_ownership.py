@@ -68,6 +68,35 @@ class GeneratedOwnershipCheckerTests(unittest.TestCase):
                 section = verifier[verifier.index(start):verifier.index(end)]
                 self.assertIn("verifyGeneratedAnalogOwnership", section)
 
+    def test_generated_waveform_schemas_and_snapshots_retain_paired_ownership(self):
+        operations = (
+            ROOT / "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td"
+        ).read_text()
+        for start, end in (
+            ("def Nodal_AnalogTransitionOp", "def Nodal_AnalogSlewOp"),
+            ("def Nodal_AnalogSlewOp", "def Nodal_AnalogAbsdelayOp"),
+            ("def Nodal_AnalogAbsdelayOp", "def Nodal_AnalogAbstimeOp"),
+        ):
+            with self.subTest(operation=start):
+                section = operations[operations.index(start):operations.index(end)]
+                self.assertIn("OptionalAttr<StrAttr>:$generated_owner", section)
+                self.assertIn("OptionalAttr<StrAttr>:$generated_induction", section)
+
+        construction = (
+            ROOT / "core/scala/api/src/nodal/ConstructionSession.scala"
+        ).read_text()
+        section = construction[
+            construction.index("private def waveformOperatorSnapshots("):
+            construction.index("private def analogSnapshots()")
+        ]
+        self.assertIn("map(canonicalGeneratedOwnership)", section)
+
+        verifier = (
+            ROOT / "core/compiler/lib/Dialect/Nodal/TimeWaveform.cpp"
+        ).read_text()
+        self.assertIn("generated waveform ownership requires paired owner", verifier)
+        self.assertIn("generated waveform ownership does not match", verifier)
+
     def test_inventory_and_positive_preservation(self):
         cases = ownership.cases()
         self.assertEqual(len(cases), 31)

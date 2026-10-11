@@ -293,3 +293,18 @@ contribution and target-lowering effects remain rejected.
 This checkpoint proves normalized-IR occurrence ownership only. It does not
 lower generated operators or storage to Verilog-A, add arrays or slices, or
 complete any F-043 parent or descendant acceptance box.
+
+## Generated waveform-operator ownership checkpoint
+
+The next bounded operator checkpoint extends the same explicit generated
+continuous-region ownership to the existing stateful `transition`, `slew` and
+`absdelay` surfaces. Construction retains the canonical generated region and
+finalized induction on each waveform contract. Bridge validation requires the
+pair to match the immediately owning analog and generated regions, and native
+verification repeats that proof after parse/print normalization.
+
+The allowlist remains deliberately narrow. `abstime`, `boundStep`, equations,
+contributions, transfer and noise effects are still rejected in generated
+regions, as are detached, partial or forged ownership pairs. This checkpoint
+does not lower generated waveform state or arrays to Verilog-A, implement
+slices, or complete any F-043 parent or descendant acceptance box.

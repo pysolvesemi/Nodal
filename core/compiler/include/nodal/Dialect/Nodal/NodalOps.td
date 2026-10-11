@@ -1218,6 +1218,8 @@ def Nodal_AnalogTransitionOp : Nodal_Op<"analog_transition", [HasParent<"AnalogO
     OptionalAttr<StrAttr>:$output_continuity,
     OptionalAttr<StrAttr>:$state_id,
     OptionalAttr<ArrayAttr>:$analyses,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
@@ -1239,6 +1241,8 @@ def Nodal_AnalogSlewOp : Nodal_Op<"analog_slew", [HasParent<"AnalogOp">]> {
     OptionalAttr<StrAttr>:$output_continuity,
     OptionalAttr<StrAttr>:$state_id,
     OptionalAttr<ArrayAttr>:$analyses,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
@@ -1260,6 +1264,8 @@ def Nodal_AnalogAbsdelayOp : Nodal_Op<"analog_absdelay", [HasParent<"AnalogOp">]
     OptionalAttr<StrAttr>:$output_continuity,
     OptionalAttr<StrAttr>:$state_id,
     OptionalAttr<ArrayAttr>:$analyses,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);

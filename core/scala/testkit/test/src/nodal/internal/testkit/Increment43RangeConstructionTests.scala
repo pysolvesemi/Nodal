@@ -119,6 +119,14 @@ final class Increment43GeneratedContinuousOperator extends Module:
       val integral = idt(1.0.V)
       val _ = (derivative, integral)
 
+final class Increment43GeneratedWaveformOperator extends Module:
+  hdlRange(0, 2): _ =>
+    analog:
+      val smoothed = transition(1.0.V)
+      val limited = slew(1.0.V)
+      val delayed = absdelay(1.0.V, 1.0.ns)
+      val _ = (smoothed, limited, delayed)
+
 final class Increment43UnsupportedGeneratedEvent extends Module:
   hdlRange(0, 2): _ =>
     val event = cross(1.0.V)
@@ -456,6 +464,85 @@ object Increment43RangeConstructionTests extends TestSuite:
         val failure = scala.util.Try(ScalaToMlirBridge.fromSnapshot(candidate)).failed.get
           .asInstanceOf[BridgeException]
         assert(failure.diagnostic.code == "NODAL-BRIDGE-043")
+
+    test("generated waveform operators retain exact region ownership"):
+      val first = ConstructionKernel.inspect(new Increment43GeneratedWaveformOperator)
+      val second = ConstructionKernel.inspect(new Increment43GeneratedWaveformOperator)
+      assert(first == second)
+      val generated = first.generatedRegions.head
+      val analog = first.analogRegions.head
+      assert(first.waveformOperators.map(_.operation) ==
+        Vector("analog_transition", "analog_slew", "analog_absdelay"))
+      assert(first.waveformOperators.forall(_.generatedOwner.contains(generated.path)))
+      assert(first.waveformOperators.forall(
+        _.generatedInduction.contains(generated.induction)
+      ))
+
+      val document = ScalaToMlirBridge.fromSnapshot(first)
+      for operation <- Vector(
+          "nodal.analog",
+          "nodal.analog_transition",
+          "nodal.analog_slew",
+          "nodal.analog_absdelay"
+        )
+      do
+        val line = document.text.linesIterator.find(_.contains(s"\"$operation\"")).get
+        assert(line.contains(s"generated_owner = \"${generated.path}\""))
+        assert(line.contains(s"generated_induction = \"${generated.induction}\""))
+
+      val forgedOperator = first.waveformOperators.head.copy(generatedInduction = None)
+      val forged = first.copy(
+        waveformOperators = forgedOperator +: first.waveformOperators.tail
+      )
+      val failure = scala.util.Try(ScalaToMlirBridge.fromSnapshot(forged)).failed.get
+        .asInstanceOf[BridgeException]
+      assert(failure.diagnostic.code == "NODAL-BRIDGE-043")
+
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          val directory = workDirectory()
+          try
+            val request = NativeCompilerRequest(
+              executable = Path.of(executable).toAbsolutePath,
+              arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
+              workingDirectory = directory,
+              timeout = Duration.ofSeconds(30)
+            )
+            NativeCompilerClient.run(document, request) match
+              case success: NativeCompilerSuccess =>
+                for operation <- Vector(
+                    "nodal.analog_transition",
+                    "nodal.analog_slew",
+                    "nodal.analog_absdelay"
+                  )
+                do
+                  val line = success.normalizedMlir.linesIterator
+                    .find(_.contains(s"\"$operation\""))
+                    .get
+                  assert(line.contains(s"generated_owner = \"${generated.path}\""))
+                  assert(line.contains(s"generated_induction = \"${generated.induction}\""))
+              case nativeFailure: NativeCompilerFailure =>
+                scala.Predef.assert(
+                  false,
+                  s"${nativeFailure.diagnostic}\n${nativeFailure.standardError}"
+                )
+
+            val marker = s"generated_owner = \"${generated.path}\""
+            val operationOffset = document.text.indexOf("\"nodal.analog_slew\"")
+            val ownerOffset = document.text.indexOf(marker, operationOffset)
+            assert(operationOffset >= 0, ownerOffset >= operationOffset)
+            val forgedText = document.text.patch(
+              ownerOffset,
+              s"generated_owner = \"${generated.path}.forged\"",
+              marker.length
+            )
+            NativeCompilerClient.run(document.copy(text = forgedText), request) match
+              case nativeFailure: NativeCompilerFailure =>
+                assert(nativeFailure.diagnostic.code == "NODAL-ITERATION-043-004")
+              case success: NativeCompilerSuccess =>
+                scala.Predef.assert(false, s"forged generated waveform accepted: $success")
+          finally delete(directory)
 
     test("unsupported generated effects still fail at their capture boundary"):
       val cases = Vector[(String, String, () => Module)](

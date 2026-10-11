@@ -485,7 +485,11 @@ ${indent(body, 2)}
         "input_continuity" -> quoted(value.inputContinuity),
         "output_continuity" -> quoted(value.outputContinuity),
         "analyses" -> array(value.analyses.map(quoted))
-      ) ++ value.stateId.toVector.map(state => "state_id" -> quoted(state))
+      ) ++ value.stateId.toVector.map(state => "state_id" -> quoted(state)) ++
+        value.generatedOwner.toVector.map(owner => "generated_owner" -> quoted(owner)) ++
+        value.generatedInduction.toVector.map(induction =>
+          "generated_induction" -> quoted(induction)
+        )
 
     private def waveformOperatorInventory: String =
       array(snapshot.waveformOperators.map: value =>
@@ -1513,6 +1517,19 @@ ${indent(body, 2)}
           fail(
             "NODAL-BRIDGE-043",
             "continuous operator ownership differs from its analog region",
+            Some(analog.path)
+          )
+        val waveforms = snapshot.waveformOperators.filter(operator =>
+          analog.expressions.exists(_.path == operator.path)
+        )
+        if waveforms.exists(operator =>
+            operator.generatedOwner != analog.generatedOwner ||
+              operator.generatedInduction != analog.generatedInduction
+          )
+        then
+          fail(
+            "NODAL-BRIDGE-043",
+            "waveform operator ownership differs from its analog region",
             Some(analog.path)
           )
       regions
@@ -2675,7 +2692,15 @@ ${indent(body, 2)}
           val operators = snapshot.continuousOperators.filter(operator =>
             analog.expressions.exists(_.path == operator.path)
           )
-          if operators.isEmpty || operators.exists(operator =>
+          val waveforms = snapshot.waveformOperators.filter(operator =>
+            analog.expressions.exists(_.path == operator.path)
+          )
+          if (operators.isEmpty && waveforms.isEmpty) ||
+            operators.exists(operator =>
+              !operator.generatedOwner.contains(region.path) ||
+                !operator.generatedInduction.contains(region.induction)
+            ) ||
+            waveforms.exists(operator =>
               !operator.generatedOwner.contains(region.path) ||
                 !operator.generatedInduction.contains(region.induction)
             )

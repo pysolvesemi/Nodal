@@ -185,3 +185,14 @@ storage to Verilog-A, enable generated events/operators, add array or slice
 syntax, or complete any F-043 parent/descendant checkbox. Target generation,
 source/index maps, scale/determinism evidence and independent output witnesses
 remain required.
+
+### Procedural semantic-region entry repair
+
+Initial remote qualification exposed that the public `analogProcedure` wrapper
+still entered the generic semantic-region rejection before the ownership-aware
+procedural recorder could validate the bounded generated-storage profile. The
+entry gate now exempts only the `Procedural` region kind. The recorder still
+requires generated lexical storage and straight-line control, and the existing
+bridge/native ownership checks remain unchanged. Generated equation, initial-
+equation, contribution and continuous regions still reject at capture; focused
+regression cases retain that fail-closed boundary.

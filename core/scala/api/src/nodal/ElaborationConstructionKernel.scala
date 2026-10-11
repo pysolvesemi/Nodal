@@ -273,7 +273,11 @@ private[nodal] object ConstructionKernel:
       kind: AnalogEquationRuntime.RegionKind
   )(body: => A): A = active match
     case Some(session) =>
-      session.requireNoGeneratedEffect(s"analog ${kind.toString.toLowerCase} region")
+      val ownedGeneratedProcedure =
+        kind == AnalogEquationRuntime.RegionKind.Procedural &&
+          AnalogProceduralConstruction.generatedProcedureActive
+      if !ownedGeneratedProcedure then
+        session.requireNoGeneratedEffect(s"analog ${kind.toString.toLowerCase} region")
       session.withAnalogSemanticRegion(kind)(body)
     case None => body
 

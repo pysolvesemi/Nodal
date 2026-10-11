@@ -78,6 +78,25 @@ final class Increment43UnsupportedGeneratedAnalogRegion extends Module:
     analog:
       ()
 
+final class Increment43UnsupportedGeneratedEquationRegion extends Module:
+  hdlRange(0, 2): _ =>
+    equations:
+      ()
+
+final class Increment43UnsupportedGeneratedInitialEquationRegion extends Module:
+  hdlRange(0, 2): _ =>
+    initialEquations:
+      ()
+
+final class Increment43UnsupportedGeneratedContributionRegion extends Module:
+  hdlRange(0, 2): _ =>
+    contributions:
+      ()
+
+final class Increment43UnsupportedGeneratedBareProceduralRegion extends Module:
+  hdlRange(0, 2): _ =>
+    CandidateRuntime.analogSemanticBlock(AnalogEquationRuntime.RegionKind.Procedural, ())
+
 final class Increment43UnsupportedGeneratedProcedure extends Module:
   hdlRange(0, 2): _ =>
     analogProcedure:
@@ -284,6 +303,13 @@ object Increment43RangeConstructionTests extends TestSuite:
           (() => new Increment43UnsupportedGeneratedContinuousOperator),
         "analog event" -> (() => new Increment43UnsupportedGeneratedEvent),
         "continuous region" -> (() => new Increment43UnsupportedGeneratedAnalogRegion),
+        "equation region" -> (() => new Increment43UnsupportedGeneratedEquationRegion),
+        "initialequation region" ->
+          (() => new Increment43UnsupportedGeneratedInitialEquationRegion),
+        "contribution region" ->
+          (() => new Increment43UnsupportedGeneratedContributionRegion),
+        "procedural region" ->
+          (() => new Increment43UnsupportedGeneratedBareProceduralRegion),
         "procedural region" -> (() => new Increment43UnsupportedGeneratedProcedure)
       )
       cases.foreach: (label, construct) =>

@@ -83,6 +83,10 @@ private[nodal] object AnalogProceduralConstruction:
     if Option(current.get()).exists(_.stack.lastOption.exists(_.eventDepth > 0)) then
       AnalogEventRuntime.fail(7, s"$role is not permitted inside an analog event-controlled body")
 
+  def generatedProcedureActive: Boolean =
+    Option(current.get()).exists(_.stack.lastOption.exists: module =>
+      module.procedureDepth > 0 && module.generatedContext.nonEmpty)
+
   def requireDigitalEventContext(): Unit =
     requireContinuousContext("digital event process")
     if Option(current.get()).exists(_.stack.lastOption.exists(_.procedureDepth > 0)) then

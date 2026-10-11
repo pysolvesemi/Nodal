@@ -3,6 +3,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
+#include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/TimeWaveform.h"
 
 #include "llvm/ADT/SmallPtrSet.h"

@@ -63,6 +63,8 @@ private final class ConstructionSession(val options: EmitOptions):
     mutable.ArrayBuffer.empty
   private val generationStack: mutable.ArrayBuffer[GeneratedRegionRecord] =
     mutable.ArrayBuffer.empty
+  private val generatedOwnershipRecords =
+    mutable.LinkedHashMap.empty[(String, String), GeneratedRegionRecord]
   private val shapeIndices: mutable.ArrayBuffer[ShapeIndexRecord] = mutable.ArrayBuffer.empty
   private val shapeViews: mutable.ArrayBuffer[ShapeViewRecord] = mutable.ArrayBuffer.empty
   private var constructorFailure: Option[(Throwable, String)] = None
@@ -1429,6 +1431,10 @@ private final class ConstructionSession(val options: EmitOptions):
     )
     module.generatedRegions += record
     generationStack += record
+    generatedOwnershipRecords.update(
+      generatedRegionPath(record) -> expressionPath(record.induction),
+      record
+    )
     val domainCount = module.domains.size
     val instanceCount = module.instances.size
     val operationCount = operations.size
@@ -2406,6 +2412,19 @@ private final class ConstructionSession(val options: EmitOptions):
             declarations = region.declarations.toVector.map(declarationPath)
           )
 
+  private def canonicalGeneratedOwnership(
+      ownership: (String, String)
+  ): (String, String) =
+    val region = generatedOwnershipRecords.getOrElse(
+      ownership,
+      fail(
+        "NODAL-ITERATION-043-004",
+        "generated procedural ownership has no canonical region record",
+        Some(ownership._1)
+      )
+    )
+    generatedRegionPath(region) -> expressionPath(region.induction)
+
   private def shapeIndexSnapshots(): Vector[KernelShapeIndexSnapshot] =
     shapeIndices.toVector.map: index =>
       val inputPath = index.input match
@@ -2817,8 +2836,9 @@ private final class ConstructionSession(val options: EmitOptions):
       transferOperators = transferOperatorSnapshots(semantic.sourceMap),
       analogFunctions = userFunctions.snapshots(modulePath),
       analogSemantics = analogSemanticRecorder.snapshot,
-      analogProcedural = AnalogProceduralConstruction.snapshots(module =>
-        modulePath(moduleHandle(module))
+      analogProcedural = AnalogProceduralConstruction.snapshots(
+        module => modulePath(moduleHandle(module)),
+        canonicalGeneratedOwnership
       ),
       waivers = waiverSnapshots(semantic.sourceMap),
       generatedRegions = generatedSnapshots(),

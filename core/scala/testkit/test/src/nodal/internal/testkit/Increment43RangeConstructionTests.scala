@@ -315,28 +315,52 @@ object Increment43RangeConstructionTests extends TestSuite:
         assert(failure.diagnostic.code == "NODAL-BRIDGE-043")
 
     test("unsupported generated effects still fail at their capture boundary"):
-      val cases = Vector[(String, () => Module)](
-        "variable" -> (() => new Increment43UnsupportedGeneratedVariable),
-        "variable" -> (() => new Increment43ForgedGeneratedVariableCarrier),
-        "assignment" -> (() => new Increment43ForgedGeneratedAssignmentCarrier),
-        "continuous-time operator" ->
-          (() => new Increment43UnsupportedGeneratedContinuousOperator),
-        "analog event" -> (() => new Increment43UnsupportedGeneratedEvent),
-        "continuous region" -> (() => new Increment43UnsupportedGeneratedAnalogRegion),
-        "equation region" -> (() => new Increment43UnsupportedGeneratedEquationRegion),
-        "initialequation region" ->
-          (() => new Increment43UnsupportedGeneratedInitialEquationRegion),
-        "contribution region" ->
-          (() => new Increment43UnsupportedGeneratedContributionRegion),
-        "procedural region" ->
-          (() => new Increment43UnsupportedGeneratedBareProceduralRegion),
-        "procedural region" -> (() => new Increment43UnsupportedGeneratedProcedure)
+      val cases = Vector[(String, String, () => Module)](
+        ("variable", "generate_0", () => new Increment43UnsupportedGeneratedVariable),
+        ("variable", "variable_1", () => new Increment43ForgedGeneratedVariableCarrier),
+        ("assignment", "generate_0", () => new Increment43ForgedGeneratedAssignmentCarrier),
+        (
+          "continuous-time operator",
+          "generate_0",
+          () => new Increment43UnsupportedGeneratedContinuousOperator
+        ),
+        ("analog event", "generate_0", () => new Increment43UnsupportedGeneratedEvent),
+        (
+          "continuous region",
+          "generate_0",
+          () => new Increment43UnsupportedGeneratedAnalogRegion
+        ),
+        (
+          "equation region",
+          "generate_0",
+          () => new Increment43UnsupportedGeneratedEquationRegion
+        ),
+        (
+          "initialequation region",
+          "generate_0",
+          () => new Increment43UnsupportedGeneratedInitialEquationRegion
+        ),
+        (
+          "contribution region",
+          "generate_0",
+          () => new Increment43UnsupportedGeneratedContributionRegion
+        ),
+        (
+          "procedural region",
+          "generate_0",
+          () => new Increment43UnsupportedGeneratedBareProceduralRegion
+        ),
+        (
+          "procedural region",
+          "generate_0",
+          () => new Increment43UnsupportedGeneratedProcedure
+        )
       )
-      cases.foreach: (label, construct) =>
+      cases.foreach: (label, path, construct) =>
         val failure = constructionFailure(ConstructionKernel.inspect(construct()))
         assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
         assert(failure.diagnostic.message.contains(label))
-        assert(failure.diagnostic.semanticPath.exists(_.contains("generate_0")))
+        assert(failure.diagnostic.semanticPath.exists(_.contains(path)))
 
     test("locked nodalc verifies public symbolic hdlRange when configured"):
       sys.env.get("NODAL_NODALC") match

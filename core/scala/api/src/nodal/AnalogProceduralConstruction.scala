@@ -961,7 +961,8 @@ private[nodal] object AnalogProceduralConstruction:
     )
 
   def snapshots(
-      resolveOwner: Module => String
+      resolveOwner: Module => String,
+      resolveGeneratedOwnership: ((String, String)) => (String, String)
   ): Vector[AnalogProceduralRuntime.Snapshot] =
     Option(current.get()).toVector.flatMap: value =>
       value.modules.foreach(finalizeEvents)
@@ -977,9 +978,10 @@ private[nodal] object AnalogProceduralConstruction:
               module.controlExpressions.toVector
             )
           else module.recorder.snapshot
+        val generatedContext = module.generatedContext.map(resolveGeneratedOwnership)
         val contextual = sourceSnapshot.copy(
-          generatedOwner = module.generatedContext.map(_._1),
-          generatedInduction = module.generatedContext.map(_._2)
+          generatedOwner = generatedContext.map(_._1),
+          generatedInduction = generatedContext.map(_._2)
         )
         val retained = remapSnapshot(resolvePayloads(module, contextual), owner)
         Option.when(

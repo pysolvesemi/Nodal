@@ -200,7 +200,9 @@ private[nodal] final case class KernelTransferOperatorSnapshot(
     denominatorSize: Int,
     operands: Vector[String],
     resultDimension: String,
-    source: Option[SourceSpan]
+    source: Option[SourceSpan],
+    generatedOwner: Option[String] = None,
+    generatedInduction: Option[String] = None
 )
 
 private[nodal] final case class KernelNoiseOperatorSnapshot(

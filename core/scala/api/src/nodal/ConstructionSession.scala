@@ -1449,6 +1449,7 @@ private final class ConstructionSession(val options: EmitOptions):
     val analogRegionCount = analogRegions.size
     val continuousOperatorCount = continuousOperators.size
     val waveformOperatorCount = waveformOperators.size
+    val transferOperatorCount = transferOperators.size
     try
       body(induction)
       val generatedContext =
@@ -1475,10 +1476,14 @@ private final class ConstructionSession(val options: EmitOptions):
       val generatedWaveforms = waveformOperators.drop(waveformOperatorCount).filter:
         case (reference, _, _, _, _, _, _, _) =>
           generatedAnalogRegions.exists(_.expressions.contains(reference))
+      val generatedTransfers = transferOperators.drop(transferOperatorCount).filter:
+        case (reference, _, _, _, _, _) =>
+          generatedAnalogRegions.exists(_.expressions.contains(reference))
       val generatedOperatorReferences = generatedOperators.map(_.reference).toSet
       val generatedWaveformReferences = generatedWaveforms.map(_._1).toSet
+      val generatedTransferReferences = generatedTransfers.map(_._1).toSet
       val generatedExpressionReferences =
-        generatedOperatorReferences ++ generatedWaveformReferences
+        generatedOperatorReferences ++ generatedWaveformReferences ++ generatedTransferReferences
       val supportedGeneratedAnalog =
         generatedAnalogRegions.nonEmpty &&
           generatedAnalogRegions.forall: analog =>
@@ -1494,13 +1499,17 @@ private final class ConstructionSession(val options: EmitOptions):
                     waveform._1 == reference &&
                       Set("analog_transition", "analog_slew", "analog_absdelay")
                         .contains(waveform._2)
+                  ) || generatedTransfers.exists(transfer =>
+                    transfer._1 == reference &&
+                      Set("laplace_nd", "zi_nd").contains(transfer._2)
                   )
       val changedAnalog = generatedAnalogRegions.nonEmpty || generatedOperators.nonEmpty ||
-        generatedWaveforms.nonEmpty
+        generatedWaveforms.nonEmpty || generatedTransfers.nonEmpty
       if changedAnalog && !supportedGeneratedAnalog then
         fail(
           "NODAL-ITERATION-043-004",
-          "generated continuous regions require an owned ddt, idt, transition, slew, or absdelay expression and no contributions",
+          "generated continuous regions require an owned ddt, idt, transition, slew, " +
+            "absdelay, laplaceNd, or ziNd expression and no contributions",
           Some(generatedRegionPath(record))
         )
       if module.domains.size != domainCount || module.instances.size != instanceCount ||
@@ -2588,6 +2597,9 @@ private final class ConstructionSession(val options: EmitOptions):
     val sources = sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
     transferOperators.toVector.map: (reference, kind, n, d, inputs, dimension) =>
       val path = expressionPath(reference)
+      val generatedOwnership = analogRegions.find(_.expressions.contains(reference))
+        .flatMap(_.generatedOwnership)
+        .map(canonicalGeneratedOwnership)
       KernelTransferOperatorSnapshot(
         path,
         kind,
@@ -2600,7 +2612,9 @@ private final class ConstructionSession(val options: EmitOptions):
           )
         ),
         dimension,
-        sources.get(path)
+        sources.get(path),
+        generatedOwnership.map(_._1),
+        generatedOwnership.map(_._2)
       )
     .sortBy(_.path)
 

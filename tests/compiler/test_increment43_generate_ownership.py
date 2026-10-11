@@ -97,6 +97,41 @@ class GeneratedOwnershipCheckerTests(unittest.TestCase):
         self.assertIn("generated waveform ownership requires paired owner", verifier)
         self.assertIn("generated waveform ownership does not match", verifier)
 
+    def test_generated_transfer_schema_snapshot_and_verifier_retain_paired_ownership(self):
+        operations = (
+            ROOT / "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td"
+        ).read_text()
+        section = operations[
+            operations.index("def Nodal_AnalogTransferOp"):
+            operations.index("def Nodal_AnalogNoiseOp")
+        ]
+        self.assertIn("OptionalAttr<StrAttr>:$generated_owner", section)
+        self.assertIn("OptionalAttr<StrAttr>:$generated_induction", section)
+
+        construction = (
+            ROOT / "core/scala/api/src/nodal/ConstructionSession.scala"
+        ).read_text()
+        section = construction[
+            construction.index("private def transferOperatorSnapshots("):
+            construction.index("private def noiseOperatorSnapshots(")
+        ]
+        self.assertIn("map(canonicalGeneratedOwnership)", section)
+
+        verifier = (
+            ROOT / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
+        ).read_text()
+        section = verifier[
+            verifier.index("LogicalResult nodal::AnalogTransferOp::verify()"):
+            verifier.index("LogicalResult nodal::AnalogNoiseOp::verify()")
+        ]
+        self.assertIn("verifyGeneratedAnalogOwnership", section)
+
+        transfer_verifier = (
+            ROOT / "core/compiler/lib/Dialect/Nodal/AnalogTransfer.cpp"
+        ).read_text()
+        self.assertIn("module->walk([&](nodal::AnalogOp region)", transfer_verifier)
+        self.assertIn("transfer identity must be unique", transfer_verifier)
+
     def test_inventory_and_positive_preservation(self):
         cases = ownership.cases()
         self.assertEqual(len(cases), 31)

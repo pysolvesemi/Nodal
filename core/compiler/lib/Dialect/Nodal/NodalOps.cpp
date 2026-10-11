@@ -2038,16 +2038,16 @@ LogicalResult nodal::AnalogOp::verify() {
     generatedProcedure |= llvm::isa<nodal::AnalogProcedureOp>(operation);
     generatedContinuous |=
         llvm::isa<nodal::AnalogDdtOp, nodal::AnalogIdtOp, nodal::AnalogTransitionOp,
-                  nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp>(operation);
+                  nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp, nodal::AnalogTransferOp>(operation);
     if (generated &&
         !llvm::isa<nodal::RealLiteralOp, nodal::ParameterRefOp, nodal::AnalogAddOp,
                    nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp, nodal::AnalogNegOp,
                    nodal::AnalogDdtOp, nodal::AnalogIdtOp, nodal::AnalogTransitionOp,
-                   nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp, nodal::AnalogProcedureOp>(
-            operation))
+                   nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp, nodal::AnalogTransferOp,
+                   nodal::AnalogProcedureOp>(operation))
       return operation.emitOpError(
           "NODAL-ITERATION-043-004: generated analog regions support only owned ddt/idt or "
-          "transition/slew/absdelay "
+          "transition/slew/absdelay/laplaceNd/ziNd "
           "expressions or generated procedural storage");
     if (llvm::isa<nodal::ConstLiteralOp>(operation) && operation.getNumResults() == 1 &&
         operation.getResult(0).getType().isInteger(1))
@@ -2655,6 +2655,8 @@ LogicalResult nodal::AnalogOnOp::verify() { return verifyAnalogEventOperation(*t
 LogicalResult nodal::AnalogHeldReadOp::verify() { return verifyAnalogHeldRead(getOperation()); }
 
 LogicalResult nodal::AnalogTransferOp::verify() {
+  if (failed(verifyGeneratedAnalogOwnership(getOperation())))
+    return failure();
   return nodal::verifyAnalogTransferOperation(getOperation());
 }
 

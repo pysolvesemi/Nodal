@@ -127,6 +127,18 @@ final class Increment43GeneratedWaveformOperator extends Module:
       val delayed = absdelay(1.0.V, 1.0.ns)
       val _ = (smoothed, limited, delayed)
 
+final class Increment43GeneratedTransferOperator extends Module:
+  hdlRange(0, 2): _ =>
+    analog:
+      val continuous = laplaceNd(1.0.V, Seq(1.0.real), Seq(1.0.real))
+      val sampled = ziNd(1.0.V, Seq(1.0.real), Seq(1.0.real), 1.0.ns)
+      val _ = (continuous, sampled)
+
+final class Increment43UnsupportedGeneratedTransferOperator extends Module:
+  hdlRange(0, 2): _ =>
+    val filtered = laplaceNd(1.0.V, Seq(1.0.real), Seq(1.0.real))
+    val _ = filtered
+
 final class Increment43UnsupportedGeneratedAbstime extends Module:
   hdlRange(0, 2): _ =>
     analog:
@@ -554,6 +566,93 @@ object Increment43RangeConstructionTests extends TestSuite:
                 scala.Predef.assert(false, s"forged generated waveform accepted: $success")
           finally delete(directory)
 
+    test("generated transfer operators retain exact region and state ownership"):
+      val first = ConstructionKernel.inspect(new Increment43GeneratedTransferOperator)
+      val second = ConstructionKernel.inspect(new Increment43GeneratedTransferOperator)
+      assert(first == second)
+      val generated = first.generatedRegions.head
+      assert(first.transferOperators.map(_.kind) == Vector("laplace_nd", "zi_nd"))
+      assert(first.transferOperators.forall(_.generatedOwner.contains(generated.path)))
+      assert(first.transferOperators.forall(
+        _.generatedInduction.contains(generated.induction)
+      ))
+
+      val document = ScalaToMlirBridge.fromSnapshot(first)
+      val transferLines = document.text.linesIterator
+        .filter(_.contains("\"nodal.analog_transfer\""))
+        .toVector
+      assert(transferLines.size == 2)
+      transferLines.foreach: line =>
+        assert(line.contains(s"generated_owner = \"${generated.path}\""))
+        assert(line.contains(s"generated_induction = \"${generated.induction}\""))
+
+      val forgedOperator = first.transferOperators.head.copy(generatedOwner = None)
+      val forged = first.copy(
+        transferOperators = forgedOperator +: first.transferOperators.tail
+      )
+      val failure = scala.util.Try(ScalaToMlirBridge.fromSnapshot(forged)).failed.get
+        .asInstanceOf[BridgeException]
+      assert(failure.diagnostic.code == "NODAL-BRIDGE-043")
+
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          val directory = workDirectory()
+          try
+            val request = NativeCompilerRequest(
+              executable = Path.of(executable).toAbsolutePath,
+              arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
+              workingDirectory = directory,
+              timeout = Duration.ofSeconds(30)
+            )
+            NativeCompilerClient.run(document, request) match
+              case success: NativeCompilerSuccess =>
+                val normalizedTransfers = success.normalizedMlir.linesIterator
+                  .filter(_.contains("\"nodal.analog_transfer\""))
+                  .toVector
+                assert(normalizedTransfers.size == 2)
+                normalizedTransfers.foreach: line =>
+                  assert(line.contains(s"generated_owner = \"${generated.path}\""))
+                  assert(line.contains(
+                    s"generated_induction = \"${generated.induction}\""
+                  ))
+              case nativeFailure: NativeCompilerFailure =>
+                scala.Predef.assert(
+                  false,
+                  s"${nativeFailure.diagnostic}\n${nativeFailure.standardError}"
+                )
+
+            val marker = s"generated_owner = \"${generated.path}\""
+            val transferOffset = document.text.indexOf("\"nodal.analog_transfer\"")
+            val ownerOffset = document.text.indexOf(marker, transferOffset)
+            assert(transferOffset >= 0, ownerOffset >= transferOffset)
+            val forgedText = document.text.patch(
+              ownerOffset,
+              s"generated_owner = \"${generated.path}.forged\"",
+              marker.length
+            )
+            NativeCompilerClient.run(document.copy(text = forgedText), request) match
+              case nativeFailure: NativeCompilerFailure =>
+                assert(nativeFailure.diagnostic.code == "NODAL-ITERATION-043-004")
+              case success: NativeCompilerSuccess =>
+                scala.Predef.assert(false, s"forged generated transfer accepted: $success")
+
+            val firstPath = first.transferOperators.head.path
+            val secondPath = first.transferOperators(1).path
+            val duplicateIdentityText = document.text.replace(
+              transferLines(1),
+              transferLines(1).replace(secondPath, firstPath)
+            )
+            NativeCompilerClient.run(
+              document.copy(text = duplicateIdentityText),
+              request
+            ) match
+              case nativeFailure: NativeCompilerFailure =>
+                assert(nativeFailure.diagnostic.code == "NODAL-ANALOG-040-002")
+              case success: NativeCompilerSuccess =>
+                scala.Predef.assert(false, s"duplicate generated transfer accepted: $success")
+          finally delete(directory)
+
     test("unsupported generated effects still fail at their capture boundary"):
       val cases = Vector[(String, String, () => Module)](
         ("variable", "generate_0", () => new Increment43UnsupportedGeneratedVariable),
@@ -573,6 +672,11 @@ object Increment43RangeConstructionTests extends TestSuite:
           "analog waveform operator",
           "generate_0",
           () => new Increment43UnsupportedGeneratedBoundStep
+        ),
+        (
+          "analog transfer operator",
+          "generate_0",
+          () => new Increment43UnsupportedGeneratedTransferOperator
         ),
         ("analog event", "generate_0", () => new Increment43UnsupportedGeneratedEvent),
         (

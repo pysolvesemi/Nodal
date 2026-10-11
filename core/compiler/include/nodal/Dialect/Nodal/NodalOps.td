@@ -1084,7 +1084,10 @@ def Nodal_AnalogTransferOp : Nodal_Op<"analog_transfer", [HasParent<"AnalogOp">]
                        StrAttr:$contract_version, I64Attr:$numerator_size,
                        I64Attr:$denominator_size, StrAttr:$operator_id, StrAttr:$state_id,
                        StrAttr:$owner, StrAttr:$coefficient_order, StrAttr:$initialization,
-                       StrAttr:$result_dimension, DictionaryAttr:$metadata);
+                       StrAttr:$result_dimension,
+                       OptionalAttr<StrAttr>:$generated_owner,
+                       OptionalAttr<StrAttr>:$generated_induction,
+                       DictionaryAttr:$metadata);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }

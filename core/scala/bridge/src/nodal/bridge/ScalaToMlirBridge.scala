@@ -459,7 +459,10 @@ ${indent(body, 2)}
           quoted(if value.kind == "laplace_nd" then "ascending_s" else "ascending_z_inverse"),
         "initialization" -> quoted("simulator-default"),
         "result_dimension" -> quoted(value.resultDimension)
-      )
+      ) ++ value.generatedOwner.toVector.map(owner => "generated_owner" -> quoted(owner)) ++
+        value.generatedInduction.toVector.map(induction =>
+          "generated_induction" -> quoted(induction)
+        )
 
     private def transferOperatorInventory: String =
       array(snapshot.transferOperators.sortBy(_.path).map: value =>
@@ -1530,6 +1533,19 @@ ${indent(body, 2)}
           fail(
             "NODAL-BRIDGE-043",
             "waveform operator ownership differs from its analog region",
+            Some(analog.path)
+          )
+        val transfers = snapshot.transferOperators.filter(operator =>
+          analog.expressions.exists(_.path == operator.path)
+        )
+        if transfers.exists(operator =>
+            operator.generatedOwner != analog.generatedOwner ||
+              operator.generatedInduction != analog.generatedInduction
+          )
+        then
+          fail(
+            "NODAL-BRIDGE-043",
+            "transfer operator ownership differs from its analog region",
             Some(analog.path)
           )
       regions
@@ -2695,12 +2711,19 @@ ${indent(body, 2)}
           val waveforms = snapshot.waveformOperators.filter(operator =>
             analog.expressions.exists(_.path == operator.path)
           )
-          if (operators.isEmpty && waveforms.isEmpty) ||
+          val transfers = snapshot.transferOperators.filter(operator =>
+            analog.expressions.exists(_.path == operator.path)
+          )
+          if (operators.isEmpty && waveforms.isEmpty && transfers.isEmpty) ||
             operators.exists(operator =>
               !operator.generatedOwner.contains(region.path) ||
                 !operator.generatedInduction.contains(region.induction)
             ) ||
             waveforms.exists(operator =>
+              !operator.generatedOwner.contains(region.path) ||
+                !operator.generatedInduction.contains(region.induction)
+            ) ||
+            transfers.exists(operator =>
               !operator.generatedOwner.contains(region.path) ||
                 !operator.generatedInduction.contains(region.induction)
             )

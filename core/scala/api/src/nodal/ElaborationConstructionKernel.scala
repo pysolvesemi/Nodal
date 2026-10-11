@@ -215,7 +215,8 @@ private[nodal] object ConstructionKernel:
       inputs: Vector[Expr[Real]]
   ): Unit = active match
     case Some(session) =>
-      session.requireNoGeneratedEffect(s"analog transfer operator '$kind'")
+      if !session.generatedContinuousRegionActive then
+        session.requireNoGeneratedEffect(s"analog transfer operator '$kind'")
       session.registerTransferOperator(value, kind, numeratorSize, denominatorSize, inputs)
     case None => AnalogTransferContract.fail(1, "transfer state requires an active Module")
 

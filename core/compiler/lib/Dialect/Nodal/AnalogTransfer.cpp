@@ -69,16 +69,22 @@ LogicalResult verifyAnalogTransferOperation(Operation *op) {
                              "invalid transfer identity or state owner");
   if (module->getNumRegions() != 1 || !llvm::hasSingleElement(module->getRegion(0)))
     return emitMappedFailure(op, "NODAL-ANALOG-040-002", "transfer owner requires one body block");
-  for (Operation &region : module->getRegion(0).front()) {
-    if (name(&region) != "nodal.analog")
-      continue;
-    if (region.getNumRegions() != 1 || !llvm::hasSingleElement(region.getRegion(0)))
-      return emitMappedFailure(op, "NODAL-ANALOG-040-002", "malformed transfer inventory region");
-    for (Operation &other : region.getRegion(0).front())
+  bool malformedInventory = false;
+  bool duplicateIdentity = false;
+  module->walk([&](nodal::AnalogOp region) {
+    if (region->getNumRegions() != 1 || !llvm::hasSingleElement(region->getRegion(0))) {
+      malformedInventory = true;
+      return;
+    }
+    for (Operation &other : region->getRegion(0).front())
       if (&other != op && (text(&other, "operator_id") == id || text(&other, "source_id") == id ||
                            text(&other, "state_id") == text(op, "state_id")))
-        return emitMappedFailure(op, "NODAL-ANALOG-040-002", "transfer identity must be unique");
-  }
+        duplicateIdentity = true;
+  });
+  if (malformedInventory)
+    return emitMappedFailure(op, "NODAL-ANALOG-040-002", "malformed transfer inventory region");
+  if (duplicateIdentity)
+    return emitMappedFailure(op, "NODAL-ANALOG-040-002", "transfer identity must be unique");
   for (NamedAttribute attr : op->getAttrs())
     if (attr.getName().getValue().starts_with("nodal.folded") ||
         attr.getName().getValue().starts_with("nodal.simplif"))

@@ -455,7 +455,8 @@ private[nodal] object AnalogProceduralMlir:
         "event_id" -> quoted(path),
         "owner" -> quoted(program.owner),
         "contract" -> quoted(AnalogEventContract.Version),
-        "name" -> quoted(event.name),
+        "name" -> quoted(event.name)
+      ) ++ generatedAttributes(program) ++ Vector(
         "metadata" -> metadata(path, event.source)
       )
       val primitive = if event.operation == "analog_event_or" then
@@ -578,7 +579,8 @@ private[nodal] object AnalogProceduralMlir:
             operandTypes = Vector("!nodal.analog_event"),
             attributes = Vector(
               "statement_id" -> quoted(event.identity),
-              "owner" -> quoted(program.owner),
+              "owner" -> quoted(program.owner)
+            ) ++ generatedAttributes(program) ++ Vector(
               "metadata" -> metadata(event.identity, event.source)
             ),
             regions = Vector("^bb0:\n" + renderBlock(event.body)),

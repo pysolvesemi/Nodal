@@ -219,18 +219,42 @@ unroll a branch or loop and does not create a second control-flow owner.
 
 The bridge accepts structured control only after the existing generated-region,
 variable-declaration and induction checks pass. Every emitted variable, read and
-assignment carries the same generated ownership pair. A bridge-local recursive
-check continues to reject an event-controlled statement even if a snapshot is
-forged after construction. Native verification admits only the established
-`analog_if`, `analog_case`, runtime/static analog-loop, lexical-scope and
-break/continue operations under the generated procedure. It independently
-checks the ownership attributes on each storage operation; event and continuous
-operations remain outside the allowlist.
+assignment carries the same generated ownership pair. At this checkpoint a
+bridge-local recursive check continued to reject an event-controlled statement
+even if a snapshot was forged after construction. Native verification admitted
+only the established `analog_if`, `analog_case`, runtime/static analog-loop,
+lexical-scope and break/continue operations under the generated procedure. It independently
+checked the ownership attributes on each storage operation; event and continuous
+operations remained outside the allowlist.
 
-Public regression covers one deterministic procedure containing conditional,
-case and runtime-loop updates, forged event injection at the bridge boundary,
-and forged assignment ownership at the configured native boundary. The earlier
-straight-line case and every capture-boundary negative remain. This is still
-normalized-IR ownership evidence only: generated events and operators, legal
+Public regression at this checkpoint covered one deterministic procedure
+containing conditional, case and runtime-loop updates, forged event injection at
+the bridge boundary, and forged assignment ownership at the configured native
+boundary. The event checkpoint below replaces that temporary event prohibition;
+the earlier straight-line case and every other capture-boundary negative remain.
+This is still normalized-IR ownership evidence only: generated operators, legal
 Verilog-A generation, arrays/slices, source/index maps and all F-043 acceptance
 boxes remain open.
+
+## Generated event-ownership checkpoint
+
+The next bounded procedural checkpoint admits an analog event occurrence only
+inside the already-owned generated analog procedure. Construction still rejects
+an event created directly in a generated region, but permits the public event
+and controlled-statement surfaces while the exact generated region and induction
+own the active procedure. Reused event handles remain occurrences: each emitted
+event expression and `nodal.analog_on` carries that procedure's ownership pair.
+
+The bridge retains the existing event validation and source inventories, emits
+the ownership pair on primitive/composed event expressions and their control,
+and continues to require the procedure's same-module region, induction and
+variable-declaration contract. Native event verification independently requires
+both attributes, matches them to the immediate `nodal.generate` and owning
+`nodal.analog_procedure`, and rejects detached, partial or forged ownership with
+`NODAL-ITERATION-043-004`. Existing nesting, runtime-monitor placement, read,
+history and event-body restrictions remain unchanged.
+
+This is normalized-IR ownership evidence. It does not enable generated
+continuous-time operators, contributions or nested event controls, and it does
+not lower generated procedures, storage or events to Verilog-A. General slices,
+legal target generation/source maps and all F-043 acceptance boxes remain open.

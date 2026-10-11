@@ -99,6 +99,13 @@ final class Increment43GeneratedStructuredLexicalStorage extends Module:
       analogLoop(iterations, maximumIterations = 2, minimumIterations = 1):
         state := state + 5.0.real
 
+final class Increment43GeneratedEventStorage extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val state = variable(Real, 0.0.V)
+      on(cross(1.0.V)):
+        state := state + 1.0.V
+
 final class Increment43UnsupportedGeneratedContinuousOperator extends Module:
   hdlRange(0, 2): _ =>
     val state = ddt(1.0.V)
@@ -377,24 +384,33 @@ object Increment43RangeConstructionTests extends TestSuite:
       assert(document.text.sliding(ownerMarker.length).count(_ == ownerMarker) > 8)
       assert(document.text.sliding(inductionMarker.length).count(_ == inductionMarker) > 8)
 
-      val control = program.controlFlow.get
-      val forgedEvent = AnalogControlFlowRuntime.Statement.EventControl(
-        identity = s"${program.owner}.forged_event",
-        event = AnalogEventRuntime.Expression(
-          operation = "analog_initial_step",
-          analyses = Vector("transient")
-        ),
-        body = AnalogControlFlowRuntime.Block(s"${program.owner}.forged_event.body", Vector.empty)
-      )
-      val forgedControl = control.copy(
-        root = control.root.copy(statements = control.root.statements :+ forgedEvent)
-      )
-      val forgedProgram = program.copy(controlFlow = Some(forgedControl))
+      val forgedProgram = program.copy(generatedInduction = Some(region.induction + ".forged"))
       val failure = scala.util.Try(
         ScalaToMlirBridge.fromSnapshot(first.copy(analogProcedural = Vector(forgedProgram)))
       ).failed.get.asInstanceOf[BridgeException]
       assert(failure.diagnostic.code == "NODAL-BRIDGE-043")
-      assert(failure.diagnostic.message.contains("event profile"))
+      assert(failure.diagnostic.message.contains("ownership"))
+
+    test("generated analog event retains exact occurrence ownership"):
+      val first = ConstructionKernel.inspect(new Increment43GeneratedEventStorage)
+      val second = ConstructionKernel.inspect(new Increment43GeneratedEventStorage)
+      assert(first == second)
+      val region = first.generatedRegions.head
+      val program = first.analogProcedural.head
+      assert(program.generatedOwner.contains(region.path))
+      assert(program.generatedInduction.contains(region.induction))
+      val events = program.controlFlow.get.root.statements.collect:
+        case event: AnalogControlFlowRuntime.Statement.EventControl => event
+      assert(events.size == 1)
+      assert(events.head.event.operation == "analog_cross")
+
+      val document = ScalaToMlirBridge.fromSnapshot(first)
+      for operation <- Vector("nodal.analog_cross", "nodal.analog_on") do
+        val offset = document.text.indexOf(s"\"$operation\"")
+        assert(offset >= 0)
+        val tail = document.text.substring(offset)
+        assert(tail.contains(s"generated_owner = \"${region.path}\""))
+        assert(tail.contains(s"generated_induction = \"${region.induction}\""))
 
     test("unsupported generated effects still fail at their capture boundary"):
       val cases = Vector[(String, String, () => Module)](
@@ -550,6 +566,49 @@ object Increment43RangeConstructionTests extends TestSuite:
                 assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
               case success: NativeCompilerSuccess =>
                 scala.Predef.assert(false, s"forged structured ownership accepted: $success")
+          finally delete(directory)
+
+    test("native verifies generated event occurrence ownership when configured"):
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          val directory = workDirectory()
+          try
+            val snapshot = ConstructionKernel.inspect(new Increment43GeneratedEventStorage)
+            val region = snapshot.generatedRegions.head
+            val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+            val request = NativeCompilerRequest(
+              executable = Path.of(executable).toAbsolutePath,
+              arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
+              workingDirectory = directory,
+              timeout = Duration.ofSeconds(30)
+            )
+            NativeCompilerClient.run(document, request) match
+              case success: NativeCompilerSuccess =>
+                assert(success.normalizedMlir.contains("\"nodal.analog_cross\""))
+                assert(success.normalizedMlir.contains("\"nodal.analog_on\""))
+              case failure: NativeCompilerFailure =>
+                scala.Predef.assert(false, s"${failure.diagnostic}\n${failure.standardError}")
+
+            val marker = s"generated_owner = \"${region.path}\""
+            for operation <- Vector("nodal.analog_cross", "nodal.analog_on") do
+              val operationOffset = document.text.indexOf(s"\"$operation\"")
+              val ownerOffset = document.text.indexOf(marker, operationOffset)
+              assert(operationOffset >= 0)
+              assert(ownerOffset >= operationOffset)
+              val forgedText = document.text.patch(
+                ownerOffset,
+                s"generated_owner = \"${region.path}.forged\"",
+                marker.length
+              )
+              NativeCompilerClient.run(document.copy(text = forgedText), request) match
+                case failure: NativeCompilerFailure =>
+                  assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
+                case success: NativeCompilerSuccess =>
+                  scala.Predef.assert(
+                    false,
+                    s"forged generated event ownership accepted: $success"
+                  )
           finally delete(directory)
 
     test(

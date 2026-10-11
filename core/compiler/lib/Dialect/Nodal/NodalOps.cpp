@@ -2081,13 +2081,15 @@ LogicalResult nodal::AnalogProcedureOp::verify() {
       if (!llvm::isa<nodal::AnalogVariableOp, nodal::AnalogVariableReadOp, nodal::AnalogAssignOp,
                      nodal::AnalogScopeOp, nodal::AnalogIfOp, nodal::AnalogIfArmOp,
                      nodal::AnalogCaseOp, nodal::AnalogCaseArmOp, nodal::AnalogLoopOp,
-                     nodal::AnalogBreakOp, nodal::AnalogContinueOp>(nested))
+                     nodal::AnalogBreakOp, nodal::AnalogContinueOp, nodal::AnalogCrossOp,
+                     nodal::AnalogAboveOp, nodal::AnalogTimerOp, nodal::AnalogInitialStepOp,
+                     nodal::AnalogFinalStepOp, nodal::AnalogEventOrOp, nodal::AnalogOnOp>(nested))
         unsupported = nested;
     });
     if (unsupported)
       return unsupported->emitOpError(
-          "NODAL-ITERATION-043-004: generated analog procedures do not support event or "
-          "continuous effects");
+          "NODAL-ITERATION-043-004: generated analog procedures do not support continuous or "
+          "unowned effects");
   }
   if (failed(verifyAnalogProcedure(getOperation())))
     return failure();

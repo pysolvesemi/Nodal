@@ -103,8 +103,10 @@ private[nodal] object AnalogProceduralConstruction:
       arguments: Vector[Expr[? <: Data]],
       analyses: Vector[String] = Vector.empty
   ): Event =
-    ConstructionKernel.requireNoGeneratedEffect(s"analog event '$operation'")
     val module = activeModule
+    ConstructionKernel.generatedRegionOwnership.foreach: context =>
+      if module.procedureDepth == 0 || !module.generatedContext.contains(context) then
+        ConstructionKernel.requireNoGeneratedEffect(s"analog event '$operation'")
     new Event(Some(KernelAnalogEventDefinition(
       module.module,
       operation,
@@ -182,8 +184,10 @@ private[nodal] object AnalogProceduralConstruction:
     result
 
   def eventControl[A](event: Event)(body: => A): A =
-    ConstructionKernel.requireNoGeneratedEffect("analog event-controlled region")
     val module = activeModule
+    ConstructionKernel.generatedRegionOwnership.foreach: context =>
+      if module.procedureDepth == 0 || !module.generatedContext.contains(context) then
+        ConstructionKernel.requireNoGeneratedEffect("analog event-controlled region")
     if module.procedureDepth == 0 then
       AnalogEventRuntime.fail(1, "analog on requires an active analogProcedure")
     if module.eventDepth > 0 then

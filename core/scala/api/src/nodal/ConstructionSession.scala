@@ -2531,6 +2531,9 @@ private final class ConstructionSession(val options: EmitOptions):
     continuousOperators.toVector.map: record =>
       val path = expressionPath(record.reference)
       val owner = modulePath(record.reference.module)
+      val generatedOwnership = analogRegions.find(_.expressions.contains(record.reference))
+        .flatMap(_.generatedOwnership)
+        .map(canonicalGeneratedOwnership)
       val stateId =
         if record.operation == "analog_idt" then Some(s"$path.state") else None
       val initialization =
@@ -2563,10 +2566,8 @@ private final class ConstructionSession(val options: EmitOptions):
         initialization = initialization,
         analyses = allAnalyses,
         source = sourceByPath.get(path),
-        generatedOwner = analogRegions.find(_.expressions.contains(record.reference))
-          .flatMap(_.generatedOwnership.map(_._1)),
-        generatedInduction = analogRegions.find(_.expressions.contains(record.reference))
-          .flatMap(_.generatedOwnership.map(_._2))
+        generatedOwner = generatedOwnership.map(_._1),
+        generatedInduction = generatedOwnership.map(_._2)
       )
     .sortBy(_.path)
 
@@ -2652,6 +2653,7 @@ private final class ConstructionSession(val options: EmitOptions):
   private def analogSnapshots(): Vector[KernelAnalogRegionSnapshot] =
     analogRegions.toVector.sortBy(region => (modulePath(region.module), region.ordinal)).map:
       region =>
+        val generatedOwnership = region.generatedOwnership.map(canonicalGeneratedOwnership)
         val expressions = region.expressions.distinct.toVector.map: reference =>
           val expression = expressionValues.getOrElse(
             reference,
@@ -2708,8 +2710,8 @@ private final class ConstructionSession(val options: EmitOptions):
           modulePath(region.module),
           expressions,
           contributions,
-          region.generatedOwnership.map(_._1),
-          region.generatedOwnership.map(_._2)
+          generatedOwnership.map(_._1),
+          generatedOwnership.map(_._2)
         )
 
   private def parameterExpressionSnapshots(): Vector[KernelParameterExpressionSnapshot] =

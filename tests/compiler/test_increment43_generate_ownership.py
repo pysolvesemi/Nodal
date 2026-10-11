@@ -12,6 +12,18 @@ import run_generate_ownership_matrix as ownership
 
 
 class GeneratedOwnershipCheckerTests(unittest.TestCase):
+    def test_generated_continuous_snapshots_resolve_finalized_induction_identity(self):
+        construction = (
+            ROOT / "core/scala/api/src/nodal/ConstructionSession.scala"
+        ).read_text()
+        for start, end in (
+            ("private def continuousOperatorSnapshots(", "private def transferOperatorSnapshots("),
+            ("private def analogSnapshots()", "private def parameterExpressionSnapshots()"),
+        ):
+            with self.subTest(snapshot=start):
+                section = construction[construction.index(start):construction.index(end)]
+                self.assertIn("map(canonicalGeneratedOwnership)", section)
+
     def test_generated_event_operation_schemas_retain_paired_ownership(self):
         operations = (
             ROOT / "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td"

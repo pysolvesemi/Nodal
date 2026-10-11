@@ -127,7 +127,7 @@ private[nodal] object ScalaToMlirBridge:
           case scope: AnalogControlFlowRuntime.Statement.Scope => block(scope.body)
           case conditional: AnalogControlFlowRuntime.Statement.IfThenElse =>
             conditional.branches.exists(branch => block(branch.body)) ||
-              conditional.otherwise.exists(block)
+            conditional.otherwise.exists(block)
           case selection: AnalogControlFlowRuntime.Statement.CaseStatement =>
             selection.arms.exists(arm => block(arm.body)) || selection.default.exists(block)
           case loop: AnalogControlFlowRuntime.Statement.Loop => block(loop.body)

@@ -87,6 +87,12 @@ private[nodal] object AnalogProceduralConstruction:
     Option(current.get()).exists(_.stack.lastOption.exists: module =>
       module.procedureDepth > 0 && module.generatedContext.nonEmpty)
 
+  def retainsGeneratedVariable(value: AnyRef, context: (String, String)): Boolean =
+    Option(current.get()).exists(_.stack.lastOption.exists: module =>
+      val retained = Option(module.variables.get(value))
+      module.procedureComplete && module.generatedContext.contains(context) &&
+      retained.exists(variable => module.variableRecords.exists(_.variable == variable)))
+
   def requireDigitalEventContext(): Unit =
     requireContinuousContext("digital event process")
     if Option(current.get()).exists(_.stack.lastOption.exists(_.procedureDepth > 0)) then

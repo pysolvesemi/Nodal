@@ -184,7 +184,9 @@ private final class ConstructionSession(val options: EmitOptions):
       domain: Option[ClockDomain],
       attributes: Vector[(String, Any)]
   ): Unit =
-    if kind != KernelSignalKind.AnalogNode then
+    val activeGeneratedVariable =
+      kind == KernelSignalKind.Variable && AnalogProceduralConstruction.generatedProcedureActive
+    if kind != KernelSignalKind.AnalogNode && !activeGeneratedVariable then
       requireNoGeneratedEffect(s"generated ${kind.label} declaration")
     val module = currentModule
     dataType.foreach(validateShapeType(_, module.handle))
@@ -1433,9 +1435,17 @@ private final class ConstructionSession(val options: EmitOptions):
     val analogRegionCount = analogRegions.size
     try
       body(induction)
+      val generatedContext =
+        generatedRegionPath(record) -> expressionPath(record.induction)
       val unsupportedDeclaration = record.declarations.iterator
         .map(reference => module.declarations(reference.index))
-        .find(_.kind != KernelSignalKind.AnalogNode)
+        .find: declaration =>
+          declaration.kind != KernelSignalKind.AnalogNode &&
+            !(declaration.kind == KernelSignalKind.Variable &&
+              AnalogProceduralConstruction.retainsGeneratedVariable(
+                declaration.value,
+                generatedContext
+              ))
       unsupportedDeclaration.foreach: declaration =>
         fail(
           "NODAL-ITERATION-043-004",

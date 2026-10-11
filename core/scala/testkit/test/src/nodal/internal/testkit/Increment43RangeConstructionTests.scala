@@ -55,6 +55,18 @@ final class Increment43UnsupportedGeneratedVariable extends Module:
     val _ = state
     ()
 
+final class Increment43ForgedGeneratedVariableCarrier extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val state = variable(Real, 0.0.V)
+      val forged = new Object
+      CandidateRuntime.declare(
+        forged,
+        KernelSignalKind.Variable,
+        dataType = Some(Real)
+      )
+      state := state + 1.0.V
+
 final class Increment43GeneratedLexicalStorage extends Module:
   hdlRange(0, 2): _ =>
     analogProcedure:
@@ -299,6 +311,7 @@ object Increment43RangeConstructionTests extends TestSuite:
     test("unsupported generated effects still fail at their capture boundary"):
       val cases = Vector[(String, () => Module)](
         "variable" -> (() => new Increment43UnsupportedGeneratedVariable),
+        "variable" -> (() => new Increment43ForgedGeneratedVariableCarrier),
         "continuous-time operator" ->
           (() => new Increment43UnsupportedGeneratedContinuousOperator),
         "analog event" -> (() => new Increment43UnsupportedGeneratedEvent),

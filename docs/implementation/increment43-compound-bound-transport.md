@@ -196,3 +196,14 @@ requires generated lexical storage and straight-line control, and the existing
 bridge/native ownership checks remain unchanged. Generated equation, initial-
 equation, contribution and continuous regions still reject at capture; focused
 regression cases retain that fail-closed boundary.
+
+### Generated declaration inventory repair
+
+The public `Variable` constructor also passes through the generic declaration
+registry before the procedural recorder sees it. That registry now gives only
+an active generated-owned analog procedure provisional access to a variable
+declaration. At generated-region completion the declaration remains accepted
+only when the same procedure retained that exact object under the current
+region and induction identities. A raw variable-kind declaration forged inside
+an otherwise valid generated procedure therefore still rejects, as do variables
+outside a procedure and every other generated declaration kind.

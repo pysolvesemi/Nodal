@@ -108,6 +108,9 @@ private[nodal] object ConstructionKernel:
   def requireNoGeneratedEffect(role: String): Unit =
     active.foreach(_.requireNoGeneratedEffect(role))
 
+  def generatedRegionOwnership: Option[(String, String)] =
+    active.flatMap(_.generatedRegionOwnership)
+
   def generatedRegion(
       lower: Int | Expr[Integer],
       upperExclusive: Int | Expr[Integer],

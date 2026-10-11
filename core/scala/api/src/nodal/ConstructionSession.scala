@@ -88,6 +88,10 @@ private final class ConstructionSession(val options: EmitOptions):
         Some(generatedRegionPath(region))
       )
 
+  def generatedRegionOwnership: Option[(String, String)] =
+    generationStack.lastOption.map: region =>
+      generatedRegionPath(region) -> expressionPath(region.induction)
+
   private def moduleHandle(module: Module): Long =
     Option(moduleIds.get(module)).map(_.longValue).getOrElse(
       fail("NODAL-OWNERSHIP-017", "Module is outside this construction transaction")

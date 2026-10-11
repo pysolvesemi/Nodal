@@ -646,6 +646,37 @@ ${indent(body, 2)}
               Some(region.path)
             )
           parentPath = parent.parent
+      val generatedProcedures = snapshot.analogProcedural.filter(_.generatedOwner.nonEmpty)
+      requireUnique(
+        generatedProcedures.flatMap(_.generatedOwner),
+        "NODAL-BRIDGE-043",
+        "generated procedural ownership"
+      )
+      snapshot.analogProcedural.foreach: program =>
+        if program.generatedOwner.nonEmpty != program.generatedInduction.nonEmpty then
+          fail(
+            "NODAL-BRIDGE-043",
+            "generated analog procedure requires paired owner and induction identities",
+            Some(program.owner)
+          )
+        program.generatedOwner.foreach: generatedOwner =>
+          val region = generatedByPath.getOrElse(
+            generatedOwner,
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated analog procedure has no owning generated region",
+              Some(generatedOwner)
+            )
+          )
+          if region.owner != program.owner ||
+            !program.generatedInduction.contains(region.induction) ||
+            program.controlFlow.nonEmpty
+          then
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated analog procedure ownership, induction, or control profile is invalid",
+              Some(generatedOwner)
+            )
       snapshot.parameterExpressions.foreach: expression =>
         if !moduleSymbols.contains(expression.owner) then
           fail(
@@ -2542,6 +2573,8 @@ ${indent(body, 2)}
           ),
           semanticPath = declaration.path
         )
+
+      nested ++= AnalogProceduralMlir.renderGenerated(snapshot, module.path, region.path)
 
       generatedRegionsFor(module)
         .filter(_.parent.contains(region.path))

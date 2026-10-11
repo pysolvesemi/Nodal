@@ -819,9 +819,10 @@ def Nodal_BridgeOp : Nodal_Op<"bridge"> {
 // Minimal analog expressions and contributions
 //===----------------------------------------------------------------------===//
 
-def Nodal_AnalogOp : Nodal_Op<"analog", [HasParent<"ModuleOp">, NoTerminator]> {
+def Nodal_AnalogOp : Nodal_Op<"analog", [ParentOneOf<["ModuleOp", "GenerateOp"]>, NoTerminator]> {
   let summary = "Continuous-time analog equation region";
-  let arguments = (ins DictionaryAttr:$metadata);
+  let arguments = (ins OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction, DictionaryAttr:$metadata);
   let regions = (region SizedRegion<1>:$body);
   let hasVerifier = 1;
 }
@@ -829,7 +830,8 @@ def Nodal_AnalogOp : Nodal_Op<"analog", [HasParent<"ModuleOp">, NoTerminator]> {
 def Nodal_AnalogProcedureOp
     : Nodal_Op<"analog_procedure", [HasParent<"AnalogOp">, NoTerminator]> {
   let summary = "Ordered component-local analog procedural region";
-  let arguments = (ins StrAttr:$owner, DictionaryAttr:$metadata);
+  let arguments = (ins StrAttr:$owner, OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction, DictionaryAttr:$metadata);
   let regions = (region SizedRegion<1>:$body);
   let hasVerifier = 1;
 }
@@ -992,6 +994,8 @@ def Nodal_AnalogVariableOp : Nodal_Op<"analog_variable"> {
   let arguments = (ins
     StrAttr:$identity,
     StrAttr:$owner,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     I64Attr:$declaration_order,
     BoolAttr:$initialized,
     StrAttr:$initializer_value,
@@ -1010,6 +1014,8 @@ def Nodal_AnalogVariableReadOp : Nodal_Op<"analog_variable_read"> {
     Nodal_VariableType:$variable,
     StrAttr:$read_id,
     StrAttr:$owner,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
@@ -1024,6 +1030,8 @@ def Nodal_AnalogAssignOp : Nodal_Op<"analog_assign"> {
     StrAttr:$statement_id,
     I64Attr:$authored_order,
     StrAttr:$owner,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     StrAttr:$value_kind,
     StrAttr:$value_dimension,
     ArrayAttr:$analyses,

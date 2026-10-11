@@ -24,10 +24,28 @@ private[nodal] object AnalogProceduralMlir:
       owner: String
   ): Vector[String] =
     snapshot.analogProcedural
-      .filter(_.owner == owner)
-      .sortBy(_.owner)
       .zipWithIndex
-      .map((program, index) => renderProgram(program, index))
+      .collect:
+        case (program, index) if program.owner == owner && program.generatedOwner.isEmpty =>
+          renderProgram(program, index)
+
+  def renderGenerated(
+      snapshot: ConstructionSnapshot,
+      owner: String,
+      generatedOwner: String
+  ): Vector[String] =
+    snapshot.analogProcedural.zipWithIndex.collect:
+      case (program, index)
+          if program.owner == owner && program.generatedOwner.contains(generatedOwner) =>
+        renderProgram(program, index)
+
+  private def generatedAttributes(
+      program: AnalogProceduralRuntime.Snapshot
+  ): Vector[(String, String)] =
+    program.generatedOwner.toVector.map(value => "generated_owner" -> quoted(value)) ++
+      program.generatedInduction.toVector.map(value =>
+        "generated_induction" -> quoted(value)
+      )
 
   def inventory(snapshot: ConstructionSnapshot): String =
     array(
@@ -40,6 +58,8 @@ private[nodal] object AnalogProceduralMlir:
                 "kind" -> quoted("variable"),
                 "identity" -> quoted(record.variable.identity),
                 "owner" -> quoted(program.owner),
+                "generated_owner" -> quoted(program.generatedOwner.getOrElse("")),
+                "generated_induction" -> quoted(program.generatedInduction.getOrElse("")),
                 "declaration_order" -> integer(record.declarationOrder),
                 "operation_order" -> integer(record.operationOrder),
                 "scalar_kind" -> quoted(record.variable.valueType.kind.label),
@@ -60,6 +80,8 @@ private[nodal] object AnalogProceduralMlir:
                 "kind" -> quoted("assignment"),
                 "identity" -> quoted(record.identity),
                 "owner" -> quoted(program.owner),
+                "generated_owner" -> quoted(program.generatedOwner.getOrElse("")),
+                "generated_induction" -> quoted(program.generatedInduction.getOrElse("")),
                 "authored_order" -> integer(record.authoredOrder),
                 "operation_order" -> integer(record.operationOrder),
                 "target" -> quoted(record.target.identity),
@@ -336,7 +358,8 @@ private[nodal] object AnalogProceduralMlir:
     val procedure = operation(
       "nodal.analog_procedure",
       attributes = Vector(
-        "owner" -> quoted(program.owner),
+        "owner" -> quoted(program.owner)
+      ) ++ generatedAttributes(program) ++ Vector(
         "metadata" -> metadata(procedurePath, procedureSource)
       ),
       regions = Vector(procedureBody),
@@ -345,7 +368,9 @@ private[nodal] object AnalogProceduralMlir:
     val analogPath = s"${program.owner}.analogProcedural"
     operation(
       "nodal.analog",
-      attributes = Vector("metadata" -> metadata(analogPath, procedureSource)),
+      attributes = generatedAttributes(program) ++ Vector(
+        "metadata" -> metadata(analogPath, procedureSource)
+      ),
       regions = Vector(procedure),
       source = procedureSource
     )
@@ -753,7 +778,8 @@ private[nodal] object AnalogProceduralMlir:
     val procedure = operation(
       "nodal.analog_procedure",
       attributes = Vector(
-        "owner" -> quoted(program.owner),
+        "owner" -> quoted(program.owner)
+      ) ++ generatedAttributes(program) ++ Vector(
         "metadata" -> metadata(procedurePath, procedureSource)
       ),
       regions = Vector(renderBlock(control.root)),
@@ -762,7 +788,9 @@ private[nodal] object AnalogProceduralMlir:
     val analogPath = s"${program.owner}.analogProcedural"
     operation(
       "nodal.analog",
-      attributes = Vector("metadata" -> metadata(analogPath, procedureSource)),
+      attributes = generatedAttributes(program) ++ Vector(
+        "metadata" -> metadata(analogPath, procedureSource)
+      ),
       regions = Vector(procedure),
       source = procedureSource
     )
@@ -935,7 +963,8 @@ private[nodal] object AnalogProceduralMlir:
       resultTypes = Vector(variableType(record.variable)),
       attributes = Vector(
         "identity" -> quoted(record.variable.identity),
-        "owner" -> quoted(program.owner),
+        "owner" -> quoted(program.owner)
+      ) ++ generatedAttributes(program) ++ Vector(
         "declaration_order" -> integer(record.declarationOrder),
         "operation_order" -> integer(record.operationOrder),
         "initialized" -> boolean(initializer.nonEmpty),
@@ -982,7 +1011,8 @@ private[nodal] object AnalogProceduralMlir:
         resultTypes = Vector(resultType),
         attributes = Vector(
           "read_id" -> quoted(readPath),
-          "owner" -> quoted(program.owner),
+          "owner" -> quoted(program.owner)
+        ) ++ generatedAttributes(program) ++ Vector(
           "metadata" -> metadata(readPath, record.source)
         ),
         source = record.source
@@ -999,7 +1029,8 @@ private[nodal] object AnalogProceduralMlir:
         "statement_id" -> quoted(record.identity),
         "authored_order" -> integer(record.authoredOrder),
         "operation_order" -> integer(record.operationOrder),
-        "owner" -> quoted(program.owner),
+        "owner" -> quoted(program.owner)
+      ) ++ generatedAttributes(program) ++ Vector(
         "value_kind" -> quoted(record.value.valueType.kind.label),
         "value_dimension" -> quoted(
           canonicalDimension(record.value.valueType.dimension)

@@ -142,18 +142,46 @@ Those effects could therefore escape the generic operation-count check without
 acquiring generated-instance ownership. Accepting them at this stage would
 silently share state or place stateful behavior outside the generated region.
 
-Until generated-instance storage and target lowering own those inventories,
-construction now rejects them at the public capture boundary with
+At that checkpoint, before generated-instance storage owned any inventory,
+construction rejected them at the public capture boundary with
 `NODAL-ITERATION-043-004` and the generated region path. The same fail-closed
 boundary covers child modules, non-node declarations, domains, conservative
 connections, user functions, transfer/noise/waveform operators, event controls,
-and continuous or procedural analog regions. Generated analog nodes remain the
+and continuous or procedural analog regions. Generated analog nodes were the
 only supported body effect, including the existing empty-body case; ordinary
-construction outside `hdlRange` is unchanged.
+construction outside `hdlRange` was unchanged.
 
 Public Scala tests exercise generated variables, `ddt`, `cross`, continuous
 analog blocks and analog procedures and require the exact diagnostic family and
-generated semantic path. This is a restriction checkpoint, not implementation
-of generated lexical state or legal Verilog-A generation. Those requirements
-remain open and must replace these temporary rejections with explicit ownership,
-verification and target witnesses rather than weakening the boundary.
+generated semantic path. This was a restriction checkpoint, not implementation
+of generated lexical state or legal Verilog-A generation. The bounded storage
+checkpoint below replaces only the procedure/storage part with explicit
+ownership and verification; target witnesses and the remaining restricted
+effects stay open.
+
+## Generated lexical-storage ownership checkpoint
+
+The first storage checkpoint replaces one narrow part of that temporary effect
+rejection. One existing `hdlRange` may now contain one existing
+`analogProcedure` whose body is straight-line lexical variable declaration,
+read and assignment. Construction records the immediate generated-region and
+induction identities on the canonical procedural snapshot. The bridge requires
+that pair to resolve to the same-module generated region, emits the analog
+procedure inside that `nodal.generate`, and places the same ownership pair on
+the analog wrapper, procedure and variable/read/assignment operations.
+
+Native verification requires the generated analog wrapper to be an immediate
+generate child, requires every procedural storage operation to match the
+enclosing region and induction, and rejects forged, missing or escaped
+ownership. Generated event controls, structured procedural control, continuous
+operators, continuous analog regions, child modules, domains, connections and
+non-node declarations retain `NODAL-ITERATION-043-004`. Multiple generated
+procedures per module remain unsupported. Ordinary component-local analog
+procedures remain unchanged.
+
+This checkpoint represents per-generated-occurrence lexical storage in normalized
+IR without host unrolling or shared enclosing storage. It does not yet lower the
+storage to Verilog-A, enable generated events/operators, add array or slice
+syntax, or complete any F-043 parent/descendant checkbox. Target generation,
+source/index maps, scale/determinism evidence and independent output witnesses
+remain required.

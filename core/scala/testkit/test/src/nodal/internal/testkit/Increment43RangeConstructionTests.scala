@@ -55,6 +55,12 @@ final class Increment43UnsupportedGeneratedVariable extends Module:
     val _ = state
     ()
 
+final class Increment43GeneratedLexicalStorage extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val state = variable(Real, 0.0.V)
+      state := state + 1.0.V
+
 final class Increment43UnsupportedGeneratedContinuousOperator extends Module:
   hdlRange(0, 2): _ =>
     val state = ddt(1.0.V)
@@ -240,7 +246,38 @@ object Increment43RangeConstructionTests extends TestSuite:
       )
       assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
 
-    test("generated storage operators events and analog regions fail at their capture boundary"):
+    test("generated lexical storage retains immediate region and induction ownership"):
+      val first = ConstructionKernel.inspect(new Increment43GeneratedLexicalStorage)
+      val second = ConstructionKernel.inspect(new Increment43GeneratedLexicalStorage)
+      assert(first == second)
+      assert(first.analogProcedural.size == 1)
+      val region = first.generatedRegions.head
+      val program = first.analogProcedural.head
+      assert(program.generatedOwner.contains(region.path))
+      assert(program.generatedInduction.contains(region.induction))
+      assert(program.variables.size == 1)
+      assert(program.assignments.size == 1)
+
+      val document = ScalaToMlirBridge.fromSnapshot(first)
+      assert(document.text.contains("\"nodal.generate\""))
+      assert(document.text.contains("\"nodal.analog_procedure\""))
+      assert(document.text.indexOf("\"nodal.generate\"") <
+        document.text.indexOf("\"nodal.analog_procedure\""))
+      assert(document.text.contains(s"generated_owner = \"${region.path}\""))
+      assert(document.text.contains(s"generated_induction = \"${region.induction}\""))
+
+      val forgedPrograms = Vector(
+        program.copy(generatedOwner = None),
+        program.copy(generatedOwner = Some(region.path + ".forged")),
+        program.copy(generatedInduction = Some(region.induction + ".forged"))
+      )
+      forgedPrograms.foreach: forgedProgram =>
+        val forged = first.copy(analogProcedural = Vector(forgedProgram))
+        val failure = scala.util.Try(ScalaToMlirBridge.fromSnapshot(forged)).failed.get
+          .asInstanceOf[BridgeException]
+        assert(failure.diagnostic.code == "NODAL-BRIDGE-043")
+
+    test("unsupported generated effects still fail at their capture boundary"):
       val cases = Vector[(String, () => Module)](
         "variable" -> (() => new Increment43UnsupportedGeneratedVariable),
         "continuous-time operator" ->
@@ -279,6 +316,46 @@ object Increment43RangeConstructionTests extends TestSuite:
                   false,
                   s"${failure.diagnostic}\n${failure.standardError}"
                 )
+          finally delete(directory)
+
+    test("native verifies generated lexical storage ownership when configured"):
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          val directory = workDirectory()
+          try
+            val snapshot = ConstructionKernel.inspect(new Increment43GeneratedLexicalStorage)
+            val region = snapshot.generatedRegions.head
+            val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+            val request = NativeCompilerRequest(
+              executable = Path.of(executable).toAbsolutePath,
+              arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
+              workingDirectory = directory,
+              timeout = Duration.ofSeconds(30)
+            )
+            NativeCompilerClient.run(document, request) match
+              case success: NativeCompilerSuccess =>
+                assert(success.normalizedMlir.contains("\"nodal.analog_variable\""))
+                assert(success.normalizedMlir.contains(region.path))
+              case failure: NativeCompilerFailure =>
+                scala.Predef.assert(false, s"${failure.diagnostic}\n${failure.standardError}")
+
+            val marker = s"generated_owner = \"${region.path}\""
+            val variableOffset = document.text.indexOf("\"nodal.analog_variable\"")
+            val ownerOffset = document.text.indexOf(marker, variableOffset)
+            assert(variableOffset >= 0)
+            assert(ownerOffset >= variableOffset)
+            val forgedText = document.text.patch(
+              ownerOffset,
+              s"generated_owner = \"${region.path}.forged\"",
+              marker.length
+            )
+            val forged = document.copy(text = forgedText)
+            NativeCompilerClient.run(forged, request) match
+              case _: NativeCompilerSuccess =>
+                scala.Predef.assert(false, "forged generated storage ownership was accepted")
+              case failure: NativeCompilerFailure =>
+                assert(failure.standardError.contains("NODAL-ITERATION-043-004"))
           finally delete(directory)
 
     test(

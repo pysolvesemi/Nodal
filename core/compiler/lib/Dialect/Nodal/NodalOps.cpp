@@ -1364,6 +1364,38 @@ LogicalResult verifySingleTopLevelProcedurePerModule(Operation *module) {
                                   "multiple analog procedural regions per component are deferred");
 }
 
+LogicalResult verifyGeneratedAnalogOwnership(Operation *operation) {
+  auto generatedOwner = operation->getAttrOfType<StringAttr>("generated_owner");
+  auto generatedInduction = operation->getAttrOfType<StringAttr>("generated_induction");
+  auto generated = operation->getParentOfType<nodal::GenerateOp>();
+  if (static_cast<bool>(generatedOwner) != static_cast<bool>(generatedInduction))
+    return operation->emitOpError(
+        "NODAL-ITERATION-043-004: generated analog ownership requires paired owner and induction "
+        "identities");
+  if (!generated) {
+    if (generatedOwner)
+      return operation->emitOpError(
+          "NODAL-ITERATION-043-004: ordinary analog operation cannot claim generated ownership");
+    return success();
+  }
+  auto regionId = generated->getAttrOfType<StringAttr>("region_id");
+  auto inductionPath = generated->getAttrOfType<StringAttr>("induction_path");
+  if (!generatedOwner || !regionId || !inductionPath ||
+      generatedOwner.getValue() != regionId.getValue() ||
+      generatedInduction.getValue() != inductionPath.getValue())
+    return operation->emitOpError(
+        "NODAL-ITERATION-043-004: generated analog ownership or induction does not match its "
+        "enclosing generate region");
+  if (auto analog = operation->getParentOfType<nodal::AnalogOp>()) {
+    if (analog.getOperation() != operation &&
+        (analog->getAttr("generated_owner") != generatedOwner ||
+         analog->getAttr("generated_induction") != generatedInduction))
+      return operation->emitOpError(
+          "NODAL-ITERATION-043-004: generated procedural operation escapes its analog owner");
+  }
+  return success();
+}
+
 LogicalResult verifyAnalogProcedure(Operation *operation) {
   if (failed(requireSingleBlock(operation)))
     return nodal::emitMappedFailure(operation, "NODAL-ANALOG-033-008",
@@ -1997,7 +2029,14 @@ LogicalResult nodal::AnalogUserCallOp::verify() {
 LogicalResult nodal::AnalogOp::verify() {
   if (failed(requireSingleBlock(getOperation())))
     return emitOpError("NODAL-ANALOG-REGION-001: analog region requires one body block");
+  if (failed(verifyGeneratedAnalogOwnership(getOperation())))
+    return failure();
+  const bool generated = static_cast<bool>(getOperation()->getParentOfType<nodal::GenerateOp>());
   for (Operation &operation : getOperation()->getRegion(0).front()) {
+    if (generated && !llvm::isa<nodal::AnalogProcedureOp>(operation))
+      return operation.emitOpError(
+          "NODAL-ITERATION-043-004: generated analog regions support only straight-line "
+          "procedural storage");
     if (llvm::isa<nodal::ConstLiteralOp>(operation) && operation.getNumResults() == 1 &&
         operation.getResult(0).getType().isInteger(1))
       continue;
@@ -2032,6 +2071,22 @@ LogicalResult nodal::AnalogBoundStepOp::verify() {
 }
 
 LogicalResult nodal::AnalogProcedureOp::verify() {
+  if (failed(verifyGeneratedAnalogOwnership(getOperation())))
+    return failure();
+  if (getOperation()->getParentOfType<nodal::GenerateOp>()) {
+    Operation *unsupported = nullptr;
+    getOperation()->walk([&](Operation *nested) {
+      if (nested == getOperation() || unsupported)
+        return;
+      if (!llvm::isa<nodal::AnalogVariableOp, nodal::AnalogVariableReadOp, nodal::AnalogAssignOp,
+                     nodal::AnalogScopeOp>(nested))
+        unsupported = nested;
+    });
+    if (unsupported)
+      return unsupported->emitOpError(
+          "NODAL-ITERATION-043-004: generated analog procedures support only straight-line "
+          "lexical storage");
+  }
   if (failed(verifyAnalogProcedure(getOperation())))
     return failure();
   return verifyAnalogEventProcedure(getOperation());
@@ -2317,6 +2372,8 @@ LogicalResult nodal::AnalogContinueOp::verify() {
 }
 
 LogicalResult nodal::AnalogVariableOp::verify() {
+  if (failed(verifyGeneratedAnalogOwnership(getOperation())))
+    return failure();
   if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-033-003",
                                        "procedural variable declaration")))
     return failure();
@@ -2331,6 +2388,8 @@ LogicalResult nodal::AnalogVariableOp::verify() {
 }
 
 LogicalResult nodal::AnalogVariableReadOp::verify() {
+  if (failed(verifyGeneratedAnalogOwnership(getOperation())))
+    return failure();
   if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-033-008",
                                        "procedural variable read")))
     return failure();
@@ -2348,6 +2407,8 @@ LogicalResult nodal::AnalogVariableReadOp::verify() {
 }
 
 LogicalResult nodal::AnalogAssignOp::verify() {
+  if (failed(verifyGeneratedAnalogOwnership(getOperation())))
+    return failure();
   if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-033-008",
                                        "procedural assignment")))
     return failure();

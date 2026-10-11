@@ -119,10 +119,47 @@ def contracts(data):
     ranges = re.findall(r'\b(value = -?[0-9]+ : i64|parameter = @[A-Za-z_0-9]+|effects = \[[^\]]*\])', text)
     origins = re.findall(
         r'\b(source_path|semantic_path|origin|dimensions) = "([^"]+)"', text)
-    expressions = re.findall(
-        r'"nodal\.const_expr"\(([^)]*)\).*?operator_name = "([^"]+)"', text)
+    expressions = expression_contracts(text)
     return (Counter(strict), Counter(parameters), Counter(ranges), Counter(origins),
-            Counter(expressions))
+            expressions)
+
+
+def expression_contracts(text):
+    """Retain expression semantics without depending on parser-local SSA names."""
+    ssa = r'%[-A-Za-z0-9_.$]+(?:#[0-9]+)?'
+    operation = re.compile(
+        rf'^\s*({ssa})\s*=\s*"nodal\.(const_literal|const_parameter_ref|const_expr)"'
+        rf'\(([^)]*)\)\s*<\{{([^\n]*)\}}>\s*:', re.MULTILINE)
+    identities = {}
+    expressions = Counter()
+    for match in operation.finditer(text):
+        result, kind, operands, attributes = match.groups()
+        if kind == "const_literal":
+            value = re.search(r'\bvalue\s*=\s*(-?[0-9]+)\s*:\s*([a-z0-9]+)',
+                              attributes)
+            spelling = re.search(r'\bspelling\s*=\s*"([^"]+)"', attributes)
+            if value and spelling:
+                identities[result] = ("literal", spelling.group(1),
+                                      value.group(1), value.group(2))
+            continue
+        if kind == "const_parameter_ref":
+            parameter = re.search(r'\bparameter\s*=\s*@([A-Za-z_][A-Za-z0-9_]*)',
+                                  attributes)
+            if parameter:
+                identities[result] = ("parameter", parameter.group(1))
+            continue
+
+        semantic_path = re.search(r'\bsemantic_path\s*=\s*"([^"]+)"', attributes)
+        operator = re.search(r'\boperator_name\s*=\s*"([^"]+)"', attributes)
+        operand_names = [value.strip() for value in operands.split(',') if value.strip()]
+        operand_identities = tuple(identities.get(value, ("unresolved", value))
+                                   for value in operand_names)
+        path = semantic_path.group(1) if semantic_path else ""
+        name = operator.group(1) if operator else ""
+        expressions[(path, name, operand_identities)] += 1
+        if path:
+            identities[result] = ("expression", path)
+    return expressions
 
 
 def valid_output(case, data, exit_code, stdout, stderr):

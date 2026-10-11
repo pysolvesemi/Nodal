@@ -77,6 +77,18 @@ class ShapeViewCheckerTests(unittest.TestCase):
                     views.valid_output(flattened, flattened_data, 0, changed, b"")
                 )
 
+    def test_expression_contract_uses_semantic_identity_not_ssa_spelling(self):
+        case = next(case for case in views.cases()
+                    if case.name == "view_symbolic_flatten")
+        data = counts.source(case).encode()
+        normalized = data
+        for old, new in ((b"%lanes_ref", b"%0"),
+                         (b"%two", b"%1"),
+                         (b"%flattened", b"%2")):
+            normalized = normalized.replace(old, new)
+        self.assertNotEqual(normalized, data)
+        self.assertTrue(views.valid_output(case, data, 0, normalized, b""))
+
 
 if __name__ == "__main__":
     unittest.main()

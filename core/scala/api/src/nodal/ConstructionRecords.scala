@@ -212,7 +212,9 @@ private[nodal] final case class KernelNoiseOperatorSnapshot(
     label: String,
     operands: Vector[String],
     resultDimension: String,
-    source: Option[SourceSpan]
+    source: Option[SourceSpan],
+    generatedOwner: Option[String] = None,
+    generatedInduction: Option[String] = None
 )
 
 private[nodal] final case class KernelWaiverSnapshot(

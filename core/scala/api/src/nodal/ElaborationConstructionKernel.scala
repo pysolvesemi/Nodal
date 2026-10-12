@@ -227,7 +227,8 @@ private[nodal] object ConstructionKernel:
       inputs: Vector[Expr[Real]]
   ): Unit = active match
     case Some(session) =>
-      session.requireNoGeneratedEffect(s"analog noise operator '$kind'")
+      if !session.generatedContinuousRegionActive then
+        session.requireNoGeneratedEffect(s"analog noise operator '$kind'")
       session.registerNoiseOperator(value, kind, label, inputs)
     case None => AnalogNoiseContract.fail(1, "noise sources require an active Module construction")
 

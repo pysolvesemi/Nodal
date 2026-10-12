@@ -476,6 +476,22 @@ ${indent(body, 2)}
           )
         )))
 
+    private def noiseOperatorAttributes(value: KernelNoiseOperatorSnapshot)
+        : Vector[(String, String)] =
+      Vector(
+        "noise_kind" -> quoted(value.kind),
+        "contract_version" -> quoted("1"),
+        "noise_name" -> quoted(value.label),
+        "source_id" -> quoted(value.path),
+        "owner" -> quoted(value.owner),
+        "correlation" -> quoted("independent"),
+        "analyses" -> "[\"noise\"]",
+        "result_dimension" -> quoted(value.resultDimension)
+      ) ++ value.generatedOwner.toVector.map(owner => "generated_owner" -> quoted(owner)) ++
+        value.generatedInduction.toVector.map(induction =>
+          "generated_induction" -> quoted(induction)
+        )
+
     private def waveformOperatorAttributes(value: KernelWaveformOperatorSnapshot)
         : Vector[(String, String)] =
       Vector(
@@ -1548,6 +1564,19 @@ ${indent(body, 2)}
             "transfer operator ownership differs from its analog region",
             Some(analog.path)
           )
+        val noise = snapshot.noiseOperators.filter(operator =>
+          analog.expressions.exists(_.path == operator.path)
+        )
+        if noise.exists(operator =>
+            operator.generatedOwner != analog.generatedOwner ||
+              operator.generatedInduction != analog.generatedInduction
+          )
+        then
+          fail(
+            "NODAL-BRIDGE-043",
+            "noise operator ownership differs from its analog region",
+            Some(analog.path)
+          )
       regions
 
     private def continuousOperator(
@@ -1799,17 +1828,7 @@ ${indent(body, 2)}
               operands = inputs.map(_._1),
               operandTypes = inputs.map(_._2),
               resultTypes = Vector("f64"),
-              attributes = Vector(
-                "noise_kind" -> quoted(contract.kind),
-                "contract_version" -> quoted("1"),
-                "noise_name" -> quoted(contract.label),
-                "source_id" -> quoted(contract.path),
-                "owner" -> quoted(contract.owner),
-                "correlation" -> quoted("independent"),
-                "analyses" -> "[\"noise\"]",
-                "result_dimension" -> quoted(contract.resultDimension),
-                "metadata" -> metadata
-              ),
+              attributes = noiseOperatorAttributes(contract) :+ ("metadata" -> metadata),
               semanticPath = expression.path
             )
             values.update(expression.path, result -> "f64")
@@ -2714,7 +2733,10 @@ ${indent(body, 2)}
           val transfers = snapshot.transferOperators.filter(operator =>
             analog.expressions.exists(_.path == operator.path)
           )
-          if (operators.isEmpty && waveforms.isEmpty && transfers.isEmpty) ||
+          val noise = snapshot.noiseOperators.filter(operator =>
+            analog.expressions.exists(_.path == operator.path)
+          )
+          if (operators.isEmpty && waveforms.isEmpty && transfers.isEmpty && noise.isEmpty) ||
             operators.exists(operator =>
               !operator.generatedOwner.contains(region.path) ||
                 !operator.generatedInduction.contains(region.induction)
@@ -2724,6 +2746,10 @@ ${indent(body, 2)}
                 !operator.generatedInduction.contains(region.induction)
             ) ||
             transfers.exists(operator =>
+              !operator.generatedOwner.contains(region.path) ||
+                !operator.generatedInduction.contains(region.induction)
+            ) ||
+            noise.exists(operator =>
               !operator.generatedOwner.contains(region.path) ||
                 !operator.generatedInduction.contains(region.induction)
             )

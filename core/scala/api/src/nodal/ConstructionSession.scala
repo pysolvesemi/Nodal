@@ -1450,6 +1450,7 @@ private final class ConstructionSession(val options: EmitOptions):
     val continuousOperatorCount = continuousOperators.size
     val waveformOperatorCount = waveformOperators.size
     val transferOperatorCount = transferOperators.size
+    val noiseOperatorCount = noiseOperators.size
     try
       body(induction)
       val generatedContext =
@@ -1479,11 +1480,16 @@ private final class ConstructionSession(val options: EmitOptions):
       val generatedTransfers = transferOperators.drop(transferOperatorCount).filter:
         case (reference, _, _, _, _, _) =>
           generatedAnalogRegions.exists(_.expressions.contains(reference))
+      val generatedNoise = noiseOperators.drop(noiseOperatorCount).filter:
+        case (reference, _, _, _, _) =>
+          generatedAnalogRegions.exists(_.expressions.contains(reference))
       val generatedOperatorReferences = generatedOperators.map(_.reference).toSet
       val generatedWaveformReferences = generatedWaveforms.map(_._1).toSet
       val generatedTransferReferences = generatedTransfers.map(_._1).toSet
+      val generatedNoiseReferences = generatedNoise.map(_._1).toSet
       val generatedExpressionReferences =
-        generatedOperatorReferences ++ generatedWaveformReferences ++ generatedTransferReferences
+        generatedOperatorReferences ++ generatedWaveformReferences ++ generatedTransferReferences ++
+          generatedNoiseReferences
       val supportedGeneratedAnalog =
         generatedAnalogRegions.nonEmpty &&
           generatedAnalogRegions.forall: analog =>
@@ -1502,14 +1508,17 @@ private final class ConstructionSession(val options: EmitOptions):
                   ) || generatedTransfers.exists(transfer =>
                     transfer._1 == reference &&
                       Set("laplace_nd", "zi_nd").contains(transfer._2)
+                  ) || generatedNoise.exists(noise =>
+                    noise._1 == reference &&
+                      Set("white", "flicker", "table").contains(noise._2)
                   )
       val changedAnalog = generatedAnalogRegions.nonEmpty || generatedOperators.nonEmpty ||
-        generatedWaveforms.nonEmpty || generatedTransfers.nonEmpty
+        generatedWaveforms.nonEmpty || generatedTransfers.nonEmpty || generatedNoise.nonEmpty
       if changedAnalog && !supportedGeneratedAnalog then
         fail(
           "NODAL-ITERATION-043-004",
           "generated continuous regions require an owned ddt, idt, transition, slew, " +
-            "absdelay, laplaceNd, or ziNd expression and no contributions",
+            "absdelay, laplaceNd, ziNd, or noise expression and no contributions",
           Some(generatedRegionPath(record))
         )
       if module.domains.size != domainCount || module.instances.size != instanceCount ||
@@ -2623,6 +2632,9 @@ private final class ConstructionSession(val options: EmitOptions):
     val sources = sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
     noiseOperators.toVector.map: (reference, kind, label, inputs, dimension) =>
       val path = expressionPath(reference)
+      val generatedOwnership = analogRegions.find(_.expressions.contains(reference))
+        .flatMap(_.generatedOwnership)
+        .map(canonicalGeneratedOwnership)
       KernelNoiseOperatorSnapshot(
         path,
         kind,
@@ -2634,7 +2646,9 @@ private final class ConstructionSession(val options: EmitOptions):
           )
         ),
         dimension,
-        sources.get(path)
+        sources.get(path),
+        generatedOwnership.map(_._1),
+        generatedOwnership.map(_._2)
       )
     .sortBy(_.path)
 

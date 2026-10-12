@@ -139,6 +139,23 @@ final class Increment43UnsupportedGeneratedTransferOperator extends Module:
     val filtered = laplaceNd(1.0.V, Seq(1.0.real), Seq(1.0.real))
     val _ = filtered
 
+final class Increment43GeneratedNoiseOperator extends Module:
+  hdlRange(0, 2): _ =>
+    analog:
+      val density = 1.0.A * 1.0.A * 1.0.s
+      val white = whiteNoise(NoiseId("generated white"), density)
+      val flicker = flickerNoise(NoiseId("generated flicker"), density, 1.0)
+      val table = tableNoise(
+        NoiseId("generated table"),
+        Seq(NoisePoint(1.0.real / 1.0.s, density))
+      )
+      val _ = (white, flicker, table)
+
+final class Increment43UnsupportedGeneratedNoiseOperator extends Module:
+  hdlRange(0, 2): _ =>
+    val source = whiteNoise(NoiseId("unsupported generated"), 1.0.A * 1.0.A * 1.0.s)
+    val _ = source
+
 final class Increment43UnsupportedGeneratedAbstime extends Module:
   hdlRange(0, 2): _ =>
     analog:
@@ -653,6 +670,93 @@ object Increment43RangeConstructionTests extends TestSuite:
                 scala.Predef.assert(false, s"duplicate generated transfer accepted: $success")
           finally delete(directory)
 
+    test("generated noise operators retain exact region and source ownership"):
+      val first = ConstructionKernel.inspect(new Increment43GeneratedNoiseOperator)
+      val second = ConstructionKernel.inspect(new Increment43GeneratedNoiseOperator)
+      assert(first == second)
+      val generated = first.generatedRegions.head
+      assert(first.noiseOperators.map(_.kind) == Vector("white", "flicker", "table"))
+      assert(first.noiseOperators.forall(_.generatedOwner.contains(generated.path)))
+      assert(first.noiseOperators.forall(
+        _.generatedInduction.contains(generated.induction)
+      ))
+
+      val document = ScalaToMlirBridge.fromSnapshot(first)
+      val noiseLines = document.text.linesIterator
+        .filter(_.contains("\"nodal.analog_noise\""))
+        .toVector
+      assert(noiseLines.size == 3)
+      noiseLines.foreach: line =>
+        assert(line.contains(s"generated_owner = \"${generated.path}\""))
+        assert(line.contains(s"generated_induction = \"${generated.induction}\""))
+
+      val forgedOperator = first.noiseOperators.head.copy(generatedOwner = None)
+      val forged = first.copy(
+        noiseOperators = forgedOperator +: first.noiseOperators.tail
+      )
+      val failure = scala.util.Try(ScalaToMlirBridge.fromSnapshot(forged)).failed.get
+        .asInstanceOf[BridgeException]
+      assert(failure.diagnostic.code == "NODAL-BRIDGE-043")
+
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          val directory = workDirectory()
+          try
+            val request = NativeCompilerRequest(
+              executable = Path.of(executable).toAbsolutePath,
+              arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
+              workingDirectory = directory,
+              timeout = Duration.ofSeconds(30)
+            )
+            NativeCompilerClient.run(document, request) match
+              case success: NativeCompilerSuccess =>
+                val normalizedNoise = success.normalizedMlir.linesIterator
+                  .filter(_.contains("\"nodal.analog_noise\""))
+                  .toVector
+                assert(normalizedNoise.size == 3)
+                normalizedNoise.foreach: line =>
+                  assert(line.contains(s"generated_owner = \"${generated.path}\""))
+                  assert(line.contains(
+                    s"generated_induction = \"${generated.induction}\""
+                  ))
+              case nativeFailure: NativeCompilerFailure =>
+                scala.Predef.assert(
+                  false,
+                  s"${nativeFailure.diagnostic}\n${nativeFailure.standardError}"
+                )
+
+            val marker = s"generated_owner = \"${generated.path}\""
+            val noiseOffset = document.text.indexOf("\"nodal.analog_noise\"")
+            val ownerOffset = document.text.indexOf(marker, noiseOffset)
+            assert(noiseOffset >= 0, ownerOffset >= noiseOffset)
+            val forgedText = document.text.patch(
+              ownerOffset,
+              s"generated_owner = \"${generated.path}.forged\"",
+              marker.length
+            )
+            NativeCompilerClient.run(document.copy(text = forgedText), request) match
+              case nativeFailure: NativeCompilerFailure =>
+                assert(nativeFailure.diagnostic.code == "NODAL-ITERATION-043-004")
+              case success: NativeCompilerSuccess =>
+                scala.Predef.assert(false, s"forged generated noise accepted: $success")
+
+            val firstPath = first.noiseOperators.head.path
+            val secondPath = first.noiseOperators(1).path
+            val duplicateIdentityText = document.text.replace(
+              noiseLines(1),
+              noiseLines(1).replace(secondPath, firstPath)
+            )
+            NativeCompilerClient.run(
+              document.copy(text = duplicateIdentityText),
+              request
+            ) match
+              case nativeFailure: NativeCompilerFailure =>
+                assert(nativeFailure.diagnostic.code == "NODAL-ANALOG-039-002")
+              case success: NativeCompilerSuccess =>
+                scala.Predef.assert(false, s"duplicate generated noise accepted: $success")
+          finally delete(directory)
+
     test("unsupported generated effects still fail at their capture boundary"):
       val cases = Vector[(String, String, () => Module)](
         ("variable", "generate_0", () => new Increment43UnsupportedGeneratedVariable),
@@ -677,6 +781,11 @@ object Increment43RangeConstructionTests extends TestSuite:
           "analog transfer operator",
           "generate_0",
           () => new Increment43UnsupportedGeneratedTransferOperator
+        ),
+        (
+          "analog noise operator",
+          "generate_0",
+          () => new Increment43UnsupportedGeneratedNoiseOperator
         ),
         ("analog event", "generate_0", () => new Increment43UnsupportedGeneratedEvent),
         (

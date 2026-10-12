@@ -1097,7 +1097,10 @@ def Nodal_AnalogNoiseOp : Nodal_Op<"analog_noise", [HasParent<"AnalogOp">]> {
   let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$noise_kind,
                        StrAttr:$contract_version, StrAttr:$noise_name, StrAttr:$source_id,
                        StrAttr:$owner, StrAttr:$correlation, ArrayAttr:$analyses,
-                       StrAttr:$result_dimension, DictionaryAttr:$metadata);
+                       StrAttr:$result_dimension,
+                       OptionalAttr<StrAttr>:$generated_owner,
+                       OptionalAttr<StrAttr>:$generated_induction,
+                       DictionaryAttr:$metadata);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }

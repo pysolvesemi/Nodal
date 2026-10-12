@@ -132,6 +132,58 @@ class GeneratedOwnershipCheckerTests(unittest.TestCase):
         self.assertIn("module->walk([&](nodal::AnalogOp region)", transfer_verifier)
         self.assertIn("transfer identity must be unique", transfer_verifier)
 
+    def test_generated_noise_schema_snapshot_and_verifier_retain_paired_ownership(self):
+        operations = (
+            ROOT / "core/compiler/include/nodal/Dialect/Nodal/NodalOps.td"
+        ).read_text()
+        section = operations[
+            operations.index("def Nodal_AnalogNoiseOp"):
+            operations.index("def Nodal_AnalogAnalysisOp")
+        ]
+        self.assertIn("OptionalAttr<StrAttr>:$generated_owner", section)
+        self.assertIn("OptionalAttr<StrAttr>:$generated_induction", section)
+
+        construction = (
+            ROOT / "core/scala/api/src/nodal/ConstructionSession.scala"
+        ).read_text()
+        section = construction[
+            construction.index("private def noiseOperatorSnapshots("):
+            construction.index("private def waveformOperatorSnapshots(")
+        ]
+        self.assertIn("map(canonicalGeneratedOwnership)", section)
+        generated = construction[
+            construction.index("val generatedNoise ="):
+            construction.index("val changedAnalog =")
+        ]
+        self.assertIn("generatedNoiseReferences", generated)
+        self.assertIn('Set("white", "flicker", "table")', generated)
+
+        bridge = (
+            ROOT / "core/scala/bridge/src/nodal/bridge/ScalaToMlirBridge.scala"
+        ).read_text()
+        attributes = bridge[
+            bridge.index("private def noiseOperatorAttributes("):
+            bridge.index("private def waveformOperatorAttributes(")
+        ]
+        self.assertIn('"generated_owner" -> quoted(owner)', attributes)
+        self.assertIn('"generated_induction" -> quoted(induction)', attributes)
+        self.assertIn("noise operator ownership differs from its analog region", bridge)
+
+        verifier = (
+            ROOT / "core/compiler/lib/Dialect/Nodal/NodalOps.cpp"
+        ).read_text()
+        section = verifier[
+            verifier.index("LogicalResult nodal::AnalogNoiseOp::verify()"):
+            verifier.index("LogicalResult nodal::AnalogFunctionOp::verify()")
+        ]
+        self.assertIn("verifyGeneratedAnalogOwnership", section)
+
+        noise_verifier = (
+            ROOT / "core/compiler/lib/Dialect/Nodal/AnalogNoise.cpp"
+        ).read_text()
+        self.assertIn("module->walk([&](nodal::AnalogOp region)", noise_verifier)
+        self.assertIn("noise source identity must be unique", noise_verifier)
+
     def test_inventory_and_positive_preservation(self):
         cases = ownership.cases()
         self.assertEqual(len(cases), 31)

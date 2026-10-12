@@ -384,3 +384,27 @@ generated storage/events/operators, analog arrays, general slices, l-value
 selection and source/index maps remain unsupported by this backend profile.
 Independent OpenVAF compilation and the F-048/F-049/F-052 handoff remain
 required, and every F-043 parent and descendant checkbox remains open.
+
+## Compound symbolic generated-contribution target checkpoint
+
+The bounded compound successor accepts the existing three-SSA generated-bound
+form only for canonical signed-64 literal, structural Integer parameter and
+`neg`/`add`/`sub`/`mul`/`div`/`mod` expression DAGs in the same module. The
+backend reuses the canonical finite-range analysis and expression renderer,
+then independently checks type, ownership, structural dependencies, operator
+arity, cycles and depth before emitting the authored expression. Positive step
+and forward direction still have to hold over every legal parameter setting;
+defaults are never substituted and iterations are never eagerly expanded.
+
+The independent target reparser recognizes only the emitted parenthesized
+integer-expression grammar and requires every identifier to name a parameter
+declared by the current module. Unknown names, unsupported operators and
+unbalanced expressions fail closed. A configured public witness carries
+`hdlRange(0, lanes + extra)` through Scala construction, normalized MLIR and a
+single Verilog-A loop.
+
+This checkpoint remains contribution-only. Generated storage, events,
+waveform/transfer/noise target state, analog arrays, general slices, l-value
+selection and source/index maps remain unsupported by this backend profile.
+Independent OpenVAF compilation and the F-048/F-049/F-052 handoff remain
+required, and every F-043 parent and descendant checkbox remains open.

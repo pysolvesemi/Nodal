@@ -169,6 +169,17 @@ final class Increment43SymbolicGeneratedContribution extends Module:
     analog:
       V(p, n) <+ 1.0.V
 
+final class Increment43CompoundGeneratedContribution extends Module:
+  val lanes: Param[Integer] = param(3.integer, range = 1 to 4)
+  val extra: Param[Integer] = param(1.integer, range = 1 to 2)
+  val limit: Expr[Integer] = lanes + extra
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+
+  hdlRange(0, limit): _ =>
+    analog:
+      V(p, n) <+ 1.0.V
+
 final class Increment43UnsupportedGeneratedNoiseOperator extends Module:
   hdlRange(0, 2): _ =>
     val source = whiteNoise(NoiseId("unsupported generated"), 1.0.A * 1.0.A * 1.0.s)
@@ -1007,6 +1018,38 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(
               result.verilogA.contains(
                 "for (generate_0_index = 0; generate_0_index < lanes; " +
+                  "generate_0_index = generate_0_index + 1) begin : generate_0"
+              )
+            )
+            assert(result.verilogA.linesIterator.count(_.trim == "V(p, n) <+ 1;") == 1)
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public compound generated contributions retain one structural Verilog-A loop"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43CompoundGeneratedContribution,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.contains("operator_name = \"add\""))
+            assert(result.mlir.contains("\"nodal.generate\"(%generated_bound_value_"))
+            assert(result.verilogA.contains("parameter integer lanes = 3 from [1:4];"))
+            assert(result.verilogA.contains("parameter integer extra = 1 from [1:2];"))
+            assert(
+              result.verilogA.contains(
+                "for (generate_0_index = 0; generate_0_index < (lanes + extra); " +
                   "generate_0_index = generate_0_index + 1) begin : generate_0"
               )
             )

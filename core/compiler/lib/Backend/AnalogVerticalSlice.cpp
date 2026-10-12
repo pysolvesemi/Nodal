@@ -1180,14 +1180,97 @@ FailureOr<GeneratedTargetBound> generatedTargetBound(Operation *generate, llvm::
   return GeneratedTargetBound{reference.getValue().str(), *range};
 }
 
+LogicalResult verifyGeneratedTargetBoundDependency(Value value, Operation *owner,
+                                                   Operation *diagnostic,
+                                                   llvm::DenseSet<Operation *> &active,
+                                                   llvm::DenseSet<Operation *> &visited) {
+  auto type = llvm::dyn_cast<IntegerType>(value.getType());
+  Operation *definition = value.getDefiningOp();
+  if (!type || !type.isSignless() || type.getWidth() != 64 || !definition ||
+      definition->getParentOp() != owner || definition->hasAttr("unit"))
+    return emitMappedFailure(diagnostic, "NODAL-BACKEND-CAPABILITY-001",
+                             "compound generated bound escapes its signed-64 module scope");
+  if (visited.contains(definition))
+    return success();
+  if (active.size() >= 512 || !active.insert(definition).second)
+    return emitMappedFailure(diagnostic, "NODAL-BACKEND-CAPABILITY-001",
+                             "compound generated bound is cyclic or exceeds the depth limit");
+
+  auto finish = [&](LogicalResult result) {
+    active.erase(definition);
+    if (succeeded(result))
+      visited.insert(definition);
+    return result;
+  };
+  llvm::StringRef operationName = definition->getName().getStringRef();
+  if (operationName == "nodal.const_literal" || operationName == "nodal.constant")
+    return finish(success());
+  if (operationName == "nodal.const_parameter_ref") {
+    auto reference = definition->getAttrOfType<FlatSymbolRefAttr>("parameter");
+    Operation *parameter = reference ? findDirectParameter(owner, reference.getValue()) : nullptr;
+    auto declaredType = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
+    if (!parameter || nodal::getParameterKind(parameter) != "integer" ||
+        !nodal::isStructuralParameter(parameter) || !declaredType ||
+        declaredType.getValue() != value.getType() || parameter->hasAttr("unit"))
+      return finish(emitMappedFailure(
+          diagnostic, "NODAL-BACKEND-CAPABILITY-001",
+          "compound generated bound requires same-module structural Integer dependencies"));
+    return finish(success());
+  }
+  if (operationName != "nodal.const_expr")
+    return finish(emitMappedFailure(diagnostic, "NODAL-BACKEND-CAPABILITY-001",
+                                    "compound generated bound contains a non-static value"));
+
+  auto operatorName = definition->getAttrOfType<StringAttr>("operator_name");
+  const unsigned arity = operatorName && operatorName.getValue() == "neg" ? 1 : 2;
+  const bool supported =
+      operatorName && (operatorName.getValue() == "add" || operatorName.getValue() == "sub" ||
+                       operatorName.getValue() == "mul" || operatorName.getValue() == "div" ||
+                       operatorName.getValue() == "mod" || operatorName.getValue() == "neg");
+  if (!supported || definition->getNumOperands() != arity)
+    return finish(
+        emitMappedFailure(diagnostic, "NODAL-BACKEND-CAPABILITY-001",
+                          "compound generated bound contains unsupported integer arithmetic"));
+  for (Value operand : definition->getOperands()) {
+    if (operand.getType() != value.getType() ||
+        failed(verifyGeneratedTargetBoundDependency(operand, owner, diagnostic, active, visited)))
+      return finish(failure());
+  }
+  return finish(success());
+}
+
+FailureOr<GeneratedTargetBound> generatedTargetBound(Value value, Operation *generate,
+                                                     llvm::StringRef name) {
+  auto module = generate->getParentOfType<nodal::ModuleOp>();
+  Operation *owner = module ? module.getOperation() : nullptr;
+  llvm::DenseSet<Operation *> active;
+  llvm::DenseSet<Operation *> visited;
+  if (!owner ||
+      failed(verifyGeneratedTargetBoundDependency(value, owner, generate, active, visited)))
+    return failure();
+  auto range = nodal::inferParameterIntegerBounds(value);
+  auto rendered = nodal::renderParameterConstantExpression(value);
+  if (failed(range) || failed(rendered)) {
+    (void)emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                            llvm::Twine("generated contribution cannot prove finite '") + name +
+                                "' expression bounds");
+    return failure();
+  }
+  return GeneratedTargetBound{*rendered, *range};
+}
+
 LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState &state,
                                           llvm::raw_ostream &output) {
-  if (generate->getNumOperands() != 0)
+  if (generate->getNumOperands() != 0 && generate->getNumOperands() != 3)
     return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
-                             "compound generated Verilog-A bounds are not yet enabled");
-  auto lower = generatedTargetBound(generate, "lower");
-  auto upper = generatedTargetBound(generate, "upper");
-  auto step = generatedTargetBound(generate, "step");
+                             "generated Verilog-A bounds require attributes or three SSA values");
+  const bool compound = generate->getNumOperands() == 3;
+  auto lower = compound ? generatedTargetBound(generate->getOperand(0), generate, "lower")
+                        : generatedTargetBound(generate, "lower");
+  auto upper = compound ? generatedTargetBound(generate->getOperand(1), generate, "upper")
+                        : generatedTargetBound(generate, "upper");
+  auto step = compound ? generatedTargetBound(generate->getOperand(2), generate, "step")
+                       : generatedTargetBound(generate, "step");
   if (failed(lower) || failed(upper) || failed(step))
     return failure();
   if (step->range.lower <= 0 || lower->range.upper > upper->range.lower)
@@ -1511,6 +1594,78 @@ bool validIdentifierList(llvm::StringRef value) {
   return !names.empty() && llvm::all_of(names, [](llvm::StringRef name) {
     return isPortableVerilogIdentifier(name.trim());
   });
+}
+
+class GeneratedBoundExpressionParser {
+public:
+  GeneratedBoundExpressionParser(llvm::StringRef text, const std::set<std::string> &parameters)
+      : text(text), parameters(parameters) {}
+
+  bool parse() { return expression(0) && position == text.size(); }
+
+private:
+  bool expression(unsigned depth) {
+    if (depth >= 512 || position >= text.size())
+      return false;
+    if (text[position] == '(') {
+      ++position;
+      const size_t contents = position;
+      if (expression(depth + 1) && consume(' ') && binaryOperator() && consume(' ') &&
+          expression(depth + 1) && consume(')'))
+        return true;
+      position = contents;
+      if (consume('-') && expression(depth + 1) && consume(')'))
+        return true;
+      return false;
+    }
+
+    const size_t start = position;
+    if (text[position] == '-')
+      ++position;
+    const size_t digits = position;
+    while (position < text.size() && text[position] >= '0' && text[position] <= '9')
+      ++position;
+    if (position != digits) {
+      int64_t ignored = 0;
+      auto parsed = std::from_chars(text.begin() + start, text.begin() + position, ignored);
+      return parsed.ec == std::errc() && parsed.ptr == text.begin() + position;
+    }
+    position = start;
+
+    while (position < text.size()) {
+      const char character = text[position];
+      if ((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+          (character >= '0' && character <= '9') || character == '_' || character == '$') {
+        ++position;
+        continue;
+      }
+      break;
+    }
+    llvm::StringRef identifier = text.slice(start, position);
+    return isPortableVerilogIdentifier(identifier) && parameters.count(identifier.str()) != 0;
+  }
+
+  bool consume(char expected) {
+    if (position >= text.size() || text[position] != expected)
+      return false;
+    ++position;
+    return true;
+  }
+
+  bool binaryOperator() {
+    if (position >= text.size() || !llvm::StringRef("+-*/%").contains(text[position]))
+      return false;
+    ++position;
+    return true;
+  }
+
+  llvm::StringRef text;
+  const std::set<std::string> &parameters;
+  size_t position = 0;
+};
+
+bool validGeneratedBoundExpression(llvm::StringRef text, const std::set<std::string> &parameters) {
+  return GeneratedBoundExpressionParser(text, parameters).parse();
 }
 
 } // namespace
@@ -1842,11 +1997,9 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
           return result.ec == std::errc() && result.ptr == text.end();
         };
         auto validBound = [&](llvm::StringRef text) {
-          int64_t ignored = 0;
-          if (parseSigned(text, ignored))
-            return true;
-          return currentHierarchyModule && isPortableVerilogIdentifier(text) &&
-                 hierarchyModules[*currentHierarchyModule].parameters.count(text.str()) != 0;
+          return currentHierarchyModule &&
+                 validGeneratedBoundExpression(
+                     text, hierarchyModules[*currentHierarchyModule].parameters);
         };
         if (!validBound(initial.second) || !validBound(condition.second))
           return failure();

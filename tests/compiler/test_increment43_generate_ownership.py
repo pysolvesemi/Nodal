@@ -232,11 +232,21 @@ class GeneratedOwnershipCheckerTests(unittest.TestCase):
         self.assertIn("nodal::inferParameterIntegerBounds", section)
         self.assertNotIn("default_value", section)
 
+        compound = backend[
+            backend.index("LogicalResult verifyGeneratedTargetBoundDependency"):
+            backend.index("LogicalResult renderGeneratedContribution")
+        ]
+        self.assertIn("same-module structural Integer dependencies", compound)
+        self.assertIn("nodal::inferParameterIntegerBounds(value)", compound)
+        self.assertIn("nodal::renderParameterConstantExpression(value)", compound)
+        self.assertIn('operatorName.getValue() == "div"', compound)
+        self.assertNotIn("default_value", compound)
+
         reparse = backend[
             backend.index("if (line.starts_with(\"for (\"))"):
             backend.index("if (line.starts_with(\"begin : event_\"))")
         ]
-        self.assertIn("parameters.count(text.str()) != 0", reparse)
+        self.assertIn("validGeneratedBoundExpression", reparse)
         self.assertIn("!validBound(initial.second)", reparse)
         self.assertIn("!validBound(condition.second)", reparse)
 

@@ -1365,19 +1365,32 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       ++contributions;
       continue;
     }
-    if (name == "nodal.analog_ddt") {
+    if (name == "nodal.analog_ddt" || name == "nodal.analog_idt") {
+      const bool stateful = name == "nodal.analog_idt";
       auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
       auto generatedInduction = operation.getAttrOfType<StringAttr>("generated_induction");
       llvm::DenseSet<Operation *> active;
       if (!owner || !generatedInduction || owner.getValue() != regionId.getValue() ||
           generatedInduction.getValue() != inductionPath.getValue())
         return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
-                                 "generated ddt ownership does not match its range");
+                                 stateful ? "generated idt ownership does not match its range"
+                                          : "generated ddt ownership does not match its range");
+      if (stateful) {
+        auto operatorId = operation.getAttrOfType<StringAttr>("operator_id");
+        auto stateId = operation.getAttrOfType<StringAttr>("state_id");
+        const std::string expectedState =
+            operatorId ? (operatorId.getValue() + ".state").str() : std::string();
+        if (!operatorId || !stateId || stateId.getValue() != expectedState)
+          return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                   "generated idt state identity is not owned by its operator");
+      }
       if (operation.getNumResults() != 1 ||
           !generatedValueFeedsContribution(operation.getResult(0), analogBody, active))
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
-            "generated ddt must feed an additive contribution without escaping its range");
+            stateful
+                ? "generated idt must feed an additive contribution without escaping its range"
+                : "generated ddt must feed an additive contribution without escaping its range");
       continue;
     }
     bool supportedExpression =
@@ -1389,7 +1402,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
     if (!supportedExpression)
       return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                "generated Verilog-A backend profile supports contributions and "
-                               "owned ddt expressions only");
+                               "owned ddt/idt expressions only");
   }
   if (!contributions)
     return emitMappedFailure(analog, "NODAL-BACKEND-CAPABILITY-001",

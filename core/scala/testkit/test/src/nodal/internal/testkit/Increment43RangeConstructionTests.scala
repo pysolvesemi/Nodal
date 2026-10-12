@@ -169,6 +169,15 @@ final class Increment43GeneratedDdtContribution extends Module:
       val voltage = V(p, n)
       I(p, n) <+ (1.pF * ddt(voltage))
 
+final class Increment43GeneratedIdtContribution extends Module:
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+
+  hdlRange(0, 2): _ =>
+    analog:
+      val voltageRate = 1.0.V / 1.0.s
+      V(p, n) <+ idt(voltageRate, 0.0.V)
+
 final class Increment43SymbolicGeneratedContribution extends Module:
   val lanes: Param[Integer] = param(4.integer, range = 1 to 8)
   val p = inout(Electrical)
@@ -1030,6 +1039,38 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(
               result.verilogA.linesIterator.count(line =>
                 line.contains("I(p, n) <+") && line.contains("ddt(V(p, n))")
+              ) == 1
+            )
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated idt contribution retains one owned stateful target expression"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedIdtContribution,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.contains("\"nodal.analog_idt\""))
+            val idtLine = result.mlir.linesIterator.find(_.contains("\"nodal.analog_idt\"")).get
+            assert(idtLine.contains("generated_owner"))
+            assert(idtLine.contains("generated_induction"))
+            assert(idtLine.contains("state_id"))
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            assert(
+              result.verilogA.linesIterator.count(line =>
+                line.contains("V(p, n) <+") && line.contains("idt(") && line.contains(", 0)")
               ) == 1
             )
           finally delete(directory)

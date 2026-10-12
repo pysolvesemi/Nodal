@@ -133,6 +133,33 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedIdtContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedIdtContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedIdtContribution.generate_0", induction_path = "GeneratedIdtContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedIdtContribution.generate_0", generated_induction = "GeneratedIdtContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %rate = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        %integral = "nodal.analog_idt"(%rate) <{analyses = ["ac", "dc", "initialization", "noise", "operating-point", "transient"], context = "contribution", generated_owner = "GeneratedIdtContribution.generate_0", generated_induction = "GeneratedIdtContribution.generate_0.index", initialization = "solver-selected", input_dimension = "time^-1*voltage", metadata = {identity = "integral"}, operator_contract = "increment35", operator_id = "GeneratedIdtContribution.integral", owner = "GeneratedIdtContribution", result_dimension = "voltage", state_id = "GeneratedIdtContribution.integral.state"}> : (f64) -> f64
+        "nodal.contribute"(%branch, %integral) <{kind = "potential", generated_owner = "GeneratedIdtContribution.generate_0", generated_induction = "GeneratedIdtContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kSymbolicGeneratedContributionModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -614,6 +641,60 @@ int main() {
     rejectedStream.flush();
     if (rejected != "sentinel")
       return fail("invalid generated ddt source published partial output");
+  }
+
+  auto generatedIdt = parse(context, kGeneratedIdtContributionModule);
+  if (!generatedIdt)
+    return fail("could not parse the generated idt contribution fixture");
+  std::string generatedIdtOutput;
+  llvm::raw_string_ostream generatedIdtStream(generatedIdtOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*generatedIdt, nodal::BackendKind::VerilogA, generatedIdtStream)))
+    return fail("generated idt contribution emission failed");
+  generatedIdtStream.flush();
+  if (generatedIdtOutput.find("V(p, n) <+ idt(1);\n") == std::string::npos)
+    return fail("generated idt contribution lost its owned stateful expression");
+
+  for (const auto &[attribute, value] :
+       {std::make_pair("generated_owner", "GeneratedIdtContribution.forged"),
+        std::make_pair("state_id", "GeneratedIdtContribution.integral.forged")}) {
+    auto forged = parse(context, kGeneratedIdtContributionModule);
+    if (!forged)
+      return fail("could not parse the generated idt mutation fixture");
+    mlir::Operation *integral = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!integral && operation->getName().getStringRef() == "nodal.analog_idt")
+        integral = operation;
+    });
+    if (!integral)
+      return fail("generated idt mutation anchor missing");
+    integral->setAttr(attribute, mlir::StringAttr::get(&context, value));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated idt ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated idt ownership published partial output");
+  }
+
+  {
+    std::string invalidSource = kGeneratedIdtContributionModule.str();
+    auto position = invalidSource.find("%branch, %integral");
+    if (position == std::string::npos)
+      return fail("generated idt source mutation anchor missing");
+    invalidSource.replace(position, std::string("%branch, %integral").size(), "%branch, %rate");
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated idt source mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("unused generated idt state passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("unused generated idt state published partial output");
   }
 
   auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);

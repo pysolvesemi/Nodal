@@ -91,6 +91,12 @@ def cases():
         Case("index_fixed_last", selection()),
         Case("index_singleton", selection("1", (0,))),
         Case("index_nested_element", selection("2", (1,), '!nodal.shaped<"3", f64>')),
+        Case("index_fixed_row", selection(
+            "2,3", (1,), result='!nodal.shaped<"3", f64>')),
+        Case("index_fixed_plane", selection(
+            "2,3,4", (1,), result='!nodal.shaped<"3,4", f64>')),
+        Case("index_symbolic_row", symbolic + selection(
+            "lanes,2", (1,), result='!nodal.shaped<"2", f64>')),
         Case("index_symbolic_minimum", symbolic + selection("lanes,3", (1, 2))),
         Case("index_symbolic_exclusive", exclusive + selection("lanes", (2,))),
         Case("index_symbolic_intersection", intersection + selection("lanes", (2,))),
@@ -106,6 +112,12 @@ def cases():
         Case("index_reject_last_axis_end", selection(indices=(0, 3)), CODE),
         Case("index_reject_missing_axis", selection(indices=(0,)), CODE),
         Case("index_reject_extra_axis", selection(indices=(0, 0, 0)), CODE),
+        Case("index_reject_empty_index", selection(
+            "2,3", (), result='!nodal.shaped<"2,3", f64>'), CODE),
+        Case("index_reject_prefix_dimensions", selection(
+            "2,3", (1,), result='!nodal.shaped<"2", f64>'), CODE),
+        Case("index_reject_prefix_element", selection(
+            "2,3", (1,), result='!nodal.shaped<"3", i64>'), CODE),
         Case("index_reject_empty_dimension", selection("2,", (0, 0)), CODE),
         Case("index_reject_result_type", selection(result="i64"), CODE),
         Case("index_reject_unproved_runtime", selection(unknown=True), CODE),

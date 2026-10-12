@@ -823,8 +823,19 @@ ${indent(body, 2)}
                   "shape-index input must be a captured structural view in the same Module",
                   Some(index.path)
                 )
-        if index.indices.size != dimensions.size then
-          fail("NODAL-BRIDGE-044", "shape-index rank does not match input rank", Some(index.path))
+        if index.indices.isEmpty || index.indices.size > dimensions.size then
+          fail(
+            "NODAL-BRIDGE-044",
+            "shape-index rank is empty or exceeds input rank",
+            Some(index.path)
+          )
+        val expectedResultDimensions = dimensions.drop(index.indices.size)
+        if index.resultDimensions != expectedResultDimensions then
+          fail(
+            "NODAL-BRIDGE-044",
+            "shape-index result dimensions do not match the unselected input axes",
+            Some(index.path)
+          )
         index.indices.zip(dimensions).zipWithIndex.foreach:
           case ((position, dimension), axis) =>
             val minimum = shapeDimensionMinimum(module, dimension, index.path)
@@ -1143,6 +1154,10 @@ ${indent(body, 2)}
                 )
               )
           val elementType = parseType(elementText, index.path)
+          val resultType =
+            if index.resultDimensions.isEmpty then elementType
+            else
+              s"!nodal.shaped<${quoted(index.resultDimensions.mkString(","))}, $elementType>"
           val indexValues = index.indices.zipWithIndex.map: (position, axis) =>
             position.toIntOption match
               case Some(literal) =>
@@ -1185,7 +1200,7 @@ ${indent(body, 2)}
             results = Vector(result),
             operands = inputValue +: indexValues.map(_._1),
             operandTypes = shapedType +: indexValues.map(_._2),
-            resultTypes = Vector(elementType),
+            resultTypes = Vector(resultType),
             attributes = Vector(
               "metadata" -> bridgeMetadata(
                 index.path,

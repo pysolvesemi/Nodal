@@ -100,7 +100,8 @@ private[nodal] final case class KernelShapeIndexSnapshot(
     path: String,
     owner: String,
     input: String,
-    indices: Vector[String]
+    indices: Vector[String],
+    resultDimensions: Vector[String] = Vector.empty
 )
 
 private[nodal] final case class KernelShapeViewSnapshot(
@@ -292,7 +293,8 @@ private final class GeneratedRegionRecord(
 private final case class ShapeIndexRecord(
     reference: ExpressionRef,
     input: DeclarationRef | ExpressionRef,
-    indices: Vector[Int | Expr[Integer]]
+    indices: Vector[Int | Expr[Integer]],
+    resultDimensions: Vector[Any]
 )
 
 private final case class ShapeViewRecord(

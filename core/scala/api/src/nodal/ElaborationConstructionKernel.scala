@@ -154,8 +154,8 @@ private[nodal] object ConstructionKernel:
   def expression(value: AnyRef): Unit =
     if !AnalogUserFunctionRuntime.capture(value) then active.foreach(_.registerExpression(value))
 
-  def shapeIndex[A <: Data](
-      expression: KernelExpr[A],
+  def shapeIndex[A <: Data, B <: Data](
+      expression: KernelExpr[B],
       input: Expr[Vec[A]],
       indices: Vector[Dimension]
   ): Unit = active match

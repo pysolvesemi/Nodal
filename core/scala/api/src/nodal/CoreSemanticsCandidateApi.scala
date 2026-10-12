@@ -58,6 +58,8 @@ object Vec:
 
 extension [A <: Data](value: Expr[Vec[A]])
   def at(indices: Dimension*): Expr[A] = CandidateRuntime.shapeIndex(value, indices.toVector)
+  def row(index: Dimension): Expr[Vec[A]] = CandidateRuntime.shapeRow(value, index)
+  def plane(index: Dimension): Expr[Vec[A]] = CandidateRuntime.shapePlane(value, index)
   def flatten: Expr[Vec[A]] = CandidateRuntime.shapeFlatten(value)
   def reshape(dimensions: Dimension*): Expr[Vec[A]] =
     CandidateRuntime.shapeView(value, dimensions.toVector)

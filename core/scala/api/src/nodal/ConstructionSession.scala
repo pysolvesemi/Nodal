@@ -280,8 +280,8 @@ private final class ConstructionSession(val options: EmitOptions):
       lower
     case _ => fail("NODAL-SHAPE-043-002", "shape extent has no proven finite minimum")
 
-  def registerShapeIndex[A <: Data](
-      expression: KernelExpr[A],
+  def registerShapeIndex[A <: Data, B <: Data](
+      expression: KernelExpr[B],
       input: Expr[Vec[A]],
       indices: Vector[Dimension]
   ): Unit =
@@ -342,12 +342,52 @@ private final class ConstructionSession(val options: EmitOptions):
         val dimensions = descriptor.arguments.lift(1).toVector.flatMap:
           case values: Seq[?] => values.toVector
           case _ => Vector.empty
-        if indices.size != dimensions.size then
+        if indices.isEmpty || indices.size > dimensions.size then
           fail(
             "NODAL-SHAPE-043-002",
-            "index rank does not match shaped rank",
+            "index rank is empty or exceeds shaped rank",
             Some(inputPath)
           )
+        val resultDimensions = dimensions.drop(indices.size)
+        val resultDescriptor = CandidateRuntime.expressionDataType(expression)
+          .map(CandidateRuntime.typeDescriptor)
+          .getOrElse(
+            fail(
+              "NODAL-SHAPE-043-002",
+              "shape index result has no data type",
+              Some(inputPath)
+            )
+          )
+        val element = descriptor.arguments.headOption.collect:
+          case candidate: DataType[?] => CandidateRuntime.typeDescriptor(candidate)
+        .getOrElse(
+          fail(
+            "NODAL-SHAPE-043-002",
+            "indexed structural value has no element type",
+            Some(inputPath)
+          )
+        )
+        if resultDimensions.isEmpty then
+          if resultDescriptor != element then
+            fail(
+              "NODAL-SHAPE-043-002",
+              "full-rank index result must match the shaped element type",
+              Some(inputPath)
+            )
+        else
+          val actualDimensions = resultDescriptor.arguments.lift(1).toVector.flatMap:
+            case values: Seq[?] => values.toVector
+            case _ => Vector.empty
+          val resultElement = resultDescriptor.arguments.headOption.collect:
+            case candidate: DataType[?] => CandidateRuntime.typeDescriptor(candidate)
+          if resultDescriptor.kind != "Vec" || resultElement != Some(element) ||
+            actualDimensions != resultDimensions
+          then
+            fail(
+              "NODAL-SHAPE-043-002",
+              "prefix index result must retain the exact remaining shaped dimensions",
+              Some(inputPath)
+            )
         val analysis = new StructuralBoundAnalysis(
           module.handle,
           "NODAL-SHAPE-043-002",
@@ -372,7 +412,8 @@ private final class ConstructionSession(val options: EmitOptions):
         val reference = captureExpression(expression).getOrElse(
           fail("NODAL-SHAPE-043-002", "shape index requires an active Module")
         )
-        shapeIndices += ShapeIndexRecord(reference, inputReference, positions.map(_._1))
+        shapeIndices +=
+          ShapeIndexRecord(reference, inputReference, positions.map(_._1), resultDimensions)
 
   private final case class ShapeViewFactor(
       literal: Option[Long],
@@ -2504,7 +2545,9 @@ private final class ConstructionSession(val options: EmitOptions):
         path = expressionPath(index.reference),
         owner = modulePath(index.reference.module),
         input = inputPath,
-        indices = index.indices.map(generatedBound)
+        indices = index.indices.map(generatedBound),
+        resultDimensions =
+          index.resultDimensions.map(renderShapeDimension(_, index.reference.module))
       )
 
   private def shapeViewSnapshots(): Vector[KernelShapeViewSnapshot] =

@@ -1631,16 +1631,32 @@ LogicalResult nodal::ShapeIndexOp::verify() {
   if (!shaped)
     return emitOpError("NODAL-SHAPE-043-002: input must have !nodal.shaped type");
   const unsigned indices = getOperation()->getNumOperands() - 1;
-  if (indices != shapedRank(shaped.getDimensions()))
-    return emitOpError("NODAL-SHAPE-043-002: index rank does not match shaped rank");
-  if (getOperation()->getResult(0).getType() != shaped.getElementType())
-    return emitOpError("NODAL-SHAPE-043-002: result must match shaped element type");
+  const unsigned rank = shapedRank(shaped.getDimensions());
+  if (indices == 0 || indices > rank)
+    return emitOpError("NODAL-SHAPE-043-002: index rank is empty or exceeds shaped rank");
+  llvm::SmallVector<llvm::StringRef> dimensions;
+  shaped.getDimensions().split(dimensions, ',', -1, true);
+  if (indices == rank) {
+    if (getOperation()->getResult(0).getType() != shaped.getElementType())
+      return emitOpError("NODAL-SHAPE-043-002: full-rank result must match shaped element type");
+  } else {
+    auto result = llvm::dyn_cast<nodal::ShapedType>(getOperation()->getResult(0).getType());
+    llvm::SmallVector<llvm::StringRef> resultDimensions;
+    if (!result || result.getElementType() != shaped.getElementType())
+      return emitOpError("NODAL-SHAPE-043-002: prefix result must retain the shaped element type");
+    result.getDimensions().split(resultDimensions, ',', -1, true);
+    if (resultDimensions.size() != dimensions.size() - indices)
+      return emitOpError(
+          "NODAL-SHAPE-043-002: prefix result rank must match the unselected input axes");
+    for (unsigned axis = 0; axis < resultDimensions.size(); ++axis)
+      if (resultDimensions[axis].trim() != dimensions[axis + indices].trim())
+        return emitOpError(
+            "NODAL-SHAPE-043-002: prefix result dimensions must match the unselected input axes");
+  }
 
   auto owner = getOperation()->getParentOfType<nodal::ModuleOp>();
   if (!owner)
     return emitOpError("NODAL-SHAPE-043-002: shaped indexing requires an owning module");
-  llvm::SmallVector<llvm::StringRef> dimensions;
-  shaped.getDimensions().split(dimensions, ',', -1, true);
   llvm::StringMap<int64_t> symbolicMinima;
   for (unsigned axis = 0; axis < indices; ++axis) {
     llvm::StringRef dimension = dimensions[axis].trim();

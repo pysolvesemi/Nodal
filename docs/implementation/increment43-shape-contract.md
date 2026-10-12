@@ -403,3 +403,28 @@ This is element indexing across an existing structural view, not a row/plane
 or general slice result, l-value selection, target array lowering, generated
 lexical storage or Verilog-A generation. Those requirements and every F-043
 parent/descendant checkbox remain open.
+
+## Structural row and plane view checkpoint
+
+The reserved public `Vec.row(index)` and `Vec.plane(index)` surfaces now retain
+rank-reducing structural views for rank-two and rank-three values respectively.
+They reuse the existing `shape_index` construction record, bridge owner and
+native operation: the selected leading axis is proven against every legal
+extent while the result carries the exact unselected dimensions and original
+element type. A row or plane may consume either a module port or an earlier
+verified structural reshape/flatten view without rereading or collapsing its
+immediate SSA predecessor.
+
+Construction rejects empty, excessive or surface-incompatible rank, unsafe
+literal/static Integer indices and any result type that does not retain the
+exact remaining axes. The snapshot records those result dimensions explicitly,
+so the bridge independently rejects a scalar relabeling or a forged prefix
+shape. Native verification repeats the rank, element-type, remaining-dimension
+and all-legal-extents bounds checks on the actual shaped SSA edge. The native
+matrix covers fixed row/plane, symbolic leading extents, empty/excessive rank,
+wrong remaining dimensions and wrong result element type.
+
+This bounded checkpoint does not add constant or symbolic range slices,
+l-value selection, storage allocation, eager element expansion, target array
+lowering, Verilog-A generation or source/index maps. Those requirements and
+every F-043 parent/descendant checkbox remain open.

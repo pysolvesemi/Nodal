@@ -86,6 +86,36 @@ final class Increment43WireShapeIndex extends Module:
   val samples: Signal[Vec[Real]] = wire(Vec(Real, 2))
   val selected: Expr[Real] = samples.at(1)
 
+final class Increment43FixedRowView extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
+  val selected: Expr[Vec[Real]] = samples.row(1)
+
+final class Increment43SymbolicRowView extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
+  val samples: Signal[Vec[Real]] = out(Vec(Real, lanes, 2))
+  val selected: Expr[Vec[Real]] = samples.row(0)
+
+final class Increment43FixedPlaneView extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3, 4))
+  val selected: Expr[Vec[Real]] = samples.plane(1)
+
+final class Increment43ReshapedRowView extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
+  val reshaped: Expr[Vec[Real]] = samples.reshape(3, 2)
+  val selected: Expr[Vec[Real]] = reshaped.row(2)
+
+final class Increment43InvalidRowRank extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3, 4))
+  val invalid: Expr[Vec[Real]] = samples.row(0)
+
+final class Increment43InvalidPlaneRank extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
+  val invalid: Expr[Vec[Real]] = samples.plane(0)
+
+final class Increment43InvalidRowBound extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
+  val invalid: Expr[Vec[Real]] = samples.row(2)
+
 final class Increment43FixedShapeView extends Module, Increment43ShapeClock:
   val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
   val transposedShape: Expr[Vec[Real]] = samples.reshape(3, 2)
@@ -325,6 +355,53 @@ object Increment43ShapeContractTests extends TestSuite:
       assert(compound.text.contains("\"nodal.const_expr\""))
       assert(compound.text.contains("operator_name = \"sub\""))
 
+    test("public row and plane views retain exact remaining dimensions"):
+      val fixed = ConstructionKernel.inspect(new Increment43FixedRowView)
+      val symbolic = ConstructionKernel.inspect(new Increment43SymbolicRowView)
+      val plane = ConstructionKernel.inspect(new Increment43FixedPlaneView)
+      val chained = ConstructionKernel.inspect(new Increment43ReshapedRowView)
+
+      assert(fixed.shapeIndices.head.indices == Vector("1"))
+      assert(fixed.shapeIndices.head.resultDimensions == Vector("3"))
+      assert(symbolic.shapeIndices.head.resultDimensions == Vector("2"))
+      assert(plane.shapeIndices.head.resultDimensions == Vector("3", "4"))
+      assert(chained.shapeIndices.head.input == chained.shapeViews.head.path)
+      assert(chained.shapeIndices.head.resultDimensions == Vector("2"))
+
+      Vector(fixed, symbolic, plane, chained).foreach: snapshot =>
+        val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+        assert(document == ScalaToMlirBridge.fromSnapshot(snapshot))
+        assert(document.text.contains("\"nodal.shape_index\""))
+      assert(ScalaToMlirBridge.fromSnapshot(fixed).text.contains(
+        "!nodal.shaped<\"3\", f64>"
+      ))
+      assert(ScalaToMlirBridge.fromSnapshot(plane).text.contains(
+        "!nodal.shaped<\"3,4\", f64>"
+      ))
+
+    test("public row and plane views reject wrong rank bounds and forged result shape"):
+      Vector(
+        failure(new Increment43InvalidRowRank),
+        failure(new Increment43InvalidPlaneRank),
+        failure(new Increment43InvalidRowBound)
+      ).foreach(error => assert(error.diagnostic.code == "NODAL-SHAPE-043-002"))
+
+      val snapshot = ConstructionKernel.inspect(new Increment43FixedRowView)
+      Vector(
+        snapshot.copy(shapeIndices = snapshot.shapeIndices.map(
+          _.copy(resultDimensions = Vector.empty)
+        )),
+        snapshot.copy(shapeIndices = snapshot.shapeIndices.map(
+          _.copy(resultDimensions = Vector("2"))
+        )),
+        snapshot.copy(shapeIndices = snapshot.shapeIndices.map(
+          _.copy(indices = Vector("1", "0"), resultDimensions = Vector("3"))
+        ))
+      ).foreach: forged =>
+        val error = scala.util.Try(ScalaToMlirBridge.fromSnapshot(forged))
+          .failed.get.asInstanceOf[BridgeException]
+        assert(error.diagnostic.code == "NODAL-BRIDGE-044")
+
     test("public port indexing rejects unsafe literals rank and unproved symbolic indices"):
       Vector(
         failure(new Increment43NegativeShapeIndex),
@@ -382,7 +459,11 @@ object Increment43ShapeContractTests extends TestSuite:
               ScalaToMlirBridge.lower(new Increment43FixedShapeIndex),
               ScalaToMlirBridge.lower(new Increment43SymbolicShapeIndex),
               ScalaToMlirBridge.lower(new Increment43SymbolicIndex),
-              ScalaToMlirBridge.lower(new Increment43CompoundIndex)
+              ScalaToMlirBridge.lower(new Increment43CompoundIndex),
+              ScalaToMlirBridge.lower(new Increment43FixedRowView),
+              ScalaToMlirBridge.lower(new Increment43SymbolicRowView),
+              ScalaToMlirBridge.lower(new Increment43FixedPlaneView),
+              ScalaToMlirBridge.lower(new Increment43ReshapedRowView)
             ).foreach: document =>
               NativeCompilerClient.run(document, request) match
                 case success: NativeCompilerSuccess =>

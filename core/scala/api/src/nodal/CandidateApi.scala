@@ -1154,6 +1154,57 @@ private[nodal] object CandidateRuntime:
     ConstructionKernel.shapeIndex(expression, value, indices)
     expression
 
+  private def shapePrefix[A <: Data](
+      value: Expr[Vec[A]],
+      index: Dimension,
+      expectedRank: Int,
+      name: String
+  ): Expr[Vec[A]] =
+    val descriptor = expressionDataType(value)
+      .map(typeDescriptor)
+      .filter(_.kind == "Vec")
+      .getOrElse(
+        scala.util.Failure[KernelTypeDescriptor](
+          new ConstructionException(
+            KernelDiagnostic("NODAL-SHAPE-043-002", s"shape $name requires a Vec value")
+          )
+        ).get
+      )
+    val element = descriptor.arguments.headOption.collect:
+      case candidate: DataType[?] => candidate
+    .getOrElse(
+      scala.util.Failure[DataType[?]](
+        new ConstructionException(
+          KernelDiagnostic("NODAL-SHAPE-043-002", s"shape $name requires a Vec element type")
+        )
+      ).get
+    )
+    val dimensions = descriptor.arguments.lift(1).toVector.flatMap:
+      case values: Seq[?] => values.toVector
+      case _ => Vector.empty
+    if dimensions.size != expectedRank then
+      scala.util.Failure[Expr[Vec[A]]](
+        new ConstructionException(
+          KernelDiagnostic(
+            "NODAL-SHAPE-043-002",
+            s"shape $name requires rank $expectedRank"
+          )
+        )
+      ).get
+    val result = new KernelExpr[Vec[A]](
+      Vector(value, index),
+      resultType = Some(KernelTypeDescriptor("Vec", Vector(element, dimensions.tail))),
+      operation = Some("shape_index")
+    )
+    ConstructionKernel.shapeIndex(result, value, Vector(index))
+    result
+
+  def shapeRow[A <: Data](value: Expr[Vec[A]], index: Dimension): Expr[Vec[A]] =
+    shapePrefix(value, index, expectedRank = 2, name = "row")
+
+  def shapePlane[A <: Data](value: Expr[Vec[A]], index: Dimension): Expr[Vec[A]] =
+    shapePrefix(value, index, expectedRank = 3, name = "plane")
+
   def shapeFlatten[A <: Data](value: Expr[Vec[A]]): Expr[Vec[A]] =
     val dimensions = expressionDataType(value)
       .map(typeDescriptor)

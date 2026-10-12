@@ -1139,30 +1139,60 @@ LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::ra
   return success();
 }
 
-FailureOr<int64_t> fixedGenerateBound(Operation *generate, llvm::StringRef name) {
-  auto value = generate->getAttrOfType<IntegerAttr>(name);
-  if (!value || !value.getValue().isSignedIntN(64)) {
-    (void)emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
-                            llvm::Twine("fixed generated contribution requires signed-64 '") +
-                                name + "' bound");
+struct GeneratedTargetBound {
+  std::string text;
+  nodal::ParameterIntegerBounds range;
+};
+
+FailureOr<GeneratedTargetBound> generatedTargetBound(Operation *generate, llvm::StringRef name) {
+  Attribute attribute = generate->getAttr(name);
+  if (auto value = llvm::dyn_cast_or_null<IntegerAttr>(attribute)) {
+    if (!value.getValue().isSignedIntN(64)) {
+      (void)emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                              llvm::Twine("generated contribution requires signed-64 '") + name +
+                                  "' bound");
+      return failure();
+    }
+    const int64_t literal = value.getValue().getSExtValue();
+    return GeneratedTargetBound{std::to_string(literal), {literal, literal}};
+  }
+
+  auto reference = llvm::dyn_cast_or_null<FlatSymbolRefAttr>(attribute);
+  auto owner = generate->getParentOfType<nodal::ModuleOp>();
+  Operation *parameter = reference && owner
+                             ? findDirectParameter(owner.getOperation(), reference.getValue())
+                             : nullptr;
+  if (!parameter || nodal::getParameterKind(parameter) != "integer" ||
+      !nodal::isStructuralParameter(parameter)) {
+    (void)emitMappedFailure(
+        generate, "NODAL-BACKEND-CAPABILITY-001",
+        llvm::Twine("generated contribution requires a literal or structural ") +
+            "Integer parameter '" + name + "' bound");
     return failure();
   }
-  return value.getValue().getSExtValue();
+  auto range = nodal::inferParameterIntegerBounds(parameter);
+  if (failed(range)) {
+    (void)emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                            llvm::Twine("generated contribution cannot prove finite '") + name +
+                                "' parameter bounds");
+    return failure();
+  }
+  return GeneratedTargetBound{reference.getValue().str(), *range};
 }
 
-LogicalResult renderFixedGeneratedContribution(Operation *generate, ModuleRenderState &state,
-                                               llvm::raw_ostream &output) {
+LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState &state,
+                                          llvm::raw_ostream &output) {
   if (generate->getNumOperands() != 0)
     return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
-                             "symbolic generated Verilog-A lowering is not yet enabled");
-  auto lower = fixedGenerateBound(generate, "lower");
-  auto upper = fixedGenerateBound(generate, "upper");
-  auto step = fixedGenerateBound(generate, "step");
+                             "compound generated Verilog-A bounds are not yet enabled");
+  auto lower = generatedTargetBound(generate, "lower");
+  auto upper = generatedTargetBound(generate, "upper");
+  auto step = generatedTargetBound(generate, "step");
   if (failed(lower) || failed(upper) || failed(step))
     return failure();
-  if (*step <= 0 || *upper < *lower)
+  if (step->range.lower <= 0 || lower->range.upper > upper->range.lower)
     return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
-                             "fixed generated Verilog-A range must be forward and nonnegative");
+                             "generated Verilog-A range must be forward for every legal setting");
 
   auto induction = generate->getAttrOfType<StringAttr>("induction");
   auto inductionPath = generate->getAttrOfType<StringAttr>("induction_path");
@@ -1230,9 +1260,9 @@ LogicalResult renderFixedGeneratedContribution(Operation *generate, ModuleRender
                              "generated Verilog-A range requires an additive contribution");
 
   output << "  analog begin\n";
-  output << "    for (" << induction.getValue() << " = " << *lower << "; " << induction.getValue()
-         << " < " << *upper << "; " << induction.getValue() << " = " << induction.getValue()
-         << " + " << *step << ") begin : " << label << "\n";
+  output << "    for (" << induction.getValue() << " = " << lower->text << "; "
+         << induction.getValue() << " < " << upper->text << "; " << induction.getValue() << " = "
+         << induction.getValue() << " + " << step->text << ") begin : " << label << "\n";
   if (failed(renderAnalog(analog, state, output, false)))
     return failure();
   output << "    end\n";
@@ -1460,7 +1490,7 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
         return failure();
   }
   for (Operation *generate : generates)
-    if (failed(renderFixedGeneratedContribution(generate, state, output)))
+    if (failed(renderGeneratedContribution(generate, state, output)))
       return failure();
   output << "endmodule\n";
   return success();
@@ -1807,19 +1837,28 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
         if (initial.first.empty() || initial.second.empty() || condition.first != initial.first ||
             update.first != initial.first || !generatedNames.contains(initial.first))
           return failure();
-        int64_t lower = 0, upper = 0;
         auto parseSigned = [](llvm::StringRef text, int64_t &value) {
           auto result = std::from_chars(text.begin(), text.end(), value);
           return result.ec == std::errc() && result.ptr == text.end();
         };
-        if (!parseSigned(initial.second, lower) || !parseSigned(condition.second, upper) ||
+        auto validBound = [&](llvm::StringRef text) {
+          int64_t ignored = 0;
+          if (parseSigned(text, ignored))
+            return true;
+          return currentHierarchyModule && isPortableVerilogIdentifier(text) &&
+                 hierarchyModules[*currentHierarchyModule].parameters.count(text.str()) != 0;
+        };
+        if (!validBound(initial.second) || !validBound(condition.second))
+          return failure();
+        int64_t lower = 0, upper = 0;
+        if (parseSigned(initial.second, lower) && parseSigned(condition.second, upper) &&
             upper < lower)
           return failure();
         llvm::StringRef updatePrefix = initial.first;
         if (!update.second.consume_front(updatePrefix) || !update.second.consume_front(" + "))
           return failure();
         int64_t step = 0;
-        if (!parseSigned(update.second, step) || step <= 0)
+        if (!validBound(update.second) || (parseSigned(update.second, step) && step <= 0))
           return failure();
         insideGenerated = true;
         continue;

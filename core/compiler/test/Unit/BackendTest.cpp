@@ -106,6 +106,39 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kSymbolicGeneratedContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "SymbolicGeneratedContribution"}> ({
+  ^bb0:
+    "nodal.parameter"() <{classification = "structural", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "COUNT", type = i64, variability = "symbolic"}> : () -> ()
+    %default = "nodal.const_literal"() <{metadata = {}, spelling = "4", value = 4 : i64}> : () -> i64
+    "nodal.parameter_value"(%default) <{metadata = {}, parameter = @COUNT}> : (i64) -> ()
+    %minimum = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %maximum = "nodal.const_literal"() <{metadata = {}, spelling = "8", value = 8 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%minimum, %maximum) <{constraint_kind = "range", lower_inclusive = true, metadata = {}, parameter = @COUNT, upper_inclusive = true}> : (i64, i64) -> ()
+    "nodal.parameter_envelope"() <{effects = ["topology"], metadata = {}, parameter = @COUNT, policy = "static_generate"}> : () -> ()
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = @COUNT, step = 1 : i64, region_id = "SymbolicGeneratedContribution.generate_0", induction_path = "SymbolicGeneratedContribution.generate_0.index", metadata = {maximum_trip_count = 8 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "SymbolicGeneratedContribution.generate_0", generated_induction = "SymbolicGeneratedContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %potential = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        "nodal.contribute"(%branch, %potential) <{kind = "potential", generated_owner = "SymbolicGeneratedContribution.generate_0", generated_induction = "SymbolicGeneratedContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kHierarchyModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -459,6 +492,29 @@ int main() {
     if (mlir::succeeded(nodal::reparseBackendTarget(invalid, *configuration)))
       return fail("malformed generated target passed independent reparse");
   }
+
+  auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);
+  if (!symbolicGenerated)
+    return fail("could not parse the symbolic generated contribution fixture");
+  std::string symbolicGeneratedOutput;
+  llvm::raw_string_ostream symbolicGeneratedStream(symbolicGeneratedOutput);
+  if (mlir::failed(nodal::emitBackend(*symbolicGenerated, nodal::BackendKind::VerilogA,
+                                      symbolicGeneratedStream)))
+    return fail("symbolic generated contribution emission failed");
+  symbolicGeneratedStream.flush();
+  if (symbolicGeneratedOutput.find("parameter integer COUNT = 4 from [1:8];\n") ==
+          std::string::npos ||
+      symbolicGeneratedOutput.find("generate_0_index < COUNT") == std::string::npos ||
+      symbolicGeneratedOutput.find("V(p, n) <+ 1;\n") == std::string::npos)
+    return fail("symbolic generated contribution lost its parameterized target loop");
+  std::string unknownGeneratedBound = symbolicGeneratedOutput;
+  auto symbolicPosition = unknownGeneratedBound.find("generate_0_index < COUNT");
+  if (symbolicPosition == std::string::npos)
+    return fail("symbolic generated bound mutation anchor missing");
+  unknownGeneratedBound.replace(symbolicPosition, std::string("generate_0_index < COUNT").size(),
+                                "generate_0_index < MISSING");
+  if (mlir::succeeded(nodal::reparseBackendTarget(unknownGeneratedBound, *configuration)))
+    return fail("undeclared symbolic generated bound passed independent reparse");
 
   RejectingReparseHooks rejectingHooks;
   std::string rejected = "sentinel";

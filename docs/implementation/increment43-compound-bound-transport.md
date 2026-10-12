@@ -365,3 +365,22 @@ analog arrays, general slices, l-value selection and source/index maps remain
 unsupported by this backend profile. Independent OpenVAF compilation and the
 F-048/F-049/F-052 compile and numerical handoff remain required, and no F-043
 parent or descendant checkbox is completed by this checkpoint.
+
+## Direct symbolic generated-contribution target checkpoint
+
+The next target checkpoint retains the same contribution-only profile while
+allowing a generated lower, upper or step bound to name a direct structural
+Integer parameter with a finite canonical range. The backend resolves the
+parameter in the owning module, independently requires Integer type,
+structural classification, finite signed-64 bounds, positive step and forward
+direction for every legal setting, and emits the parameter name rather than its
+default. The target reparse gate accepts only signed literals or parameters
+declared by that module in each loop clause; an undeclared replacement rejects.
+
+The public configured witness uses `hdlRange(0, lanes)` with `lanes` constrained
+to `1 to 8` and retains one parameterized Verilog-A loop. It does not enumerate
+legal parameter values or specialize the default. Compound expression bounds,
+generated storage/events/operators, analog arrays, general slices, l-value
+selection and source/index maps remain unsupported by this backend profile.
+Independent OpenVAF compilation and the F-048/F-049/F-052 handoff remain
+required, and every F-043 parent and descendant checkbox remains open.

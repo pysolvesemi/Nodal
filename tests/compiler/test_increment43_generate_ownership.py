@@ -219,6 +219,27 @@ class GeneratedOwnershipCheckerTests(unittest.TestCase):
         ]
         self.assertIn("verifyGeneratedAnalogOwnership", section)
 
+    def test_symbolic_generated_target_reuses_structural_parameter_bounds(self):
+        backend = (
+            ROOT / "core/compiler/lib/Backend/AnalogVerticalSlice.cpp"
+        ).read_text()
+        section = backend[
+            backend.index("FailureOr<GeneratedTargetBound> generatedTargetBound"):
+            backend.index("LogicalResult renderGeneratedContribution")
+        ]
+        self.assertIn("findDirectParameter", section)
+        self.assertIn("nodal::isStructuralParameter", section)
+        self.assertIn("nodal::inferParameterIntegerBounds", section)
+        self.assertNotIn("default_value", section)
+
+        reparse = backend[
+            backend.index("if (line.starts_with(\"for (\"))"):
+            backend.index("if (line.starts_with(\"begin : event_\"))")
+        ]
+        self.assertIn("parameters.count(text.str()) != 0", reparse)
+        self.assertIn("!validBound(initial.second)", reparse)
+        self.assertIn("!validBound(condition.second)", reparse)
+
     def test_inventory_and_positive_preservation(self):
         cases = ownership.cases()
         self.assertEqual(len(cases), 35)

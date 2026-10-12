@@ -160,6 +160,15 @@ final class Increment43GeneratedContribution extends Module:
       V(p, n) <+ 1.0.V
       I(p, n) <+ 1.0.A
 
+final class Increment43SymbolicGeneratedContribution extends Module:
+  val lanes: Param[Integer] = param(4.integer, range = 1 to 8)
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+
+  hdlRange(0, lanes): _ =>
+    analog:
+      V(p, n) <+ 1.0.V
+
 final class Increment43UnsupportedGeneratedNoiseOperator extends Module:
   hdlRange(0, 2): _ =>
     val source = whiteNoise(NoiseId("unsupported generated"), 1.0.A * 1.0.A * 1.0.s)
@@ -972,6 +981,36 @@ object Increment43RangeConstructionTests extends TestSuite:
             )
             assert(result.verilogA.linesIterator.count(_.trim == "V(p, n) <+ 1;") == 1)
             assert(result.verilogA.linesIterator.count(_.trim == "I(p, n) <+ 1;") == 1)
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public symbolic generated contributions retain one parameterized Verilog-A loop"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43SymbolicGeneratedContribution,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.contains("upper = @lanes"))
+            assert(result.verilogA.contains("parameter integer lanes = 4 from [1:8];"))
+            assert(
+              result.verilogA.contains(
+                "for (generate_0_index = 0; generate_0_index < lanes; " +
+                  "generate_0_index = generate_0_index + 1) begin : generate_0"
+              )
+            )
+            assert(result.verilogA.linesIterator.count(_.trim == "V(p, n) <+ 1;") == 1)
           finally delete(directory)
         case _ => assert(true)
 

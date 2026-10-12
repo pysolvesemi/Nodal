@@ -2630,27 +2630,29 @@ private final class ConstructionSession(val options: EmitOptions):
   private def noiseOperatorSnapshots(sourceMap: Vector[SourceMapEntry])
       : Vector[KernelNoiseOperatorSnapshot] =
     val sources = sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
-    noiseOperators.toVector.map: (reference, kind, label, inputs, dimension) =>
-      val path = expressionPath(reference)
-      val generatedOwnership = analogRegions.find(_.expressions.contains(reference))
-        .flatMap(_.generatedOwnership)
-        .map(canonicalGeneratedOwnership)
-      KernelNoiseOperatorSnapshot(
-        path,
-        kind,
-        modulePath(reference.module),
-        label,
-        inputs.map(input =>
-          pathOf(input).getOrElse(
-            AnalogNoiseContract.fail(2, "noise input has no semantic path")
-          )
-        ),
-        dimension,
-        sources.get(path),
-        generatedOwnership.map(_._1),
-        generatedOwnership.map(_._2)
-      )
-    .sortBy(_.path)
+    noiseOperators.toVector
+      .sortBy: (reference, _, _, _, _) =>
+        modulePath(reference.module) -> reference.index
+      .map: (reference, kind, label, inputs, dimension) =>
+        val path = expressionPath(reference)
+        val generatedOwnership = analogRegions.find(_.expressions.contains(reference))
+          .flatMap(_.generatedOwnership)
+          .map(canonicalGeneratedOwnership)
+        KernelNoiseOperatorSnapshot(
+          path,
+          kind,
+          modulePath(reference.module),
+          label,
+          inputs.map(input =>
+            pathOf(input).getOrElse(
+              AnalogNoiseContract.fail(2, "noise input has no semantic path")
+            )
+          ),
+          dimension,
+          sources.get(path),
+          generatedOwnership.map(_._1),
+          generatedOwnership.map(_._2)
+        )
 
   private def waveformOperatorSnapshots(
       sourceMap: Vector[SourceMapEntry]

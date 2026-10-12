@@ -189,6 +189,35 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedSlewContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.unit"() <{dimension = "voltage", metadata = {}, native_suffix = "", scale = 1.0 : f64, sym_name = "Volt", symbol = "V"}> : () -> ()
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedSlewContribution"}> ({
+  ^bb0:
+    "nodal.parameter"() <{classification = "ordinary", default_value = 1.0 : f64, metadata = {}, parameter_kind = "real", sym_name = "LEVEL", type = f64, unit = @Volt, variability = "fixed"}> : () -> ()
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedSlewContribution.generate_0", induction_path = "GeneratedSlewContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedSlewContribution.generate_0", generated_induction = "GeneratedSlewContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %input = "nodal.parameter_ref"() <{metadata = {}, parameter = @LEVEL}> : () -> !nodal.quantity<"real", "voltage">
+        %limited = "nodal.analog_slew"(%input) <{analyses = ["ac", "dc", "initialization", "noise", "operating-point", "transient"], context = "contribution", generated_owner = "GeneratedSlewContribution.generate_0", generated_induction = "GeneratedSlewContribution.generate_0.index", input_continuity = "constant", metadata = {identity = "limited"}, operand_dimensions = ["voltage"], operator_contract = "increment36", operator_id = "GeneratedSlewContribution.limited", output_continuity = "constant", owner = "GeneratedSlewContribution", result_dimension = "voltage", state_id = "GeneratedSlewContribution.limited.state"}> : (!nodal.quantity<"real", "voltage">) -> !nodal.quantity<"real", "voltage">
+        "nodal.contribute"(%branch, %limited) <{kind = "potential", generated_owner = "GeneratedSlewContribution.generate_0", generated_induction = "GeneratedSlewContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, !nodal.quantity<"real", "voltage">) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kSymbolicGeneratedContributionModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -788,6 +817,69 @@ int main() {
     rejectedStream.flush();
     if (rejected != "sentinel")
       return fail("invalid generated transition consumer published partial output");
+  }
+
+  auto generatedSlew = parse(context, kGeneratedSlewContributionModule);
+  if (!generatedSlew)
+    return fail("could not parse the generated slew contribution fixture");
+  std::string generatedSlewOutput;
+  llvm::raw_string_ostream generatedSlewStream(generatedSlewOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*generatedSlew, nodal::BackendKind::VerilogA, generatedSlewStream)))
+    return fail("generated slew contribution emission failed");
+  generatedSlewStream.flush();
+  if (generatedSlewOutput.find("V(p, n) <+ slew(LEVEL);\n") == std::string::npos ||
+      generatedSlewOutput.find("real waveform_") != std::string::npos)
+    return fail("generated slew lost its single owned per-occurrence expression");
+
+  for (const auto &[attribute, value] :
+       {std::make_pair("generated_owner", "GeneratedSlewContribution.forged"),
+        std::make_pair("state_id", "GeneratedSlewContribution.limited.forged")}) {
+    auto forged = parse(context, kGeneratedSlewContributionModule);
+    if (!forged)
+      return fail("could not parse the generated slew mutation fixture");
+    mlir::Operation *slew = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!slew && operation->getName().getStringRef() == "nodal.analog_slew")
+        slew = operation;
+    });
+    if (!slew)
+      return fail("generated slew mutation anchor missing");
+    slew->setAttr(attribute, mlir::StringAttr::get(&context, value));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated slew ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated slew ownership published partial output");
+  }
+
+  for (const auto &mutation :
+       {std::make_pair("%branch, %limited", "%branch, %input"),
+        std::make_pair("        \"nodal.contribute\"(%branch, %limited)",
+                       "        \"nodal.contribute\"(%branch, %limited) <{kind = \"potential\", "
+                       "generated_owner = \"GeneratedSlewContribution.generate_0\", "
+                       "generated_induction = \"GeneratedSlewContribution.generate_0.index\", "
+                       "metadata = {}}> : (!nodal.branch<\"electrical\">, "
+                       "!nodal.quantity<\"real\", \"voltage\">) -> ()\n"
+                       "        \"nodal.contribute\"(%branch, %limited)")}) {
+    std::string invalidSource = kGeneratedSlewContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated slew consumer mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated slew consumer mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated slew consumer passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated slew consumer published partial output");
   }
 
   auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);

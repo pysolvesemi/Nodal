@@ -1112,7 +1112,7 @@ LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::ra
       continue;
     }
     if (nodal::isStatefulWaveformOperation(&operation) || name == "nodal.analog_bound_step") {
-      // The generated transition profile pre-renders one single-use call so it
+      // The generated waveform profile pre-renders one single-use call so it
       // stays per generated occurrence instead of acquiring shared module
       // storage. Ordinary waveform operations still materialize exactly once.
       if (operation.getNumResults() == 1 && state.expressions.count(operation.getResult(0)))
@@ -1437,7 +1437,9 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                 : "generated ddt must feed an additive contribution without escaping its range");
       continue;
     }
-    if (name == "nodal.analog_transition") {
+    if (name == "nodal.analog_transition" || name == "nodal.analog_slew") {
+      const bool slew = name == "nodal.analog_slew";
+      const llvm::StringRef waveform = slew ? "slew" : "transition";
       auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
       auto generatedInduction = operation.getAttrOfType<StringAttr>("generated_induction");
       auto operatorId = operation.getAttrOfType<StringAttr>("operator_id");
@@ -1447,22 +1449,27 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       llvm::DenseSet<Operation *> active;
       if (!owner || !generatedInduction || owner.getValue() != regionId.getValue() ||
           generatedInduction.getValue() != inductionPath.getValue())
-        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
-                                 "generated transition ownership does not match its range");
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            (llvm::Twine("generated ") + waveform + " ownership does not match its range").str());
       if (!operatorId || !stateId || stateId.getValue() != expectedState)
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
-            "generated transition state identity is not owned by its operator");
+            (llvm::Twine("generated ") + waveform + " state identity is not owned by its operator")
+                .str());
       if (operation.getNumResults() != 1 ||
           !generatedValueFeedsOneContribution(operation.getResult(0), analogBody, active))
-        return emitMappedFailure(
-            &operation, "NODAL-BACKEND-CAPABILITY-001",
-            "generated transition must feed one additive contribution without escaping its range");
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 (llvm::Twine("generated ") + waveform +
+                                  " must feed one additive contribution without escaping its range")
+                                     .str());
       auto rendered = renderWaveformCall(&operation, state);
       if (failed(rendered) ||
           !state.expressions.try_emplace(operation.getResult(0), *rendered).second)
-        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
-                                 "generated transition cannot be rendered as one owned expression");
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            (llvm::Twine("generated ") + waveform + " cannot be rendered as one owned expression")
+                .str());
       continue;
     }
     bool supportedExpression =
@@ -1474,7 +1481,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
     if (!supportedExpression)
       return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                "generated Verilog-A backend profile supports contributions and "
-                               "owned ddt/idt/transition expressions only");
+                               "owned ddt/idt/transition/slew expressions only");
   }
   if (!contributions)
     return emitMappedFailure(analog, "NODAL-BACKEND-CAPABILITY-001",

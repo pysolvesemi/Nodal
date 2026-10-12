@@ -106,6 +106,33 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedDdtContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedDdtContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedDdtContribution.generate_0", induction_path = "GeneratedDdtContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedDdtContribution.generate_0", generated_induction = "GeneratedDdtContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %one = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        %derivative = "nodal.analog_ddt"(%one) <{analyses = ["ac", "dc", "initialization", "noise", "operating-point", "transient"], context = "contribution", generated_owner = "GeneratedDdtContribution.generate_0", generated_induction = "GeneratedDdtContribution.generate_0.index", initialization = "none", input_dimension = "1", metadata = {identity = "derivative"}, operator_contract = "increment35", operator_id = "GeneratedDdtContribution.derivative", owner = "GeneratedDdtContribution", result_dimension = "time^-1"}> : (f64) -> f64
+        "nodal.contribute"(%branch, %derivative) <{kind = "potential", generated_owner = "GeneratedDdtContribution.generate_0", generated_induction = "GeneratedDdtContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kSymbolicGeneratedContributionModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -536,6 +563,40 @@ int main() {
     invalid.replace(position, std::string(mutation.first).size(), mutation.second);
     if (mlir::succeeded(nodal::reparseBackendTarget(invalid, *configuration)))
       return fail("malformed generated target passed independent reparse");
+  }
+
+  auto generatedDdt = parse(context, kGeneratedDdtContributionModule);
+  if (!generatedDdt)
+    return fail("could not parse the generated ddt contribution fixture");
+  std::string generatedDdtOutput;
+  llvm::raw_string_ostream generatedDdtStream(generatedDdtOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*generatedDdt, nodal::BackendKind::VerilogA, generatedDdtStream)))
+    return fail("generated ddt contribution emission failed");
+  generatedDdtStream.flush();
+  if (generatedDdtOutput.find("V(p, n) <+ ddt(1);\n") == std::string::npos)
+    return fail("generated ddt contribution lost its owned operator expression");
+  for (const auto &mutation :
+       {std::make_pair(
+            "context = \"contribution\", generated_owner = \"GeneratedDdtContribution.generate_0\"",
+            "context = \"contribution\", generated_owner = \"GeneratedDdtContribution.forged\""),
+        std::make_pair("%branch, %derivative", "%branch, %one")}) {
+    std::string invalidSource = kGeneratedDdtContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated ddt source mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated ddt source mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated ddt source passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated ddt source published partial output");
   }
 
   auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);

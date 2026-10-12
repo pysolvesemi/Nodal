@@ -1259,6 +1259,42 @@ FailureOr<GeneratedTargetBound> generatedTargetBound(Value value, Operation *gen
   return GeneratedTargetBound{*rendered, *range};
 }
 
+bool generatedValueFeedsContribution(Value value, Block &body,
+                                     llvm::DenseSet<Operation *> &active) {
+  Operation *definition = value.getDefiningOp();
+  if (!definition || !active.insert(definition).second || value.use_empty())
+    return false;
+
+  bool reachedContribution = false;
+  for (OpOperand &use : value.getUses()) {
+    Operation *user = use.getOwner();
+    if (user->getBlock() != &body) {
+      active.erase(definition);
+      return false;
+    }
+    llvm::StringRef name = user->getName().getStringRef();
+    if (name == "nodal.contribute") {
+      if (use.getOperandNumber() != 1) {
+        active.erase(definition);
+        return false;
+      }
+      reachedContribution = true;
+      continue;
+    }
+    const bool expression = name == "nodal.analog_add" || name == "nodal.analog_sub" ||
+                            name == "nodal.analog_mul" || name == "nodal.analog_div" ||
+                            name == "nodal.analog_neg";
+    if (!expression || user->getNumResults() != 1 ||
+        !generatedValueFeedsContribution(user->getResult(0), body, active)) {
+      active.erase(definition);
+      return false;
+    }
+    reachedContribution = true;
+  }
+  active.erase(definition);
+  return reachedContribution;
+}
+
 LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState &state,
                                           llvm::raw_ostream &output) {
   if (generate->getNumOperands() != 0 && generate->getNumOperands() != 3)
@@ -1315,8 +1351,9 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
     return emitMappedFailure(analog, "NODAL-BACKEND-CAPABILITY-001",
                              "generated analog region requires one body block");
 
+  Block &analogBody = analog->getRegion(0).front();
   unsigned contributions = 0;
-  for (Operation &operation : analog->getRegion(0).front()) {
+  for (Operation &operation : analogBody) {
     llvm::StringRef name = operation.getName().getStringRef();
     if (name == "nodal.contribute") {
       auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
@@ -1328,6 +1365,21 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       ++contributions;
       continue;
     }
+    if (name == "nodal.analog_ddt") {
+      auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
+      auto generatedInduction = operation.getAttrOfType<StringAttr>("generated_induction");
+      llvm::DenseSet<Operation *> active;
+      if (!owner || !generatedInduction || owner.getValue() != regionId.getValue() ||
+          generatedInduction.getValue() != inductionPath.getValue())
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated ddt ownership does not match its range");
+      if (operation.getNumResults() != 1 ||
+          !generatedValueFeedsContribution(operation.getResult(0), analogBody, active))
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            "generated ddt must feed an additive contribution without escaping its range");
+      continue;
+    }
     bool supportedExpression =
         name == "nodal.real_literal" || name == "nodal.analog_integer_literal" ||
         name == "nodal.parameter_ref" || name == "nodal.access" ||
@@ -1336,7 +1388,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
         name == "nodal.analog_div" || name == "nodal.analog_neg";
     if (!supportedExpression)
       return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
-                               "generated Verilog-A backend profile is contribution-only");
+                               "generated Verilog-A backend profile supports contributions and "
+                               "owned ddt expressions only");
   }
   if (!contributions)
     return emitMappedFailure(analog, "NODAL-BACKEND-CAPABILITY-001",

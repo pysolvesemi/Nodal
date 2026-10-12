@@ -308,3 +308,36 @@ contributions, transfer and noise effects are still rejected in generated
 regions, as are detached, partial or forged ownership pairs. This checkpoint
 does not lower generated waveform state or arrays to Verilog-A, implement
 slices, or complete any F-043 parent or descendant acceptance box.
+
+## Generated transfer/noise ownership checkpoints
+
+Later bounded checkpoints extend the same exact generated continuous-region
+ownership to the existing `laplaceNd`/`ziNd` transfer operators and
+`whiteNoise`/`flickerNoise`/`tableNoise` sources. Construction, bridge and
+native verification retain the immediate generated region and finalized
+induction on every operation. Transfer state identities and noise-source
+identities remain unique across nested generated analog regions. Direct,
+partial, detached and forged forms continue to fail closed.
+
+These checkpoints do not change the public operator surfaces or lower generated
+state/noise to a target. Equations, contributions, arrays, general slices,
+legal Verilog-A generation and source/index maps remain open at this point.
+
+## Generated additive-contribution ownership checkpoint
+
+The next bounded checkpoint admits the existing potential and flow `<+`
+surfaces only inside an explicit legacy `analog` region owned by the active
+`hdlRange`. It does not admit the separate `contributions` semantic region.
+Construction resolves the canonical generated region and induction while
+materializing both the analog-region snapshot and each contribution snapshot.
+
+The bridge requires every generated contribution to carry the exact same pair
+as its analog region and emits that pair on `nodal.contribute`. Native schemas
+retain it, and the contribution verifier independently matches it to the
+immediate `nodal.generate` and owning `nodal.analog`. Partial, detached or
+forged ownership remains `NODAL-ITERATION-043-004`; direct ordinary
+contributions continue to omit generated ownership.
+
+This is normalized-IR ownership evidence only. Generated equations, target
+arrays/generation, general slices, source/index maps and every F-043 acceptance
+box remain open.

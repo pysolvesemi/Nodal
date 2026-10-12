@@ -1592,6 +1592,16 @@ ${indent(body, 2)}
             "noise operator ownership differs from its analog region",
             Some(analog.path)
           )
+        analog.contributions.foreach: contribution =>
+          if contribution.generatedOwner.isDefined != contribution.generatedInduction.isDefined ||
+            contribution.generatedOwner != analog.generatedOwner ||
+            contribution.generatedInduction != analog.generatedInduction
+          then
+            fail(
+              "NODAL-BRIDGE-043",
+              "contribution ownership differs from its analog region",
+              Some(contribution.path)
+            )
       regions
 
     private def continuousOperator(
@@ -2044,7 +2054,11 @@ ${indent(body, 2)}
           "nodal.contribute",
           operands = Vector(branch._1, value._1),
           operandTypes = Vector(branch._2, value._2),
-          attributes = Vector(
+          attributes = contribution.generatedOwner.toVector.map(owner =>
+            "generated_owner" -> quoted(owner)
+          ) ++ contribution.generatedInduction.toVector.map(induction =>
+            "generated_induction" -> quoted(induction)
+          ) ++ Vector(
             "kind" -> quoted(contribution.kind),
             "metadata" -> bridgeMetadata(
               contribution.path,
@@ -2751,7 +2765,8 @@ ${indent(body, 2)}
           val noise = snapshot.noiseOperators.filter(operator =>
             analog.expressions.exists(_.path == operator.path)
           )
-          if (operators.isEmpty && waveforms.isEmpty && transfers.isEmpty && noise.isEmpty) ||
+          if (operators.isEmpty && waveforms.isEmpty && transfers.isEmpty && noise.isEmpty &&
+              analog.contributions.isEmpty) ||
             operators.exists(operator =>
               !operator.generatedOwner.contains(region.path) ||
                 !operator.generatedInduction.contains(region.induction)
@@ -2767,6 +2782,9 @@ ${indent(body, 2)}
             noise.exists(operator =>
               !operator.generatedOwner.contains(region.path) ||
                 !operator.generatedInduction.contains(region.induction)
+            ) || analog.contributions.exists(contribution =>
+              !contribution.generatedOwner.contains(region.path) ||
+                !contribution.generatedInduction.contains(region.induction)
             )
           then
             fail(

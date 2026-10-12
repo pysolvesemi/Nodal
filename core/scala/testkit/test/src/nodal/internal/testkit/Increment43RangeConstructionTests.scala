@@ -151,6 +151,15 @@ final class Increment43GeneratedNoiseOperator extends Module:
       )
       val _ = (white, flicker, table)
 
+final class Increment43GeneratedContribution extends Module:
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+
+  hdlRange(0, 2): _ =>
+    analog:
+      V(p, n) <+ 1.0.V
+      I(p, n) <+ 1.0.A
+
 final class Increment43UnsupportedGeneratedNoiseOperator extends Module:
   hdlRange(0, 2): _ =>
     val source = whiteNoise(NoiseId("unsupported generated"), 1.0.A * 1.0.A * 1.0.s)
@@ -755,6 +764,84 @@ object Increment43RangeConstructionTests extends TestSuite:
                 assert(nativeFailure.diagnostic.code == "NODAL-ANALOG-039-002")
               case success: NativeCompilerSuccess =>
                 scala.Predef.assert(false, s"duplicate generated noise accepted: $success")
+          finally delete(directory)
+
+    test("generated additive contributions retain exact region ownership"):
+      val first = ConstructionKernel.inspect(new Increment43GeneratedContribution)
+      val second = ConstructionKernel.inspect(new Increment43GeneratedContribution)
+      assert(first == second)
+      val generated = first.generatedRegions.head
+      val analog = first.analogRegions.head
+      assert(analog.generatedOwner.contains(generated.path))
+      assert(analog.generatedInduction.contains(generated.induction))
+      assert(analog.contributions.map(_.kind) == Vector("potential", "flow"))
+      assert(analog.contributions.forall(_.generatedOwner.contains(generated.path)))
+      assert(analog.contributions.forall(
+        _.generatedInduction.contains(generated.induction)
+      ))
+
+      val document = ScalaToMlirBridge.fromSnapshot(first)
+      val contributionLines = document.text.linesIterator
+        .filter(_.contains("\"nodal.contribute\""))
+        .toVector
+      assert(contributionLines.size == 2)
+      contributionLines.foreach: line =>
+        assert(line.contains(s"generated_owner = \"${generated.path}\""))
+        assert(line.contains(s"generated_induction = \"${generated.induction}\""))
+
+      val forgedContribution = analog.contributions.head.copy(generatedOwner = None)
+      val forged = first.copy(
+        analogRegions = Vector(
+          analog.copy(contributions = forgedContribution +: analog.contributions.tail)
+        )
+      )
+      val failure = scala.util.Try(ScalaToMlirBridge.fromSnapshot(forged)).failed.get
+        .asInstanceOf[BridgeException]
+      assert(failure.diagnostic.code == "NODAL-BRIDGE-043")
+      assert(failure.diagnostic.message.contains("contribution ownership"))
+
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          val directory = workDirectory()
+          try
+            val request = NativeCompilerRequest(
+              executable = Path.of(executable).toAbsolutePath,
+              arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
+              workingDirectory = directory,
+              timeout = Duration.ofSeconds(30)
+            )
+            NativeCompilerClient.run(document, request) match
+              case success: NativeCompilerSuccess =>
+                val normalized = success.normalizedMlir.linesIterator
+                  .filter(_.contains("\"nodal.contribute\""))
+                  .toVector
+                assert(normalized.size == 2)
+                normalized.foreach: line =>
+                  assert(line.contains(s"generated_owner = \"${generated.path}\""))
+                  assert(line.contains(
+                    s"generated_induction = \"${generated.induction}\""
+                  ))
+              case nativeFailure: NativeCompilerFailure =>
+                scala.Predef.assert(
+                  false,
+                  s"${nativeFailure.diagnostic}\n${nativeFailure.standardError}"
+                )
+
+            val marker = s"generated_owner = \"${generated.path}\""
+            val contributionOffset = document.text.indexOf("\"nodal.contribute\"")
+            val ownerOffset = document.text.indexOf(marker, contributionOffset)
+            assert(contributionOffset >= 0, ownerOffset >= contributionOffset)
+            val forgedText = document.text.patch(
+              ownerOffset,
+              s"generated_owner = \"${generated.path}.forged\"",
+              marker.length
+            )
+            NativeCompilerClient.run(document.copy(text = forgedText), request) match
+              case nativeFailure: NativeCompilerFailure =>
+                assert(nativeFailure.diagnostic.code == "NODAL-ITERATION-043-004")
+              case success: NativeCompilerSuccess =>
+                scala.Predef.assert(false, s"forged generated contribution accepted: $success")
           finally delete(directory)
 
     test("unsupported generated effects still fail at their capture boundary"):

@@ -28,6 +28,31 @@ def hardware_loop(body):
             '({\n^bb0:\n' + body + '}) : () -> ()\n')
 
 
+def generated_contribution(owner="Fixture.outer", induction="Fixture.outer.index",
+                           *, include_owner=True, include_induction=True):
+    attributes = ['kind = "potential"', 'metadata = {}']
+    if include_owner:
+        attributes.append(f'generated_owner = "{owner}"')
+    if include_induction:
+        attributes.append(f'generated_induction = "{induction}"')
+    body = ('"nodal.analog"() <{generated_owner = "Fixture.outer", '
+            'generated_induction = "Fixture.outer.index", metadata = {}}> ({\n'
+            '^bb0:\n'
+            '  %value = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> '
+            ': () -> f64\n'
+            f'  "nodal.contribute"(%branch, %value) <{{{", ".join(attributes)}}}> '
+            ': (!nodal.branch<"electrical">, f64) -> ()\n'
+            '}) : () -> ()\n')
+    prefix = ('%p = "nodal.terminal"() <{name = "p", metadata = {}}> '
+              ': () -> !nodal.terminal<"electrical">\n'
+              '%n = "nodal.terminal"() <{name = "n", metadata = {}}> '
+              ': () -> !nodal.terminal<"electrical">\n'
+              '%branch = "nodal.branch"(%p, %n) <{metadata = {}}> '
+              ': (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) '
+              '-> !nodal.branch<"electrical">\n')
+    return prefix + region(body=body)
+
+
 def cases():
     first = region()
     other = region("Fixture.other")
@@ -66,6 +91,13 @@ def cases():
         Case("ownership_reject_detached_node", node(), CODE),
         Case("ownership_reject_partial_node_contract", node().replace(
             ', generated_induction = "Fixture.outer.index"', ''), CODE),
+        Case("ownership_generated_contribution", generated_contribution()),
+        Case("ownership_reject_contribution_wrong_owner",
+             generated_contribution(owner="Fixture.other"), CODE),
+        Case("ownership_reject_contribution_partial_contract",
+             generated_contribution(include_induction=False), CODE),
+        Case("ownership_reject_contribution_missing_contract",
+             generated_contribution(include_owner=False, include_induction=False), CODE),
     ]
     for attribute, original in (("region_id", "Fixture.outer"),
                                 ("induction_path", "Fixture.outer.index")):
@@ -83,13 +115,25 @@ def node_contracts(data):
                               rb'("[^"\n]*")', data))
 
 
+def contribution_contracts(data):
+    contracts = []
+    for line in data.splitlines():
+        if b'"nodal.contribute"' in line:
+            contracts.extend(re.findall(
+                rb'\b(generated_owner|generated_induction|kind)\s*=\s*("[^"\n]*")',
+                line))
+    return Counter(contracts)
+
+
 def valid_output(case, data, exit_code, stdout, stderr):
     if not count_valid_output(case, data, exit_code, stdout, stderr):
         return False
     return case.code is not None or (
         stdout.count(b'"nodal.node"') == data.count(b'"nodal.node"') and
         stdout.count(b'"nodal.module"') == data.count(b'"nodal.module"') and
-        node_contracts(stdout) == node_contracts(data))
+        stdout.count(b'"nodal.contribute"') == data.count(b'"nodal.contribute"') and
+        node_contracts(stdout) == node_contracts(data) and
+        contribution_contracts(stdout) == contribution_contracts(data))
 
 
 if __name__ == "__main__":

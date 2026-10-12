@@ -1535,8 +1535,8 @@ private final class ConstructionSession(val options: EmitOptions):
         generatedAnalogRegions.nonEmpty &&
           generatedAnalogRegions.forall: analog =>
             analog.generatedOwnership.contains(generatedContext) &&
-              analog.contributions.isEmpty &&
-              analog.expressions.exists(generatedExpressionReferences.contains) &&
+              (analog.contributions.nonEmpty ||
+                analog.expressions.exists(generatedExpressionReferences.contains)) &&
               analog.expressions.forall: reference =>
                 !generatedExpressionReferences.contains(reference) ||
                   generatedOperators.exists(operator =>
@@ -1559,7 +1559,7 @@ private final class ConstructionSession(val options: EmitOptions):
         fail(
           "NODAL-ITERATION-043-004",
           "generated continuous regions require an owned ddt, idt, transition, slew, " +
-            "absdelay, laplaceNd, ziNd, or noise expression and no contributions",
+            "absdelay, laplaceNd, ziNd, noise expression, or additive contribution",
           Some(generatedRegionPath(record))
         )
       if module.domains.size != domainCount || module.instances.size != instanceCount ||
@@ -1981,7 +1981,10 @@ private final class ConstructionSession(val options: EmitOptions):
     case other => other.toString
 
   def operation(kind: String, values: Any*): Unit =
-    requireNoGeneratedEffect(s"generated '$kind' effect")
+    val generatedAnalogContribution =
+      kind == "analog-contribute" && generatedContinuousRegionActive
+    if !generatedAnalogContribution then
+      requireNoGeneratedEffect(s"generated '$kind' effect")
     if kind == "assignment" then
       analogSemanticContext.foreach: context =>
         if context.kind != AnalogEquationRuntime.RegionKind.Procedural then
@@ -1997,14 +2000,15 @@ private final class ConstructionSession(val options: EmitOptions):
       if values.size != 2 then
         fail("NODAL-ANALOG-LIFECYCLE-003", "analog contribution requires target and value")
       region.contributions += ((values(0), values(1)))
-    val owner = moduleStack.lastOption.map(_.handle).getOrElse(
-      fail("NODAL-LIFECYCLE-018", "operation requires an active Module")
-    )
-    val captured = Operation(owner, kind, values.toVector)
-    operations += captured
-    moduleStack.lastOption.foreach(module =>
-      semanticOrigin.captureOperation(module.handle, kind, captured.values)
-    )
+    if !generatedAnalogContribution then
+      val owner = moduleStack.lastOption.map(_.handle).getOrElse(
+        fail("NODAL-LIFECYCLE-018", "operation requires an active Module")
+      )
+      val captured = Operation(owner, kind, values.toVector)
+      operations += captured
+      moduleStack.lastOption.foreach(module =>
+        semanticOrigin.captureOperation(module.handle, kind, captured.values)
+      )
 
   private def provisionalModulePath(handle: Long): String =
     val record = records(handle)
@@ -2793,7 +2797,9 @@ private final class ConstructionSession(val options: EmitOptions):
               s"${modulePath(region.module)}.analog_${region.ordinal}.contribution_$index",
               targetPath,
               valuePath,
-              kind
+              kind,
+              generatedOwnership.map(_._1),
+              generatedOwnership.map(_._2)
             )
         KernelAnalogRegionSnapshot(
           s"${modulePath(region.module)}.analog_${region.ordinal}",

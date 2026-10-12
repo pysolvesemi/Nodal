@@ -1325,6 +1325,8 @@ def Nodal_ContributeOp : Nodal_Op<"contribute", [HasParent<"AnalogOp">]> {
     Nodal_BranchType:$branch,
     AnyType:$value,
     StrAttr:$kind,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;

@@ -147,7 +147,9 @@ private[nodal] final case class KernelAnalogContributionSnapshot(
     path: String,
     target: String,
     value: String,
-    kind: String
+    kind: String,
+    generatedOwner: Option[String] = None,
+    generatedInduction: Option[String] = None
 )
 
 private[nodal] final case class KernelAnalogRegionSnapshot(

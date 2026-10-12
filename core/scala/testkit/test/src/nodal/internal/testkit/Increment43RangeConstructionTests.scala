@@ -938,6 +938,43 @@ object Increment43RangeConstructionTests extends TestSuite:
                 )
           finally delete(directory)
 
+    test("public fixed generated contributions compile to one Verilog-A loop when configured"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedContribution,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.contains("\"nodal.generate\""))
+            assert(result.mlir.contains("\"nodal.contribute\""))
+            assert(
+              result.mlir.contains(
+                "generated_owner = \"Increment43GeneratedContribution.generate_0\""
+              )
+            )
+            assert(result.verilogA.contains("  genvar generate_0_index;"))
+            assert(
+              result.verilogA.contains(
+                "for (generate_0_index = 0; generate_0_index < 2; " +
+                  "generate_0_index = generate_0_index + 1) begin : generate_0"
+              )
+            )
+            assert(result.verilogA.linesIterator.count(_.trim == "V(p, n) <+ 1;") == 1)
+            assert(result.verilogA.linesIterator.count(_.trim == "I(p, n) <+ 1;") == 1)
+          finally delete(directory)
+        case _ => assert(true)
+
     test("native verifies generated lexical storage ownership when configured"):
       sys.env.get("NODAL_NODALC") match
         case None => assert(true)

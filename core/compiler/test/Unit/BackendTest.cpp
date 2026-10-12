@@ -78,6 +78,34 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedContribution.generate_0", induction_path = "GeneratedContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedContribution.generate_0", generated_induction = "GeneratedContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %potential = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        "nodal.contribute"(%branch, %potential) <{kind = "potential", generated_owner = "GeneratedContribution.generate_0", generated_induction = "GeneratedContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+        %flow = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        "nodal.contribute"(%branch, %flow) <{kind = "flow", generated_owner = "GeneratedContribution.generate_0", generated_induction = "GeneratedContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kHierarchyModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -400,6 +428,37 @@ int main() {
   unsupportedStream.flush();
   if (unchanged != "sentinel")
     return fail("failed capability checking published partial output");
+
+  auto generated = parse(context, kGeneratedContributionModule);
+  if (!generated)
+    return fail("could not parse the fixed generated contribution fixture");
+  std::string generatedOutput;
+  llvm::raw_string_ostream generatedStream(generatedOutput);
+  if (mlir::failed(nodal::emitBackend(*generated, nodal::BackendKind::VerilogA, generatedStream)))
+    return fail("fixed generated contribution emission failed");
+  generatedStream.flush();
+  if (generatedOutput.find("  genvar generate_0_index;\n") == std::string::npos ||
+      generatedOutput.find("    for (generate_0_index = 0; generate_0_index < 2; "
+                           "generate_0_index = generate_0_index + 1) begin : generate_0\n") ==
+          std::string::npos ||
+      generatedOutput.find("    V(p, n) <+ 1;\n") == std::string::npos ||
+      generatedOutput.find("    I(p, n) <+ 1;\n") == std::string::npos)
+    return fail("fixed generated contribution target lost its loop, owner, or equations");
+  if (generatedOutput.find("V(p, n) <+ 1;\n    V(p, n) <+ 1;") != std::string::npos)
+    return fail("fixed generated contribution was eagerly unrolled");
+  for (const auto &mutation :
+       {std::make_pair("  genvar generate_0_index;\n", ""),
+        std::make_pair("generate_0_index + 1) begin", "generate_0_index + 0) begin"),
+        std::make_pair("generate_0_index < 2", "generate_0_index <= 2"),
+        std::make_pair("begin : generate_0", "begin : for")}) {
+    std::string invalid = generatedOutput;
+    auto position = invalid.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated target mutation anchor missing");
+    invalid.replace(position, std::string(mutation.first).size(), mutation.second);
+    if (mlir::succeeded(nodal::reparseBackendTarget(invalid, *configuration)))
+      return fail("malformed generated target passed independent reparse");
+  }
 
   RejectingReparseHooks rejectingHooks;
   std::string rejected = "sentinel";

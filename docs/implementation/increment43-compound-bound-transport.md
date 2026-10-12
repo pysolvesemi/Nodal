@@ -341,3 +341,27 @@ contributions continue to omit generated ownership.
 This is normalized-IR ownership evidence only. Generated equations, target
 arrays/generation, general slices, source/index maps and every F-043 acceptance
 box remain open.
+
+## Fixed generated-contribution Verilog-A checkpoint
+
+The first target checkpoint lowers only the already-verified fixed literal
+`hdlRange` profile whose generated analog body contains additive potential or
+flow contributions and their supporting scalar expressions. The backend keeps
+the canonical generated region and induction identities, requires the exact
+ownership pair on the nested analog region and every contribution, and emits
+one module-scope `genvar` plus one deterministic analog `for` loop. It does not
+enumerate iterations or duplicate contribution bodies.
+
+The target reparse gate recognizes only the emitted forward loop form, requires
+the declared induction variable, signed literal bounds, a positive step and a
+portable block label, and rejects nested or incomplete generated blocks. A
+configured public witness crosses Scala construction, normalized MLIR and the
+generated Verilog-A text; the native backend unit also exercises target
+verification and reparse before publication.
+
+This is a bounded source-generation witness, not final target qualification.
+Symbolic bounds, generated storage, events, waveform/transfer/noise operators,
+analog arrays, general slices, l-value selection and source/index maps remain
+unsupported by this backend profile. Independent OpenVAF compilation and the
+F-048/F-049/F-052 compile and numerical handoff remain required, and no F-043
+parent or descendant checkbox is completed by this checkpoint.

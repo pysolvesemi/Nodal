@@ -64,6 +64,7 @@ constexpr llvm::StringLiteral kSupportedOperations[] = {
     "nodal.node",
     "nodal.connect",
     "nodal.branch",
+    "nodal.generate",
     "nodal.analog",
     "nodal.real_literal",
     "nodal.analog_integer_literal",
@@ -540,7 +541,8 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
                                  llvm::SmallVectorImpl<Operation *> &ports,
                                  llvm::SmallVectorImpl<Operation *> &nodes,
                                  llvm::SmallVectorImpl<Operation *> &namedBranches,
-                                 llvm::SmallVectorImpl<Operation *> &analogs) {
+                                 llvm::SmallVectorImpl<Operation *> &analogs,
+                                 llvm::SmallVectorImpl<Operation *> &generates) {
   Region &region = definition->getRegion(0);
   if (!llvm::hasSingleElement(region))
     return failure();
@@ -581,6 +583,8 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
       }
     } else if (name == "nodal.analog") {
       analogs.push_back(&operation);
+    } else if (name == "nodal.generate") {
+      generates.push_back(&operation);
     }
   }
   // These names share a target namespace even though the source IR uses
@@ -1135,6 +1139,107 @@ LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::ra
   return success();
 }
 
+FailureOr<int64_t> fixedGenerateBound(Operation *generate, llvm::StringRef name) {
+  auto value = generate->getAttrOfType<IntegerAttr>(name);
+  if (!value || !value.getValue().isSignedIntN(64)) {
+    (void)emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                            llvm::Twine("fixed generated contribution requires signed-64 '") +
+                                name + "' bound");
+    return failure();
+  }
+  return value.getValue().getSExtValue();
+}
+
+LogicalResult renderFixedGeneratedContribution(Operation *generate, ModuleRenderState &state,
+                                               llvm::raw_ostream &output) {
+  if (generate->getNumOperands() != 0)
+    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                             "symbolic generated Verilog-A lowering is not yet enabled");
+  auto lower = fixedGenerateBound(generate, "lower");
+  auto upper = fixedGenerateBound(generate, "upper");
+  auto step = fixedGenerateBound(generate, "step");
+  if (failed(lower) || failed(upper) || failed(step))
+    return failure();
+  if (*step <= 0 || *upper < *lower)
+    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                             "fixed generated Verilog-A range must be forward and nonnegative");
+
+  auto induction = generate->getAttrOfType<StringAttr>("induction");
+  auto inductionPath = generate->getAttrOfType<StringAttr>("induction_path");
+  auto regionId = generate->getAttrOfType<StringAttr>("region_id");
+  if (!induction || !inductionPath || !regionId ||
+      !isPortableVerilogIdentifier(induction.getValue()))
+    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                             "generated Verilog-A range requires canonical target identities");
+  llvm::StringRef label = regionId.getValue();
+  if (size_t separator = label.rfind('.'); separator != llvm::StringRef::npos)
+    label = label.drop_front(separator + 1);
+  if (!isPortableVerilogIdentifier(label))
+    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                             "generated Verilog-A label is not a portable identifier");
+
+  Region &body = generate->getRegion(0);
+  if (!llvm::hasSingleElement(body))
+    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                             "generated Verilog-A range requires one body block");
+  Operation *analog = nullptr;
+  for (Operation &operation : body.front()) {
+    if (operation.getName().getStringRef() != "nodal.analog" || analog)
+      return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                               "fixed generated Verilog-A profile supports one analog region");
+    analog = &operation;
+  }
+  if (!analog)
+    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                             "fixed generated Verilog-A range has no analog contribution region");
+  auto analogOwner = analog->getAttrOfType<StringAttr>("generated_owner");
+  auto analogInduction = analog->getAttrOfType<StringAttr>("generated_induction");
+  if (!analogOwner || !analogInduction || analogOwner.getValue() != regionId.getValue() ||
+      analogInduction.getValue() != inductionPath.getValue())
+    return emitMappedFailure(analog, "NODAL-BACKEND-CAPABILITY-001",
+                             "generated analog region ownership does not match its range");
+  if (!llvm::hasSingleElement(analog->getRegion(0)))
+    return emitMappedFailure(analog, "NODAL-BACKEND-CAPABILITY-001",
+                             "generated analog region requires one body block");
+
+  unsigned contributions = 0;
+  for (Operation &operation : analog->getRegion(0).front()) {
+    llvm::StringRef name = operation.getName().getStringRef();
+    if (name == "nodal.contribute") {
+      auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
+      auto generatedInduction = operation.getAttrOfType<StringAttr>("generated_induction");
+      if (!owner || !generatedInduction || owner.getValue() != regionId.getValue() ||
+          generatedInduction.getValue() != inductionPath.getValue())
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated contribution ownership does not match its range");
+      ++contributions;
+      continue;
+    }
+    bool supportedExpression =
+        name == "nodal.real_literal" || name == "nodal.analog_integer_literal" ||
+        name == "nodal.parameter_ref" || name == "nodal.access" ||
+        name == "nodal.terminal_access" || name == "nodal.port_flow_access" ||
+        name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
+        name == "nodal.analog_div" || name == "nodal.analog_neg";
+    if (!supportedExpression)
+      return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                               "generated Verilog-A backend profile is contribution-only");
+  }
+  if (!contributions)
+    return emitMappedFailure(analog, "NODAL-BACKEND-CAPABILITY-001",
+                             "generated Verilog-A range requires an additive contribution");
+
+  output << "  analog begin\n";
+  output << "    for (" << induction.getValue() << " = " << *lower << "; " << induction.getValue()
+         << " < " << *upper << "; " << induction.getValue() << " = " << induction.getValue()
+         << " + " << *step << ") begin : " << label << "\n";
+  if (failed(renderAnalog(analog, state, output, false)))
+    return failure();
+  output << "    end\n";
+  output << "  end\n";
+  return success();
+}
+
 LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output) {
   ModuleRenderState state;
   llvm::SmallVector<Operation *, 8> parameters;
@@ -1142,8 +1247,9 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
   llvm::SmallVector<Operation *, 8> nodes;
   llvm::SmallVector<Operation *, 4> namedBranches;
   llvm::SmallVector<Operation *, 2> analogs;
-  if (failed(
-          collectModuleState(definition, state, parameters, ports, nodes, namedBranches, analogs)))
+  llvm::SmallVector<Operation *, 2> generates;
+  if (failed(collectModuleState(definition, state, parameters, ports, nodes, namedBranches, analogs,
+                                generates)))
     return emitMappedFailure(definition, "NODAL-BACKEND-RC-001",
                              "could not collect RC module structure");
 
@@ -1256,6 +1362,27 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
     output << "\n";
   }
 
+  llvm::StringSet<> generatedInductions;
+  llvm::StringSet<> generatedLabels;
+  for (Operation *generate : generates) {
+    auto induction = generate->getAttrOfType<StringAttr>("induction");
+    auto regionId = generate->getAttrOfType<StringAttr>("region_id");
+    if (!induction || !isPortableVerilogIdentifier(induction.getValue()) ||
+        !generatedInductions.insert(induction.getValue()).second)
+      return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                               "generated Verilog-A induction identity is invalid or duplicated");
+    if (!regionId)
+      return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                               "generated Verilog-A region identity is missing");
+    llvm::StringRef label = regionId.getValue();
+    if (size_t separator = label.rfind('.'); separator != llvm::StringRef::npos)
+      label = label.drop_front(separator + 1);
+    if (!isPortableVerilogIdentifier(label) || !generatedLabels.insert(label).second)
+      return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                               "generated Verilog-A label is invalid or duplicated");
+    output << "  genvar " << induction.getValue() << ";\n";
+  }
+
   if (failed(renderHierarchy(definition, state, output)))
     return failure();
 
@@ -1332,6 +1459,9 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
       if (failed(renderAnalog(analog, state, output)))
         return failure();
   }
+  for (Operation *generate : generates)
+    if (failed(renderFixedGeneratedContribution(generate, state, output)))
+      return failure();
   output << "endmodule\n";
   return success();
 }
@@ -1568,6 +1698,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
   llvm::StringSet<> realNames;
   llvm::StringSet<> assignedRealNames;
   llvm::StringSet<> eventNames;
+  llvm::StringSet<> generatedNames;
+  llvm::StringSet<> generatedLabels;
   std::vector<HierarchyModuleSyntax> hierarchyModules;
   std::optional<std::size_t> currentHierarchyModule;
   auto identifierEventDeclaration = [&](llvm::StringRef name) {
@@ -1578,6 +1710,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
   candidate.split(lines, '\n', -1, true);
   bool insideModule = false;
   bool insideAnalog = false;
+  bool insideGenerated = false;
   bool sawModule = false;
   for (size_t lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
     llvm::StringRef line = lines[lineIndex].trim();
@@ -1608,6 +1741,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       realNames.clear();
       assignedRealNames.clear();
       eventNames.clear();
+      generatedNames.clear();
+      generatedLabels.clear();
       userFunctions.clear();
       insideModule = true;
       sawModule = true;
@@ -1639,7 +1774,10 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
     if (line == "end") {
       if (!insideAnalog)
         return failure();
-      insideAnalog = false;
+      if (insideGenerated)
+        insideGenerated = false;
+      else
+        insideAnalog = false;
       continue;
     }
     if (line == "endmodule") {
@@ -1650,6 +1788,42 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       continue;
     }
     if (insideAnalog) {
+      if (line.starts_with("for (")) {
+        if (insideGenerated)
+          return failure();
+        size_t close = line.find(") begin : ");
+        if (close == llvm::StringRef::npos || close + sizeof(") begin : ") - 1 >= line.size())
+          return failure();
+        llvm::StringRef label = line.drop_front(close + sizeof(") begin : ") - 1).trim();
+        if (!isPortableVerilogIdentifier(label) || !generatedLabels.insert(label).second)
+          return failure();
+        llvm::SmallVector<llvm::StringRef, 3> clauses;
+        line.slice(sizeof("for (") - 1, close).split(clauses, ';', -1, true);
+        if (clauses.size() != 3)
+          return failure();
+        auto initial = clauses[0].trim().split(" = ");
+        auto condition = clauses[1].trim().split(" < ");
+        auto update = clauses[2].trim().split(" = ");
+        if (initial.first.empty() || initial.second.empty() || condition.first != initial.first ||
+            update.first != initial.first || !generatedNames.contains(initial.first))
+          return failure();
+        int64_t lower = 0, upper = 0;
+        auto parseSigned = [](llvm::StringRef text, int64_t &value) {
+          auto result = std::from_chars(text.begin(), text.end(), value);
+          return result.ec == std::errc() && result.ptr == text.end();
+        };
+        if (!parseSigned(initial.second, lower) || !parseSigned(condition.second, upper) ||
+            upper < lower)
+          return failure();
+        llvm::StringRef updatePrefix = initial.first;
+        if (!update.second.consume_front(updatePrefix) || !update.second.consume_front(" + "))
+          return failure();
+        int64_t step = 0;
+        if (!parseSigned(update.second, step) || step <= 0)
+          return failure();
+        insideGenerated = true;
+        continue;
+      }
       if (line.starts_with("begin : event_")) {
         std::string remaining;
         for (size_t i = lineIndex; i < lines.size(); ++i)
@@ -1705,6 +1879,12 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       }
       continue;
     }
+    if (line.starts_with("genvar ") && line.ends_with(";")) {
+      auto identifier = line.drop_front(sizeof("genvar ") - 1).drop_back().trim();
+      if (!isPortableVerilogIdentifier(identifier) || !generatedNames.insert(identifier).second)
+        return failure();
+      continue;
+    }
     if (line.starts_with("real ") && line.ends_with(";")) {
       auto identifier = line.drop_front(5).drop_back().trim();
       if (identifier.contains(',') || !validIdentifierList(identifier) ||
@@ -1754,7 +1934,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
     }
     return failure();
   }
-  return sawModule && !insideModule && !insideAnalog && verifyHierarchySyntax(hierarchyModules)
+  return sawModule && !insideModule && !insideAnalog && !insideGenerated &&
+                 verifyHierarchySyntax(hierarchyModules)
              ? success()
              : failure();
 }

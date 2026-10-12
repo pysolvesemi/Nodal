@@ -469,6 +469,44 @@ FailureOr<std::string> renderWaveformCall(Operation *operation, ModuleRenderStat
   return call;
 }
 
+FailureOr<std::string> renderTransferCall(Operation *operation, ModuleRenderState &state) {
+  auto kind = operation->getAttrOfType<StringAttr>("transfer_kind");
+  auto numerator = operation->getAttrOfType<IntegerAttr>("numerator_size");
+  auto denominator = operation->getAttrOfType<IntegerAttr>("denominator_size");
+  if (!kind || !numerator || !denominator || numerator.getInt() <= 0 || denominator.getInt() <= 0)
+    return failure();
+
+  const auto numeratorSize = static_cast<unsigned>(numerator.getInt());
+  const auto denominatorSize = static_cast<unsigned>(denominator.getInt());
+  const auto coefficientCount = numeratorSize + denominatorSize;
+  if (operation->getNumOperands() <= coefficientCount)
+    return failure();
+
+  auto input = renderExpression(operation->getOperand(0), state);
+  if (failed(input))
+    return failure();
+  std::string call = kind.getValue().str() + "(" + *input;
+  unsigned index = 1;
+  for (unsigned size : {numeratorSize, denominatorSize}) {
+    call += ", '{";
+    for (unsigned coefficient = 0; coefficient < size; ++coefficient, ++index) {
+      auto value = renderExpression(operation->getOperand(index), state);
+      if (failed(value))
+        return failure();
+      call += (coefficient ? ", " : "") + *value;
+    }
+    call += "}";
+  }
+  for (; index < operation->getNumOperands(); ++index) {
+    auto value = renderExpression(operation->getOperand(index), state);
+    if (failed(value))
+      return failure();
+    call += ", " + *value;
+  }
+  call += ")";
+  return call;
+}
+
 LogicalResult orderParametersByDependency(Operation *definition,
                                           llvm::SmallVectorImpl<Operation *> &parameters) {
   llvm::sort(parameters,
@@ -1048,39 +1086,20 @@ LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::ra
   for (Operation &operation : region.front()) {
     llvm::StringRef name = operation.getName().getStringRef();
     if (name == "nodal.analog_transfer") {
-      auto kind = operation.getAttrOfType<StringAttr>("transfer_kind").getValue();
-      unsigned numerator =
-          static_cast<unsigned>(operation.getAttrOfType<IntegerAttr>("numerator_size").getInt());
-      unsigned denominator =
-          static_cast<unsigned>(operation.getAttrOfType<IntegerAttr>("denominator_size").getInt());
-      auto input = renderExpression(operation.getOperand(0), state);
-      if (failed(input))
+      // A generated transfer profile may pre-render one single-use call so its
+      // state stays local to the generated occurrence. Ordinary transfer state
+      // still materializes exactly once in a private module-scope temporary.
+      if (operation.getNumResults() == 1 && state.expressions.count(operation.getResult(0)))
+        continue;
+      auto call = renderTransferCall(&operation, state);
+      if (failed(call))
         return failure();
-      std::string call = kind.str() + "(" + *input;
-      unsigned index = 1;
-      for (unsigned size : {numerator, denominator}) {
-        call += ", '{";
-        for (unsigned coefficient = 0; coefficient < size; ++coefficient, ++index) {
-          auto value = renderExpression(operation.getOperand(index), state);
-          if (failed(value))
-            return failure();
-          call += (coefficient ? ", " : "") + *value;
-        }
-        call += "}";
-      }
-      for (; index < operation.getNumOperands(); ++index) {
-        auto value = renderExpression(operation.getOperand(index), state);
-        if (failed(value))
-          return failure();
-        call += ", " + *value;
-      }
-      call += ")";
       auto temporary = state.transferNames.find(operation.getResult(0));
       if (temporary == state.transferNames.end())
         return emitMappedFailure(&operation, "NODAL-BACKEND-TRANSFER-001",
                                  "transfer state has no private storage");
       // Do not inline at each consumer, normalize coefficients, or omit zero filters.
-      output << "    " << temporary->second << " = " << call << ";\n";
+      output << "    " << temporary->second << " = " << *call << ";\n";
       state.expressions[operation.getResult(0)] = temporary->second;
       continue;
     }
@@ -1437,6 +1456,37 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                 : "generated ddt must feed an additive contribution without escaping its range");
       continue;
     }
+    if (name == "nodal.analog_transfer") {
+      auto kind = operation.getAttrOfType<StringAttr>("transfer_kind");
+      auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
+      auto generatedInduction = operation.getAttrOfType<StringAttr>("generated_induction");
+      auto operatorId = operation.getAttrOfType<StringAttr>("operator_id");
+      auto stateId = operation.getAttrOfType<StringAttr>("state_id");
+      const std::string expectedState =
+          operatorId ? (operatorId.getValue() + ".state").str() : std::string();
+      llvm::DenseSet<Operation *> active;
+      if (!kind || kind.getValue() != "laplace_nd")
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated transfer target profile admits only laplaceNd");
+      if (!owner || !generatedInduction || owner.getValue() != regionId.getValue() ||
+          generatedInduction.getValue() != inductionPath.getValue())
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated laplaceNd ownership does not match its range");
+      if (!operatorId || !stateId || stateId.getValue() != expectedState)
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated laplaceNd state identity is not owned by its operator");
+      if (operation.getNumResults() != 1 ||
+          !generatedValueFeedsOneContribution(operation.getResult(0), analogBody, active))
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            "generated laplaceNd must feed one additive contribution without escaping its range");
+      auto rendered = renderTransferCall(&operation, state);
+      if (failed(rendered) ||
+          !state.expressions.try_emplace(operation.getResult(0), *rendered).second)
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated laplaceNd cannot be rendered as one owned expression");
+      continue;
+    }
     if (name == "nodal.analog_transition" || name == "nodal.analog_slew" ||
         name == "nodal.analog_absdelay") {
       const bool slew = name == "nodal.analog_slew";
@@ -1484,7 +1534,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
     if (!supportedExpression)
       return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                "generated Verilog-A backend profile supports contributions and "
-                               "owned ddt/idt/transition/slew/absdelay expressions only");
+                               "owned ddt/idt/transition/slew/absdelay/laplaceNd expressions only");
   }
   if (!contributions)
     return emitMappedFailure(analog, "NODAL-BACKEND-CAPABILITY-001",

@@ -250,6 +250,34 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedLaplaceContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedLaplaceContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedLaplaceContribution.generate_0", induction_path = "GeneratedLaplaceContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedLaplaceContribution.generate_0", generated_induction = "GeneratedLaplaceContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %input = "nodal.access"(%branch) <{kind = "potential", metadata = {}}> : (!nodal.branch<"electrical">) -> f64
+        %one = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        %filtered = "nodal.analog_transfer"(%input, %one, %one) <{coefficient_order = "ascending_s", contract_version = "1", denominator_size = 1 : i64, generated_owner = "GeneratedLaplaceContribution.generate_0", generated_induction = "GeneratedLaplaceContribution.generate_0.index", initialization = "simulator-default", metadata = {semantic_path = "GeneratedLaplaceContribution.filtered"}, numerator_size = 1 : i64, operator_id = "GeneratedLaplaceContribution.filtered", owner = "GeneratedLaplaceContribution", result_dimension = "voltage", state_id = "GeneratedLaplaceContribution.filtered.state", transfer_kind = "laplace_nd"}> : (f64, f64, f64) -> f64
+        "nodal.contribute"(%branch, %filtered) <{kind = "potential", generated_owner = "GeneratedLaplaceContribution.generate_0", generated_induction = "GeneratedLaplaceContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kSymbolicGeneratedContributionModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -975,6 +1003,69 @@ int main() {
     rejectedStream.flush();
     if (rejected != "sentinel")
       return fail("invalid generated absdelay consumer published partial output");
+  }
+
+  auto generatedLaplace = parse(context, kGeneratedLaplaceContributionModule);
+  if (!generatedLaplace)
+    return fail("could not parse the generated laplaceNd contribution fixture");
+  std::string generatedLaplaceOutput;
+  llvm::raw_string_ostream generatedLaplaceStream(generatedLaplaceOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedLaplace, nodal::BackendKind::VerilogA,
+                                      generatedLaplaceStream)))
+    return fail("generated laplaceNd contribution emission failed");
+  generatedLaplaceStream.flush();
+  if (generatedLaplaceOutput.find("V(p, n) <+ laplace_nd(V(p, n), '{1}, '{1});\n") ==
+          std::string::npos ||
+      generatedLaplaceOutput.find("real transfer_") != std::string::npos)
+    return fail("generated laplaceNd lost its single owned per-occurrence expression");
+
+  for (const auto &[attribute, value] :
+       {std::make_pair("generated_owner", "GeneratedLaplaceContribution.forged"),
+        std::make_pair("state_id", "GeneratedLaplaceContribution.filtered.forged")}) {
+    auto forged = parse(context, kGeneratedLaplaceContributionModule);
+    if (!forged)
+      return fail("could not parse the generated laplaceNd mutation fixture");
+    mlir::Operation *laplace = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!laplace && operation->getName().getStringRef() == "nodal.analog_transfer")
+        laplace = operation;
+    });
+    if (!laplace)
+      return fail("generated laplaceNd mutation anchor missing");
+    laplace->setAttr(attribute, mlir::StringAttr::get(&context, value));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated laplaceNd ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated laplaceNd ownership published partial output");
+  }
+
+  for (const auto &mutation :
+       {std::make_pair("%branch, %filtered", "%branch, %input"),
+        std::make_pair("        \"nodal.contribute\"(%branch, %filtered)",
+                       "        \"nodal.contribute\"(%branch, %filtered) <{kind = \"potential\", "
+                       "generated_owner = \"GeneratedLaplaceContribution.generate_0\", "
+                       "generated_induction = \"GeneratedLaplaceContribution.generate_0.index\", "
+                       "metadata = {}}> : (!nodal.branch<\"electrical\">, f64) -> ()\n"
+                       "        \"nodal.contribute\"(%branch, %filtered)")}) {
+    std::string invalidSource = kGeneratedLaplaceContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated laplaceNd consumer mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated laplaceNd consumer mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated laplaceNd consumer passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated laplaceNd consumer published partial output");
   }
 
   auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);

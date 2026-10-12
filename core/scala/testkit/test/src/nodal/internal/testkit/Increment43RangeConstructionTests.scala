@@ -1103,9 +1103,9 @@ object Increment43RangeConstructionTests extends TestSuite:
                   scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
                 identity
               )
-            assert(result.mlir.contains(""nodal.analog_transition""))
+            assert(result.mlir.contains("\"nodal.analog_transition\""))
             val transitionLine =
-              result.mlir.linesIterator.find(_.contains(""nodal.analog_transition"")).get
+              result.mlir.linesIterator.find(_.contains("\"nodal.analog_transition\"")).get
             assert(transitionLine.contains("generated_owner"))
             assert(transitionLine.contains("generated_induction"))
             assert(transitionLine.contains("state_id"))

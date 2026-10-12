@@ -507,6 +507,37 @@ FailureOr<std::string> renderTransferCall(Operation *operation, ModuleRenderStat
   return call;
 }
 
+FailureOr<std::string> renderNoiseCall(Operation *operation, ModuleRenderState &state) {
+  auto kind = operation->getAttrOfType<StringAttr>("noise_kind");
+  auto label = operation->getAttrOfType<StringAttr>("noise_name");
+  if (!kind || !label || label.getValue().empty())
+    return failure();
+
+  const unsigned operands = operation->getNumOperands();
+  std::string call;
+  if (kind.getValue() == "white" && operands == 1)
+    call = "white_noise(";
+  else if (kind.getValue() == "flicker" && operands == 2)
+    call = "flicker_noise(";
+  else if (kind.getValue() == "table" && operands > 0 && operands % 2 == 0)
+    call = "noise_table('{";
+  else
+    return failure();
+
+  for (unsigned index = 0; index < operands; ++index) {
+    auto argument = renderExpression(operation->getOperand(index), state);
+    if (failed(argument))
+      return failure();
+    if (index)
+      call += ", ";
+    call += *argument;
+  }
+  if (kind.getValue() == "table")
+    call += "}";
+  call += ", \"" + label.getValue().str() + "\")";
+  return call;
+}
+
 LogicalResult orderParametersByDependency(Operation *definition,
                                           llvm::SmallVectorImpl<Operation *> &parameters) {
   llvm::sort(parameters,
@@ -1104,29 +1135,22 @@ LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::ra
       continue;
     }
     if (name == "nodal.analog_noise") {
-      auto kind = operation.getAttrOfType<StringAttr>("noise_kind").getValue();
-      std::string call = kind == "white"     ? "white_noise("
-                         : kind == "flicker" ? "flicker_noise("
-                                             : "noise_table('{";
-      for (unsigned i = 0; i < operation.getNumOperands(); ++i) {
-        auto argument = renderExpression(operation.getOperand(i), state);
-        if (failed(argument))
-          return emitMappedFailure(&operation, "NODAL-BACKEND-NOISE-001",
-                                   "cannot render noise argument");
-        if (i)
-          call += ", ";
-        call += *argument;
-      }
-      if (kind == "table")
-        call += "}";
-      call += ", \"" + operation.getAttrOfType<StringAttr>("noise_name").getValue().str() + "\")";
+      // A generated white-noise profile may pre-render one single-use call so
+      // its source stays local to the generated occurrence. Ordinary noise
+      // sources still materialize exactly once to preserve SSA correlation.
+      if (operation.getNumResults() == 1 && state.expressions.count(operation.getResult(0)))
+        continue;
+      auto call = renderNoiseCall(&operation, state);
+      if (failed(call))
+        return emitMappedFailure(&operation, "NODAL-BACKEND-NOISE-001",
+                                 "cannot render noise source");
       auto temporary = state.noiseNames.find(operation.getResult(0));
       if (temporary == state.noiseNames.end())
         return emitMappedFailure(&operation, "NODAL-BACKEND-NOISE-001",
                                  "noise source has no private storage");
       // One evaluation per owned SSA source, including unused and zero-power sources.
       // Never inline this call at every use: that would silently lose correlation.
-      output << "    " << temporary->second << " = " << call << ";\n";
+      output << "    " << temporary->second << " = " << *call << ";\n";
       state.expressions[operation.getResult(0)] = temporary->second;
       continue;
     }
@@ -1534,6 +1558,48 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                 .str());
       continue;
     }
+    if (name == "nodal.analog_noise") {
+      auto kind = operation.getAttrOfType<StringAttr>("noise_kind");
+      auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
+      auto generatedInduction = operation.getAttrOfType<StringAttr>("generated_induction");
+      auto sourceId = operation.getAttrOfType<StringAttr>("source_id");
+      auto noiseOwner = operation.getAttrOfType<StringAttr>("owner");
+      auto metadata = operation.getAttrOfType<DictionaryAttr>("metadata");
+      auto semanticPath = metadata ? metadata.getAs<StringAttr>("semantic_path") : StringAttr();
+      auto module = operation.getParentOfType<nodal::ModuleOp>();
+      auto moduleMetadata =
+          module ? module->getAttrOfType<DictionaryAttr>("metadata") : DictionaryAttr();
+      auto modulePath =
+          moduleMetadata ? moduleMetadata.getAs<StringAttr>("semantic_path") : StringAttr();
+      llvm::StringRef expectedOwner = modulePath ? modulePath.getValue()
+                                      : module   ? symbolName(module.getOperation())
+                                                 : llvm::StringRef();
+      llvm::DenseSet<Operation *> active;
+      if (!kind || kind.getValue() != "white")
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated noise target profile admits only whiteNoise");
+      if (!owner || !generatedInduction || owner.getValue() != regionId.getValue() ||
+          generatedInduction.getValue() != inductionPath.getValue())
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated whiteNoise ownership does not match its range");
+      if (!sourceId || !noiseOwner || !semanticPath || expectedOwner.empty() ||
+          noiseOwner.getValue() != expectedOwner ||
+          sourceId.getValue() != semanticPath.getValue() ||
+          !sourceId.getValue().starts_with((expectedOwner + ".").str()))
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated whiteNoise source identity is not owned by its module");
+      if (operation.getNumResults() != 1 ||
+          !generatedValueFeedsOneContribution(operation.getResult(0), analogBody, active))
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            "generated whiteNoise must feed one additive contribution without escaping its range");
+      auto rendered = renderNoiseCall(&operation, state);
+      if (failed(rendered) ||
+          !state.expressions.try_emplace(operation.getResult(0), *rendered).second)
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated whiteNoise cannot be rendered as one owned expression");
+      continue;
+    }
     bool supportedExpression =
         name == "nodal.real_literal" || name == "nodal.analog_integer_literal" ||
         name == "nodal.parameter_ref" || name == "nodal.access" ||
@@ -1543,7 +1609,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
     if (!supportedExpression)
       return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                "generated Verilog-A backend profile supports contributions and "
-                               "owned ddt/idt/transition/slew/absdelay/laplaceNd/ziNd expressions "
+                               "owned ddt/idt/transition/slew/absdelay/laplaceNd/ziNd/whiteNoise "
+                               "expressions "
                                "only");
   }
   if (!contributions)

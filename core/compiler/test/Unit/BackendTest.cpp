@@ -307,6 +307,36 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedWhiteNoiseContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedWhiteNoiseContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedWhiteNoiseContribution.generate_0", induction_path = "GeneratedWhiteNoiseContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedWhiteNoiseContribution.generate_0", generated_induction = "GeneratedWhiteNoiseContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %amp = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {unit = "A"}}> : () -> f64
+        %second = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {unit = "s"}}> : () -> f64
+        %squared = "nodal.analog_mul"(%amp, %amp) <{metadata = {}}> : (f64, f64) -> f64
+        %density = "nodal.analog_mul"(%squared, %second) <{metadata = {}}> : (f64, f64) -> f64
+        %noise = "nodal.analog_noise"(%density) <{analyses = ["noise"], contract_version = "1", correlation = "independent", generated_owner = "GeneratedWhiteNoiseContribution.generate_0", generated_induction = "GeneratedWhiteNoiseContribution.generate_0.index", metadata = {semantic_path = "GeneratedWhiteNoiseContribution.noise"}, noise_kind = "white", noise_name = "generated white", owner = "GeneratedWhiteNoiseContribution", result_dimension = "current", source_id = "GeneratedWhiteNoiseContribution.noise"}> : (f64) -> f64
+        "nodal.contribute"(%branch, %noise) <{kind = "flow", generated_owner = "GeneratedWhiteNoiseContribution.generate_0", generated_induction = "GeneratedWhiteNoiseContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kSymbolicGeneratedContributionModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -1158,6 +1188,70 @@ int main() {
     rejectedStream.flush();
     if (rejected != "sentinel")
       return fail("invalid generated ziNd consumer published partial output");
+  }
+
+  auto generatedWhiteNoise = parse(context, kGeneratedWhiteNoiseContributionModule);
+  if (!generatedWhiteNoise)
+    return fail("could not parse the generated whiteNoise contribution fixture");
+  std::string generatedWhiteNoiseOutput;
+  llvm::raw_string_ostream generatedWhiteNoiseStream(generatedWhiteNoiseOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedWhiteNoise, nodal::BackendKind::VerilogA,
+                                      generatedWhiteNoiseStream)))
+    return fail("generated whiteNoise contribution emission failed");
+  generatedWhiteNoiseStream.flush();
+  if (generatedWhiteNoiseOutput.find("I(p, n) <+ white_noise(1, \"generated white\");\n") ==
+          std::string::npos ||
+      generatedWhiteNoiseOutput.find("real noise_") != std::string::npos)
+    return fail("generated whiteNoise lost its single owned per-occurrence expression");
+
+  for (const auto &[attribute, value] :
+       {std::make_pair("generated_owner", "GeneratedWhiteNoiseContribution.forged"),
+        std::make_pair("source_id", "GeneratedWhiteNoiseContribution.forged")}) {
+    auto forged = parse(context, kGeneratedWhiteNoiseContributionModule);
+    if (!forged)
+      return fail("could not parse the generated whiteNoise mutation fixture");
+    mlir::Operation *noise = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!noise && operation->getName().getStringRef() == "nodal.analog_noise")
+        noise = operation;
+    });
+    if (!noise)
+      return fail("generated whiteNoise mutation anchor missing");
+    noise->setAttr(attribute, mlir::StringAttr::get(&context, value));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated whiteNoise ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated whiteNoise ownership published partial output");
+  }
+
+  for (const auto &mutation :
+       {std::make_pair("%branch, %noise", "%branch, %amp"),
+        std::make_pair("        \"nodal.contribute\"(%branch, %noise)",
+                       "        \"nodal.contribute\"(%branch, %noise) <{kind = \"flow\", "
+                       "generated_owner = \"GeneratedWhiteNoiseContribution.generate_0\", "
+                       "generated_induction = "
+                       "\"GeneratedWhiteNoiseContribution.generate_0.index\", metadata = {}}> : "
+                       "(!nodal.branch<\"electrical\">, f64) -> ()\n"
+                       "        \"nodal.contribute\"(%branch, %noise)")}) {
+    std::string invalidSource = kGeneratedWhiteNoiseContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated whiteNoise consumer mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated whiteNoise consumer mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated whiteNoise consumer passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated whiteNoise consumer published partial output");
   }
 
   auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);

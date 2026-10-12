@@ -213,6 +213,14 @@ final class Increment43GeneratedLaplaceContribution extends Module:
     analog:
       V(p, n) <+ laplaceNd(V(p, n), Seq(1.0.real), Seq(1.0.real))
 
+final class Increment43GeneratedZiContribution extends Module:
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+
+  hdlRange(0, 2): _ =>
+    analog:
+      V(p, n) <+ ziNd(V(p, n), Seq(1.0.real), Seq(1.0.real), 1.0.ns)
+
 final class Increment43SymbolicGeneratedContribution extends Module:
   val lanes: Param[Integer] = param(4.integer, range = 1 to 8)
   val p = inout(Electrical)
@@ -1243,6 +1251,42 @@ object Increment43RangeConstructionTests extends TestSuite:
               result.verilogA.linesIterator.count(line =>
                 line.contains("V(p, n) <+") &&
                   line.contains("laplace_nd(V(p, n), '{1}, '{1})")
+              ) == 1
+            )
+            assert(!result.verilogA.contains("real transfer_"))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated ziNd retains one per-occurrence target expression"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedZiContribution,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.contains("\"nodal.analog_transfer\""))
+            val transferLine =
+              result.mlir.linesIterator.find(_.contains("\"nodal.analog_transfer\"")).get
+            assert(transferLine.contains("transfer_kind = \"zi_nd\""))
+            assert(transferLine.contains("generated_owner"))
+            assert(transferLine.contains("generated_induction"))
+            assert(transferLine.contains("state_id"))
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            assert(
+              result.verilogA.linesIterator.count(line =>
+                line.contains("V(p, n) <+") &&
+                  line.contains("zi_nd(V(p, n), '{1}, '{1}, 1e-09)")
               ) == 1
             )
             assert(!result.verilogA.contains("real transfer_"))

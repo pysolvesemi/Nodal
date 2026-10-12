@@ -278,6 +278,35 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedZiContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedZiContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedZiContribution.generate_0", induction_path = "GeneratedZiContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedZiContribution.generate_0", generated_induction = "GeneratedZiContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %input = "nodal.access"(%branch) <{kind = "potential", metadata = {}}> : (!nodal.branch<"electrical">) -> f64
+        %one = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        %interval = "nodal.real_literal"() <{value = 1.0e-9 : f64, metadata = {unit = "s"}}> : () -> f64
+        %filtered = "nodal.analog_transfer"(%input, %one, %one, %interval) <{coefficient_order = "ascending_z_inverse", contract_version = "1", denominator_size = 1 : i64, generated_owner = "GeneratedZiContribution.generate_0", generated_induction = "GeneratedZiContribution.generate_0.index", initialization = "simulator-default", metadata = {semantic_path = "GeneratedZiContribution.filtered"}, numerator_size = 1 : i64, operator_id = "GeneratedZiContribution.filtered", owner = "GeneratedZiContribution", result_dimension = "voltage", state_id = "GeneratedZiContribution.filtered.state", transfer_kind = "zi_nd"}> : (f64, f64, f64, f64) -> f64
+        "nodal.contribute"(%branch, %filtered) <{kind = "potential", generated_owner = "GeneratedZiContribution.generate_0", generated_induction = "GeneratedZiContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kSymbolicGeneratedContributionModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -1066,6 +1095,69 @@ int main() {
     rejectedStream.flush();
     if (rejected != "sentinel")
       return fail("invalid generated laplaceNd consumer published partial output");
+  }
+
+  auto generatedZi = parse(context, kGeneratedZiContributionModule);
+  if (!generatedZi)
+    return fail("could not parse the generated ziNd contribution fixture");
+  std::string generatedZiOutput;
+  llvm::raw_string_ostream generatedZiStream(generatedZiOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*generatedZi, nodal::BackendKind::VerilogA, generatedZiStream)))
+    return fail("generated ziNd contribution emission failed");
+  generatedZiStream.flush();
+  if (generatedZiOutput.find("V(p, n) <+ zi_nd(V(p, n), '{1}, '{1}, 1e-09);\n") ==
+          std::string::npos ||
+      generatedZiOutput.find("real transfer_") != std::string::npos)
+    return fail("generated ziNd lost its single owned per-occurrence expression");
+
+  for (const auto &[attribute, value] :
+       {std::make_pair("generated_owner", "GeneratedZiContribution.forged"),
+        std::make_pair("state_id", "GeneratedZiContribution.filtered.forged")}) {
+    auto forged = parse(context, kGeneratedZiContributionModule);
+    if (!forged)
+      return fail("could not parse the generated ziNd mutation fixture");
+    mlir::Operation *zi = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!zi && operation->getName().getStringRef() == "nodal.analog_transfer")
+        zi = operation;
+    });
+    if (!zi)
+      return fail("generated ziNd mutation anchor missing");
+    zi->setAttr(attribute, mlir::StringAttr::get(&context, value));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated ziNd ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated ziNd ownership published partial output");
+  }
+
+  for (const auto &mutation :
+       {std::make_pair("%branch, %filtered", "%branch, %input"),
+        std::make_pair("        \"nodal.contribute\"(%branch, %filtered)",
+                       "        \"nodal.contribute\"(%branch, %filtered) <{kind = \"potential\", "
+                       "generated_owner = \"GeneratedZiContribution.generate_0\", "
+                       "generated_induction = \"GeneratedZiContribution.generate_0.index\", "
+                       "metadata = {}}> : (!nodal.branch<\"electrical\">, f64) -> ()\n"
+                       "        \"nodal.contribute\"(%branch, %filtered)")}) {
+    std::string invalidSource = kGeneratedZiContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated ziNd consumer mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated ziNd consumer mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated ziNd consumer passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated ziNd consumer published partial output");
   }
 
   auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);

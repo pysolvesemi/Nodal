@@ -1458,6 +1458,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
     }
     if (name == "nodal.analog_transfer") {
       auto kind = operation.getAttrOfType<StringAttr>("transfer_kind");
+      const bool sampled = kind && kind.getValue() == "zi_nd";
+      const llvm::StringRef transferName = sampled ? "ziNd" : "laplaceNd";
       auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
       auto generatedInduction = operation.getAttrOfType<StringAttr>("generated_induction");
       auto operatorId = operation.getAttrOfType<StringAttr>("operator_id");
@@ -1465,26 +1467,33 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       const std::string expectedState =
           operatorId ? (operatorId.getValue() + ".state").str() : std::string();
       llvm::DenseSet<Operation *> active;
-      if (!kind || kind.getValue() != "laplace_nd")
+      if (!kind || (kind.getValue() != "laplace_nd" && !sampled))
         return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
-                                 "generated transfer target profile admits only laplaceNd");
+                                 "generated transfer target profile admits only laplaceNd/ziNd");
       if (!owner || !generatedInduction || owner.getValue() != regionId.getValue() ||
           generatedInduction.getValue() != inductionPath.getValue())
-        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
-                                 "generated laplaceNd ownership does not match its range");
-      if (!operatorId || !stateId || stateId.getValue() != expectedState)
-        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
-                                 "generated laplaceNd state identity is not owned by its operator");
-      if (operation.getNumResults() != 1 ||
-          !generatedValueFeedsOneContribution(operation.getResult(0), analogBody, active))
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
-            "generated laplaceNd must feed one additive contribution without escaping its range");
+            (llvm::Twine("generated ") + transferName + " ownership does not match its range")
+                .str());
+      if (!operatorId || !stateId || stateId.getValue() != expectedState)
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 (llvm::Twine("generated ") + transferName +
+                                  " state identity is not owned by its operator")
+                                     .str());
+      if (operation.getNumResults() != 1 ||
+          !generatedValueFeedsOneContribution(operation.getResult(0), analogBody, active))
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 (llvm::Twine("generated ") + transferName +
+                                  " must feed one additive contribution without escaping its range")
+                                     .str());
       auto rendered = renderTransferCall(&operation, state);
       if (failed(rendered) ||
           !state.expressions.try_emplace(operation.getResult(0), *rendered).second)
         return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
-                                 "generated laplaceNd cannot be rendered as one owned expression");
+                                 (llvm::Twine("generated ") + transferName +
+                                  " cannot be rendered as one owned expression")
+                                     .str());
       continue;
     }
     if (name == "nodal.analog_transition" || name == "nodal.analog_slew" ||
@@ -1534,7 +1543,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
     if (!supportedExpression)
       return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                "generated Verilog-A backend profile supports contributions and "
-                               "owned ddt/idt/transition/slew/absdelay/laplaceNd expressions only");
+                               "owned ddt/idt/transition/slew/absdelay/laplaceNd/ziNd expressions "
+                               "only");
   }
   if (!contributions)
     return emitMappedFailure(analog, "NODAL-BACKEND-CAPABILITY-001",

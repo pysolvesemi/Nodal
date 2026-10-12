@@ -1323,23 +1323,6 @@ ${indent(body, 2)}
         val result = "%generated_bound_value_" + nextGeneratedStaticValue
         nextGeneratedStaticValue += 1
         result
-      val generatedBodies = generatedRegionsFor(module)
-        .filter(_.parent.isEmpty)
-        .map(region =>
-          renderGeneratedRegion(
-            module,
-            region,
-            declarationsByPath,
-            parameterSymbols,
-            expressionsByPath,
-            generatedStatic,
-            generatedStaticValues,
-            () => allocateGeneratedStaticValue()
-          )
-        )
-      body ++= generatedStatic
-      body ++= generatedBodies
-
       val topology = topologyEntries(module)
       val childEndpoints = topology
         .flatMap(edge => Vector(edge.left, edge.right))
@@ -1485,6 +1468,24 @@ ${indent(body, 2)}
           expression.path,
           branchByKey(expression.operands(0) -> expression.operands(1))
         )
+
+      val generatedBodies = generatedRegionsFor(module)
+        .filter(_.parent.isEmpty)
+        .map(region =>
+          renderGeneratedRegion(
+            module,
+            region,
+            declarationsByPath,
+            parameterSymbols,
+            expressionsByPath,
+            generatedStatic,
+            generatedStaticValues,
+            () => allocateGeneratedStaticValue(),
+            accessBranches
+          )
+        )
+      body ++= generatedStatic
+      body ++= generatedBodies
 
       body ++= AnalogUserFunctionMlir.renderModule(snapshot, module.path)
 
@@ -2691,7 +2692,8 @@ ${indent(body, 2)}
         expressionsByPath: Map[String, KernelParameterExpressionSnapshot],
         generatedStatic: mutable.ArrayBuffer[String],
         generatedStaticValues: mutable.LinkedHashMap[String, (String, String)],
-        allocateGeneratedStaticValue: () => String
+        allocateGeneratedStaticValue: () => String,
+        accessBranches: mutable.LinkedHashMap[String, (String, String)]
     ): String =
       val nested = mutable.ArrayBuffer.empty[String]
       region.declarations.sorted.foreach: declarationPath =>
@@ -2797,7 +2799,7 @@ ${indent(body, 2)}
             index,
             declarationsByPath,
             parameterSymbols,
-            mutable.LinkedHashMap.empty
+            accessBranches
           )
 
       generatedRegionsFor(module)
@@ -2812,7 +2814,8 @@ ${indent(body, 2)}
             expressionsByPath,
             generatedStatic,
             generatedStaticValues,
-            allocateGeneratedStaticValue
+            allocateGeneratedStaticValue,
+            accessBranches
           )
         )
 

@@ -388,15 +388,21 @@ object Increment43ShapeContractTests extends TestSuite:
 
       val snapshot = ConstructionKernel.inspect(new Increment43FixedRowView)
       Vector(
-        snapshot.copy(shapeIndices = snapshot.shapeIndices.map(
-          _.copy(resultDimensions = Vector.empty)
-        )),
-        snapshot.copy(shapeIndices = snapshot.shapeIndices.map(
-          _.copy(resultDimensions = Vector("2"))
-        )),
-        snapshot.copy(shapeIndices = snapshot.shapeIndices.map(
-          _.copy(indices = Vector("1", "0"), resultDimensions = Vector("3"))
-        ))
+        snapshot.copy(shapeIndices =
+          snapshot.shapeIndices.map(
+            _.copy(resultDimensions = Vector.empty)
+          )
+        ),
+        snapshot.copy(shapeIndices =
+          snapshot.shapeIndices.map(
+            _.copy(resultDimensions = Vector("2"))
+          )
+        ),
+        snapshot.copy(shapeIndices =
+          snapshot.shapeIndices.map(
+            _.copy(indices = Vector("1", "0"), resultDimensions = Vector("3"))
+          )
+        )
       ).foreach: forged =>
         val error = scala.util.Try(ScalaToMlirBridge.fromSnapshot(forged))
           .failed.get.asInstanceOf[BridgeException]

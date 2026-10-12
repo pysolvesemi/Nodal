@@ -446,6 +446,29 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
   return rendered;
 }
 
+FailureOr<std::string> renderWaveformCall(Operation *operation, ModuleRenderState &state) {
+  llvm::StringRef name = operation->getName().getStringRef();
+  llvm::StringRef spelling = name == "nodal.analog_bound_step"   ? "$bound_step"
+                             : name == "nodal.analog_transition" ? "transition"
+                             : name == "nodal.analog_slew"       ? "slew"
+                             : name == "nodal.analog_absdelay"   ? "absdelay"
+                                                                 : "";
+  if (spelling.empty())
+    return failure();
+
+  std::string call = spelling.str() + "(";
+  for (unsigned index = 0; index < operation->getNumOperands(); ++index) {
+    auto argument = renderExpression(operation->getOperand(index), state);
+    if (failed(argument))
+      return failure();
+    if (index)
+      call += ", ";
+    call += *argument;
+  }
+  call += ")";
+  return call;
+}
+
 LogicalResult orderParametersByDependency(Operation *definition,
                                           llvm::SmallVectorImpl<Operation *> &parameters) {
   llvm::sort(parameters,
@@ -1089,25 +1112,19 @@ LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::ra
       continue;
     }
     if (nodal::isStatefulWaveformOperation(&operation) || name == "nodal.analog_bound_step") {
-      std::string call = name == "nodal.analog_bound_step"   ? "$bound_step"
-                         : name == "nodal.analog_transition" ? "transition"
-                         : name == "nodal.analog_slew"       ? "slew"
-                                                             : "absdelay";
-      call += "(";
-      for (unsigned index = 0; index < operation.getNumOperands(); ++index) {
-        auto argument = renderExpression(operation.getOperand(index), state);
-        if (failed(argument))
-          return failure();
-        if (index)
-          call += ", ";
-        call += *argument;
-      }
-      call += ")";
+      // The generated transition profile pre-renders one single-use call so it
+      // stays per generated occurrence instead of acquiring shared module
+      // storage. Ordinary waveform operations still materialize exactly once.
+      if (operation.getNumResults() == 1 && state.expressions.count(operation.getResult(0)))
+        continue;
+      auto call = renderWaveformCall(&operation, state);
+      if (failed(call))
+        return failure();
       if (name == "nodal.analog_bound_step")
-        output << "    " << call << ";\n";
+        output << "    " << *call << ";\n";
       else {
         const auto &temporary = state.waveformNames[operation.getResult(0)];
-        output << "    " << temporary << " = " << call << ";\n";
+        output << "    " << temporary << " = " << *call << ";\n";
         state.expressions[operation.getResult(0)] = temporary;
       }
       continue;
@@ -1295,6 +1312,33 @@ bool generatedValueFeedsContribution(Value value, Block &body,
   return reachedContribution;
 }
 
+bool generatedValueFeedsOneContribution(Value value, Block &body,
+                                        llvm::DenseSet<Operation *> &active) {
+  Operation *definition = value.getDefiningOp();
+  if (!definition || !value.hasOneUse() || !active.insert(definition).second)
+    return false;
+
+  OpOperand &use = *value.getUses().begin();
+  Operation *user = use.getOwner();
+  if (user->getBlock() != &body) {
+    active.erase(definition);
+    return false;
+  }
+  llvm::StringRef name = user->getName().getStringRef();
+  if (name == "nodal.contribute") {
+    const bool result = use.getOperandNumber() == 1;
+    active.erase(definition);
+    return result;
+  }
+  const bool expression = name == "nodal.analog_add" || name == "nodal.analog_sub" ||
+                          name == "nodal.analog_mul" || name == "nodal.analog_div" ||
+                          name == "nodal.analog_neg";
+  const bool result = expression && user->getNumResults() == 1 &&
+                      generatedValueFeedsOneContribution(user->getResult(0), body, active);
+  active.erase(definition);
+  return result;
+}
+
 LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState &state,
                                           llvm::raw_ostream &output) {
   if (generate->getNumOperands() != 0 && generate->getNumOperands() != 3)
@@ -1393,6 +1437,34 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                 : "generated ddt must feed an additive contribution without escaping its range");
       continue;
     }
+    if (name == "nodal.analog_transition") {
+      auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
+      auto generatedInduction = operation.getAttrOfType<StringAttr>("generated_induction");
+      auto operatorId = operation.getAttrOfType<StringAttr>("operator_id");
+      auto stateId = operation.getAttrOfType<StringAttr>("state_id");
+      const std::string expectedState =
+          operatorId ? (operatorId.getValue() + ".state").str() : std::string();
+      llvm::DenseSet<Operation *> active;
+      if (!owner || !generatedInduction || owner.getValue() != regionId.getValue() ||
+          generatedInduction.getValue() != inductionPath.getValue())
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated transition ownership does not match its range");
+      if (!operatorId || !stateId || stateId.getValue() != expectedState)
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            "generated transition state identity is not owned by its operator");
+      if (operation.getNumResults() != 1 ||
+          !generatedValueFeedsOneContribution(operation.getResult(0), analogBody, active))
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            "generated transition must feed one additive contribution without escaping its range");
+      auto rendered = renderWaveformCall(&operation, state);
+      if (failed(rendered) ||
+          !state.expressions.try_emplace(operation.getResult(0), *rendered).second)
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated transition cannot be rendered as one owned expression");
+      continue;
+    }
     bool supportedExpression =
         name == "nodal.real_literal" || name == "nodal.analog_integer_literal" ||
         name == "nodal.parameter_ref" || name == "nodal.access" ||
@@ -1402,7 +1474,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
     if (!supportedExpression)
       return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                "generated Verilog-A backend profile supports contributions and "
-                               "owned ddt/idt expressions only");
+                               "owned ddt/idt/transition expressions only");
   }
   if (!contributions)
     return emitMappedFailure(analog, "NODAL-BACKEND-CAPABILITY-001",

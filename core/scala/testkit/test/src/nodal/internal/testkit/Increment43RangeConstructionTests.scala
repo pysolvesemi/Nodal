@@ -178,6 +178,15 @@ final class Increment43GeneratedIdtContribution extends Module:
       val voltageRate = 1.0.V / 1.0.s
       V(p, n) <+ idt(voltageRate, 0.0.V)
 
+final class Increment43GeneratedTransitionContribution extends Module:
+  val level: Param[Real] = param(1.0.V)
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+
+  hdlRange(0, 2): _ =>
+    analog:
+      V(p, n) <+ transition(level)
+
 final class Increment43SymbolicGeneratedContribution extends Module:
   val lanes: Param[Integer] = param(4.integer, range = 1 to 8)
   val p = inout(Electrical)
@@ -1073,6 +1082,40 @@ object Increment43RangeConstructionTests extends TestSuite:
                 line.contains("V(p, n) <+") && line.contains("idt(") && line.contains(", 0)")
               ) == 1
             )
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated transition retains one per-occurrence target expression"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedTransitionContribution,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.contains(""nodal.analog_transition""))
+            val transitionLine =
+              result.mlir.linesIterator.find(_.contains(""nodal.analog_transition"")).get
+            assert(transitionLine.contains("generated_owner"))
+            assert(transitionLine.contains("generated_induction"))
+            assert(transitionLine.contains("state_id"))
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            assert(
+              result.verilogA.linesIterator.count(line =>
+                line.contains("V(p, n) <+") && line.contains("transition(level)")
+              ) == 1
+            )
+            assert(!result.verilogA.contains("real waveform_"))
           finally delete(directory)
         case _ => assert(true)
 

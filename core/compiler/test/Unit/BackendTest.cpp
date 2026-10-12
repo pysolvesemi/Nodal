@@ -160,6 +160,35 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedTransitionContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.unit"() <{dimension = "voltage", metadata = {}, native_suffix = "", scale = 1.0 : f64, sym_name = "Volt", symbol = "V"}> : () -> ()
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedTransitionContribution"}> ({
+  ^bb0:
+    "nodal.parameter"() <{classification = "ordinary", default_value = 1.0 : f64, metadata = {}, parameter_kind = "real", sym_name = "LEVEL", type = f64, unit = @Volt, variability = "fixed"}> : () -> ()
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedTransitionContribution.generate_0", induction_path = "GeneratedTransitionContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedTransitionContribution.generate_0", generated_induction = "GeneratedTransitionContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %input = "nodal.parameter_ref"() <{metadata = {}, parameter = @LEVEL}> : () -> !nodal.quantity<"real", "voltage">
+        %smoothed = "nodal.analog_transition"(%input) <{analyses = ["ac", "dc", "initialization", "noise", "operating-point", "transient"], context = "contribution", generated_owner = "GeneratedTransitionContribution.generate_0", generated_induction = "GeneratedTransitionContribution.generate_0.index", input_continuity = "constant", metadata = {identity = "smoothed"}, operand_dimensions = ["voltage"], operator_contract = "increment36", operator_id = "GeneratedTransitionContribution.smoothed", output_continuity = "continuous", owner = "GeneratedTransitionContribution", result_dimension = "voltage", state_id = "GeneratedTransitionContribution.smoothed.state"}> : (!nodal.quantity<"real", "voltage">) -> !nodal.quantity<"real", "voltage">
+        "nodal.contribute"(%branch, %smoothed) <{kind = "potential", generated_owner = "GeneratedTransitionContribution.generate_0", generated_induction = "GeneratedTransitionContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, !nodal.quantity<"real", "voltage">) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kSymbolicGeneratedContributionModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -695,6 +724,70 @@ int main() {
     rejectedStream.flush();
     if (rejected != "sentinel")
       return fail("unused generated idt state published partial output");
+  }
+
+  auto generatedTransition = parse(context, kGeneratedTransitionContributionModule);
+  if (!generatedTransition)
+    return fail("could not parse the generated transition contribution fixture");
+  std::string generatedTransitionOutput;
+  llvm::raw_string_ostream generatedTransitionStream(generatedTransitionOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedTransition, nodal::BackendKind::VerilogA,
+                                      generatedTransitionStream)))
+    return fail("generated transition contribution emission failed");
+  generatedTransitionStream.flush();
+  if (generatedTransitionOutput.find("V(p, n) <+ transition(LEVEL);\n") == std::string::npos ||
+      generatedTransitionOutput.find("real waveform_") != std::string::npos)
+    return fail("generated transition lost its single owned per-occurrence expression");
+
+  for (const auto &[attribute, value] :
+       {std::make_pair("generated_owner", "GeneratedTransitionContribution.forged"),
+        std::make_pair("state_id", "GeneratedTransitionContribution.smoothed.forged")}) {
+    auto forged = parse(context, kGeneratedTransitionContributionModule);
+    if (!forged)
+      return fail("could not parse the generated transition mutation fixture");
+    mlir::Operation *transition = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!transition && operation->getName().getStringRef() == "nodal.analog_transition")
+        transition = operation;
+    });
+    if (!transition)
+      return fail("generated transition mutation anchor missing");
+    transition->setAttr(attribute, mlir::StringAttr::get(&context, value));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated transition ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated transition ownership published partial output");
+  }
+
+  for (const auto &mutation :
+       {std::make_pair("%branch, %smoothed", "%branch, %input"),
+        std::make_pair(
+            "        \"nodal.contribute\"(%branch, %smoothed)",
+            "        \"nodal.contribute\"(%branch, %smoothed) <{kind = \"potential\", "
+            "generated_owner = \"GeneratedTransitionContribution.generate_0\", "
+            "generated_induction = \"GeneratedTransitionContribution.generate_0.index\", "
+            "metadata = {}}> : (!nodal.branch<\"electrical\">, "
+            "!nodal.quantity<\"real\", \"voltage\">) -> ()\n"
+            "        \"nodal.contribute\"(%branch, %smoothed)")}) {
+    std::string invalidSource = kGeneratedTransitionContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated transition consumer mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated transition consumer mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated transition consumer passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated transition consumer published partial output");
   }
 
   auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);

@@ -124,8 +124,8 @@ module attributes {
     ^bb0:
       "nodal.analog"() <{generated_owner = "GeneratedDdtContribution.generate_0", generated_induction = "GeneratedDdtContribution.generate_0.index", metadata = {}}> ({
       ^bb0:
-        %one = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
-        %derivative = "nodal.analog_ddt"(%one) <{analyses = ["ac", "dc", "initialization", "noise", "operating-point", "transient"], context = "contribution", generated_owner = "GeneratedDdtContribution.generate_0", generated_induction = "GeneratedDdtContribution.generate_0.index", initialization = "none", input_dimension = "1", metadata = {identity = "derivative"}, operator_contract = "increment35", operator_id = "GeneratedDdtContribution.derivative", owner = "GeneratedDdtContribution", result_dimension = "time^-1"}> : (f64) -> f64
+        %voltage = "nodal.access"(%branch) <{kind = "potential", metadata = {}}> : (!nodal.branch<"electrical">) -> f64
+        %derivative = "nodal.analog_ddt"(%voltage) <{analyses = ["ac", "dc", "initialization", "noise", "operating-point", "transient"], context = "contribution", generated_owner = "GeneratedDdtContribution.generate_0", generated_induction = "GeneratedDdtContribution.generate_0.index", initialization = "none", input_dimension = "1", metadata = {identity = "derivative"}, operator_contract = "increment35", operator_id = "GeneratedDdtContribution.derivative", owner = "GeneratedDdtContribution", result_dimension = "time^-1"}> : (f64) -> f64
         "nodal.contribute"(%branch, %derivative) <{kind = "potential", generated_owner = "GeneratedDdtContribution.generate_0", generated_induction = "GeneratedDdtContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
       }) : () -> ()
     }) : () -> ()
@@ -574,13 +574,13 @@ int main() {
           nodal::emitBackend(*generatedDdt, nodal::BackendKind::VerilogA, generatedDdtStream)))
     return fail("generated ddt contribution emission failed");
   generatedDdtStream.flush();
-  if (generatedDdtOutput.find("V(p, n) <+ ddt(1);\n") == std::string::npos)
+  if (generatedDdtOutput.find("V(p, n) <+ ddt(V(p, n));\n") == std::string::npos)
     return fail("generated ddt contribution lost its owned operator expression");
   for (const auto &mutation :
        {std::make_pair(
             "context = \"contribution\", generated_owner = \"GeneratedDdtContribution.generate_0\"",
             "context = \"contribution\", generated_owner = \"GeneratedDdtContribution.forged\""),
-        std::make_pair("%branch, %derivative", "%branch, %one")}) {
+        std::make_pair("%branch, %derivative", "%branch, %voltage")}) {
     std::string invalidSource = kGeneratedDdtContributionModule.str();
     auto position = invalidSource.find(mutation.first);
     if (position == std::string::npos)

@@ -196,6 +196,15 @@ final class Increment43GeneratedSlewContribution extends Module:
     analog:
       V(p, n) <+ slew(level)
 
+final class Increment43GeneratedAbsdelayContribution extends Module:
+  val level: Param[Real] = param(1.0.V)
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+
+  hdlRange(0, 2): _ =>
+    analog:
+      V(p, n) <+ absdelay(level, 1.0.ns)
+
 final class Increment43SymbolicGeneratedContribution extends Module:
   val lanes: Param[Integer] = param(4.integer, range = 1 to 8)
   val p = inout(Electrical)
@@ -1156,6 +1165,40 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(
               result.verilogA.linesIterator.count(line =>
                 line.contains("V(p, n) <+") && line.contains("slew(level)")
+              ) == 1
+            )
+            assert(!result.verilogA.contains("real waveform_"))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated absdelay retains one per-occurrence target expression"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedAbsdelayContribution,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.contains("\"nodal.analog_absdelay\""))
+            val absdelayLine =
+              result.mlir.linesIterator.find(_.contains("\"nodal.analog_absdelay\"")).get
+            assert(absdelayLine.contains("generated_owner"))
+            assert(absdelayLine.contains("generated_induction"))
+            assert(absdelayLine.contains("state_id"))
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            assert(
+              result.verilogA.linesIterator.count(line =>
+                line.contains("V(p, n) <+") && line.contains("absdelay(level, 1e-09)")
               ) == 1
             )
             assert(!result.verilogA.contains("real waveform_"))

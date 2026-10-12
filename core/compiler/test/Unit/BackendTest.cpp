@@ -218,6 +218,38 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedAbsdelayContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.unit"() <{dimension = "voltage", metadata = {}, native_suffix = "", scale = 1.0 : f64, sym_name = "Volt", symbol = "V"}> : () -> ()
+  "nodal.unit"() <{dimension = "time", metadata = {}, native_suffix = "", scale = 1.0 : f64, sym_name = "Second", symbol = "s"}> : () -> ()
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedAbsdelayContribution"}> ({
+  ^bb0:
+    "nodal.parameter"() <{classification = "ordinary", default_value = 1.0 : f64, metadata = {}, parameter_kind = "real", sym_name = "LEVEL", type = f64, unit = @Volt, variability = "fixed"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = 1.0e-9 : f64, metadata = {}, parameter_kind = "real", sym_name = "DELAY", type = f64, unit = @Second, variability = "fixed"}> : () -> ()
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedAbsdelayContribution.generate_0", induction_path = "GeneratedAbsdelayContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedAbsdelayContribution.generate_0", generated_induction = "GeneratedAbsdelayContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %input = "nodal.parameter_ref"() <{metadata = {}, parameter = @LEVEL}> : () -> !nodal.quantity<"real", "voltage">
+        %delay = "nodal.parameter_ref"() <{metadata = {}, parameter = @DELAY}> : () -> !nodal.quantity<"real", "time">
+        %delayed = "nodal.analog_absdelay"(%input, %delay) <{analyses = ["ac", "dc", "initialization", "noise", "operating-point", "transient"], context = "contribution", generated_owner = "GeneratedAbsdelayContribution.generate_0", generated_induction = "GeneratedAbsdelayContribution.generate_0.index", input_continuity = "constant", metadata = {identity = "delayed"}, operand_dimensions = ["voltage", "time"], operator_contract = "increment36", operator_id = "GeneratedAbsdelayContribution.delayed", output_continuity = "unknown", owner = "GeneratedAbsdelayContribution", result_dimension = "voltage", state_id = "GeneratedAbsdelayContribution.delayed.state"}> : (!nodal.quantity<"real", "voltage">, !nodal.quantity<"real", "time">) -> !nodal.quantity<"real", "voltage">
+        "nodal.contribute"(%branch, %delayed) <{kind = "potential", generated_owner = "GeneratedAbsdelayContribution.generate_0", generated_induction = "GeneratedAbsdelayContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, !nodal.quantity<"real", "voltage">) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kSymbolicGeneratedContributionModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -880,6 +912,69 @@ int main() {
     rejectedStream.flush();
     if (rejected != "sentinel")
       return fail("invalid generated slew consumer published partial output");
+  }
+
+  auto generatedAbsdelay = parse(context, kGeneratedAbsdelayContributionModule);
+  if (!generatedAbsdelay)
+    return fail("could not parse the generated absdelay contribution fixture");
+  std::string generatedAbsdelayOutput;
+  llvm::raw_string_ostream generatedAbsdelayStream(generatedAbsdelayOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedAbsdelay, nodal::BackendKind::VerilogA,
+                                      generatedAbsdelayStream)))
+    return fail("generated absdelay contribution emission failed");
+  generatedAbsdelayStream.flush();
+  if (generatedAbsdelayOutput.find("V(p, n) <+ absdelay(LEVEL, DELAY);\n") == std::string::npos ||
+      generatedAbsdelayOutput.find("real waveform_") != std::string::npos)
+    return fail("generated absdelay lost its single owned per-occurrence expression");
+
+  for (const auto &[attribute, value] :
+       {std::make_pair("generated_owner", "GeneratedAbsdelayContribution.forged"),
+        std::make_pair("state_id", "GeneratedAbsdelayContribution.delayed.forged")}) {
+    auto forged = parse(context, kGeneratedAbsdelayContributionModule);
+    if (!forged)
+      return fail("could not parse the generated absdelay mutation fixture");
+    mlir::Operation *absdelay = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!absdelay && operation->getName().getStringRef() == "nodal.analog_absdelay")
+        absdelay = operation;
+    });
+    if (!absdelay)
+      return fail("generated absdelay mutation anchor missing");
+    absdelay->setAttr(attribute, mlir::StringAttr::get(&context, value));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated absdelay ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated absdelay ownership published partial output");
+  }
+
+  for (const auto &mutation :
+       {std::make_pair("%branch, %delayed", "%branch, %input"),
+        std::make_pair("        \"nodal.contribute\"(%branch, %delayed)",
+                       "        \"nodal.contribute\"(%branch, %delayed) <{kind = \"potential\", "
+                       "generated_owner = \"GeneratedAbsdelayContribution.generate_0\", "
+                       "generated_induction = \"GeneratedAbsdelayContribution.generate_0.index\", "
+                       "metadata = {}}> : (!nodal.branch<\"electrical\">, "
+                       "!nodal.quantity<\"real\", \"voltage\">) -> ()\n"
+                       "        \"nodal.contribute\"(%branch, %delayed)")}) {
+    std::string invalidSource = kGeneratedAbsdelayContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated absdelay consumer mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated absdelay consumer mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated absdelay consumer passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated absdelay consumer published partial output");
   }
 
   auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);

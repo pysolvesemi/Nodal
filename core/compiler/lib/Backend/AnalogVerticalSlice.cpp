@@ -1437,9 +1437,12 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                 : "generated ddt must feed an additive contribution without escaping its range");
       continue;
     }
-    if (name == "nodal.analog_transition" || name == "nodal.analog_slew") {
+    if (name == "nodal.analog_transition" || name == "nodal.analog_slew" ||
+        name == "nodal.analog_absdelay") {
       const bool slew = name == "nodal.analog_slew";
-      const llvm::StringRef waveform = slew ? "slew" : "transition";
+      const llvm::StringRef waveform = slew                              ? "slew"
+                                       : name == "nodal.analog_absdelay" ? "absdelay"
+                                                                         : "transition";
       auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
       auto generatedInduction = operation.getAttrOfType<StringAttr>("generated_induction");
       auto operatorId = operation.getAttrOfType<StringAttr>("operator_id");
@@ -1481,7 +1484,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
     if (!supportedExpression)
       return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                "generated Verilog-A backend profile supports contributions and "
-                               "owned ddt/idt/transition/slew expressions only");
+                               "owned ddt/idt/transition/slew/absdelay expressions only");
   }
   if (!contributions)
     return emitMappedFailure(analog, "NODAL-BACKEND-CAPABILITY-001",

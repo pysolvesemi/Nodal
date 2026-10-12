@@ -579,7 +579,7 @@ int main() {
     return fail("compound generated contribution lost its structural expression target loop");
   for (const auto &mutation :
        {std::make_pair("classification = \"structural\"", "classification = \"ordinary\""),
-        std::make_pair("operator_name = \"add\"", "operator_name = \"gt\"")}) {
+        std::make_pair("operator_name = \"add\"", "operator_name = \"add\", unit = @forged")}) {
     std::string invalidSource = kCompoundGeneratedContributionModule.str();
     auto position = invalidSource.find(mutation.first);
     if (position == std::string::npos)

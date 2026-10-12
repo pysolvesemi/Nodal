@@ -576,11 +576,28 @@ int main() {
   generatedDdtStream.flush();
   if (generatedDdtOutput.find("V(p, n) <+ ddt(V(p, n));\n") == std::string::npos)
     return fail("generated ddt contribution lost its owned operator expression");
-  for (const auto &mutation :
-       {std::make_pair(
-            "context = \"contribution\", generated_owner = \"GeneratedDdtContribution.generate_0\"",
-            "context = \"contribution\", generated_owner = \"GeneratedDdtContribution.forged\""),
-        std::make_pair("%branch, %derivative", "%branch, %voltage")}) {
+  auto forgedDdtOwner = parse(context, kGeneratedDdtContributionModule);
+  if (!forgedDdtOwner)
+    return fail("could not parse the generated ddt owner-mutation fixture");
+  mlir::Operation *forgedDdt = nullptr;
+  forgedDdtOwner->walk([&](mlir::Operation *operation) {
+    if (!forgedDdt && operation->getName().getStringRef() == "nodal.analog_ddt")
+      forgedDdt = operation;
+  });
+  if (!forgedDdt)
+    return fail("generated ddt owner-mutation anchor missing");
+  forgedDdt->setAttr("generated_owner",
+                     mlir::StringAttr::get(&context, "GeneratedDdtContribution.forged"));
+  std::string forgedOwnerOutput = "sentinel";
+  llvm::raw_string_ostream forgedOwnerStream(forgedOwnerOutput);
+  if (mlir::succeeded(
+          nodal::emitBackend(*forgedDdtOwner, nodal::BackendKind::VerilogA, forgedOwnerStream)))
+    return fail("forged generated ddt owner passed backend verification");
+  forgedOwnerStream.flush();
+  if (forgedOwnerOutput != "sentinel")
+    return fail("forged generated ddt owner published partial output");
+
+  for (const auto &mutation : {std::make_pair("%branch, %derivative", "%branch, %voltage")}) {
     std::string invalidSource = kGeneratedDdtContributionModule.str();
     auto position = invalidSource.find(mutation.first);
     if (position == std::string::npos)

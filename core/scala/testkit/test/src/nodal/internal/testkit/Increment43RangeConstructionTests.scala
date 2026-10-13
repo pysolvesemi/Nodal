@@ -125,7 +125,11 @@ final class Increment43GeneratedConditionalEventStorage extends Module:
           analogCaseDefault:
             state := state + 4.0.V
         analogLoop(iterations, maximumIterations = 2, minimumIterations = 1):
-          state := state + 5.0.V
+          analogConditional:
+            analogWhen(select):
+              state := state + 5.0.V
+            analogOtherwise:
+              state := state + 6.0.V
 
 final class Increment43GeneratedEventTarget extends Module:
   hdlRange(0, 2): _ =>
@@ -1555,7 +1559,7 @@ object Increment43RangeConstructionTests extends TestSuite:
           finally delete(directory)
         case _ => assert(true)
 
-    test("public generated conditional and case event storage retain one target control tree"):
+    test("public generated event storage retains bounded target control trees"):
       (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
         case (Some(nodalc), Some(translator)) =>
           val directory = workDirectory()
@@ -1589,13 +1593,13 @@ object Increment43RangeConstructionTests extends TestSuite:
               assert(lines.nonEmpty)
               assert(lines.forall(_.contains(s"generated_owner = \"${region.path}\"")))
               assert(lines.forall(_.contains(s"generated_induction = \"${region.induction}\"")))
-            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_if\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_if\"")) == 2)
             assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_case\"")) == 1)
             assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_loop\"")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains("@(cross(1")) == 1)
-            assert(result.verilogA.linesIterator.count(_.trim.startsWith("if (event_")) == 1)
-            assert(result.verilogA.linesIterator.count(_.trim == "else begin") == 1)
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("if (event_")) == 2)
+            assert(result.verilogA.linesIterator.count(_.trim == "else begin") == 2)
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("case (event_")) == 1)
             assert(result.verilogA.linesIterator.count(_.trim == "0: begin") == 1)
             assert(result.verilogA.linesIterator.count(_.trim == "default: begin") == 1)
@@ -1605,6 +1609,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.linesIterator.count(_.contains(" + 4.0")) == 1)
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (event_")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains(" + 5.0")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains(" + 6.0")) == 1)
           finally delete(directory)
         case _ => assert(true)
 

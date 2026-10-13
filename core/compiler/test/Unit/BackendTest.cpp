@@ -1667,23 +1667,67 @@ int main() {
         "statement_id = \"GeneratedEvent.event_0.loop_2\", static_trip_count = 0 : i64, "
         "static_trip_count_present = false}> ({\n"
         "            ^bb0:\n"
-        "              %state_read_loop = \"nodal.analog_variable_read\"(%state) "
-        "<{read_id = \"GeneratedEvent.event_0.loop_2.assignment.read_0\", owner = "
+        "              \"nodal.analog_if\"() <{metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.if_0\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.loop_2.if_0\"}> ({\n"
+        "              ^bb0:\n"
+        "                \"nodal.analog_if_arm\"() <{arm_id = "
+        "\"GeneratedEvent.event_0.loop_2.if_0.branch_0\", condition_dimension = \"1\", "
+        "condition_kind = \"boolean\", condition_reads = [\"GeneratedEvent.select\"], "
+        "condition_value = \"GeneratedEvent.select\", is_else = false, metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.loop_2.if_0.condition_0\"}, owner = "
+        "\"GeneratedEvent\", stage = \"runtime\", static_value = false, "
+        "static_value_present = false}> ({\n"
+        "                ^bb0:\n"
+        "                  %state_read_loop = \"nodal.analog_variable_read\"(%state) "
+        "<{read_id = \"GeneratedEvent.event_0.loop_2.if_0.assignment.read_0\", owner = "
         "\"GeneratedEvent\", generated_owner = \"GeneratedEvent.generate_0\", "
         "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
-        "{semantic_path = \"GeneratedEvent.event_0.loop_2.assignment.read_0\"}}> : "
+        "{semantic_path = \"GeneratedEvent.event_0.loop_2.if_0.assignment.read_0\"}}> : "
         "(!nodal.variable<\"real\", \"voltage\">) -> "
         "!nodal.quantity<\"real\", \"voltage\">\n"
-        "              \"nodal.analog_assign\"(%state, %state_read_loop) <{analyses = "
+        "                  \"nodal.analog_assign\"(%state, %state_read_loop) <{analyses = "
         "[\"dc\", \"transient\"], authored_order = 4 : i64, guard_dimension = \"\", "
         "guard_kind = \"\", guard_present = false, guard_reads = [], guard_value = \"\", "
         "generated_owner = \"GeneratedEvent.generate_0\", generated_induction = "
         "\"GeneratedEvent.generate_0.index\", metadata = {semantic_path = "
-        "\"GeneratedEvent.event_0.loop_2.assignment\", value = "
+        "\"GeneratedEvent.event_0.loop_2.if_0.assignment\", value = "
         "\"analog_add(GeneratedEvent.state,5.0 V)\"}, owner = \"GeneratedEvent\", "
-        "statement_id = \"GeneratedEvent.event_0.loop_2.assignment\", value_dimension = "
-        "\"voltage\", value_kind = \"real\"}> : (!nodal.variable<\"real\", "
-        "\"voltage\">, !nodal.quantity<\"real\", \"voltage\">) -> ()\n"
+        "statement_id = \"GeneratedEvent.event_0.loop_2.if_0.assignment\", "
+        "value_dimension = \"voltage\", value_kind = \"real\"}> : "
+        "(!nodal.variable<\"real\", \"voltage\">, !nodal.quantity<\"real\", "
+        "\"voltage\">) -> ()\n"
+        "                }) : () -> ()\n"
+        "                \"nodal.analog_if_arm\"() <{arm_id = "
+        "\"GeneratedEvent.event_0.loop_2.if_0.otherwise\", condition_dimension = \"\", "
+        "condition_kind = \"\", condition_reads = [], condition_value = \"\", "
+        "is_else = true, metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.if_0.otherwise\"}, owner = \"GeneratedEvent\", "
+        "stage = \"else\", static_value = false, static_value_present = false}> ({\n"
+        "                ^bb0:\n"
+        "                  %state_read_loop_else = "
+        "\"nodal.analog_variable_read\"(%state) <{read_id = "
+        "\"GeneratedEvent.event_0.loop_2.if_0.assignment_else.read_0\", owner = "
+        "\"GeneratedEvent\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.if_0.assignment_else.read_0\"}}> : "
+        "(!nodal.variable<\"real\", \"voltage\">) -> "
+        "!nodal.quantity<\"real\", \"voltage\">\n"
+        "                  \"nodal.analog_assign\"(%state, %state_read_loop_else) "
+        "<{analyses = [\"dc\", \"transient\"], authored_order = 5 : i64, "
+        "guard_dimension = \"\", guard_kind = \"\", guard_present = false, "
+        "guard_reads = [], guard_value = \"\", generated_owner = "
+        "\"GeneratedEvent.generate_0\", generated_induction = "
+        "\"GeneratedEvent.generate_0.index\", metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.if_0.assignment_else\", value = "
+        "\"analog_add(GeneratedEvent.state,6.0 V)\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.loop_2.if_0.assignment_else\", "
+        "value_dimension = \"voltage\", value_kind = \"real\"}> : "
+        "(!nodal.variable<\"real\", \"voltage\">, !nodal.quantity<\"real\", "
+        "\"voltage\">) -> ()\n"
+        "                }) : () -> ()\n"
+        "              }) : () -> ()\n"
         "            }) : () -> ()\n"
         "          }) : (!nodal.analog_event) -> ()";
     std::string generatedStorageSource = kGeneratedEventModule.str();
@@ -1714,17 +1758,19 @@ int main() {
         generatedStorageOutput.find("real event_GeneratedEvent_event_0_case_assignment_read_0;");
     auto loopIndex =
         generatedStorageOutput.find("integer event_GeneratedEvent_event_0_loop_2_index;");
-    auto loopRead =
-        generatedStorageOutput.find("real event_GeneratedEvent_event_0_loop_2_assignment_read_0;");
+    auto loopRead = generatedStorageOutput.find(
+        "real event_GeneratedEvent_event_0_loop_2_if_0_assignment_read_0;");
+    auto loopElseRead = generatedStorageOutput.find(
+        "real event_GeneratedEvent_event_0_loop_2_if_0_assignment_else_read_0;");
     auto procedure = generatedStorageOutput.find("begin : event_GeneratedEvent_procedure");
     if (loop == std::string::npos || select == std::string::npos || mode == std::string::npos ||
         iterations == std::string::npos || state == std::string::npos ||
         read == std::string::npos || caseRead == std::string::npos ||
         loopIndex == std::string::npos || loopRead == std::string::npos ||
-        procedure == std::string::npos ||
+        loopElseRead == std::string::npos || procedure == std::string::npos ||
         !(loop < select && select < mode && mode < iterations && iterations < state &&
-          state < read && read < caseRead && caseRead < loopRead && loopRead < loopIndex &&
-          loopIndex < procedure) ||
+          state < read && read < caseRead && caseRead < loopRead && loopRead < loopElseRead &&
+          loopElseRead < loopIndex && loopIndex < procedure) ||
         generatedStorageOutput.find("if (event_GeneratedEvent_select) begin") ==
             std::string::npos ||
         generatedStorageOutput.find("else begin") == std::string::npos ||
@@ -1757,7 +1803,11 @@ int main() {
             std::string::npos ||
         generatedStorageOutput.find(
             "event_GeneratedEvent_state = "
-            "(event_GeneratedEvent_event_0_loop_2_assignment_read_0 + 5.0);") ==
+            "(event_GeneratedEvent_event_0_loop_2_if_0_assignment_read_0 + 5.0);") ==
+            std::string::npos ||
+        generatedStorageOutput.find(
+            "event_GeneratedEvent_state = "
+            "(event_GeneratedEvent_event_0_loop_2_if_0_assignment_else_read_0 + 6.0);") ==
             std::string::npos ||
         mlir::failed(nodal::reparseBackendTarget(generatedStorageOutput, *configuration)))
       return fail("generated event storage lost its per-occurrence target layout");
@@ -1799,9 +1849,8 @@ int main() {
       return fail("forged generated event storage published partial output");
 
     std::string nestedLoopSource = generatedStorageSource;
-    const std::string nestedLoopAnchor =
-        "            ^bb0:\n"
-        "              %state_read_loop = \"nodal.analog_variable_read\"(%state)";
+    const std::string nestedLoopAnchor = "            ^bb0:\n"
+                                         "              \"nodal.analog_if\"()";
     const std::string nestedLoop =
         "            \"nodal.analog_loop\"() <{bound_dimension = \"1\", "
         "bound_kind = \"integer\", bound_reads = [], bound_value = \"1\", "
@@ -1835,6 +1884,69 @@ int main() {
     nestedLoopRejectedStream.flush();
     if (nestedLoopRejected != "sentinel")
       return fail("unsupported generated event nested loop published partial output");
+
+    auto loopCaseModule = parse(context, generatedStorageSource);
+    if (!loopCaseModule)
+      return fail("generated event loop-case mutation fixture did not parse");
+    mlir::Operation *runtimeLoop = nullptr;
+    mlir::Operation *eventCase = nullptr;
+    loopCaseModule->walk([&](mlir::Operation *operation) {
+      if (!runtimeLoop && operation->getName().getStringRef() == "nodal.analog_loop")
+        runtimeLoop = operation;
+      if (!eventCase && operation->getName().getStringRef() == "nodal.analog_case")
+        eventCase = operation;
+    });
+    if (!runtimeLoop || !eventCase)
+      return fail("generated event loop-case mutation anchor missing");
+    auto retagStructuredClone = [&](mlir::Operation *clone, llvm::StringRef suffix,
+                                    int64_t assignmentOrder) {
+      clone->walk([&](mlir::Operation *nested) {
+        for (llvm::StringRef key : {"statement_id", "arm_id", "read_id"})
+          if (auto identity = nested->getAttrOfType<mlir::StringAttr>(key))
+            nested->setAttr(key,
+                            mlir::StringAttr::get(&context, (identity.getValue() + suffix).str()));
+        if (nested->hasAttr("authored_order"))
+          nested->setAttr(
+              "authored_order",
+              mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), assignmentOrder++));
+      });
+    };
+    mlir::Operation *loopCase = eventCase->clone();
+    retagStructuredClone(loopCase, ".loop_case_mutation", 6);
+    runtimeLoop->getRegion(0).front().push_back(loopCase);
+    std::string loopCaseRejected = "sentinel";
+    llvm::raw_string_ostream loopCaseRejectedStream(loopCaseRejected);
+    if (mlir::succeeded(nodal::emitBackend(*loopCaseModule, nodal::BackendKind::VerilogA,
+                                           loopCaseRejectedStream)))
+      return fail("unsupported generated event loop case passed backend verification");
+    loopCaseRejectedStream.flush();
+    if (loopCaseRejected != "sentinel")
+      return fail("unsupported generated event loop case published partial output");
+
+    auto nestedConditionalModule = parse(context, generatedStorageSource);
+    if (!nestedConditionalModule)
+      return fail("generated event nested-conditional mutation fixture did not parse");
+    mlir::Operation *loopConditional = nullptr;
+    nestedConditionalModule->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.analog_if" && operation->getParentOp() &&
+          operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
+        loopConditional = operation;
+    });
+    if (!loopConditional)
+      return fail("generated event nested-conditional mutation anchor missing");
+    auto &conditionalBlock = loopConditional->getRegion(0).front();
+    mlir::Operation &lastArm = conditionalBlock.back();
+    mlir::Operation *nestedConditional = loopConditional->clone();
+    retagStructuredClone(nestedConditional, ".nested_conditional_mutation", 6);
+    lastArm.getRegion(0).front().push_back(nestedConditional);
+    std::string nestedConditionalRejected = "sentinel";
+    llvm::raw_string_ostream nestedConditionalRejectedStream(nestedConditionalRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedConditionalModule, nodal::BackendKind::VerilogA,
+                                           nestedConditionalRejectedStream)))
+      return fail("unsupported nested generated loop conditional passed backend verification");
+    nestedConditionalRejectedStream.flush();
+    if (nestedConditionalRejected != "sentinel")
+      return fail("unsupported nested generated loop conditional published partial output");
   }
 
   auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);

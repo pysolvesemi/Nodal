@@ -1462,6 +1462,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
           ++proceduralLoops;
           auto stage = nested->getAttrOfType<StringAttr>("stage");
           bool nestedLoop = false;
+          unsigned directConditionals = 0;
           for (Operation *parent = nested->getParentOp(); parent && parent != &operation;
                parent = parent->getParentOp())
             if (llvm::isa<AnalogLoopOp>(parent)) {
@@ -1469,9 +1470,31 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
               break;
             }
           nested->walk([&](Operation *bodyOperation) {
-            if (bodyOperation != nested &&
-                !llvm::isa<AnalogVariableReadOp, AnalogAssignOp>(bodyOperation))
-              unsupportedStorage = true;
+            if (bodyOperation == nested)
+              return;
+            if (llvm::isa<AnalogIfOp>(bodyOperation)) {
+              if (bodyOperation->getParentOp() != nested || ++directConditionals > 1)
+                unsupportedStorage = true;
+              return;
+            }
+            if (llvm::isa<AnalogIfArmOp>(bodyOperation)) {
+              Operation *conditional = bodyOperation->getParentOp();
+              if (!conditional || !llvm::isa<AnalogIfOp>(conditional) ||
+                  conditional->getParentOp() != nested)
+                unsupportedStorage = true;
+              return;
+            }
+            if (llvm::isa<AnalogVariableReadOp, AnalogAssignOp>(bodyOperation)) {
+              Operation *parent = bodyOperation->getParentOp();
+              if (parent == nested)
+                return;
+              auto arm = llvm::dyn_cast<AnalogIfArmOp>(parent);
+              Operation *conditional = arm ? arm->getParentOp() : nullptr;
+              if (conditional && llvm::isa<AnalogIfOp>(conditional) &&
+                  conditional->getParentOp() == nested)
+                return;
+            }
+            unsupportedStorage = true;
           });
           unsupportedStorage |= nestedLoop || !stage || stage.getValue() != "runtime" ||
                                 hasAnalogEvents(nested) ||

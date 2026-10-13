@@ -1452,9 +1452,34 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
           generatedInduction.getValue() != inductionPath.getValue())
         return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                  "generated event procedure ownership does not match its range");
-      if (!hasAnalogEvents(&operation))
-        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
-                                 "generated event procedure requires an analog event");
+      const bool eventProcedureProfile = hasAnalogEvents(&operation);
+      if (!eventProcedureProfile) {
+        unsigned variables = 0;
+        unsigned reads = 0;
+        unsigned assignments = 0;
+        bool unsupported = false;
+        operation.walk([&](Operation *nested) {
+          if (nested == &operation)
+            return;
+          if (nested->getParentOp() != &operation) {
+            unsupported = true;
+            return;
+          }
+          if (llvm::isa<AnalogVariableOp>(nested))
+            ++variables;
+          else if (llvm::isa<AnalogVariableReadOp>(nested))
+            ++reads;
+          else if (llvm::isa<AnalogAssignOp>(nested))
+            ++assignments;
+          else
+            unsupported = true;
+        });
+        if (unsupported || variables != 1 || reads != 1 || assignments != 1)
+          return emitMappedFailure(
+              &operation, "NODAL-BACKEND-CAPABILITY-001",
+              "generated lexical storage target profile requires one root variable, read, and "
+              "assignment without events or nested control");
+      }
       bool unsupportedStorage = false;
       bool mismatchedStorage = false;
       unsigned proceduralLoops = 0;
@@ -2180,7 +2205,7 @@ LogicalResult verifyBackendOperations(mlir::ModuleOp module, const BackendProfil
     auto procedure = llvm::dyn_cast<nodal::AnalogProcedureOp>(operation);
     if (!procedure)
       procedure = operation->getParentOfType<nodal::AnalogProcedureOp>();
-    if (procedure && hasAnalogEvents(procedure)) {
+    if (procedure && (hasAnalogEvents(procedure) || procedure->hasAttr("generated_owner"))) {
       if (llvm::isa<nodal::AnalogProcedureOp, nodal::AnalogVariableOp, nodal::AnalogVariableReadOp,
                     nodal::AnalogAssignOp, nodal::AnalogScopeOp, nodal::AnalogIfOp,
                     nodal::AnalogIfArmOp, nodal::AnalogCaseOp, nodal::AnalogCaseArmOp,

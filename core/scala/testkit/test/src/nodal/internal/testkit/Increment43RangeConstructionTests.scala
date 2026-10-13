@@ -1538,6 +1538,47 @@ object Increment43RangeConstructionTests extends TestSuite:
           finally delete(directory)
         case _ => assert(true)
 
+    test("public generated lexical storage is local to each target occurrence"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedLexicalStorage,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            val loop = result.verilogA.indexOf("for (generate_0_index")
+            val declaration = result.verilogA.indexOf(
+              "real event_Increment43GeneratedLexicalStorage_state = 0.0;"
+            )
+            val procedure = result.verilogA.indexOf(
+              "begin : event_Increment43GeneratedLexicalStorage_procedure"
+            )
+            val assignment = result.verilogA.indexOf(
+              "event_Increment43GeneratedLexicalStorage_state ="
+            )
+            assert(result.mlir.contains("\"nodal.analog_variable\""))
+            assert(result.mlir.contains("\"nodal.analog_variable_read\""))
+            assert(result.mlir.contains("\"nodal.analog_assign\""))
+            assert(loop >= 0)
+            assert(declaration > loop)
+            assert(procedure > declaration)
+            assert(assignment > procedure)
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains(" real event_")) == 2)
+            assert(!result.verilogA.contains("@("))
+          finally delete(directory)
+        case _ => assert(true)
+
     test("public generated event retains one non-unrolled target occurrence"):
       (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
         case (Some(nodalc), Some(translator)) =>

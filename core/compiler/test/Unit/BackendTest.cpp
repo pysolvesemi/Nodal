@@ -453,6 +453,33 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedLexicalStorageModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true, semantic_path = "GeneratedLexicalStorage"}, sym_name = "GeneratedLexicalStorage"}> ({
+  ^bb0:
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedLexicalStorage.generate_0", induction_path = "GeneratedLexicalStorage.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedLexicalStorage.generate_0", generated_induction = "GeneratedLexicalStorage.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        "nodal.analog_procedure"() <{owner = "GeneratedLexicalStorage", generated_owner = "GeneratedLexicalStorage.generate_0", generated_induction = "GeneratedLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLexicalStorage.analogProcedure"}}> ({
+        ^bb0:
+          %state = "nodal.analog_variable"() <{identity = "GeneratedLexicalStorage.state", owner = "GeneratedLexicalStorage", declaration_order = 0 : i64, initialized = true, initializer_value = "0.0 V", initializer_kind = "real", initializer_dimension = "voltage", initializer_reads = [], generated_owner = "GeneratedLexicalStorage.generate_0", generated_induction = "GeneratedLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedLexicalStorage.state"}}> : () -> !nodal.variable<"real", "voltage">
+          %state_read = "nodal.analog_variable_read"(%state) <{read_id = "GeneratedLexicalStorage.assignment.read_0", owner = "GeneratedLexicalStorage", generated_owner = "GeneratedLexicalStorage.generate_0", generated_induction = "GeneratedLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLexicalStorage.assignment.read_0"}}> : (!nodal.variable<"real", "voltage">) -> !nodal.quantity<"real", "voltage">
+          "nodal.analog_assign"(%state, %state_read) <{analyses = ["dc", "transient"], authored_order = 0 : i64, guard_dimension = "", guard_kind = "", guard_present = false, guard_reads = [], guard_value = "", generated_owner = "GeneratedLexicalStorage.generate_0", generated_induction = "GeneratedLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLexicalStorage.assignment", value = "analog_add(GeneratedLexicalStorage.state,1.0 V)"}, owner = "GeneratedLexicalStorage", statement_id = "GeneratedLexicalStorage.assignment", value_dimension = "voltage", value_kind = "real"}> : (!nodal.variable<"real", "voltage">, !nodal.quantity<"real", "voltage">) -> ()
+        }) : () -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kGeneratedEventModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -1631,6 +1658,83 @@ int main() {
     rejectedStream.flush();
     if (rejected != "sentinel")
       return fail("invalid generated tableNoise consumer published partial output");
+  }
+
+  auto generatedLexicalStorage = parse(context, kGeneratedLexicalStorageModule);
+  if (!generatedLexicalStorage)
+    return fail("could not parse the generated lexical-storage fixture");
+  std::string generatedLexicalStorageOutput;
+  llvm::raw_string_ostream generatedLexicalStorageStream(generatedLexicalStorageOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedLexicalStorage, nodal::BackendKind::VerilogA,
+                                      generatedLexicalStorageStream)))
+    return fail("generated lexical-storage emission failed");
+  generatedLexicalStorageStream.flush();
+  auto lexicalLoop = generatedLexicalStorageOutput.find("for (generate_0_index");
+  auto lexicalDeclaration =
+      generatedLexicalStorageOutput.find("real event_GeneratedLexicalStorage_state = 0.0;");
+  auto lexicalProcedure =
+      generatedLexicalStorageOutput.find("begin : event_GeneratedLexicalStorage_procedure");
+  auto lexicalRead =
+      generatedLexicalStorageOutput.find("event_GeneratedLexicalStorage_assignment_read_0 = "
+                                         "event_GeneratedLexicalStorage_state;");
+  auto lexicalAssignment = generatedLexicalStorageOutput.find(
+      "event_GeneratedLexicalStorage_state = "
+      "(event_GeneratedLexicalStorage_assignment_read_0 + 1.0);");
+  if (lexicalLoop == std::string::npos || lexicalDeclaration == std::string::npos ||
+      lexicalProcedure == std::string::npos || lexicalRead == std::string::npos ||
+      lexicalAssignment == std::string::npos ||
+      !(lexicalLoop < lexicalDeclaration && lexicalDeclaration < lexicalProcedure &&
+        lexicalProcedure < lexicalRead && lexicalRead < lexicalAssignment) ||
+      generatedLexicalStorageOutput.find("@(") != std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(generatedLexicalStorageOutput, *configuration)))
+    return fail("generated lexical storage lost its per-occurrence target layout");
+
+  {
+    auto invalid = parse(context, kGeneratedLexicalStorageModule);
+    if (!invalid)
+      return fail("could not parse the generated lexical-storage mutation fixture");
+    mlir::Operation *variable = nullptr;
+    invalid->walk([&](mlir::Operation *operation) {
+      if (!variable && operation->getName().getStringRef() == "nodal.analog_variable")
+        variable = operation;
+    });
+    if (!variable)
+      return fail("generated lexical-storage mutation anchor missing");
+    variable->setAttr("generated_owner",
+                      mlir::StringAttr::get(&context, "GeneratedLexicalStorage.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*invalid, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated lexical ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated lexical storage published partial output");
+  }
+
+  {
+    std::string unsupportedSource = kGeneratedLexicalStorageModule.str();
+    const std::string anchor = "        }) : () -> ()\n      }) : () -> ()";
+    const std::string unsupportedScope =
+        "          \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLexicalStorage.scope_0\"}, owner = \"GeneratedLexicalStorage\", "
+        "scope_id = \"GeneratedLexicalStorage.scope_0\"}> ({\n"
+        "          ^bb0:\n"
+        "          }) : () -> ()\n";
+    auto position = unsupportedSource.find(anchor);
+    if (position == std::string::npos)
+      return fail("generated lexical-storage scope mutation anchor missing");
+    unsupportedSource.insert(position, unsupportedScope);
+    auto unsupported = parse(context, unsupportedSource);
+    if (!unsupported)
+      return fail("generated lexical-storage scope mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*unsupported, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("unsupported generated lexical scope passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("unsupported generated lexical scope published partial output");
   }
 
   auto generatedEvent = parse(context, kGeneratedEventModule);

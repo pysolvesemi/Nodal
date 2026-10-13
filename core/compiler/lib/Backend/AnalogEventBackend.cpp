@@ -428,9 +428,9 @@ LogicalResult prepareGeneratedAnalogEventBackend(Operation *procedure,
                                                  AnalogEventRenderState &state,
                                                  llvm::raw_ostream &out, unsigned indent) {
   auto eventProcedure = llvm::dyn_cast_or_null<AnalogProcedureOp>(procedure);
-  if (!eventProcedure || !hasAnalogEvents(eventProcedure) ||
-      !procedure->hasAttr("generated_owner") || !procedure->hasAttr("generated_induction"))
-    return reject(procedure, "generated event storage requires one owned event procedure");
+  if (!eventProcedure || !procedure->hasAttr("generated_owner") ||
+      !procedure->hasAttr("generated_induction"))
+    return reject(procedure, "generated storage requires one owned analog procedure");
   if (auto module = procedure->getParentOfType<ModuleOp>())
     module->walk([&](Operation *op) {
       for (auto key : {"name", "sym_name"})
@@ -441,7 +441,8 @@ LogicalResult prepareGeneratedAnalogEventBackend(Operation *procedure,
 }
 LogicalResult renderAnalogEventProcedure(Operation *procedure, AnalogEventRenderState &state,
                                          llvm::raw_ostream &out) {
-  if (!hasAnalogEvents(procedure))
+  if (!hasAnalogEvents(procedure) &&
+      (!procedure->hasAttr("generated_owner") || !procedure->hasAttr("generated_induction")))
     return reject(procedure, "ordinary procedure lowering remains gated");
   if (failed(verifyAnalogEventProcedure(procedure)))
     return failure();

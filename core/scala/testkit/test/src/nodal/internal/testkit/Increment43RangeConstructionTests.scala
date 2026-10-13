@@ -1517,7 +1517,7 @@ object Increment43RangeConstructionTests extends TestSuite:
               .filter(line =>
                 val trimmed = line.trim
                 (trimmed.startsWith("real event_") || trimmed.startsWith("integer event_")) &&
-                  trimmed.endsWith(";")
+                trimmed.endsWith(";")
               )
               .toVector
             assert(declarations.size == 2)

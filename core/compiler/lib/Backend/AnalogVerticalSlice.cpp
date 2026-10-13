@@ -1463,6 +1463,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
           auto stage = nested->getAttrOfType<StringAttr>("stage");
           bool nestedLoop = false;
           unsigned directConditionals = 0;
+          unsigned directCases = 0;
           for (Operation *parent = nested->getParentOp(); parent && parent != &operation;
                parent = parent->getParentOp())
             if (llvm::isa<AnalogLoopOp>(parent)) {
@@ -1484,6 +1485,18 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                 unsupportedStorage = true;
               return;
             }
+            if (llvm::isa<AnalogCaseOp>(bodyOperation)) {
+              if (bodyOperation->getParentOp() != nested || ++directCases > 1)
+                unsupportedStorage = true;
+              return;
+            }
+            if (llvm::isa<AnalogCaseArmOp>(bodyOperation)) {
+              Operation *caseOperation = bodyOperation->getParentOp();
+              if (!caseOperation || !llvm::isa<AnalogCaseOp>(caseOperation) ||
+                  caseOperation->getParentOp() != nested)
+                unsupportedStorage = true;
+              return;
+            }
             if (llvm::isa<AnalogVariableReadOp, AnalogAssignOp>(bodyOperation)) {
               Operation *parent = bodyOperation->getParentOp();
               if (parent == nested)
@@ -1492,6 +1505,11 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
               Operation *conditional = arm ? arm->getParentOp() : nullptr;
               if (conditional && llvm::isa<AnalogIfOp>(conditional) &&
                   conditional->getParentOp() == nested)
+                return;
+              auto caseArm = llvm::dyn_cast<AnalogCaseArmOp>(parent);
+              Operation *caseOperation = caseArm ? caseArm->getParentOp() : nullptr;
+              if (caseOperation && llvm::isa<AnalogCaseOp>(caseOperation) &&
+                  caseOperation->getParentOp() == nested)
                 return;
             }
             unsupportedStorage = true;
@@ -1519,7 +1537,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       if (unsupportedStorage || proceduralLoops > 1)
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
-            "generated event-local storage admits one direct runtime event-body loop");
+            "generated event-local storage admits one direct runtime event-body loop with one "
+            "direct conditional and case tree");
       if (mismatchedStorage)
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",

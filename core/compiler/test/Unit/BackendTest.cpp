@@ -1914,14 +1914,32 @@ int main() {
     mlir::Operation *loopCase = eventCase->clone();
     retagStructuredClone(loopCase, ".loop_case_mutation", 6);
     runtimeLoop->getRegion(0).front().push_back(loopCase);
-    std::string loopCaseRejected = "sentinel";
-    llvm::raw_string_ostream loopCaseRejectedStream(loopCaseRejected);
+    std::string loopCaseOutput;
+    llvm::raw_string_ostream loopCaseStream(loopCaseOutput);
+    if (mlir::failed(
+            nodal::emitBackend(*loopCaseModule, nodal::BackendKind::VerilogA, loopCaseStream)))
+      return fail("generated event loop case failed backend verification");
+    loopCaseStream.flush();
+    auto loopCaseStart = loopCaseOutput.find("for (event_GeneratedEvent_event_0_loop_2_index");
+    auto nestedCaseStart = loopCaseOutput.find("case (event_GeneratedEvent_mode)", loopCaseStart);
+    if (loopCaseStart == std::string::npos || nestedCaseStart == std::string::npos ||
+        nestedCaseStart < loopCaseStart ||
+        mlir::failed(nodal::reparseBackendTarget(loopCaseOutput, *configuration)))
+      return fail("generated event loop case lost its direct target topology");
+
+    auto &loopCaseBlock = loopCase->getRegion(0).front();
+    mlir::Operation &lastCaseArm = loopCaseBlock.back();
+    mlir::Operation *nestedCase = loopCase->clone();
+    retagStructuredClone(nestedCase, ".nested_case_mutation", 8);
+    lastCaseArm.getRegion(0).front().push_back(nestedCase);
+    std::string nestedCaseRejected = "sentinel";
+    llvm::raw_string_ostream nestedCaseRejectedStream(nestedCaseRejected);
     if (mlir::succeeded(nodal::emitBackend(*loopCaseModule, nodal::BackendKind::VerilogA,
-                                           loopCaseRejectedStream)))
-      return fail("unsupported generated event loop case passed backend verification");
-    loopCaseRejectedStream.flush();
-    if (loopCaseRejected != "sentinel")
-      return fail("unsupported generated event loop case published partial output");
+                                           nestedCaseRejectedStream)))
+      return fail("unsupported nested generated loop case passed backend verification");
+    nestedCaseRejectedStream.flush();
+    if (nestedCaseRejected != "sentinel")
+      return fail("unsupported nested generated loop case published partial output");
 
     auto nestedConditionalModule = parse(context, generatedStorageSource);
     if (!nestedConditionalModule)

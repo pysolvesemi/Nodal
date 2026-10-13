@@ -130,6 +130,11 @@ final class Increment43GeneratedConditionalEventStorage extends Module:
               state := state + 5.0.V
             analogOtherwise:
               state := state + 6.0.V
+          analogCase(mode):
+            analogCaseArm(0):
+              state := state + 7.0.V
+            analogCaseDefault:
+              state := state + 8.0.V
 
 final class Increment43GeneratedEventTarget extends Module:
   hdlRange(0, 2): _ =>
@@ -1594,15 +1599,15 @@ object Increment43RangeConstructionTests extends TestSuite:
               assert(lines.forall(_.contains(s"generated_owner = \"${region.path}\"")))
               assert(lines.forall(_.contains(s"generated_induction = \"${region.induction}\"")))
             assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_if\"")) == 2)
-            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_case\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_case\"")) == 2)
             assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_loop\"")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains("@(cross(1")) == 1)
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("if (event_")) == 2)
             assert(result.verilogA.linesIterator.count(_.trim == "else begin") == 2)
-            assert(result.verilogA.linesIterator.count(_.trim.startsWith("case (event_")) == 1)
-            assert(result.verilogA.linesIterator.count(_.trim == "0: begin") == 1)
-            assert(result.verilogA.linesIterator.count(_.trim == "default: begin") == 1)
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("case (event_")) == 2)
+            assert(result.verilogA.linesIterator.count(_.trim == "0: begin") == 2)
+            assert(result.verilogA.linesIterator.count(_.trim == "default: begin") == 2)
             assert(result.verilogA.linesIterator.count(_.contains(" + 1.0")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains(" + 2.0")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains(" + 3.0")) == 1)
@@ -1610,6 +1615,8 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (event_")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains(" + 5.0")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains(" + 6.0")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains(" + 7.0")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains(" + 8.0")) == 1)
           finally delete(directory)
         case _ => assert(true)
 

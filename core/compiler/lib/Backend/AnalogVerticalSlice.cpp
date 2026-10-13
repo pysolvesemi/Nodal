@@ -1457,28 +1457,56 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
         unsigned variables = 0;
         unsigned reads = 0;
         unsigned assignments = 0;
-        bool unsupported = false;
+        unsigned conditionals = 0;
+        unsigned conditionalArms = 0;
+        bool directProfile = true;
+        bool conditionalProfile = true;
         operation.walk([&](Operation *nested) {
           if (nested == &operation)
             return;
-          if (nested->getParentOp() != &operation) {
-            unsupported = true;
+          Operation *parent = nested->getParentOp();
+          if (llvm::isa<AnalogVariableOp>(nested)) {
+            ++variables;
+            directProfile &= parent == &operation;
+            conditionalProfile &= parent == &operation;
             return;
           }
-          if (llvm::isa<AnalogVariableOp>(nested))
-            ++variables;
-          else if (llvm::isa<AnalogVariableReadOp>(nested))
+          if (llvm::isa<AnalogVariableReadOp>(nested)) {
             ++reads;
-          else if (llvm::isa<AnalogAssignOp>(nested))
+            directProfile &= parent == &operation;
+            conditionalProfile &= llvm::isa<AnalogIfArmOp>(parent) && parent->getParentOp() &&
+                                  parent->getParentOp()->getParentOp() == &operation;
+            return;
+          }
+          if (llvm::isa<AnalogAssignOp>(nested)) {
             ++assignments;
-          else
-            unsupported = true;
+            directProfile &= parent == &operation;
+            conditionalProfile &= llvm::isa<AnalogIfArmOp>(parent) && parent->getParentOp() &&
+                                  parent->getParentOp()->getParentOp() == &operation;
+            return;
+          }
+          directProfile = false;
+          if (llvm::isa<AnalogIfOp>(nested)) {
+            ++conditionals;
+            conditionalProfile &= parent == &operation;
+            return;
+          }
+          if (llvm::isa<AnalogIfArmOp>(nested)) {
+            ++conditionalArms;
+            conditionalProfile &=
+                llvm::isa<AnalogIfOp>(parent) && parent->getParentOp() == &operation;
+            return;
+          }
+          conditionalProfile = false;
         });
-        if (unsupported || variables != 1 || reads != 1 || assignments != 1)
+        directProfile &= variables == 1 && reads == 1 && assignments == 1;
+        conditionalProfile &= variables == 2 && reads == 2 && assignments == 2 &&
+                              conditionals == 1 && conditionalArms == 2;
+        if (!directProfile && !conditionalProfile)
           return emitMappedFailure(
               &operation, "NODAL-BACKEND-CAPABILITY-001",
-              "generated lexical storage target profile requires one root variable, read, and "
-              "assignment without events or nested control");
+              "generated lexical storage target profile requires either one direct variable/read/"
+              "assignment or one direct two-arm conditional over two root variables");
       }
       bool unsupportedStorage = false;
       bool mismatchedStorage = false;

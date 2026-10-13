@@ -480,6 +480,45 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedConditionalLexicalStorageModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true, semantic_path = "GeneratedConditionalLexicalStorage"}, sym_name = "GeneratedConditionalLexicalStorage"}> ({
+  ^bb0:
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedConditionalLexicalStorage.generate_0", induction_path = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedConditionalLexicalStorage.generate_0", generated_induction = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        "nodal.analog_procedure"() <{owner = "GeneratedConditionalLexicalStorage", generated_owner = "GeneratedConditionalLexicalStorage.generate_0", generated_induction = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedConditionalLexicalStorage.analogProcedure"}}> ({
+        ^bb0:
+          %select = "nodal.analog_variable"() <{identity = "GeneratedConditionalLexicalStorage.select", owner = "GeneratedConditionalLexicalStorage", declaration_order = 0 : i64, initialized = true, initializer_value = "false", initializer_kind = "boolean", initializer_dimension = "1", initializer_reads = [], generated_owner = "GeneratedConditionalLexicalStorage.generate_0", generated_induction = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedConditionalLexicalStorage.select"}}> : () -> !nodal.variable<"boolean", "1">
+          %state = "nodal.analog_variable"() <{identity = "GeneratedConditionalLexicalStorage.state", owner = "GeneratedConditionalLexicalStorage", declaration_order = 1 : i64, initialized = true, initializer_value = "0.0", initializer_kind = "real", initializer_dimension = "1", initializer_reads = [], generated_owner = "GeneratedConditionalLexicalStorage.generate_0", generated_induction = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedConditionalLexicalStorage.state"}}> : () -> !nodal.variable<"real", "1">
+          "nodal.analog_if"() <{metadata = {semantic_path = "GeneratedConditionalLexicalStorage.if_0"}, owner = "GeneratedConditionalLexicalStorage", statement_id = "GeneratedConditionalLexicalStorage.if_0"}> ({
+          ^bb0:
+            "nodal.analog_if_arm"() <{arm_id = "GeneratedConditionalLexicalStorage.if_0.branch_0", condition_dimension = "1", condition_kind = "boolean", condition_reads = ["GeneratedConditionalLexicalStorage.select"], condition_value = "GeneratedConditionalLexicalStorage.select", is_else = false, metadata = {semantic_path = "GeneratedConditionalLexicalStorage.if_0.condition_0"}, owner = "GeneratedConditionalLexicalStorage", stage = "runtime", static_value = false, static_value_present = false}> ({
+            ^bb0:
+              %state_read = "nodal.analog_variable_read"(%state) <{read_id = "GeneratedConditionalLexicalStorage.assignment.read_0", owner = "GeneratedConditionalLexicalStorage", generated_owner = "GeneratedConditionalLexicalStorage.generate_0", generated_induction = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedConditionalLexicalStorage.assignment.read_0"}}> : (!nodal.variable<"real", "1">) -> !nodal.quantity<"real", "1">
+              "nodal.analog_assign"(%state, %state_read) <{analyses = ["dc", "transient"], authored_order = 0 : i64, guard_dimension = "", guard_kind = "", guard_present = false, guard_reads = [], guard_value = "", generated_owner = "GeneratedConditionalLexicalStorage.generate_0", generated_induction = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedConditionalLexicalStorage.assignment", value = "analog_add(GeneratedConditionalLexicalStorage.state,1.0)"}, owner = "GeneratedConditionalLexicalStorage", statement_id = "GeneratedConditionalLexicalStorage.assignment", value_dimension = "1", value_kind = "real"}> : (!nodal.variable<"real", "1">, !nodal.quantity<"real", "1">) -> ()
+            }) : () -> ()
+            "nodal.analog_if_arm"() <{arm_id = "GeneratedConditionalLexicalStorage.if_0.otherwise", condition_dimension = "", condition_kind = "", condition_reads = [], condition_value = "", is_else = true, metadata = {semantic_path = "GeneratedConditionalLexicalStorage.if_0.otherwise"}, owner = "GeneratedConditionalLexicalStorage", stage = "else", static_value = false, static_value_present = false}> ({
+            ^bb0:
+              %state_read_else = "nodal.analog_variable_read"(%state) <{read_id = "GeneratedConditionalLexicalStorage.assignment_else.read_0", owner = "GeneratedConditionalLexicalStorage", generated_owner = "GeneratedConditionalLexicalStorage.generate_0", generated_induction = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedConditionalLexicalStorage.assignment_else.read_0"}}> : (!nodal.variable<"real", "1">) -> !nodal.quantity<"real", "1">
+              "nodal.analog_assign"(%state, %state_read_else) <{analyses = ["dc", "transient"], authored_order = 1 : i64, guard_dimension = "", guard_kind = "", guard_present = false, guard_reads = [], guard_value = "", generated_owner = "GeneratedConditionalLexicalStorage.generate_0", generated_induction = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedConditionalLexicalStorage.assignment_else", value = "analog_add(GeneratedConditionalLexicalStorage.state,2.0)"}, owner = "GeneratedConditionalLexicalStorage", statement_id = "GeneratedConditionalLexicalStorage.assignment_else", value_dimension = "1", value_kind = "real"}> : (!nodal.variable<"real", "1">, !nodal.quantity<"real", "1">) -> ()
+            }) : () -> ()
+          }) : () -> ()
+        }) : () -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kGeneratedEventModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -1735,6 +1774,87 @@ int main() {
     rejectedStream.flush();
     if (rejected != "sentinel")
       return fail("unsupported generated lexical scope published partial output");
+  }
+
+  auto generatedConditionalStorage = parse(context, kGeneratedConditionalLexicalStorageModule);
+  if (!generatedConditionalStorage)
+    return fail("could not parse the generated conditional lexical-storage fixture");
+  std::string generatedConditionalOutput;
+  llvm::raw_string_ostream generatedConditionalStream(generatedConditionalOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedConditionalStorage, nodal::BackendKind::VerilogA,
+                                      generatedConditionalStream)))
+    return fail("generated conditional lexical-storage emission failed");
+  generatedConditionalStream.flush();
+  auto conditionalLoop = generatedConditionalOutput.find("for (generate_0_index");
+  auto conditionalDeclaration = generatedConditionalOutput.find(
+      "integer event_GeneratedConditionalLexicalStorage_select = 0;");
+  auto conditionalIf =
+      generatedConditionalOutput.find("if (event_GeneratedConditionalLexicalStorage_select) begin");
+  auto conditionalFirst = generatedConditionalOutput.find(
+      "event_GeneratedConditionalLexicalStorage_state = "
+      "(event_GeneratedConditionalLexicalStorage_assignment_read_0 + 1.0);");
+  auto conditionalElse = generatedConditionalOutput.find("else begin", conditionalIf);
+  auto conditionalSecond = generatedConditionalOutput.find(
+      "event_GeneratedConditionalLexicalStorage_state = "
+      "(event_GeneratedConditionalLexicalStorage_assignment_else_read_0 + 2.0);");
+  if (conditionalLoop == std::string::npos || conditionalDeclaration == std::string::npos ||
+      conditionalIf == std::string::npos || conditionalFirst == std::string::npos ||
+      conditionalElse == std::string::npos || conditionalSecond == std::string::npos ||
+      !(conditionalLoop < conditionalDeclaration && conditionalDeclaration < conditionalIf &&
+        conditionalIf < conditionalFirst && conditionalFirst < conditionalElse &&
+        conditionalElse < conditionalSecond) ||
+      generatedConditionalOutput.find("@(") != std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(generatedConditionalOutput, *configuration)))
+    return fail("generated conditional lexical storage lost its authored target layout");
+
+  {
+    auto invalid = parse(context, kGeneratedConditionalLexicalStorageModule);
+    if (!invalid)
+      return fail("could not parse the generated conditional ownership mutation fixture");
+    mlir::Operation *assignment = nullptr;
+    invalid->walk([&](mlir::Operation *operation) {
+      if (!assignment && operation->getName().getStringRef() == "nodal.analog_assign")
+        assignment = operation;
+    });
+    if (!assignment)
+      return fail("generated conditional ownership mutation anchor missing");
+    assignment->setAttr(
+        "generated_owner",
+        mlir::StringAttr::get(&context, "GeneratedConditionalLexicalStorage.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*invalid, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated conditional storage ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated conditional storage published partial output");
+  }
+
+  {
+    std::string unsupportedSource = kGeneratedConditionalLexicalStorageModule.str();
+    const std::string anchor = "              %state_read = \"nodal.analog_variable_read\"(%state)";
+    const std::string unsupportedScope =
+        "              \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedConditionalLexicalStorage.scope_0\"}, owner = "
+        "\"GeneratedConditionalLexicalStorage\", scope_id = "
+        "\"GeneratedConditionalLexicalStorage.scope_0\"}> ({\n"
+        "              ^bb0:\n"
+        "              }) : () -> ()\n";
+    auto position = unsupportedSource.find(anchor);
+    if (position == std::string::npos)
+      return fail("generated conditional lexical scope mutation anchor missing");
+    unsupportedSource.insert(position, unsupportedScope);
+    auto unsupported = parse(context, unsupportedSource);
+    if (!unsupported)
+      return fail("generated conditional lexical scope mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*unsupported, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("unsupported nested generated conditional scope passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("unsupported nested generated conditional scope published partial output");
   }
 
   auto generatedEvent = parse(context, kGeneratedEventModule);

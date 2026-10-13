@@ -79,6 +79,17 @@ final class Increment43GeneratedLexicalStorage extends Module:
       val state = variable(Real, 0.0.V)
       state := state + 1.0.V
 
+final class Increment43GeneratedConditionalLexicalStorage extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val select = variable(Bool, false.B)
+      val state = variable(Real, 0.0.real)
+      analogConditional:
+        analogWhen(select):
+          state := state + 1.0.real
+        analogOtherwise:
+          state := state + 2.0.real
+
 final class Increment43GeneratedStructuredLexicalStorage extends Module:
   hdlRange(0, 2): _ =>
     analogProcedure:
@@ -1575,6 +1586,39 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(assignment > procedure)
             assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains(" real event_")) == 2)
+            assert(!result.verilogA.contains("@("))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated conditional lexical storage retains authored arms"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedConditionalLexicalStorage,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.contains("\"nodal.analog_if\""))
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_if_arm\"")) == 2)
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            assert(
+              result.verilogA.contains(
+                "if (event_Increment43GeneratedConditionalLexicalStorage_select)"
+              )
+            )
+            assert(result.verilogA.contains("end else begin"))
+            assert(result.verilogA.contains("+ 1.0"))
+            assert(result.verilogA.contains("+ 2.0"))
             assert(!result.verilogA.contains("@("))
           finally delete(directory)
         case _ => assert(true)

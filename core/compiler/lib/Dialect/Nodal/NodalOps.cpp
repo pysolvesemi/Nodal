@@ -2054,19 +2054,19 @@ LogicalResult nodal::AnalogOp::verify() {
     generatedProcedure |= llvm::isa<nodal::AnalogProcedureOp>(operation);
     generatedContinuous |=
         llvm::isa<nodal::AnalogDdtOp, nodal::AnalogIdtOp, nodal::AnalogTransitionOp,
-                  nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp, nodal::AnalogTransferOp,
-                  nodal::AnalogNoiseOp, nodal::ContributeOp>(operation);
+                  nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp, nodal::AnalogAbstimeOp,
+                  nodal::AnalogTransferOp, nodal::AnalogNoiseOp, nodal::ContributeOp>(operation);
     if (generated &&
         !llvm::isa<nodal::RealLiteralOp, nodal::ParameterRefOp, nodal::AnalogAddOp,
                    nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp, nodal::AnalogNegOp,
                    nodal::AnalogDdtOp, nodal::AnalogIdtOp, nodal::AnalogTransitionOp,
-                   nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp, nodal::AnalogTransferOp,
-                   nodal::AnalogNoiseOp, nodal::AccessOp, nodal::TerminalAccessOp,
-                   nodal::PortFlowAccessOp, nodal::ContributeOp, nodal::AnalogProcedureOp>(
-            operation))
+                   nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp, nodal::AnalogAbstimeOp,
+                   nodal::AnalogTransferOp, nodal::AnalogNoiseOp, nodal::AccessOp,
+                   nodal::TerminalAccessOp, nodal::PortFlowAccessOp, nodal::ContributeOp,
+                   nodal::AnalogProcedureOp>(operation))
       return operation.emitOpError(
           "NODAL-ITERATION-043-004: generated analog regions support only owned ddt/idt or "
-          "transition/slew/absdelay/laplaceNd/ziNd/noise "
+          "transition/slew/absdelay/abstime/laplaceNd/ziNd/noise "
           "expressions, additive contributions, or generated procedural storage");
     if (llvm::isa<nodal::ConstLiteralOp>(operation) && operation.getNumResults() == 1 &&
         operation.getResult(0).getType().isInteger(1))

@@ -237,18 +237,21 @@ LogicalResult verifyTimeWaveformOperation(Operation *op) {
     auto regionId = generated->getAttrOfType<StringAttr>("region_id");
     auto inductionPath = generated->getAttrOfType<StringAttr>("induction_path");
     Operation *analog = op->getParentOfType<nodal::AnalogOp>();
-    if (!generatedOwner || !regionId || !inductionPath || !analog ||
-        generatedOwner.getValue() != regionId.getValue() ||
+    auto analogOwner = analog ? analog->getAttrOfType<StringAttr>("generated_owner") : StringAttr();
+    auto analogInduction =
+        analog ? analog->getAttrOfType<StringAttr>("generated_induction") : StringAttr();
+    if (!generatedOwner || !generatedInduction || !regionId || !inductionPath || !analog ||
+        !analogOwner || !analogInduction || generatedOwner.getValue() != regionId.getValue() ||
         generatedInduction.getValue() != inductionPath.getValue() ||
-        analog->getAttr("generated_owner") != generatedOwner ||
-        analog->getAttr("generated_induction") != generatedInduction)
+        analogOwner.getValue() != generatedOwner.getValue() ||
+        analogInduction.getValue() != generatedInduction.getValue())
       return emitMappedFailure(
           op, "NODAL-ITERATION-043-004",
           "generated waveform ownership does not match its analog and generate owners");
-    if (!isStatefulWaveformOperation(op))
+    if (!isStatefulWaveformOperation(op) && !clock)
       return emitMappedFailure(
           op, "NODAL-ITERATION-043-004",
-          "generated waveform profile admits only transition, slew, and absdelay");
+          "generated waveform profile admits only transition, slew, absdelay, and abstime");
   }
   const unsigned count = op->getNumOperands();
   if ((transition && (count < 1 || count > 5)) || (slew && (count < 1 || count > 3)) ||

@@ -245,6 +245,14 @@ final class Increment43GeneratedAbsdelayContribution extends Module:
     analog:
       V(p, n) <+ absdelay(level, 1.0.ns)
 
+final class Increment43GeneratedAbstimeContribution extends Module:
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+
+  hdlRange(0, 2): _ =>
+    analog:
+      V(p, n) <+ ((abstime / 1.0.s) * 1.0.V)
+
 final class Increment43GeneratedLaplaceContribution extends Module:
   val p = inout(Electrical)
   val n = inout(Electrical)
@@ -316,12 +324,6 @@ final class Increment43UnsupportedGeneratedNoiseOperator extends Module:
   hdlRange(0, 2): _ =>
     val source = whiteNoise(NoiseId("unsupported generated"), 1.0.A * 1.0.A * 1.0.s)
     val _ = source
-
-final class Increment43UnsupportedGeneratedAbstime extends Module:
-  hdlRange(0, 2): _ =>
-    analog:
-      val currentTime = abstime
-      val _ = currentTime
 
 final class Increment43UnsupportedGeneratedBoundStep extends Module:
   hdlRange(0, 2): _ =>
@@ -1009,11 +1011,6 @@ object Increment43RangeConstructionTests extends TestSuite:
         (
           "analog waveform operator",
           "generate_0",
-          () => new Increment43UnsupportedGeneratedAbstime
-        ),
-        (
-          "analog waveform operator",
-          "generate_0",
           () => new Increment43UnsupportedGeneratedBoundStep
         ),
         (
@@ -1286,6 +1283,40 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(
               result.verilogA.linesIterator.count(line =>
                 line.contains("V(p, n) <+") && line.contains("absdelay(level, 1e-09)")
+              ) == 1
+            )
+            assert(!result.verilogA.contains("real waveform_"))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated abstime retains one per-occurrence target expression"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedAbstimeContribution,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.contains("\"nodal.analog_abstime\""))
+            val abstimeLine =
+              result.mlir.linesIterator.find(_.contains("\"nodal.analog_abstime\"")).get
+            assert(abstimeLine.contains("generated_owner"))
+            assert(abstimeLine.contains("generated_induction"))
+            assert(!abstimeLine.contains("state_id"))
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            assert(
+              result.verilogA.linesIterator.count(line =>
+                line.contains("V(p, n) <+") && line.contains("$abstime")
               ) == 1
             )
             assert(!result.verilogA.contains("real waveform_"))

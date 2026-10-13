@@ -1721,6 +1721,24 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                 .str());
       continue;
     }
+    if (name == "nodal.analog_abstime") {
+      auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
+      auto generatedInduction = operation.getAttrOfType<StringAttr>("generated_induction");
+      llvm::DenseSet<Operation *> active;
+      if (!owner || !generatedInduction || owner.getValue() != regionId.getValue() ||
+          generatedInduction.getValue() != inductionPath.getValue())
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated abstime ownership does not match its range");
+      if (operation.getNumResults() != 1 ||
+          !generatedValueFeedsOneContribution(operation.getResult(0), analogBody, active))
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            "generated abstime must feed one additive contribution without escaping its range");
+      if (!state.expressions.try_emplace(operation.getResult(0), "$abstime").second)
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated abstime cannot be rendered as one owned expression");
+      continue;
+    }
     if (name == "nodal.analog_noise") {
       auto kind = operation.getAttrOfType<StringAttr>("noise_kind");
       auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
@@ -1783,7 +1801,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
     if (!supportedExpression)
       return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                "generated Verilog-A backend profile supports contributions and "
-                               "owned ddt/idt/transition/slew/absdelay/laplaceNd/ziNd/whiteNoise/"
+                               "owned ddt/idt/transition/slew/absdelay/abstime/laplaceNd/ziNd/"
+                               "whiteNoise/"
                                "flickerNoise/tableNoise expressions "
                                "only");
   }

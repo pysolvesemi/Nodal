@@ -135,6 +135,8 @@ final class Increment43GeneratedConditionalEventStorage extends Module:
               state := state + 7.0.V
             analogCaseDefault:
               state := state + 8.0.V
+          analogContinue()
+          analogBreak()
 
 final class Increment43GeneratedEventTarget extends Module:
   hdlRange(0, 2): _ =>
@@ -1601,6 +1603,8 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_if\"")) == 2)
             assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_case\"")) == 2)
             assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_loop\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_continue\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_break\"")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains("@(cross(1")) == 1)
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("if (event_")) == 2)
@@ -1617,6 +1621,8 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.linesIterator.count(_.contains(" + 6.0")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains(" + 7.0")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains(" + 8.0")) == 1)
+            assert(result.verilogA.linesIterator.count(_.trim.endsWith("_continue = 1;")) == 1)
+            assert(result.verilogA.linesIterator.count(_.trim.endsWith("_break = 1;")) == 1)
           finally delete(directory)
         case _ => assert(true)
 

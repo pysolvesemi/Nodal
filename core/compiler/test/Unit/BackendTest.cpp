@@ -1728,6 +1728,12 @@ int main() {
         "\"voltage\">) -> ()\n"
         "                }) : () -> ()\n"
         "              }) : () -> ()\n"
+        "              \"nodal.analog_continue\"() <{metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.continue_0\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.loop_2.continue_0\"}> : () -> ()\n"
+        "              \"nodal.analog_break\"() <{metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.break_1\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.loop_2.break_1\"}> : () -> ()\n"
         "            }) : () -> ()\n"
         "          }) : (!nodal.analog_event) -> ()";
     std::string generatedStorageSource = kGeneratedEventModule.str();
@@ -1808,6 +1814,10 @@ int main() {
         generatedStorageOutput.find(
             "event_GeneratedEvent_state = "
             "(event_GeneratedEvent_event_0_loop_2_if_0_assignment_else_read_0 + 6.0);") ==
+            std::string::npos ||
+        generatedStorageOutput.find("event_GeneratedEvent_event_0_loop_2_continue = 1;") ==
+            std::string::npos ||
+        generatedStorageOutput.find("event_GeneratedEvent_event_0_loop_2_break = 1;") ==
             std::string::npos ||
         mlir::failed(nodal::reparseBackendTarget(generatedStorageOutput, *configuration)))
       return fail("generated event storage lost its per-occurrence target layout");
@@ -1965,6 +1975,34 @@ int main() {
     nestedConditionalRejectedStream.flush();
     if (nestedConditionalRejected != "sentinel")
       return fail("unsupported nested generated loop conditional published partial output");
+
+    auto nestedExitModule = parse(context, generatedStorageSource);
+    if (!nestedExitModule)
+      return fail("generated event nested-exit mutation fixture did not parse");
+    mlir::Operation *nestedExitConditional = nullptr;
+    mlir::Operation *directExit = nullptr;
+    nestedExitModule->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.analog_if" && operation->getParentOp() &&
+          operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
+        nestedExitConditional = operation;
+      if (!directExit && operation->getName().getStringRef() == "nodal.analog_break")
+        directExit = operation;
+    });
+    if (!nestedExitConditional || !directExit)
+      return fail("generated event nested-exit mutation anchor missing");
+    mlir::Operation *nestedExit = directExit->clone();
+    nestedExit->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(&context, "GeneratedEvent.event_0.loop_2.nested_break_mutation"));
+    nestedExitConditional->getRegion(0).front().back().getRegion(0).front().push_back(nestedExit);
+    std::string nestedExitRejected = "sentinel";
+    llvm::raw_string_ostream nestedExitRejectedStream(nestedExitRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedExitModule, nodal::BackendKind::VerilogA,
+                                           nestedExitRejectedStream)))
+      return fail("unsupported nested generated loop exit passed backend verification");
+    nestedExitRejectedStream.flush();
+    if (nestedExitRejected != "sentinel")
+      return fail("unsupported nested generated loop exit published partial output");
   }
 
   auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);

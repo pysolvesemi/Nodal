@@ -1497,6 +1497,14 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                 unsupportedStorage = true;
               return;
             }
+            if (llvm::isa<AnalogBreakOp, AnalogContinueOp>(bodyOperation)) {
+              auto exitOwner = bodyOperation->getAttrOfType<StringAttr>("owner");
+              auto procedureOwner = operation.getAttrOfType<StringAttr>("owner");
+              if (bodyOperation->getParentOp() != nested || !exitOwner || !procedureOwner ||
+                  exitOwner.getValue() != procedureOwner.getValue())
+                unsupportedStorage = true;
+              return;
+            }
             if (llvm::isa<AnalogVariableReadOp, AnalogAssignOp>(bodyOperation)) {
               Operation *parent = bodyOperation->getParentOp();
               if (parent == nested)
@@ -1538,7 +1546,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
             "generated event-local storage admits one direct runtime event-body loop with one "
-            "direct conditional and case tree");
+            "direct conditional and case tree plus direct loop exits");
       if (mismatchedStorage)
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",

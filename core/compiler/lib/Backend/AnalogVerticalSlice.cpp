@@ -1441,6 +1441,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
   Block &analogBody = analog->getRegion(0).front();
   unsigned contributions = 0;
   unsigned procedures = 0;
+  Operation *eventProcedure = nullptr;
   for (Operation &operation : analogBody) {
     llvm::StringRef name = operation.getName().getStringRef();
     if (name == "nodal.analog_procedure") {
@@ -1453,15 +1454,30 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       if (!hasAnalogEvents(&operation))
         return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                  "generated event procedure requires an analog event");
-      bool hasStorage = false;
+      bool unsupportedStorage = false;
+      bool mismatchedStorage = false;
       operation.walk([&](Operation *nested) {
-        hasStorage |=
-            llvm::isa<AnalogVariableOp, AnalogVariableReadOp, AnalogAssignOp, AnalogLoopOp>(nested);
+        if (llvm::isa<AnalogLoopOp>(nested)) {
+          unsupportedStorage = true;
+          return;
+        }
+        if (!llvm::isa<AnalogVariableOp, AnalogVariableReadOp, AnalogAssignOp>(nested))
+          return;
+        auto storageOwner = nested->getAttrOfType<StringAttr>("generated_owner");
+        auto storageInduction = nested->getAttrOfType<StringAttr>("generated_induction");
+        mismatchedStorage |= !storageOwner || !storageInduction ||
+                             storageOwner.getValue() != regionId.getValue() ||
+                             storageInduction.getValue() != inductionPath.getValue();
       });
-      if (hasStorage)
+      if (unsupportedStorage)
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
-            "generated event-local storage requires a separately qualified target layout");
+            "generated event-local storage does not admit nested procedural loops");
+      if (mismatchedStorage)
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            "generated event-local storage ownership does not match its range");
+      eventProcedure = &operation;
       ++procedures;
       continue;
     }
@@ -1650,12 +1666,15 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
   if ((contributions == 0) == (procedures == 0) || procedures > 1)
     return emitMappedFailure(analog, "NODAL-BACKEND-CAPABILITY-001",
                              "generated Verilog-A range requires either additive contributions or "
-                             "one storage-free event procedure");
+                             "one owned event procedure");
 
   output << "  analog begin\n";
   output << "    for (" << induction.getValue() << " = " << lower->text << "; "
          << induction.getValue() << " < " << upper->text << "; " << induction.getValue() << " = "
          << induction.getValue() << " + " << step->text << ") begin : " << label << "\n";
+  if (eventProcedure &&
+      failed(prepareGeneratedAnalogEventBackend(eventProcedure, state.eventState, output, 6)))
+    return failure();
   if (failed(renderAnalog(analog, state, output, false)))
     return failure();
   output << "    end\n";
@@ -2200,12 +2219,30 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
   auto identifierEventDeclaration = [&](llvm::StringRef name) {
     return !name.contains(',') && validIdentifierList(name) && eventNames.insert(name).second;
   };
+  auto eventDeclaration = [&](llvm::StringRef line) {
+    if ((!line.starts_with("real event_") && !line.starts_with("integer event_") &&
+         !line.starts_with("genvar event_")) ||
+        !line.ends_with(";"))
+      return false;
+    auto declaration = line.drop_front(line.find(' ') + 1).drop_back();
+    auto parts = declaration.split(" = ");
+    if (!identifierEventDeclaration(parts.first))
+      return false;
+    if (!parts.second.empty()) {
+      std::string check = "begin\n" + parts.first.str() + " = " + parts.second.str() + ";\nend\n";
+      auto consumed = reparseAnalogEventBlock(check);
+      if (failed(consumed) || *consumed != check.size())
+        return false;
+    }
+    return true;
+  };
 
   llvm::SmallVector<llvm::StringRef, 64> lines;
   candidate.split(lines, '\n', -1, true);
   bool insideModule = false;
   bool insideAnalog = false;
   bool insideGenerated = false;
+  bool generatedStatement = false;
   bool sawModule = false;
   for (size_t lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
     llvm::StringRef line = lines[lineIndex].trim();
@@ -2324,6 +2361,14 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
         if (!validBound(update.second) || (parseSigned(update.second, step) && step <= 0))
           return failure();
         insideGenerated = true;
+        generatedStatement = false;
+        continue;
+      }
+      if (insideGenerated &&
+          (line.starts_with("real event_") || line.starts_with("integer event_") ||
+           line.starts_with("genvar event_"))) {
+        if (generatedStatement || !eventDeclaration(line))
+          return failure();
         continue;
       }
       if (line.starts_with("begin : event_")) {
@@ -2336,9 +2381,13 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
         size_t count = llvm::count(llvm::StringRef(remaining).take_front(*consumed), '\n');
         if (!count)
           return failure();
+        if (insideGenerated)
+          generatedStatement = true;
         lineIndex += count - 1;
         continue;
       }
+      if (insideGenerated)
+        generatedStatement = true;
       if (!line.ends_with(";"))
         return failure();
       if (line.contains("<+") && !line.contains(" = ")) {
@@ -2366,19 +2415,10 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
         return failure();
       continue;
     }
-    if ((line.starts_with("real event_") || line.starts_with("integer event_") ||
-         line.starts_with("genvar event_")) &&
-        line.ends_with(";")) {
-      auto declaration = line.drop_front(line.find(' ') + 1).drop_back();
-      auto parts = declaration.split(" = ");
-      if (!identifierEventDeclaration(parts.first))
+    if (line.starts_with("real event_") || line.starts_with("integer event_") ||
+        line.starts_with("genvar event_")) {
+      if (!eventDeclaration(line))
         return failure();
-      if (!parts.second.empty()) {
-        std::string check = "begin\n" + parts.first.str() + " = " + parts.second.str() + ";\nend\n";
-        auto consumed = reparseAnalogEventBlock(check);
-        if (failed(consumed) || *consumed != check.size())
-          return failure();
-      }
       continue;
     }
     if (line.starts_with("genvar ") && line.ends_with(";")) {

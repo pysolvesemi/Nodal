@@ -1524,21 +1524,95 @@ int main() {
         "generated_owner = \"GeneratedEvent.generate_0\", generated_induction = "
         "\"GeneratedEvent.generate_0.index\", metadata = {}}> : () -> "
         "!nodal.variable<\"real\", \"voltage\">\n";
-    std::string invalidSource = kGeneratedEventModule.str();
-    auto position = invalidSource.find(anchor);
+    const std::string bodyAnchor = "          ^bb0:\n          }) : (!nodal.analog_event) -> ()";
+    const std::string assignment =
+        "          ^bb0:\n"
+        "            %state_read = \"nodal.analog_variable_read\"(%state) "
+        "<{read_id = \"GeneratedEvent.event_0.assignment.read_0\", owner = "
+        "\"GeneratedEvent\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.assignment.read_0\"}}> : "
+        "(!nodal.variable<\"real\", \"voltage\">) -> "
+        "!nodal.quantity<\"real\", \"voltage\">\n"
+        "            \"nodal.analog_assign\"(%state, %state_read) <{analyses = "
+        "[\"dc\", \"transient\"], authored_order = 0 : i64, guard_dimension = "
+        "\"\", guard_kind = \"\", guard_present = false, guard_reads = [], "
+        "guard_value = \"\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.assignment\", value = "
+        "\"analog_add(GeneratedEvent.state,1.0 V)\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.assignment\", value_dimension = "
+        "\"voltage\", value_kind = \"real\"}> : (!nodal.variable<\"real\", "
+        "\"voltage\">, !nodal.quantity<\"real\", \"voltage\">) -> ()\n"
+        "          }) : (!nodal.analog_event) -> ()";
+    std::string generatedStorageSource = kGeneratedEventModule.str();
+    auto position = generatedStorageSource.find(anchor);
     if (position == std::string::npos)
       return fail("generated event storage mutation anchor missing");
-    invalidSource.insert(position, storage);
-    auto invalid = parse(context, invalidSource);
+    generatedStorageSource.insert(position, storage);
+    position = generatedStorageSource.find(bodyAnchor);
+    if (position == std::string::npos)
+      return fail("generated event assignment mutation anchor missing");
+    generatedStorageSource.replace(position, bodyAnchor.size(), assignment);
+    auto generatedStorage = parse(context, generatedStorageSource);
+    if (!generatedStorage)
+      return fail("generated event storage fixture did not parse");
+    std::string generatedStorageOutput;
+    llvm::raw_string_ostream generatedStorageStream(generatedStorageOutput);
+    if (mlir::failed(nodal::emitBackend(*generatedStorage, nodal::BackendKind::VerilogA,
+                                        generatedStorageStream)))
+      return fail("generated event storage emission failed");
+    generatedStorageStream.flush();
+    auto loop = generatedStorageOutput.find("for (generate_0_index");
+    auto state = generatedStorageOutput.find("real event_GeneratedEvent_state = 0.0;");
+    auto read = generatedStorageOutput.find("real event_GeneratedEvent_event_0_assignment_read_0;");
+    auto procedure = generatedStorageOutput.find("begin : event_GeneratedEvent_procedure");
+    if (loop == std::string::npos || state == std::string::npos || read == std::string::npos ||
+        procedure == std::string::npos || !(loop < state && state < read && read < procedure) ||
+        generatedStorageOutput.find(
+            "event_GeneratedEvent_event_0_assignment_read_0 = event_GeneratedEvent_state;") ==
+            std::string::npos ||
+        generatedStorageOutput.find(
+            "event_GeneratedEvent_state = (event_GeneratedEvent_event_0_assignment_read_0 + "
+            "1.0);") == std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(generatedStorageOutput, *configuration)))
+      return fail("generated event storage lost its per-occurrence target layout");
+
+    std::string misplacedStorage = generatedStorageOutput;
+    auto declarationStart = misplacedStorage.rfind('\n', state);
+    declarationStart = declarationStart == std::string::npos ? 0 : declarationStart + 1;
+    auto declarationEnd = misplacedStorage.find('\n', state);
+    if (declarationEnd == std::string::npos)
+      return fail("generated event storage target declaration anchor missing");
+    std::string declaration =
+        misplacedStorage.substr(declarationStart, declarationEnd - declarationStart + 1);
+    misplacedStorage.erase(declarationStart, declaration.size());
+    auto procedureClose = misplacedStorage.find(
+        "    end\n    end\n", misplacedStorage.find("begin : event_GeneratedEvent_procedure"));
+    if (procedureClose == std::string::npos)
+      return fail("generated event storage target procedure anchor missing");
+    misplacedStorage.insert(procedureClose + std::string("    end\n").size(), declaration);
+    if (mlir::succeeded(nodal::reparseBackendTarget(misplacedStorage, *configuration)))
+      return fail("late generated event storage declaration passed target reparse");
+
+    auto invalid = parse(context, generatedStorageSource);
     if (!invalid)
-      return fail("generated event storage mutation did not parse");
+      return fail("generated event storage mutation fixture did not parse");
+    mlir::Operation *variable = nullptr;
+    invalid->walk([&](mlir::Operation *operation) {
+      if (!variable && operation->getName().getStringRef() == "nodal.analog_variable")
+        variable = operation;
+    });
+    if (!variable)
+      return fail("generated event storage ownership mutation anchor missing");
+    variable->setAttr("generated_owner", mlir::StringAttr::get(&context, "GeneratedEvent.forged"));
     std::string rejected = "sentinel";
     llvm::raw_string_ostream rejectedStream(rejected);
     if (mlir::succeeded(nodal::emitBackend(*invalid, nodal::BackendKind::VerilogA, rejectedStream)))
-      return fail("unqualified generated event storage passed backend verification");
+      return fail("forged generated event storage passed backend verification");
     rejectedStream.flush();
     if (rejected != "sentinel")
-      return fail("unqualified generated event storage published partial output");
+      return fail("forged generated event storage published partial output");
   }
 
   auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);

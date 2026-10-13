@@ -1475,6 +1475,65 @@ object Increment43RangeConstructionTests extends TestSuite:
           finally delete(directory)
         case _ => assert(true)
 
+    test("public generated event storage is local to each target occurrence"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val module = new Increment43GeneratedEventStorage
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                module,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            val region = ConstructionKernel
+              .inspect(new Increment43GeneratedEventStorage)
+              .generatedRegions
+              .head
+            for operation <- Vector(
+                "nodal.analog_variable",
+                "nodal.analog_variable_read",
+                "nodal.analog_assign",
+                "nodal.analog_cross",
+                "nodal.analog_on"
+              )
+            do
+              val line = result.mlir.linesIterator.find(_.contains(s"\"$operation\"")).get
+              assert(line.contains(s"generated_owner = \"${region.path}\""))
+              assert(line.contains(s"generated_induction = \"${region.induction}\""))
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains("@(cross(1")) == 1)
+            val loopOffset = result.verilogA.indexOf("for (generate_0_index")
+            val procedureOffset = result.verilogA.indexOf("begin : event_", loopOffset)
+            val declarations = result.verilogA.linesIterator
+              .filter(line =>
+                val trimmed = line.trim
+                (trimmed.startsWith("real event_") || trimmed.startsWith("integer event_")) &&
+                  trimmed.endsWith(";")
+              )
+              .toVector
+            assert(declarations.size == 2)
+            for declaration <- declarations do
+              val offset = result.verilogA.indexOf(declaration)
+              assert(loopOffset < offset)
+              assert(offset < procedureOffset)
+            val assignments = result.verilogA.linesIterator
+              .map(_.trim)
+              .filter(line => line.startsWith("event_") && line.contains(" = "))
+              .toVector
+            assert(assignments.size == 2)
+            assert(assignments.exists(_.contains(" + 1.0")))
+          finally delete(directory)
+        case _ => assert(true)
+
     test("public symbolic generated contributions retain one parameterized Verilog-A loop"):
       (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
         case (Some(nodalc), Some(translator)) =>
@@ -1638,7 +1697,14 @@ object Increment43RangeConstructionTests extends TestSuite:
               case success: NativeCompilerSuccess =>
                 assert(success.normalizedMlir.contains("\"nodal.analog_cross\""))
                 assert(success.normalizedMlir.contains("\"nodal.analog_on\""))
-                for operation <- Vector("nodal.analog_cross", "nodal.analog_on") do
+                for operation <- Vector(
+                    "nodal.analog_variable",
+                    "nodal.analog_variable_read",
+                    "nodal.analog_assign",
+                    "nodal.analog_cross",
+                    "nodal.analog_on"
+                  )
+                do
                   val line = success.normalizedMlir.linesIterator
                     .find(_.contains(s"\"$operation\""))
                     .get
@@ -1648,7 +1714,14 @@ object Increment43RangeConstructionTests extends TestSuite:
                 scala.Predef.assert(false, s"${failure.diagnostic}\n${failure.standardError}")
 
             val marker = s"generated_owner = \"${region.path}\""
-            for operation <- Vector("nodal.analog_cross", "nodal.analog_on") do
+            for operation <- Vector(
+                "nodal.analog_variable",
+                "nodal.analog_variable_read",
+                "nodal.analog_assign",
+                "nodal.analog_cross",
+                "nodal.analog_on"
+              )
+            do
               val operationOffset = document.text.indexOf(s"\"$operation\"")
               val ownerOffset = document.text.indexOf(marker, operationOffset)
               assert(operationOffset >= 0)

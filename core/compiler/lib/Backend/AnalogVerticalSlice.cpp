@@ -1440,8 +1440,31 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
 
   Block &analogBody = analog->getRegion(0).front();
   unsigned contributions = 0;
+  unsigned procedures = 0;
   for (Operation &operation : analogBody) {
     llvm::StringRef name = operation.getName().getStringRef();
+    if (name == "nodal.analog_procedure") {
+      auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
+      auto generatedInduction = operation.getAttrOfType<StringAttr>("generated_induction");
+      if (!owner || !generatedInduction || owner.getValue() != regionId.getValue() ||
+          generatedInduction.getValue() != inductionPath.getValue())
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated event procedure ownership does not match its range");
+      if (!hasAnalogEvents(&operation))
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated event procedure requires an analog event");
+      bool hasStorage = false;
+      operation.walk([&](Operation *nested) {
+        hasStorage |=
+            llvm::isa<AnalogVariableOp, AnalogVariableReadOp, AnalogAssignOp, AnalogLoopOp>(nested);
+      });
+      if (hasStorage)
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            "generated event-local storage requires a separately qualified target layout");
+      ++procedures;
+      continue;
+    }
     if (name == "nodal.contribute") {
       auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
       auto generatedInduction = operation.getAttrOfType<StringAttr>("generated_induction");
@@ -1624,9 +1647,10 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                                "flickerNoise/tableNoise expressions "
                                "only");
   }
-  if (!contributions)
+  if ((contributions == 0) == (procedures == 0) || procedures > 1)
     return emitMappedFailure(analog, "NODAL-BACKEND-CAPABILITY-001",
-                             "generated Verilog-A range requires an additive contribution");
+                             "generated Verilog-A range requires either additive contributions or "
+                             "one storage-free event procedure");
 
   output << "  analog begin\n";
   output << "    for (" << induction.getValue() << " = " << lower->text << "; "

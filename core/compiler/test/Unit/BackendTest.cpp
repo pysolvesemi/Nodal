@@ -400,6 +400,34 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedEventModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true, semantic_path = "GeneratedEvent"}, sym_name = "GeneratedEvent"}> ({
+  ^bb0:
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedEvent.generate_0", induction_path = "GeneratedEvent.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedEvent.generate_0", generated_induction = "GeneratedEvent.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        "nodal.analog_procedure"() <{owner = "GeneratedEvent", generated_owner = "GeneratedEvent.generate_0", generated_induction = "GeneratedEvent.generate_0.index", metadata = {semantic_path = "GeneratedEvent.analogProcedure"}}> ({
+        ^bb0:
+          %cross = "nodal.analog_cross"() <{event_id = "GeneratedEvent.event_0.event", owner = "GeneratedEvent", contract = "increment37", name = "", generated_owner = "GeneratedEvent.generate_0", generated_induction = "GeneratedEvent.generate_0.index", arguments = [{slot = 0 : i64, value = "1.0 V", kind = "real", dimension = "voltage", reads = []}], analyses = [], event_reads = [], metadata = {}}> : () -> !nodal.analog_event
+          "nodal.analog_on"(%cross) <{statement_id = "GeneratedEvent.event_0", owner = "GeneratedEvent", generated_owner = "GeneratedEvent.generate_0", generated_induction = "GeneratedEvent.generate_0.index", metadata = {}}> ({
+          ^bb0:
+          }) : (!nodal.analog_event) -> ()
+        }) : () -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kSymbolicGeneratedContributionModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -1445,6 +1473,72 @@ int main() {
     rejectedStream.flush();
     if (rejected != "sentinel")
       return fail("invalid generated tableNoise consumer published partial output");
+  }
+
+  auto generatedEvent = parse(context, kGeneratedEventModule);
+  if (!generatedEvent)
+    return fail("could not parse the generated event fixture");
+  std::string generatedEventOutput;
+  llvm::raw_string_ostream generatedEventStream(generatedEventOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*generatedEvent, nodal::BackendKind::VerilogA, generatedEventStream)))
+    return fail("generated event emission failed");
+  generatedEventStream.flush();
+  if (generatedEventOutput.find(
+          "for (generate_0_index = 0; generate_0_index < 2; generate_0_index = "
+          "generate_0_index + 1) begin : generate_0\n") == std::string::npos ||
+      generatedEventOutput.find("@(cross(1.0)) begin\n") == std::string::npos ||
+      generatedEventOutput.find("real event_") != std::string::npos ||
+      generatedEventOutput.find("integer event_") != std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(generatedEventOutput, *configuration)))
+    return fail("generated event lost its single owned target occurrence");
+
+  {
+    auto forged = parse(context, kGeneratedEventModule);
+    if (!forged)
+      return fail("could not parse the generated event mutation fixture");
+    mlir::Operation *procedure = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!procedure && operation->getName().getStringRef() == "nodal.analog_procedure")
+        procedure = operation;
+    });
+    if (!procedure)
+      return fail("generated event procedure mutation anchor missing");
+    procedure->setAttr("generated_owner", mlir::StringAttr::get(&context, "GeneratedEvent.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated event ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated event ownership published partial output");
+  }
+
+  {
+    const std::string anchor = "          %cross = \"nodal.analog_cross\"()";
+    const std::string storage =
+        "          %state = \"nodal.analog_variable\"() <{identity = "
+        "\"GeneratedEvent.state\", owner = \"GeneratedEvent\", declaration_order = 0 : "
+        "i64, initialized = true, initializer_value = \"0.0 V\", initializer_kind = "
+        "\"real\", initializer_dimension = \"voltage\", initializer_reads = [], "
+        "generated_owner = \"GeneratedEvent.generate_0\", generated_induction = "
+        "\"GeneratedEvent.generate_0.index\", metadata = {}}> : () -> "
+        "!nodal.variable<\"real\", \"voltage\">\n";
+    std::string invalidSource = kGeneratedEventModule.str();
+    auto position = invalidSource.find(anchor);
+    if (position == std::string::npos)
+      return fail("generated event storage mutation anchor missing");
+    invalidSource.insert(position, storage);
+    auto invalid = parse(context, invalidSource);
+    if (!invalid)
+      return fail("generated event storage mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*invalid, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("unqualified generated event storage passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("unqualified generated event storage published partial output");
   }
 
   auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);

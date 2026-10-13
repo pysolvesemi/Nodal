@@ -106,6 +106,12 @@ final class Increment43GeneratedEventStorage extends Module:
       on(cross(1.0.V)):
         state := state + 1.0.V
 
+final class Increment43GeneratedEventTarget extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      on(cross(1.0.V)):
+        ()
+
 final class Increment43UnsupportedGeneratedContinuousOperator extends Module:
   hdlRange(0, 2): _ =>
     val state = ddt(1.0.V)
@@ -1429,6 +1435,43 @@ object Increment43RangeConstructionTests extends TestSuite:
               ) == 1
             )
             assert(!result.verilogA.contains("real noise_"))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated event retains one non-unrolled target occurrence"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedEventTarget,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            val region = ConstructionKernel
+              .inspect(new Increment43GeneratedEventTarget)
+              .generatedRegions.head
+            for operation <- Vector(
+                "nodal.analog_procedure",
+                "nodal.analog_cross",
+                "nodal.analog_on"
+              )
+            do
+              val line = result.mlir.linesIterator.find(_.contains(s"\"$operation\"")).get
+              assert(line.contains(s"generated_owner = \"${region.path}\""))
+              assert(line.contains(s"generated_induction = \"${region.induction}\""))
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains("@(cross(1")) == 1)
+            assert(!result.verilogA.contains("real event_"))
+            assert(!result.verilogA.contains("integer event_"))
           finally delete(directory)
         case _ => assert(true)
 

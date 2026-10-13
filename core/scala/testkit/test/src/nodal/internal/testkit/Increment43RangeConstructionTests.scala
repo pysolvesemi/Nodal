@@ -253,6 +253,11 @@ final class Increment43GeneratedAbstimeContribution extends Module:
     analog:
       V(p, n) <+ ((abstime / 1.0.s) * 1.0.V)
 
+final class Increment43GeneratedBoundStep extends Module:
+  hdlRange(0, 2): _ =>
+    analog:
+      boundStep(1.0.ns)
+
 final class Increment43GeneratedLaplaceContribution extends Module:
   val p = inout(Electrical)
   val n = inout(Electrical)
@@ -327,8 +332,7 @@ final class Increment43UnsupportedGeneratedNoiseOperator extends Module:
 
 final class Increment43UnsupportedGeneratedBoundStep extends Module:
   hdlRange(0, 2): _ =>
-    analog:
-      boundStep(1.0.ns)
+    boundStep(1.0.ns)
 
 final class Increment43UnsupportedGeneratedEvent extends Module:
   hdlRange(0, 2): _ =>
@@ -1319,6 +1323,37 @@ object Increment43RangeConstructionTests extends TestSuite:
                 line.contains("V(p, n) <+") && line.contains("$abstime")
               ) == 1
             )
+            assert(!result.verilogA.contains("real waveform_"))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated boundStep retains one per-occurrence target effect"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedBoundStep,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.contains("\"nodal.analog_bound_step\""))
+            val boundStepLine =
+              result.mlir.linesIterator.find(_.contains("\"nodal.analog_bound_step\"")).get
+            assert(boundStepLine.contains("generated_owner"))
+            assert(boundStepLine.contains("generated_induction"))
+            assert(!boundStepLine.contains("state_id"))
+            assert(!boundStepLine.contains(" -> f64"))
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains("$bound_step(1e-09);")) == 1)
             assert(!result.verilogA.contains("real waveform_"))
           finally delete(directory)
         case _ => assert(true)

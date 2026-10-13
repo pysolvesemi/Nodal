@@ -1544,7 +1544,13 @@ private final class ConstructionSession(val options: EmitOptions):
                       Set("analog_ddt", "analog_idt").contains(operator.operation)
                   ) || generatedWaveforms.exists(waveform =>
                     waveform._1 == reference &&
-                      Set("analog_transition", "analog_slew", "analog_absdelay")
+                      Set(
+                        "analog_transition",
+                        "analog_slew",
+                        "analog_absdelay",
+                        "analog_abstime",
+                        "analog_bound_step"
+                      )
                         .contains(waveform._2)
                   ) || generatedTransfers.exists(transfer =>
                     transfer._1 == reference &&
@@ -1559,7 +1565,8 @@ private final class ConstructionSession(val options: EmitOptions):
         fail(
           "NODAL-ITERATION-043-004",
           "generated continuous regions require an owned ddt, idt, transition, slew, " +
-            "absdelay, laplaceNd, ziNd, noise expression, or additive contribution",
+            "absdelay, abstime, boundStep, laplaceNd, ziNd, noise expression, or additive " +
+            "contribution",
           Some(generatedRegionPath(record))
         )
       if module.domains.size != domainCount || module.instances.size != instanceCount ||

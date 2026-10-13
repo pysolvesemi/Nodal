@@ -278,6 +278,31 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedBoundStepModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.unit"() <{dimension = "time", metadata = {}, native_suffix = "", scale = 1.0 : f64, sym_name = "Second", symbol = "s"}> : () -> ()
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedBoundStep"}> ({
+  ^bb0:
+    "nodal.parameter"() <{classification = "ordinary", default_value = 1.0e-9 : f64, metadata = {}, parameter_kind = "real", sym_name = "LIMIT", type = f64, unit = @Second, variability = "fixed"}> : () -> ()
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedBoundStep.generate_0", induction_path = "GeneratedBoundStep.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedBoundStep.generate_0", generated_induction = "GeneratedBoundStep.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %limit = "nodal.parameter_ref"() <{metadata = {}, parameter = @LIMIT}> : () -> !nodal.quantity<"real", "time">
+        "nodal.analog_bound_step"(%limit) <{analyses = ["transient"], context = "legacy-analog", generated_owner = "GeneratedBoundStep.generate_0", generated_induction = "GeneratedBoundStep.generate_0.index", input_continuity = "none", metadata = {identity = "step"}, operand_dimensions = ["time"], operator_contract = "increment36", operator_id = "GeneratedBoundStep.step", output_continuity = "none", owner = "GeneratedBoundStep", result_dimension = "none"}> : (!nodal.quantity<"real", "time">) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kGeneratedLaplaceContributionModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -1242,6 +1267,50 @@ int main() {
     rejectedStream.flush();
     if (rejected != "sentinel")
       return fail("invalid generated abstime consumer published partial output");
+  }
+
+  auto generatedBoundStep = parse(context, kGeneratedBoundStepModule);
+  if (!generatedBoundStep)
+    return fail("could not parse the generated boundStep fixture");
+  std::string generatedBoundStepOutput;
+  llvm::raw_string_ostream generatedBoundStepStream(generatedBoundStepOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedBoundStep, nodal::BackendKind::VerilogA,
+                                      generatedBoundStepStream)))
+    return fail("generated boundStep emission failed");
+  generatedBoundStepStream.flush();
+  if (generatedBoundStepOutput.find("$bound_step(LIMIT);\n") == std::string::npos ||
+      generatedBoundStepOutput.find("real waveform_") != std::string::npos)
+    return fail("generated boundStep lost its single owned per-occurrence effect");
+
+  for (bool duplicate : {false, true}) {
+    auto forged = parse(context, kGeneratedBoundStepModule);
+    if (!forged)
+      return fail("could not parse the generated boundStep mutation fixture");
+    mlir::Operation *boundStep = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!boundStep && operation->getName().getStringRef() == "nodal.analog_bound_step")
+        boundStep = operation;
+    });
+    if (!boundStep)
+      return fail("generated boundStep mutation anchor missing");
+    if (duplicate) {
+      mlir::Operation *second = boundStep->clone();
+      second->setAttr("operator_id", mlir::StringAttr::get(&context, "GeneratedBoundStep.second"));
+      auto insertionPoint = mlir::Block::iterator(boundStep);
+      ++insertionPoint;
+      boundStep->getBlock()->getOperations().insert(insertionPoint, second);
+    } else {
+      boundStep->setAttr("generated_owner",
+                         mlir::StringAttr::get(&context, "GeneratedBoundStep.forged"));
+    }
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail(duplicate ? "multiple generated boundStep effects passed backend verification"
+                            : "forged generated boundStep ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated boundStep published partial output");
   }
 
   auto generatedLaplace = parse(context, kGeneratedLaplaceContributionModule);

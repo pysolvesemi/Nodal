@@ -240,8 +240,13 @@ private[nodal] object ConstructionKernel:
     active.foreach: session =>
       val ownedGeneratedWaveform =
         session.generatedContinuousRegionActive &&
-          Set("analog_transition", "analog_slew", "analog_absdelay", "analog_abstime")
-            .contains(operation)
+          Set(
+            "analog_transition",
+            "analog_slew",
+            "analog_absdelay",
+            "analog_abstime",
+            "analog_bound_step"
+          ).contains(operation)
       if !ownedGeneratedWaveform then
         session.requireNoGeneratedEffect(s"analog waveform operator '$operation'")
       session.registerWaveformOperator(value, operation, inputs)

@@ -1316,6 +1316,8 @@ def Nodal_AnalogBoundStepOp : Nodal_Op<"analog_bound_step", [HasParent<"AnalogOp
     OptionalAttr<StrAttr>:$output_continuity,
     OptionalAttr<StrAttr>:$state_id,
     OptionalAttr<ArrayAttr>:$analyses,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;

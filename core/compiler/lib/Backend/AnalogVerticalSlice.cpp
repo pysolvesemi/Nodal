@@ -1441,6 +1441,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
   Block &analogBody = analog->getRegion(0).front();
   unsigned contributions = 0;
   unsigned procedures = 0;
+  unsigned boundStepEffects = 0;
   Operation *eventProcedure = nullptr;
   for (Operation &operation : analogBody) {
     llvm::StringRef name = operation.getName().getStringRef();
@@ -1739,6 +1740,24 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                                  "generated abstime cannot be rendered as one owned expression");
       continue;
     }
+    if (name == "nodal.analog_bound_step") {
+      auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
+      auto generatedInduction = operation.getAttrOfType<StringAttr>("generated_induction");
+      FailureOr<std::string> operandDimension = failure();
+      if (operation.getNumOperands() == 1)
+        operandDimension = nodal::getAnalogRealDimension(operation.getOperand(0));
+      if (!owner || !generatedInduction || owner.getValue() != regionId.getValue() ||
+          generatedInduction.getValue() != inductionPath.getValue())
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated boundStep ownership does not match its range");
+      if (operation.getNumOperands() != 1 || operation.getNumResults() != 0 ||
+          failed(operandDimension) || *operandDimension != "time")
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            "generated boundStep requires one time-valued operand and no result");
+      ++boundStepEffects;
+      continue;
+    }
     if (name == "nodal.analog_noise") {
       auto kind = operation.getAttrOfType<StringAttr>("noise_kind");
       auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
@@ -1801,15 +1820,19 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
     if (!supportedExpression)
       return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                "generated Verilog-A backend profile supports contributions and "
-                               "owned ddt/idt/transition/slew/absdelay/abstime/laplaceNd/ziNd/"
+                               "owned ddt/idt/transition/slew/absdelay/abstime/boundStep/"
+                               "laplaceNd/ziNd/"
                                "whiteNoise/"
                                "flickerNoise/tableNoise expressions "
                                "only");
   }
-  if ((contributions == 0) == (procedures == 0) || procedures > 1)
+  const unsigned profiles = static_cast<unsigned>(contributions != 0) +
+                            static_cast<unsigned>(procedures != 0) +
+                            static_cast<unsigned>(boundStepEffects != 0);
+  if (profiles != 1 || procedures > 1 || boundStepEffects > 1)
     return emitMappedFailure(analog, "NODAL-BACKEND-CAPABILITY-001",
                              "generated Verilog-A range requires either additive contributions or "
-                             "one owned event procedure");
+                             "one owned event procedure or boundStep effect");
 
   output << "  analog begin\n";
   output << "    for (" << induction.getValue() << " = " << lower->text << "; "

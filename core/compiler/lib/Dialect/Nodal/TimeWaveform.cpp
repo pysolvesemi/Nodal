@@ -248,10 +248,11 @@ LogicalResult verifyTimeWaveformOperation(Operation *op) {
       return emitMappedFailure(
           op, "NODAL-ITERATION-043-004",
           "generated waveform ownership does not match its analog and generate owners");
-    if (!isStatefulWaveformOperation(op) && !clock)
+    if (!isStatefulWaveformOperation(op) && !clock && !effect)
       return emitMappedFailure(
           op, "NODAL-ITERATION-043-004",
-          "generated waveform profile admits only transition, slew, absdelay, and abstime");
+          "generated waveform profile admits only transition, slew, absdelay, abstime, and "
+          "boundStep");
   }
   const unsigned count = op->getNumOperands();
   if ((transition && (count < 1 || count > 5)) || (slew && (count < 1 || count > 3)) ||

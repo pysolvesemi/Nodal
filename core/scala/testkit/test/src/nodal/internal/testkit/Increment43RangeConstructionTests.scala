@@ -90,6 +90,17 @@ final class Increment43GeneratedConditionalLexicalStorage extends Module:
         analogOtherwise:
           state := state + 2.0.real
 
+final class Increment43GeneratedCaseLexicalStorage extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val mode = variable(Integer, 0.integer)
+      val state = variable(Real, 0.0.real)
+      analogCase(mode):
+        analogCaseArm(0):
+          state := state + 3.0.real
+        analogCaseDefault:
+          state := state + 4.0.real
+
 final class Increment43GeneratedStructuredLexicalStorage extends Module:
   hdlRange(0, 2): _ =>
     analogProcedure:
@@ -1619,6 +1630,40 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.contains("end else begin"))
             assert(result.verilogA.contains("+ 1.0"))
             assert(result.verilogA.contains("+ 2.0"))
+            assert(!result.verilogA.contains("@("))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated case lexical storage retains authored arms"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedCaseLexicalStorage,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.contains("\"nodal.analog_case\""))
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_case_arm\"")) == 2)
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            assert(
+              result.verilogA.contains(
+                "case (event_Increment43GeneratedCaseLexicalStorage_mode)"
+              )
+            )
+            assert(result.verilogA.contains("0: begin"))
+            assert(result.verilogA.contains("default: begin"))
+            assert(result.verilogA.contains("+ 3.0"))
+            assert(result.verilogA.contains("+ 4.0"))
             assert(!result.verilogA.contains("@("))
           finally delete(directory)
         case _ => assert(true)

@@ -135,7 +135,7 @@ final class Increment43GeneratedConditionalEventStorage extends Module:
               state := state + 7.0.V
             analogCaseDefault:
               state := state + 8.0.V
-          block:
+          CandidateRuntime.block:
             state := state + 9.0.V
           analogContinue()
           analogBreak()

@@ -2039,16 +2039,22 @@ int main() {
       return fail("generated event nested-scope mutation fixture did not parse");
     mlir::Operation *scopeConditional = nullptr;
     mlir::Operation *directScope = nullptr;
+    mlir::Operation *scopeLoop = nullptr;
+    mlir::Operation *scopeCasePrototype = nullptr;
     nestedScopeModule->walk([&](mlir::Operation *operation) {
       if (operation->getName().getStringRef() == "nodal.analog_if" && operation->getParentOp() &&
           operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
         scopeConditional = operation;
+      if (!scopeLoop && operation->getName().getStringRef() == "nodal.analog_loop")
+        scopeLoop = operation;
+      if (!scopeCasePrototype && operation->getName().getStringRef() == "nodal.analog_case")
+        scopeCasePrototype = operation;
       if (!directScope && operation->getName().getStringRef() == "nodal.analog_scope" &&
           operation->getParentOp() &&
           operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
         directScope = operation;
     });
-    if (!scopeConditional || !directScope)
+    if (!scopeConditional || !scopeLoop || !scopeCasePrototype || !directScope)
       return fail("generated event nested-scope mutation anchor missing");
     mlir::Operation *nestedScope = directScope->clone();
     nestedScope->setAttr(
@@ -2056,14 +2062,37 @@ int main() {
         mlir::StringAttr::get(&context, "GeneratedEvent.event_0.loop_2.nested_scope_mutation"));
     scopeConditional->getRegion(0).front().back().getRegion(0).front().push_back(nestedScope);
     directScope->erase();
-    std::string nestedScopeRejected = "sentinel";
-    llvm::raw_string_ostream nestedScopeRejectedStream(nestedScopeRejected);
+    std::string nestedScopeOutput;
+    llvm::raw_string_ostream nestedScopeStream(nestedScopeOutput);
+    if (mlir::failed(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                        nestedScopeStream)))
+      return fail("generated event conditional-arm scope failed backend verification");
+    nestedScopeStream.flush();
+    auto conditionalScopeStart = nestedScopeOutput.find("else begin");
+    auto conditionalScopeAssignment = nestedScopeOutput.find(
+        "event_GeneratedEvent_state = "
+        "(event_GeneratedEvent_event_0_loop_2_scope_0_assignment_read_0 + 9.0);");
+    if (conditionalScopeStart == std::string::npos ||
+        conditionalScopeAssignment == std::string::npos ||
+        conditionalScopeAssignment < conditionalScopeStart ||
+        mlir::failed(nodal::reparseBackendTarget(nestedScopeOutput, *configuration)))
+      return fail("generated event conditional-arm scope lost its direct target topology");
+
+    mlir::Operation *scopeCase = scopeCasePrototype->clone();
+    retagStructuredClone(scopeCase, ".scope_case_mutation", 6);
+    scopeLoop->getRegion(0).front().push_back(scopeCase);
+    mlir::Operation *caseScope = nestedScope->clone();
+    retagStructuredClone(caseScope, ".case_scope_mutation", 8);
+    scopeCase->getRegion(0).front().back().getRegion(0).front().push_back(caseScope);
+    nestedScope->erase();
+    std::string caseScopeRejected = "sentinel";
+    llvm::raw_string_ostream caseScopeRejectedStream(caseScopeRejected);
     if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
-                                           nestedScopeRejectedStream)))
-      return fail("unsupported nested generated loop scope passed backend verification");
-    nestedScopeRejectedStream.flush();
-    if (nestedScopeRejected != "sentinel")
-      return fail("unsupported nested generated loop scope published partial output");
+                                           caseScopeRejectedStream)))
+      return fail("unsupported generated loop case-arm scope passed backend verification");
+    caseScopeRejectedStream.flush();
+    if (caseScopeRejected != "sentinel")
+      return fail("unsupported generated loop case-arm scope published partial output");
   }
 
   auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);

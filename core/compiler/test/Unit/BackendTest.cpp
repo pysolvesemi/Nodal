@@ -1728,6 +1728,29 @@ int main() {
         "\"voltage\">) -> ()\n"
         "                }) : () -> ()\n"
         "              }) : () -> ()\n"
+        "              \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.scope_0\"}, owner = \"GeneratedEvent\", scope_id = "
+        "\"GeneratedEvent.event_0.loop_2.scope_0\"}> ({\n"
+        "              ^bb0:\n"
+        "                %state_read_scope = \"nodal.analog_variable_read\"(%state) "
+        "<{read_id = \"GeneratedEvent.event_0.loop_2.scope_0.assignment.read_0\", owner = "
+        "\"GeneratedEvent\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.loop_2.scope_0.assignment.read_0\"}}> : "
+        "(!nodal.variable<\"real\", \"voltage\">) -> "
+        "!nodal.quantity<\"real\", \"voltage\">\n"
+        "                \"nodal.analog_assign\"(%state, %state_read_scope) <{analyses = "
+        "[\"dc\", \"transient\"], authored_order = 6 : i64, guard_dimension = \"\", "
+        "guard_kind = \"\", guard_present = false, guard_reads = [], guard_value = \"\", "
+        "generated_owner = \"GeneratedEvent.generate_0\", generated_induction = "
+        "\"GeneratedEvent.generate_0.index\", metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.scope_0.assignment\", value = "
+        "\"analog_add(GeneratedEvent.state,9.0 V)\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.loop_2.scope_0.assignment\", "
+        "value_dimension = \"voltage\", value_kind = \"real\"}> : "
+        "(!nodal.variable<\"real\", \"voltage\">, !nodal.quantity<\"real\", "
+        "\"voltage\">) -> ()\n"
+        "              }) : () -> ()\n"
         "              \"nodal.analog_continue\"() <{metadata = {semantic_path = "
         "\"GeneratedEvent.event_0.loop_2.continue_0\"}, owner = \"GeneratedEvent\", "
         "statement_id = \"GeneratedEvent.event_0.loop_2.continue_0\"}> : () -> ()\n"
@@ -1768,15 +1791,18 @@ int main() {
         "real event_GeneratedEvent_event_0_loop_2_if_0_assignment_read_0;");
     auto loopElseRead = generatedStorageOutput.find(
         "real event_GeneratedEvent_event_0_loop_2_if_0_assignment_else_read_0;");
+    auto loopScopeRead = generatedStorageOutput.find(
+        "real event_GeneratedEvent_event_0_loop_2_scope_0_assignment_read_0;");
     auto procedure = generatedStorageOutput.find("begin : event_GeneratedEvent_procedure");
     if (loop == std::string::npos || select == std::string::npos || mode == std::string::npos ||
         iterations == std::string::npos || state == std::string::npos ||
         read == std::string::npos || caseRead == std::string::npos ||
         loopIndex == std::string::npos || loopRead == std::string::npos ||
-        loopElseRead == std::string::npos || procedure == std::string::npos ||
+        loopElseRead == std::string::npos || loopScopeRead == std::string::npos ||
+        procedure == std::string::npos ||
         !(loop < select && select < mode && mode < iterations && iterations < state &&
           state < read && read < caseRead && caseRead < loopRead && loopRead < loopElseRead &&
-          loopElseRead < loopIndex && loopIndex < procedure) ||
+          loopElseRead < loopScopeRead && loopScopeRead < loopIndex && loopIndex < procedure) ||
         generatedStorageOutput.find("if (event_GeneratedEvent_select) begin") ==
             std::string::npos ||
         generatedStorageOutput.find("else begin") == std::string::npos ||
@@ -1814,6 +1840,10 @@ int main() {
         generatedStorageOutput.find(
             "event_GeneratedEvent_state = "
             "(event_GeneratedEvent_event_0_loop_2_if_0_assignment_else_read_0 + 6.0);") ==
+            std::string::npos ||
+        generatedStorageOutput.find(
+            "event_GeneratedEvent_state = "
+            "(event_GeneratedEvent_event_0_loop_2_scope_0_assignment_read_0 + 9.0);") ==
             std::string::npos ||
         generatedStorageOutput.find("event_GeneratedEvent_event_0_loop_2_continue = 1;") ==
             std::string::npos ||
@@ -1922,7 +1952,7 @@ int main() {
       });
     };
     mlir::Operation *loopCase = eventCase->clone();
-    retagStructuredClone(loopCase, ".loop_case_mutation", 6);
+    retagStructuredClone(loopCase, ".loop_case_mutation", 7);
     runtimeLoop->getRegion(0).front().push_back(loopCase);
     std::string loopCaseOutput;
     llvm::raw_string_ostream loopCaseStream(loopCaseOutput);
@@ -1940,7 +1970,7 @@ int main() {
     auto &loopCaseBlock = loopCase->getRegion(0).front();
     mlir::Operation &lastCaseArm = loopCaseBlock.back();
     mlir::Operation *nestedCase = loopCase->clone();
-    retagStructuredClone(nestedCase, ".nested_case_mutation", 8);
+    retagStructuredClone(nestedCase, ".nested_case_mutation", 9);
     lastCaseArm.getRegion(0).front().push_back(nestedCase);
     std::string nestedCaseRejected = "sentinel";
     llvm::raw_string_ostream nestedCaseRejectedStream(nestedCaseRejected);
@@ -1965,7 +1995,7 @@ int main() {
     auto &conditionalBlock = loopConditional->getRegion(0).front();
     mlir::Operation &lastArm = conditionalBlock.back();
     mlir::Operation *nestedConditional = loopConditional->clone();
-    retagStructuredClone(nestedConditional, ".nested_conditional_mutation", 6);
+    retagStructuredClone(nestedConditional, ".nested_conditional_mutation", 7);
     lastArm.getRegion(0).front().push_back(nestedConditional);
     std::string nestedConditionalRejected = "sentinel";
     llvm::raw_string_ostream nestedConditionalRejectedStream(nestedConditionalRejected);
@@ -2003,6 +2033,37 @@ int main() {
     nestedExitRejectedStream.flush();
     if (nestedExitRejected != "sentinel")
       return fail("unsupported nested generated loop exit published partial output");
+
+    auto nestedScopeModule = parse(context, generatedStorageSource);
+    if (!nestedScopeModule)
+      return fail("generated event nested-scope mutation fixture did not parse");
+    mlir::Operation *scopeConditional = nullptr;
+    mlir::Operation *directScope = nullptr;
+    nestedScopeModule->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.analog_if" && operation->getParentOp() &&
+          operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
+        scopeConditional = operation;
+      if (!directScope && operation->getName().getStringRef() == "nodal.analog_scope" &&
+          operation->getParentOp() &&
+          operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
+        directScope = operation;
+    });
+    if (!scopeConditional || !directScope)
+      return fail("generated event nested-scope mutation anchor missing");
+    mlir::Operation *nestedScope = directScope->clone();
+    nestedScope->setAttr(
+        "scope_id",
+        mlir::StringAttr::get(&context, "GeneratedEvent.event_0.loop_2.nested_scope_mutation"));
+    scopeConditional->getRegion(0).front().back().getRegion(0).front().push_back(nestedScope);
+    directScope->erase();
+    std::string nestedScopeRejected = "sentinel";
+    llvm::raw_string_ostream nestedScopeRejectedStream(nestedScopeRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                           nestedScopeRejectedStream)))
+      return fail("unsupported nested generated loop scope passed backend verification");
+    nestedScopeRejectedStream.flush();
+    if (nestedScopeRejected != "sentinel")
+      return fail("unsupported nested generated loop scope published partial output");
   }
 
   auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);

@@ -1524,8 +1524,15 @@ int main() {
         "generated_owner = \"GeneratedEvent.generate_0\", generated_induction = "
         "\"GeneratedEvent.generate_0.index\", metadata = {}}> : () -> "
         "!nodal.variable<\"boolean\", \"1\">\n"
+        "          %mode = \"nodal.analog_variable\"() <{identity = "
+        "\"GeneratedEvent.mode\", owner = \"GeneratedEvent\", declaration_order = 1 : "
+        "i64, initialized = true, initializer_value = \"0\", initializer_kind = "
+        "\"integer\", initializer_dimension = \"1\", initializer_reads = [], "
+        "generated_owner = \"GeneratedEvent.generate_0\", generated_induction = "
+        "\"GeneratedEvent.generate_0.index\", metadata = {}}> : () -> "
+        "!nodal.variable<\"integer\", \"1\">\n"
         "          %state = \"nodal.analog_variable\"() <{identity = "
-        "\"GeneratedEvent.state\", owner = \"GeneratedEvent\", declaration_order = 1 : "
+        "\"GeneratedEvent.state\", owner = \"GeneratedEvent\", declaration_order = 2 : "
         "i64, initialized = true, initializer_value = \"0.0 V\", initializer_kind = "
         "\"real\", initializer_dimension = \"voltage\", initializer_reads = [], "
         "generated_owner = \"GeneratedEvent.generate_0\", generated_induction = "
@@ -1590,6 +1597,61 @@ int main() {
         "\"voltage\">, !nodal.quantity<\"real\", \"voltage\">) -> ()\n"
         "              }) : () -> ()\n"
         "            }) : () -> ()\n"
+        "            \"nodal.analog_case\"() <{metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.case_1.selector\"}, owner = \"GeneratedEvent\", "
+        "selector_dimension = \"1\", selector_kind = \"integer\", selector_reads = "
+        "[\"GeneratedEvent.mode\"], selector_value = \"GeneratedEvent.mode\", "
+        "statement_id = \"GeneratedEvent.event_0.case_1\", static_value = \"\", "
+        "static_value_present = false}> ({\n"
+        "            ^bb0:\n"
+        "              \"nodal.analog_case_arm\"() <{arm_id = "
+        "\"GeneratedEvent.event_0.case_1.arm_0\", is_default = false, labels = "
+        "[\"integer:0\"], metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.case_1.arm_0\"}, owner = \"GeneratedEvent\"}> ({\n"
+        "              ^bb0:\n"
+        "                %state_read_case = \"nodal.analog_variable_read\"(%state) "
+        "<{read_id = \"GeneratedEvent.event_0.case_assignment.read_0\", owner = "
+        "\"GeneratedEvent\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.case_assignment.read_0\"}}> : "
+        "(!nodal.variable<\"real\", \"voltage\">) -> "
+        "!nodal.quantity<\"real\", \"voltage\">\n"
+        "                \"nodal.analog_assign\"(%state, %state_read_case) <{analyses = "
+        "[\"dc\", \"transient\"], authored_order = 2 : i64, guard_dimension = "
+        "\"\", guard_kind = \"\", guard_present = false, guard_reads = [], "
+        "guard_value = \"\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.case_assignment\", value = "
+        "\"analog_add(GeneratedEvent.state,3.0 V)\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.case_assignment\", value_dimension = "
+        "\"voltage\", value_kind = \"real\"}> : (!nodal.variable<\"real\", "
+        "\"voltage\">, !nodal.quantity<\"real\", \"voltage\">) -> ()\n"
+        "              }) : () -> ()\n"
+        "              \"nodal.analog_case_arm\"() <{arm_id = "
+        "\"GeneratedEvent.event_0.case_1.default\", is_default = true, labels = [], "
+        "metadata = {semantic_path = \"GeneratedEvent.event_0.case_1.default\"}, "
+        "owner = \"GeneratedEvent\"}> ({\n"
+        "              ^bb0:\n"
+        "                %state_read_default = \"nodal.analog_variable_read\"(%state) "
+        "<{read_id = \"GeneratedEvent.event_0.case_default_assignment.read_0\", owner = "
+        "\"GeneratedEvent\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.case_default_assignment.read_0\"}}> : "
+        "(!nodal.variable<\"real\", \"voltage\">) -> "
+        "!nodal.quantity<\"real\", \"voltage\">\n"
+        "                \"nodal.analog_assign\"(%state, %state_read_default) <{analyses = "
+        "[\"dc\", \"transient\"], authored_order = 3 : i64, guard_dimension = "
+        "\"\", guard_kind = \"\", guard_present = false, guard_reads = [], "
+        "guard_value = \"\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.case_default_assignment\", value = "
+        "\"analog_add(GeneratedEvent.state,4.0 V)\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.case_default_assignment\", "
+        "value_dimension = \"voltage\", value_kind = \"real\"}> : "
+        "(!nodal.variable<\"real\", \"voltage\">, !nodal.quantity<\"real\", "
+        "\"voltage\">) -> ()\n"
+        "              }) : () -> ()\n"
+        "            }) : () -> ()\n"
         "          }) : (!nodal.analog_event) -> ()";
     std::string generatedStorageSource = kGeneratedEventModule.str();
     auto position = generatedStorageSource.find(anchor);
@@ -1611,15 +1673,23 @@ int main() {
     generatedStorageStream.flush();
     auto loop = generatedStorageOutput.find("for (generate_0_index");
     auto select = generatedStorageOutput.find("integer event_GeneratedEvent_select = 0;");
+    auto mode = generatedStorageOutput.find("integer event_GeneratedEvent_mode = 0;");
     auto state = generatedStorageOutput.find("real event_GeneratedEvent_state = 0.0;");
     auto read = generatedStorageOutput.find("real event_GeneratedEvent_event_0_assignment_read_0;");
+    auto caseRead =
+        generatedStorageOutput.find("real event_GeneratedEvent_event_0_case_assignment_read_0;");
     auto procedure = generatedStorageOutput.find("begin : event_GeneratedEvent_procedure");
-    if (loop == std::string::npos || select == std::string::npos || state == std::string::npos ||
-        read == std::string::npos || procedure == std::string::npos ||
-        !(loop < select && select < state && state < read && read < procedure) ||
+    if (loop == std::string::npos || select == std::string::npos || mode == std::string::npos ||
+        state == std::string::npos || read == std::string::npos || caseRead == std::string::npos ||
+        procedure == std::string::npos ||
+        !(loop < select && select < mode && mode < state && state < read && read < caseRead &&
+          caseRead < procedure) ||
         generatedStorageOutput.find("if (event_GeneratedEvent_select) begin") ==
             std::string::npos ||
         generatedStorageOutput.find("else begin") == std::string::npos ||
+        generatedStorageOutput.find("case (event_GeneratedEvent_mode)") == std::string::npos ||
+        generatedStorageOutput.find("0: begin") == std::string::npos ||
+        generatedStorageOutput.find("default: begin") == std::string::npos ||
         generatedStorageOutput.find(
             "event_GeneratedEvent_event_0_assignment_read_0 = event_GeneratedEvent_state;") ==
             std::string::npos ||
@@ -1629,6 +1699,13 @@ int main() {
         generatedStorageOutput.find(
             "event_GeneratedEvent_state = "
             "(event_GeneratedEvent_event_0_assignment_else_read_0 + 2.0);") == std::string::npos ||
+        generatedStorageOutput.find(
+            "event_GeneratedEvent_state = "
+            "(event_GeneratedEvent_event_0_case_assignment_read_0 + 3.0);") == std::string::npos ||
+        generatedStorageOutput.find(
+            "event_GeneratedEvent_state = "
+            "(event_GeneratedEvent_event_0_case_default_assignment_read_0 + 4.0);") ==
+            std::string::npos ||
         mlir::failed(nodal::reparseBackendTarget(generatedStorageOutput, *configuration)))
       return fail("generated event storage lost its per-occurrence target layout");
 
@@ -1680,7 +1757,7 @@ int main() {
         "static_trip_count_present = false}> ({\n"
         "            ^bb0:\n"
         "              \"nodal.analog_assign\"(%state) <{analyses = [\"dc\", "
-        "\"transient\"], authored_order = 2 : i64, guard_dimension = \"\", "
+        "\"transient\"], authored_order = 4 : i64, guard_dimension = \"\", "
         "guard_kind = \"\", guard_present = false, guard_reads = [], guard_value = "
         "\"\", generated_owner = \"GeneratedEvent.generate_0\", "
         "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "

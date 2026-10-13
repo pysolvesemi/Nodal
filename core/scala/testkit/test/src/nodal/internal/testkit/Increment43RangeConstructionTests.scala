@@ -110,6 +110,7 @@ final class Increment43GeneratedConditionalEventStorage extends Module:
   hdlRange(0, 2): _ =>
     analogProcedure:
       val select = variable(Bool, false.B)
+      val mode = variable(Integer, 0.integer)
       val state = variable(Real, 0.0.V)
       on(cross(1.0.V)):
         analogConditional:
@@ -117,6 +118,11 @@ final class Increment43GeneratedConditionalEventStorage extends Module:
             state := state + 1.0.V
           analogOtherwise:
             state := state + 2.0.V
+        analogCase(mode):
+          analogCaseArm(0):
+            state := state + 3.0.V
+          analogCaseDefault:
+            state := state + 4.0.V
 
 final class Increment43GeneratedEventTarget extends Module:
   hdlRange(0, 2): _ =>
@@ -1546,7 +1552,7 @@ object Increment43RangeConstructionTests extends TestSuite:
           finally delete(directory)
         case _ => assert(true)
 
-    test("public generated conditional event storage retains one target control tree"):
+    test("public generated conditional and case event storage retain one target control tree"):
       (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
         case (Some(nodalc), Some(translator)) =>
           val directory = workDirectory()
@@ -1581,12 +1587,18 @@ object Increment43RangeConstructionTests extends TestSuite:
               assert(lines.forall(_.contains(s"generated_owner = \"${region.path}\"")))
               assert(lines.forall(_.contains(s"generated_induction = \"${region.induction}\"")))
             assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_if\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_case\"")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains("@(cross(1")) == 1)
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("if (event_")) == 1)
             assert(result.verilogA.linesIterator.count(_.trim == "else begin") == 1)
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("case (event_")) == 1)
+            assert(result.verilogA.linesIterator.count(_.trim == "0: begin") == 1)
+            assert(result.verilogA.linesIterator.count(_.trim == "default: begin") == 1)
             assert(result.verilogA.linesIterator.count(_.contains(" + 1.0")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains(" + 2.0")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains(" + 3.0")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains(" + 4.0")) == 1)
           finally delete(directory)
         case _ => assert(true)
 

@@ -230,6 +230,15 @@ final class Increment43GeneratedWhiteNoiseContribution extends Module:
       val density = 1.0.A * 1.0.A * 1.0.s
       I(p, n) <+ whiteNoise(NoiseId("generated white"), density)
 
+final class Increment43GeneratedFlickerNoiseContribution extends Module:
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+
+  hdlRange(0, 2): _ =>
+    analog:
+      val density = 1.0.A * 1.0.A * 1.0.s
+      I(p, n) <+ flickerNoise(NoiseId("generated flicker"), density, 1.0)
+
 final class Increment43SymbolicGeneratedContribution extends Module:
   val lanes: Param[Integer] = param(4.integer, range = 1 to 8)
   val p = inout(Electrical)
@@ -1332,6 +1341,42 @@ object Increment43RangeConstructionTests extends TestSuite:
               result.verilogA.linesIterator.count(line =>
                 line.contains("I(p, n) <+") &&
                   line.contains("white_noise(1, \"generated white\")")
+              ) == 1
+            )
+            assert(!result.verilogA.contains("real noise_"))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated flickerNoise retains one per-occurrence target expression"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedFlickerNoiseContribution,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.contains("\"nodal.analog_noise\""))
+            val noiseLine =
+              result.mlir.linesIterator.find(_.contains("\"nodal.analog_noise\"")).get
+            assert(noiseLine.contains("noise_kind = \"flicker\""))
+            assert(noiseLine.contains("generated_owner"))
+            assert(noiseLine.contains("generated_induction"))
+            assert(noiseLine.contains("source_id"))
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            assert(
+              result.verilogA.linesIterator.count(line =>
+                line.contains("I(p, n) <+") &&
+                  line.contains("flicker_noise(1, 1, \"generated flicker\")")
               ) == 1
             )
             assert(!result.verilogA.contains("real noise_"))

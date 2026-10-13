@@ -1135,8 +1135,8 @@ LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::ra
       continue;
     }
     if (name == "nodal.analog_noise") {
-      // A generated white-noise profile may pre-render one single-use call so
-      // its source stays local to the generated occurrence. Ordinary noise
+      // A supported generated-noise profile may pre-render one single-use call
+      // so its source stays local to the generated occurrence. Ordinary noise
       // sources still materialize exactly once to preserve SSA correlation.
       if (operation.getNumResults() == 1 && state.expressions.count(operation.getResult(0)))
         continue;
@@ -1575,29 +1575,37 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                                       : module   ? symbolName(module.getOperation())
                                                  : llvm::StringRef();
       llvm::DenseSet<Operation *> active;
-      if (!kind || kind.getValue() != "white")
+      if (!kind || (kind.getValue() != "white" && kind.getValue() != "flicker"))
         return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
-                                 "generated noise target profile admits only whiteNoise");
+                                 "generated noise target profile admits only whiteNoise and "
+                                 "flickerNoise");
+      llvm::StringRef noise = kind.getValue() == "white" ? "whiteNoise" : "flickerNoise";
       if (!owner || !generatedInduction || owner.getValue() != regionId.getValue() ||
           generatedInduction.getValue() != inductionPath.getValue())
-        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
-                                 "generated whiteNoise ownership does not match its range");
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            (llvm::Twine("generated ") + noise + " ownership does not match its range").str());
       if (!sourceId || !noiseOwner || !semanticPath || expectedOwner.empty() ||
           noiseOwner.getValue() != expectedOwner ||
           sourceId.getValue() != semanticPath.getValue() ||
           !sourceId.getValue().starts_with((expectedOwner + ".").str()))
-        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
-                                 "generated whiteNoise source identity is not owned by its module");
-      if (operation.getNumResults() != 1 ||
-          !generatedValueFeedsOneContribution(operation.getResult(0), analogBody, active))
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
-            "generated whiteNoise must feed one additive contribution without escaping its range");
+            (llvm::Twine("generated ") + noise + " source identity is not owned by its module")
+                .str());
+      if (operation.getNumResults() != 1 ||
+          !generatedValueFeedsOneContribution(operation.getResult(0), analogBody, active))
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 (llvm::Twine("generated ") + noise +
+                                  " must feed one additive contribution without escaping its range")
+                                     .str());
       auto rendered = renderNoiseCall(&operation, state);
       if (failed(rendered) ||
           !state.expressions.try_emplace(operation.getResult(0), *rendered).second)
-        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
-                                 "generated whiteNoise cannot be rendered as one owned expression");
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            (llvm::Twine("generated ") + noise + " cannot be rendered as one owned expression")
+                .str());
       continue;
     }
     bool supportedExpression =
@@ -1609,8 +1617,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
     if (!supportedExpression)
       return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                "generated Verilog-A backend profile supports contributions and "
-                               "owned ddt/idt/transition/slew/absdelay/laplaceNd/ziNd/whiteNoise "
-                               "expressions "
+                               "owned ddt/idt/transition/slew/absdelay/laplaceNd/ziNd/whiteNoise/"
+                               "flickerNoise expressions "
                                "only");
   }
   if (!contributions)

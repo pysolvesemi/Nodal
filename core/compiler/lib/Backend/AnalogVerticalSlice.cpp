@@ -1522,7 +1522,20 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             if (llvm::isa<AnalogBreakOp, AnalogContinueOp>(bodyOperation)) {
               auto exitOwner = bodyOperation->getAttrOfType<StringAttr>("owner");
               auto procedureOwner = operation.getAttrOfType<StringAttr>("owner");
-              if (bodyOperation->getParentOp() != nested || !exitOwner || !procedureOwner ||
+              Operation *parent = bodyOperation->getParentOp();
+              auto arm = llvm::dyn_cast_or_null<AnalogIfArmOp>(parent);
+              Operation *conditional = arm ? arm->getParentOp() : nullptr;
+              auto caseArm = llvm::dyn_cast_or_null<AnalogCaseArmOp>(parent);
+              Operation *caseOperation = caseArm ? caseArm->getParentOp() : nullptr;
+              const bool directLoopExit = parent == nested;
+              const bool directConditionalArmExit = conditional &&
+                                                    llvm::isa<AnalogIfOp>(conditional) &&
+                                                    conditional->getParentOp() == nested;
+              const bool directCaseArmExit = caseOperation &&
+                                             llvm::isa<AnalogCaseOp>(caseOperation) &&
+                                             caseOperation->getParentOp() == nested;
+              if ((!directLoopExit && !directConditionalArmExit && !directCaseArmExit) ||
+                  !exitOwner || !procedureOwner ||
                   exitOwner.getValue() != procedureOwner.getValue())
                 unsupportedStorage = true;
               return;
@@ -1583,8 +1596,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             &operation, "NODAL-BACKEND-CAPABILITY-001",
             "generated event-local storage admits one direct runtime event-body loop with one "
             "direct conditional and case tree, one direct loop/conditional-arm/case-arm lexical "
-            "scope, "
-            "plus direct loop exits");
+            "scope, plus direct loop/conditional-arm/case-arm exits");
       if (mismatchedStorage)
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",

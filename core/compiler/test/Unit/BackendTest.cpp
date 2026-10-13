@@ -2010,29 +2010,96 @@ int main() {
     if (!nestedExitModule)
       return fail("generated event nested-exit mutation fixture did not parse");
     mlir::Operation *nestedExitConditional = nullptr;
-    mlir::Operation *directExit = nullptr;
+    mlir::Operation *nestedExitLoopOp = nullptr;
+    mlir::Operation *nestedExitRootCase = nullptr;
+    mlir::Operation *directBreak = nullptr;
+    mlir::Operation *directContinue = nullptr;
     nestedExitModule->walk([&](mlir::Operation *operation) {
+      if (!nestedExitLoopOp && operation->getName().getStringRef() == "nodal.analog_loop")
+        nestedExitLoopOp = operation;
       if (operation->getName().getStringRef() == "nodal.analog_if" && operation->getParentOp() &&
           operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
         nestedExitConditional = operation;
-      if (!directExit && operation->getName().getStringRef() == "nodal.analog_break")
-        directExit = operation;
+      if (!nestedExitRootCase && operation->getName().getStringRef() == "nodal.analog_case")
+        nestedExitRootCase = operation;
+      if (!directBreak && operation->getName().getStringRef() == "nodal.analog_break")
+        directBreak = operation;
+      if (!directContinue && operation->getName().getStringRef() == "nodal.analog_continue")
+        directContinue = operation;
     });
-    if (!nestedExitConditional || !directExit)
+    if (!nestedExitConditional || !nestedExitLoopOp || !nestedExitRootCase || !directBreak ||
+        !directContinue)
       return fail("generated event nested-exit mutation anchor missing");
-    mlir::Operation *nestedExit = directExit->clone();
-    nestedExit->setAttr(
+    mlir::Operation *nestedExitCase = nestedExitRootCase->clone();
+    retagStructuredClone(nestedExitCase, ".arm_exit_mutation", 7);
+    nestedExitLoopOp->getRegion(0).front().push_back(nestedExitCase);
+    mlir::Operation *conditionalExit = directContinue->clone();
+    conditionalExit->setAttr(
         "statement_id",
-        mlir::StringAttr::get(&context, "GeneratedEvent.event_0.loop_2.nested_break_mutation"));
-    nestedExitConditional->getRegion(0).front().back().getRegion(0).front().push_back(nestedExit);
-    std::string nestedExitRejected = "sentinel";
-    llvm::raw_string_ostream nestedExitRejectedStream(nestedExitRejected);
+        mlir::StringAttr::get(&context, "GeneratedEvent.event_0.loop_2.arm_continue_mutation"));
+    nestedExitConditional->getRegion(0).front().front().getRegion(0).front().push_back(
+        conditionalExit);
+    mlir::Operation *caseExit = directBreak->clone();
+    caseExit->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(&context, "GeneratedEvent.event_0.loop_2.arm_break_mutation"));
+    nestedExitCase->getRegion(0).front().back().getRegion(0).front().push_back(caseExit);
+    std::string nestedExitOutput;
+    llvm::raw_string_ostream nestedExitStream(nestedExitOutput);
+    if (mlir::failed(
+            nodal::emitBackend(*nestedExitModule, nodal::BackendKind::VerilogA, nestedExitStream)))
+      return fail("generated event loop-arm exit failed backend verification");
+    nestedExitStream.flush();
+    auto nestedExitLoop = nestedExitOutput.find("for (event_GeneratedEvent_event_0_loop_2_index");
+    auto nestedExitIf = nestedExitOutput.find("if (event_GeneratedEvent_select)", nestedExitLoop);
+    auto nestedExitContinue = nestedExitOutput.find("_continue = 1;", nestedExitIf);
+    auto nestedExitCaseStart =
+        nestedExitOutput.find("case (event_GeneratedEvent_mode)", nestedExitLoop);
+    auto nestedExitDefault = nestedExitOutput.find("default: begin", nestedExitCaseStart);
+    auto nestedExitBreak = nestedExitOutput.find("_break = 1;", nestedExitDefault);
+    if (nestedExitLoop == std::string::npos || nestedExitIf == std::string::npos ||
+        nestedExitContinue == std::string::npos || nestedExitCaseStart == std::string::npos ||
+        nestedExitDefault == std::string::npos || nestedExitBreak == std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(nestedExitOutput, *configuration)))
+      return fail("generated event loop-arm exit lost its direct target topology");
+    conditionalExit->setAttr("owner", mlir::StringAttr::get(&context, "ForgedGeneratedEvent"));
+    std::string forgedExitRejected = "sentinel";
+    llvm::raw_string_ostream forgedExitRejectedStream(forgedExitRejected);
     if (mlir::succeeded(nodal::emitBackend(*nestedExitModule, nodal::BackendKind::VerilogA,
-                                           nestedExitRejectedStream)))
-      return fail("unsupported nested generated loop exit passed backend verification");
-    nestedExitRejectedStream.flush();
-    if (nestedExitRejected != "sentinel")
-      return fail("unsupported nested generated loop exit published partial output");
+                                           forgedExitRejectedStream)))
+      return fail("forged generated loop-arm exit passed backend verification");
+    forgedExitRejectedStream.flush();
+    if (forgedExitRejected != "sentinel")
+      return fail("forged generated loop-arm exit published partial output");
+
+    auto deeperExitModule = parse(context, generatedStorageSource);
+    if (!deeperExitModule)
+      return fail("generated event deeper-exit mutation fixture did not parse");
+    mlir::Operation *deeperExitScope = nullptr;
+    mlir::Operation *deeperBreak = nullptr;
+    deeperExitModule->walk([&](mlir::Operation *operation) {
+      if (!deeperExitScope && operation->getName().getStringRef() == "nodal.analog_scope" &&
+          operation->getParentOp() &&
+          operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
+        deeperExitScope = operation;
+      if (!deeperBreak && operation->getName().getStringRef() == "nodal.analog_break")
+        deeperBreak = operation;
+    });
+    if (!deeperExitScope || !deeperBreak)
+      return fail("generated event deeper-exit mutation anchor missing");
+    mlir::Operation *scopeExit = deeperBreak->clone();
+    scopeExit->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(&context, "GeneratedEvent.event_0.loop_2.scope_break_mutation"));
+    deeperExitScope->getRegion(0).front().push_back(scopeExit);
+    std::string deeperExitRejected = "sentinel";
+    llvm::raw_string_ostream deeperExitRejectedStream(deeperExitRejected);
+    if (mlir::succeeded(nodal::emitBackend(*deeperExitModule, nodal::BackendKind::VerilogA,
+                                           deeperExitRejectedStream)))
+      return fail("unsupported deeper generated loop exit passed backend verification");
+    deeperExitRejectedStream.flush();
+    if (deeperExitRejected != "sentinel")
+      return fail("unsupported deeper generated loop exit published partial output");
 
     auto nestedScopeModule = parse(context, generatedStorageSource);
     if (!nestedScopeModule)

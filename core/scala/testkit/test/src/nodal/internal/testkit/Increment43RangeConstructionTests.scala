@@ -128,6 +128,7 @@ final class Increment43GeneratedConditionalEventStorage extends Module:
           analogConditional:
             analogWhen(select):
               state := state + 5.0.V
+              analogContinue()
             analogOtherwise:
               state := state + 6.0.V
           analogCase(mode):
@@ -136,9 +137,8 @@ final class Increment43GeneratedConditionalEventStorage extends Module:
             analogCaseDefault:
               CandidateRuntime.block:
                 state := state + 8.0.V
+              analogBreak()
           state := state + 9.0.V
-          analogContinue()
-          analogBreak()
 
 final class Increment43GeneratedEventTarget extends Module:
   hdlRange(0, 2): _ =>
@@ -1627,6 +1627,16 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.linesIterator.count(_.contains(" + 9.0")) == 1)
             assert(result.verilogA.linesIterator.count(_.trim.endsWith("_continue = 1;")) == 1)
             assert(result.verilogA.linesIterator.count(_.trim.endsWith("_break = 1;")) == 1)
+            val runtimeLoop = result.verilogA.indexOf("for (event_")
+            val loopIf = result.verilogA.indexOf("if (event_", runtimeLoop)
+            val loopElse = result.verilogA.indexOf("else begin", loopIf)
+            val loopContinue = result.verilogA.indexOf("_continue = 1;", loopIf)
+            val loopCase = result.verilogA.indexOf("case (event_", runtimeLoop)
+            val loopDefault = result.verilogA.indexOf("default: begin", loopCase)
+            val loopBreak = result.verilogA.indexOf("_break = 1;", loopDefault)
+            assert(runtimeLoop >= 0)
+            assert(loopIf > runtimeLoop && loopContinue > loopIf && loopContinue < loopElse)
+            assert(loopCase > runtimeLoop && loopDefault > loopCase && loopBreak > loopDefault)
           finally delete(directory)
         case _ => assert(true)
 

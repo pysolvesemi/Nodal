@@ -1504,12 +1504,17 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
               Operation *parent = bodyOperation->getParentOp();
               auto arm = llvm::dyn_cast_or_null<AnalogIfArmOp>(parent);
               Operation *conditional = arm ? arm->getParentOp() : nullptr;
+              auto caseArm = llvm::dyn_cast_or_null<AnalogCaseArmOp>(parent);
+              Operation *caseOperation = caseArm ? caseArm->getParentOp() : nullptr;
               const bool directLoopScope = parent == nested;
               const bool directConditionalArmScope = conditional &&
                                                      llvm::isa<AnalogIfOp>(conditional) &&
                                                      conditional->getParentOp() == nested;
-              if ((!directLoopScope && !directConditionalArmScope) || ++admittedScopes > 1 ||
-                  !scopeOwner || !procedureOwner ||
+              const bool directCaseArmScope = caseOperation &&
+                                              llvm::isa<AnalogCaseOp>(caseOperation) &&
+                                              caseOperation->getParentOp() == nested;
+              if ((!directLoopScope && !directConditionalArmScope && !directCaseArmScope) ||
+                  ++admittedScopes > 1 || !scopeOwner || !procedureOwner ||
                   scopeOwner.getValue() != procedureOwner.getValue())
                 unsupportedStorage = true;
               return;
@@ -1533,6 +1538,11 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                 Operation *scopeConditional = scopeArm ? scopeArm->getParentOp() : nullptr;
                 if (scopeConditional && llvm::isa<AnalogIfOp>(scopeConditional) &&
                     scopeConditional->getParentOp() == nested)
+                  return;
+                auto scopeCaseArm = llvm::dyn_cast_or_null<AnalogCaseArmOp>(parent->getParentOp());
+                Operation *scopeCase = scopeCaseArm ? scopeCaseArm->getParentOp() : nullptr;
+                if (scopeCase && llvm::isa<AnalogCaseOp>(scopeCase) &&
+                    scopeCase->getParentOp() == nested)
                   return;
               }
               auto arm = llvm::dyn_cast<AnalogIfArmOp>(parent);
@@ -1572,7 +1582,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
             "generated event-local storage admits one direct runtime event-body loop with one "
-            "direct conditional and case tree, one direct loop/conditional-arm lexical scope, "
+            "direct conditional and case tree, one direct loop/conditional-arm/case-arm lexical "
+            "scope, "
             "plus direct loop exits");
       if (mismatchedStorage)
         return emitMappedFailure(

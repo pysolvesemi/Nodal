@@ -2085,14 +2085,41 @@ int main() {
     retagStructuredClone(caseScope, ".case_scope_mutation", 8);
     scopeCase->getRegion(0).front().back().getRegion(0).front().push_back(caseScope);
     nestedScope->erase();
-    std::string caseScopeRejected = "sentinel";
-    llvm::raw_string_ostream caseScopeRejectedStream(caseScopeRejected);
+    std::string caseScopeOutput;
+    llvm::raw_string_ostream caseScopeStream(caseScopeOutput);
+    if (mlir::failed(
+            nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA, caseScopeStream)))
+      return fail("generated event case-arm scope failed backend verification");
+    caseScopeStream.flush();
+    auto caseScopeAssignment = caseScopeOutput.find(
+        "event_GeneratedEvent_state = "
+        "(event_GeneratedEvent_event_0_loop_2_scope_0_assignment_read_0_case_scope_mutation + "
+        "9.0);");
+    auto caseScopeStart = caseScopeOutput.rfind("default: begin", caseScopeAssignment);
+    auto caseScopeEnd = caseScopeOutput.find("endcase", caseScopeAssignment);
+    if (caseScopeStart == std::string::npos || caseScopeEnd == std::string::npos ||
+        caseScopeAssignment == std::string::npos || caseScopeAssignment < caseScopeStart ||
+        caseScopeAssignment > caseScopeEnd ||
+        mlir::failed(nodal::reparseBackendTarget(caseScopeOutput, *configuration)))
+      return fail("generated event case-arm scope lost its direct target topology");
+
+    mlir::Operation *deeperCaseScope = caseScope->clone();
+    deeperCaseScope->setAttr(
+        "scope_id", mlir::StringAttr::get(
+                        &context, "GeneratedEvent.event_0.loop_2.deeper_case_scope_mutation"));
+    deeperCaseScope->getRegion(0).front().clear();
+    caseScope->getBlock()->getOperations().insert(mlir::Block::iterator(caseScope),
+                                                  deeperCaseScope);
+    caseScope->moveBefore(&deeperCaseScope->getRegion(0).front(),
+                          deeperCaseScope->getRegion(0).front().end());
+    std::string deeperCaseScopeRejected = "sentinel";
+    llvm::raw_string_ostream deeperCaseScopeRejectedStream(deeperCaseScopeRejected);
     if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
-                                           caseScopeRejectedStream)))
-      return fail("unsupported generated loop case-arm scope passed backend verification");
-    caseScopeRejectedStream.flush();
-    if (caseScopeRejected != "sentinel")
-      return fail("unsupported generated loop case-arm scope published partial output");
+                                           deeperCaseScopeRejectedStream)))
+      return fail("unsupported deeper generated loop case-arm scope passed backend verification");
+    deeperCaseScopeRejectedStream.flush();
+    if (deeperCaseScopeRejected != "sentinel")
+      return fail("unsupported deeper generated loop case-arm scope published partial output");
   }
 
   auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);

@@ -1575,11 +1575,14 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                                       : module   ? symbolName(module.getOperation())
                                                  : llvm::StringRef();
       llvm::DenseSet<Operation *> active;
-      if (!kind || (kind.getValue() != "white" && kind.getValue() != "flicker"))
+      if (!kind || (kind.getValue() != "white" && kind.getValue() != "flicker" &&
+                    kind.getValue() != "table"))
         return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
-                                 "generated noise target profile admits only whiteNoise and "
-                                 "flickerNoise");
-      llvm::StringRef noise = kind.getValue() == "white" ? "whiteNoise" : "flickerNoise";
+                                 "generated noise target profile admits only whiteNoise, "
+                                 "flickerNoise, and tableNoise");
+      llvm::StringRef noise = kind.getValue() == "white"     ? "whiteNoise"
+                              : kind.getValue() == "flicker" ? "flickerNoise"
+                                                             : "tableNoise";
       if (!owner || !generatedInduction || owner.getValue() != regionId.getValue() ||
           generatedInduction.getValue() != inductionPath.getValue())
         return emitMappedFailure(
@@ -1618,7 +1621,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                "generated Verilog-A backend profile supports contributions and "
                                "owned ddt/idt/transition/slew/absdelay/laplaceNd/ziNd/whiteNoise/"
-                               "flickerNoise expressions "
+                               "flickerNoise/tableNoise expressions "
                                "only");
   }
   if (!contributions)

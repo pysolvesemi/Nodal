@@ -368,6 +368,38 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedTableNoiseContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedTableNoiseContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedTableNoiseContribution.generate_0", induction_path = "GeneratedTableNoiseContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedTableNoiseContribution.generate_0", generated_induction = "GeneratedTableNoiseContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %amp = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {unit = "A"}}> : () -> f64
+        %second = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {unit = "s"}}> : () -> f64
+        %one = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        %squared = "nodal.analog_mul"(%amp, %amp) <{metadata = {}}> : (f64, f64) -> f64
+        %density = "nodal.analog_mul"(%squared, %second) <{metadata = {}}> : (f64, f64) -> f64
+        %frequency = "nodal.analog_div"(%one, %second) <{metadata = {}}> : (f64, f64) -> f64
+        %noise = "nodal.analog_noise"(%frequency, %density) <{analyses = ["noise"], contract_version = "1", correlation = "independent", generated_owner = "GeneratedTableNoiseContribution.generate_0", generated_induction = "GeneratedTableNoiseContribution.generate_0.index", metadata = {semantic_path = "GeneratedTableNoiseContribution.noise"}, noise_kind = "table", noise_name = "generated table", owner = "GeneratedTableNoiseContribution", result_dimension = "current", source_id = "GeneratedTableNoiseContribution.noise"}> : (f64, f64) -> f64
+        "nodal.contribute"(%branch, %noise) <{kind = "flow", generated_owner = "GeneratedTableNoiseContribution.generate_0", generated_induction = "GeneratedTableNoiseContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kSymbolicGeneratedContributionModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -1348,6 +1380,71 @@ int main() {
     rejectedStream.flush();
     if (rejected != "sentinel")
       return fail("invalid generated flickerNoise consumer published partial output");
+  }
+
+  auto generatedTableNoise = parse(context, kGeneratedTableNoiseContributionModule);
+  if (!generatedTableNoise)
+    return fail("could not parse the generated tableNoise contribution fixture");
+  std::string generatedTableNoiseOutput;
+  llvm::raw_string_ostream generatedTableNoiseStream(generatedTableNoiseOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedTableNoise, nodal::BackendKind::VerilogA,
+                                      generatedTableNoiseStream)))
+    return fail("generated tableNoise contribution emission failed");
+  generatedTableNoiseStream.flush();
+  if (generatedTableNoiseOutput.find("I(p, n) <+ noise_table('{1, 1}, \"generated table\");\n") ==
+          std::string::npos ||
+      generatedTableNoiseOutput.find("real noise_") != std::string::npos)
+    return fail("generated tableNoise lost its single owned per-occurrence expression");
+
+  for (const auto &[attribute, value] :
+       {std::make_pair("generated_owner", "GeneratedTableNoiseContribution.forged"),
+        std::make_pair("source_id", "GeneratedTableNoiseContribution.forged"),
+        std::make_pair("noise_kind", "white")}) {
+    auto forged = parse(context, kGeneratedTableNoiseContributionModule);
+    if (!forged)
+      return fail("could not parse the generated tableNoise mutation fixture");
+    mlir::Operation *noise = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!noise && operation->getName().getStringRef() == "nodal.analog_noise")
+        noise = operation;
+    });
+    if (!noise)
+      return fail("generated tableNoise mutation anchor missing");
+    noise->setAttr(attribute, mlir::StringAttr::get(&context, value));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated tableNoise metadata passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated tableNoise metadata published partial output");
+  }
+
+  for (const auto &mutation :
+       {std::make_pair("%branch, %noise", "%branch, %amp"),
+        std::make_pair("        \"nodal.contribute\"(%branch, %noise)",
+                       "        \"nodal.contribute\"(%branch, %noise) <{kind = \"flow\", "
+                       "generated_owner = \"GeneratedTableNoiseContribution.generate_0\", "
+                       "generated_induction = "
+                       "\"GeneratedTableNoiseContribution.generate_0.index\", metadata = {}}> "
+                       ": (!nodal.branch<\"electrical\">, f64) -> ()\n"
+                       "        \"nodal.contribute\"(%branch, %noise)")}) {
+    std::string invalidSource = kGeneratedTableNoiseContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated tableNoise consumer mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated tableNoise consumer mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated tableNoise consumer passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated tableNoise consumer published partial output");
   }
 
   auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);

@@ -101,6 +101,14 @@ final class Increment43GeneratedCaseLexicalStorage extends Module:
         analogCaseDefault:
           state := state + 4.0.real
 
+final class Increment43GeneratedLoopLexicalStorage extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val iterations = variable(Integer, 1.integer)
+      val state = variable(Real, 0.0.real)
+      analogLoop(iterations, maximumIterations = 2, minimumIterations = 1):
+        state := state + 5.0.real
+
 final class Increment43GeneratedStructuredLexicalStorage extends Module:
   hdlRange(0, 2): _ =>
     analogProcedure:
@@ -1664,6 +1672,36 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.contains("default: begin"))
             assert(result.verilogA.contains("+ 3.0"))
             assert(result.verilogA.contains("+ 4.0"))
+            assert(!result.verilogA.contains("@("))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated loop lexical storage retains per-occurrence state"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedLoopLexicalStorage,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.contains("\"nodal.analog_loop\""))
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            assert(
+              result.verilogA.contains(
+                "for (event_Increment43GeneratedLoopLexicalStorage_loop_0_index = 0;"
+              )
+            )
+            assert(result.verilogA.contains("+ 5.0"))
             assert(!result.verilogA.contains("@("))
           finally delete(directory)
         case _ => assert(true)

@@ -437,7 +437,7 @@ LogicalResult prepareGeneratedAnalogEventBackend(Operation *procedure,
         if (!text(op, key).empty())
           state.reserved.insert(text(op, key));
     });
-  return prepareEventStorage(procedure, state, out, indent, false);
+  return prepareEventStorage(procedure, state, out, indent, true);
 }
 LogicalResult renderAnalogEventProcedure(Operation *procedure, AnalogEventRenderState &state,
                                          llvm::raw_ostream &out) {

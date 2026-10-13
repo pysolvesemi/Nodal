@@ -1456,23 +1456,47 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                                  "generated event procedure requires an analog event");
       bool unsupportedStorage = false;
       bool mismatchedStorage = false;
+      unsigned proceduralLoops = 0;
       operation.walk([&](Operation *nested) {
         if (llvm::isa<AnalogLoopOp>(nested)) {
-          unsupportedStorage = true;
+          ++proceduralLoops;
+          auto stage = nested->getAttrOfType<StringAttr>("stage");
+          bool nestedLoop = false;
+          for (Operation *parent = nested->getParentOp(); parent && parent != &operation;
+               parent = parent->getParentOp())
+            if (llvm::isa<AnalogLoopOp>(parent)) {
+              nestedLoop = true;
+              break;
+            }
+          nested->walk([&](Operation *bodyOperation) {
+            if (bodyOperation != nested &&
+                !llvm::isa<AnalogVariableReadOp, AnalogAssignOp>(bodyOperation))
+              unsupportedStorage = true;
+          });
+          unsupportedStorage |= nestedLoop || !stage || stage.getValue() != "runtime" ||
+                                hasAnalogEvents(nested) ||
+                                !llvm::isa<AnalogOnOp>(nested->getParentOp());
           return;
         }
         if (!llvm::isa<AnalogVariableOp, AnalogVariableReadOp, AnalogAssignOp>(nested))
           return;
+        if (llvm::isa<AnalogVariableOp>(nested))
+          for (Operation *parent = nested->getParentOp(); parent && parent != &operation;
+               parent = parent->getParentOp())
+            if (llvm::isa<AnalogLoopOp>(parent)) {
+              unsupportedStorage = true;
+              break;
+            }
         auto storageOwner = nested->getAttrOfType<StringAttr>("generated_owner");
         auto storageInduction = nested->getAttrOfType<StringAttr>("generated_induction");
         mismatchedStorage |= !storageOwner || !storageInduction ||
                              storageOwner.getValue() != regionId.getValue() ||
                              storageInduction.getValue() != inductionPath.getValue();
       });
-      if (unsupportedStorage)
+      if (unsupportedStorage || proceduralLoops > 1)
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
-            "generated event-local storage does not admit nested procedural loops");
+            "generated event-local storage admits one direct runtime event-body loop");
       if (mismatchedStorage)
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",

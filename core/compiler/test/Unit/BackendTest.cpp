@@ -1531,8 +1531,15 @@ int main() {
         "generated_owner = \"GeneratedEvent.generate_0\", generated_induction = "
         "\"GeneratedEvent.generate_0.index\", metadata = {}}> : () -> "
         "!nodal.variable<\"integer\", \"1\">\n"
+        "          %iterations = \"nodal.analog_variable\"() <{identity = "
+        "\"GeneratedEvent.iterations\", owner = \"GeneratedEvent\", declaration_order = 2 : "
+        "i64, initialized = true, initializer_value = \"1\", initializer_kind = "
+        "\"integer\", initializer_dimension = \"1\", initializer_reads = [], "
+        "generated_owner = \"GeneratedEvent.generate_0\", generated_induction = "
+        "\"GeneratedEvent.generate_0.index\", metadata = {}}> : () -> "
+        "!nodal.variable<\"integer\", \"1\">\n"
         "          %state = \"nodal.analog_variable\"() <{identity = "
-        "\"GeneratedEvent.state\", owner = \"GeneratedEvent\", declaration_order = 2 : "
+        "\"GeneratedEvent.state\", owner = \"GeneratedEvent\", declaration_order = 3 : "
         "i64, initialized = true, initializer_value = \"0.0 V\", initializer_kind = "
         "\"real\", initializer_dimension = \"voltage\", initializer_reads = [], "
         "generated_owner = \"GeneratedEvent.generate_0\", generated_induction = "
@@ -1652,6 +1659,32 @@ int main() {
         "\"voltage\">) -> ()\n"
         "              }) : () -> ()\n"
         "            }) : () -> ()\n"
+        "            \"nodal.analog_loop\"() <{bound_dimension = \"1\", "
+        "bound_kind = \"integer\", bound_reads = [\"GeneratedEvent.iterations\"], "
+        "bound_value = \"GeneratedEvent.iterations\", maximum_iterations = 2 : i64, "
+        "metadata = {semantic_path = \"GeneratedEvent.event_0.loop_2\"}, "
+        "minimum_iterations = 1 : i64, owner = \"GeneratedEvent\", stage = \"runtime\", "
+        "statement_id = \"GeneratedEvent.event_0.loop_2\", static_trip_count = 0 : i64, "
+        "static_trip_count_present = false}> ({\n"
+        "            ^bb0:\n"
+        "              %state_read_loop = \"nodal.analog_variable_read\"(%state) "
+        "<{read_id = \"GeneratedEvent.event_0.loop_2.assignment.read_0\", owner = "
+        "\"GeneratedEvent\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.loop_2.assignment.read_0\"}}> : "
+        "(!nodal.variable<\"real\", \"voltage\">) -> "
+        "!nodal.quantity<\"real\", \"voltage\">\n"
+        "              \"nodal.analog_assign\"(%state, %state_read_loop) <{analyses = "
+        "[\"dc\", \"transient\"], authored_order = 4 : i64, guard_dimension = \"\", "
+        "guard_kind = \"\", guard_present = false, guard_reads = [], guard_value = \"\", "
+        "generated_owner = \"GeneratedEvent.generate_0\", generated_induction = "
+        "\"GeneratedEvent.generate_0.index\", metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.assignment\", value = "
+        "\"analog_add(GeneratedEvent.state,5.0 V)\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.loop_2.assignment\", value_dimension = "
+        "\"voltage\", value_kind = \"real\"}> : (!nodal.variable<\"real\", "
+        "\"voltage\">, !nodal.quantity<\"real\", \"voltage\">) -> ()\n"
+        "            }) : () -> ()\n"
         "          }) : (!nodal.analog_event) -> ()";
     std::string generatedStorageSource = kGeneratedEventModule.str();
     auto position = generatedStorageSource.find(anchor);
@@ -1674,16 +1707,24 @@ int main() {
     auto loop = generatedStorageOutput.find("for (generate_0_index");
     auto select = generatedStorageOutput.find("integer event_GeneratedEvent_select = 0;");
     auto mode = generatedStorageOutput.find("integer event_GeneratedEvent_mode = 0;");
+    auto iterations = generatedStorageOutput.find("integer event_GeneratedEvent_iterations = 1;");
     auto state = generatedStorageOutput.find("real event_GeneratedEvent_state = 0.0;");
     auto read = generatedStorageOutput.find("real event_GeneratedEvent_event_0_assignment_read_0;");
     auto caseRead =
         generatedStorageOutput.find("real event_GeneratedEvent_event_0_case_assignment_read_0;");
+    auto loopIndex =
+        generatedStorageOutput.find("integer event_GeneratedEvent_event_0_loop_2_index;");
+    auto loopRead =
+        generatedStorageOutput.find("real event_GeneratedEvent_event_0_loop_2_assignment_read_0;");
     auto procedure = generatedStorageOutput.find("begin : event_GeneratedEvent_procedure");
     if (loop == std::string::npos || select == std::string::npos || mode == std::string::npos ||
-        state == std::string::npos || read == std::string::npos || caseRead == std::string::npos ||
+        iterations == std::string::npos || state == std::string::npos ||
+        read == std::string::npos || caseRead == std::string::npos ||
+        loopIndex == std::string::npos || loopRead == std::string::npos ||
         procedure == std::string::npos ||
-        !(loop < select && select < mode && mode < state && state < read && read < caseRead &&
-          caseRead < procedure) ||
+        !(loop < select && select < mode && mode < iterations && iterations < state &&
+          state < read && read < caseRead && caseRead < loopRead && loopRead < loopIndex &&
+          loopIndex < procedure) ||
         generatedStorageOutput.find("if (event_GeneratedEvent_select) begin") ==
             std::string::npos ||
         generatedStorageOutput.find("else begin") == std::string::npos ||
@@ -1705,6 +1746,18 @@ int main() {
         generatedStorageOutput.find(
             "event_GeneratedEvent_state = "
             "(event_GeneratedEvent_event_0_case_default_assignment_read_0 + 4.0);") ==
+            std::string::npos ||
+        generatedStorageOutput.find(
+            "event_GeneratedEvent_event_0_loop_2_limit = event_GeneratedEvent_iterations;") ==
+            std::string::npos ||
+        generatedStorageOutput.find("for (event_GeneratedEvent_event_0_loop_2_index = 0; "
+                                    "(event_GeneratedEvent_event_0_loop_2_index < "
+                                    "event_GeneratedEvent_event_0_loop_2_limit) && "
+                                    "!event_GeneratedEvent_event_0_loop_2_break") ==
+            std::string::npos ||
+        generatedStorageOutput.find(
+            "event_GeneratedEvent_state = "
+            "(event_GeneratedEvent_event_0_loop_2_assignment_read_0 + 5.0);") ==
             std::string::npos ||
         mlir::failed(nodal::reparseBackendTarget(generatedStorageOutput, *configuration)))
       return fail("generated event storage lost its per-occurrence target layout");
@@ -1746,30 +1799,30 @@ int main() {
       return fail("forged generated event storage published partial output");
 
     std::string nestedLoopSource = generatedStorageSource;
-    const std::string conditionalAnchor = "          }) : (!nodal.analog_event) -> ()";
+    const std::string nestedLoopAnchor =
+        "            ^bb0:\n"
+        "              %state_read_loop = \"nodal.analog_variable_read\"(%state)";
     const std::string nestedLoop =
         "            \"nodal.analog_loop\"() <{bound_dimension = \"1\", "
         "bound_kind = \"integer\", bound_reads = [], bound_value = \"1\", "
         "maximum_iterations = 1 : i64, metadata = {semantic_path = "
-        "\"GeneratedEvent.event_0.loop_0\"}, minimum_iterations = 1 : i64, owner = "
+        "\"GeneratedEvent.event_0.loop_2.loop_0\"}, minimum_iterations = 1 : i64, owner = "
         "\"GeneratedEvent\", stage = \"runtime\", statement_id = "
-        "\"GeneratedEvent.event_0.loop_0\", static_trip_count = 0 : i64, "
+        "\"GeneratedEvent.event_0.loop_2.loop_0\", static_trip_count = 0 : i64, "
         "static_trip_count_present = false}> ({\n"
         "            ^bb0:\n"
-        "              \"nodal.analog_assign\"(%state) <{analyses = [\"dc\", "
-        "\"transient\"], authored_order = 4 : i64, guard_dimension = \"\", "
-        "guard_kind = \"\", guard_present = false, guard_reads = [], guard_value = "
-        "\"\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "              %nested_read = \"nodal.analog_variable_read\"(%state) "
+        "<{read_id = \"GeneratedEvent.event_0.loop_2.loop_0.read_0\", owner = "
+        "\"GeneratedEvent\", generated_owner = \"GeneratedEvent.generate_0\", "
         "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
-        "{semantic_path = \"GeneratedEvent.event_0.loop_0.assignment\", value = "
-        "\"1.0 V\"}, owner = \"GeneratedEvent\", statement_id = "
-        "\"GeneratedEvent.event_0.loop_0.assignment\", value_dimension = "
-        "\"voltage\", value_kind = \"real\"}> : "
-        "(!nodal.variable<\"real\", \"voltage\">) -> ()\n"
+        "{semantic_path = \"GeneratedEvent.event_0.loop_2.loop_0.read_0\"}}> : "
+        "(!nodal.variable<\"real\", \"voltage\">) -> "
+        "!nodal.quantity<\"real\", \"voltage\">\n"
         "            }) : () -> ()\n";
-    position = nestedLoopSource.find(conditionalAnchor);
+    position = nestedLoopSource.find(nestedLoopAnchor);
     if (position == std::string::npos)
       return fail("generated event nested-loop mutation anchor missing");
+    position += std::string("            ^bb0:\n").size();
     nestedLoopSource.insert(position, nestedLoop);
     auto nestedLoopModule = parse(context, nestedLoopSource);
     if (!nestedLoopModule)

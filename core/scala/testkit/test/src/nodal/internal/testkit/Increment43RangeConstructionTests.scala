@@ -111,6 +111,7 @@ final class Increment43GeneratedConditionalEventStorage extends Module:
     analogProcedure:
       val select = variable(Bool, false.B)
       val mode = variable(Integer, 0.integer)
+      val iterations = variable(Integer, 1.integer)
       val state = variable(Real, 0.0.V)
       on(cross(1.0.V)):
         analogConditional:
@@ -123,6 +124,8 @@ final class Increment43GeneratedConditionalEventStorage extends Module:
             state := state + 3.0.V
           analogCaseDefault:
             state := state + 4.0.V
+        analogLoop(iterations, maximumIterations = 2, minimumIterations = 1):
+          state := state + 5.0.V
 
 final class Increment43GeneratedEventTarget extends Module:
   hdlRange(0, 2): _ =>
@@ -1588,6 +1591,7 @@ object Increment43RangeConstructionTests extends TestSuite:
               assert(lines.forall(_.contains(s"generated_induction = \"${region.induction}\"")))
             assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_if\"")) == 1)
             assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_case\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_loop\"")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains("@(cross(1")) == 1)
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("if (event_")) == 1)
@@ -1599,6 +1603,8 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.linesIterator.count(_.contains(" + 2.0")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains(" + 3.0")) == 1)
             assert(result.verilogA.linesIterator.count(_.contains(" + 4.0")) == 1)
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (event_")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains(" + 5.0")) == 1)
           finally delete(directory)
         case _ => assert(true)
 

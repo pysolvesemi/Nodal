@@ -3092,6 +3092,97 @@ int main() {
         mlir::failed(nodal::reparseBackendTarget(scopedExitOutput, *configuration)))
       return fail("generated loop-case scope exit lost its direct target topology");
 
+    std::string scopedContinueSource = scopedSource;
+    auto scopedContinueAssignment = scopedContinueSource.find(assignmentAnchor);
+    auto scopedContinueAssignmentEnd = scopedContinueSource.find('\n', scopedContinueAssignment);
+    if (scopedContinueAssignment == std::string::npos ||
+        scopedContinueAssignmentEnd == std::string::npos)
+      return fail("generated loop-case scope-continue assignment anchor missing");
+    const std::string scopedContinue =
+        "                \"nodal.analog_continue\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0.continue_0\"}, owner = "
+        "\"GeneratedLoopCaseLexicalStorage\", statement_id = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0.continue_0\"}> : () -> ()\n";
+    scopedContinueSource.insert(scopedContinueAssignmentEnd + 1, scopedContinue);
+    auto scopedContinueModule = parse(context, scopedContinueSource);
+    if (!scopedContinueModule)
+      return fail("generated loop-case scope-continue fixture did not parse");
+    std::string scopedContinueOutput;
+    llvm::raw_string_ostream scopedContinueStream(scopedContinueOutput);
+    if (mlir::failed(nodal::emitBackend(*scopedContinueModule, nodal::BackendKind::VerilogA,
+                                        scopedContinueStream)))
+      return fail("generated loop-case scope-continue emission failed");
+    scopedContinueStream.flush();
+    auto scopedContinueRuntime =
+        scopedContinueOutput.find("for (event_GeneratedLoopCaseLexicalStorage_loop_0_index = 0;");
+    auto scopedContinueCase = scopedContinueOutput.find(
+        "case (event_GeneratedLoopCaseLexicalStorage_mode)", scopedContinueRuntime);
+    auto scopedContinueArm = scopedContinueOutput.find("0: begin", scopedContinueCase);
+    auto scopedContinueArmBegin = scopedContinueOutput.find("begin", scopedContinueArm);
+    auto scopedContinueScopeBegin = scopedContinueOutput.find("begin", scopedContinueArmBegin + 5);
+    auto scopedContinueAssignmentOutput =
+        scopedContinueOutput.find(" + 8.0);", scopedContinueScopeBegin);
+    auto scopedContinueExit =
+        scopedContinueOutput.find("_continue = 1;", scopedContinueAssignmentOutput);
+    auto scopedContinueDefault = scopedContinueOutput.find("default: begin", scopedContinueExit);
+    if (scopedContinueRuntime == std::string::npos || scopedContinueCase == std::string::npos ||
+        scopedContinueArm == std::string::npos || scopedContinueArmBegin == std::string::npos ||
+        scopedContinueScopeBegin == std::string::npos ||
+        scopedContinueAssignmentOutput == std::string::npos ||
+        scopedContinueExit == std::string::npos || scopedContinueDefault == std::string::npos ||
+        !(scopedContinueRuntime < scopedContinueCase && scopedContinueCase < scopedContinueArm &&
+          scopedContinueArm < scopedContinueArmBegin &&
+          scopedContinueArmBegin < scopedContinueScopeBegin &&
+          scopedContinueScopeBegin < scopedContinueAssignmentOutput &&
+          scopedContinueAssignmentOutput < scopedContinueExit &&
+          scopedContinueExit < scopedContinueDefault) ||
+        scopedContinueOutput.find("@(") != std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(scopedContinueOutput, *configuration)))
+      return fail("generated loop-case scope continue lost its direct target topology");
+
+    auto forgedContinue = parse(context, scopedContinueSource);
+    if (!forgedContinue)
+      return fail("generated loop-case scope-continue ownership fixture did not parse");
+    mlir::Operation *continueOperation = nullptr;
+    forgedContinue->walk([&](mlir::Operation *operation) {
+      if (!continueOperation && operation->getName().getStringRef() == "nodal.analog_continue")
+        continueOperation = operation;
+    });
+    if (!continueOperation)
+      return fail("generated loop-case scope-continue ownership anchor missing");
+    continueOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopCaseLexicalStorage.forged"));
+    std::string continueRejected = "sentinel";
+    llvm::raw_string_ostream forgedContinueStream(continueRejected);
+    if (mlir::succeeded(nodal::emitBackend(*forgedContinue, nodal::BackendKind::VerilogA,
+                                           forgedContinueStream)))
+      return fail("forged generated loop-case scope continue passed backend verification");
+    forgedContinueStream.flush();
+    if (continueRejected != "sentinel")
+      return fail("forged generated loop-case scope continue published partial output");
+
+    std::string duplicateContinueSource = scopedContinueSource;
+    auto duplicateContinuePosition = duplicateContinueSource.find("                }) : () -> ()",
+                                                                  scopedContinueAssignmentEnd + 1);
+    if (duplicateContinuePosition == std::string::npos)
+      return fail("generated loop-case scope duplicate-continue anchor missing");
+    std::string secondContinue = scopedContinue;
+    for (auto duplicateId = secondContinue.find("continue_0"); duplicateId != std::string::npos;
+         duplicateId = secondContinue.find("continue_0", duplicateId + 10))
+      secondContinue.replace(duplicateId, 10, "continue_1");
+    duplicateContinueSource.insert(duplicateContinuePosition, secondContinue);
+    auto duplicateContinue = parse(context, duplicateContinueSource);
+    if (!duplicateContinue)
+      return fail("generated loop-case scope duplicate-continue mutation did not parse");
+    continueRejected = "sentinel";
+    llvm::raw_string_ostream duplicateContinueStream(continueRejected);
+    if (mlir::succeeded(nodal::emitBackend(*duplicateContinue, nodal::BackendKind::VerilogA,
+                                           duplicateContinueStream)))
+      return fail("duplicate generated loop-case scope continue passed backend verification");
+    duplicateContinueStream.flush();
+    if (continueRejected != "sentinel")
+      return fail("duplicate generated loop-case scope continue published partial output");
+
     auto forgedExit = parse(context, scopedExitSource);
     if (!forgedExit)
       return fail("generated loop-case scope-exit ownership fixture did not parse");

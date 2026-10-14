@@ -4061,6 +4061,66 @@ int main() {
     if (forgedExitRejected != "sentinel")
       return fail("forged generated loop-arm exit published partial output");
 
+    auto caseContinueModule = parse(context, generatedStorageSource);
+    if (!caseContinueModule)
+      return fail("generated event case-arm continue mutation fixture did not parse");
+    mlir::Operation *caseContinueLoop = nullptr;
+    mlir::Operation *caseContinueRootCase = nullptr;
+    mlir::Operation *caseContinueTemplate = nullptr;
+    mlir::Operation *caseContinueRootBreak = nullptr;
+    caseContinueModule->walk([&](mlir::Operation *operation) {
+      if (!caseContinueLoop && operation->getName().getStringRef() == "nodal.analog_loop")
+        caseContinueLoop = operation;
+      if (!caseContinueRootCase && operation->getName().getStringRef() == "nodal.analog_case" &&
+          operation->getParentOp() &&
+          operation->getParentOp()->getName().getStringRef() == "nodal.analog_on")
+        caseContinueRootCase = operation;
+      if (!caseContinueTemplate && operation->getName().getStringRef() == "nodal.analog_continue")
+        caseContinueTemplate = operation;
+      if (!caseContinueRootBreak && operation->getName().getStringRef() == "nodal.analog_break")
+        caseContinueRootBreak = operation;
+    });
+    if (!caseContinueLoop || !caseContinueRootCase || !caseContinueTemplate ||
+        !caseContinueRootBreak)
+      return fail("generated event case-arm continue mutation anchor missing");
+    mlir::Operation *caseContinue = caseContinueRootCase->clone();
+    retagStructuredClone(caseContinue, ".case_continue_mutation", 7);
+    mlir::Operation *caseContinueExit = caseContinueTemplate->clone();
+    caseContinueExit->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(&context, "GeneratedEvent.event_0.loop_2.case_continue_mutation"));
+    caseContinueTemplate->erase();
+    caseContinueRootBreak->erase();
+    caseContinue->getRegion(0).front().back().getRegion(0).front().push_back(caseContinueExit);
+    caseContinueLoop->getRegion(0).front().push_back(caseContinue);
+    std::string caseContinueOutput;
+    llvm::raw_string_ostream caseContinueStream(caseContinueOutput);
+    if (mlir::failed(nodal::emitBackend(*caseContinueModule, nodal::BackendKind::VerilogA,
+                                        caseContinueStream)))
+      return fail("generated event case-arm continue failed backend verification");
+    caseContinueStream.flush();
+    auto caseContinueLoopStart =
+        caseContinueOutput.find("for (event_GeneratedEvent_event_0_loop_2_index");
+    auto caseContinueCase =
+        caseContinueOutput.find("case (event_GeneratedEvent_mode)", caseContinueLoopStart);
+    auto caseContinueDefault = caseContinueOutput.find("default: begin", caseContinueCase);
+    auto caseContinueTarget = caseContinueOutput.find("_continue = 1;", caseContinueDefault);
+    if (caseContinueLoopStart == std::string::npos || caseContinueCase == std::string::npos ||
+        caseContinueDefault == std::string::npos || caseContinueTarget == std::string::npos ||
+        !(caseContinueLoopStart < caseContinueCase && caseContinueCase < caseContinueDefault &&
+          caseContinueDefault < caseContinueTarget) ||
+        mlir::failed(nodal::reparseBackendTarget(caseContinueOutput, *configuration)))
+      return fail("generated event case-arm continue lost its direct target topology");
+    caseContinueExit->setAttr("owner", mlir::StringAttr::get(&context, "ForgedGeneratedEvent"));
+    std::string caseContinueRejected = "sentinel";
+    llvm::raw_string_ostream caseContinueRejectedStream(caseContinueRejected);
+    if (mlir::succeeded(nodal::emitBackend(*caseContinueModule, nodal::BackendKind::VerilogA,
+                                           caseContinueRejectedStream)))
+      return fail("forged generated event case-arm continue passed backend verification");
+    caseContinueRejectedStream.flush();
+    if (caseContinueRejected != "sentinel")
+      return fail("forged generated event case-arm continue published partial output");
+
     auto deeperExitModule = parse(context, generatedStorageSource);
     if (!deeperExitModule)
       return fail("generated event deeper-exit mutation fixture did not parse");

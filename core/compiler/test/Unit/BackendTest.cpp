@@ -3786,6 +3786,7 @@ int main() {
     mlir::Operation *scopeLoop = nullptr;
     mlir::Operation *scopeCasePrototype = nullptr;
     mlir::Operation *scopeBreak = nullptr;
+    mlir::Operation *scopeContinue = nullptr;
     nestedScopeModule->walk([&](mlir::Operation *operation) {
       if (operation->getName().getStringRef() == "nodal.analog_if" && operation->getParentOp() &&
           operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
@@ -3796,18 +3797,23 @@ int main() {
         scopeCasePrototype = operation;
       if (!scopeBreak && operation->getName().getStringRef() == "nodal.analog_break")
         scopeBreak = operation;
+      if (!scopeContinue && operation->getName().getStringRef() == "nodal.analog_continue")
+        scopeContinue = operation;
       if (!directScope && operation->getName().getStringRef() == "nodal.analog_scope" &&
           operation->getParentOp() &&
           operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
         directScope = operation;
     });
-    if (!scopeConditional || !scopeLoop || !scopeCasePrototype || !directScope || !scopeBreak)
+    if (!scopeConditional || !scopeLoop || !scopeCasePrototype || !directScope || !scopeBreak ||
+        !scopeContinue)
       return fail("generated event nested-scope mutation anchor missing");
     mlir::Operation *nestedScope = directScope->clone();
     nestedScope->setAttr(
         "scope_id",
         mlir::StringAttr::get(&context, "GeneratedEvent.event_0.loop_2.nested_scope_mutation"));
     scopeConditional->getRegion(0).front().back().getRegion(0).front().push_back(nestedScope);
+    scopeContinue->moveBefore(&nestedScope->getRegion(0).front(),
+                              nestedScope->getRegion(0).front().end());
     directScope->erase();
     std::string nestedScopeOutput;
     llvm::raw_string_ostream nestedScopeStream(nestedScopeOutput);
@@ -3819,11 +3825,75 @@ int main() {
     auto conditionalScopeAssignment = nestedScopeOutput.find(
         "event_GeneratedEvent_state = "
         "(event_GeneratedEvent_event_0_loop_2_scope_0_assignment_read_0 + 9.0);");
+    auto conditionalScopeContinue =
+        nestedScopeOutput.find("_continue = 1;", conditionalScopeAssignment);
+    auto conditionalScopeBreak = nestedScopeOutput.find("_break = 1;", conditionalScopeContinue);
     if (conditionalScopeStart == std::string::npos ||
         conditionalScopeAssignment == std::string::npos ||
+        conditionalScopeContinue == std::string::npos ||
+        conditionalScopeBreak == std::string::npos ||
         conditionalScopeAssignment < conditionalScopeStart ||
+        conditionalScopeContinue < conditionalScopeAssignment ||
+        conditionalScopeContinue > conditionalScopeBreak ||
         mlir::failed(nodal::reparseBackendTarget(nestedScopeOutput, *configuration)))
-      return fail("generated event conditional-arm scope lost its direct target topology");
+      return fail("generated event conditional-arm scope continue lost its direct target topology");
+
+    scopeContinue->setAttr("owner", mlir::StringAttr::get(&context, "ForgedGeneratedEvent"));
+    std::string forgedConditionalScopeExitRejected = "sentinel";
+    llvm::raw_string_ostream forgedConditionalScopeExitRejectedStream(
+        forgedConditionalScopeExitRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                           forgedConditionalScopeExitRejectedStream)))
+      return fail("forged generated loop conditional-arm scope continue passed backend "
+                  "verification");
+    forgedConditionalScopeExitRejectedStream.flush();
+    if (forgedConditionalScopeExitRejected != "sentinel")
+      return fail("forged generated loop conditional-arm scope continue published partial "
+                  "output");
+    scopeContinue->setAttr("owner", mlir::StringAttr::get(&context, "GeneratedEvent"));
+
+    mlir::Operation *duplicateScopeContinue = scopeContinue->clone();
+    duplicateScopeContinue->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(&context,
+                              "GeneratedEvent.event_0.loop_2.duplicate_scope_continue_mutation"));
+    nestedScope->getRegion(0).front().push_back(duplicateScopeContinue);
+    std::string duplicateConditionalScopeExitRejected = "sentinel";
+    llvm::raw_string_ostream duplicateConditionalScopeExitRejectedStream(
+        duplicateConditionalScopeExitRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                           duplicateConditionalScopeExitRejectedStream)))
+      return fail("duplicate generated loop conditional-arm scope continue passed backend "
+                  "verification");
+    duplicateConditionalScopeExitRejectedStream.flush();
+    if (duplicateConditionalScopeExitRejected != "sentinel")
+      return fail("duplicate generated loop conditional-arm scope continue published partial "
+                  "output");
+    duplicateScopeContinue->erase();
+
+    mlir::Operation *deeperConditionalScope = nestedScope->clone();
+    deeperConditionalScope->setAttr(
+        "scope_id",
+        mlir::StringAttr::get(&context,
+                              "GeneratedEvent.event_0.loop_2.deeper_conditional_scope_mutation"));
+    deeperConditionalScope->getRegion(0).front().clear();
+    nestedScope->getBlock()->getOperations().insert(mlir::Block::iterator(nestedScope),
+                                                    deeperConditionalScope);
+    nestedScope->moveBefore(&deeperConditionalScope->getRegion(0).front(),
+                            deeperConditionalScope->getRegion(0).front().end());
+    std::string deeperConditionalScopeRejected = "sentinel";
+    llvm::raw_string_ostream deeperConditionalScopeRejectedStream(deeperConditionalScopeRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                           deeperConditionalScopeRejectedStream)))
+      return fail("unsupported deeper generated loop conditional-arm scope passed backend "
+                  "verification");
+    deeperConditionalScopeRejectedStream.flush();
+    if (deeperConditionalScopeRejected != "sentinel")
+      return fail("unsupported deeper generated loop conditional-arm scope published partial "
+                  "output");
+    nestedScope->moveBefore(deeperConditionalScope);
+    deeperConditionalScope->erase();
+    scopeContinue->moveBefore(scopeBreak);
 
     mlir::Operation *scopeCase = scopeCasePrototype->clone();
     retagStructuredClone(scopeCase, ".scope_case_mutation", 6);

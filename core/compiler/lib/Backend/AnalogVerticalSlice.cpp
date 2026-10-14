@@ -2067,6 +2067,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
           unsigned directConditionals = 0;
           unsigned directCases = 0;
           unsigned admittedScopes = 0;
+          unsigned admittedScopeExits = 0;
           for (Operation *parent = nested->getParentOp(); parent && parent != &operation;
                parent = parent->getParentOp())
             if (llvm::isa<AnalogLoopOp>(parent)) {
@@ -2129,6 +2130,10 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
               Operation *conditional = arm ? arm->getParentOp() : nullptr;
               auto caseArm = llvm::dyn_cast_or_null<AnalogCaseArmOp>(parent);
               Operation *caseOperation = caseArm ? caseArm->getParentOp() : nullptr;
+              auto scope = llvm::dyn_cast_or_null<AnalogScopeOp>(parent);
+              auto scopeCaseArm =
+                  scope ? llvm::dyn_cast_or_null<AnalogCaseArmOp>(scope->getParentOp()) : nullptr;
+              Operation *scopeCase = scopeCaseArm ? scopeCaseArm->getParentOp() : nullptr;
               const bool directLoopExit = parent == nested;
               const bool directConditionalArmExit = conditional &&
                                                     llvm::isa<AnalogIfOp>(conditional) &&
@@ -2136,9 +2141,13 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
               const bool directCaseArmExit = caseOperation &&
                                              llvm::isa<AnalogCaseOp>(caseOperation) &&
                                              caseOperation->getParentOp() == nested;
-              if ((!directLoopExit && !directConditionalArmExit && !directCaseArmExit) ||
-                  !exitOwner || !procedureOwner ||
-                  exitOwner.getValue() != procedureOwner.getValue())
+              const bool directCaseArmScopeBreak =
+                  llvm::isa<AnalogBreakOp>(bodyOperation) && scopeCase &&
+                  llvm::isa<AnalogCaseOp>(scopeCase) && scopeCase->getParentOp() == nested;
+              if ((!directLoopExit && !directConditionalArmExit && !directCaseArmExit &&
+                   !directCaseArmScopeBreak) ||
+                  (directCaseArmScopeBreak && ++admittedScopeExits > 1) || !exitOwner ||
+                  !procedureOwner || exitOwner.getValue() != procedureOwner.getValue())
                 unsupportedStorage = true;
               return;
             }
@@ -2198,7 +2207,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             &operation, "NODAL-BACKEND-CAPABILITY-001",
             "generated lexical storage admits one direct runtime loop; event-local storage may "
             "also use one direct conditional and case tree, one direct loop/conditional-arm/"
-            "case-arm lexical scope, plus direct loop/conditional-arm/case-arm exits; non-event "
+            "case-arm lexical scope, plus direct loop/conditional-arm/case-arm exits or one "
+            "direct case-arm lexical-scope break; non-event "
             "loop storage may use one direct continue/break pair, one direct lexical-scope "
             "continue/break pair, one direct conditional-arm lexical-scope continue, or one "
             "direct conditional-arm continue/case-arm break");

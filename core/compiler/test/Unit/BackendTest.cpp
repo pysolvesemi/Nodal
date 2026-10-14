@@ -3785,6 +3785,7 @@ int main() {
     mlir::Operation *directScope = nullptr;
     mlir::Operation *scopeLoop = nullptr;
     mlir::Operation *scopeCasePrototype = nullptr;
+    mlir::Operation *scopeBreak = nullptr;
     nestedScopeModule->walk([&](mlir::Operation *operation) {
       if (operation->getName().getStringRef() == "nodal.analog_if" && operation->getParentOp() &&
           operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
@@ -3793,12 +3794,14 @@ int main() {
         scopeLoop = operation;
       if (!scopeCasePrototype && operation->getName().getStringRef() == "nodal.analog_case")
         scopeCasePrototype = operation;
+      if (!scopeBreak && operation->getName().getStringRef() == "nodal.analog_break")
+        scopeBreak = operation;
       if (!directScope && operation->getName().getStringRef() == "nodal.analog_scope" &&
           operation->getParentOp() &&
           operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
         directScope = operation;
     });
-    if (!scopeConditional || !scopeLoop || !scopeCasePrototype || !directScope)
+    if (!scopeConditional || !scopeLoop || !scopeCasePrototype || !directScope || !scopeBreak)
       return fail("generated event nested-scope mutation anchor missing");
     mlir::Operation *nestedScope = directScope->clone();
     nestedScope->setAttr(
@@ -3828,6 +3831,7 @@ int main() {
     mlir::Operation *caseScope = nestedScope->clone();
     retagStructuredClone(caseScope, ".case_scope_mutation", 8);
     scopeCase->getRegion(0).front().back().getRegion(0).front().push_back(caseScope);
+    scopeBreak->moveBefore(&caseScope->getRegion(0).front(), caseScope->getRegion(0).front().end());
     nestedScope->erase();
     std::string caseScopeOutput;
     llvm::raw_string_ostream caseScopeStream(caseScopeOutput);
@@ -3840,12 +3844,41 @@ int main() {
         "(event_GeneratedEvent_event_0_loop_2_scope_0_assignment_read_0_case_scope_mutation + "
         "9.0);");
     auto caseScopeStart = caseScopeOutput.rfind("default: begin", caseScopeAssignment);
+    auto caseScopeBreak = caseScopeOutput.find("_break = 1;", caseScopeAssignment);
     auto caseScopeEnd = caseScopeOutput.find("endcase", caseScopeAssignment);
     if (caseScopeStart == std::string::npos || caseScopeEnd == std::string::npos ||
-        caseScopeAssignment == std::string::npos || caseScopeAssignment < caseScopeStart ||
-        caseScopeAssignment > caseScopeEnd ||
+        caseScopeAssignment == std::string::npos || caseScopeBreak == std::string::npos ||
+        caseScopeAssignment < caseScopeStart || caseScopeBreak < caseScopeAssignment ||
+        caseScopeBreak > caseScopeEnd ||
         mlir::failed(nodal::reparseBackendTarget(caseScopeOutput, *configuration)))
-      return fail("generated event case-arm scope lost its direct target topology");
+      return fail("generated event case-arm scope break lost its direct target topology");
+
+    scopeBreak->setAttr("owner", mlir::StringAttr::get(&context, "ForgedGeneratedEvent"));
+    std::string forgedScopeExitRejected = "sentinel";
+    llvm::raw_string_ostream forgedScopeExitRejectedStream(forgedScopeExitRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                           forgedScopeExitRejectedStream)))
+      return fail("forged generated loop case-arm scope break passed backend verification");
+    forgedScopeExitRejectedStream.flush();
+    if (forgedScopeExitRejected != "sentinel")
+      return fail("forged generated loop case-arm scope break published partial output");
+    scopeBreak->setAttr("owner", mlir::StringAttr::get(&context, "GeneratedEvent"));
+
+    mlir::Operation *duplicateScopeBreak = scopeBreak->clone();
+    duplicateScopeBreak->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(&context,
+                              "GeneratedEvent.event_0.loop_2.duplicate_scope_break_mutation"));
+    caseScope->getRegion(0).front().push_back(duplicateScopeBreak);
+    std::string duplicateScopeExitRejected = "sentinel";
+    llvm::raw_string_ostream duplicateScopeExitRejectedStream(duplicateScopeExitRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                           duplicateScopeExitRejectedStream)))
+      return fail("duplicate generated loop case-arm scope break passed backend verification");
+    duplicateScopeExitRejectedStream.flush();
+    if (duplicateScopeExitRejected != "sentinel")
+      return fail("duplicate generated loop case-arm scope break published partial output");
+    duplicateScopeBreak->erase();
 
     mlir::Operation *deeperCaseScope = caseScope->clone();
     deeperCaseScope->setAttr(

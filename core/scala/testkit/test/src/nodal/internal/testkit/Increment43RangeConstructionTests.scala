@@ -195,6 +195,21 @@ final class Increment43GeneratedLoopConditionalScopeExitLexicalStorage extends M
           analogOtherwise:
             state := state + 7.0.real
 
+final class Increment43GeneratedLoopConditionalScopeBreakLexicalStorage extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val iterations = variable(Integer, 1.integer)
+      val select = variable(Bool, false.B)
+      val state = variable(Real, 0.0.real)
+      analogLoop(iterations, maximumIterations = 2, minimumIterations = 1):
+        analogConditional:
+          analogWhen(select):
+            CandidateRuntime.block:
+              state := state + 13.0.real
+              analogBreak()
+          analogOtherwise:
+            state := state + 7.0.real
+
 final class Increment43GeneratedLoopCaseLexicalStorage extends Module:
   hdlRange(0, 2): _ =>
     analogProcedure:
@@ -2170,6 +2185,49 @@ object Increment43RangeConstructionTests extends TestSuite:
               conditional > runtimeLoop && conditionalBegin > conditional &&
                 scope > conditionalBegin && assignment > scope &&
                 loopContinue > assignment && otherwise > loopContinue &&
+                otherwiseAssignment > otherwise
+            )
+            assert(!result.verilogA.contains("@("))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated loop conditional-arm lexical scope break retains authored control"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedLoopConditionalScopeBreakLexicalStorage,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_loop\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_if\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_scope\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_continue\"")) == 0)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_break\"")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            val runtimeLoop = result.verilogA.indexOf("for (event_")
+            val conditional = result.verilogA.indexOf("if (event_", runtimeLoop)
+            val conditionalBegin = result.verilogA.indexOf("begin", conditional)
+            val scope = result.verilogA.indexOf("begin", conditionalBegin + "begin".length)
+            val assignment = result.verilogA.indexOf(" + 13.0);", scope)
+            val loopBreak = result.verilogA.indexOf("_break = 1;", assignment)
+            val otherwise = result.verilogA.indexOf("else begin", loopBreak)
+            val otherwiseAssignment = result.verilogA.indexOf(" + 7.0);", otherwise)
+            assert(runtimeLoop >= 0)
+            assert(
+              conditional > runtimeLoop && conditionalBegin > conditional &&
+                scope > conditionalBegin && assignment > scope &&
+                loopBreak > assignment && otherwise > loopBreak &&
                 otherwiseAssignment > otherwise
             )
             assert(!result.verilogA.contains("@("))

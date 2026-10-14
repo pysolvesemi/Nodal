@@ -2682,6 +2682,83 @@ int main() {
         mlir::failed(nodal::reparseBackendTarget(scopedExitOutput, *configuration)))
       return fail("generated loop-conditional scope exit lost its direct target topology");
 
+    std::string scopedBreakSource = scopedExitSource;
+    auto scopedBreakName = scopedBreakSource.find("nodal.analog_continue");
+    if (scopedBreakName == std::string::npos)
+      return fail("generated loop-conditional scope-break operation anchor missing");
+    scopedBreakSource.replace(scopedBreakName, std::string("nodal.analog_continue").size(),
+                              "nodal.analog_break");
+    for (auto breakId = scopedBreakSource.find("continue_0"); breakId != std::string::npos;
+         breakId = scopedBreakSource.find("continue_0", breakId + 7))
+      scopedBreakSource.replace(breakId, std::string("continue_0").size(), "break_0");
+    auto scopedBreakModule = parse(context, scopedBreakSource);
+    if (!scopedBreakModule)
+      return fail("generated loop-conditional scope-break fixture did not parse");
+    std::string scopedBreakOutput;
+    llvm::raw_string_ostream scopedBreakStream(scopedBreakOutput);
+    if (mlir::failed(nodal::emitBackend(*scopedBreakModule, nodal::BackendKind::VerilogA,
+                                        scopedBreakStream)))
+      return fail("generated loop-conditional scope-break emission failed");
+    scopedBreakStream.flush();
+    auto scopedBreakAssignment = scopedBreakOutput.find(" + 6.0);");
+    auto scopedBreakExit = scopedBreakOutput.find("_break = 1;", scopedBreakAssignment);
+    auto scopedBreakOtherwise = scopedBreakOutput.find("else begin", scopedBreakExit);
+    if (scopedBreakAssignment == std::string::npos || scopedBreakExit == std::string::npos ||
+        scopedBreakOtherwise == std::string::npos ||
+        !(scopedBreakAssignment < scopedBreakExit && scopedBreakExit < scopedBreakOtherwise) ||
+        scopedBreakOutput.find("@(") != std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(scopedBreakOutput, *configuration)))
+      return fail("generated loop-conditional scope break lost its direct target topology");
+
+    mlir::Operation *scopedBreakOperation = nullptr;
+    scopedBreakModule->walk([&](mlir::Operation *operation) {
+      if (!scopedBreakOperation && operation->getName().getStringRef() == "nodal.analog_break")
+        scopedBreakOperation = operation;
+    });
+    if (!scopedBreakOperation)
+      return fail("generated loop-conditional scope-break ownership anchor missing");
+    scopedBreakOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopConditionalLexicalStorage.forged"));
+    std::string breakRejected = "sentinel";
+    llvm::raw_string_ostream forgedBreakStream(breakRejected);
+    if (mlir::succeeded(nodal::emitBackend(*scopedBreakModule, nodal::BackendKind::VerilogA,
+                                           forgedBreakStream)))
+      return fail("forged generated loop-conditional scope break passed backend verification");
+    forgedBreakStream.flush();
+    if (breakRejected != "sentinel")
+      return fail("forged generated loop-conditional scope break published partial output");
+    scopedBreakOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopConditionalLexicalStorage"));
+
+    mlir::Operation *duplicateScopedBreak = scopedBreakOperation->clone();
+    duplicateScopedBreak->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(
+            &context, "GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0.break_1"));
+    scopedBreakOperation->getBlock()->push_back(duplicateScopedBreak);
+    breakRejected = "sentinel";
+    llvm::raw_string_ostream duplicateBreakStream(breakRejected);
+    if (mlir::succeeded(nodal::emitBackend(*scopedBreakModule, nodal::BackendKind::VerilogA,
+                                           duplicateBreakStream)))
+      return fail("duplicate generated loop-conditional scope break passed backend verification");
+    duplicateBreakStream.flush();
+    if (breakRejected != "sentinel")
+      return fail("duplicate generated loop-conditional scope break published partial output");
+    duplicateScopedBreak->erase();
+
+    mlir::Operation *scopedBreakScope = scopedBreakOperation->getParentOp();
+    mlir::Operation *deeperBreakScope = scopedBreakScope->clone();
+    scopedBreakScope->getRegion(0).front().push_back(deeperBreakScope);
+    breakRejected = "sentinel";
+    llvm::raw_string_ostream deeperBreakStream(breakRejected);
+    if (mlir::succeeded(nodal::emitBackend(*scopedBreakModule, nodal::BackendKind::VerilogA,
+                                           deeperBreakStream)))
+      return fail("deeper generated loop-conditional scope break passed backend verification");
+    deeperBreakStream.flush();
+    if (breakRejected != "sentinel")
+      return fail("deeper generated loop-conditional scope break published partial output");
+    deeperBreakScope->erase();
+
     auto forgedExit = parse(context, scopedExitSource);
     if (!forgedExit)
       return fail("generated loop-conditional scope-exit ownership fixture did not parse");

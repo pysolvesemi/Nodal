@@ -2972,6 +2972,117 @@ int main() {
         mlir::failed(nodal::reparseBackendTarget(scopedOutput, *configuration)))
       return fail("generated loop-case scope lost its direct target topology");
 
+    std::string scopedExitSource = scopedSource;
+    auto scopedExitAssignment = scopedExitSource.find(assignmentAnchor);
+    auto scopedExitAssignmentEnd = scopedExitSource.find('\n', scopedExitAssignment);
+    if (scopedExitAssignment == std::string::npos || scopedExitAssignmentEnd == std::string::npos)
+      return fail("generated loop-case scope-exit assignment anchor missing");
+    const std::string scopedBreak =
+        "                \"nodal.analog_break\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0.break_0\"}, owner = "
+        "\"GeneratedLoopCaseLexicalStorage\", statement_id = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0.break_0\"}> : () -> ()\n";
+    scopedExitSource.insert(scopedExitAssignmentEnd + 1, scopedBreak);
+    auto scopedExit = parse(context, scopedExitSource);
+    if (!scopedExit)
+      return fail("generated loop-case scope-exit fixture did not parse");
+    std::string scopedExitOutput;
+    llvm::raw_string_ostream scopedExitStream(scopedExitOutput);
+    if (mlir::failed(
+            nodal::emitBackend(*scopedExit, nodal::BackendKind::VerilogA, scopedExitStream)))
+      return fail("generated loop-case scope-exit emission failed");
+    scopedExitStream.flush();
+    auto scopedExitRuntime =
+        scopedExitOutput.find("for (event_GeneratedLoopCaseLexicalStorage_loop_0_index = 0;");
+    auto scopedExitCase = scopedExitOutput.find("case (event_GeneratedLoopCaseLexicalStorage_mode)",
+                                                scopedExitRuntime);
+    auto scopedExitArm = scopedExitOutput.find("0: begin", scopedExitCase);
+    auto scopedExitArmBegin = scopedExitOutput.find("begin", scopedExitArm);
+    auto scopedExitScopeBegin = scopedExitOutput.find("begin", scopedExitArmBegin + 5);
+    auto scopedExitAssignmentOutput = scopedExitOutput.find(" + 8.0);", scopedExitScopeBegin);
+    auto scopedExitBreak = scopedExitOutput.find("_break = 1;", scopedExitAssignmentOutput);
+    auto scopedExitDefault = scopedExitOutput.find("default: begin", scopedExitBreak);
+    if (scopedExitRuntime == std::string::npos || scopedExitCase == std::string::npos ||
+        scopedExitArm == std::string::npos || scopedExitArmBegin == std::string::npos ||
+        scopedExitScopeBegin == std::string::npos ||
+        scopedExitAssignmentOutput == std::string::npos || scopedExitBreak == std::string::npos ||
+        scopedExitDefault == std::string::npos ||
+        !(scopedExitRuntime < scopedExitCase && scopedExitCase < scopedExitArm &&
+          scopedExitArm < scopedExitArmBegin && scopedExitArmBegin < scopedExitScopeBegin &&
+          scopedExitScopeBegin < scopedExitAssignmentOutput &&
+          scopedExitAssignmentOutput < scopedExitBreak && scopedExitBreak < scopedExitDefault) ||
+        scopedExitOutput.find("@(") != std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(scopedExitOutput, *configuration)))
+      return fail("generated loop-case scope exit lost its direct target topology");
+
+    auto forgedExit = parse(context, scopedExitSource);
+    if (!forgedExit)
+      return fail("generated loop-case scope-exit ownership fixture did not parse");
+    mlir::Operation *breakOperation = nullptr;
+    forgedExit->walk([&](mlir::Operation *operation) {
+      if (!breakOperation && operation->getName().getStringRef() == "nodal.analog_break")
+        breakOperation = operation;
+    });
+    if (!breakOperation)
+      return fail("generated loop-case scope-exit ownership anchor missing");
+    breakOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopCaseLexicalStorage.forged"));
+    std::string exitRejected = "sentinel";
+    llvm::raw_string_ostream forgedExitStream(exitRejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*forgedExit, nodal::BackendKind::VerilogA, forgedExitStream)))
+      return fail("forged generated loop-case scope exit passed backend verification");
+    forgedExitStream.flush();
+    if (exitRejected != "sentinel")
+      return fail("forged generated loop-case scope exit published partial output");
+
+    std::string duplicateExitSource = scopedExitSource;
+    auto duplicateExitPosition =
+        duplicateExitSource.find("                }) : () -> ()", scopedExitAssignmentEnd + 1);
+    if (duplicateExitPosition == std::string::npos)
+      return fail("generated loop-case scope duplicate-exit anchor missing");
+    std::string duplicateBreak = scopedBreak;
+    for (auto duplicateId = duplicateBreak.find("break_0"); duplicateId != std::string::npos;
+         duplicateId = duplicateBreak.find("break_0", duplicateId + 7))
+      duplicateBreak.replace(duplicateId, 7, "break_1");
+    duplicateExitSource.insert(duplicateExitPosition, duplicateBreak);
+    auto duplicateExit = parse(context, duplicateExitSource);
+    if (!duplicateExit)
+      return fail("generated loop-case scope duplicate-exit mutation did not parse");
+    exitRejected = "sentinel";
+    llvm::raw_string_ostream duplicateExitStream(exitRejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*duplicateExit, nodal::BackendKind::VerilogA, duplicateExitStream)))
+      return fail("duplicate generated loop-case scope exit passed backend verification");
+    duplicateExitStream.flush();
+    if (exitRejected != "sentinel")
+      return fail("duplicate generated loop-case scope exit published partial output");
+
+    std::string deeperExitSource = scopedSource;
+    auto deeperExitAssignment = deeperExitSource.find(assignmentAnchor);
+    auto deeperExitAssignmentEnd = deeperExitSource.find('\n', deeperExitAssignment);
+    if (deeperExitAssignment == std::string::npos || deeperExitAssignmentEnd == std::string::npos)
+      return fail("generated loop-case deeper scope-exit assignment anchor missing");
+    const std::string deeperScopedBreak =
+        "                \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0.scope_0\"}, owner = "
+        "\"GeneratedLoopCaseLexicalStorage\", scope_id = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0.scope_0\"}> ({\n"
+        "                ^bb0:\n" +
+        scopedBreak + "                }) : () -> ()\n";
+    deeperExitSource.insert(deeperExitAssignmentEnd + 1, deeperScopedBreak);
+    auto deeperExit = parse(context, deeperExitSource);
+    if (!deeperExit)
+      return fail("generated loop-case deeper scope-exit mutation did not parse");
+    exitRejected = "sentinel";
+    llvm::raw_string_ostream deeperExitStream(exitRejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*deeperExit, nodal::BackendKind::VerilogA, deeperExitStream)))
+      return fail("deeper generated loop-case scope exit passed backend verification");
+    deeperExitStream.flush();
+    if (exitRejected != "sentinel")
+      return fail("deeper generated loop-case scope exit published partial output");
+
     auto forged = parse(context, scopedSource);
     if (!forged)
       return fail("could not parse the generated loop-case scope ownership fixture");

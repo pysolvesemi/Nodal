@@ -1741,8 +1741,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             loopCaseScopeProfile = false;
             loopCaseScopeExitProfile &= llvm::isa<AnalogBreakOp, AnalogContinueOp>(nested) &&
                                         isDirectLoopCaseArmScope(parent);
-            loopConditionalExitProfile &=
-                llvm::isa<AnalogContinueOp>(nested) && isDirectLoopConditionalArm(parent);
+            loopConditionalExitProfile &= llvm::isa<AnalogBreakOp, AnalogContinueOp>(nested) &&
+                                          isDirectLoopConditionalArm(parent);
             loopCaseExitProfile &= llvm::isa<AnalogBreakOp>(nested) && isDirectLoopCaseArm(parent);
             loopExitProfile &=
                 llvm::isa<AnalogLoopOp>(parent) && parent->getParentOp() == &operation;
@@ -1775,7 +1775,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                                   conditionals == 1 && conditionalArms == 2 && loops == 1;
         loopConditionalExitProfile &= variables == 3 && reads == 2 && assignments == 2 &&
                                       conditionals == 1 && conditionalArms == 2 && loops == 1 &&
-                                      breaks == 0 && continues == 1;
+                                      breaks + continues == 1;
         loopConditionalScopeProfile &= variables == 3 && reads == 2 && assignments == 2 &&
                                        conditionals == 1 && conditionalArms == 2 && loops == 1 &&
                                        scopes == 1 && loopConditionalScopeReads == 1 &&
@@ -1822,7 +1822,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
               "generated lexical storage target profile requires either one direct variable/read/"
               "assignment, one direct two-arm conditional, one direct case/default tree, or one "
               "direct runtime loop over root variables with an optional direct two-arm "
-              "conditional, conditional-arm continue, conditional-arm lexical scope, "
+              "conditional, conditional-arm exit, conditional-arm lexical scope, "
               "conditional-arm lexical-scope exit, direct "
               "case/default tree, case-arm break, case-arm lexical scope, case-arm "
               "lexical-scope exit, direct lexical scope, "
@@ -1956,7 +1956,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                 const bool acceptedDirectExit = nonEventLoopExitProfile && parent == nested;
                 const bool acceptedConditionalExit =
                     nonEventLoopConditionalExitProfile &&
-                    llvm::isa<AnalogContinueOp>(bodyOperation) && conditional &&
+                    llvm::isa<AnalogBreakOp, AnalogContinueOp>(bodyOperation) && conditional &&
                     llvm::isa<AnalogIfOp>(conditional) && conditional->getParentOp() == nested;
                 const bool acceptedCaseExit =
                     nonEventLoopCaseExitProfile && llvm::isa<AnalogBreakOp>(bodyOperation) &&
@@ -2051,8 +2051,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                  (directCases != 1 || directCaseArms != 2)) ||
                 (nonEventLoopExitProfile && (directBreaks != 1 || directContinues != 1)) ||
                 (nonEventLoopScopeExitProfile && (directBreaks != 1 || directContinues != 1)) ||
-                (nonEventLoopConditionalExitProfile &&
-                 (directBreaks != 0 || directContinues != 1)) ||
+                (nonEventLoopConditionalExitProfile && directBreaks + directContinues != 1) ||
                 (nonEventLoopConditionalScopeExitProfile && directBreaks + directContinues != 1) ||
                 (nonEventLoopCaseExitProfile && (directBreaks != 1 || directContinues != 0)) ||
                 (nonEventLoopCaseScopeExitProfile && directBreaks + directContinues != 1) ||
@@ -2222,7 +2221,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             "non-event "
             "loop storage may use one direct continue/break pair, one direct lexical-scope "
             "continue/break pair, one direct conditional-arm/case-arm lexical-scope exit, or one "
-            "direct conditional-arm continue/case-arm break");
+            "direct conditional-arm exit/case-arm break");
       if (mismatchedStorage)
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",

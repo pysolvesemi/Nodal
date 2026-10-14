@@ -2515,6 +2515,80 @@ int main() {
         mlir::failed(nodal::reparseBackendTarget(exitOutput, *configuration)))
       return fail("generated loop conditional-arm exit lost its direct target topology");
 
+    std::string breakSource = kGeneratedLoopConditionalLexicalStorageModule.str();
+    auto breakAssignmentPosition = breakSource.find(assignmentAnchor);
+    auto breakAssignmentEnd = breakSource.find('\n', breakAssignmentPosition);
+    if (breakAssignmentPosition == std::string::npos || breakAssignmentEnd == std::string::npos)
+      return fail("generated loop conditional-arm break assignment anchor missing");
+    const std::string loopBreak =
+        "                \"nodal.analog_break\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.break_0\"}, owner = "
+        "\"GeneratedLoopConditionalLexicalStorage\", statement_id = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.break_0\"}> : () -> ()\n";
+    breakSource.insert(breakAssignmentEnd + 1, loopBreak);
+    auto breakModule = parse(context, breakSource);
+    if (!breakModule)
+      return fail("generated loop conditional-arm break fixture did not parse");
+    std::string breakOutput;
+    llvm::raw_string_ostream breakStream(breakOutput);
+    if (mlir::failed(nodal::emitBackend(*breakModule, nodal::BackendKind::VerilogA, breakStream)))
+      return fail("generated loop conditional-arm break emission failed");
+    breakStream.flush();
+    auto breakRuntime =
+        breakOutput.find("for (event_GeneratedLoopConditionalLexicalStorage_loop_0_index = 0;");
+    auto breakConditional = breakOutput.find(
+        "if (event_GeneratedLoopConditionalLexicalStorage_select) begin", breakRuntime);
+    auto breakAssignment = breakOutput.find(" + 6.0);", breakConditional);
+    auto breakExit = breakOutput.find("_break = 1;", breakAssignment);
+    auto breakOtherwise = breakOutput.find("else begin", breakExit);
+    if (breakRuntime == std::string::npos || breakConditional == std::string::npos ||
+        breakAssignment == std::string::npos || breakExit == std::string::npos ||
+        breakOtherwise == std::string::npos ||
+        !(breakRuntime < breakConditional && breakConditional < breakAssignment &&
+          breakAssignment < breakExit && breakExit < breakOtherwise) ||
+        breakOutput.find("@(") != std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(breakOutput, *configuration)))
+      return fail("generated loop conditional-arm break lost its direct target topology");
+
+    auto forgedBreak = parse(context, breakSource);
+    if (!forgedBreak)
+      return fail("generated loop conditional-arm break ownership fixture did not parse");
+    mlir::Operation *breakOperation = nullptr;
+    forgedBreak->walk([&](mlir::Operation *operation) {
+      if (!breakOperation && operation->getName().getStringRef() == "nodal.analog_break")
+        breakOperation = operation;
+    });
+    if (!breakOperation)
+      return fail("generated loop conditional-arm break ownership anchor missing");
+    breakOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopConditionalLexicalStorage.forged"));
+    std::string breakRejected = "sentinel";
+    llvm::raw_string_ostream forgedBreakStream(breakRejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*forgedBreak, nodal::BackendKind::VerilogA, forgedBreakStream)))
+      return fail("forged generated loop conditional-arm break passed backend verification");
+    forgedBreakStream.flush();
+    if (breakRejected != "sentinel")
+      return fail("forged generated loop conditional-arm break published partial output");
+
+    std::string duplicateBreakSource = breakSource;
+    std::string secondBreak = loopBreak;
+    for (auto duplicateId = secondBreak.find("break_0"); duplicateId != std::string::npos;
+         duplicateId = secondBreak.find("break_0", duplicateId + 7))
+      secondBreak.replace(duplicateId, 7, "break_1");
+    duplicateBreakSource.insert(breakAssignmentEnd + 1, secondBreak);
+    auto duplicateBreak = parse(context, duplicateBreakSource);
+    if (!duplicateBreak)
+      return fail("generated loop conditional-arm duplicate-break mutation did not parse");
+    breakRejected = "sentinel";
+    llvm::raw_string_ostream duplicateBreakStream(breakRejected);
+    if (mlir::succeeded(nodal::emitBackend(*duplicateBreak, nodal::BackendKind::VerilogA,
+                                           duplicateBreakStream)))
+      return fail("duplicate generated loop conditional-arm break passed backend verification");
+    duplicateBreakStream.flush();
+    if (breakRejected != "sentinel")
+      return fail("duplicate generated loop conditional-arm break published partial output");
+
     auto forged = parse(context, exitSource);
     if (!forged)
       return fail("generated loop conditional-arm exit ownership fixture did not parse");

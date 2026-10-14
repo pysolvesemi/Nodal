@@ -128,6 +128,17 @@ final class Increment43GeneratedLoopScopeLexicalStorage extends Module:
         CandidateRuntime.block:
           state := state + 10.0.real
 
+final class Increment43GeneratedLoopScopeExitLexicalStorage extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val iterations = variable(Integer, 1.integer)
+      val state = variable(Real, 0.0.real)
+      analogLoop(iterations, maximumIterations = 2, minimumIterations = 1):
+        CandidateRuntime.block:
+          state := state + 10.0.real
+          analogContinue()
+          analogBreak()
+
 final class Increment43GeneratedLoopConditionalLexicalStorage extends Module:
   hdlRange(0, 2): _ =>
     analogProcedure:
@@ -1838,6 +1849,45 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(loopBegin > runtimeLoop)
             assert(scope > loopBegin)
             assert(assignment > scope)
+            assert(!result.verilogA.contains("@("))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated loop lexical scope exits retain per-occurrence control"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedLoopScopeExitLexicalStorage,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_loop\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_scope\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_continue\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_break\"")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains("for (event_")) == 1)
+            val runtimeLoop = result.verilogA.indexOf("for (event_")
+            val loopBegin = result.verilogA.indexOf("begin", runtimeLoop)
+            val scope = result.verilogA.indexOf("begin", loopBegin + "begin".length)
+            val assignment = result.verilogA.indexOf(" + 10.0);", scope)
+            val loopContinue = result.verilogA.indexOf("_continue = 1;", assignment)
+            val loopBreak = result.verilogA.indexOf("_break = 1;", loopContinue)
+            assert(runtimeLoop >= 0)
+            assert(
+              loopBegin > runtimeLoop && scope > loopBegin && assignment > scope &&
+                loopContinue > assignment && loopBreak > loopContinue
+            )
             assert(!result.verilogA.contains("@("))
           finally delete(directory)
         case _ => assert(true)

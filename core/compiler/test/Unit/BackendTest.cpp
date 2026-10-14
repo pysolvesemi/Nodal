@@ -2342,6 +2342,106 @@ int main() {
       return fail("deeper generated loop lexical scope published partial output");
   }
 
+  {
+    std::string scopedExitSource = kGeneratedLoopLexicalStorageModule.str();
+    const std::string readAnchor =
+        "            %state_read = \"nodal.analog_variable_read\"(%state)";
+    const std::string assignmentAnchor = "            \"nodal.analog_assign\"(%state, %state_read)";
+    const std::string scopeHeader =
+        "            \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0\"}, owner = "
+        "\"GeneratedLoopLexicalStorage\", scope_id = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0\"}> ({\n"
+        "            ^bb0:\n";
+    const std::string scopedExits =
+        "            \"nodal.analog_continue\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0.continue_0\"}, owner = "
+        "\"GeneratedLoopLexicalStorage\", statement_id = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0.continue_0\"}> : () -> ()\n"
+        "            \"nodal.analog_break\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0.break_0\"}, owner = "
+        "\"GeneratedLoopLexicalStorage\", statement_id = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0.break_0\"}> : () -> ()\n";
+    auto readPosition = scopedExitSource.find(readAnchor);
+    if (readPosition == std::string::npos)
+      return fail("generated loop lexical scope-exit read anchor missing");
+    scopedExitSource.insert(readPosition, scopeHeader);
+    auto assignmentPosition = scopedExitSource.find(assignmentAnchor, readPosition);
+    if (assignmentPosition == std::string::npos)
+      return fail("generated loop lexical scope-exit assignment anchor missing");
+    auto assignmentEnd = scopedExitSource.find('\n', assignmentPosition);
+    if (assignmentEnd == std::string::npos)
+      return fail("generated loop lexical scope-exit assignment terminator missing");
+    scopedExitSource.insert(assignmentEnd + 1, scopedExits + "            }) : () -> ()\n");
+
+    auto scopedExit = parse(context, scopedExitSource);
+    if (!scopedExit)
+      return fail("generated loop lexical scope-exit fixture did not parse");
+    std::string scopedExitOutput;
+    llvm::raw_string_ostream scopedExitStream(scopedExitOutput);
+    if (mlir::failed(
+            nodal::emitBackend(*scopedExit, nodal::BackendKind::VerilogA, scopedExitStream)))
+      return fail("generated loop lexical scope-exit emission failed");
+    scopedExitStream.flush();
+    auto runtimeLoop =
+        scopedExitOutput.find("for (event_GeneratedLoopLexicalStorage_loop_0_index = 0;");
+    auto loopBegin = scopedExitOutput.find("begin", runtimeLoop);
+    auto scopeBegin = scopedExitOutput.find("begin", loopBegin + 5);
+    auto assignment = scopedExitOutput.find(" + 5.0);", scopeBegin);
+    auto loopContinue = scopedExitOutput.find("_continue = 1;", assignment);
+    auto loopBreak = scopedExitOutput.find("_break = 1;", loopContinue);
+    if (runtimeLoop == std::string::npos || loopBegin == std::string::npos ||
+        scopeBegin == std::string::npos || assignment == std::string::npos ||
+        loopContinue == std::string::npos || loopBreak == std::string::npos ||
+        !(runtimeLoop < loopBegin && loopBegin < scopeBegin && scopeBegin < assignment &&
+          assignment < loopContinue && loopContinue < loopBreak) ||
+        scopedExitOutput.find("@(") != std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(scopedExitOutput, *configuration)))
+      return fail("generated loop lexical scope exits lost their direct target topology");
+
+    auto forged = parse(context, scopedExitSource);
+    if (!forged)
+      return fail("generated loop lexical scope-exit ownership fixture did not parse");
+    mlir::Operation *breakOperation = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!breakOperation && operation->getName().getStringRef() == "nodal.analog_break")
+        breakOperation = operation;
+    });
+    if (!breakOperation)
+      return fail("generated loop lexical scope-exit ownership anchor missing");
+    breakOperation->setAttr("owner",
+                            mlir::StringAttr::get(&context, "GeneratedLoopLexicalStorage.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated loop lexical scope exit passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated loop lexical scope exit published partial output");
+
+    std::string duplicateSource = scopedExitSource;
+    auto duplicatePosition = duplicateSource.find("            }) : () -> ()", assignmentEnd + 1);
+    if (duplicatePosition == std::string::npos)
+      return fail("generated loop lexical scope duplicate-exit anchor missing");
+    std::string duplicateBreak =
+        scopedExits.substr(scopedExits.find("            \"nodal.analog_break\"()"));
+    for (auto position = duplicateBreak.find("break_0"); position != std::string::npos;
+         position = duplicateBreak.find("break_0", position + 7))
+      duplicateBreak.replace(position, 7, "break_1");
+    duplicateSource.insert(duplicatePosition, duplicateBreak);
+    auto duplicate = parse(context, duplicateSource);
+    if (!duplicate)
+      return fail("generated loop lexical scope duplicate-exit mutation did not parse");
+    rejected = "sentinel";
+    llvm::raw_string_ostream duplicateRejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*duplicate, nodal::BackendKind::VerilogA, duplicateRejectedStream)))
+      return fail("duplicate generated loop lexical scope exit passed backend verification");
+    duplicateRejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("duplicate generated loop lexical scope exit published partial output");
+  }
+
   auto generatedLoopConditionalStorage =
       parse(context, kGeneratedLoopConditionalLexicalStorageModule);
   if (!generatedLoopConditionalStorage)

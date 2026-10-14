@@ -632,6 +632,49 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedLoopCaseLexicalStorageModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true, semantic_path = "GeneratedLoopCaseLexicalStorage"}, sym_name = "GeneratedLoopCaseLexicalStorage"}> ({
+  ^bb0:
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedLoopCaseLexicalStorage.generate_0", induction_path = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        "nodal.analog_procedure"() <{owner = "GeneratedLoopCaseLexicalStorage", generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.analogProcedure"}}> ({
+        ^bb0:
+          %iterations = "nodal.analog_variable"() <{identity = "GeneratedLoopCaseLexicalStorage.iterations", owner = "GeneratedLoopCaseLexicalStorage", declaration_order = 0 : i64, initialized = true, initializer_value = "1", initializer_kind = "integer", initializer_dimension = "1", initializer_reads = [], generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedLoopCaseLexicalStorage.iterations"}}> : () -> !nodal.variable<"integer", "1">
+          %mode = "nodal.analog_variable"() <{identity = "GeneratedLoopCaseLexicalStorage.mode", owner = "GeneratedLoopCaseLexicalStorage", declaration_order = 1 : i64, initialized = true, initializer_value = "0", initializer_kind = "integer", initializer_dimension = "1", initializer_reads = [], generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedLoopCaseLexicalStorage.mode"}}> : () -> !nodal.variable<"integer", "1">
+          %state = "nodal.analog_variable"() <{identity = "GeneratedLoopCaseLexicalStorage.state", owner = "GeneratedLoopCaseLexicalStorage", declaration_order = 2 : i64, initialized = true, initializer_value = "0.0", initializer_kind = "real", initializer_dimension = "1", initializer_reads = [], generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedLoopCaseLexicalStorage.state"}}> : () -> !nodal.variable<"real", "1">
+          "nodal.analog_loop"() <{bound_dimension = "1", bound_kind = "integer", bound_reads = ["GeneratedLoopCaseLexicalStorage.iterations"], bound_value = "GeneratedLoopCaseLexicalStorage.iterations", maximum_iterations = 2 : i64, metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.loop_0"}, minimum_iterations = 1 : i64, owner = "GeneratedLoopCaseLexicalStorage", stage = "runtime", statement_id = "GeneratedLoopCaseLexicalStorage.loop_0", static_trip_count = 0 : i64, static_trip_count_present = false}> ({
+          ^bb0:
+            "nodal.analog_case"() <{metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.selector"}, owner = "GeneratedLoopCaseLexicalStorage", selector_dimension = "1", selector_kind = "integer", selector_reads = ["GeneratedLoopCaseLexicalStorage.mode"], selector_value = "GeneratedLoopCaseLexicalStorage.mode", statement_id = "GeneratedLoopCaseLexicalStorage.loop_0.case_0", static_value = "", static_value_present = false}> ({
+            ^bb0:
+              "nodal.analog_case_arm"() <{arm_id = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.arm_0", is_default = false, labels = ["integer:0"], metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.arm_0"}, owner = "GeneratedLoopCaseLexicalStorage"}> ({
+              ^bb0:
+                %state_read = "nodal.analog_variable_read"(%state) <{read_id = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.assignment.read_0", owner = "GeneratedLoopCaseLexicalStorage", generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.assignment.read_0"}}> : (!nodal.variable<"real", "1">) -> !nodal.quantity<"real", "1">
+                "nodal.analog_assign"(%state, %state_read) <{analyses = ["dc", "transient"], authored_order = 0 : i64, guard_dimension = "", guard_kind = "", guard_present = false, guard_reads = [], guard_value = "", generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.assignment", value = "analog_add(GeneratedLoopCaseLexicalStorage.state,8.0)"}, owner = "GeneratedLoopCaseLexicalStorage", statement_id = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.assignment", value_dimension = "1", value_kind = "real"}> : (!nodal.variable<"real", "1">, !nodal.quantity<"real", "1">) -> ()
+              }) : () -> ()
+              "nodal.analog_case_arm"() <{arm_id = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.default", is_default = true, labels = [], metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.default"}, owner = "GeneratedLoopCaseLexicalStorage"}> ({
+              ^bb0:
+                %state_read_default = "nodal.analog_variable_read"(%state) <{read_id = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.assignment_default.read_0", owner = "GeneratedLoopCaseLexicalStorage", generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.assignment_default.read_0"}}> : (!nodal.variable<"real", "1">) -> !nodal.quantity<"real", "1">
+                "nodal.analog_assign"(%state, %state_read_default) <{analyses = ["dc", "transient"], authored_order = 1 : i64, guard_dimension = "", guard_kind = "", guard_present = false, guard_reads = [], guard_value = "", generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.assignment_default", value = "analog_add(GeneratedLoopCaseLexicalStorage.state,9.0)"}, owner = "GeneratedLoopCaseLexicalStorage", statement_id = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.assignment_default", value_dimension = "1", value_kind = "real"}> : (!nodal.variable<"real", "1">, !nodal.quantity<"real", "1">) -> ()
+              }) : () -> ()
+            }) : () -> ()
+          }) : () -> ()
+        }) : () -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kGeneratedEventModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -2207,6 +2250,91 @@ int main() {
     rejectedStream.flush();
     if (rejected != "sentinel")
       return fail("unsupported generated loop-conditional scope published partial output");
+  }
+
+  auto generatedLoopCaseStorage = parse(context, kGeneratedLoopCaseLexicalStorageModule);
+  if (!generatedLoopCaseStorage)
+    return fail("could not parse the generated loop-case lexical-storage fixture");
+  std::string generatedLoopCaseOutput;
+  llvm::raw_string_ostream generatedLoopCaseStream(generatedLoopCaseOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedLoopCaseStorage, nodal::BackendKind::VerilogA,
+                                      generatedLoopCaseStream)))
+    return fail("generated loop-case lexical-storage emission failed");
+  generatedLoopCaseStream.flush();
+  auto loopCaseOuter = generatedLoopCaseOutput.find("for (generate_0_index");
+  auto loopCaseRuntime =
+      generatedLoopCaseOutput.find("for (event_GeneratedLoopCaseLexicalStorage_loop_0_index = 0;");
+  auto loopCaseTree = generatedLoopCaseOutput.find(
+      "case (event_GeneratedLoopCaseLexicalStorage_mode)", loopCaseRuntime);
+  auto loopCaseArm = generatedLoopCaseOutput.find("0: begin", loopCaseTree);
+  auto loopCaseAssignment = generatedLoopCaseOutput.find(
+      "event_GeneratedLoopCaseLexicalStorage_state = "
+      "(event_GeneratedLoopCaseLexicalStorage_loop_0_case_0_assignment_read_0 + 8.0);",
+      loopCaseArm);
+  auto loopCaseDefault = generatedLoopCaseOutput.find("default: begin", loopCaseTree);
+  auto loopCaseDefaultAssignment = generatedLoopCaseOutput.find(
+      "event_GeneratedLoopCaseLexicalStorage_state = "
+      "(event_GeneratedLoopCaseLexicalStorage_loop_0_case_0_assignment_default_read_0 + 9.0);",
+      loopCaseDefault);
+  if (loopCaseOuter == std::string::npos || loopCaseRuntime == std::string::npos ||
+      loopCaseTree == std::string::npos || loopCaseArm == std::string::npos ||
+      loopCaseAssignment == std::string::npos || loopCaseDefault == std::string::npos ||
+      loopCaseDefaultAssignment == std::string::npos ||
+      !(loopCaseOuter < loopCaseRuntime && loopCaseRuntime < loopCaseTree &&
+        loopCaseTree < loopCaseArm && loopCaseArm < loopCaseAssignment &&
+        loopCaseAssignment < loopCaseDefault && loopCaseDefault < loopCaseDefaultAssignment) ||
+      generatedLoopCaseOutput.find("@(") != std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(generatedLoopCaseOutput, *configuration)))
+    return fail("generated loop-case lexical storage lost its direct target topology");
+
+  {
+    auto invalid = parse(context, kGeneratedLoopCaseLexicalStorageModule);
+    if (!invalid)
+      return fail("could not parse the generated loop-case owner mutation fixture");
+    mlir::Operation *caseOperation = nullptr;
+    invalid->walk([&](mlir::Operation *operation) {
+      if (!caseOperation && operation->getName().getStringRef() == "nodal.analog_case")
+        caseOperation = operation;
+    });
+    if (!caseOperation)
+      return fail("generated loop-case owner mutation anchor missing");
+    caseOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopCaseLexicalStorage.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*invalid, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated loop-case owner passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated loop-case owner published partial output");
+  }
+
+  {
+    std::string unsupportedSource = kGeneratedLoopCaseLexicalStorageModule.str();
+    const std::string anchor =
+        "                %state_read = \"nodal.analog_variable_read\"(%state)";
+    const std::string unsupportedScope =
+        "                \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0\"}, owner = "
+        "\"GeneratedLoopCaseLexicalStorage\", scope_id = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0\"}> ({\n"
+        "                ^bb0:\n"
+        "                }) : () -> ()\n";
+    auto position = unsupportedSource.find(anchor);
+    if (position == std::string::npos)
+      return fail("generated loop-case scope mutation anchor missing");
+    unsupportedSource.insert(position, unsupportedScope);
+    auto unsupported = parse(context, unsupportedSource);
+    if (!unsupported)
+      return fail("generated loop-case scope mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*unsupported, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("unsupported generated loop-case scope passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("unsupported generated loop-case scope published partial output");
   }
 
   auto generatedEvent = parse(context, kGeneratedEventModule);

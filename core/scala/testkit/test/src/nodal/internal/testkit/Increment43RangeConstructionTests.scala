@@ -109,6 +109,15 @@ final class Increment43GeneratedLoopLexicalStorage extends Module:
       analogLoop(iterations, maximumIterations = 2, minimumIterations = 1):
         state := state + 5.0.real
 
+final class Increment43GeneratedLoopScopeLexicalStorage extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val iterations = variable(Integer, 1.integer)
+      val state = variable(Real, 0.0.real)
+      analogLoop(iterations, maximumIterations = 2, minimumIterations = 1):
+        CandidateRuntime.block:
+          state := state + 10.0.real
+
 final class Increment43GeneratedLoopConditionalLexicalStorage extends Module:
   hdlRange(0, 2): _ =>
     analogProcedure:
@@ -1728,6 +1737,41 @@ object Increment43RangeConstructionTests extends TestSuite:
               )
             )
             assert(result.verilogA.contains("+ 5.0"))
+            assert(!result.verilogA.contains("@("))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated loop lexical scope retains per-occurrence state"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedLoopScopeLexicalStorage,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.contains("\"nodal.analog_loop\""))
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_scope\"")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            val runtimeLoop = result.verilogA.indexOf(
+              "for (event_Increment43GeneratedLoopScopeLexicalStorage_loop_0_index = 0;"
+            )
+            val loopBegin = result.verilogA.indexOf("begin", runtimeLoop)
+            val scope = result.verilogA.indexOf("begin", loopBegin + "begin".length)
+            val assignment = result.verilogA.indexOf("+ 10.0", scope)
+            assert(runtimeLoop >= 0)
+            assert(loopBegin > runtimeLoop)
+            assert(scope > loopBegin)
+            assert(assignment > scope)
             assert(!result.verilogA.contains("@("))
           finally delete(directory)
         case _ => assert(true)

@@ -2143,30 +2143,94 @@ int main() {
   }
 
   {
-    std::string unsupportedSource = kGeneratedLoopLexicalStorageModule.str();
+    std::string scopedSource = kGeneratedLoopLexicalStorageModule.str();
     const std::string anchor = "            %state_read = \"nodal.analog_variable_read\"(%state)";
-    const std::string unsupportedScope =
+    const std::string scopeHeader =
         "            \"nodal.analog_scope\"() <{metadata = {semantic_path = "
         "\"GeneratedLoopLexicalStorage.loop_0.scope_0\"}, owner = "
         "\"GeneratedLoopLexicalStorage\", scope_id = "
         "\"GeneratedLoopLexicalStorage.loop_0.scope_0\"}> ({\n"
-        "            ^bb0:\n"
-        "            }) : () -> ()\n";
-    auto position = unsupportedSource.find(anchor);
+        "            ^bb0:\n";
+    const std::string assignmentAnchor = "            \"nodal.analog_assign\"(%state, %state_read)";
+    auto position = scopedSource.find(anchor);
     if (position == std::string::npos)
       return fail("generated loop lexical scope mutation anchor missing");
-    unsupportedSource.insert(position, unsupportedScope);
-    auto unsupported = parse(context, unsupportedSource);
-    if (!unsupported)
-      return fail("generated loop lexical scope mutation did not parse");
+    scopedSource.insert(position, scopeHeader);
+    auto assignmentPosition = scopedSource.find(assignmentAnchor, position + scopeHeader.size());
+    if (assignmentPosition == std::string::npos)
+      return fail("generated loop lexical scope assignment anchor missing");
+    auto assignmentEnd = scopedSource.find('\n', assignmentPosition);
+    if (assignmentEnd == std::string::npos)
+      return fail("generated loop lexical scope assignment terminator missing");
+    scopedSource.insert(assignmentEnd + 1, "            }) : () -> ()\n");
+
+    auto scoped = parse(context, scopedSource);
+    if (!scoped)
+      return fail("generated loop lexical scope fixture did not parse");
+    std::string scopedOutput;
+    llvm::raw_string_ostream scopedStream(scopedOutput);
+    if (mlir::failed(nodal::emitBackend(*scoped, nodal::BackendKind::VerilogA, scopedStream)))
+      return fail("generated loop lexical scope emission failed");
+    scopedStream.flush();
+    auto scopedOuter = scopedOutput.find("for (generate_0_index");
+    auto scopedRuntime =
+        scopedOutput.find("for (event_GeneratedLoopLexicalStorage_loop_0_index = 0;");
+    auto scopedLoopBegin = scopedOutput.find("begin", scopedRuntime);
+    auto scopedBegin = scopedOutput.find("begin", scopedLoopBegin + 5);
+    auto scopedAssignment =
+        scopedOutput.find("event_GeneratedLoopLexicalStorage_state = "
+                          "(event_GeneratedLoopLexicalStorage_loop_0_assignment_read_0 + 5.0);");
+    if (scopedOuter == std::string::npos || scopedRuntime == std::string::npos ||
+        scopedLoopBegin == std::string::npos || scopedBegin == std::string::npos ||
+        scopedAssignment == std::string::npos ||
+        !(scopedOuter < scopedRuntime && scopedRuntime < scopedLoopBegin &&
+          scopedLoopBegin < scopedBegin && scopedBegin < scopedAssignment) ||
+        scopedOutput.find("@(") != std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(scopedOutput, *configuration)))
+      return fail("generated loop lexical scope lost its per-occurrence target layout");
+
+    auto forged = parse(context, scopedSource);
+    if (!forged)
+      return fail("could not parse the generated loop lexical scope ownership fixture");
+    mlir::Operation *scope = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!scope && operation->getName().getStringRef() == "nodal.analog_scope")
+        scope = operation;
+    });
+    if (!scope)
+      return fail("generated loop lexical scope ownership mutation anchor missing");
+    scope->setAttr("owner", mlir::StringAttr::get(&context, "GeneratedLoopLexicalStorage.forged"));
     std::string rejected = "sentinel";
     llvm::raw_string_ostream rejectedStream(rejected);
-    if (mlir::succeeded(
-            nodal::emitBackend(*unsupported, nodal::BackendKind::VerilogA, rejectedStream)))
-      return fail("unsupported generated loop lexical scope passed backend verification");
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated loop lexical scope ownership passed backend verification");
     rejectedStream.flush();
     if (rejected != "sentinel")
-      return fail("unsupported generated loop lexical scope published partial output");
+      return fail("forged generated loop lexical scope published partial output");
+
+    std::string deeperSource = scopedSource;
+    const std::string deeperScope =
+        "            \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0.scope_0\"}, owner = "
+        "\"GeneratedLoopLexicalStorage\", scope_id = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0.scope_0\"}> ({\n"
+        "            ^bb0:\n"
+        "            }) : () -> ()\n";
+    auto deeperPosition = deeperSource.find(anchor);
+    if (deeperPosition == std::string::npos)
+      return fail("generated loop deeper lexical scope mutation anchor missing");
+    deeperSource.insert(deeperPosition, deeperScope);
+    auto deeper = parse(context, deeperSource);
+    if (!deeper)
+      return fail("generated loop deeper lexical scope mutation did not parse");
+    rejected = "sentinel";
+    llvm::raw_string_ostream deeperRejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*deeper, nodal::BackendKind::VerilogA, deeperRejectedStream)))
+      return fail("deeper generated loop lexical scope passed backend verification");
+    deeperRejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("deeper generated loop lexical scope published partial output");
   }
 
   auto generatedLoopConditionalStorage =

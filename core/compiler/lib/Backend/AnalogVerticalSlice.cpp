@@ -1455,6 +1455,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       const bool eventProcedureProfile = hasAnalogEvents(&operation);
       bool nonEventLoopConditionalProfile = false;
       bool nonEventLoopCaseProfile = false;
+      bool nonEventLoopScopeProfile = false;
       if (!eventProcedureProfile) {
         unsigned variables = 0;
         unsigned reads = 0;
@@ -1464,12 +1465,14 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
         unsigned cases = 0;
         unsigned caseArms = 0;
         unsigned loops = 0;
+        unsigned scopes = 0;
         bool directProfile = true;
         bool conditionalProfile = true;
         bool caseProfile = true;
         bool loopProfile = true;
         bool loopConditionalProfile = true;
         bool loopCaseProfile = true;
+        bool loopScopeProfile = true;
         auto isDirectLoopConditionalArm = [&](Operation *candidate) {
           auto arm = llvm::dyn_cast_or_null<AnalogIfArmOp>(candidate);
           Operation *conditional = arm ? arm->getParentOp() : nullptr;
@@ -1496,6 +1499,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             loopProfile &= parent == &operation;
             loopConditionalProfile &= parent == &operation;
             loopCaseProfile &= parent == &operation;
+            loopScopeProfile &= parent == &operation;
             return;
           }
           if (llvm::isa<AnalogVariableReadOp>(nested)) {
@@ -1508,6 +1512,9 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             loopProfile &= llvm::isa<AnalogLoopOp>(parent) && parent->getParentOp() == &operation;
             loopConditionalProfile &= isDirectLoopConditionalArm(parent);
             loopCaseProfile &= isDirectLoopCaseArm(parent);
+            loopScopeProfile &= llvm::isa<AnalogScopeOp>(parent) && parent->getParentOp() &&
+                                llvm::isa<AnalogLoopOp>(parent->getParentOp()) &&
+                                parent->getParentOp()->getParentOp() == &operation;
             return;
           }
           if (llvm::isa<AnalogAssignOp>(nested)) {
@@ -1520,6 +1527,9 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             loopProfile &= llvm::isa<AnalogLoopOp>(parent) && parent->getParentOp() == &operation;
             loopConditionalProfile &= isDirectLoopConditionalArm(parent);
             loopCaseProfile &= isDirectLoopCaseArm(parent);
+            loopScopeProfile &= llvm::isa<AnalogScopeOp>(parent) && parent->getParentOp() &&
+                                llvm::isa<AnalogLoopOp>(parent->getParentOp()) &&
+                                parent->getParentOp()->getParentOp() == &operation;
             return;
           }
           directProfile = false;
@@ -1531,6 +1541,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             loopConditionalProfile &=
                 llvm::isa<AnalogLoopOp>(parent) && parent->getParentOp() == &operation;
             loopCaseProfile = false;
+            loopScopeProfile = false;
             return;
           }
           if (llvm::isa<AnalogIfArmOp>(nested)) {
@@ -1541,6 +1552,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             loopProfile = false;
             loopConditionalProfile &= isDirectLoopConditionalArm(nested);
             loopCaseProfile = false;
+            loopScopeProfile = false;
             return;
           }
           if (llvm::isa<AnalogCaseOp>(nested)) {
@@ -1551,6 +1563,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             loopConditionalProfile = false;
             loopCaseProfile &=
                 llvm::isa<AnalogLoopOp>(parent) && parent->getParentOp() == &operation;
+            loopScopeProfile = false;
             return;
           }
           if (llvm::isa<AnalogCaseArmOp>(nested)) {
@@ -1560,6 +1573,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             loopProfile = false;
             loopConditionalProfile = false;
             loopCaseProfile &= isDirectLoopCaseArm(nested);
+            loopScopeProfile = false;
             return;
           }
           if (llvm::isa<AnalogLoopOp>(nested)) {
@@ -1569,6 +1583,18 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             caseProfile = false;
             loopConditionalProfile &= parent == &operation;
             loopCaseProfile &= parent == &operation;
+            loopScopeProfile &= parent == &operation;
+            return;
+          }
+          if (llvm::isa<AnalogScopeOp>(nested)) {
+            ++scopes;
+            conditionalProfile = false;
+            caseProfile = false;
+            loopProfile = false;
+            loopConditionalProfile = false;
+            loopCaseProfile = false;
+            loopScopeProfile &=
+                llvm::isa<AnalogLoopOp>(parent) && parent->getParentOp() == &operation;
             return;
           }
           conditionalProfile = false;
@@ -1576,6 +1602,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
           loopProfile = false;
           loopConditionalProfile = false;
           loopCaseProfile = false;
+          loopScopeProfile = false;
         });
         directProfile &= variables == 1 && reads == 1 && assignments == 1;
         conditionalProfile &= variables == 2 && reads == 2 && assignments == 2 &&
@@ -1587,16 +1614,19 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                                   conditionals == 1 && conditionalArms == 2 && loops == 1;
         loopCaseProfile &= variables == 3 && reads == 2 && assignments == 2 && cases == 1 &&
                            caseArms == 2 && loops == 1;
+        loopScopeProfile &=
+            variables == 2 && reads == 1 && assignments == 1 && loops == 1 && scopes == 1;
         nonEventLoopConditionalProfile = loopConditionalProfile;
         nonEventLoopCaseProfile = loopCaseProfile;
+        nonEventLoopScopeProfile = loopScopeProfile;
         if (!directProfile && !conditionalProfile && !caseProfile && !loopProfile &&
-            !loopConditionalProfile && !loopCaseProfile)
+            !loopConditionalProfile && !loopCaseProfile && !loopScopeProfile)
           return emitMappedFailure(
               &operation, "NODAL-BACKEND-CAPABILITY-001",
               "generated lexical storage target profile requires either one direct variable/read/"
               "assignment, one direct two-arm conditional, one direct case/default tree, or one "
               "direct runtime loop over root variables with an optional direct two-arm "
-              "conditional or direct case/default tree");
+              "conditional, direct case/default tree, or direct lexical scope");
       }
       bool unsupportedStorage = false;
       bool mismatchedStorage = false;
@@ -1626,6 +1656,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             unsigned directConditionalArms = 0;
             unsigned directCases = 0;
             unsigned directCaseArms = 0;
+            unsigned directScopes = 0;
             nested->walk([&](Operation *bodyOperation) {
               if (bodyOperation == nested)
                 return;
@@ -1679,9 +1710,21 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                   unsupportedStorage = true;
                 return;
               }
+              if (llvm::isa<AnalogScopeOp>(bodyOperation)) {
+                auto scopeOwner = bodyOperation->getAttrOfType<StringAttr>("owner");
+                if (!nonEventLoopScopeProfile || bodyOperation->getParentOp() != nested ||
+                    ++directScopes > 1 || !scopeOwner || !procedureOwner ||
+                    scopeOwner.getValue() != procedureOwner.getValue())
+                  unsupportedStorage = true;
+                return;
+              }
               if (llvm::isa<AnalogVariableReadOp, AnalogAssignOp>(bodyOperation)) {
                 if (!nonEventLoopConditionalProfile && !nonEventLoopCaseProfile &&
-                    bodyOperation->getParentOp() == nested)
+                    !nonEventLoopScopeProfile && bodyOperation->getParentOp() == nested)
+                  return;
+                if (nonEventLoopScopeProfile &&
+                    llvm::isa<AnalogScopeOp>(bodyOperation->getParentOp()) &&
+                    bodyOperation->getParentOp()->getParentOp() == nested)
                   return;
                 auto arm = llvm::dyn_cast<AnalogIfArmOp>(bodyOperation->getParentOp());
                 Operation *conditional = arm ? arm->getParentOp() : nullptr;
@@ -1703,7 +1746,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                 loopOwner.getValue() != procedureOwner.getValue() || !ownedRootBound ||
                 (nonEventLoopConditionalProfile &&
                  (directConditionals != 1 || directConditionalArms != 2)) ||
-                (nonEventLoopCaseProfile && (directCases != 1 || directCaseArms != 2));
+                (nonEventLoopCaseProfile && (directCases != 1 || directCaseArms != 2)) ||
+                (nonEventLoopScopeProfile && directScopes != 1);
             return;
           }
           bool nestedLoop = false;

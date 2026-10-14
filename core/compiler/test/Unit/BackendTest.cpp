@@ -3044,6 +3044,76 @@ int main() {
           exitAssignment < exitBreak) ||
         mlir::failed(nodal::reparseBackendTarget(exitOutput, *configuration)))
       return fail("generated loop case-arm exit lost its direct target topology");
+
+    std::string continueSource = kGeneratedLoopCaseLexicalStorageModule.str();
+    const std::string loopContinue =
+        "                \"nodal.analog_continue\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.continue_0\"}, owner = "
+        "\"GeneratedLoopCaseLexicalStorage\", statement_id = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.continue_0\"}> : () -> ()\n";
+    continueSource.insert(assignmentEnd + 1, loopContinue);
+    auto continueModule = parse(context, continueSource);
+    if (!continueModule)
+      return fail("generated loop case-arm continue fixture did not parse");
+    std::string continueOutput;
+    llvm::raw_string_ostream continueStream(continueOutput);
+    if (mlir::failed(
+            nodal::emitBackend(*continueModule, nodal::BackendKind::VerilogA, continueStream)))
+      return fail("generated loop case-arm continue emission failed");
+    continueStream.flush();
+    auto continueRuntime =
+        continueOutput.find("for (event_GeneratedLoopCaseLexicalStorage_loop_0_index = 0;");
+    auto continueCase =
+        continueOutput.find("case (event_GeneratedLoopCaseLexicalStorage_mode)", continueRuntime);
+    auto continueDefault = continueOutput.find("default: begin", continueCase);
+    auto continueAssignment = continueOutput.find(" + 9.0);", continueDefault);
+    auto continueExit = continueOutput.find("_continue = 1;", continueAssignment);
+    if (continueRuntime == std::string::npos || continueCase == std::string::npos ||
+        continueDefault == std::string::npos || continueAssignment == std::string::npos ||
+        continueExit == std::string::npos ||
+        !(continueRuntime < continueCase && continueCase < continueDefault &&
+          continueDefault < continueAssignment && continueAssignment < continueExit) ||
+        mlir::failed(nodal::reparseBackendTarget(continueOutput, *configuration)))
+      return fail("generated loop case-arm continue lost its direct target topology");
+
+    auto forgedContinue = parse(context, continueSource);
+    if (!forgedContinue)
+      return fail("generated loop case-arm continue ownership fixture did not parse");
+    mlir::Operation *continueOperation = nullptr;
+    forgedContinue->walk([&](mlir::Operation *operation) {
+      if (!continueOperation && operation->getName().getStringRef() == "nodal.analog_continue")
+        continueOperation = operation;
+    });
+    if (!continueOperation)
+      return fail("generated loop case-arm continue ownership anchor missing");
+    continueOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopCaseLexicalStorage.forged"));
+    std::string continueRejected = "sentinel";
+    llvm::raw_string_ostream forgedContinueStream(continueRejected);
+    if (mlir::succeeded(nodal::emitBackend(*forgedContinue, nodal::BackendKind::VerilogA,
+                                           forgedContinueStream)))
+      return fail("forged generated loop case-arm continue passed backend verification");
+    forgedContinueStream.flush();
+    if (continueRejected != "sentinel")
+      return fail("forged generated loop case-arm continue published partial output");
+
+    std::string duplicateContinueSource = continueSource;
+    std::string secondContinue = loopContinue;
+    for (auto duplicateId = secondContinue.find("continue_0"); duplicateId != std::string::npos;
+         duplicateId = secondContinue.find("continue_0", duplicateId + 10))
+      secondContinue.replace(duplicateId, 10, "continue_1");
+    duplicateContinueSource.insert(assignmentEnd + 1, secondContinue);
+    auto duplicateContinue = parse(context, duplicateContinueSource);
+    if (!duplicateContinue)
+      return fail("generated loop case-arm duplicate-continue mutation did not parse");
+    continueRejected = "sentinel";
+    llvm::raw_string_ostream duplicateContinueStream(continueRejected);
+    if (mlir::succeeded(nodal::emitBackend(*duplicateContinue, nodal::BackendKind::VerilogA,
+                                           duplicateContinueStream)))
+      return fail("duplicate generated loop case-arm continue passed backend verification");
+    duplicateContinueStream.flush();
+    if (continueRejected != "sentinel")
+      return fail("duplicate generated loop case-arm continue published partial output");
   }
 
   {

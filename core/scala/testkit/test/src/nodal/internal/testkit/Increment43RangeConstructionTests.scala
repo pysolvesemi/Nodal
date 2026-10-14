@@ -141,6 +141,20 @@ final class Increment43GeneratedLoopConditionalLexicalStorage extends Module:
           analogOtherwise:
             state := state + 7.0.real
 
+final class Increment43GeneratedLoopConditionalExitLexicalStorage extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val iterations = variable(Integer, 1.integer)
+      val select = variable(Bool, false.B)
+      val state = variable(Real, 0.0.real)
+      analogLoop(iterations, maximumIterations = 2, minimumIterations = 1):
+        analogConditional:
+          analogWhen(select):
+            state := state + 6.0.real
+            analogContinue()
+          analogOtherwise:
+            state := state + 7.0.real
+
 final class Increment43GeneratedLoopConditionalScopeLexicalStorage extends Module:
   hdlRange(0, 2): _ =>
     analogProcedure:
@@ -167,6 +181,20 @@ final class Increment43GeneratedLoopCaseLexicalStorage extends Module:
             state := state + 8.0.real
           analogCaseDefault:
             state := state + 9.0.real
+
+final class Increment43GeneratedLoopCaseExitLexicalStorage extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val iterations = variable(Integer, 1.integer)
+      val mode = variable(Integer, 0.integer)
+      val state = variable(Real, 0.0.real)
+      analogLoop(iterations, maximumIterations = 2, minimumIterations = 1):
+        analogCase(mode):
+          analogCaseArm(0):
+            state := state + 8.0.real
+          analogCaseDefault:
+            state := state + 9.0.real
+            analogBreak()
 
 final class Increment43GeneratedLoopCaseScopeLexicalStorage extends Module:
   hdlRange(0, 2): _ =>
@@ -1889,6 +1917,43 @@ object Increment43RangeConstructionTests extends TestSuite:
           finally delete(directory)
         case _ => assert(true)
 
+    test("public generated loop conditional-arm exit retains authored control"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedLoopConditionalExitLexicalStorage,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_loop\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_if\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_continue\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_break\"")) == 0)
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            val runtimeLoop = result.verilogA.indexOf("for (event_")
+            val conditional = result.verilogA.indexOf("if (event_", runtimeLoop)
+            val assignment = result.verilogA.indexOf(" + 6.0);", conditional)
+            val loopContinue = result.verilogA.indexOf("_continue = 1;", assignment)
+            val otherwise = result.verilogA.indexOf("else begin", loopContinue)
+            assert(runtimeLoop >= 0)
+            assert(
+              conditional > runtimeLoop && assignment > conditional &&
+                loopContinue > assignment && otherwise > loopContinue
+            )
+            assert(!result.verilogA.contains("@("))
+          finally delete(directory)
+        case _ => assert(true)
+
     test("public generated loop conditional lexical scope retains per-occurrence state"):
       (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
         case (Some(nodalc), Some(translator)) =>
@@ -1972,6 +2037,43 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.contains("default: begin"))
             assert(result.verilogA.contains("+ 8.0"))
             assert(result.verilogA.contains("+ 9.0"))
+            assert(!result.verilogA.contains("@("))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated loop case-arm exit retains authored control"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedLoopCaseExitLexicalStorage,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_loop\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_case\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_continue\"")) == 0)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_break\"")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            val runtimeLoop = result.verilogA.indexOf("for (event_")
+            val caseTree = result.verilogA.indexOf("case (event_", runtimeLoop)
+            val defaultArm = result.verilogA.indexOf("default: begin", caseTree)
+            val assignment = result.verilogA.indexOf(" + 9.0);", defaultArm)
+            val loopBreak = result.verilogA.indexOf("_break = 1;", assignment)
+            assert(runtimeLoop >= 0)
+            assert(
+              caseTree > runtimeLoop && defaultArm > caseTree &&
+                assignment > defaultArm && loopBreak > assignment
+            )
             assert(!result.verilogA.contains("@("))
           finally delete(directory)
         case _ => assert(true)

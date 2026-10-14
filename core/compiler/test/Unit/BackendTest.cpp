@@ -2121,6 +2121,115 @@ int main() {
     return fail("generated loop lexical storage lost its per-occurrence target layout");
 
   {
+    std::string exitSource = kGeneratedLoopLexicalStorageModule.str();
+    const std::string assignmentAnchor = "            \"nodal.analog_assign\"(%state, %state_read)";
+    auto assignmentPosition = exitSource.find(assignmentAnchor);
+    if (assignmentPosition == std::string::npos)
+      return fail("generated loop exit assignment anchor missing");
+    auto assignmentEnd = exitSource.find('\n', assignmentPosition);
+    if (assignmentEnd == std::string::npos)
+      return fail("generated loop exit assignment terminator missing");
+    const std::string exits =
+        "            \"nodal.analog_continue\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopLexicalStorage.loop_0.continue_0\"}, owner = "
+        "\"GeneratedLoopLexicalStorage\", statement_id = "
+        "\"GeneratedLoopLexicalStorage.loop_0.continue_0\"}> : () -> ()\n"
+        "            \"nodal.analog_break\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopLexicalStorage.loop_0.break_1\"}, owner = "
+        "\"GeneratedLoopLexicalStorage\", statement_id = "
+        "\"GeneratedLoopLexicalStorage.loop_0.break_1\"}> : () -> ()\n";
+    exitSource.insert(assignmentEnd + 1, exits);
+
+    auto exitModule = parse(context, exitSource);
+    if (!exitModule)
+      return fail("generated loop exit fixture did not parse");
+    std::string exitOutput;
+    llvm::raw_string_ostream exitStream(exitOutput);
+    if (mlir::failed(nodal::emitBackend(*exitModule, nodal::BackendKind::VerilogA, exitStream)))
+      return fail("generated loop exit emission failed");
+    exitStream.flush();
+    auto exitRuntimeLoop =
+        exitOutput.find("for (event_GeneratedLoopLexicalStorage_loop_0_index = 0;");
+    auto exitAssignment = exitOutput.find(" + 5.0);", exitRuntimeLoop);
+    auto continueFlag = exitOutput.find("_continue = 1;", exitAssignment);
+    auto breakFlag = exitOutput.find("_break = 1;", continueFlag);
+    if (exitRuntimeLoop == std::string::npos || exitAssignment == std::string::npos ||
+        continueFlag == std::string::npos || breakFlag == std::string::npos ||
+        !(exitRuntimeLoop < exitAssignment && exitAssignment < continueFlag &&
+          continueFlag < breakFlag) ||
+        mlir::failed(nodal::reparseBackendTarget(exitOutput, *configuration)))
+      return fail("generated loop exits lost their per-occurrence target layout");
+
+    auto forged = parse(context, exitSource);
+    if (!forged)
+      return fail("generated loop exit ownership fixture did not parse");
+    mlir::Operation *continueOperation = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!continueOperation && operation->getName().getStringRef() == "nodal.analog_continue")
+        continueOperation = operation;
+    });
+    if (!continueOperation)
+      return fail("generated loop exit ownership anchor missing");
+    continueOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopLexicalStorage.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated loop exit ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated loop exit published partial output");
+
+    std::string duplicateSource = exitSource;
+    auto duplicatePosition =
+        duplicateSource.find("            \"nodal.analog_break\"()", assignmentEnd + 1);
+    if (duplicatePosition == std::string::npos)
+      return fail("generated loop duplicate-exit mutation anchor missing");
+    std::string duplicateBreak = exits.substr(exits.find("            \"nodal.analog_break\"()"));
+    for (auto position = duplicateBreak.find("break_1"); position != std::string::npos;
+         position = duplicateBreak.find("break_1", position + 7))
+      duplicateBreak.replace(position, 7, "break_2");
+    duplicateSource.insert(duplicatePosition, duplicateBreak);
+    auto duplicate = parse(context, duplicateSource);
+    if (!duplicate)
+      return fail("generated loop duplicate-exit mutation did not parse");
+    rejected = "sentinel";
+    llvm::raw_string_ostream duplicateRejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*duplicate, nodal::BackendKind::VerilogA, duplicateRejectedStream)))
+      return fail("duplicate generated loop exit passed backend verification");
+    duplicateRejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("duplicate generated loop exit published partial output");
+
+    std::string deeperSource = kGeneratedLoopLexicalStorageModule.str();
+    const std::string readAnchor =
+        "            %state_read = \"nodal.analog_variable_read\"(%state)";
+    auto deeperPosition = deeperSource.find(readAnchor);
+    if (deeperPosition == std::string::npos)
+      return fail("generated loop deeper-exit mutation anchor missing");
+    const std::string deeperExits =
+        "            \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0\"}, owner = "
+        "\"GeneratedLoopLexicalStorage\", scope_id = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0\"}> ({\n"
+        "            ^bb0:\n" +
+        exits + "            }) : () -> ()\n";
+    deeperSource.insert(deeperPosition, deeperExits);
+    auto deeper = parse(context, deeperSource);
+    if (!deeper)
+      return fail("generated loop deeper-exit mutation did not parse");
+    rejected = "sentinel";
+    llvm::raw_string_ostream deeperRejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*deeper, nodal::BackendKind::VerilogA, deeperRejectedStream)))
+      return fail("scope-contained generated loop exits passed backend verification");
+    deeperRejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("scope-contained generated loop exits published partial output");
+  }
+
+  {
     auto invalid = parse(context, kGeneratedLoopLexicalStorageModule);
     if (!invalid)
       return fail("could not parse the generated loop ownership mutation fixture");

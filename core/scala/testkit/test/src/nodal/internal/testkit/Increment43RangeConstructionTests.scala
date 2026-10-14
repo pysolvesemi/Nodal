@@ -158,6 +158,20 @@ final class Increment43GeneratedLoopCaseLexicalStorage extends Module:
           analogCaseDefault:
             state := state + 9.0.real
 
+final class Increment43GeneratedLoopCaseScopeLexicalStorage extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val iterations = variable(Integer, 1.integer)
+      val mode = variable(Integer, 0.integer)
+      val state = variable(Real, 0.0.real)
+      analogLoop(iterations, maximumIterations = 2, minimumIterations = 1):
+        analogCase(mode):
+          analogCaseArm(0):
+            CandidateRuntime.block:
+              state := state + 12.0.real
+          analogCaseDefault:
+            state := state + 9.0.real
+
 final class Increment43GeneratedStructuredLexicalStorage extends Module:
   hdlRange(0, 2): _ =>
     analogProcedure:
@@ -1911,6 +1925,54 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.contains("default: begin"))
             assert(result.verilogA.contains("+ 8.0"))
             assert(result.verilogA.contains("+ 9.0"))
+            assert(!result.verilogA.contains("@("))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated loop case-arm scope retains authored lexical nesting"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedLoopCaseScopeLexicalStorage,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.contains("\"nodal.analog_loop\""))
+            assert(result.mlir.contains("\"nodal.analog_case\""))
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_case_arm\"")) == 2)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_scope\"")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            val runtimeLoop = result.verilogA.indexOf(
+              "for (event_Increment43GeneratedLoopCaseScopeLexicalStorage_loop_0_index = 0;"
+            )
+            val caseTree = result.verilogA.indexOf(
+              "case (event_Increment43GeneratedLoopCaseScopeLexicalStorage_mode)",
+              runtimeLoop
+            )
+            val arm = result.verilogA.indexOf("0: begin", caseTree)
+            val armBegin = result.verilogA.indexOf("begin", arm)
+            val scope = result.verilogA.indexOf("begin", armBegin + "begin".length)
+            val scopedAssignment = result.verilogA.indexOf("+ 12.0", scope)
+            val default = result.verilogA.indexOf("default: begin", scopedAssignment)
+            val defaultAssignment = result.verilogA.indexOf("+ 9.0", default)
+            assert(runtimeLoop >= 0)
+            assert(caseTree > runtimeLoop)
+            assert(arm > caseTree)
+            assert(armBegin > arm)
+            assert(scope > armBegin)
+            assert(scopedAssignment > scope)
+            assert(default > scopedAssignment)
+            assert(defaultAssignment > default)
             assert(!result.verilogA.contains("@("))
           finally delete(directory)
         case _ => assert(true)

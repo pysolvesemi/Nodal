@@ -4062,6 +4062,66 @@ int main() {
       return fail("duplicate generated loop case-arm scope break published partial output");
     duplicateScopeBreak->erase();
 
+    mlir::Operation *caseScopeContinue = scopeContinue->clone();
+    caseScopeContinue->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(&context,
+                              "GeneratedEvent.event_0.loop_2.case_scope_continue_mutation"));
+    scopeBreak->erase();
+    caseScope->getRegion(0).front().push_back(caseScopeContinue);
+    std::string caseScopeContinueOutput;
+    llvm::raw_string_ostream caseScopeContinueStream(caseScopeContinueOutput);
+    if (mlir::failed(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                        caseScopeContinueStream)))
+      return fail("generated event case-arm scope continue failed backend verification");
+    caseScopeContinueStream.flush();
+    auto caseScopeContinueAssignment = caseScopeContinueOutput.find(
+        "event_GeneratedEvent_state = "
+        "(event_GeneratedEvent_event_0_loop_2_scope_0_assignment_read_0_case_scope_mutation + "
+        "9.0);");
+    auto caseScopeContinueStart =
+        caseScopeContinueOutput.rfind("default: begin", caseScopeContinueAssignment);
+    auto caseScopeContinueExit =
+        caseScopeContinueOutput.find("_continue = 1;", caseScopeContinueAssignment);
+    auto caseScopeContinueEnd =
+        caseScopeContinueOutput.find("endcase", caseScopeContinueAssignment);
+    if (caseScopeContinueStart == std::string::npos || caseScopeContinueEnd == std::string::npos ||
+        caseScopeContinueAssignment == std::string::npos ||
+        caseScopeContinueExit == std::string::npos ||
+        caseScopeContinueAssignment < caseScopeContinueStart ||
+        caseScopeContinueExit < caseScopeContinueAssignment ||
+        caseScopeContinueExit > caseScopeContinueEnd ||
+        mlir::failed(nodal::reparseBackendTarget(caseScopeContinueOutput, *configuration)))
+      return fail("generated event case-arm scope continue lost its direct target topology");
+
+    caseScopeContinue->setAttr("owner", mlir::StringAttr::get(&context, "ForgedGeneratedEvent"));
+    std::string forgedCaseScopeContinueRejected = "sentinel";
+    llvm::raw_string_ostream forgedCaseScopeContinueRejectedStream(forgedCaseScopeContinueRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                           forgedCaseScopeContinueRejectedStream)))
+      return fail("forged generated loop case-arm scope continue passed backend verification");
+    forgedCaseScopeContinueRejectedStream.flush();
+    if (forgedCaseScopeContinueRejected != "sentinel")
+      return fail("forged generated loop case-arm scope continue published partial output");
+    caseScopeContinue->setAttr("owner", mlir::StringAttr::get(&context, "GeneratedEvent"));
+
+    mlir::Operation *duplicateCaseScopeContinue = caseScopeContinue->clone();
+    duplicateCaseScopeContinue->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(
+            &context, "GeneratedEvent.event_0.loop_2.duplicate_case_scope_continue_mutation"));
+    caseScope->getRegion(0).front().push_back(duplicateCaseScopeContinue);
+    std::string duplicateCaseScopeContinueRejected = "sentinel";
+    llvm::raw_string_ostream duplicateCaseScopeContinueRejectedStream(
+        duplicateCaseScopeContinueRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                           duplicateCaseScopeContinueRejectedStream)))
+      return fail("duplicate generated loop case-arm scope continue passed backend verification");
+    duplicateCaseScopeContinueRejectedStream.flush();
+    if (duplicateCaseScopeContinueRejected != "sentinel")
+      return fail("duplicate generated loop case-arm scope continue published partial output");
+    duplicateCaseScopeContinue->erase();
+
     mlir::Operation *deeperCaseScope = caseScope->clone();
     deeperCaseScope->setAttr(
         "scope_id", mlir::StringAttr::get(

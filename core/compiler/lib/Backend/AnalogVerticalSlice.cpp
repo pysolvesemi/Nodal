@@ -2149,12 +2149,12 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                   llvm::isa<AnalogBreakOp, AnalogContinueOp>(bodyOperation) && scopeConditional &&
                   llvm::isa<AnalogIfOp>(scopeConditional) &&
                   scopeConditional->getParentOp() == nested;
-              const bool directCaseArmScopeBreak =
-                  llvm::isa<AnalogBreakOp>(bodyOperation) && scopeCase &&
+              const bool directCaseArmScopeExit =
+                  llvm::isa<AnalogBreakOp, AnalogContinueOp>(bodyOperation) && scopeCase &&
                   llvm::isa<AnalogCaseOp>(scopeCase) && scopeCase->getParentOp() == nested;
               if ((!directLoopExit && !directConditionalArmExit && !directCaseArmExit &&
-                   !directConditionalArmScopeExit && !directCaseArmScopeBreak) ||
-                  ((directConditionalArmScopeExit || directCaseArmScopeBreak) &&
+                   !directConditionalArmScopeExit && !directCaseArmScopeExit) ||
+                  ((directConditionalArmScopeExit || directCaseArmScopeExit) &&
                    ++admittedScopeExits > 1) ||
                   !exitOwner || !procedureOwner ||
                   exitOwner.getValue() != procedureOwner.getValue())
@@ -2218,7 +2218,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             "generated lexical storage admits one direct runtime loop; event-local storage may "
             "also use one direct conditional and case tree, one direct loop/conditional-arm/"
             "case-arm lexical scope, plus direct loop/conditional-arm/case-arm exits or one "
-            "direct conditional-arm lexical-scope exit/case-arm lexical-scope break; "
+            "direct conditional-arm/case-arm lexical-scope exit; "
             "non-event "
             "loop storage may use one direct continue/break pair, one direct lexical-scope "
             "continue/break pair, one direct conditional-arm lexical-scope continue, or one "

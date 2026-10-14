@@ -2637,6 +2637,119 @@ int main() {
         mlir::failed(nodal::reparseBackendTarget(scopedOutput, *configuration)))
       return fail("generated loop-conditional scope lost its direct target topology");
 
+    std::string scopedExitSource = scopedSource;
+    auto scopedExitAssignment = scopedExitSource.find(assignmentAnchor);
+    auto scopedExitAssignmentEnd = scopedExitSource.find('\n', scopedExitAssignment);
+    if (scopedExitAssignment == std::string::npos || scopedExitAssignmentEnd == std::string::npos)
+      return fail("generated loop-conditional scope-exit assignment anchor missing");
+    const std::string scopedContinue =
+        "                \"nodal.analog_continue\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0.continue_0\"}, owner = "
+        "\"GeneratedLoopConditionalLexicalStorage\", statement_id = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0.continue_0\"}> : () -> "
+        "()\n";
+    scopedExitSource.insert(scopedExitAssignmentEnd + 1, scopedContinue);
+    auto scopedExit = parse(context, scopedExitSource);
+    if (!scopedExit)
+      return fail("generated loop-conditional scope-exit fixture did not parse");
+    std::string scopedExitOutput;
+    llvm::raw_string_ostream scopedExitStream(scopedExitOutput);
+    if (mlir::failed(
+            nodal::emitBackend(*scopedExit, nodal::BackendKind::VerilogA, scopedExitStream)))
+      return fail("generated loop-conditional scope-exit emission failed");
+    scopedExitStream.flush();
+    auto scopedExitRuntime = scopedExitOutput.find(
+        "for (event_GeneratedLoopConditionalLexicalStorage_loop_0_index = 0;");
+    auto scopedExitConditional = scopedExitOutput.find(
+        "if (event_GeneratedLoopConditionalLexicalStorage_select) begin", scopedExitRuntime);
+    auto scopedExitConditionalBegin = scopedExitOutput.find("begin", scopedExitConditional);
+    auto scopedExitScopeBegin = scopedExitOutput.find("begin", scopedExitConditionalBegin + 5);
+    auto scopedExitAssignmentOutput = scopedExitOutput.find(" + 6.0);", scopedExitScopeBegin);
+    auto scopedExitContinue = scopedExitOutput.find("_continue = 1;", scopedExitAssignmentOutput);
+    auto scopedExitOtherwise = scopedExitOutput.find("else begin", scopedExitContinue);
+    if (scopedExitRuntime == std::string::npos || scopedExitConditional == std::string::npos ||
+        scopedExitConditionalBegin == std::string::npos ||
+        scopedExitScopeBegin == std::string::npos ||
+        scopedExitAssignmentOutput == std::string::npos ||
+        scopedExitContinue == std::string::npos || scopedExitOtherwise == std::string::npos ||
+        !(scopedExitRuntime < scopedExitConditional &&
+          scopedExitConditional < scopedExitConditionalBegin &&
+          scopedExitConditionalBegin < scopedExitScopeBegin &&
+          scopedExitScopeBegin < scopedExitAssignmentOutput &&
+          scopedExitAssignmentOutput < scopedExitContinue &&
+          scopedExitContinue < scopedExitOtherwise) ||
+        scopedExitOutput.find("@(") != std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(scopedExitOutput, *configuration)))
+      return fail("generated loop-conditional scope exit lost its direct target topology");
+
+    auto forgedExit = parse(context, scopedExitSource);
+    if (!forgedExit)
+      return fail("generated loop-conditional scope-exit ownership fixture did not parse");
+    mlir::Operation *continueOperation = nullptr;
+    forgedExit->walk([&](mlir::Operation *operation) {
+      if (!continueOperation && operation->getName().getStringRef() == "nodal.analog_continue")
+        continueOperation = operation;
+    });
+    if (!continueOperation)
+      return fail("generated loop-conditional scope-exit ownership anchor missing");
+    continueOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopConditionalLexicalStorage.forged"));
+    std::string exitRejected = "sentinel";
+    llvm::raw_string_ostream forgedExitStream(exitRejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*forgedExit, nodal::BackendKind::VerilogA, forgedExitStream)))
+      return fail("forged generated loop-conditional scope exit passed backend verification");
+    forgedExitStream.flush();
+    if (exitRejected != "sentinel")
+      return fail("forged generated loop-conditional scope exit published partial output");
+
+    std::string duplicateExitSource = scopedExitSource;
+    auto duplicateExitPosition =
+        duplicateExitSource.find("                }) : () -> ()", scopedExitAssignmentEnd + 1);
+    if (duplicateExitPosition == std::string::npos)
+      return fail("generated loop-conditional scope duplicate-exit anchor missing");
+    std::string duplicateContinue = scopedContinue;
+    for (auto duplicateId = duplicateContinue.find("continue_0"); duplicateId != std::string::npos;
+         duplicateId = duplicateContinue.find("continue_0", duplicateId + 10))
+      duplicateContinue.replace(duplicateId, 10, "continue_1");
+    duplicateExitSource.insert(duplicateExitPosition, duplicateContinue);
+    auto duplicateExit = parse(context, duplicateExitSource);
+    if (!duplicateExit)
+      return fail("generated loop-conditional scope duplicate-exit mutation did not parse");
+    exitRejected = "sentinel";
+    llvm::raw_string_ostream duplicateExitStream(exitRejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*duplicateExit, nodal::BackendKind::VerilogA, duplicateExitStream)))
+      return fail("duplicate generated loop-conditional scope exit passed backend verification");
+    duplicateExitStream.flush();
+    if (exitRejected != "sentinel")
+      return fail("duplicate generated loop-conditional scope exit published partial output");
+
+    std::string deeperExitSource = scopedSource;
+    auto deeperExitAssignment = deeperExitSource.find(assignmentAnchor);
+    auto deeperExitAssignmentEnd = deeperExitSource.find('\n', deeperExitAssignment);
+    if (deeperExitAssignment == std::string::npos || deeperExitAssignmentEnd == std::string::npos)
+      return fail("generated loop-conditional deeper scope-exit assignment anchor missing");
+    const std::string deeperScopedContinue =
+        "                \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0.scope_0\"}, owner = "
+        "\"GeneratedLoopConditionalLexicalStorage\", scope_id = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0.scope_0\"}> ({\n"
+        "                ^bb0:\n" +
+        scopedContinue + "                }) : () -> ()\n";
+    deeperExitSource.insert(deeperExitAssignmentEnd + 1, deeperScopedContinue);
+    auto deeperExit = parse(context, deeperExitSource);
+    if (!deeperExit)
+      return fail("generated loop-conditional deeper scope-exit mutation did not parse");
+    exitRejected = "sentinel";
+    llvm::raw_string_ostream deeperExitStream(exitRejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*deeperExit, nodal::BackendKind::VerilogA, deeperExitStream)))
+      return fail("deeper generated loop-conditional scope exit passed backend verification");
+    deeperExitStream.flush();
+    if (exitRejected != "sentinel")
+      return fail("deeper generated loop-conditional scope exit published partial output");
+
     auto forged = parse(context, scopedSource);
     if (!forged)
       return fail("could not parse the generated loop-conditional scope ownership fixture");

@@ -2289,31 +2289,125 @@ int main() {
   }
 
   {
-    std::string unsupportedSource = kGeneratedLoopConditionalLexicalStorageModule.str();
+    std::string scopedSource = kGeneratedLoopConditionalLexicalStorageModule.str();
     const std::string anchor =
         "                %state_read = \"nodal.analog_variable_read\"(%state)";
-    const std::string unsupportedScope =
+    const std::string scopeHeader =
         "                \"nodal.analog_scope\"() <{metadata = {semantic_path = "
         "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0\"}, owner = "
         "\"GeneratedLoopConditionalLexicalStorage\", scope_id = "
         "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0\"}> ({\n"
-        "                ^bb0:\n"
-        "                }) : () -> ()\n";
-    auto position = unsupportedSource.find(anchor);
+        "                ^bb0:\n";
+    const std::string assignmentAnchor =
+        "                \"nodal.analog_assign\"(%state, %state_read)";
+    auto position = scopedSource.find(anchor);
     if (position == std::string::npos)
       return fail("generated loop-conditional scope mutation anchor missing");
-    unsupportedSource.insert(position, unsupportedScope);
-    auto unsupported = parse(context, unsupportedSource);
-    if (!unsupported)
-      return fail("generated loop-conditional scope mutation did not parse");
+    scopedSource.insert(position, scopeHeader);
+    auto assignmentPosition = scopedSource.find(assignmentAnchor, position + scopeHeader.size());
+    if (assignmentPosition == std::string::npos)
+      return fail("generated loop-conditional scope assignment anchor missing");
+    auto assignmentEnd = scopedSource.find('\n', assignmentPosition);
+    if (assignmentEnd == std::string::npos)
+      return fail("generated loop-conditional scope assignment terminator missing");
+    scopedSource.insert(assignmentEnd + 1, "                }) : () -> ()\n");
+
+    auto scoped = parse(context, scopedSource);
+    if (!scoped)
+      return fail("generated loop-conditional scope fixture did not parse");
+    std::string scopedOutput;
+    llvm::raw_string_ostream scopedStream(scopedOutput);
+    if (mlir::failed(nodal::emitBackend(*scoped, nodal::BackendKind::VerilogA, scopedStream)))
+      return fail("generated loop-conditional scope emission failed");
+    scopedStream.flush();
+    auto scopedRuntime =
+        scopedOutput.find("for (event_GeneratedLoopConditionalLexicalStorage_loop_0_index = 0;");
+    auto scopedConditional = scopedOutput.find(
+        "if (event_GeneratedLoopConditionalLexicalStorage_select) begin", scopedRuntime);
+    auto scopedConditionalBegin = scopedOutput.find("begin", scopedConditional);
+    auto scopedArmBegin = scopedOutput.find("begin", scopedConditionalBegin + 5);
+    auto scopedAssignment = scopedOutput.find(
+        "event_GeneratedLoopConditionalLexicalStorage_state = "
+        "(event_GeneratedLoopConditionalLexicalStorage_loop_0_if_0_assignment_read_0 + 6.0);",
+        scopedArmBegin);
+    auto scopedOtherwise = scopedOutput.find("else begin", scopedAssignment);
+    if (scopedRuntime == std::string::npos || scopedConditional == std::string::npos ||
+        scopedConditionalBegin == std::string::npos || scopedArmBegin == std::string::npos ||
+        scopedAssignment == std::string::npos || scopedOtherwise == std::string::npos ||
+        !(scopedRuntime < scopedConditional && scopedConditional < scopedConditionalBegin &&
+          scopedConditionalBegin < scopedArmBegin && scopedArmBegin < scopedAssignment &&
+          scopedAssignment < scopedOtherwise) ||
+        scopedOutput.find("@(") != std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(scopedOutput, *configuration)))
+      return fail("generated loop-conditional scope lost its direct target topology");
+
+    auto forged = parse(context, scopedSource);
+    if (!forged)
+      return fail("could not parse the generated loop-conditional scope ownership fixture");
+    mlir::Operation *scope = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!scope && operation->getName().getStringRef() == "nodal.analog_scope")
+        scope = operation;
+    });
+    if (!scope)
+      return fail("generated loop-conditional scope ownership mutation anchor missing");
+    scope->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopConditionalLexicalStorage.forged"));
     std::string rejected = "sentinel";
     llvm::raw_string_ostream rejectedStream(rejected);
-    if (mlir::succeeded(
-            nodal::emitBackend(*unsupported, nodal::BackendKind::VerilogA, rejectedStream)))
-      return fail("unsupported generated loop-conditional scope passed backend verification");
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated loop-conditional scope ownership passed backend verification");
     rejectedStream.flush();
     if (rejected != "sentinel")
-      return fail("unsupported generated loop-conditional scope published partial output");
+      return fail("forged generated loop-conditional scope published partial output");
+
+    std::string emptyScopeSource = kGeneratedLoopConditionalLexicalStorageModule.str();
+    const std::string emptyScope =
+        "                \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.empty_scope\"}, owner = "
+        "\"GeneratedLoopConditionalLexicalStorage\", scope_id = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.empty_scope\"}> ({\n"
+        "                ^bb0:\n"
+        "                }) : () -> ()\n";
+    auto emptyPosition = emptyScopeSource.find(anchor);
+    if (emptyPosition == std::string::npos)
+      return fail("generated loop-conditional empty scope mutation anchor missing");
+    emptyScopeSource.insert(emptyPosition, emptyScope);
+    auto empty = parse(context, emptyScopeSource);
+    if (!empty)
+      return fail("generated loop-conditional empty scope mutation did not parse");
+    rejected = "sentinel";
+    llvm::raw_string_ostream emptyRejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*empty, nodal::BackendKind::VerilogA, emptyRejectedStream)))
+      return fail("empty generated loop-conditional scope passed backend verification");
+    emptyRejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("empty generated loop-conditional scope published partial output");
+
+    std::string deeperSource = scopedSource;
+    const std::string deeperScope =
+        "                \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0.scope_0\"}, owner = "
+        "\"GeneratedLoopConditionalLexicalStorage\", scope_id = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0.scope_0\"}> ({\n"
+        "                ^bb0:\n"
+        "                }) : () -> ()\n";
+    auto deeperPosition = deeperSource.find(anchor);
+    if (deeperPosition == std::string::npos)
+      return fail("generated loop-conditional deeper scope mutation anchor missing");
+    deeperSource.insert(deeperPosition, deeperScope);
+    auto deeper = parse(context, deeperSource);
+    if (!deeper)
+      return fail("generated loop-conditional deeper scope mutation did not parse");
+    rejected = "sentinel";
+    llvm::raw_string_ostream deeperRejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*deeper, nodal::BackendKind::VerilogA, deeperRejectedStream)))
+      return fail("deeper generated loop-conditional scope passed backend verification");
+    deeperRejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("deeper generated loop-conditional scope published partial output");
   }
 
   auto generatedLoopCaseStorage = parse(context, kGeneratedLoopCaseLexicalStorageModule);

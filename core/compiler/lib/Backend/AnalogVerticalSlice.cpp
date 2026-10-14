@@ -2145,16 +2145,16 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
               const bool directCaseArmExit = caseOperation &&
                                              llvm::isa<AnalogCaseOp>(caseOperation) &&
                                              caseOperation->getParentOp() == nested;
-              const bool directConditionalArmScopeContinue =
-                  llvm::isa<AnalogContinueOp>(bodyOperation) && scopeConditional &&
+              const bool directConditionalArmScopeExit =
+                  llvm::isa<AnalogBreakOp, AnalogContinueOp>(bodyOperation) && scopeConditional &&
                   llvm::isa<AnalogIfOp>(scopeConditional) &&
                   scopeConditional->getParentOp() == nested;
               const bool directCaseArmScopeBreak =
                   llvm::isa<AnalogBreakOp>(bodyOperation) && scopeCase &&
                   llvm::isa<AnalogCaseOp>(scopeCase) && scopeCase->getParentOp() == nested;
               if ((!directLoopExit && !directConditionalArmExit && !directCaseArmExit &&
-                   !directConditionalArmScopeContinue && !directCaseArmScopeBreak) ||
-                  ((directConditionalArmScopeContinue || directCaseArmScopeBreak) &&
+                   !directConditionalArmScopeExit && !directCaseArmScopeBreak) ||
+                  ((directConditionalArmScopeExit || directCaseArmScopeBreak) &&
                    ++admittedScopeExits > 1) ||
                   !exitOwner || !procedureOwner ||
                   exitOwner.getValue() != procedureOwner.getValue())
@@ -2218,7 +2218,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             "generated lexical storage admits one direct runtime loop; event-local storage may "
             "also use one direct conditional and case tree, one direct loop/conditional-arm/"
             "case-arm lexical scope, plus direct loop/conditional-arm/case-arm exits or one "
-            "direct conditional-arm lexical-scope continue/case-arm lexical-scope break; "
+            "direct conditional-arm lexical-scope exit/case-arm lexical-scope break; "
             "non-event "
             "loop storage may use one direct continue/break pair, one direct lexical-scope "
             "continue/break pair, one direct conditional-arm lexical-scope continue, or one "

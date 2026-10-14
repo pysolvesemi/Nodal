@@ -3778,6 +3778,118 @@ int main() {
     if (deeperExitRejected != "sentinel")
       return fail("unsupported deeper generated loop exit published partial output");
 
+    auto conditionalScopeBreakModule = parse(context, generatedStorageSource);
+    if (!conditionalScopeBreakModule)
+      return fail("generated event conditional-scope break mutation fixture did not parse");
+    mlir::Operation *conditionalScopeBreakConditional = nullptr;
+    mlir::Operation *conditionalScopeBreakDirectScope = nullptr;
+    mlir::Operation *conditionalScopeBreakOp = nullptr;
+    conditionalScopeBreakModule->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.analog_if" && operation->getParentOp() &&
+          operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
+        conditionalScopeBreakConditional = operation;
+      if (!conditionalScopeBreakDirectScope &&
+          operation->getName().getStringRef() == "nodal.analog_scope" && operation->getParentOp() &&
+          operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
+        conditionalScopeBreakDirectScope = operation;
+      if (!conditionalScopeBreakOp && operation->getName().getStringRef() == "nodal.analog_break")
+        conditionalScopeBreakOp = operation;
+    });
+    if (!conditionalScopeBreakConditional || !conditionalScopeBreakDirectScope ||
+        !conditionalScopeBreakOp)
+      return fail("generated event conditional-scope break mutation anchor missing");
+    mlir::Operation *conditionalBreakScope = conditionalScopeBreakDirectScope->clone();
+    conditionalBreakScope->setAttr(
+        "scope_id",
+        mlir::StringAttr::get(&context,
+                              "GeneratedEvent.event_0.loop_2.conditional_break_scope_mutation"));
+    conditionalScopeBreakConditional->getRegion(0).front().back().getRegion(0).front().push_back(
+        conditionalBreakScope);
+    conditionalScopeBreakOp->moveBefore(&conditionalBreakScope->getRegion(0).front(),
+                                        conditionalBreakScope->getRegion(0).front().end());
+    conditionalScopeBreakDirectScope->erase();
+    std::string conditionalScopeBreakOutput;
+    llvm::raw_string_ostream conditionalScopeBreakStream(conditionalScopeBreakOutput);
+    if (mlir::failed(nodal::emitBackend(*conditionalScopeBreakModule, nodal::BackendKind::VerilogA,
+                                        conditionalScopeBreakStream)))
+      return fail("generated event conditional-arm scope break failed backend verification");
+    conditionalScopeBreakStream.flush();
+    auto conditionalBreakElse = conditionalScopeBreakOutput.find("else begin");
+    auto conditionalBreakAssignment = conditionalScopeBreakOutput.find(
+        "event_GeneratedEvent_state = "
+        "(event_GeneratedEvent_event_0_loop_2_scope_0_assignment_read_0 + 9.0);",
+        conditionalBreakElse);
+    auto conditionalBreakExit =
+        conditionalScopeBreakOutput.find("_break = 1;", conditionalBreakAssignment);
+    auto conditionalBreakContinue =
+        conditionalScopeBreakOutput.find("_continue = 1;", conditionalBreakExit);
+    if (conditionalBreakElse == std::string::npos ||
+        conditionalBreakAssignment == std::string::npos ||
+        conditionalBreakExit == std::string::npos ||
+        conditionalBreakContinue == std::string::npos ||
+        conditionalBreakAssignment < conditionalBreakElse ||
+        conditionalBreakExit < conditionalBreakAssignment ||
+        conditionalBreakExit > conditionalBreakContinue ||
+        mlir::failed(nodal::reparseBackendTarget(conditionalScopeBreakOutput, *configuration)))
+      return fail("generated event conditional-arm scope break lost its direct target topology");
+
+    conditionalScopeBreakOp->setAttr("owner",
+                                     mlir::StringAttr::get(&context, "ForgedGeneratedEvent"));
+    std::string forgedConditionalScopeBreakRejected = "sentinel";
+    llvm::raw_string_ostream forgedConditionalScopeBreakRejectedStream(
+        forgedConditionalScopeBreakRejected);
+    if (mlir::succeeded(nodal::emitBackend(*conditionalScopeBreakModule,
+                                           nodal::BackendKind::VerilogA,
+                                           forgedConditionalScopeBreakRejectedStream)))
+      return fail("forged generated loop conditional-arm scope break passed backend "
+                  "verification");
+    forgedConditionalScopeBreakRejectedStream.flush();
+    if (forgedConditionalScopeBreakRejected != "sentinel")
+      return fail("forged generated loop conditional-arm scope break published partial output");
+    conditionalScopeBreakOp->setAttr("owner", mlir::StringAttr::get(&context, "GeneratedEvent"));
+
+    mlir::Operation *duplicateConditionalScopeBreak = conditionalScopeBreakOp->clone();
+    duplicateConditionalScopeBreak->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(
+            &context, "GeneratedEvent.event_0.loop_2.duplicate_conditional_scope_break_mutation"));
+    conditionalBreakScope->getRegion(0).front().push_back(duplicateConditionalScopeBreak);
+    std::string duplicateConditionalScopeBreakRejected = "sentinel";
+    llvm::raw_string_ostream duplicateConditionalScopeBreakRejectedStream(
+        duplicateConditionalScopeBreakRejected);
+    if (mlir::succeeded(nodal::emitBackend(*conditionalScopeBreakModule,
+                                           nodal::BackendKind::VerilogA,
+                                           duplicateConditionalScopeBreakRejectedStream)))
+      return fail("duplicate generated loop conditional-arm scope break passed backend "
+                  "verification");
+    duplicateConditionalScopeBreakRejectedStream.flush();
+    if (duplicateConditionalScopeBreakRejected != "sentinel")
+      return fail("duplicate generated loop conditional-arm scope break published partial output");
+    duplicateConditionalScopeBreak->erase();
+
+    mlir::Operation *deeperConditionalBreakScope = conditionalBreakScope->clone();
+    deeperConditionalBreakScope->setAttr(
+        "scope_id",
+        mlir::StringAttr::get(
+            &context, "GeneratedEvent.event_0.loop_2.deeper_conditional_break_scope_mutation"));
+    deeperConditionalBreakScope->getRegion(0).front().clear();
+    conditionalBreakScope->getBlock()->getOperations().insert(
+        mlir::Block::iterator(conditionalBreakScope), deeperConditionalBreakScope);
+    conditionalBreakScope->moveBefore(&deeperConditionalBreakScope->getRegion(0).front(),
+                                      deeperConditionalBreakScope->getRegion(0).front().end());
+    std::string deeperConditionalBreakScopeRejected = "sentinel";
+    llvm::raw_string_ostream deeperConditionalBreakScopeRejectedStream(
+        deeperConditionalBreakScopeRejected);
+    if (mlir::succeeded(nodal::emitBackend(*conditionalScopeBreakModule,
+                                           nodal::BackendKind::VerilogA,
+                                           deeperConditionalBreakScopeRejectedStream)))
+      return fail("unsupported deeper generated loop conditional-arm break scope passed backend "
+                  "verification");
+    deeperConditionalBreakScopeRejectedStream.flush();
+    if (deeperConditionalBreakScopeRejected != "sentinel")
+      return fail("unsupported deeper generated loop conditional-arm break scope published "
+                  "partial output");
+
     auto nestedScopeModule = parse(context, generatedStorageSource);
     if (!nestedScopeModule)
       return fail("generated event nested-scope mutation fixture did not parse");

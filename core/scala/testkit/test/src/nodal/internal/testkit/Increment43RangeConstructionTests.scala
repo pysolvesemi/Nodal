@@ -329,6 +329,23 @@ final class Increment43GeneratedConditionalScopeEventStorage extends Module:
               state := state + 11.0.V
           state := state + 12.0.V
 
+final class Increment43GeneratedConditionalScopeBreakEventStorage extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val select = variable(Bool, false.B)
+      val iterations = variable(Integer, 1.integer)
+      val state = variable(Real, 0.0.V)
+      on(cross(1.0.V)):
+        analogLoop(iterations, maximumIterations = 2, minimumIterations = 1):
+          analogConditional:
+            analogWhen(select):
+              CandidateRuntime.block:
+                state := state + 13.0.V
+                analogBreak()
+            analogOtherwise:
+              state := state + 14.0.V
+          state := state + 15.0.V
+
 final class Increment43GeneratedEventTarget extends Module:
   hdlRange(0, 2): _ =>
     analogProcedure:
@@ -2534,6 +2551,63 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(runtimeLoop >= 0 && conditional > runtimeLoop)
             assert(scopedAssignment > conditional && scopedContinue > scopedAssignment)
             assert(otherwise > scopedContinue && otherwiseAssignment > otherwise)
+            assert(trailingAssignment > otherwiseAssignment)
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated event conditional-arm scope break retains authored control"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedConditionalScopeBreakEventStorage,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            val region = ConstructionKernel
+              .inspect(new Increment43GeneratedConditionalScopeBreakEventStorage)
+              .generatedRegions
+              .head
+            for operation <- Vector(
+                "nodal.analog_variable",
+                "nodal.analog_variable_read",
+                "nodal.analog_assign",
+                "nodal.analog_scope",
+                "nodal.analog_break"
+              )
+            do
+              val lines = result.mlir.linesIterator.filter(_.contains(s"\"$operation\"")).toVector
+              assert(lines.nonEmpty)
+              if operation != "nodal.analog_scope" && operation != "nodal.analog_break" then
+                assert(lines.forall(_.contains(s"generated_owner = \"${region.path}\"")))
+                assert(lines.forall(_.contains(s"generated_induction = \"${region.induction}\"")))
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_loop\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_if\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_scope\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_continue\"")) == 0)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_break\"")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains("@(cross(1")) == 1)
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (event_")) == 1)
+            val runtimeLoop = result.verilogA.indexOf("for (event_")
+            val conditional = result.verilogA.indexOf("if (event_", runtimeLoop)
+            val scopedAssignment = result.verilogA.indexOf(" + 13.0", conditional)
+            val scopedBreak = result.verilogA.indexOf("_break = 1;", scopedAssignment)
+            val otherwise = result.verilogA.indexOf("else begin", scopedBreak)
+            val otherwiseAssignment = result.verilogA.indexOf(" + 14.0", otherwise)
+            val trailingAssignment = result.verilogA.indexOf(" + 15.0", otherwiseAssignment)
+            assert(runtimeLoop >= 0 && conditional > runtimeLoop)
+            assert(scopedAssignment > conditional && scopedBreak > scopedAssignment)
+            assert(otherwise > scopedBreak && otherwiseAssignment > otherwise)
             assert(trailingAssignment > otherwiseAssignment)
           finally delete(directory)
         case _ => assert(true)

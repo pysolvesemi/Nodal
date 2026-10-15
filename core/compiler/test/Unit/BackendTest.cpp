@@ -151,6 +151,33 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedNodeDdtContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedNodeDdtContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 1 : i64, upper = 4 : i64, step = 1 : i64, region_id = "GeneratedNodeDdtContribution.generate_0", induction_path = "GeneratedNodeDdtContribution.generate_0.index", metadata = {maximum_trip_count = 3 : i64}}> ({
+    ^bb0:
+      %tap = "nodal.node"() <{name = "tap", source_path = "GeneratedNodeDdtContribution.tap", generated_owner = "GeneratedNodeDdtContribution.generate_0", generated_induction = "GeneratedNodeDdtContribution.generate_0.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "GeneratedNodeDdtContribution.generate_0", induction = "GeneratedNodeDdtContribution.generate_0.index"}}> : () -> !nodal.terminal<"electrical">
+      %branch = "nodal.branch"(%tap, %p) <{metadata = {generated_owner = "GeneratedNodeDdtContribution.generate_0", generated_induction = "GeneratedNodeDdtContribution.generate_0.index"}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+      "nodal.analog"() <{generated_owner = "GeneratedNodeDdtContribution.generate_0", generated_induction = "GeneratedNodeDdtContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %voltage = "nodal.access"(%branch) <{kind = "potential", metadata = {generated_owner = "GeneratedNodeDdtContribution.generate_0", generated_induction = "GeneratedNodeDdtContribution.generate_0.index"}}> : (!nodal.branch<"electrical">) -> f64
+        %derivative = "nodal.analog_ddt"(%voltage) <{analyses = ["ac", "dc", "initialization", "noise", "operating-point", "transient"], context = "contribution", generated_owner = "GeneratedNodeDdtContribution.generate_0", generated_induction = "GeneratedNodeDdtContribution.generate_0.index", initialization = "none", input_dimension = "1", metadata = {identity = "derivative"}, operator_contract = "increment35", operator_id = "GeneratedNodeDdtContribution.derivative", owner = "GeneratedNodeDdtContribution", result_dimension = "time^-1"}> : (f64) -> f64
+        "nodal.contribute"(%branch, %derivative) <{kind = "flow", generated_owner = "GeneratedNodeDdtContribution.generate_0", generated_induction = "GeneratedNodeDdtContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kGeneratedDdtContributionModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -1453,6 +1480,62 @@ int main() {
     repeatedStream.flush();
     if (target != repeated)
       return fail("generated node contribution emission is nondeterministic");
+  }
+
+  auto generatedNodeDdt = parse(context, kGeneratedNodeDdtContributionModule);
+  if (!generatedNodeDdt)
+    return fail("could not parse generated node ddt contribution fixture");
+  std::string generatedNodeDdtOutput;
+  llvm::raw_string_ostream generatedNodeDdtStream(generatedNodeDdtOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedNodeDdt, nodal::BackendKind::VerilogA,
+                                      generatedNodeDdtStream)))
+    return fail("generated node ddt contribution emission failed");
+  generatedNodeDdtStream.flush();
+  if (generatedNodeDdtOutput.find("  electrical tap[1:(4 - 1)];\n") == std::string::npos ||
+      generatedNodeDdtOutput.find(
+          "I(tap[generate_0_index], p) <+ ddt(V(tap[generate_0_index], p));\n") ==
+          std::string::npos)
+    return fail("generated node ddt lost its indexed access or owned operator expression");
+  if (mlir::failed(nodal::reparseBackendTarget(generatedNodeDdtOutput, *configuration)))
+    return fail("generated node ddt target failed independent reparse");
+  std::string repeatedGeneratedNodeDdtOutput;
+  llvm::raw_string_ostream repeatedGeneratedNodeDdtStream(repeatedGeneratedNodeDdtOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedNodeDdt, nodal::BackendKind::VerilogA,
+                                      repeatedGeneratedNodeDdtStream)))
+    return fail("generated node ddt repeated emission failed");
+  repeatedGeneratedNodeDdtStream.flush();
+  if (generatedNodeDdtOutput != repeatedGeneratedNodeDdtOutput)
+    return fail("generated node ddt emission is nondeterministic");
+
+  for (llvm::StringRef mutation : {"owner", "induction", "escape"}) {
+    auto invalid = parse(context, kGeneratedNodeDdtContributionModule);
+    if (!invalid)
+      return fail("could not parse generated node ddt rejection fixture");
+    mlir::Operation *access = nullptr;
+    mlir::Operation *contribution = nullptr;
+    invalid->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.access")
+        access = operation;
+      if (operation->getName().getStringRef() == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!access || !contribution)
+      return fail("generated node ddt rejection fixture lost its access or contribution");
+    if (mutation == "owner" || mutation == "induction") {
+      mlir::NamedAttrList metadata(access->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set(mutation == "owner" ? "generated_owner" : "generated_induction",
+                   mlir::StringAttr::get(&context, "forged"));
+      access->setAttr("metadata", metadata.getDictionary(&context));
+    }
+    if (mutation == "escape")
+      contribution->setOperand(1, access->getResult(0));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*invalid, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated node ddt access passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated node ddt access published partial output");
   }
 
   std::string stridedGeneratedNodeSource = kGeneratedNodeContributionModule.str();

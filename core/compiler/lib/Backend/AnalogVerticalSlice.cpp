@@ -1614,6 +1614,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
 
   Block &analogBody = analog->getRegion(0).front();
   unsigned contributions = 0;
+  unsigned generatedNodeAccesses = 0;
   llvm::DenseSet<Value> contributedGeneratedBranches;
   unsigned procedures = 0;
   unsigned boundStepEffects = 0;
@@ -2643,6 +2644,18 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
             "generated analog-node access ownership does not match its branch");
+      if (operation.getNumResults() != 1 || !operation.getResult(0).hasOneUse())
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            "generated analog-node access must feed one direct owned ddt input");
+      OpOperand &use = *operation.getResult(0).getUses().begin();
+      Operation *user = use.getOwner();
+      if (user->getBlock() != &analogBody || use.getOperandNumber() != 0 ||
+          user->getName().getStringRef() != "nodal.analog_ddt")
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            "generated analog-node access must feed one direct owned ddt input");
+      ++generatedNodeAccesses;
     }
     if (!supportedExpression)
       return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
@@ -2667,6 +2680,10 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
         analog, "NODAL-BACKEND-CAPABILITY-001",
         "generated analog-node contribution profile requires one additive contribution per "
         "owned indexed branch");
+  if (generatedNodeAccesses != 0 && (generatedNodeAccesses != 1 || generatedBranches.size() != 1))
+    return emitMappedFailure(
+        analog, "NODAL-BACKEND-CAPABILITY-001",
+        "generated analog-node ddt profile requires one direct access on one owned branch");
 
   output << "  analog begin\n";
   output << "    for (" << induction.getValue() << " = " << lower->text << "; "

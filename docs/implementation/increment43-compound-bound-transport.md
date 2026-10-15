@@ -635,3 +635,27 @@ Cross-range connections, generated instances, shaped terminals, general slices,
 mixed procedural/event bodies and wider aliases remain unsupported. Independent
 simulator qualification and the F-048/F-049/F-052 handoff remain required.
 Every F-043 parent and descendant acceptance box remains open.
+
+## Generated analog-node ddt access checkpoint
+
+One direct potential access on an exactly-owned generated electrical-node array
+may now feed one owned `ddt` and the additive flow contribution on the same
+branch. The node remains one symbolic target array, and both the access and
+contribution select its element with the canonical generated induction. This
+combines the already-qualified node-array and non-state-retaining `ddt`
+renderers without adding another operator, array, range or storage owner.
+
+The native boundary requires exact generated owner and induction metadata on
+the node, branch, access, operator and contribution. The access has exactly one
+direct use as operand zero of the owned `ddt`; the derivative must reach an
+additive contribution without leaving the generated analog body. Forged access
+ownership or induction and a second/direct escape reject before target
+publication. Public and native witnesses retain deterministic IR/target text,
+the indexed `V(...)` inside `ddt`, the indexed `I(...)` target and
+independent target reparse.
+
+This profile does not admit `idt` or waveform/event state on generated nodes,
+cross-range access, shaped terminals, general slices, generated
+connections/instances, or mixed procedural/event bodies. Independent simulator
+qualification and the F-048/F-049/F-052 handoff remain required. Every F-043
+parent and descendant acceptance box remains open.

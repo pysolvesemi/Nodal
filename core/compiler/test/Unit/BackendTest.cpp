@@ -1279,20 +1279,33 @@ int main() {
       return fail("generated node group emission is nondeterministic");
   }
 
-  for (llvm::StringRef mutation : {"valid", "branch-owner", "source", "body-shape"}) {
+  for (llvm::StringRef mutation :
+       {"valid-single", "valid-group", "branch-owner", "source", "second-owner", "second-induction",
+        "second-name", "second-source", "second-source-duplicate", "body-shape"}) {
     auto mixed = parse(context, kGeneratedNodeContributionModule);
     if (!mixed)
       return fail("could not parse generated node contribution fixture");
     mlir::Operation *node = nullptr;
     mlir::Operation *branch = nullptr;
+    mlir::Operation *analog = nullptr;
     mixed->walk([&](mlir::Operation *operation) {
       if (operation->getName().getStringRef() == "nodal.node")
         node = operation;
       if (operation->getName().getStringRef() == "nodal.branch")
         branch = operation;
+      if (operation->getName().getStringRef() == "nodal.analog")
+        analog = operation;
     });
-    if (!node || !branch)
+    if (!node || !branch || !analog)
       return fail("generated node contribution fixture lost its direct topology");
+    mlir::Operation *secondNode = nullptr;
+    if (mutation != "valid-single" && mutation != "branch-owner" && mutation != "source") {
+      secondNode = node->clone();
+      node->getBlock()->getOperations().insert(branch->getIterator(), secondNode);
+      secondNode->setAttr("name", mlir::StringAttr::get(&context, "returnTap"));
+      secondNode->setAttr("source_path",
+                          mlir::StringAttr::get(&context, "GeneratedNodeContribution.returnTap"));
+    }
     if (mutation == "branch-owner") {
       mlir::NamedAttrList metadata(branch->getAttrOfType<mlir::DictionaryAttr>("metadata"));
       metadata.set("generated_owner", mlir::StringAttr::get(&context, "forged"));
@@ -1300,19 +1313,24 @@ int main() {
     }
     if (mutation == "source")
       node->setAttr("source_path", mlir::StringAttr::get(&context, ""));
-    if (mutation == "body-shape") {
-      mlir::Operation *extra = node->clone();
-      extra->setAttr("name", mlir::StringAttr::get(&context, "extraTap"));
-      extra->setAttr("source_path",
-                     mlir::StringAttr::get(&context, "GeneratedNodeContribution.extraTap"));
-      node->getBlock()->getOperations().insert(std::next(node->getIterator()), extra);
-    }
+    if (mutation == "second-owner")
+      secondNode->setAttr("generated_owner", mlir::StringAttr::get(&context, "forged"));
+    if (mutation == "second-induction")
+      secondNode->setAttr("generated_induction", mlir::StringAttr::get(&context, "forged.index"));
+    if (mutation == "second-name")
+      secondNode->setAttr("name", node->getAttr("name"));
+    if (mutation == "second-source")
+      secondNode->setAttr("source_path", mlir::StringAttr::get(&context, ""));
+    if (mutation == "second-source-duplicate")
+      secondNode->setAttr("source_path", node->getAttr("source_path"));
+    if (mutation == "body-shape")
+      node->getBlock()->getOperations().insert(analog->getIterator(), branch->clone());
     std::string output = "sentinel";
     llvm::raw_string_ostream stream(output);
     const bool emitted =
         mlir::succeeded(nodal::emitBackend(*mixed, nodal::BackendKind::VerilogA, stream));
     stream.flush();
-    if (mutation != "valid") {
+    if (mutation != "valid-single" && mutation != "valid-group") {
       if (emitted || output != "sentinel")
         return fail("invalid generated node contribution was accepted or published output");
       continue;
@@ -1321,6 +1339,10 @@ int main() {
         output.find("  genvar generate_0_index;\n") == std::string::npos ||
         output.find("V(tap[generate_0_index], p) <+ 1;\n") == std::string::npos)
       return fail("generated node contribution lost its array, index, or equation");
+    if (mutation == "valid-group" &&
+        output.find("  electrical tap[0:(3 - 1)];\n"
+                    "  electrical returnTap[0:(3 - 1)];\n") == std::string::npos)
+      return fail("generated node-group contribution lost declaration order or array bounds");
     std::string target = output.substr(std::string("sentinel").size());
     if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
       return fail("generated node contribution failed independent target reparse");

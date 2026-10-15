@@ -43,6 +43,17 @@ final class Increment43GeneratedNodeContribution extends Module:
     analog:
       V(tap, p) <+ 1.0.V
 
+final class Increment43GeneratedNodeGroupContribution extends Module:
+  val lanes: Param[Integer] = param(3.integer, range = 2 to 5)
+  val p = inout(Electrical)
+
+  hdlRange(1, lanes): _ =>
+    val tap = node(Electrical)
+    val returnTap = node(Electrical)
+    val _ = returnTap
+    analog:
+      V(tap, p) <+ 1.0.V
+
 final class Increment43MissingRange extends Module:
   val lanes: Param[Integer] = param(2.integer)
 
@@ -1634,6 +1645,67 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.linesIterator.count(
               _.trim == "V(tap[generate_0_index], p) <+ 1;"
             ) == 1)
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("generated node-group contribution retains separate arrays and one selected target"):
+      val snapshot = ConstructionKernel.inspect(new Increment43GeneratedNodeGroupContribution)
+      assert(
+        snapshot == ConstructionKernel.inspect(new Increment43GeneratedNodeGroupContribution)
+      )
+      assert(snapshot.generatedRegions.size == 1)
+      val region = snapshot.generatedRegions.head
+      assert(region.lower == "1")
+      assert(region.declarations.size == 2)
+      region.declarations.foreach: path =>
+        assert(snapshot.sourceMap.exists(_.semanticPath == path))
+      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
+      assert(snapshot.analogRegions.count(_.generatedOwner.contains(region.path)) == 1)
+      val declarationNames = region.declarations.map(_.split('.').last)
+      assert(declarationNames.count(_ == "tap") == 1)
+      val generatedName = declarationNames.find(_ != "tap").get
+      val first = ScalaToMlirBridge.lower(new Increment43GeneratedNodeGroupContribution)
+      assert(first == ScalaToMlirBridge.lower(new Increment43GeneratedNodeGroupContribution))
+      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
+      assert(first.text.sliding("\"nodal.branch\"".length).count(_ == "\"nodal.branch\"") == 1)
+      assert(
+        first.text.sliding("\"nodal.contribute\"".length).count(_ == "\"nodal.contribute\"") == 1
+      )
+      assert(first.text.contains(s"generated_owner = \"${region.path}\""))
+      assert(first.text.contains(s"generated_induction = \"${region.induction}\""))
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            def compileGroup() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43GeneratedNodeGroupContribution,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val result = compileGroup()
+            assert(result == compileGroup())
+            val generatedDeclaration = s"  electrical $generatedName[1:(lanes - 1)];"
+            val tapDeclaration = "  electrical tap[1:(lanes - 1)];"
+            assert(result.verilogA.contains(generatedDeclaration))
+            assert(result.verilogA.contains(tapDeclaration))
+            assert(
+              result.verilogA.indexOf(generatedDeclaration) <
+                result.verilogA.indexOf(tapDeclaration)
+            )
+            assert(result.verilogA.linesIterator.count(
+              _.trim == "V(tap[generate_0_index], p) <+ 1;"
+            ) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains("electrical ")) == 3)
+            assert(result.verilogA.linesIterator.count(_.contains("genvar generate_0_index")) == 1)
           finally delete(directory)
         case _ => assert(true)
 

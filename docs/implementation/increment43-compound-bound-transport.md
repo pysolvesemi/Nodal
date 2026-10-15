@@ -485,3 +485,29 @@ bounds, procedural state or events, shaped terminal arrays, general slices and
 source-index selection remain unsupported. Every F-043 parent and descendant
 acceptance box remains open, and independent simulator qualification plus the
 F-048/F-049/F-052 handoff are still required.
+
+## Generated analog-node group contribution checkpoint
+
+The direct generated-node contribution profile now accepts a nonempty group of
+exactly-owned electrical declarations followed by one exactly-owned branch and
+one continuous region. Every declaration retains the shared range and induction
+identity and becomes its own electrical array. Exactly one declaration may feed
+the branch; the remaining declarations must stay direct, unused topology in
+this bounded profile. The selected declaration becomes the single indexed
+target of the existing additive contribution loop.
+
+The extension reuses the qualified node-array renderer and branch/contribution
+path. It does not introduce a second layout engine, specialize parameter
+defaults, unroll lanes or infer storage. Native checks reject forged later-node
+owner or induction identities, duplicate target names, missing or duplicate
+source identities, and a second direct branch before publishing output. The
+public nonzero-lower, symbolic-upper witness retains both source-map entries,
+stable declaration order, one branch, one contribution and byte-identical
+repeated IR/target output.
+
+Multiple selected nodes or contributions, generated connections or instances,
+compound/non-unit node-array bounds, procedural state or events, shaped
+terminal arrays, general slices and source-index selection remain unsupported.
+This remains compiler-only evidence; independent simulator qualification and
+the F-048/F-049/F-052 handoff are required. Every F-043 parent and descendant
+acceptance box remains open.

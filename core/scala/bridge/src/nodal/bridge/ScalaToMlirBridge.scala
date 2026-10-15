@@ -2834,60 +2834,59 @@ ${indent(body, 2)}
           generatedBranchByKey(expression.operands(0) -> expression.operands(1))
         )
 
-      ownedAnalogRegions.zipWithIndex.foreach:
-        (analog, index) =>
-          if !analog.generatedInduction.contains(region.induction) then
-            fail(
-              "NODAL-BRIDGE-043",
-              "generated continuous region ownership or induction is invalid",
-              Some(analog.path)
-            )
-          val operators = snapshot.continuousOperators.filter(operator =>
-            analog.expressions.exists(_.path == operator.path)
+      ownedAnalogRegions.zipWithIndex.foreach: (analog, index) =>
+        if !analog.generatedInduction.contains(region.induction) then
+          fail(
+            "NODAL-BRIDGE-043",
+            "generated continuous region ownership or induction is invalid",
+            Some(analog.path)
           )
-          val waveforms = snapshot.waveformOperators.filter(operator =>
-            analog.expressions.exists(_.path == operator.path)
+        val operators = snapshot.continuousOperators.filter(operator =>
+          analog.expressions.exists(_.path == operator.path)
+        )
+        val waveforms = snapshot.waveformOperators.filter(operator =>
+          analog.expressions.exists(_.path == operator.path)
+        )
+        val transfers = snapshot.transferOperators.filter(operator =>
+          analog.expressions.exists(_.path == operator.path)
+        )
+        val noise = snapshot.noiseOperators.filter(operator =>
+          analog.expressions.exists(_.path == operator.path)
+        )
+        if (operators.isEmpty && waveforms.isEmpty && transfers.isEmpty && noise.isEmpty &&
+            analog.contributions.isEmpty) ||
+          operators.exists(operator =>
+            !operator.generatedOwner.contains(region.path) ||
+              !operator.generatedInduction.contains(region.induction)
+          ) ||
+          waveforms.exists(operator =>
+            !operator.generatedOwner.contains(region.path) ||
+              !operator.generatedInduction.contains(region.induction)
+          ) ||
+          transfers.exists(operator =>
+            !operator.generatedOwner.contains(region.path) ||
+              !operator.generatedInduction.contains(region.induction)
+          ) ||
+          noise.exists(operator =>
+            !operator.generatedOwner.contains(region.path) ||
+              !operator.generatedInduction.contains(region.induction)
+          ) || analog.contributions.exists(contribution =>
+            !contribution.generatedOwner.contains(region.path) ||
+              !contribution.generatedInduction.contains(region.induction)
           )
-          val transfers = snapshot.transferOperators.filter(operator =>
-            analog.expressions.exists(_.path == operator.path)
+        then
+          fail(
+            "NODAL-BRIDGE-043",
+            "generated continuous operator ownership is incomplete",
+            Some(analog.path)
           )
-          val noise = snapshot.noiseOperators.filter(operator =>
-            analog.expressions.exists(_.path == operator.path)
-          )
-          if (operators.isEmpty && waveforms.isEmpty && transfers.isEmpty && noise.isEmpty &&
-              analog.contributions.isEmpty) ||
-            operators.exists(operator =>
-              !operator.generatedOwner.contains(region.path) ||
-                !operator.generatedInduction.contains(region.induction)
-            ) ||
-            waveforms.exists(operator =>
-              !operator.generatedOwner.contains(region.path) ||
-                !operator.generatedInduction.contains(region.induction)
-            ) ||
-            transfers.exists(operator =>
-              !operator.generatedOwner.contains(region.path) ||
-                !operator.generatedInduction.contains(region.induction)
-            ) ||
-            noise.exists(operator =>
-              !operator.generatedOwner.contains(region.path) ||
-                !operator.generatedInduction.contains(region.induction)
-            ) || analog.contributions.exists(contribution =>
-              !contribution.generatedOwner.contains(region.path) ||
-                !contribution.generatedInduction.contains(region.induction)
-            )
-          then
-            fail(
-              "NODAL-BRIDGE-043",
-              "generated continuous operator ownership is incomplete",
-              Some(analog.path)
-            )
-          nested += renderAnalogRegion(
-            analog,
-            index,
-            declarationsByPath,
-            parameterSymbols,
-            accessBranches
-          )
+        nested += renderAnalogRegion(
+          analog,
+          index,
+          declarationsByPath,
+          parameterSymbols,
+          accessBranches
+        )
 
       generatedRegionsFor(module)
         .filter(_.parent.contains(region.path))

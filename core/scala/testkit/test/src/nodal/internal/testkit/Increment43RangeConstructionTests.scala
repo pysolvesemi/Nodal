@@ -812,7 +812,9 @@ object Increment43RangeConstructionTests extends TestSuite:
       assert(first.text.contains("upper = @lanes"))
       assert(first.text.indexOf("\"nodal.generate\"") < first.text.indexOf("\"nodal.node\""))
       val sourceMapStart = first.text.indexOf("nodal.bridge.source_map")
-      val sourceMapEnd = first.text.indexOf("nodal.bridge.analog_semantics", sourceMapStart)
+      val sourceMapEnd = first.text.indexOf("nodal.bridge.topology", sourceMapStart)
+      assert(sourceMapStart >= 0)
+      assert(sourceMapEnd > sourceMapStart)
       val sourceMap = first.text.substring(sourceMapStart, sourceMapEnd)
       val region = ConstructionKernel.inspect(new Increment43SymbolicGeneratedNode)
         .generatedRegions.head
@@ -832,7 +834,9 @@ object Increment43RangeConstructionTests extends TestSuite:
       assert(document.text.contains("effects = [\"topology\"]"))
       assert(!document.text.contains("effects = [\"generate\"]"))
       val sourceMapStart = document.text.indexOf("nodal.bridge.source_map")
-      val sourceMapEnd = document.text.indexOf("nodal.bridge.analog_semantics", sourceMapStart)
+      val sourceMapEnd = document.text.indexOf("nodal.bridge.topology", sourceMapStart)
+      assert(sourceMapStart >= 0)
+      assert(sourceMapEnd > sourceMapStart)
       val sourceMap = document.text.substring(sourceMapStart, sourceMapEnd)
       first.generatedRegions.foreach: region =>
         val regionMarker = s"semantic_path = \"${region.path}\""

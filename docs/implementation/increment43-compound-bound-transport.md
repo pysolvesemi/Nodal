@@ -612,3 +612,26 @@ Generated conservative connections and instances, shaped terminals, general
 slices, mixed procedural/event bodies and wider aliases remain unsupported.
 Independent simulator qualification and the F-048/F-049/F-052 handoff remain
 required. Every F-043 parent and descendant acceptance box remains open.
+
+## Peer generated analog-node branch checkpoint
+
+Two exactly-owned electrical declarations in the same direct generated body may
+now form one branch with both endpoints indexed by the canonical generated
+induction. Each declaration remains a separate target array and the resulting
+equation preserves the authored positive/negative endpoint order. This admits
+the legal direct peer topology without flattening the arrays, introducing an
+alias or creating per-use storage.
+
+The backend reuses the qualified node-array, branch, source-map and contribution
+renderers. Both endpoints must be known terminals; every generated endpoint must
+belong to the same generated body and exact induction, and all generated-node
+uses must remain direct owned branches. A branch that selects the same generated
+element at both endpoints, forged peer ownership or induction, deeper escape or
+missing contribution rejects before target publication. Public and native
+witnesses retain two source identities, deterministic IR/target output, exact
+indexed endpoint order and independent target reparse.
+
+Cross-range connections, generated instances, shaped terminals, general slices,
+mixed procedural/event bodies and wider aliases remain unsupported. Independent
+simulator qualification and the F-048/F-049/F-052 handoff remain required.
+Every F-043 parent and descendant acceptance box remains open.

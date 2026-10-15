@@ -1546,38 +1546,42 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
         return emitMappedFailure(branch, "NODAL-BACKEND-CAPABILITY-001",
                                  "generated analog-node branch ownership does not match its range");
 
-      Operation *selectedNode = nullptr;
-      bool nodeIsPositive = false;
+      Operation *positiveNode = nullptr;
+      Operation *negativeNode = nullptr;
       for (Operation *node : generatedNodes) {
         const bool positive = branch->getOperand(0) == node->getResult(0);
         const bool negative = branch->getOperand(1) == node->getResult(0);
         if (!positive && !negative)
           continue;
-        if (positive == negative || selectedNode)
+        if ((positive && positiveNode) || (negative && negativeNode))
           return emitMappedFailure(
               branch, "NODAL-BACKEND-CAPABILITY-001",
-              "generated analog-node branches require one unambiguous owned array element");
-        selectedNode = node;
-        nodeIsPositive = positive;
+              "generated analog-node branches require unambiguous owned array elements");
+        if (positive)
+          positiveNode = node;
+        if (negative)
+          negativeNode = node;
       }
-      if (!selectedNode)
+      if (!positiveNode && !negativeNode)
         return emitMappedFailure(
             branch, "NODAL-BACKEND-CAPABILITY-001",
-            "generated analog-node branch requires exactly one owned array element");
-      selectedNodes.insert(selectedNode->getResult(0));
-      Value rootTerminal = branch->getOperand(nodeIsPositive ? 1 : 0);
-      auto root = state.terminals.find(rootTerminal);
-      if (root == state.terminals.end() || llvm::any_of(generatedNodes, [&](Operation *node) {
-            return node->getResult(0) == rootTerminal;
-          }))
+            "generated analog-node branch requires at least one owned array element");
+      if (positiveNode && positiveNode == negativeNode)
         return emitMappedFailure(
             branch, "NODAL-BACKEND-CAPABILITY-001",
-            "generated analog-node branch requires one existing non-generated root terminal");
-      const std::string &indexedNode = state.terminals.find(selectedNode->getResult(0))->second;
+            "generated analog-node branch cannot select the same array element twice");
+      auto positive = state.terminals.find(branch->getOperand(0));
+      auto negative = state.terminals.find(branch->getOperand(1));
+      if (positive == state.terminals.end() || negative == state.terminals.end())
+        return emitMappedFailure(branch, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated analog-node branch requires only known terminals");
+      if (positiveNode)
+        selectedNodes.insert(positiveNode->getResult(0));
+      if (negativeNode)
+        selectedNodes.insert(negativeNode->getResult(0));
       if (!state.branches
-               .try_emplace(branch->getResult(0), nodeIsPositive
-                                                      ? std::make_pair(indexedNode, root->second)
-                                                      : std::make_pair(root->second, indexedNode))
+               .try_emplace(branch->getResult(0),
+                            std::make_pair(positive->second, negative->second))
                .second)
         return emitMappedFailure(branch, "NODAL-BACKEND-CAPABILITY-001",
                                  "generated analog-node branch result is duplicated");

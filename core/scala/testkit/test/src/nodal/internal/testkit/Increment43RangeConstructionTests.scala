@@ -76,6 +76,15 @@ final class Increment43SharedGeneratedNodeContributions extends Module:
       V(tap, p) <+ 1.0.V
       V(tap, n) <+ 2.0.V
 
+final class Increment43GeneratedNodePairContribution extends Module:
+  val lanes: Param[Integer] = param(3.integer, range = 2 to 5)
+
+  hdlRange(1, lanes): _ =>
+    val tap = node(Electrical)
+    val returnTap = node(Electrical)
+    analog:
+      V(tap, returnTap) <+ 1.0.V
+
 final class Increment43CompoundGeneratedNodeGroupContributions extends Module:
   val lanes: Param[Integer] = param(3.integer, range = 2 to 4)
   val extra: Param[Integer] = param(1.integer, range = 1 to 2)
@@ -1931,6 +1940,55 @@ object Increment43RangeConstructionTests extends TestSuite:
               _.trim == s"V($generatedName[generate_0_index], n) <+ 2;"
             ) == 1)
             assert(result.verilogA.linesIterator.count(_.contains("electrical ")) == 3)
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("two generated node arrays may form one direct owned branch"):
+      val snapshot = ConstructionKernel.inspect(new Increment43GeneratedNodePairContribution)
+      assert(
+        snapshot == ConstructionKernel.inspect(new Increment43GeneratedNodePairContribution)
+      )
+      assert(snapshot.generatedRegions.size == 1)
+      val region = snapshot.generatedRegions.head
+      assert(region.declarations.size == 2)
+      region.declarations.foreach: path =>
+        assert(snapshot.sourceMap.exists(_.semanticPath == path))
+      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
+      val declarationNames = region.declarations.map(_.split('.').last)
+      assert(declarationNames.count(_ == "tap") == 1)
+      val generatedName = declarationNames.find(_ != "tap").get
+      val first = ScalaToMlirBridge.lower(new Increment43GeneratedNodePairContribution)
+      assert(first == ScalaToMlirBridge.lower(new Increment43GeneratedNodePairContribution))
+      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
+      assert(first.text.sliding("\"nodal.branch\"".length).count(_ == "\"nodal.branch\"") == 1)
+      assert(
+        first.text.sliding("\"nodal.contribute\"".length).count(_ == "\"nodal.contribute\"") == 1
+      )
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            def compilePair() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43GeneratedNodePairContribution,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val result = compilePair()
+            assert(result == compilePair())
+            assert(result.verilogA.linesIterator.count(
+              _.trim ==
+                s"V(tap[generate_0_index], $generatedName[generate_0_index]) <+ 1;"
+            ) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains("electrical ")) == 2)
           finally delete(directory)
         case _ => assert(true)
 

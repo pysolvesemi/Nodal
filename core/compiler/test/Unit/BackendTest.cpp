@@ -1332,7 +1332,7 @@ int main() {
        {"valid-single", "valid-group", "valid-multi", "branch-owner", "source", "second-owner",
         "second-induction", "second-name", "second-source", "second-source-duplicate",
         "second-branch-owner", "shared-selection", "missing-second-contribution",
-        "duplicate-contribution-target", "crossed-branch", "body-shape"}) {
+        "duplicate-contribution-target", "generated-pair", "generated-self-branch", "body-shape"}) {
     auto mixed = parse(context, kGeneratedNodeContributionModule);
     if (!mixed)
       return fail("could not parse generated node contribution fixture");
@@ -1381,7 +1381,7 @@ int main() {
     const bool multi = mutation == "valid-multi" || mutation == "second-branch-owner" ||
                        mutation == "shared-selection" ||
                        mutation == "missing-second-contribution" ||
-                       mutation == "duplicate-contribution-target" || mutation == "crossed-branch";
+                       mutation == "duplicate-contribution-target" || mutation == "generated-pair";
     if (multi) {
       secondBranch = branch->clone();
       node->getBlock()->getOperations().insert(analog->getIterator(), secondBranch);
@@ -1393,7 +1393,7 @@ int main() {
       }
       if (mutation == "shared-selection")
         secondBranch->setOperand(0, node->getResult(0));
-      if (mutation == "crossed-branch")
+      if (mutation == "generated-pair")
         secondBranch->setOperand(1, node->getResult(0));
       if (mutation != "missing-second-contribution") {
         mlir::Operation *secondContribution = contribution->clone();
@@ -1403,6 +1403,8 @@ int main() {
                                               : secondBranch->getResult(0));
       }
     }
+    if (mutation == "generated-self-branch")
+      branch->setOperand(1, node->getResult(0));
     if (mutation == "body-shape")
       node->getBlock()->getOperations().insert(analog->getIterator(), branch->clone());
     std::string output = "sentinel";
@@ -1411,7 +1413,7 @@ int main() {
         mlir::succeeded(nodal::emitBackend(*mixed, nodal::BackendKind::VerilogA, stream));
     stream.flush();
     if (mutation != "valid-single" && mutation != "valid-group" && mutation != "valid-multi" &&
-        mutation != "shared-selection") {
+        mutation != "shared-selection" && mutation != "generated-pair") {
       if (emitted || output != "sentinel")
         return fail("invalid generated node contribution was accepted or published output");
       continue;
@@ -1437,6 +1439,10 @@ int main() {
           output.find(equation, first + equation.size()) == std::string::npos)
         return fail("shared generated node did not retain both direct branch contributions");
     }
+    if (mutation == "generated-pair" &&
+        output.find("V(returnTap[generate_0_index], tap[generate_0_index]) <+ 1;\n") ==
+            std::string::npos)
+      return fail("generated node pair lost its two indexed branch terminals");
     std::string target = output.substr(std::string("sentinel").size());
     if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
       return fail("generated node contribution failed independent target reparse");

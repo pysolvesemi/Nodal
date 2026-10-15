@@ -386,6 +386,22 @@ final class Increment43GeneratedConditionalContinueEventStorage extends Module:
               state := state + 29.0.V
           state := state + 30.0.V
 
+final class Increment43GeneratedConditionalBreakEventStorage extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val select = variable(Bool, false.B)
+      val iterations = variable(Integer, 1.integer)
+      val state = variable(Real, 0.0.V)
+      on(cross(1.0.V)):
+        analogLoop(iterations, maximumIterations = 2, minimumIterations = 1):
+          analogConditional:
+            analogWhen(select):
+              state := state + 31.0.V
+              analogBreak()
+            analogOtherwise:
+              state := state + 32.0.V
+          state := state + 33.0.V
+
 final class Increment43GeneratedConditionalScopeEventStorage extends Module:
   hdlRange(0, 2): _ =>
     analogProcedure:
@@ -2848,6 +2864,60 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(runtimeLoop >= 0 && conditional > runtimeLoop)
             assert(assignment > conditional && loopContinue > assignment)
             assert(otherwise > loopContinue && otherwiseAssignment > otherwise)
+            assert(trailingAssignment > otherwiseAssignment)
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("public generated event conditional-arm break retains authored control"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43GeneratedConditionalBreakEventStorage,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            val region = ConstructionKernel
+              .inspect(new Increment43GeneratedConditionalBreakEventStorage)
+              .generatedRegions
+              .head
+            for operation <- Vector(
+                "nodal.analog_variable",
+                "nodal.analog_variable_read",
+                "nodal.analog_assign"
+              )
+            do
+              val lines = result.mlir.linesIterator.filter(_.contains(s"\"$operation\"")).toVector
+              assert(lines.nonEmpty)
+              assert(lines.forall(_.contains(s"generated_owner = \"${region.path}\"")))
+              assert(lines.forall(_.contains(s"generated_induction = \"${region.induction}\"")))
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_loop\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_if\"")) == 1)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_scope\"")) == 0)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_continue\"")) == 0)
+            assert(result.mlir.linesIterator.count(_.contains("\"nodal.analog_break\"")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
+            assert(result.verilogA.linesIterator.count(_.contains("@(cross(1")) == 1)
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (event_")) == 1)
+            val runtimeLoop = result.verilogA.indexOf("for (event_")
+            val conditional = result.verilogA.indexOf("if (event_", runtimeLoop)
+            val assignment = result.verilogA.indexOf(" + 31.0", conditional)
+            val loopBreak = result.verilogA.indexOf("_break = 1;", assignment)
+            val otherwise = result.verilogA.indexOf("else begin", loopBreak)
+            val otherwiseAssignment = result.verilogA.indexOf(" + 32.0", otherwise)
+            val trailingAssignment = result.verilogA.indexOf(" + 33.0", otherwiseAssignment)
+            assert(runtimeLoop >= 0 && conditional > runtimeLoop)
+            assert(assignment > conditional && loopBreak > assignment)
+            assert(otherwise > loopBreak && otherwiseAssignment > otherwise)
             assert(trailingAssignment > otherwiseAssignment)
           finally delete(directory)
         case _ => assert(true)

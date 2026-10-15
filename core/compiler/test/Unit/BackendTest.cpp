@@ -1331,7 +1331,7 @@ int main() {
   for (llvm::StringRef mutation :
        {"valid-single", "valid-group", "valid-multi", "branch-owner", "source", "second-owner",
         "second-induction", "second-name", "second-source", "second-source-duplicate",
-        "second-branch-owner", "duplicate-selection", "missing-second-contribution",
+        "second-branch-owner", "shared-selection", "missing-second-contribution",
         "duplicate-contribution-target", "crossed-branch", "body-shape"}) {
     auto mixed = parse(context, kGeneratedNodeContributionModule);
     if (!mixed)
@@ -1379,7 +1379,7 @@ int main() {
       secondNode->setAttr("source_path", node->getAttr("source_path"));
     mlir::Operation *secondBranch = nullptr;
     const bool multi = mutation == "valid-multi" || mutation == "second-branch-owner" ||
-                       mutation == "duplicate-selection" ||
+                       mutation == "shared-selection" ||
                        mutation == "missing-second-contribution" ||
                        mutation == "duplicate-contribution-target" || mutation == "crossed-branch";
     if (multi) {
@@ -1391,7 +1391,7 @@ int main() {
         metadata.set("generated_owner", mlir::StringAttr::get(&context, "forged"));
         secondBranch->setAttr("metadata", metadata.getDictionary(&context));
       }
-      if (mutation == "duplicate-selection")
+      if (mutation == "shared-selection")
         secondBranch->setOperand(0, node->getResult(0));
       if (mutation == "crossed-branch")
         secondBranch->setOperand(1, node->getResult(0));
@@ -1410,7 +1410,8 @@ int main() {
     const bool emitted =
         mlir::succeeded(nodal::emitBackend(*mixed, nodal::BackendKind::VerilogA, stream));
     stream.flush();
-    if (mutation != "valid-single" && mutation != "valid-group" && mutation != "valid-multi") {
+    if (mutation != "valid-single" && mutation != "valid-group" && mutation != "valid-multi" &&
+        mutation != "shared-selection") {
       if (emitted || output != "sentinel")
         return fail("invalid generated node contribution was accepted or published output");
       continue;
@@ -1429,6 +1430,13 @@ int main() {
          output.find("V(returnTap[generate_0_index], p) <+ 1;\n") == std::string::npos ||
          output.find("V(tap[generate_0_index], p) <+ 1;\n") == std::string::npos))
       return fail("generated node-group contributions lost declaration or equation order");
+    if (mutation == "shared-selection") {
+      const std::string equation = "V(tap[generate_0_index], p) <+ 1;\n";
+      const auto first = output.find(equation);
+      if (first == std::string::npos ||
+          output.find(equation, first + equation.size()) == std::string::npos)
+        return fail("shared generated node did not retain both direct branch contributions");
+    }
     std::string target = output.substr(std::string("sentinel").size());
     if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
       return fail("generated node contribution failed independent target reparse");
@@ -5020,6 +5028,59 @@ int main() {
                                     "((COUNT + MISSING) - 1)");
   if (mlir::succeeded(nodal::reparseBackendTarget(invalidCompoundNodeTarget, *configuration)))
     return fail("undeclared compound generated node bound passed independent reparse");
+
+  std::string sharedGeneratedNodeSource = kCompoundGeneratedNodeContributionModule.str();
+  auto sharedBranch =
+      sharedGeneratedNodeSource.find("%return_tap_branch = \"nodal.branch\"(%return_tap, %p)");
+  if (sharedBranch == std::string::npos)
+    return fail("shared generated node branch mutation anchor missing");
+  sharedGeneratedNodeSource.replace(
+      sharedBranch, std::string("%return_tap_branch = \"nodal.branch\"(%return_tap, %p)").size(),
+      "%return_tap_branch = \"nodal.branch\"(%tap, %p)");
+  auto sharedGeneratedNode = parse(context, sharedGeneratedNodeSource);
+  if (!sharedGeneratedNode)
+    return fail("shared generated node branch fixture did not parse");
+  std::string sharedGeneratedNodeOutput;
+  llvm::raw_string_ostream sharedGeneratedNodeStream(sharedGeneratedNodeOutput);
+  if (mlir::failed(nodal::emitBackend(*sharedGeneratedNode, nodal::BackendKind::VerilogA,
+                                      sharedGeneratedNodeStream)))
+    return fail("shared generated node branch emission failed");
+  sharedGeneratedNodeStream.flush();
+  if (sharedGeneratedNodeOutput.find("V(tap[generate_0_index], p) <+ 1;\n") == std::string::npos ||
+      sharedGeneratedNodeOutput.find("V(tap[generate_0_index], p) <+ 2;\n") == std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(sharedGeneratedNodeOutput, *configuration)))
+    return fail("shared generated node branches lost their ordered target equations");
+  std::string repeatedSharedGeneratedNodeOutput;
+  llvm::raw_string_ostream repeatedSharedGeneratedNodeStream(repeatedSharedGeneratedNodeOutput);
+  if (mlir::failed(nodal::emitBackend(*sharedGeneratedNode, nodal::BackendKind::VerilogA,
+                                      repeatedSharedGeneratedNodeStream)))
+    return fail("shared generated node branch repeated emission failed");
+  repeatedSharedGeneratedNodeStream.flush();
+  if (sharedGeneratedNodeOutput != repeatedSharedGeneratedNodeOutput)
+    return fail("shared generated node branch emission is nondeterministic");
+
+  auto escapedGeneratedNode = parse(context, sharedGeneratedNodeSource);
+  if (!escapedGeneratedNode)
+    return fail("generated node escape mutation fixture did not parse");
+  mlir::Operation *escapedBranchTemplate = nullptr;
+  mlir::Operation *escapedNodeAnalog = nullptr;
+  escapedGeneratedNode->walk([&](mlir::Operation *operation) {
+    if (!escapedBranchTemplate && operation->getName().getStringRef() == "nodal.branch")
+      escapedBranchTemplate = operation;
+    if (!escapedNodeAnalog && operation->getName().getStringRef() == "nodal.analog")
+      escapedNodeAnalog = operation;
+  });
+  if (!escapedBranchTemplate || !escapedNodeAnalog)
+    return fail("generated node escape mutation anchor missing");
+  escapedNodeAnalog->getRegion(0).front().push_back(escapedBranchTemplate->clone());
+  std::string rejectedEscapedNode = "sentinel";
+  llvm::raw_string_ostream rejectedEscapedNodeStream(rejectedEscapedNode);
+  if (mlir::succeeded(nodal::emitBackend(*escapedGeneratedNode, nodal::BackendKind::VerilogA,
+                                         rejectedEscapedNodeStream)))
+    return fail("generated node non-branch escape passed backend verification");
+  rejectedEscapedNodeStream.flush();
+  if (rejectedEscapedNode != "sentinel")
+    return fail("generated node non-branch escape published partial output");
 
   RejectingReparseHooks rejectingHooks;
   std::string rejected = "sentinel";

@@ -589,3 +589,26 @@ slices, shaped terminals, generated connections or instances, mixed
 procedural/event storage, reverse ranges or wider generated bodies. Independent
 simulator qualification and the F-048/F-049/F-052 handoff remain required.
 Every F-043 parent and descendant acceptance box remains open.
+
+## Shared generated analog-node branch checkpoint
+
+One exactly-owned generated electrical declaration may now participate in more
+than one direct owned branch and additive contribution. The declaration still
+becomes one target array, while every authored branch retains its own root
+terminal, orientation and contribution order. This removes the earlier
+one-branch-per-node restriction without creating aliases, implicit connections,
+duplicate arrays or per-use storage.
+
+The backend validates every use of the generated node before rendering: all
+uses must be direct branches in the same generated body, each branch must select
+exactly one generated node plus one existing non-generated root terminal, and
+every branch must receive exactly one owned additive contribution. A selected
+node cannot escape through an access, nested region or unrelated operation.
+Public and native witnesses retain source identity, a single array declaration,
+two ordered equations, deterministic repeated output and independent target
+reparse; escape and partial-output negatives remain fail closed.
+
+Generated conservative connections and instances, shaped terminals, general
+slices, mixed procedural/event bodies and wider aliases remain unsupported.
+Independent simulator qualification and the F-048/F-049/F-052 handoff remain
+required. Every F-043 parent and descendant acceptance box remains open.

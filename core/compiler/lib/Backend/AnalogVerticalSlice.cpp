@@ -1523,6 +1523,14 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       state.terminals.try_emplace(node->getResult(0), indexedNode);
     }
     llvm::DenseSet<Value> selectedNodes;
+    for (Operation *node : generatedNodes) {
+      for (OpOperand &use : node->getResult(0).getUses()) {
+        if (!llvm::is_contained(generatedBranches, use.getOwner()) || use.getOperandNumber() > 1)
+          return emitMappedFailure(
+              node, "NODAL-BACKEND-CAPABILITY-001",
+              "generated analog-node arrays may escape only through direct owned branches");
+      }
+    }
     for (Operation *branch : generatedBranches) {
       auto branchMetadata = branch->getAttrOfType<DictionaryAttr>("metadata");
       auto branchOwner =
@@ -1545,11 +1553,10 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
         const bool negative = branch->getOperand(1) == node->getResult(0);
         if (!positive && !negative)
           continue;
-        if (positive == negative || selectedNode || !node->getResult(0).hasOneUse() ||
-            !selectedNodes.insert(node->getResult(0)).second)
+        if (positive == negative || selectedNode)
           return emitMappedFailure(
               branch, "NODAL-BACKEND-CAPABILITY-001",
-              "generated analog-node branches require distinct owned array elements");
+              "generated analog-node branches require one unambiguous owned array element");
         selectedNode = node;
         nodeIsPositive = positive;
       }
@@ -1557,6 +1564,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
         return emitMappedFailure(
             branch, "NODAL-BACKEND-CAPABILITY-001",
             "generated analog-node branch requires exactly one owned array element");
+      selectedNodes.insert(selectedNode->getResult(0));
       Value rootTerminal = branch->getOperand(nodeIsPositive ? 1 : 0);
       auto root = state.terminals.find(rootTerminal);
       if (root == state.terminals.end() || llvm::any_of(generatedNodes, [&](Operation *node) {

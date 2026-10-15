@@ -1539,7 +1539,11 @@ object Increment43RangeConstructionTests extends TestSuite:
       val region = snapshot.generatedRegions.head
       assert(region.lower == "1")
       assert(region.maximumTripCount == 4)
-      assert(region.declarations.map(_.split('.').last).toSet == Set("tap", "returnTap"))
+      val declarationNames = region.declarations.map(_.split('.').last)
+      assert(declarationNames.size == 2)
+      assert(declarationNames.count(_ == "tap") == 1)
+      val generatedName = declarationNames.find(_ != "tap").get
+      assert(generatedName.startsWith("analog_node_increment43_range_construction_tests_l31_"))
       region.declarations.foreach: path =>
         assert(snapshot.sourceMap.exists(_.semanticPath == path))
       assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
@@ -1569,7 +1573,8 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.contains("parameter integer lanes = 3 from [2:5];"))
             assert(
               result.verilogA.contains(
-                "  electrical returnTap[1:(lanes - 1)];\n  electrical tap[1:(lanes - 1)];"
+                s"  electrical $generatedName[1:(lanes - 1)];\n" +
+                  "  electrical tap[1:(lanes - 1)];"
               )
             )
             assert(

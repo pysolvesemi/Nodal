@@ -2737,6 +2737,7 @@ ${indent(body, 2)}
                 "metadata" -> bridgeMetadata(
                   declaration.path,
                   Vector(
+                    "allow_floating" -> boolean(true),
                     "declaration_kind" -> quoted(declaration.kind),
                     "generated_owner" -> quoted(region.path),
                     "induction" -> quoted(region.induction)

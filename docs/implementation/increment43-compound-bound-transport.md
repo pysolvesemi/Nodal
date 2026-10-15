@@ -427,3 +427,21 @@ syntax, general slices, l-value selection, implicit memories, eager unrolling,
 or wider generated operator admission. Legal analog arrays and their target
 layout remain required, and every F-043 parent and descendant checkbox remains
 open.
+
+## Generated analog-node array target checkpoint
+
+One generated-object profile now reaches a legal Verilog-A array layout. An
+`hdlRange` body containing exactly one electrical analog node, with a nonempty
+unit-step range and exact generated owner/induction identities, lowers to one
+electrical array whose declared indices are the authored half-open bounds. A
+symbolic upper bound remains a target parameter expression; the implementation
+does not evaluate its default, clone scalar nodes, or infer variable memory.
+
+Native validation rejects extra body operations, compound or non-unit bounds,
+non-electrical objects, missing source identity, and forged ownership before
+publishing target text. The independent target reparser validates both array
+bounds against the module's declared parameter namespace. A public Scala
+witness retains the `nodal.generate`/`nodal.node` source ownership and compiles
+to the single electrical array. General shaped terminals, slices, l-value
+selection, generated instances/connections, and mixed node/effect bodies remain
+unsupported; all F-043 parent and descendant acceptance boxes remain open.

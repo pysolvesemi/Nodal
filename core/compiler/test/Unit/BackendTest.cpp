@@ -106,6 +106,25 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedNodeArrayModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedNodeArray"}> ({
+  ^bb0:
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 3 : i64, step = 1 : i64, region_id = "GeneratedNodeArray.generate_0", induction_path = "GeneratedNodeArray.generate_0.index", metadata = {maximum_trip_count = 3 : i64}}> ({
+    ^bb0:
+      %tap = "nodal.node"() <{name = "tap", source_path = "GeneratedNodeArray.tap", generated_owner = "GeneratedNodeArray.generate_0", generated_induction = "GeneratedNodeArray.generate_0.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "GeneratedNodeArray.generate_0", induction = "GeneratedNodeArray.generate_0.index"}}> : () -> !nodal.terminal<"electrical">
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kGeneratedDdtContributionModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -1134,6 +1153,53 @@ int main() {
     if (mlir::succeeded(nodal::reparseBackendTarget(invalid, *configuration)))
       return fail("malformed generated target passed independent reparse");
   }
+
+  auto generatedNodeArray = parse(context, kGeneratedNodeArrayModule);
+  if (!generatedNodeArray)
+    return fail("could not parse the generated analog-node array fixture");
+  std::string generatedNodeArrayOutput;
+  llvm::raw_string_ostream generatedNodeArrayStream(generatedNodeArrayOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedNodeArray, nodal::BackendKind::VerilogA,
+                                      generatedNodeArrayStream)))
+    return fail("generated analog-node array emission failed");
+  generatedNodeArrayStream.flush();
+  if (generatedNodeArrayOutput.find("  electrical tap[0:(3 - 1)];\n") == std::string::npos ||
+      generatedNodeArrayOutput.find("genvar generate_0_index") != std::string::npos ||
+      generatedNodeArrayOutput.find("analog begin") != std::string::npos)
+    return fail("generated analog node was not retained as one legal electrical array");
+  if (mlir::failed(nodal::reparseBackendTarget(generatedNodeArrayOutput, *configuration)))
+    return fail("generated analog-node array failed independent target reparse");
+  for (const auto &mutation :
+       {std::make_pair("electrical tap[0:(3 - 1)];", "electrical tap[0:(3 && 1)];"),
+        std::make_pair("electrical tap[0:(3 - 1)];", "electrical tap[0:MISSING];")}) {
+    std::string invalid = generatedNodeArrayOutput;
+    auto position = invalid.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated analog-node array mutation anchor missing");
+    invalid.replace(position, std::string(mutation.first).size(), mutation.second);
+    if (mlir::succeeded(nodal::reparseBackendTarget(invalid, *configuration)))
+      return fail("malformed generated analog-node array passed independent reparse");
+  }
+  auto forgedGeneratedNodeArray = parse(context, kGeneratedNodeArrayModule);
+  if (!forgedGeneratedNodeArray)
+    return fail("could not parse the generated analog-node owner mutation fixture");
+  mlir::Operation *forgedGeneratedNode = nullptr;
+  forgedGeneratedNodeArray->walk([&](mlir::Operation *operation) {
+    if (!forgedGeneratedNode && operation->getName().getStringRef() == "nodal.node")
+      forgedGeneratedNode = operation;
+  });
+  if (!forgedGeneratedNode)
+    return fail("generated analog-node owner mutation fixture has no node");
+  forgedGeneratedNode->setAttr(
+      "generated_owner", mlir::StringAttr::get(&context, "GeneratedNodeArray.generate_forged"));
+  std::string forgedGeneratedNodeOutput = "sentinel";
+  llvm::raw_string_ostream forgedGeneratedNodeStream(forgedGeneratedNodeOutput);
+  if (mlir::succeeded(nodal::emitBackend(*forgedGeneratedNodeArray, nodal::BackendKind::VerilogA,
+                                         forgedGeneratedNodeStream)))
+    return fail("forged generated analog-node owner passed backend verification");
+  forgedGeneratedNodeStream.flush();
+  if (forgedGeneratedNodeOutput != "sentinel")
+    return fail("forged generated analog-node owner published partial output");
 
   auto generatedDdt = parse(context, kGeneratedDdtContributionModule);
   if (!generatedDdt)

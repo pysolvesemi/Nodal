@@ -694,6 +694,27 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
                                  "declarations collide in the target namespace");
     }
   }
+  bool validGeneratedNames = true;
+  for (Operation *generate : generates) {
+    generate->walk([&](Operation *operation) {
+      if (operation->getName().getStringRef() != "nodal.node")
+        return;
+      auto spelling = operation->getAttrOfType<StringAttr>("name");
+      if (!spelling || !isPortableVerilogIdentifier(spelling.getValue())) {
+        operation->emitError(
+            "[NODAL-BACKEND-NAMING-001] generated node requires a portable HDL identifier");
+        validGeneratedNames = false;
+        return;
+      }
+      if (!declarations.insert(spelling.getValue()).second) {
+        operation->emitError(
+            "[NODAL-BACKEND-NAMING-002] generated node collides in the target namespace");
+        validGeneratedNames = false;
+      }
+    });
+  }
+  if (!validGeneratedNames)
+    return failure();
   for (Operation &operation : region.front()) {
     if (operation.getName().getStringRef() != "nodal.analog_user_function")
       continue;
@@ -2474,6 +2495,57 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
   return success();
 }
 
+bool isGeneratedNodeArrayProfile(Operation *generate) {
+  Region &body = generate->getRegion(0);
+  return llvm::hasSingleElement(body) && llvm::hasSingleElement(body.front()) &&
+         body.front().front().getName().getStringRef() == "nodal.node";
+}
+
+LogicalResult renderGeneratedNodeArray(Operation *generate, llvm::raw_ostream &output) {
+  if (generate->getNumOperands() != 0)
+    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                             "generated analog-node arrays require direct range bounds");
+  auto lower = generatedTargetBound(generate, "lower");
+  auto upper = generatedTargetBound(generate, "upper");
+  auto step = generatedTargetBound(generate, "step");
+  if (failed(lower) || failed(upper) || failed(step))
+    return failure();
+  if (step->range.lower != 1 || step->range.upper != 1 || lower->range.upper >= upper->range.lower)
+    return emitMappedFailure(
+        generate, "NODAL-BACKEND-CAPABILITY-001",
+        "generated analog-node arrays require a nonempty unit-step range for every legal setting");
+
+  auto inductionPath = generate->getAttrOfType<StringAttr>("induction_path");
+  auto regionId = generate->getAttrOfType<StringAttr>("region_id");
+  Region &body = generate->getRegion(0);
+  if (!inductionPath || !regionId || !llvm::hasSingleElement(body) ||
+      !llvm::hasSingleElement(body.front()))
+    return emitMappedFailure(
+        generate, "NODAL-BACKEND-CAPABILITY-001",
+        "generated analog-node array requires canonical ownership and one node");
+  Operation *node = &body.front().front();
+  if (node->getName().getStringRef() != "nodal.node" || node->getNumResults() != 1)
+    return emitMappedFailure(node, "NODAL-BACKEND-CAPABILITY-001",
+                             "generated analog-node array body must contain exactly one node");
+  auto name = node->getAttrOfType<StringAttr>("name");
+  auto sourcePath = node->getAttrOfType<StringAttr>("source_path");
+  auto generatedOwner = node->getAttrOfType<StringAttr>("generated_owner");
+  auto generatedInduction = node->getAttrOfType<StringAttr>("generated_induction");
+  auto terminalType = llvm::dyn_cast<nodal::TerminalType>(node->getResult(0).getType());
+  if (!name || !sourcePath || sourcePath.getValue().trim().empty() ||
+      !isPortableVerilogIdentifier(name.getValue()) || !generatedOwner || !generatedInduction ||
+      generatedOwner.getValue() != regionId.getValue() ||
+      generatedInduction.getValue() != inductionPath.getValue() || !terminalType ||
+      terminalType.getDiscipline() != "electrical")
+    return emitMappedFailure(
+        node, "NODAL-BACKEND-CAPABILITY-001",
+        "generated analog-node array requires one electrical node with exact owner and induction");
+
+  output << "  electrical " << name.getValue() << "[" << lower->text << ":(" << upper->text
+         << " - 1)];\n";
+  return success();
+}
+
 LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output) {
   ModuleRenderState state;
   llvm::SmallVector<Operation *, 8> parameters;
@@ -2614,8 +2686,13 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
     if (!isPortableVerilogIdentifier(label) || !generatedLabels.insert(label).second)
       return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
                                "generated Verilog-A label is invalid or duplicated");
-    output << "  genvar " << induction.getValue() << ";\n";
+    if (!isGeneratedNodeArrayProfile(generate))
+      output << "  genvar " << induction.getValue() << ";\n";
   }
+
+  for (Operation *generate : generates)
+    if (isGeneratedNodeArrayProfile(generate) && failed(renderGeneratedNodeArray(generate, output)))
+      return failure();
 
   if (failed(renderHierarchy(definition, state, output)))
     return failure();
@@ -2694,7 +2771,8 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
         return failure();
   }
   for (Operation *generate : generates)
-    if (failed(renderGeneratedContribution(generate, state, output)))
+    if (!isGeneratedNodeArrayProfile(generate) &&
+        failed(renderGeneratedContribution(generate, state, output)))
       return failure();
   output << "endmodule\n";
   return success();
@@ -3243,6 +3321,24 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
         hierarchyModules[*currentHierarchyModule].ports.insert(name.trim().str());
         hierarchyModules[*currentHierarchyModule].nodes.insert(name.trim().str());
       }
+      continue;
+    }
+    if (line.starts_with("electrical ") && line.ends_with(";") && line.contains('[')) {
+      llvm::StringRef declaration = line.drop_front(line.find(' ') + 1).drop_back().trim();
+      size_t open = declaration.find('[');
+      size_t close = declaration.rfind(']');
+      if (open == llvm::StringRef::npos || close != declaration.size() - 1 || open == 0 ||
+          !isPortableVerilogIdentifier(declaration.take_front(open)) || !currentHierarchyModule)
+        return failure();
+      llvm::StringRef bounds = declaration.slice(open + 1, close);
+      auto range = bounds.split(':');
+      if (range.first.empty() || range.second.empty() || range.second.contains(':') ||
+          !validGeneratedBoundExpression(range.first.trim(),
+                                         hierarchyModules[*currentHierarchyModule].parameters) ||
+          !validGeneratedBoundExpression(range.second.trim(),
+                                         hierarchyModules[*currentHierarchyModule].parameters))
+        return failure();
+      hierarchyModules[*currentHierarchyModule].nodes.insert(declaration.take_front(open).str());
       continue;
     }
     if (line.starts_with("electrical ") && line.ends_with(";") &&

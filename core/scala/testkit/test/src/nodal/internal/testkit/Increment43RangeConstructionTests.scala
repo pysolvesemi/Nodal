@@ -1496,6 +1496,33 @@ object Increment43RangeConstructionTests extends TestSuite:
                 )
           finally delete(directory)
 
+    test("public symbolic generated analog node lowers to one target electrical array"):
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val result = ScalaToMlirBridge
+              .compileToVerilogA(
+                new Increment43SymbolicGeneratedNode,
+                Path.of(nodalc).toAbsolutePath,
+                Path.of(translator).toAbsolutePath,
+                directory,
+                Duration.ofSeconds(60)
+              )
+              .fold(
+                failure =>
+                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                identity
+              )
+            assert(result.mlir.contains("\"nodal.generate\""))
+            assert(result.mlir.contains("\"nodal.node\""))
+            assert(result.verilogA.contains("parameter integer lanes = 2 from [1:4];"))
+            assert(result.verilogA.contains("electrical tap[0:(lanes - 1)];"))
+            assert(!result.verilogA.contains("genvar generate_0_index"))
+            assert(!result.verilogA.contains("analog begin"))
+          finally delete(directory)
+        case _ => assert(true)
+
     test("public fixed generated contributions compile to one Verilog-A loop when configured"):
       (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
         case (Some(nodalc), Some(translator)) =>

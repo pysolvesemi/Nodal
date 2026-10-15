@@ -562,3 +562,30 @@ source-index selection, shaped terminals, generated connections or instances,
 mixed procedural/event storage and non-unit ranges remain unsupported.
 Independent simulator qualification and the F-048/F-049/F-052 handoff are still
 required. Every F-043 parent and descendant acceptance box remains open.
+
+## Strided generated analog-node source-index checkpoint
+
+The qualified direct generated-node contribution profile now accepts a
+provably positive non-unit `hdlRange` step without adding a slice or array API.
+The authored induction remains the source index and continues to drive the
+target loop. Because Verilog-A electrical arrays have contiguous declared
+ranges, the backend derives one compact zero-based target index as
+`(induction - lower) / step` and a ceiling-divided trip-count bound. Each legal
+source iteration therefore owns exactly one target array element; skipped source
+indices do not create extra floating nodes.
+
+Unit-step output remains byte-compatible and keeps the authored array bounds.
+The strided path reuses the existing finite Integer-bound analysis, target
+expression grammar, node-array renderer and exact generated owner/induction
+checks. It neither substitutes parameter defaults nor unrolls lanes. Native and
+configured public witnesses cover a nonzero lower bound, symbolic upper bound,
+two selected electrical arrays, ordered mapped contributions, repeated
+deterministic output and independent target reparse. A zero or potentially
+nonpositive step rejects before any target text is published.
+
+This is source-index selection for the existing direct generated electrical
+node profile only. It does not introduce general shaped-value indexing or
+slices, shaped terminals, generated connections or instances, mixed
+procedural/event storage, reverse ranges or wider generated bodies. Independent
+simulator qualification and the F-048/F-049/F-052 handoff remain required.
+Every F-043 parent and descendant acceptance box remains open.

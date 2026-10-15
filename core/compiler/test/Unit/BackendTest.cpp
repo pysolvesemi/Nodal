@@ -1441,6 +1441,60 @@ int main() {
       return fail("generated node contribution emission is nondeterministic");
   }
 
+  std::string stridedGeneratedNodeSource = kGeneratedNodeContributionModule.str();
+  auto stridedRange =
+      stridedGeneratedNodeSource.find("lower = 0 : i64, upper = 3 : i64, step = 1 : i64");
+  if (stridedRange == std::string::npos)
+    return fail("strided generated node range mutation anchor missing");
+  stridedGeneratedNodeSource.replace(
+      stridedRange, std::string("lower = 0 : i64, upper = 3 : i64, step = 1 : i64").size(),
+      "lower = 1 : i64, upper = 7 : i64, step = 2 : i64");
+  auto stridedGeneratedNode = parse(context, stridedGeneratedNodeSource);
+  if (!stridedGeneratedNode)
+    return fail("could not parse the strided generated analog-node fixture");
+  std::string stridedGeneratedNodeOutput;
+  llvm::raw_string_ostream stridedGeneratedNodeStream(stridedGeneratedNodeOutput);
+  if (mlir::failed(nodal::emitBackend(*stridedGeneratedNode, nodal::BackendKind::VerilogA,
+                                      stridedGeneratedNodeStream)))
+    return fail("strided generated analog-node emission failed");
+  stridedGeneratedNodeStream.flush();
+  if (stridedGeneratedNodeOutput.find("  electrical tap[0:(((((7 - 1) + 2) - 1) / 2) - 1)];\n") ==
+          std::string::npos ||
+      stridedGeneratedNodeOutput.find("for (generate_0_index = 1; generate_0_index < 7; "
+                                      "generate_0_index = generate_0_index + 2)") ==
+          std::string::npos ||
+      stridedGeneratedNodeOutput.find("V(tap[((generate_0_index - 1) / 2)], p) <+ 1;\n") ==
+          std::string::npos)
+    return fail("strided generated node lost compact array or source-index selection");
+  if (mlir::failed(nodal::reparseBackendTarget(stridedGeneratedNodeOutput, *configuration)))
+    return fail("strided generated analog-node target failed independent reparse");
+  std::string repeatedStridedGeneratedNodeOutput;
+  llvm::raw_string_ostream repeatedStridedGeneratedNodeStream(repeatedStridedGeneratedNodeOutput);
+  if (mlir::failed(nodal::emitBackend(*stridedGeneratedNode, nodal::BackendKind::VerilogA,
+                                      repeatedStridedGeneratedNodeStream)))
+    return fail("strided generated analog-node repeated emission failed");
+  repeatedStridedGeneratedNodeStream.flush();
+  if (stridedGeneratedNodeOutput != repeatedStridedGeneratedNodeOutput)
+    return fail("strided generated analog-node emission is nondeterministic");
+
+  std::string zeroStepGeneratedNodeSource = stridedGeneratedNodeSource;
+  auto zeroStep = zeroStepGeneratedNodeSource.find("step = 2 : i64");
+  if (zeroStep == std::string::npos)
+    return fail("zero-step generated node mutation anchor missing");
+  zeroStepGeneratedNodeSource.replace(zeroStep, std::string("step = 2 : i64").size(),
+                                      "step = 0 : i64");
+  auto zeroStepGeneratedNode = parse(context, zeroStepGeneratedNodeSource);
+  if (zeroStepGeneratedNode) {
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*zeroStepGeneratedNode, nodal::BackendKind::VerilogA,
+                                           rejectedStream)))
+      return fail("zero-step generated analog-node source passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("zero-step generated analog-node source published partial output");
+  }
+
   auto generatedDdt = parse(context, kGeneratedDdtContributionModule);
   if (!generatedDdt)
     return fail("could not parse the generated ddt contribution fixture");

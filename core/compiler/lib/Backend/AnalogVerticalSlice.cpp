@@ -1225,6 +1225,26 @@ struct GeneratedTargetBound {
   nodal::ParameterIntegerBounds range;
 };
 
+struct GeneratedNodeArrayLayout {
+  std::string lower;
+  std::string upper;
+  std::string index;
+};
+
+GeneratedNodeArrayLayout generatedNodeArrayLayout(const GeneratedTargetBound &lower,
+                                                  const GeneratedTargetBound &upper,
+                                                  const GeneratedTargetBound &step,
+                                                  llvm::StringRef induction) {
+  if (step.range.lower == 1 && step.range.upper == 1)
+    return {lower.text, (llvm::Twine("(") + upper.text + " - 1)").str(), induction.str()};
+
+  const std::string extent = (llvm::Twine("(") + upper.text + " - " + lower.text + ")").str();
+  const std::string rounded = (llvm::Twine("((") + extent + " + " + step.text + ") - 1)").str();
+  const std::string count = (llvm::Twine("(") + rounded + " / " + step.text + ")").str();
+  return {"0", (llvm::Twine("(") + count + " - 1)").str(),
+          (llvm::Twine("((") + induction + " - " + lower.text + ") / " + step.text + ")").str()};
+}
+
 FailureOr<GeneratedTargetBound> generatedTargetBound(Operation *generate, llvm::StringRef name) {
   Attribute attribute = generate->getAttr(name);
   if (auto value = llvm::dyn_cast_or_null<IntegerAttr>(attribute)) {
@@ -1471,11 +1491,12 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       ++operation;
     }
     analog = &body.front().back();
-    if (step->range.lower != 1 || step->range.upper != 1 ||
-        lower->range.upper >= upper->range.lower)
+    if (step->range.lower <= 0 || lower->range.upper >= upper->range.lower)
       return emitMappedFailure(
           generate, "NODAL-BACKEND-CAPABILITY-001",
-          "generated analog-node contribution requires a nonempty unit-step range");
+          "generated analog-node contribution requires a nonempty positive-step range");
+    const GeneratedNodeArrayLayout layout =
+        generatedNodeArrayLayout(*lower, *upper, *step, induction.getValue());
     llvm::StringSet<> nodeNames;
     llvm::StringSet<> sourcePaths;
     for (Operation *node : generatedNodes) {
@@ -1498,7 +1519,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             "generated analog-node contribution requires exactly-owned electrical nodes with "
             "unique names and source identities");
       const std::string indexedNode =
-          (llvm::Twine(nodeName.getValue()) + "[" + induction.getValue() + "]").str();
+          (llvm::Twine(nodeName.getValue()) + "[" + layout.index + "]").str();
       state.terminals.try_emplace(node->getResult(0), indexedNode);
     }
     llvm::DenseSet<Value> selectedNodes;
@@ -2674,10 +2695,13 @@ LogicalResult renderGeneratedNodeArray(Operation *generate, llvm::raw_ostream &o
                        : generatedTargetBound(generate, "step");
   if (failed(lower) || failed(upper) || failed(step))
     return failure();
-  if (step->range.lower != 1 || step->range.upper != 1 || lower->range.upper >= upper->range.lower)
+  if (step->range.lower <= 0 || lower->range.upper >= upper->range.lower)
     return emitMappedFailure(
         generate, "NODAL-BACKEND-CAPABILITY-001",
-        "generated analog-node arrays require a nonempty unit-step range for every legal setting");
+        "generated analog-node arrays require a nonempty positive-step range for every legal "
+        "setting");
+
+  const GeneratedNodeArrayLayout layout = generatedNodeArrayLayout(*lower, *upper, *step, "");
 
   auto inductionPath = generate->getAttrOfType<StringAttr>("induction_path");
   auto regionId = generate->getAttrOfType<StringAttr>("region_id");
@@ -2710,8 +2734,8 @@ LogicalResult renderGeneratedNodeArray(Operation *generate, llvm::raw_ostream &o
           "generated analog-node array requires an electrical node with exact owner, induction, "
           "and unique source identity");
 
-    output << "  electrical " << name.getValue() << "[" << lower->text << ":(" << upper->text
-           << " - 1)];\n";
+    output << "  electrical " << name.getValue() << "[" << layout.lower << ":" << layout.upper
+           << "];\n";
   }
   return success();
 }

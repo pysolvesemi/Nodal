@@ -78,6 +78,17 @@ final class Increment43CompoundGeneratedNodeGroupContributions extends Module:
       V(tap, p) <+ 1.0.V
       V(returnTap, p) <+ 2.0.V
 
+final class Increment43StridedGeneratedNodeGroupContributions extends Module:
+  val lanes: Param[Integer] = param(7.integer, range = 6 to 10)
+  val p = inout(Electrical)
+
+  hdlRange(1, lanes, 2): _ =>
+    val tap = node(Electrical)
+    val returnTap = node(Electrical)
+    analog:
+      V(tap, p) <+ 1.0.V
+      V(returnTap, p) <+ 2.0.V
+
 final class Increment43MissingRange extends Module:
   val lanes: Param[Integer] = param(2.integer)
 
@@ -1860,6 +1871,77 @@ object Increment43RangeConstructionTests extends TestSuite:
             ) == 1)
             assert(result.verilogA.linesIterator.count(
               _.trim == s"V($generatedName[generate_0_index], p) <+ 2;"
+            ) == 1)
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("strided generated node groups retain compact source-index selection"):
+      val snapshot =
+        ConstructionKernel.inspect(new Increment43StridedGeneratedNodeGroupContributions)
+      assert(
+        snapshot ==
+          ConstructionKernel.inspect(new Increment43StridedGeneratedNodeGroupContributions)
+      )
+      assert(snapshot.generatedRegions.size == 1)
+      val region = snapshot.generatedRegions.head
+      assert(region.lower == "1")
+      assert(region.step == "2")
+      assert(region.declarations.size == 2)
+      region.declarations.foreach: path =>
+        assert(snapshot.sourceMap.exists(_.semanticPath == path))
+      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
+      val declarationNames = region.declarations.map(_.split('.').last)
+      assert(declarationNames.count(_ == "tap") == 1)
+      val generatedName = declarationNames.find(_ != "tap").get
+      val first = ScalaToMlirBridge.lower(new Increment43StridedGeneratedNodeGroupContributions)
+      assert(
+        first == ScalaToMlirBridge.lower(new Increment43StridedGeneratedNodeGroupContributions)
+      )
+      assert(first.text.contains("step = 2 : i64"))
+      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
+      assert(first.text.sliding("\"nodal.branch\"".length).count(_ == "\"nodal.branch\"") == 2)
+      assert(
+        first.text.sliding("\"nodal.contribute\"".length).count(_ == "\"nodal.contribute\"") == 2
+      )
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            def compileGroup() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43StridedGeneratedNodeGroupContributions,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val result = compileGroup()
+            assert(result == compileGroup())
+            val upper = "(((((lanes - 1) + 2) - 1) / 2) - 1)"
+            assert(
+              result.verilogA.contains(
+                s"  electrical $generatedName[0:$upper];\n" +
+                  s"  electrical tap[0:$upper];"
+              )
+            )
+            assert(
+              result.verilogA.contains(
+                "for (generate_0_index = 1; generate_0_index < lanes; " +
+                  "generate_0_index = generate_0_index + 2)"
+              )
+            )
+            val mapped = "((generate_0_index - 1) / 2)"
+            assert(result.verilogA.linesIterator.count(
+              _.trim == s"V(tap[$mapped], p) <+ 1;"
+            ) == 1)
+            assert(result.verilogA.linesIterator.count(
+              _.trim == s"V($generatedName[$mapped], p) <+ 2;"
             ) == 1)
           finally delete(directory)
         case _ => assert(true)

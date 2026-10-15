@@ -2497,8 +2497,10 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
 
 bool isGeneratedNodeArrayProfile(Operation *generate) {
   Region &body = generate->getRegion(0);
-  return llvm::hasSingleElement(body) && llvm::hasSingleElement(body.front()) &&
-         body.front().front().getName().getStringRef() == "nodal.node";
+  return llvm::hasSingleElement(body) && !body.front().empty() &&
+         llvm::all_of(body.front(), [](Operation &operation) {
+           return operation.getName().getStringRef() == "nodal.node";
+         });
 }
 
 LogicalResult renderGeneratedNodeArray(Operation *generate, llvm::raw_ostream &output) {
@@ -2518,31 +2520,32 @@ LogicalResult renderGeneratedNodeArray(Operation *generate, llvm::raw_ostream &o
   auto inductionPath = generate->getAttrOfType<StringAttr>("induction_path");
   auto regionId = generate->getAttrOfType<StringAttr>("region_id");
   Region &body = generate->getRegion(0);
-  if (!inductionPath || !regionId || !llvm::hasSingleElement(body) ||
-      !llvm::hasSingleElement(body.front()))
+  if (!inductionPath || !regionId || !isGeneratedNodeArrayProfile(generate))
     return emitMappedFailure(
         generate, "NODAL-BACKEND-CAPABILITY-001",
-        "generated analog-node array requires canonical ownership and one node");
-  Operation *node = &body.front().front();
-  if (node->getName().getStringRef() != "nodal.node" || node->getNumResults() != 1)
-    return emitMappedFailure(node, "NODAL-BACKEND-CAPABILITY-001",
-                             "generated analog-node array body must contain exactly one node");
-  auto name = node->getAttrOfType<StringAttr>("name");
-  auto sourcePath = node->getAttrOfType<StringAttr>("source_path");
-  auto generatedOwner = node->getAttrOfType<StringAttr>("generated_owner");
-  auto generatedInduction = node->getAttrOfType<StringAttr>("generated_induction");
-  auto terminalType = llvm::dyn_cast<nodal::TerminalType>(node->getResult(0).getType());
-  if (!name || !sourcePath || sourcePath.getValue().trim().empty() ||
-      !isPortableVerilogIdentifier(name.getValue()) || !generatedOwner || !generatedInduction ||
-      generatedOwner.getValue() != regionId.getValue() ||
-      generatedInduction.getValue() != inductionPath.getValue() || !terminalType ||
-      terminalType.getDiscipline() != "electrical")
-    return emitMappedFailure(
-        node, "NODAL-BACKEND-CAPABILITY-001",
-        "generated analog-node array requires one electrical node with exact owner and induction");
+        "generated analog-node arrays require canonical ownership and a nonempty node-only body");
+  for (Operation &operation : body.front()) {
+    Operation *node = &operation;
+    if (node->getNumResults() != 1)
+      return emitMappedFailure(node, "NODAL-BACKEND-CAPABILITY-001",
+                               "generated analog-node array requires one terminal per declaration");
+    auto name = node->getAttrOfType<StringAttr>("name");
+    auto sourcePath = node->getAttrOfType<StringAttr>("source_path");
+    auto generatedOwner = node->getAttrOfType<StringAttr>("generated_owner");
+    auto generatedInduction = node->getAttrOfType<StringAttr>("generated_induction");
+    auto terminalType = llvm::dyn_cast<nodal::TerminalType>(node->getResult(0).getType());
+    if (!name || !sourcePath || sourcePath.getValue().trim().empty() ||
+        !isPortableVerilogIdentifier(name.getValue()) || !generatedOwner || !generatedInduction ||
+        generatedOwner.getValue() != regionId.getValue() ||
+        generatedInduction.getValue() != inductionPath.getValue() || !terminalType ||
+        terminalType.getDiscipline() != "electrical")
+      return emitMappedFailure(
+          node, "NODAL-BACKEND-CAPABILITY-001",
+          "generated analog-node array requires an electrical node with exact owner and induction");
 
-  output << "  electrical " << name.getValue() << "[" << lower->text << ":(" << upper->text
-         << " - 1)];\n";
+    output << "  electrical " << name.getValue() << "[" << lower->text << ":(" << upper->text
+           << " - 1)];\n";
+  }
   return success();
 }
 

@@ -431,13 +431,13 @@ open.
 ## Generated analog-node array target checkpoint
 
 One generated-object profile now reaches a legal Verilog-A array layout. An
-`hdlRange` body containing exactly one electrical analog node, with a nonempty
+`hdlRange` body containing one or more electrical analog nodes, with a nonempty
 unit-step range and exact generated owner/induction identities, lowers to one
-electrical array whose declared indices are the authored half-open bounds. A
+electrical array per declaration whose indices are the authored half-open bounds. A
 symbolic upper bound remains a target parameter expression; the implementation
 does not evaluate its default, clone scalar nodes, or infer variable memory.
 
-Native validation rejects extra body operations, compound or non-unit bounds,
+Native validation rejects non-node body operations, compound or non-unit bounds,
 non-electrical objects, missing source identity, and forged ownership before
 publishing target text. The independent target reparser validates both array
 bounds against the module's declared parameter namespace. A public Scala
@@ -445,3 +445,16 @@ witness retains the `nodal.generate`/`nodal.node` source ownership and compiles
 to the single electrical array. General shaped terminals, slices, l-value
 selection, generated instances/connections, and mixed node/effect bodies remain
 unsupported; all F-043 parent and descendant acceptance boxes remain open.
+
+The node-group extension reuses this renderer and the existing module namespace
+validator. It retains every declaration's canonical source path and the shared
+region/induction identity; no additional layout registry or per-lane expansion
+is introduced. Each node is validated independently, including later nodes in
+the body. Native witnesses reject a forged second owner or induction, duplicate
+target name and missing second source path without publishing partial output.
+The public two-node witness uses a nonzero lower bound and a symbolic upper
+envelope, checking stable source identities and repeated identical IR/target
+emission. Native body order is preserved; public declarations retain the bridge's
+existing canonical source-path order. Work and output grow with declaration
+count, not the parameter's lane count. This is a compiler-only checkpoint; the
+existing internal target reparse is not independent simulator qualification.

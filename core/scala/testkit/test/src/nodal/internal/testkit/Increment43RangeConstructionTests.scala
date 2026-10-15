@@ -25,6 +25,15 @@ final class Increment43LiteralGeneratedNode extends Module:
     val _ = tap
     ()
 
+final class Increment43SymbolicGeneratedNodeGroup extends Module:
+  val lanes: Param[Integer] = param(3.integer, range = 2 to 5)
+
+  hdlRange(1, lanes): _ =>
+    val tap = node(Electrical)
+    val returnTap = node(Electrical)
+    val _ = (tap, returnTap)
+    ()
+
 final class Increment43MissingRange extends Module:
   val lanes: Param[Integer] = param(2.integer)
 
@@ -1519,6 +1528,55 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.contains("parameter integer lanes = 2 from [1:4];"))
             assert(result.verilogA.contains("electrical tap[0:(lanes - 1)];"))
             assert(!result.verilogA.contains("genvar generate_0_index"))
+            assert(!result.verilogA.contains("analog begin"))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("generated node groups retain separate arrays and shared symbolic index identity"):
+      val snapshot = ConstructionKernel.inspect(new Increment43SymbolicGeneratedNodeGroup)
+      assert(snapshot == ConstructionKernel.inspect(new Increment43SymbolicGeneratedNodeGroup))
+      assert(snapshot.generatedRegions.size == 1)
+      val region = snapshot.generatedRegions.head
+      assert(region.lower == "1")
+      assert(region.maximumTripCount == 4)
+      assert(region.declarations.map(_.split('.').last).toSet == Set("tap", "returnTap"))
+      region.declarations.foreach: path =>
+        assert(snapshot.sourceMap.exists(_.semanticPath == path))
+      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
+      val first = ScalaToMlirBridge.lower(new Increment43SymbolicGeneratedNodeGroup)
+      assert(first == ScalaToMlirBridge.lower(new Increment43SymbolicGeneratedNodeGroup))
+      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            def compileGroup() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43SymbolicGeneratedNodeGroup,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val result = compileGroup()
+            assert(result == compileGroup())
+            assert(result.verilogA.contains("parameter integer lanes = 3 from [2:5];"))
+            assert(
+              result.verilogA.contains(
+                "  electrical returnTap[1:(lanes - 1)];\n  electrical tap[1:(lanes - 1)];"
+              )
+            )
+            assert(
+              result.mlir.sliding("\"nodal.generate\"".length).count(_ == "\"nodal.generate\"") == 1
+            )
+            assert(result.mlir.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
+            assert(!result.verilogA.contains("genvar"))
             assert(!result.verilogA.contains("analog begin"))
           finally delete(directory)
         case _ => assert(true)

@@ -1201,6 +1201,58 @@ int main() {
   if (forgedGeneratedNodeOutput != "sentinel")
     return fail("forged generated analog-node owner published partial output");
 
+  for (llvm::StringRef mutation : {"valid", "owner", "induction", "name", "source"}) {
+    auto group = parse(context, kGeneratedNodeArrayModule);
+    if (!group)
+      return fail("could not parse generated node group fixture");
+    mlir::Operation *firstNode = nullptr;
+    group->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.node")
+        firstNode = operation;
+    });
+    if (!firstNode)
+      return fail("generated node group fixture has no first node");
+    mlir::Operation *secondNode = firstNode->clone();
+    firstNode->getBlock()->push_back(secondNode);
+    secondNode->setAttr("name", mlir::StringAttr::get(&context, "returnTap"));
+    secondNode->setAttr("source_path",
+                        mlir::StringAttr::get(&context, "GeneratedNodeArray.returnTap"));
+    if (mutation == "owner")
+      secondNode->setAttr("generated_owner", mlir::StringAttr::get(&context, "forged"));
+    if (mutation == "induction")
+      secondNode->setAttr("generated_induction", mlir::StringAttr::get(&context, "forged.index"));
+    if (mutation == "name")
+      secondNode->setAttr("name", firstNode->getAttr("name"));
+    if (mutation == "source")
+      secondNode->setAttr("source_path", mlir::StringAttr::get(&context, ""));
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool emitted =
+        mlir::succeeded(nodal::emitBackend(*group, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (emitted || output != "sentinel")
+        return fail("invalid second generated node was accepted or published partial output");
+      continue;
+    }
+    if (!emitted ||
+        output.find("  electrical tap[0:(3 - 1)];\n"
+                    "  electrical returnTap[0:(3 - 1)];\n") == std::string::npos ||
+        output.find("genvar") != std::string::npos ||
+        output.find("analog begin") != std::string::npos)
+      return fail("generated node group did not preserve separate arrays and declaration order");
+    std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("generated node group failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*group, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("generated node group repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("generated node group emission is nondeterministic");
+  }
+
   auto generatedDdt = parse(context, kGeneratedDdtContributionModule);
   if (!generatedDdt)
     return fail("could not parse the generated ddt contribution fixture");

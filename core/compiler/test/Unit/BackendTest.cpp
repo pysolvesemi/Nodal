@@ -125,6 +125,32 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedNodeContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedNodeContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 3 : i64, step = 1 : i64, region_id = "GeneratedNodeContribution.generate_0", induction_path = "GeneratedNodeContribution.generate_0.index", metadata = {maximum_trip_count = 3 : i64}}> ({
+    ^bb0:
+      %tap = "nodal.node"() <{name = "tap", source_path = "GeneratedNodeContribution.tap", generated_owner = "GeneratedNodeContribution.generate_0", generated_induction = "GeneratedNodeContribution.generate_0.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "GeneratedNodeContribution.generate_0", induction = "GeneratedNodeContribution.generate_0.index"}}> : () -> !nodal.terminal<"electrical">
+      %branch = "nodal.branch"(%tap, %p) <{metadata = {generated_owner = "GeneratedNodeContribution.generate_0", generated_induction = "GeneratedNodeContribution.generate_0.index"}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+      "nodal.analog"() <{generated_owner = "GeneratedNodeContribution.generate_0", generated_induction = "GeneratedNodeContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %potential = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        "nodal.contribute"(%branch, %potential) <{kind = "potential", generated_owner = "GeneratedNodeContribution.generate_0", generated_induction = "GeneratedNodeContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kGeneratedDdtContributionModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -1251,6 +1277,60 @@ int main() {
     repeatedStream.flush();
     if (target != repeated)
       return fail("generated node group emission is nondeterministic");
+  }
+
+  for (llvm::StringRef mutation : {"valid", "branch-owner", "source", "body-shape"}) {
+    auto mixed = parse(context, kGeneratedNodeContributionModule);
+    if (!mixed)
+      return fail("could not parse generated node contribution fixture");
+    mlir::Operation *node = nullptr;
+    mlir::Operation *branch = nullptr;
+    mixed->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.node")
+        node = operation;
+      if (operation->getName().getStringRef() == "nodal.branch")
+        branch = operation;
+    });
+    if (!node || !branch)
+      return fail("generated node contribution fixture lost its direct topology");
+    if (mutation == "branch-owner") {
+      mlir::NamedAttrList metadata(branch->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set("generated_owner", mlir::StringAttr::get(&context, "forged"));
+      branch->setAttr("metadata", metadata.getDictionary(&context));
+    }
+    if (mutation == "source")
+      node->setAttr("source_path", mlir::StringAttr::get(&context, ""));
+    if (mutation == "body-shape") {
+      mlir::Operation *extra = node->clone();
+      extra->setAttr("name", mlir::StringAttr::get(&context, "extraTap"));
+      extra->setAttr("source_path",
+                     mlir::StringAttr::get(&context, "GeneratedNodeContribution.extraTap"));
+      node->getBlock()->getOperations().insert(std::next(node->getIterator()), extra);
+    }
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool emitted =
+        mlir::succeeded(nodal::emitBackend(*mixed, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (emitted || output != "sentinel")
+        return fail("invalid generated node contribution was accepted or published output");
+      continue;
+    }
+    if (!emitted || output.find("  electrical tap[0:(3 - 1)];\n") == std::string::npos ||
+        output.find("  genvar generate_0_index;\n") == std::string::npos ||
+        output.find("V(tap[generate_0_index], p) <+ 1;\n") == std::string::npos)
+      return fail("generated node contribution lost its array, index, or equation");
+    std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("generated node contribution failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*mixed, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("generated node contribution repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("generated node contribution emission is nondeterministic");
   }
 
   auto generatedDdt = parse(context, kGeneratedDdtContributionModule);

@@ -1430,10 +1430,10 @@ ${indent(body, 2)}
               )
 
       val accessBranches = mutable.LinkedHashMap.empty[String, (String, String)]
-      val accessExpressions = analogRegionsFor(module).flatMap(_.expressions)
-        .filter(expression =>
-          expression.operation == "potential_access" || expression.operation == "flow_access"
-        )
+      val accessExpressions = analogRegionsFor(module).flatMap(_.expressions).filter(expression =>
+        (expression.operation == "potential_access" || expression.operation == "flow_access") &&
+          expression.operands.forall(values.contains)
+      )
       val branchKeys = accessExpressions.map: expression =>
         if expression.operands.size != 2 then
           fail(
@@ -1496,7 +1496,8 @@ ${indent(body, 2)}
             generatedStatic,
             generatedStaticValues,
             () => allocateGeneratedStaticValue(),
-            accessBranches
+            accessBranches,
+            values.toMap
           )
         )
       body ++= generatedStatic
@@ -1739,7 +1740,11 @@ ${indent(body, 2)}
         val result = s"%analog_${regionIndex}_expr_$index"
         val metadata = bridgeMetadata(
           expression.path,
-          expression.unit.toVector.map(unit => "unit" -> quoted(unit))
+          expression.unit.toVector.map(unit => "unit" -> quoted(unit)) ++
+            region.generatedOwner.toVector.map(owner => "generated_owner" -> quoted(owner)) ++
+            region.generatedInduction.toVector.map(induction =>
+              "generated_induction" -> quoted(induction)
+            )
         )
         expression.operation match
           case "real_literal" =>
@@ -2708,9 +2713,11 @@ ${indent(body, 2)}
         generatedStatic: mutable.ArrayBuffer[String],
         generatedStaticValues: mutable.LinkedHashMap[String, (String, String)],
         allocateGeneratedStaticValue: () => String,
-        accessBranches: mutable.LinkedHashMap[String, (String, String)]
+        accessBranches: mutable.LinkedHashMap[String, (String, String)],
+        enclosingValues: Map[String, (String, String)]
     ): String =
       val nested = mutable.ArrayBuffer.empty[String]
+      val generatedValues = mutable.LinkedHashMap.from(enclosingValues)
       region.declarations.sorted.foreach: declarationPath =>
         val declaration = declarationsByPath.getOrElse(
           declarationPath,
@@ -2746,6 +2753,7 @@ ${indent(body, 2)}
               ),
               semanticPath = declaration.path
             )
+            generatedValues.update(declaration.path, result -> resultType)
           case "variable"
               if snapshot.analogProcedural.exists(program =>
                 program.owner == module.path &&
@@ -2763,7 +2771,70 @@ ${indent(body, 2)}
 
       nested ++= AnalogProceduralMlir.renderGenerated(snapshot, module.path, region.path)
 
-      snapshot.analogRegions.filter(_.generatedOwner.contains(region.path)).zipWithIndex.foreach:
+      val ownedAnalogRegions = snapshot.analogRegions.filter(_.generatedOwner.contains(region.path))
+      val generatedAccessExpressions = ownedAnalogRegions.flatMap(_.expressions).filter(
+        expression =>
+          (expression.operation == "potential_access" || expression.operation == "flow_access") &&
+            !accessBranches.contains(expression.path)
+      )
+      val generatedBranchKeys = generatedAccessExpressions.map: expression =>
+        if expression.operands.size != 2 then
+          fail(
+            "NODAL-RC-BRANCH-001",
+            "Increment 25 requires a two-terminal V(p,n) or I(p,n) access",
+            Some(expression.path)
+          )
+        expression.operands(0) -> expression.operands(1)
+      val generatedBranchByKey = generatedBranchKeys.distinct.sorted.map: key =>
+        val (positivePath, negativePath) = key
+        val positive = generatedValues.getOrElse(
+          positivePath,
+          fail("NODAL-RC-BRANCH-002", "positive terminal is unavailable", Some(positivePath))
+        )
+        val negative = generatedValues.getOrElse(
+          negativePath,
+          fail("NODAL-RC-BRANCH-002", "negative terminal is unavailable", Some(negativePath))
+        )
+        if positive._2 != negative._2 then
+          fail(
+            "NODAL-RC-BRANCH-003",
+            "RC access terminals have incompatible disciplines '" + positive._2 +
+              "' and '" + negative._2 + "'",
+            Some(positivePath)
+          )
+        val result = "%" + stableLocalSymbol(
+          "generated_branch",
+          s"${region.path}.$positivePath.$negativePath"
+        )
+        val resultType =
+          s"""!nodal.branch<${quoted(terminalDiscipline(positive._2, positivePath))}>"""
+        nested += operation(
+          "nodal.branch",
+          results = Vector(result),
+          operands = Vector(positive._1, negative._1),
+          operandTypes = Vector(positive._2, negative._2),
+          resultTypes = Vector(resultType),
+          attributes = Vector(
+            "metadata" -> bridgeMetadata(
+              s"$positivePath->$negativePath",
+              Vector(
+                "vertical_slice" -> quoted("rc"),
+                "generated_owner" -> quoted(region.path),
+                "generated_induction" -> quoted(region.induction)
+              )
+            )
+          ),
+          semanticPath = positivePath
+        )
+        key -> (result -> resultType)
+      .toMap
+      generatedAccessExpressions.foreach: expression =>
+        accessBranches.update(
+          expression.path,
+          generatedBranchByKey(expression.operands(0) -> expression.operands(1))
+        )
+
+      ownedAnalogRegions.zipWithIndex.foreach:
         (analog, index) =>
           if !analog.generatedInduction.contains(region.induction) then
             fail(
@@ -2831,7 +2902,8 @@ ${indent(body, 2)}
             generatedStatic,
             generatedStaticValues,
             allocateGeneratedStaticValue,
-            accessBranches
+            accessBranches,
+            generatedValues.toMap
           )
         )
 

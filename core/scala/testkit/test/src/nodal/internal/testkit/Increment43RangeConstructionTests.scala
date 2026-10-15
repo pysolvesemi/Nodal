@@ -34,6 +34,15 @@ final class Increment43SymbolicGeneratedNodeGroup extends Module:
     val _ = (tap, returnTap)
     ()
 
+final class Increment43GeneratedNodeContribution extends Module:
+  val lanes: Param[Integer] = param(3.integer, range = 1 to 4)
+  val p = inout(Electrical)
+
+  hdlRange(0, lanes): _ =>
+    val tap = node(Electrical)
+    analog:
+      V(tap, p) <+ 1.0.V
+
 final class Increment43MissingRange extends Module:
   val lanes: Param[Integer] = param(2.integer)
 
@@ -1583,6 +1592,48 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.mlir.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
             assert(!result.verilogA.contains("genvar"))
             assert(!result.verilogA.contains("analog begin"))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("generated node contribution retains its owned indexed target"):
+      val snapshot = ConstructionKernel.inspect(new Increment43GeneratedNodeContribution)
+      assert(snapshot == ConstructionKernel.inspect(new Increment43GeneratedNodeContribution))
+      assert(snapshot.generatedRegions.size == 1)
+      val region = snapshot.generatedRegions.head
+      assert(region.declarations.size == 1)
+      assert(snapshot.analogRegions.count(_.generatedOwner.contains(region.path)) == 1)
+      val first = ScalaToMlirBridge.lower(new Increment43GeneratedNodeContribution)
+      assert(first == ScalaToMlirBridge.lower(new Increment43GeneratedNodeContribution))
+      assert(first.text.contains("\"nodal.node\""))
+      assert(first.text.contains("\"nodal.branch\""))
+      assert(first.text.contains("\"nodal.contribute\""))
+      assert(first.text.contains(s"generated_owner = \"${region.path}\""))
+      assert(first.text.contains(s"generated_induction = \"${region.induction}\""))
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            def compileMixed() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43GeneratedNodeContribution,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val result = compileMixed()
+            assert(result == compileMixed())
+            assert(result.verilogA.contains("  electrical tap[0:(lanes - 1)];"))
+            assert(result.verilogA.contains("  genvar generate_0_index;"))
+            assert(result.verilogA.linesIterator.count(
+              _.trim == "V(tap[generate_0_index], p) <+ 1;"
+            ) == 1)
           finally delete(directory)
         case _ => assert(true)
 

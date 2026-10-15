@@ -458,3 +458,30 @@ emission. Native body order is preserved; public declarations retain the bridge'
 existing canonical source-path order. Work and output grow with declaration
 count, not the parameter's lane count. This is a compiler-only checkpoint; the
 existing internal target reparse is not independent simulator qualification.
+
+## Generated analog-node contribution checkpoint
+
+The next bounded profile composes the qualified node-array declaration with one
+exactly-owned additive analog contribution in the same direct generated body.
+The body is deliberately fixed to one electrical node, one branch and one
+continuous analog region under a direct nonempty unit-step range. The branch
+must connect that node to an existing root terminal, and the contribution must
+target the same branch. Exact region and induction identities are retained on
+the node, branch metadata, analog region, access metadata and contribution.
+
+The bridge now creates a branch inside the generated region only when an access
+depends on a declaration owned by that region. Existing generated contributions
+whose endpoints are both root terminals retain their module-level branch and
+unchanged target shape. The backend binds the generated terminal to
+`name[induction]`, emits one electrical array declaration and one runtime target
+loop, and never specializes the parameter default or expands lanes.
+
+Native witnesses reject a forged branch owner, missing node source and a deeper
+or wider direct body without publishing partial output. The public symbolic
+witness checks deterministic construction and bridge output plus configured
+Verilog-A containing exactly one indexed contribution. Multiple nodes in a
+mixed body, generated connections or instances, compound/non-unit node-array
+bounds, procedural state or events, shaped terminal arrays, general slices and
+source-index selection remain unsupported. Every F-043 parent and descendant
+acceptance box remains open, and independent simulator qualification plus the
+F-048/F-049/F-052 handoff are still required.

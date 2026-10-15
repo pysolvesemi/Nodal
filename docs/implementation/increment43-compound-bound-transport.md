@@ -511,3 +511,27 @@ terminal arrays, general slices and source-index selection remain unsupported.
 This remains compiler-only evidence; independent simulator qualification and
 the F-048/F-049/F-052 handoff are required. Every F-043 parent and descendant
 acceptance box remains open.
+
+## Generated analog-node group contributions checkpoint
+
+The same direct generated-node group may now retain a nonempty ordered set of
+exactly-owned branches and additive contributions. Each branch selects one
+distinct generated electrical declaration and one existing non-generated root
+terminal. The target keeps one array per declaration and emits one indexed
+equation per selected declaration inside the existing symbolic loop. Unselected
+declarations remain legal only when they do not escape the direct body.
+
+This extension reuses the qualified array, branch, expression and contribution
+renderers. It does not add another ownership registry or target engine, unroll
+the range, specialize a parameter default or infer memory. Native admission
+rejects duplicate node selection, generated-to-generated branches, forged branch
+ownership, duplicate contribution targets, missing branch contributions and
+ambiguous or deeper bodies before publishing output. Public and native witnesses
+retain declaration and contribution order and require byte-identical repeated
+IR/target output.
+
+General slices, shaped terminals, generated connections or instances, mixed
+procedural/event storage, compound or non-unit node-array bounds and source-index
+selection remain unsupported. Independent simulator qualification and the
+F-048/F-049/F-052 handoff are still required. Every F-043 parent and descendant
+acceptance box remains open.

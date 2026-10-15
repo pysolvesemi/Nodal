@@ -1280,14 +1280,17 @@ int main() {
   }
 
   for (llvm::StringRef mutation :
-       {"valid-single", "valid-group", "branch-owner", "source", "second-owner", "second-induction",
-        "second-name", "second-source", "second-source-duplicate", "body-shape"}) {
+       {"valid-single", "valid-group", "valid-multi", "branch-owner", "source", "second-owner",
+        "second-induction", "second-name", "second-source", "second-source-duplicate",
+        "second-branch-owner", "duplicate-selection", "missing-second-contribution",
+        "duplicate-contribution-target", "crossed-branch", "body-shape"}) {
     auto mixed = parse(context, kGeneratedNodeContributionModule);
     if (!mixed)
       return fail("could not parse generated node contribution fixture");
     mlir::Operation *node = nullptr;
     mlir::Operation *branch = nullptr;
     mlir::Operation *analog = nullptr;
+    mlir::Operation *contribution = nullptr;
     mixed->walk([&](mlir::Operation *operation) {
       if (operation->getName().getStringRef() == "nodal.node")
         node = operation;
@@ -1295,8 +1298,10 @@ int main() {
         branch = operation;
       if (operation->getName().getStringRef() == "nodal.analog")
         analog = operation;
+      if (operation->getName().getStringRef() == "nodal.contribute")
+        contribution = operation;
     });
-    if (!node || !branch || !analog)
+    if (!node || !branch || !analog || !contribution)
       return fail("generated node contribution fixture lost its direct topology");
     mlir::Operation *secondNode = nullptr;
     if (mutation != "valid-single" && mutation != "branch-owner" && mutation != "source") {
@@ -1323,6 +1328,32 @@ int main() {
       secondNode->setAttr("source_path", mlir::StringAttr::get(&context, ""));
     if (mutation == "second-source-duplicate")
       secondNode->setAttr("source_path", node->getAttr("source_path"));
+    mlir::Operation *secondBranch = nullptr;
+    const bool multi = mutation == "valid-multi" || mutation == "second-branch-owner" ||
+                       mutation == "duplicate-selection" ||
+                       mutation == "missing-second-contribution" ||
+                       mutation == "duplicate-contribution-target" || mutation == "crossed-branch";
+    if (multi) {
+      secondBranch = branch->clone();
+      node->getBlock()->getOperations().insert(analog->getIterator(), secondBranch);
+      secondBranch->setOperand(0, secondNode->getResult(0));
+      if (mutation == "second-branch-owner") {
+        mlir::NamedAttrList metadata(secondBranch->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+        metadata.set("generated_owner", mlir::StringAttr::get(&context, "forged"));
+        secondBranch->setAttr("metadata", metadata.getDictionary(&context));
+      }
+      if (mutation == "duplicate-selection")
+        secondBranch->setOperand(0, node->getResult(0));
+      if (mutation == "crossed-branch")
+        secondBranch->setOperand(1, node->getResult(0));
+      if (mutation != "missing-second-contribution") {
+        mlir::Operation *secondContribution = contribution->clone();
+        analog->getRegion(0).front().push_back(secondContribution);
+        secondContribution->setOperand(0, mutation == "duplicate-contribution-target"
+                                              ? branch->getResult(0)
+                                              : secondBranch->getResult(0));
+      }
+    }
     if (mutation == "body-shape")
       node->getBlock()->getOperations().insert(analog->getIterator(), branch->clone());
     std::string output = "sentinel";
@@ -1330,7 +1361,7 @@ int main() {
     const bool emitted =
         mlir::succeeded(nodal::emitBackend(*mixed, nodal::BackendKind::VerilogA, stream));
     stream.flush();
-    if (mutation != "valid-single" && mutation != "valid-group") {
+    if (mutation != "valid-single" && mutation != "valid-group" && mutation != "valid-multi") {
       if (emitted || output != "sentinel")
         return fail("invalid generated node contribution was accepted or published output");
       continue;
@@ -1343,6 +1374,12 @@ int main() {
         output.find("  electrical tap[0:(3 - 1)];\n"
                     "  electrical returnTap[0:(3 - 1)];\n") == std::string::npos)
       return fail("generated node-group contribution lost declaration order or array bounds");
+    if (mutation == "valid-multi" &&
+        (output.find("  electrical tap[0:(3 - 1)];\n"
+                     "  electrical returnTap[0:(3 - 1)];\n") == std::string::npos ||
+         output.find("V(returnTap[generate_0_index], p) <+ 1;\n") == std::string::npos ||
+         output.find("V(tap[generate_0_index], p) <+ 1;\n") == std::string::npos))
+      return fail("generated node-group contributions lost declaration or equation order");
     std::string target = output.substr(std::string("sentinel").size());
     if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
       return fail("generated node contribution failed independent target reparse");

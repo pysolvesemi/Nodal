@@ -1408,14 +1408,16 @@ bool isGeneratedNodeContributionProfile(Operation *generate) {
   if (!llvm::hasSingleElement(body) || body.front().getOperations().size() < 3)
     return false;
   auto operation = body.front().begin();
-  const size_t nodeCount = body.front().getOperations().size() - 2;
-  for (size_t index = 0; index < nodeCount; ++index, ++operation) {
-    if (operation->getName().getStringRef() != "nodal.node")
-      return false;
-  }
-  if (operation->getName().getStringRef() != "nodal.branch")
+  while (operation != body.front().end() && operation->getName().getStringRef() == "nodal.node")
+    ++operation;
+  if (operation == body.front().begin() || operation == body.front().end() ||
+      operation->getName().getStringRef() != "nodal.branch")
     return false;
-  return (++operation)->getName().getStringRef() == "nodal.analog";
+  while (operation != body.front().end() && operation->getName().getStringRef() == "nodal.branch")
+    ++operation;
+  if (operation == body.front().end() || operation->getName().getStringRef() != "nodal.analog")
+    return false;
+  return ++operation == body.front().end();
 }
 
 LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState &state,
@@ -1455,8 +1457,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
     return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
                              "generated Verilog-A range requires one body block");
   Operation *analog = nullptr;
-  Operation *generatedBranch = nullptr;
   llvm::SmallVector<Operation *, 4> generatedNodes;
+  llvm::SmallVector<Operation *, 4> generatedBranches;
   const bool generatedNodeContributionProfile = isGeneratedNodeContributionProfile(generate);
   if (generatedNodeContributionProfile) {
     auto operation = body.front().begin();
@@ -1464,29 +1466,18 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       generatedNodes.push_back(&*operation);
       ++operation;
     }
-    generatedBranch = &*operation;
+    while (operation->getName().getStringRef() == "nodal.branch") {
+      generatedBranches.push_back(&*operation);
+      ++operation;
+    }
     analog = &body.front().back();
     if (generate->getNumOperands() != 0 || step->range.lower != 1 || step->range.upper != 1 ||
         lower->range.upper >= upper->range.lower)
       return emitMappedFailure(
           generate, "NODAL-BACKEND-CAPABILITY-001",
           "generated analog-node contribution requires a direct nonempty unit-step range");
-    auto branchMetadata = generatedBranch->getAttrOfType<DictionaryAttr>("metadata");
-    auto branchOwner =
-        branchMetadata ? branchMetadata.getAs<StringAttr>("generated_owner") : StringAttr();
-    auto branchInduction =
-        branchMetadata ? branchMetadata.getAs<StringAttr>("generated_induction") : StringAttr();
-    if (generatedBranch->getNumOperands() != 2 || generatedBranch->getNumResults() != 1)
-      return emitMappedFailure(
-          generatedBranch, "NODAL-BACKEND-CAPABILITY-001",
-          "generated analog-node branch requires two terminals and one branch result");
-    if (!branchOwner || !branchInduction || branchOwner.getValue() != regionId.getValue() ||
-        branchInduction.getValue() != inductionPath.getValue())
-      return emitMappedFailure(generatedBranch, "NODAL-BACKEND-CAPABILITY-001",
-                               "generated analog-node branch ownership does not match its range");
-
-    Operation *selectedNode = nullptr;
-    bool nodeIsPositive = false;
+    llvm::StringSet<> nodeNames;
+    llvm::StringSet<> sourcePaths;
     for (Operation *node : generatedNodes) {
       auto nodeName = node->getAttrOfType<StringAttr>("name");
       auto sourcePath = node->getAttrOfType<StringAttr>("source_path");
@@ -1499,41 +1490,74 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
           !isPortableVerilogIdentifier(nodeName.getValue()) || !nodeOwner || !nodeInduction ||
           nodeOwner.getValue() != regionId.getValue() ||
           nodeInduction.getValue() != inductionPath.getValue() || !terminalType ||
-          terminalType.getDiscipline() != "electrical")
+          terminalType.getDiscipline() != "electrical" ||
+          !nodeNames.insert(nodeName.getValue()).second ||
+          !sourcePaths.insert(sourcePath.getValue()).second)
         return emitMappedFailure(
             node, "NODAL-BACKEND-CAPABILITY-001",
-            "generated analog-node contribution requires exactly-owned electrical nodes");
-      const bool positive = generatedBranch->getOperand(0) == node->getResult(0);
-      const bool negative = generatedBranch->getOperand(1) == node->getResult(0);
-      if (positive || negative) {
-        if (positive == negative || selectedNode || !node->getResult(0).hasOneUse())
-          return emitMappedFailure(
-              generatedBranch, "NODAL-BACKEND-CAPABILITY-001",
-              "generated analog-node branch requires exactly one owned array element");
-        selectedNode = node;
-        nodeIsPositive = positive;
-      } else if (!node->getResult(0).use_empty()) {
-        return emitMappedFailure(
-            node, "NODAL-BACKEND-CAPABILITY-001",
-            "unselected generated analog-node array must not escape its direct body");
-      }
+            "generated analog-node contribution requires exactly-owned electrical nodes with "
+            "unique names and source identities");
       const std::string indexedNode =
           (llvm::Twine(nodeName.getValue()) + "[" + induction.getValue() + "]").str();
       state.terminals.try_emplace(node->getResult(0), indexedNode);
     }
-    if (!selectedNode)
-      return emitMappedFailure(
-          generatedBranch, "NODAL-BACKEND-CAPABILITY-001",
-          "generated analog-node branch requires exactly one owned array element");
-    Value rootTerminal = generatedBranch->getOperand(nodeIsPositive ? 1 : 0);
-    auto root = state.terminals.find(rootTerminal);
-    if (root == state.terminals.end())
-      return emitMappedFailure(generatedBranch, "NODAL-BACKEND-CAPABILITY-001",
-                               "generated analog-node branch requires one existing root terminal");
-    const std::string &indexedNode = state.terminals.find(selectedNode->getResult(0))->second;
-    state.branches.try_emplace(generatedBranch->getResult(0),
-                               nodeIsPositive ? std::make_pair(indexedNode, root->second)
-                                              : std::make_pair(root->second, indexedNode));
+    llvm::DenseSet<Value> selectedNodes;
+    for (Operation *branch : generatedBranches) {
+      auto branchMetadata = branch->getAttrOfType<DictionaryAttr>("metadata");
+      auto branchOwner =
+          branchMetadata ? branchMetadata.getAs<StringAttr>("generated_owner") : StringAttr();
+      auto branchInduction =
+          branchMetadata ? branchMetadata.getAs<StringAttr>("generated_induction") : StringAttr();
+      if (branch->getNumOperands() != 2 || branch->getNumResults() != 1)
+        return emitMappedFailure(
+            branch, "NODAL-BACKEND-CAPABILITY-001",
+            "generated analog-node branch requires two terminals and one branch result");
+      if (!branchOwner || !branchInduction || branchOwner.getValue() != regionId.getValue() ||
+          branchInduction.getValue() != inductionPath.getValue())
+        return emitMappedFailure(branch, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated analog-node branch ownership does not match its range");
+
+      Operation *selectedNode = nullptr;
+      bool nodeIsPositive = false;
+      for (Operation *node : generatedNodes) {
+        const bool positive = branch->getOperand(0) == node->getResult(0);
+        const bool negative = branch->getOperand(1) == node->getResult(0);
+        if (!positive && !negative)
+          continue;
+        if (positive == negative || selectedNode || !node->getResult(0).hasOneUse() ||
+            !selectedNodes.insert(node->getResult(0)).second)
+          return emitMappedFailure(
+              branch, "NODAL-BACKEND-CAPABILITY-001",
+              "generated analog-node branches require distinct owned array elements");
+        selectedNode = node;
+        nodeIsPositive = positive;
+      }
+      if (!selectedNode)
+        return emitMappedFailure(
+            branch, "NODAL-BACKEND-CAPABILITY-001",
+            "generated analog-node branch requires exactly one owned array element");
+      Value rootTerminal = branch->getOperand(nodeIsPositive ? 1 : 0);
+      auto root = state.terminals.find(rootTerminal);
+      if (root == state.terminals.end() || llvm::any_of(generatedNodes, [&](Operation *node) {
+            return node->getResult(0) == rootTerminal;
+          }))
+        return emitMappedFailure(
+            branch, "NODAL-BACKEND-CAPABILITY-001",
+            "generated analog-node branch requires one existing non-generated root terminal");
+      const std::string &indexedNode = state.terminals.find(selectedNode->getResult(0))->second;
+      if (!state.branches
+               .try_emplace(branch->getResult(0), nodeIsPositive
+                                                      ? std::make_pair(indexedNode, root->second)
+                                                      : std::make_pair(root->second, indexedNode))
+               .second)
+        return emitMappedFailure(branch, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated analog-node branch result is duplicated");
+    }
+    for (Operation *node : generatedNodes)
+      if (!selectedNodes.contains(node->getResult(0)) && !node->getResult(0).use_empty())
+        return emitMappedFailure(
+            node, "NODAL-BACKEND-CAPABILITY-001",
+            "unselected generated analog-node array must not escape its direct body");
   } else {
     for (Operation &operation : body.front()) {
       if (operation.getName().getStringRef() != "nodal.analog" || analog)
@@ -1557,6 +1581,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
 
   Block &analogBody = analog->getRegion(0).front();
   unsigned contributions = 0;
+  llvm::DenseSet<Value> contributedGeneratedBranches;
   unsigned procedures = 0;
   unsigned boundStepEffects = 0;
   Operation *eventProcedure = nullptr;
@@ -2356,12 +2381,17 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
           generatedInduction.getValue() != inductionPath.getValue())
         return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                  "generated contribution ownership does not match its range");
-      if (generatedNodeContributionProfile &&
-          (operation.getNumOperands() < 1 ||
-           operation.getOperand(0) != generatedBranch->getResult(0)))
-        return emitMappedFailure(
-            &operation, "NODAL-BACKEND-CAPABILITY-001",
-            "generated analog-node contribution must target its owned indexed branch");
+      if (generatedNodeContributionProfile) {
+        if (operation.getNumOperands() < 1 ||
+            llvm::none_of(generatedBranches,
+                          [&](Operation *branch) {
+                            return operation.getOperand(0) == branch->getResult(0);
+                          }) ||
+            !contributedGeneratedBranches.insert(operation.getOperand(0)).second)
+          return emitMappedFailure(
+              &operation, "NODAL-BACKEND-CAPABILITY-001",
+              "generated analog-node contributions must target distinct owned indexed branches");
+      }
       ++contributions;
       continue;
     }
@@ -2574,7 +2604,9 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       if (!owner || !generatedInduction || owner.getValue() != regionId.getValue() ||
           generatedInduction.getValue() != inductionPath.getValue() ||
           operation.getNumOperands() != 1 ||
-          operation.getOperand(0) != generatedBranch->getResult(0))
+          llvm::none_of(generatedBranches, [&](Operation *branch) {
+            return operation.getOperand(0) == branch->getResult(0);
+          }))
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
             "generated analog-node access ownership does not match its branch");
@@ -2595,10 +2627,13 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
     return emitMappedFailure(analog, "NODAL-BACKEND-CAPABILITY-001",
                              "generated Verilog-A range requires either additive contributions or "
                              "one owned event procedure or boundStep effect");
-  if (generatedNodeContributionProfile && contributions != 1)
+  if (generatedNodeContributionProfile &&
+      (contributions != generatedBranches.size() ||
+       contributedGeneratedBranches.size() != generatedBranches.size()))
     return emitMappedFailure(
         analog, "NODAL-BACKEND-CAPABILITY-001",
-        "generated analog-node contribution profile requires one additive contribution");
+        "generated analog-node contribution profile requires one additive contribution per "
+        "owned indexed branch");
 
   output << "  analog begin\n";
   output << "    for (" << induction.getValue() << " = " << lower->text << "; "

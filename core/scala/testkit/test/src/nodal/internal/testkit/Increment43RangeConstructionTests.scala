@@ -778,6 +778,7 @@ object Increment43RangeConstructionTests extends TestSuite:
       assert(region.maximumTripCount == 4)
       assert(region.declarations.size == 1)
       assert(region.declarations.head.endsWith(".tap"))
+      assert(first.sourceMap.exists(_.semanticPath == region.induction))
 
       val parameter = first.modules.head.declarations.find(_.name == "lanes").get
       val attributes = parameter.attributes.toMap
@@ -810,6 +811,13 @@ object Increment43RangeConstructionTests extends TestSuite:
       assert(first.text.contains("maximum_trip_count = 4 : i64"))
       assert(first.text.contains("upper = @lanes"))
       assert(first.text.indexOf("\"nodal.generate\"") < first.text.indexOf("\"nodal.node\""))
+      val sourceMapStart = first.text.indexOf("nodal.bridge.source_map")
+      val sourceMapEnd = first.text.indexOf("nodal.bridge.analog_semantics", sourceMapStart)
+      val sourceMap = first.text.substring(sourceMapStart, sourceMapEnd)
+      val region = ConstructionKernel.inspect(new Increment43SymbolicGeneratedNode)
+        .generatedRegions.head
+      assert(sourceMap.contains(s"semantic_path = \"${region.path}\""))
+      assert(sourceMap.contains(s"semantic_path = \"${region.induction}\""))
 
     test("repeated nested generation retains one canonical topology effect"):
       val first = ConstructionKernel.inspect(new Increment43RepeatedSymbolicGeneratedNodes)
@@ -823,6 +831,14 @@ object Increment43RangeConstructionTests extends TestSuite:
       val document = ScalaToMlirBridge.fromSnapshot(first)
       assert(document.text.contains("effects = [\"topology\"]"))
       assert(!document.text.contains("effects = [\"generate\"]"))
+      val sourceMapStart = document.text.indexOf("nodal.bridge.source_map")
+      val sourceMapEnd = document.text.indexOf("nodal.bridge.analog_semantics", sourceMapStart)
+      val sourceMap = document.text.substring(sourceMapStart, sourceMapEnd)
+      first.generatedRegions.foreach: region =>
+        val regionMarker = s"semantic_path = \"${region.path}\""
+        val inductionMarker = s"semantic_path = \"${region.induction}\""
+        assert(sourceMap.sliding(regionMarker.length).count(_ == regionMarker) == 1)
+        assert(sourceMap.sliding(inductionMarker.length).count(_ == inductionMarker) == 1)
 
     test("bridge rejects missing empty and unsupported structural effects"):
       val snapshot = ConstructionKernel.inspect(new Increment43SymbolicGeneratedNode)
@@ -869,6 +885,29 @@ object Increment43RangeConstructionTests extends TestSuite:
         val failure = scala.util.Try(ScalaToMlirBridge.fromSnapshot(forged))
           .failed.get.asInstanceOf[BridgeException]
         assert(failure.diagnostic.code == "NODAL-BRIDGE-043")
+
+    test("bridge rejects generated induction without a canonical source map"):
+      val snapshot = ConstructionKernel.inspect(new Increment43SymbolicGeneratedNode)
+      val region = snapshot.generatedRegions.head
+      val missing = snapshot.copy(
+        sourceMap = snapshot.sourceMap.filterNot(_.semanticPath == region.induction)
+      )
+      val missingFailure = scala.util.Try(ScalaToMlirBridge.fromSnapshot(missing))
+        .failed.get.asInstanceOf[BridgeException]
+      assert(missingFailure.diagnostic.code == "NODAL-BRIDGE-043")
+      assert(missingFailure.diagnostic.semanticPath.contains(region.induction))
+
+      val inductionEntry = snapshot.sourceMap.find(_.semanticPath == region.induction).get
+      val conflicting = snapshot.copy(
+        sourceMap = snapshot.sourceMap :+ inductionEntry.copy(
+          semanticPath = region.path,
+          source = inductionEntry.source.copy(line = inductionEntry.source.line + 1)
+        )
+      )
+      val conflictingFailure = scala.util.Try(ScalaToMlirBridge.fromSnapshot(conflicting))
+        .failed.get.asInstanceOf[BridgeException]
+      assert(conflictingFailure.diagnostic.code == "NODAL-BRIDGE-043")
+      assert(conflictingFailure.diagnostic.semanticPath.contains(region.path))
 
     test("symbolic generation rejects missing finite parameter ranges"):
       val failure = constructionFailure(

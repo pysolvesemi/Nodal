@@ -635,6 +635,21 @@ ${indent(body, 2)}
             "generated region or induction identity is noncanonical or escapes its owning Module",
             Some(region.path)
           )
+        val inductionSource = sourceByPath.getOrElse(
+          region.induction,
+          fail(
+            "NODAL-BRIDGE-043",
+            "generated induction has no canonical source-map entry",
+            Some(region.induction)
+          )
+        )
+        sourceByPath.get(region.path).foreach: regionSource =>
+          if regionSource != inductionSource then
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated region and induction source-map entries disagree",
+              Some(region.path)
+            )
         val declarationPaths = module.declarations.map(_.path).toSet
         region.declarations.foreach: declaration =>
           if !declarationPaths.contains(declaration) then
@@ -3415,7 +3430,15 @@ ${indent(body, 2)}
           Vector("semantic_path" -> quoted(entry.semanticPath)) ++
             sourceFields(entry.source)
         )
-      array(ordinary ++ AnalogProceduralMlir.sourceMapEntries(snapshot))
+      val generatedRegions = snapshot.generatedRegions
+        .filterNot(region => sourceByPath.contains(region.path))
+        .sortBy(_.path)
+        .map: region =>
+          dictionary(
+            Vector("semantic_path" -> quoted(region.path)) ++
+              sourceFields(sourceByPath(region.induction))
+          )
+      array(ordinary ++ generatedRegions ++ AnalogProceduralMlir.sourceMapEntries(snapshot))
 
     private def sourceFields(path: String): Vector[(String, String)] =
       sourceByPath.get(path).toVector.flatMap(source => sourceFields(source))

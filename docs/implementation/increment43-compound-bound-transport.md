@@ -408,3 +408,22 @@ waveform/transfer/noise target state, analog arrays, general slices, l-value
 selection and source/index maps remain unsupported by this backend profile.
 Independent OpenVAF compilation and the F-048/F-049/F-052 handoff remain
 required, and every F-043 parent and descendant checkbox remains open.
+
+## Generated region source/index-map checkpoint
+
+Each captured generated region now retains a deterministic source-map entry at
+the bridge boundary by reusing the canonical source span of its already-owned
+induction expression. The module inventory therefore carries a distinct pair:
+the generated-region identity maps the target loop, while the induction
+identity maps the authored index. Nested and repeated regions keep separate
+semantic paths and emit each mapping exactly once; no new source registry or
+target naming engine is introduced.
+
+Bridge validation fails closed when the induction has no canonical source-map
+entry or when an explicitly supplied region mapping disagrees with it. Public
+tests cover fixed deterministic emission, nested/repeated identity separation,
+and the missing-induction forgery. This checkpoint does not add target array
+syntax, general slices, l-value selection, implicit memories, eager unrolling,
+or wider generated operator admission. Legal analog arrays and their target
+layout remain required, and every F-043 parent and descendant checkbox remains
+open.

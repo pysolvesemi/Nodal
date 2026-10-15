@@ -1471,11 +1471,11 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       ++operation;
     }
     analog = &body.front().back();
-    if (generate->getNumOperands() != 0 || step->range.lower != 1 || step->range.upper != 1 ||
+    if (step->range.lower != 1 || step->range.upper != 1 ||
         lower->range.upper >= upper->range.lower)
       return emitMappedFailure(
           generate, "NODAL-BACKEND-CAPABILITY-001",
-          "generated analog-node contribution requires a direct nonempty unit-step range");
+          "generated analog-node contribution requires a nonempty unit-step range");
     llvm::StringSet<> nodeNames;
     llvm::StringSet<> sourcePaths;
     for (Operation *node : generatedNodes) {
@@ -2662,12 +2662,16 @@ bool hasGeneratedNodeArray(Operation *generate) {
 }
 
 LogicalResult renderGeneratedNodeArray(Operation *generate, llvm::raw_ostream &output) {
-  if (generate->getNumOperands() != 0)
+  if (generate->getNumOperands() != 0 && generate->getNumOperands() != 3)
     return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
-                             "generated analog-node arrays require direct range bounds");
-  auto lower = generatedTargetBound(generate, "lower");
-  auto upper = generatedTargetBound(generate, "upper");
-  auto step = generatedTargetBound(generate, "step");
+                             "generated analog-node arrays require attributes or three SSA bounds");
+  const bool compound = generate->getNumOperands() == 3;
+  auto lower = compound ? generatedTargetBound(generate->getOperand(0), generate, "lower")
+                        : generatedTargetBound(generate, "lower");
+  auto upper = compound ? generatedTargetBound(generate->getOperand(1), generate, "upper")
+                        : generatedTargetBound(generate, "upper");
+  auto step = compound ? generatedTargetBound(generate->getOperand(2), generate, "step")
+                       : generatedTargetBound(generate, "step");
   if (failed(lower) || failed(upper) || failed(step))
     return failure();
   if (step->range.lower != 1 || step->range.upper != 1 || lower->range.upper >= upper->range.lower)

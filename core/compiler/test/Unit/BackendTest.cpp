@@ -826,6 +826,55 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kCompoundGeneratedNodeContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "CompoundGeneratedNodeContribution"}> ({
+  ^bb0:
+    "nodal.parameter"() <{classification = "structural", default_value = 3 : i64, metadata = {}, parameter_kind = "integer", sym_name = "COUNT", type = i64, variability = "symbolic"}> : () -> ()
+    %count_default = "nodal.const_literal"() <{metadata = {}, spelling = "3", value = 3 : i64}> : () -> i64
+    "nodal.parameter_value"(%count_default) <{metadata = {}, parameter = @COUNT}> : (i64) -> ()
+    %count_minimum = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %count_maximum = "nodal.const_literal"() <{metadata = {}, spelling = "4", value = 4 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%count_minimum, %count_maximum) <{constraint_kind = "range", lower_inclusive = true, metadata = {}, parameter = @COUNT, upper_inclusive = true}> : (i64, i64) -> ()
+    "nodal.parameter_envelope"() <{effects = ["topology"], metadata = {}, parameter = @COUNT, policy = "static_generate"}> : () -> ()
+    "nodal.parameter"() <{classification = "structural", default_value = 1 : i64, metadata = {}, parameter_kind = "integer", sym_name = "EXTRA", type = i64, variability = "symbolic"}> : () -> ()
+    %extra_default = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    "nodal.parameter_value"(%extra_default) <{metadata = {}, parameter = @EXTRA}> : (i64) -> ()
+    %extra_minimum = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %extra_maximum = "nodal.const_literal"() <{metadata = {}, spelling = "2", value = 2 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%extra_minimum, %extra_maximum) <{constraint_kind = "range", lower_inclusive = true, metadata = {}, parameter = @EXTRA, upper_inclusive = true}> : (i64, i64) -> ()
+    "nodal.parameter_envelope"() <{effects = ["topology"], metadata = {}, parameter = @EXTRA, policy = "static_generate"}> : () -> ()
+    %zero = "nodal.const_literal"() <{metadata = {source_path = "CompoundGeneratedNodeContribution.generate_0.lower"}, spelling = "0", value = 0 : i64}> : () -> i64
+    %count = "nodal.const_parameter_ref"() <{metadata = {source_path = "CompoundGeneratedNodeContribution.count"}, parameter = @COUNT}> : () -> i64
+    %extra = "nodal.const_parameter_ref"() <{metadata = {source_path = "CompoundGeneratedNodeContribution.extra"}, parameter = @EXTRA}> : () -> i64
+    %upper = "nodal.const_expr"(%count, %extra) <{metadata = {source_path = "CompoundGeneratedNodeContribution.generate_0.upper"}, operator_name = "add"}> : (i64, i64) -> i64
+    %one = "nodal.const_literal"() <{metadata = {source_path = "CompoundGeneratedNodeContribution.generate_0.step"}, spelling = "1", value = 1 : i64}> : () -> i64
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    "nodal.generate"(%zero, %upper, %one) <{induction = "generate_0_index", region_id = "CompoundGeneratedNodeContribution.generate_0", induction_path = "CompoundGeneratedNodeContribution.generate_0.index", metadata = {maximum_trip_count = 6 : i64}}> ({
+    ^bb0:
+      %tap = "nodal.node"() <{name = "tap", source_path = "CompoundGeneratedNodeContribution.tap", generated_owner = "CompoundGeneratedNodeContribution.generate_0", generated_induction = "CompoundGeneratedNodeContribution.generate_0.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "CompoundGeneratedNodeContribution.generate_0", induction = "CompoundGeneratedNodeContribution.generate_0.index"}}> : () -> !nodal.terminal<"electrical">
+      %return_tap = "nodal.node"() <{name = "returnTap", source_path = "CompoundGeneratedNodeContribution.returnTap", generated_owner = "CompoundGeneratedNodeContribution.generate_0", generated_induction = "CompoundGeneratedNodeContribution.generate_0.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "CompoundGeneratedNodeContribution.generate_0", induction = "CompoundGeneratedNodeContribution.generate_0.index"}}> : () -> !nodal.terminal<"electrical">
+      %tap_branch = "nodal.branch"(%tap, %p) <{metadata = {generated_owner = "CompoundGeneratedNodeContribution.generate_0", generated_induction = "CompoundGeneratedNodeContribution.generate_0.index"}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+      %return_tap_branch = "nodal.branch"(%return_tap, %p) <{metadata = {generated_owner = "CompoundGeneratedNodeContribution.generate_0", generated_induction = "CompoundGeneratedNodeContribution.generate_0.index"}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+      "nodal.analog"() <{generated_owner = "CompoundGeneratedNodeContribution.generate_0", generated_induction = "CompoundGeneratedNodeContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %one_volt = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        "nodal.contribute"(%tap_branch, %one_volt) <{kind = "potential", generated_owner = "CompoundGeneratedNodeContribution.generate_0", generated_induction = "CompoundGeneratedNodeContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+        %two_volts = "nodal.real_literal"() <{value = 2.0 : f64, metadata = {}}> : () -> f64
+        "nodal.contribute"(%return_tap_branch, %two_volts) <{kind = "potential", generated_owner = "CompoundGeneratedNodeContribution.generate_0", generated_induction = "CompoundGeneratedNodeContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : (i64, i64, i64) -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kHierarchyModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -4841,6 +4890,82 @@ int main() {
     if (mlir::succeeded(nodal::reparseBackendTarget(invalid, *configuration)))
       return fail("malformed compound generated target passed independent reparse");
   }
+
+  auto compoundGeneratedNodes = parse(context, kCompoundGeneratedNodeContributionModule);
+  if (!compoundGeneratedNodes)
+    return fail("could not parse the compound generated node contribution fixture");
+  std::string compoundGeneratedNodeOutput;
+  llvm::raw_string_ostream compoundGeneratedNodeStream(compoundGeneratedNodeOutput);
+  if (mlir::failed(nodal::emitBackend(*compoundGeneratedNodes, nodal::BackendKind::VerilogA,
+                                      compoundGeneratedNodeStream)))
+    return fail("compound generated node contribution emission failed");
+  compoundGeneratedNodeStream.flush();
+  if (compoundGeneratedNodeOutput.find("  electrical tap[0:((COUNT + EXTRA) - 1)];\n"
+                                       "  electrical returnTap[0:((COUNT + EXTRA) - 1)];\n") ==
+          std::string::npos ||
+      compoundGeneratedNodeOutput.find("generate_0_index < (COUNT + EXTRA)") == std::string::npos ||
+      compoundGeneratedNodeOutput.find("V(tap[generate_0_index], p) <+ 1;\n") ==
+          std::string::npos ||
+      compoundGeneratedNodeOutput.find("V(returnTap[generate_0_index], p) <+ 2;\n") ==
+          std::string::npos)
+    return fail("compound generated node group lost symbolic arrays, loop, or equation order");
+  if (mlir::failed(nodal::reparseBackendTarget(compoundGeneratedNodeOutput, *configuration)))
+    return fail("compound generated node contribution failed independent target reparse");
+  std::string repeatedCompoundGeneratedNodeOutput;
+  llvm::raw_string_ostream repeatedCompoundGeneratedNodeStream(repeatedCompoundGeneratedNodeOutput);
+  if (mlir::failed(nodal::emitBackend(*compoundGeneratedNodes, nodal::BackendKind::VerilogA,
+                                      repeatedCompoundGeneratedNodeStream)))
+    return fail("compound generated node contribution repeated emission failed");
+  repeatedCompoundGeneratedNodeStream.flush();
+  if (compoundGeneratedNodeOutput != repeatedCompoundGeneratedNodeOutput)
+    return fail("compound generated node contribution emission is nondeterministic");
+  for (const auto &mutation :
+       {std::make_pair(
+            "name = \"returnTap\", source_path = \"CompoundGeneratedNodeContribution.returnTap\", "
+            "generated_owner = \"CompoundGeneratedNodeContribution.generate_0\"",
+            "name = \"returnTap\", source_path = \"CompoundGeneratedNodeContribution.returnTap\", "
+            "generated_owner = \"forged\""),
+        std::make_pair(
+            "name = \"returnTap\", source_path = \"CompoundGeneratedNodeContribution.returnTap\", "
+            "generated_owner = \"CompoundGeneratedNodeContribution.generate_0\", "
+            "generated_induction = \"CompoundGeneratedNodeContribution.generate_0.index\"",
+            "name = \"returnTap\", source_path = \"CompoundGeneratedNodeContribution.returnTap\", "
+            "generated_owner = \"CompoundGeneratedNodeContribution.generate_0\", "
+            "generated_induction = \"forged.index\""),
+        std::make_pair(
+            "name = \"returnTap\", source_path = \"CompoundGeneratedNodeContribution.returnTap\"",
+            "name = \"tap\", source_path = \"CompoundGeneratedNodeContribution.returnTap\""),
+        std::make_pair("source_path = \"CompoundGeneratedNodeContribution.returnTap\"",
+                       "source_path = \"\""),
+        std::make_pair("source_path = \"CompoundGeneratedNodeContribution.generate_0.step\"}, "
+                       "spelling = \"1\", value = 1 : i64",
+                       "source_path = \"CompoundGeneratedNodeContribution.generate_0.step\"}, "
+                       "spelling = \"2\", value = 2 : i64")}) {
+    std::string invalidSource = kCompoundGeneratedNodeContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("compound generated node source mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      continue;
+    std::string rejectedCompoundNode = "sentinel";
+    llvm::raw_string_ostream rejectedCompoundNodeStream(rejectedCompoundNode);
+    if (mlir::succeeded(nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA,
+                                           rejectedCompoundNodeStream)))
+      return fail("invalid compound generated node source passed backend verification");
+    rejectedCompoundNodeStream.flush();
+    if (rejectedCompoundNode != "sentinel")
+      return fail("invalid compound generated node source published partial output");
+  }
+  std::string invalidCompoundNodeTarget = compoundGeneratedNodeOutput;
+  auto compoundNodeBound = invalidCompoundNodeTarget.find("((COUNT + EXTRA) - 1)");
+  if (compoundNodeBound == std::string::npos)
+    return fail("compound generated node target mutation anchor missing");
+  invalidCompoundNodeTarget.replace(compoundNodeBound, std::string("((COUNT + EXTRA) - 1)").size(),
+                                    "((COUNT + MISSING) - 1)");
+  if (mlir::succeeded(nodal::reparseBackendTarget(invalidCompoundNodeTarget, *configuration)))
+    return fail("undeclared compound generated node bound passed independent reparse");
 
   RejectingReparseHooks rejectingHooks;
   std::string rejected = "sentinel";

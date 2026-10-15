@@ -535,3 +535,30 @@ procedural/event storage, compound or non-unit node-array bounds and source-inde
 selection remain unsupported. Independent simulator qualification and the
 F-048/F-049/F-052 handoff are still required. Every F-043 parent and descendant
 acceptance box remains open.
+
+## Compound generated analog-node array bounds checkpoint
+
+The qualified generated-node group contribution profile now accepts the
+existing canonical three-SSA bound form. Lower, upper-exclusive and step bounds
+are resolved through the same finite Integer-bound analysis and target
+expression renderer already used by compound generated contributions. The
+range must remain provably nonempty and exactly unit-step for every legal
+structural-parameter setting; defaults are not substituted and lanes are not
+expanded.
+
+Every electrical declaration keeps the same generated region, induction and
+source identity and becomes a separate array with the authored symbolic bounds.
+The existing branch and contribution path continues to index each selected
+array with the canonical induction. No new public schema, storage engine,
+ownership registry or array renderer is introduced. Native and configured
+public witnesses cover two declarations, a nonzero or symbolic lower envelope,
+ordered indexed equations, deterministic repeated output and independent target
+reparse. Forged later-node ownership or induction, duplicate names, missing
+source identity, unsafe steps and undeclared target-bound identifiers fail
+without partial output.
+
+This remains the direct node/branch/contribution body profile. General slices,
+source-index selection, shaped terminals, generated connections or instances,
+mixed procedural/event storage and non-unit ranges remain unsupported.
+Independent simulator qualification and the F-048/F-049/F-052 handoff are still
+required. Every F-043 parent and descendant acceptance box remains open.

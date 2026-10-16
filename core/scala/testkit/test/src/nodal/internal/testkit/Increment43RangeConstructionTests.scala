@@ -125,6 +125,16 @@ final class Increment43StridedGeneratedPeerNodeDdtContribution extends Module:
       val voltage = V(tap, returnTap)
       I(tap, returnTap) <+ (1.pF * ddt(voltage))
 
+final class Increment43GeneratedNodeIdtContribution extends Module:
+  val p = inout(Electrical)
+
+  hdlRange(1, 4): _ =>
+    val tap = node(Electrical)
+    analog:
+      val voltage = V(tap, p)
+      val voltageRate = voltage / 1.0.s
+      V(tap, p) <+ idt(voltageRate, 0.0.V)
+
 final class Increment43CompoundGeneratedNodeGroupContributions extends Module:
   val lanes: Param[Integer] = param(3.integer, range = 2 to 4)
   val extra: Param[Integer] = param(1.integer, range = 1 to 2)
@@ -2281,6 +2291,55 @@ object Increment43RangeConstructionTests extends TestSuite:
               ) == 1
             )
             assert(result.verilogA.linesIterator.count(_.contains("electrical ")) == 2)
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("generated node access may feed one memoryless path into one owned idt state"):
+      val snapshot = ConstructionKernel.inspect(new Increment43GeneratedNodeIdtContribution)
+      assert(snapshot == ConstructionKernel.inspect(new Increment43GeneratedNodeIdtContribution))
+      assert(snapshot.generatedRegions.size == 1)
+      val region = snapshot.generatedRegions.head
+      assert(region.declarations.size == 1)
+      assert(snapshot.sourceMap.exists(_.semanticPath == region.declarations.head))
+      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
+      val first = ScalaToMlirBridge.lower(new Increment43GeneratedNodeIdtContribution)
+      assert(first == ScalaToMlirBridge.lower(new Increment43GeneratedNodeIdtContribution))
+      val accessLine = first.text.linesIterator.find(_.contains("\"nodal.access\"")).get
+      assert(accessLine.contains(s"generated_owner = \"${region.path}\""))
+      assert(accessLine.contains(s"generated_induction = \"${region.induction}\""))
+      val idtLine = first.text.linesIterator.find(_.contains("\"nodal.analog_idt\"")).get
+      assert(idtLine.contains(s"generated_owner = \"${region.path}\""))
+      assert(idtLine.contains(s"generated_induction = \"${region.induction}\""))
+      assert(idtLine.contains("state_id"))
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            def compileIdt() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43GeneratedNodeIdtContribution,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val result = compileIdt()
+            assert(result == compileIdt())
+            assert(result.verilogA.contains("  electrical tap[1:(4 - 1)];"))
+            assert(
+              result.verilogA.linesIterator.count(line =>
+                line.contains("V(tap[generate_0_index], p) <+") &&
+                  line.contains("idt(") &&
+                  line.contains("V(tap[generate_0_index], p)") &&
+                  line.contains(", 0)")
+              ) == 1
+            )
           finally delete(directory)
         case _ => assert(true)
 

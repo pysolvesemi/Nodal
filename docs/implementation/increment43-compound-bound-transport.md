@@ -749,3 +749,34 @@ peer branch. It does not define a general slice signature, cross-range mapping,
 negative step, nested generated operator graph or stateful operator profile.
 Those profiles and their independent qualification remain open under the
 existing F-043 checklist.
+
+## Generated analog-node idt ownership checkpoint
+
+One exactly-owned potential access on a generated electrical-node branch may
+now pass through a one-use memoryless dimension-conversion path into one owned
+`idt`, whose result directly feeds the additive contribution on that branch.
+This admits an indexed potential accumulated from its corresponding voltage
+rate while retaining the target loop as the only generated-instance domain.
+
+The backend reuses the canonical one-use expression traversal and the existing
+Increment 35 operator/state contract. The access path must stay in the same
+generated analog body, traverse at least one supported memoryless expression,
+and enter operand zero of exactly one `idt`. The `idt` independently retains the
+exact range owner and induction, an operator-owned `state_id`, and one path to
+the contribution. Direct dimensionally-invalid access-to-`idt`, forged access
+or operator ownership, forged state identity, escape and duplicate access all
+reject before target publication. Native evidence also requires deterministic
+emission and independent target reparse.
+
+The public witness retains its generated-node and induction source maps,
+normalized access/arithmetic/operator ownership, fixed initial value and
+configured Verilog-A with one indexed node array and one per-occurrence `idt`
+expression. This is simulator-owned analog integration state scoped by the
+generated target occurrence; it does not introduce a language memory, shared
+module variable, array-flattening store or second state registry.
+
+This bounded path does not admit arbitrary operator graphs or fan-out,
+operator-to-operator chains, peer/cross-range state, general slices, shaped
+terminals, generated connections/instances, default specialization or eager
+unrolling. Independent simulator qualification, the F-048/F-049/F-052 handoff
+and every F-043 acceptance obligation remain open.

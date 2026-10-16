@@ -1538,6 +1538,119 @@ int main() {
       return fail("invalid generated node ddt access published partial output");
   }
 
+  std::string generatedNodeIdtSource = kGeneratedNodeDdtContributionModule.str();
+  auto generatedNodeIdtStart = generatedNodeIdtSource.find("        %derivative =");
+  auto generatedNodeIdtEnd = generatedNodeIdtSource.find('\n', generatedNodeIdtStart);
+  if (generatedNodeIdtStart == std::string::npos || generatedNodeIdtEnd == std::string::npos)
+    return fail("generated node idt fixture lost its derivative anchor");
+  generatedNodeIdtSource.replace(
+      generatedNodeIdtStart, generatedNodeIdtEnd - generatedNodeIdtStart,
+      "        %second = \"nodal.real_literal\"() <{value = 1.0 : f64, metadata = {}}> : () -> "
+      "f64\n"
+      "        %rate = \"nodal.analog_div\"(%voltage, %second) <{metadata = {}}> : (f64, f64) "
+      "-> f64\n"
+      "        %initial = \"nodal.real_literal\"() <{value = 0.0 : f64, metadata = {}}> : () -> "
+      "f64\n"
+      "        %integral = \"nodal.analog_idt\"(%rate, %initial) <{analyses = [\"ac\", \"dc\", "
+      "\"initialization\", \"noise\", \"operating-point\", \"transient\"], context = "
+      "\"contribution\", generated_owner = \"GeneratedNodeDdtContribution.generate_0\", "
+      "generated_induction = \"GeneratedNodeDdtContribution.generate_0.index\", initial_dimension "
+      "= \"voltage\", initialization = \"fixed\", input_dimension = \"time^-1*voltage\", metadata "
+      "= {identity = \"integral\"}, operator_contract = \"increment35\", operator_id = "
+      "\"GeneratedNodeDdtContribution.integral\", owner = \"GeneratedNodeDdtContribution\", "
+      "result_dimension = \"voltage\", state_id = "
+      "\"GeneratedNodeDdtContribution.integral.state\"}> : (f64, f64) -> f64");
+  auto generatedNodeIdtContribution = generatedNodeIdtSource.find("%branch, %derivative");
+  if (generatedNodeIdtContribution == std::string::npos)
+    return fail("generated node idt fixture lost its contribution anchor");
+  generatedNodeIdtSource.replace(generatedNodeIdtContribution,
+                                 std::string("%branch, %derivative").size(),
+                                 "%branch, %integral");
+  auto generatedNodeIdtKind = generatedNodeIdtSource.find("kind = \"flow\"",
+                                                         generatedNodeIdtContribution);
+  if (generatedNodeIdtKind == std::string::npos)
+    return fail("generated node idt fixture lost its contribution kind");
+  generatedNodeIdtSource.replace(generatedNodeIdtKind, std::string("kind = \"flow\"").size(),
+                                 "kind = \"potential\"");
+
+  for (llvm::StringRef mutation : {"valid", "access-owner", "access-induction", "operator-owner",
+                                   "operator-induction", "state", "direct-idt", "escape",
+                                   "post-expression", "second-access"}) {
+    std::string source = generatedNodeIdtSource;
+    if (mutation == "post-expression") {
+      auto contribution = source.find("        \"nodal.contribute\"");
+      auto operand = source.find("%branch, %integral", contribution);
+      if (contribution == std::string::npos || operand == std::string::npos)
+        return fail("generated node idt post-expression mutation anchor missing");
+      source.insert(contribution,
+                    "        %post = \"nodal.analog_neg\"(%integral) <{metadata = {}}> : (f64) "
+                    "-> f64\n");
+      operand = source.find("%branch, %integral", contribution);
+      source.replace(operand, std::string("%branch, %integral").size(), "%branch, %post");
+    }
+    auto candidate = parse(context, source);
+    if (!candidate)
+      return fail("could not parse generated node idt fixture");
+    mlir::Operation *access = nullptr;
+    mlir::Operation *integral = nullptr;
+    mlir::Operation *contribution = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      llvm::StringRef name = operation->getName().getStringRef();
+      if (name == "nodal.access")
+        access = operation;
+      if (name == "nodal.analog_idt")
+        integral = operation;
+      if (name == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!access || !integral || !contribution)
+      return fail("generated node idt fixture lost its access, state or contribution");
+    if (mutation == "access-owner" || mutation == "access-induction") {
+      mlir::NamedAttrList metadata(access->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set(mutation == "access-owner" ? "generated_owner" : "generated_induction",
+                   mlir::StringAttr::get(&context, "forged"));
+      access->setAttr("metadata", metadata.getDictionary(&context));
+    }
+    if (mutation == "operator-owner")
+      integral->setAttr("generated_owner", mlir::StringAttr::get(&context, "forged"));
+    if (mutation == "operator-induction")
+      integral->setAttr("generated_induction", mlir::StringAttr::get(&context, "forged.index"));
+    if (mutation == "state")
+      integral->setAttr("state_id", mlir::StringAttr::get(&context, "forged.state"));
+    if (mutation == "direct-idt")
+      integral->setOperand(0, access->getResult(0));
+    if (mutation == "escape")
+      contribution->setOperand(1, access->getResult(0));
+    if (mutation == "second-access") {
+      mlir::Operation *extraAccess = access->clone();
+      access->getBlock()->getOperations().insert(std::next(access->getIterator()), extraAccess);
+    }
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool accepted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (accepted || output != "sentinel")
+        return fail("invalid generated node idt escaped or published partial output");
+      continue;
+    }
+    const std::string equation =
+        "V(tap[generate_0_index], p) <+ idt((V(tap[generate_0_index], p) / 1), 0);";
+    if (!accepted || output.find(equation) == std::string::npos)
+      return fail("generated node idt lost its indexed access or owned stateful expression");
+    std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("generated node idt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("generated node idt repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("generated node idt emission is nondeterministic");
+  }
+
   std::string generatedNodeAlgebraSource = kGeneratedNodeDdtContributionModule.str();
   auto derivativeStart = generatedNodeAlgebraSource.find("        %derivative =");
   auto derivativeEnd = generatedNodeAlgebraSource.find('\n', derivativeStart);

@@ -1396,8 +1396,12 @@ bool generatedValueFeedsContribution(Value value, Block &body,
   return reachedContribution;
 }
 
-bool generatedValueFeedsOneContribution(Value value, Block &body,
-                                        llvm::DenseSet<Operation *> &active) {
+enum class GeneratedValueEndpoint { Contribution, DirectContribution, IdtInput };
+
+bool generatedValueFeedsOneEndpoint(Value value, Block &body,
+                                    llvm::DenseSet<Operation *> &active,
+                                    GeneratedValueEndpoint endpoint,
+                                    bool traversedExpression = false) {
   Operation *definition = value.getDefiningOp();
   if (!definition || !value.hasOneUse() || !active.insert(definition).second)
     return false;
@@ -1409,18 +1413,43 @@ bool generatedValueFeedsOneContribution(Value value, Block &body,
     return false;
   }
   llvm::StringRef name = user->getName().getStringRef();
-  if (name == "nodal.contribute") {
-    const bool result = use.getOperandNumber() == 1;
+  const bool reachedContribution =
+      (endpoint == GeneratedValueEndpoint::Contribution ||
+       endpoint == GeneratedValueEndpoint::DirectContribution) &&
+      name == "nodal.contribute" && use.getOperandNumber() == 1;
+  const bool reachedIdt = endpoint == GeneratedValueEndpoint::IdtInput &&
+                          name == "nodal.analog_idt" && traversedExpression &&
+                          use.getOperandNumber() == 0;
+  if (reachedContribution || reachedIdt) {
     active.erase(definition);
-    return result;
+    return true;
   }
   const bool expression = name == "nodal.analog_add" || name == "nodal.analog_sub" ||
                           name == "nodal.analog_mul" || name == "nodal.analog_div" ||
                           name == "nodal.analog_neg";
-  const bool result = expression && user->getNumResults() == 1 &&
-                      generatedValueFeedsOneContribution(user->getResult(0), body, active);
+  const bool result = endpoint != GeneratedValueEndpoint::DirectContribution && expression &&
+                      user->getNumResults() == 1 &&
+                      generatedValueFeedsOneEndpoint(user->getResult(0), body, active, endpoint,
+                                                     true);
   active.erase(definition);
   return result;
+}
+
+bool generatedValueFeedsOneContribution(Value value, Block &body,
+                                        llvm::DenseSet<Operation *> &active) {
+  return generatedValueFeedsOneEndpoint(value, body, active,
+                                        GeneratedValueEndpoint::Contribution);
+}
+
+bool generatedValueFeedsOneIdtInput(Value value, Block &body,
+                                    llvm::DenseSet<Operation *> &active) {
+  return generatedValueFeedsOneEndpoint(value, body, active, GeneratedValueEndpoint::IdtInput);
+}
+
+bool generatedValueFeedsOneDirectContribution(Value value, Block &body,
+                                              llvm::DenseSet<Operation *> &active) {
+  return generatedValueFeedsOneEndpoint(value, body, active,
+                                        GeneratedValueEndpoint::DirectContribution);
 }
 
 bool isGeneratedNodeContributionProfile(Operation *generate) {
@@ -2448,8 +2477,13 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
           return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                    "generated idt state identity is not owned by its operator");
       }
-      if (operation.getNumResults() != 1 ||
-          !generatedValueFeedsContribution(operation.getResult(0), analogBody, active))
+      const bool feedsContribution =
+          operation.getNumResults() == 1 &&
+          (stateful && generatedNodeContributionProfile
+               ? generatedValueFeedsOneDirectContribution(operation.getResult(0), analogBody,
+                                                          active)
+               : generatedValueFeedsContribution(operation.getResult(0), analogBody, active));
+      if (!feedsContribution)
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
             stateful
@@ -2653,12 +2687,14 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       const bool directDdt = user->getBlock() == &analogBody && use.getOperandNumber() == 0 &&
                              user->getName().getStringRef() == "nodal.analog_ddt";
       llvm::DenseSet<Operation *> active;
-      if (!directDdt &&
+      const bool ownedIdtInput =
+          generatedValueFeedsOneIdtInput(operation.getResult(0), analogBody, active);
+      if (!directDdt && !ownedIdtInput &&
           !generatedValueFeedsOneContribution(operation.getResult(0), analogBody, active))
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
-            "generated analog-node access must feed one memoryless contribution or direct owned "
-            "ddt input without escaping its range");
+            "generated analog-node access must feed one memoryless contribution, direct owned "
+            "ddt input, or one memoryless path into an owned idt without escaping its range");
       ++generatedNodeAccesses;
     }
     if (!supportedExpression)

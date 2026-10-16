@@ -95,6 +95,16 @@ final class Increment43GeneratedNodeResistorContribution extends Module:
     analog:
       I(tap, p) <+ (V(tap, p) / R)
 
+final class Increment43GeneratedPeerNodeResistorContribution extends Module:
+  val lanes: Param[Integer] = param(7.integer, range = 6 to 10)
+  val R: Param[Real] = param(1.kOhm)
+
+  hdlRange(1, lanes, 2): _ =>
+    val tap = node(Electrical)
+    val returnTap = node(Electrical)
+    analog:
+      I(tap, returnTap) <+ (V(tap, returnTap) / R)
+
 final class Increment43GeneratedNodeDdtContribution extends Module:
   val lanes: Param[Integer] = param(3.integer, range = 2 to 5)
   val p = inout(Electrical)
@@ -2059,6 +2069,77 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(
               result.verilogA.linesIterator.count(
                 _.trim == "electrical tap[0:(((((lanes - 1) + 2) - 1) / 2) - 1)];"
+              ) == 1
+            )
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("peer generated node resistor retains both indexed endpoints"):
+      val snapshot =
+        ConstructionKernel.inspect(new Increment43GeneratedPeerNodeResistorContribution)
+      assert(
+        snapshot ==
+          ConstructionKernel.inspect(new Increment43GeneratedPeerNodeResistorContribution)
+      )
+      assert(snapshot.generatedRegions.size == 1)
+      val region = snapshot.generatedRegions.head
+      assert(region.declarations.size == 2)
+      region.declarations.foreach: path =>
+        assert(snapshot.sourceMap.exists(_.semanticPath == path))
+      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
+      val declarationNames = region.declarations.map(_.split('.').last)
+      assert(declarationNames.count(_ == "tap") == 1)
+      val peerName = declarationNames.find(_ != "tap").get
+      val first = ScalaToMlirBridge.lower(new Increment43GeneratedPeerNodeResistorContribution)
+      assert(
+        first == ScalaToMlirBridge.lower(new Increment43GeneratedPeerNodeResistorContribution)
+      )
+      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
+      assert(first.text.sliding("\"nodal.branch\"".length).count(_ == "\"nodal.branch\"") == 1)
+      assert(first.text.sliding("\"nodal.access\"".length).count(_ == "\"nodal.access\"") == 1)
+      assert(
+        first.text.sliding("\"nodal.analog_div\"".length).count(_ == "\"nodal.analog_div\"") == 1
+      )
+      val accessLine = first.text.linesIterator.find(_.contains("\"nodal.access\"")).get
+      assert(accessLine.contains(s"generated_owner = \"${region.path}\""))
+      assert(accessLine.contains(s"generated_induction = \"${region.induction}\""))
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            def compilePeerResistor() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43GeneratedPeerNodeResistorContribution,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val index = "((generate_0_index - 1) / 2)"
+            val result = compilePeerResistor()
+            assert(result == compilePeerResistor())
+            assert(
+              result.verilogA.linesIterator.count(
+                _.trim ==
+                  s"I(tap[$index], $peerName[$index]) <+ " +
+                    s"(V(tap[$index], $peerName[$index]) / R);"
+              ) == 1
+            )
+            assert(
+              result.verilogA.linesIterator.count(
+                _.trim == "electrical tap[0:(((((lanes - 1) + 2) - 1) / 2) - 1)];"
+              ) == 1
+            )
+            assert(
+              result.verilogA.linesIterator.count(
+                _.trim ==
+                  s"electrical $peerName[0:(((((lanes - 1) + 2) - 1) / 2) - 1)];"
               ) == 1
             )
           finally delete(directory)

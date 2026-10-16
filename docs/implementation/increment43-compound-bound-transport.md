@@ -684,3 +684,27 @@ fan-out, cross-range references, general slices, shaped terminals or generated
 instances/connections. Internal target reparse is compiler evidence, not
 independent simulator or numerical qualification. The F-048/F-049/F-052 handoff
 and every F-043 acceptance obligation remain open.
+
+## Peer generated analog-node memoryless access checkpoint
+
+The qualified peer-node branch and one-use memoryless access profiles now have
+an explicit public composition witness: a symbolic, positive-stride generated
+resistor connects two exactly-owned electrical arrays and retains both indexed
+endpoints in its flow target and potential expression. The source induction
+continues to drive the target loop, while the existing compact source-index map
+selects the corresponding element of each Verilog-A electrical array.
+
+No backend admission rule is widened. The composition still requires exactly
+one owned branch, one generated access and one additive contribution path;
+both nodes, the branch, the access and the contribution retain the same exact
+generated owner and induction. Native evidence covers deterministic emission,
+independent target reparse, forged peer owner/induction and a second access,
+with rejection before partial output. The public witness retains both source
+maps, symbolic resistance and bounds, repeated deterministic IR/target text and
+configured native-backed lowering.
+
+This remains a direct peer branch with a memoryless arithmetic path. It does not
+add cross-range references, fan-out, stateful operators, general slices, shaped
+terminals, generated connections/instances, default specialization or
+unrolling. Independent simulator qualification, the F-048/F-049/F-052 handoff
+and every F-043 acceptance obligation remain open.

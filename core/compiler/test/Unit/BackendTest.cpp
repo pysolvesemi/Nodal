@@ -1682,7 +1682,13 @@ int main() {
   for (llvm::StringRef mutation :
        {"valid", "peer-owner", "peer-induction", "peer-source", "access-owner", "access-induction",
         "operator-owner", "operator-induction", "escape", "second-access"}) {
-    auto candidate = parse(context, kGeneratedNodeDdtContributionModule);
+    std::string source = kGeneratedNodeDdtContributionModule.str();
+    auto range = source.find("lower = 1 : i64, upper = 4 : i64, step = 1 : i64");
+    if (range == std::string::npos)
+      return fail("strided generated peer-node ddt range mutation anchor missing");
+    source.replace(range, std::string("lower = 1 : i64, upper = 4 : i64, step = 1 : i64").size(),
+                   "lower = 1 : i64, upper = 7 : i64, step = 2 : i64");
+    auto candidate = parse(context, source);
     if (!candidate)
       return fail("could not parse generated peer-node ddt fixture");
     mlir::Operation *node = nullptr;
@@ -1749,8 +1755,11 @@ int main() {
         return fail("invalid generated peer-node ddt escaped or published partial output");
       continue;
     }
-    const std::string equation = "I(tap[generate_0_index], returnTap[generate_0_index]) <+ "
-                                 "ddt(V(tap[generate_0_index], returnTap[generate_0_index]));";
+    const std::string index = "((generate_0_index - 1) / 2)";
+    const std::string equation = "I(tap[" + index + "], returnTap[" + index +
+                                 "]) <+ "
+                                 "ddt(V(tap[" +
+                                 index + "], returnTap[" + index + "]));";
     if (!accepted || output.find(equation) == std::string::npos)
       return fail("generated peer-node ddt lost an indexed endpoint or owned derivative");
     std::string target = output.substr(std::string("sentinel").size());

@@ -115,10 +115,10 @@ final class Increment43GeneratedNodeDdtContribution extends Module:
       val voltage = V(tap, p)
       I(tap, p) <+ (1.pF * ddt(voltage))
 
-final class Increment43GeneratedPeerNodeDdtContribution extends Module:
-  val lanes: Param[Integer] = param(3.integer, range = 2 to 5)
+final class Increment43StridedGeneratedPeerNodeDdtContribution extends Module:
+  val lanes: Param[Integer] = param(7.integer, range = 6 to 10)
 
-  hdlRange(1, lanes): _ =>
+  hdlRange(1, lanes, 2): _ =>
     val tap = node(Electrical)
     val returnTap = node(Electrical)
     analog:
@@ -1990,6 +1990,8 @@ object Increment43RangeConstructionTests extends TestSuite:
       )
       assert(snapshot.generatedRegions.size == 1)
       val region = snapshot.generatedRegions.head
+      assert(region.lower == "1")
+      assert(region.step == "2")
       assert(region.declarations.size == 2)
       region.declarations.foreach: path =>
         assert(snapshot.sourceMap.exists(_.semanticPath == path))
@@ -2208,12 +2210,12 @@ object Increment43RangeConstructionTests extends TestSuite:
           finally delete(directory)
         case _ => assert(true)
 
-    test("peer generated node access may feed one direct owned ddt contribution"):
+    test("strided peer generated node access may feed one direct owned ddt contribution"):
       val snapshot =
-        ConstructionKernel.inspect(new Increment43GeneratedPeerNodeDdtContribution)
+        ConstructionKernel.inspect(new Increment43StridedGeneratedPeerNodeDdtContribution)
       assert(
         snapshot ==
-          ConstructionKernel.inspect(new Increment43GeneratedPeerNodeDdtContribution)
+          ConstructionKernel.inspect(new Increment43StridedGeneratedPeerNodeDdtContribution)
       )
       assert(snapshot.generatedRegions.size == 1)
       val region = snapshot.generatedRegions.head
@@ -2224,8 +2226,10 @@ object Increment43RangeConstructionTests extends TestSuite:
       val declarationNames = region.declarations.map(_.split('.').last)
       assert(declarationNames.count(_ == "tap") == 1)
       val peerName = declarationNames.find(_ != "tap").get
-      val first = ScalaToMlirBridge.lower(new Increment43GeneratedPeerNodeDdtContribution)
-      assert(first == ScalaToMlirBridge.lower(new Increment43GeneratedPeerNodeDdtContribution))
+      val first = ScalaToMlirBridge.lower(new Increment43StridedGeneratedPeerNodeDdtContribution)
+      assert(
+        first == ScalaToMlirBridge.lower(new Increment43StridedGeneratedPeerNodeDdtContribution)
+      )
       val accessLines = first.text.linesIterator.filter(_.contains("\"nodal.access\"")).toVector
       assert(accessLines.size == 2)
       assert(accessLines.count(_.contains("kind = \"flow\"")) == 1)
@@ -2243,7 +2247,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             def compileDdt() =
               ScalaToMlirBridge
                 .compileToVerilogA(
-                  new Increment43GeneratedPeerNodeDdtContribution,
+                  new Increment43StridedGeneratedPeerNodeDdtContribution,
                   Path.of(nodalc).toAbsolutePath,
                   Path.of(translator).toAbsolutePath,
                   directory,
@@ -2256,12 +2260,24 @@ object Increment43RangeConstructionTests extends TestSuite:
                 )
             val result = compileDdt()
             assert(result == compileDdt())
+            val upper = "(((((lanes - 1) + 2) - 1) / 2) - 1)"
+            assert(
+              result.verilogA.contains(
+                s"  electrical $peerName[0:$upper];\n" +
+                  s"  electrical tap[0:$upper];"
+              )
+            )
+            assert(
+              result.verilogA.contains(
+                "for (generate_0_index = 1; generate_0_index < lanes; " +
+                  "generate_0_index = generate_0_index + 2)"
+              )
+            )
+            val mapped = "((generate_0_index - 1) / 2)"
             assert(
               result.verilogA.linesIterator.count(line =>
-                line.contains(s"I(tap[generate_0_index], $peerName[generate_0_index]) <+") &&
-                  line.contains(
-                    s"ddt(V(tap[generate_0_index], $peerName[generate_0_index]))"
-                  )
+                line.contains(s"I(tap[$mapped], $peerName[$mapped]) <+") &&
+                  line.contains(s"ddt(V(tap[$mapped], $peerName[$mapped]))")
               ) == 1
             )
             assert(result.verilogA.linesIterator.count(_.contains("electrical ")) == 2)

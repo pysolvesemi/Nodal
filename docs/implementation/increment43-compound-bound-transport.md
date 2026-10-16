@@ -735,3 +735,17 @@ terminals, generated connections/instances, default specialization or
 unrolling. Internal target reparse is compiler evidence, not independent
 simulator or numerical qualification. The F-048/F-049/F-052 handoff and every
 F-043 acceptance obligation remain open.
+
+The same bounded composition now exercises an authored positive stride. Both
+electrical arrays use the compact generated-instance domain while the target
+loop retains the authored induction. Branch endpoints and the derivative's
+potential access select each compact array with the shared source-index map
+`((generate_0_index - 1) / 2)`. Owner, induction and cardinality mutations keep
+the fail-closed behavior above; no second mapping registry or expression engine
+is introduced.
+
+This positive-stride witness is still one direct generated range and one direct
+peer branch. It does not define a general slice signature, cross-range mapping,
+negative step, nested generated operator graph or stateful operator profile.
+Those profiles and their independent qualification remain open under the
+existing F-043 checklist.

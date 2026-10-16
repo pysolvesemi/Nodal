@@ -1398,8 +1398,7 @@ bool generatedValueFeedsContribution(Value value, Block &body,
 
 enum class GeneratedValueEndpoint { Contribution, DirectContribution, IdtInput };
 
-bool generatedValueFeedsOneEndpoint(Value value, Block &body,
-                                    llvm::DenseSet<Operation *> &active,
+bool generatedValueFeedsOneEndpoint(Value value, Block &body, llvm::DenseSet<Operation *> &active,
                                     GeneratedValueEndpoint endpoint,
                                     bool traversedExpression = false) {
   Operation *definition = value.getDefiningOp();
@@ -1413,10 +1412,9 @@ bool generatedValueFeedsOneEndpoint(Value value, Block &body,
     return false;
   }
   llvm::StringRef name = user->getName().getStringRef();
-  const bool reachedContribution =
-      (endpoint == GeneratedValueEndpoint::Contribution ||
-       endpoint == GeneratedValueEndpoint::DirectContribution) &&
-      name == "nodal.contribute" && use.getOperandNumber() == 1;
+  const bool reachedContribution = (endpoint == GeneratedValueEndpoint::Contribution ||
+                                    endpoint == GeneratedValueEndpoint::DirectContribution) &&
+                                   name == "nodal.contribute" && use.getOperandNumber() == 1;
   const bool reachedIdt = endpoint == GeneratedValueEndpoint::IdtInput &&
                           name == "nodal.analog_idt" && traversedExpression &&
                           use.getOperandNumber() == 0;
@@ -1427,22 +1425,20 @@ bool generatedValueFeedsOneEndpoint(Value value, Block &body,
   const bool expression = name == "nodal.analog_add" || name == "nodal.analog_sub" ||
                           name == "nodal.analog_mul" || name == "nodal.analog_div" ||
                           name == "nodal.analog_neg";
-  const bool result = endpoint != GeneratedValueEndpoint::DirectContribution && expression &&
-                      user->getNumResults() == 1 &&
-                      generatedValueFeedsOneEndpoint(user->getResult(0), body, active, endpoint,
-                                                     true);
+  const bool result =
+      endpoint != GeneratedValueEndpoint::DirectContribution && expression &&
+      user->getNumResults() == 1 &&
+      generatedValueFeedsOneEndpoint(user->getResult(0), body, active, endpoint, true);
   active.erase(definition);
   return result;
 }
 
 bool generatedValueFeedsOneContribution(Value value, Block &body,
                                         llvm::DenseSet<Operation *> &active) {
-  return generatedValueFeedsOneEndpoint(value, body, active,
-                                        GeneratedValueEndpoint::Contribution);
+  return generatedValueFeedsOneEndpoint(value, body, active, GeneratedValueEndpoint::Contribution);
 }
 
-bool generatedValueFeedsOneIdtInput(Value value, Block &body,
-                                    llvm::DenseSet<Operation *> &active) {
+bool generatedValueFeedsOneIdtInput(Value value, Block &body, llvm::DenseSet<Operation *> &active) {
   return generatedValueFeedsOneEndpoint(value, body, active, GeneratedValueEndpoint::IdtInput);
 }
 

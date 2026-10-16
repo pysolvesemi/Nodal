@@ -1564,18 +1564,17 @@ int main() {
   if (generatedNodeIdtContribution == std::string::npos)
     return fail("generated node idt fixture lost its contribution anchor");
   generatedNodeIdtSource.replace(generatedNodeIdtContribution,
-                                 std::string("%branch, %derivative").size(),
-                                 "%branch, %integral");
-  auto generatedNodeIdtKind = generatedNodeIdtSource.find("kind = \"flow\"",
-                                                         generatedNodeIdtContribution);
+                                 std::string("%branch, %derivative").size(), "%branch, %integral");
+  auto generatedNodeIdtKind =
+      generatedNodeIdtSource.find("kind = \"flow\"", generatedNodeIdtContribution);
   if (generatedNodeIdtKind == std::string::npos)
     return fail("generated node idt fixture lost its contribution kind");
   generatedNodeIdtSource.replace(generatedNodeIdtKind, std::string("kind = \"flow\"").size(),
                                  "kind = \"potential\"");
 
-  for (llvm::StringRef mutation : {"valid", "access-owner", "access-induction", "operator-owner",
-                                   "operator-induction", "state", "direct-idt", "escape",
-                                   "post-expression", "second-access"}) {
+  for (llvm::StringRef mutation :
+       {"valid", "access-owner", "access-induction", "operator-owner", "operator-induction",
+        "state", "direct-idt", "escape", "post-expression", "second-access"}) {
     std::string source = generatedNodeIdtSource;
     if (mutation == "post-expression") {
       auto contribution = source.find("        \"nodal.contribute\"");

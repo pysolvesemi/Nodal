@@ -1990,8 +1990,6 @@ object Increment43RangeConstructionTests extends TestSuite:
       )
       assert(snapshot.generatedRegions.size == 1)
       val region = snapshot.generatedRegions.head
-      assert(region.lower == "1")
-      assert(region.step == "2")
       assert(region.declarations.size == 2)
       region.declarations.foreach: path =>
         assert(snapshot.sourceMap.exists(_.semanticPath == path))
@@ -2219,6 +2217,8 @@ object Increment43RangeConstructionTests extends TestSuite:
       )
       assert(snapshot.generatedRegions.size == 1)
       val region = snapshot.generatedRegions.head
+      assert(region.lower == "1")
+      assert(region.step == "2")
       assert(region.declarations.size == 2)
       region.declarations.foreach: path =>
         assert(snapshot.sourceMap.exists(_.semanticPath == path))

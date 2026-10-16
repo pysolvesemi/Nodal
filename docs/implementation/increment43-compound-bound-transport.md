@@ -805,3 +805,29 @@ arbitrary operator graphs, fan-out, shaped terminals, generated connections or
 instances, default specialization, eager unrolling, or language memory.
 Independent simulator qualification, the F-048/F-049/F-052 handoff and every
 F-043 acceptance obligation remain open.
+
+## Generated analog-node idt result-path checkpoint
+
+The generated-node `idt` profile now permits its exactly-owned result to
+traverse the existing one-use memoryless add/subtract/multiply/divide/negate
+expression path before reaching its additive contribution. The stateful
+operator still has one result use, one contribution destination and the exact
+generated range owner, induction and operator-owned state identity. This admits
+a dimension-preserving scale after integration without copying state or
+creating another generated occurrence.
+
+The backend reuses the canonical one-contribution dependency traversal and
+expression renderer; no second operator graph or state registry is introduced.
+The previous direct-result form remains supported. Native evidence covers the
+direct predecessor, a divided result, fan-out rejection before partial output,
+deterministic repeated emission and independent target reparse. A configured
+public positive-stride peer-node witness retains both source-index mappings,
+the pre-`idt` dimension-conversion path, fixed initial value and one post-`idt`
+memoryless scale in normalized IR and generated Verilog-A.
+
+This remains one direct generated range, one branch, one access and one
+stateful operator occurrence. It does not admit result fan-out, a second
+stateful operator, cross-range references, general slices, shaped terminals,
+generated connections or instances, default specialization, eager unrolling or
+language memory. Independent simulator qualification, the F-048/F-049/F-052
+handoff and every F-043 acceptance obligation remain open.

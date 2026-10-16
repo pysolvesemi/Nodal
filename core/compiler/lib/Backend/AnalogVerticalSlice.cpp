@@ -1396,7 +1396,7 @@ bool generatedValueFeedsContribution(Value value, Block &body,
   return reachedContribution;
 }
 
-enum class GeneratedValueEndpoint { Contribution, DirectContribution, IdtInput };
+enum class GeneratedValueEndpoint { Contribution, IdtInput };
 
 bool generatedValueFeedsOneEndpoint(Value value, Block &body, llvm::DenseSet<Operation *> &active,
                                     GeneratedValueEndpoint endpoint,
@@ -1412,8 +1412,7 @@ bool generatedValueFeedsOneEndpoint(Value value, Block &body, llvm::DenseSet<Ope
     return false;
   }
   llvm::StringRef name = user->getName().getStringRef();
-  const bool reachedContribution = (endpoint == GeneratedValueEndpoint::Contribution ||
-                                    endpoint == GeneratedValueEndpoint::DirectContribution) &&
+  const bool reachedContribution = endpoint == GeneratedValueEndpoint::Contribution &&
                                    name == "nodal.contribute" && use.getOperandNumber() == 1;
   const bool reachedIdt = endpoint == GeneratedValueEndpoint::IdtInput &&
                           name == "nodal.analog_idt" && traversedExpression &&
@@ -1426,8 +1425,7 @@ bool generatedValueFeedsOneEndpoint(Value value, Block &body, llvm::DenseSet<Ope
                           name == "nodal.analog_mul" || name == "nodal.analog_div" ||
                           name == "nodal.analog_neg";
   const bool result =
-      endpoint != GeneratedValueEndpoint::DirectContribution && expression &&
-      user->getNumResults() == 1 &&
+      expression && user->getNumResults() == 1 &&
       generatedValueFeedsOneEndpoint(user->getResult(0), body, active, endpoint, true);
   active.erase(definition);
   return result;
@@ -1440,12 +1438,6 @@ bool generatedValueFeedsOneContribution(Value value, Block &body,
 
 bool generatedValueFeedsOneIdtInput(Value value, Block &body, llvm::DenseSet<Operation *> &active) {
   return generatedValueFeedsOneEndpoint(value, body, active, GeneratedValueEndpoint::IdtInput);
-}
-
-bool generatedValueFeedsOneDirectContribution(Value value, Block &body,
-                                              llvm::DenseSet<Operation *> &active) {
-  return generatedValueFeedsOneEndpoint(value, body, active,
-                                        GeneratedValueEndpoint::DirectContribution);
 }
 
 bool isGeneratedNodeContributionProfile(Operation *generate) {
@@ -2476,8 +2468,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       const bool feedsContribution =
           operation.getNumResults() == 1 &&
           (stateful && generatedNodeContributionProfile
-               ? generatedValueFeedsOneDirectContribution(operation.getResult(0), analogBody,
-                                                          active)
+               ? generatedValueFeedsOneContribution(operation.getResult(0), analogBody, active)
                : generatedValueFeedsContribution(operation.getResult(0), analogBody, active));
       if (!feedsContribution)
         return emitMappedFailure(

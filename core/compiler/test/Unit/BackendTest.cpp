@@ -1574,19 +1574,8 @@ int main() {
 
   for (llvm::StringRef mutation :
        {"valid", "access-owner", "access-induction", "operator-owner", "operator-induction",
-        "state", "direct-idt", "escape", "post-expression", "second-access"}) {
+        "state", "direct-idt", "escape", "second-access"}) {
     std::string source = generatedNodeIdtSource;
-    if (mutation == "post-expression") {
-      auto contribution = source.find("        \"nodal.contribute\"");
-      auto operand = source.find("%branch, %integral", contribution);
-      if (contribution == std::string::npos || operand == std::string::npos)
-        return fail("generated node idt post-expression mutation anchor missing");
-      source.insert(contribution,
-                    "        %post = \"nodal.analog_neg\"(%integral) <{metadata = {}}> : (f64) "
-                    "-> f64\n");
-      operand = source.find("%branch, %integral", contribution);
-      source.replace(operand, std::string("%branch, %integral").size(), "%branch, %post");
-    }
     auto candidate = parse(context, source);
     if (!candidate)
       return fail("could not parse generated node idt fixture");
@@ -1648,6 +1637,73 @@ int main() {
     repeatedStream.flush();
     if (target != repeated)
       return fail("generated node idt emission is nondeterministic");
+  }
+
+  std::string generatedNodeScaledIdtSource = generatedNodeIdtSource;
+  auto scaledIdtContribution = generatedNodeScaledIdtSource.find("        \"nodal.contribute\"");
+  auto scaledIdtOperand =
+      generatedNodeScaledIdtSource.find("%branch, %integral", scaledIdtContribution);
+  if (scaledIdtContribution == std::string::npos || scaledIdtOperand == std::string::npos)
+    return fail("generated node scaled idt fixture lost its contribution anchor");
+  generatedNodeScaledIdtSource.insert(
+      scaledIdtContribution,
+      "        %scale = \"nodal.real_literal\"() <{value = 2.0 : f64, metadata = {}}> : () -> "
+      "f64\n"
+      "        %scaled = \"nodal.analog_div\"(%integral, %scale) <{metadata = {}}> : (f64, "
+      "f64) -> f64\n");
+  scaledIdtOperand = generatedNodeScaledIdtSource.find("%branch, %integral", scaledIdtContribution);
+  generatedNodeScaledIdtSource.replace(scaledIdtOperand, std::string("%branch, %integral").size(),
+                                       "%branch, %scaled");
+
+  for (llvm::StringRef mutation : {"valid", "fanout"}) {
+    auto candidate = parse(context, generatedNodeScaledIdtSource);
+    if (!candidate)
+      return fail("could not parse generated node scaled idt fixture");
+    mlir::Operation *scaled = nullptr;
+    mlir::Operation *contribution = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.analog_div" &&
+          operation->getOperand(0).getDefiningOp() &&
+          operation->getOperand(0).getDefiningOp()->getName().getStringRef() == "nodal.analog_idt")
+        scaled = operation;
+      if (operation->getName().getStringRef() == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!scaled || !contribution)
+      return fail("generated node scaled idt fixture lost its result path or contribution");
+    if (mutation == "fanout") {
+      mlir::OperationState state(scaled->getLoc(), "nodal.analog_neg");
+      state.addOperands(scaled->getResult(0));
+      state.addTypes(scaled->getResult(0).getType());
+      state.addAttribute("metadata", mlir::DictionaryAttr::get(&context));
+      mlir::Operation *escape = mlir::Operation::create(state);
+      contribution->getBlock()->getOperations().insert(contribution->getIterator(), escape);
+    }
+
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool accepted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (accepted || output != "sentinel")
+        return fail("generated node scaled idt fanout escaped or published partial output");
+      continue;
+    }
+    const std::string equation =
+        "V(tap[generate_0_index], p) <+ (idt((V(tap[generate_0_index], p) / 1), 0) / 2);";
+    if (!accepted || output.find(equation) == std::string::npos)
+      return fail("generated node scaled idt lost its owned memoryless result path");
+    std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("generated node scaled idt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("generated node scaled idt repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("generated node scaled idt emission is nondeterministic");
   }
 
   for (llvm::StringRef mutation : {"valid", "peer-owner", "peer-induction", "peer-source"}) {

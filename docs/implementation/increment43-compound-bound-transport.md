@@ -659,3 +659,28 @@ cross-range access, shaped terminals, general slices, generated
 connections/instances, or mixed procedural/event bodies. Independent simulator
 qualification and the F-048/F-049/F-052 handoff remain required. Every F-043
 parent and descendant acceptance box remains open.
+
+## Generated analog-node memoryless access checkpoint
+
+One exactly-owned access on a generated electrical-node branch may now feed
+its additive contribution directly or through the existing memoryless
+add/subtract/multiply/divide/negate expression chain. The existing direct
+`ddt` input remains supported. This admits an ordinary resistor equation
+`I(tap, p) <+ (V(tap, p) / R)` inside `hdlRange` while retaining symbolic
+resistance and bounds, and compact source-index mapping for strided ranges.
+
+The backend reuses the canonical one-contribution dependency validator and
+expression renderer. Every access and intermediate memoryless result must have
+exactly one use, stay in the same analog body and reach the owned contribution.
+The one-access/one-branch profile, exact generated owner and induction checks,
+and array/branch identity checks remain enforced. No expression is copied or
+unrolled. Native witnesses cover direct and divided access, forged metadata,
+a second use, an unsupported operator after arithmetic, deterministic output
+and target reparse; the public resistor witness exercises the configured
+Scala-to-IR-to-Verilog-A path and source maps with a symbolic strided bound.
+
+This does not admit stateful operators after a generated access, arbitrary
+fan-out, cross-range references, general slices, shaped terminals or generated
+instances/connections. Internal target reparse is compiler evidence, not
+independent simulator or numerical qualification. The F-048/F-049/F-052 handoff
+and every F-043 acceptance obligation remain open.

@@ -1538,6 +1538,83 @@ int main() {
       return fail("invalid generated node ddt access published partial output");
   }
 
+  std::string generatedNodeAlgebraSource = kGeneratedNodeDdtContributionModule.str();
+  auto derivativeStart = generatedNodeAlgebraSource.find("        %derivative =");
+  auto derivativeEnd = generatedNodeAlgebraSource.find('\n', derivativeStart);
+  if (derivativeStart == std::string::npos || derivativeEnd == std::string::npos)
+    return fail("generated node algebra fixture lost its derivative anchor");
+  const std::string derivativeLine =
+      generatedNodeAlgebraSource.substr(derivativeStart, derivativeEnd - derivativeStart);
+  generatedNodeAlgebraSource.replace(
+      derivativeStart, derivativeEnd - derivativeStart,
+      "        %resistance = \"nodal.real_literal\"() <{value = 1000.0 : f64, metadata = {}}> : "
+      "() -> f64\n"
+      "        %derivative = \"nodal.analog_div\"(%voltage, %resistance) <{metadata = {}}> : "
+      "(f64, f64) -> f64");
+  for (llvm::StringRef mutation : {"valid", "direct", "owner", "induction", "escape", "operator"}) {
+    std::string source = generatedNodeAlgebraSource;
+    if (mutation == "operator") {
+      auto result = source.find("%derivative =");
+      source.replace(result, std::string("%derivative").size(), "%current");
+      std::string nestedDerivative = derivativeLine;
+      nestedDerivative.replace(nestedDerivative.find("%voltage"), std::string("%voltage").size(),
+                               "%current");
+      source.insert(source.find("        \"nodal.contribute\""), nestedDerivative + "\n");
+    }
+    auto candidate = parse(context, source);
+    if (!candidate)
+      return fail("could not parse generated node algebra fixture");
+    mlir::Operation *access = nullptr;
+    mlir::Operation *division = nullptr;
+    mlir::Operation *contribution = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.access")
+        access = operation;
+      if (operation->getName().getStringRef() == "nodal.analog_div")
+        division = operation;
+      if (operation->getName().getStringRef() == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!access || !division || !contribution)
+      return fail("generated node algebra fixture lost its expression path");
+    if (mutation == "owner" || mutation == "induction") {
+      mlir::NamedAttrList metadata(access->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set(mutation == "owner" ? "generated_owner" : "generated_induction",
+                   mlir::StringAttr::get(&context, "forged"));
+      access->setAttr("metadata", metadata.getDictionary(&context));
+    }
+    if (mutation == "direct" || mutation == "escape") {
+      contribution->setOperand(1, access->getResult(0));
+      if (mutation == "direct")
+        division->erase();
+    }
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool accepted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid" && mutation != "direct") {
+      if (accepted || output != "sentinel")
+        return fail("invalid generated node algebra escaped or published partial output");
+      continue;
+    }
+    const std::string expected = mutation == "direct" ? "V(tap[generate_0_index], p)"
+                                                      : "(V(tap[generate_0_index], p) / 1000)";
+    if (!accepted ||
+        output.find("I(tap[generate_0_index], p) <+ " + expected + ";") == std::string::npos)
+      return fail("generated node algebra lost its indexed access or expression");
+    const std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("generated node algebra failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("generated node algebra repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("generated node algebra emission is nondeterministic");
+  }
+
   std::string stridedGeneratedNodeSource = kGeneratedNodeContributionModule.str();
   auto stridedRange =
       stridedGeneratedNodeSource.find("lower = 0 : i64, upper = 3 : i64, step = 1 : i64");

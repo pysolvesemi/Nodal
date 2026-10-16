@@ -2647,14 +2647,18 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       if (operation.getNumResults() != 1 || !operation.getResult(0).hasOneUse())
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
-            "generated analog-node access must feed one direct owned ddt input");
+            "generated analog-node access requires one owned contribution path");
       OpOperand &use = *operation.getResult(0).getUses().begin();
       Operation *user = use.getOwner();
-      if (user->getBlock() != &analogBody || use.getOperandNumber() != 0 ||
-          user->getName().getStringRef() != "nodal.analog_ddt")
+      const bool directDdt = user->getBlock() == &analogBody && use.getOperandNumber() == 0 &&
+                             user->getName().getStringRef() == "nodal.analog_ddt";
+      llvm::DenseSet<Operation *> active;
+      if (!directDdt &&
+          !generatedValueFeedsOneContribution(operation.getResult(0), analogBody, active))
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
-            "generated analog-node access must feed one direct owned ddt input");
+            "generated analog-node access must feed one memoryless contribution or direct owned "
+            "ddt input without escaping its range");
       ++generatedNodeAccesses;
     }
     if (!supportedExpression)
@@ -2683,7 +2687,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
   if (generatedNodeAccesses != 0 && (generatedNodeAccesses != 1 || generatedBranches.size() != 1))
     return emitMappedFailure(
         analog, "NODAL-BACKEND-CAPABILITY-001",
-        "generated analog-node ddt profile requires one direct access on one owned branch");
+        "generated analog-node access profile requires one direct access on one owned branch");
 
   output << "  analog begin\n";
   output << "    for (" << induction.getValue() << " = " << lower->text << "; "

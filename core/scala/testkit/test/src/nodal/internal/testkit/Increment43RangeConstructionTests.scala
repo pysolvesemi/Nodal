@@ -2096,13 +2096,16 @@ object Increment43RangeConstructionTests extends TestSuite:
       )
       assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
       assert(first.text.sliding("\"nodal.branch\"".length).count(_ == "\"nodal.branch\"") == 1)
-      assert(first.text.sliding("\"nodal.access\"".length).count(_ == "\"nodal.access\"") == 1)
+      val accessLines = first.text.linesIterator.filter(_.contains("\"nodal.access\"")).toVector
+      assert(accessLines.size == 2)
+      assert(accessLines.count(_.contains("kind = \"flow\"")) == 1)
+      assert(accessLines.count(_.contains("kind = \"potential\"")) == 1)
       assert(
         first.text.sliding("\"nodal.analog_div\"".length).count(_ == "\"nodal.analog_div\"") == 1
       )
-      val accessLine = first.text.linesIterator.find(_.contains("\"nodal.access\"")).get
-      assert(accessLine.contains(s"generated_owner = \"${region.path}\""))
-      assert(accessLine.contains(s"generated_induction = \"${region.induction}\""))
+      accessLines.foreach: line =>
+        assert(line.contains(s"generated_owner = \"${region.path}\""))
+        assert(line.contains(s"generated_induction = \"${region.induction}\""))
       (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
         case (Some(nodalc), Some(translator)) =>
           val directory = workDirectory()
@@ -2128,7 +2131,7 @@ object Increment43RangeConstructionTests extends TestSuite:
               result.verilogA.linesIterator.count(
                 _.trim ==
                   s"I(tap[$index], $peerName[$index]) <+ " +
-                    s"(V(tap[$index], $peerName[$index]) / R);"
+                  s"(V(tap[$index], $peerName[$index]) / R);"
               ) == 1
             )
             assert(

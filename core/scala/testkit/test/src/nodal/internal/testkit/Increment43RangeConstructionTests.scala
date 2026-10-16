@@ -115,6 +115,16 @@ final class Increment43GeneratedNodeDdtContribution extends Module:
       val voltage = V(tap, p)
       I(tap, p) <+ (1.pF * ddt(voltage))
 
+final class Increment43GeneratedPeerNodeDdtContribution extends Module:
+  val lanes: Param[Integer] = param(3.integer, range = 2 to 5)
+
+  hdlRange(1, lanes): _ =>
+    val tap = node(Electrical)
+    val returnTap = node(Electrical)
+    analog:
+      val voltage = V(tap, returnTap)
+      I(tap, returnTap) <+ (1.pF * ddt(voltage))
+
 final class Increment43CompoundGeneratedNodeGroupContributions extends Module:
   val lanes: Param[Integer] = param(3.integer, range = 2 to 4)
   val extra: Param[Integer] = param(1.integer, range = 1 to 2)
@@ -2195,6 +2205,66 @@ object Increment43RangeConstructionTests extends TestSuite:
                 _.trim == "electrical tap[1:(lanes - 1)];"
               ) == 1
             )
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("peer generated node access may feed one direct owned ddt contribution"):
+      val snapshot =
+        ConstructionKernel.inspect(new Increment43GeneratedPeerNodeDdtContribution)
+      assert(
+        snapshot ==
+          ConstructionKernel.inspect(new Increment43GeneratedPeerNodeDdtContribution)
+      )
+      assert(snapshot.generatedRegions.size == 1)
+      val region = snapshot.generatedRegions.head
+      assert(region.declarations.size == 2)
+      region.declarations.foreach: path =>
+        assert(snapshot.sourceMap.exists(_.semanticPath == path))
+      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
+      val declarationNames = region.declarations.map(_.split('.').last)
+      assert(declarationNames.count(_ == "tap") == 1)
+      val peerName = declarationNames.find(_ != "tap").get
+      val first = ScalaToMlirBridge.lower(new Increment43GeneratedPeerNodeDdtContribution)
+      assert(first == ScalaToMlirBridge.lower(new Increment43GeneratedPeerNodeDdtContribution))
+      val accessLines = first.text.linesIterator.filter(_.contains("\"nodal.access\"")).toVector
+      assert(accessLines.size == 2)
+      assert(accessLines.count(_.contains("kind = \"flow\"")) == 1)
+      assert(accessLines.count(_.contains("kind = \"potential\"")) == 1)
+      accessLines.foreach: line =>
+        assert(line.contains(s"generated_owner = \"${region.path}\""))
+        assert(line.contains(s"generated_induction = \"${region.induction}\""))
+      val ddtLine = first.text.linesIterator.find(_.contains("\"nodal.analog_ddt\"")).get
+      assert(ddtLine.contains(s"generated_owner = \"${region.path}\""))
+      assert(ddtLine.contains(s"generated_induction = \"${region.induction}\""))
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            def compileDdt() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43GeneratedPeerNodeDdtContribution,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val result = compileDdt()
+            assert(result == compileDdt())
+            assert(
+              result.verilogA.linesIterator.count(line =>
+                line.contains(s"I(tap[generate_0_index], $peerName[generate_0_index]) <+") &&
+                  line.contains(
+                    s"ddt(V(tap[generate_0_index], $peerName[generate_0_index]))"
+                  )
+              ) == 1
+            )
+            assert(result.verilogA.linesIterator.count(_.contains("electrical ")) == 2)
           finally delete(directory)
         case _ => assert(true)
 

@@ -1679,6 +1679,92 @@ int main() {
       return fail("generated peer-node algebra emission is nondeterministic");
   }
 
+  for (llvm::StringRef mutation :
+       {"valid", "peer-owner", "peer-induction", "peer-source", "access-owner", "access-induction",
+        "operator-owner", "operator-induction", "escape", "second-access"}) {
+    auto candidate = parse(context, kGeneratedNodeDdtContributionModule);
+    if (!candidate)
+      return fail("could not parse generated peer-node ddt fixture");
+    mlir::Operation *node = nullptr;
+    mlir::Operation *branch = nullptr;
+    mlir::Operation *access = nullptr;
+    mlir::Operation *derivative = nullptr;
+    mlir::Operation *contribution = nullptr;
+    mlir::Operation *rootTerminal = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      llvm::StringRef name = operation->getName().getStringRef();
+      if (name == "nodal.terminal")
+        rootTerminal = operation;
+      if (name == "nodal.node")
+        node = operation;
+      if (name == "nodal.branch")
+        branch = operation;
+      if (name == "nodal.access")
+        access = operation;
+      if (name == "nodal.analog_ddt")
+        derivative = operation;
+      if (name == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!node || !branch || !access || !derivative || !contribution || !rootTerminal)
+      return fail("generated peer-node ddt fixture lost its topology or expression");
+    mlir::Operation *peer = node->clone();
+    node->getBlock()->getOperations().insert(branch->getIterator(), peer);
+    peer->setAttr("name", mlir::StringAttr::get(&context, "returnTap"));
+    peer->setAttr("source_path",
+                  mlir::StringAttr::get(&context, "GeneratedNodeDdtContribution.returnTap"));
+    branch->setOperand(1, peer->getResult(0));
+    if (!rootTerminal->getResult(0).use_empty())
+      return fail("generated peer-node ddt fixture retained its root terminal use");
+    rootTerminal->erase();
+    if (mutation == "peer-owner")
+      peer->setAttr("generated_owner", mlir::StringAttr::get(&context, "forged"));
+    if (mutation == "peer-induction")
+      peer->setAttr("generated_induction", mlir::StringAttr::get(&context, "forged.index"));
+    if (mutation == "peer-source")
+      peer->setAttr("source_path", mlir::StringAttr::get(&context, ""));
+    if (mutation == "access-owner" || mutation == "access-induction") {
+      mlir::NamedAttrList metadata(access->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set(mutation == "access-owner" ? "generated_owner" : "generated_induction",
+                   mlir::StringAttr::get(&context, "forged"));
+      access->setAttr("metadata", metadata.getDictionary(&context));
+    }
+    if (mutation == "operator-owner")
+      derivative->setAttr("generated_owner", mlir::StringAttr::get(&context, "forged"));
+    if (mutation == "operator-induction")
+      derivative->setAttr("generated_induction", mlir::StringAttr::get(&context, "forged.index"));
+    if (mutation == "escape")
+      contribution->setOperand(1, access->getResult(0));
+    if (mutation == "second-access") {
+      mlir::Operation *extraAccess = access->clone();
+      access->getBlock()->getOperations().insert(std::next(access->getIterator()), extraAccess);
+    }
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool accepted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (accepted || output != "sentinel")
+        return fail("invalid generated peer-node ddt escaped or published partial output");
+      continue;
+    }
+    const std::string equation = "I(tap[generate_0_index], returnTap[generate_0_index]) <+ "
+                                 "ddt(V(tap[generate_0_index], returnTap[generate_0_index]));";
+    if (!accepted || output.find(equation) == std::string::npos)
+      return fail("generated peer-node ddt lost an indexed endpoint or owned derivative");
+    std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("generated peer-node ddt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("generated peer-node ddt repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("generated peer-node ddt emission is nondeterministic");
+  }
+
   std::string stridedGeneratedNodeSource = kGeneratedNodeContributionModule.str();
   auto stridedRange =
       stridedGeneratedNodeSource.find("lower = 0 : i64, upper = 3 : i64, step = 1 : i64");

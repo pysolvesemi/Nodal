@@ -708,3 +708,30 @@ add cross-range references, fan-out, stateful operators, general slices, shaped
 terminals, generated connections/instances, default specialization or
 unrolling. Independent simulator qualification, the F-048/F-049/F-052 handoff
 and every F-043 acceptance obligation remain open.
+
+## Peer generated analog-node ddt access checkpoint
+
+The qualified peer-node branch and direct generated-node `ddt` access profiles
+now have an explicit composition witness. Two exactly-owned electrical arrays
+form one direct branch; its potential access feeds one exactly-owned derivative,
+and the additive flow contribution retains the same indexed positive and
+negative endpoints. The source induction remains the target index and no lane
+is cloned or specialized.
+
+No backend admission rule or public API is widened. The composition reuses the
+canonical generated-node array, peer branch, access, `ddt`, contribution and
+source-map owners. Native validation covers the positive target and rejects a
+forged peer owner, peer induction, source identity, access owner or induction,
+operator owner or induction, direct escape and a second access before any
+partial target is published. Repeated emission must be byte-identical and pass
+the independent target reparser. The configured public Scala witness retains
+both node source maps plus exact branch, access, operator and contribution
+ownership through normalized IR and Verilog-A.
+
+This remains one direct peer branch with one potential access and one `ddt`.
+It does not admit `idt` or other state-retaining operators after a generated
+access, arbitrary fan-out, cross-range references, general slices, shaped
+terminals, generated connections/instances, default specialization or
+unrolling. Internal target reparse is compiler evidence, not independent
+simulator or numerical qualification. The F-048/F-049/F-052 handoff and every
+F-043 acceptance obligation remain open.

@@ -780,3 +780,28 @@ operator-to-operator chains, peer/cross-range state, general slices, shaped
 terminals, generated connections/instances, default specialization or eager
 unrolling. Independent simulator qualification, the F-048/F-049/F-052 handoff
 and every F-043 acceptance obligation remain open.
+
+## Peer generated analog-node idt composition checkpoint
+
+The qualified peer-node branch and generated-node `idt` profiles now have an
+explicit composition witness. Two exactly-owned electrical arrays form one
+direct branch; its potential access traverses the required one-use memoryless
+dimension-conversion path into one owned `idt`, and the additive potential
+contribution retains the same indexed positive and negative endpoints. A
+positive source stride continues to use the existing compact source-index map
+for both arrays while the authored induction remains the target loop variable.
+
+No backend admission rule, public API or schema is widened. The composition
+reuses the canonical node-array, peer-branch, access, expression, `idt`, state,
+contribution and source-map owners. Native evidence rejects a forged peer owner,
+peer induction or peer source identity before partial target publication. The
+public witness retains both source mappings, exact operator ownership and state
+identity, deterministic normalized IR and Verilog-A, and independently reparses
+the target.
+
+This remains one direct generated range, one peer branch and one stateful
+operator path. It does not define general slices, cross-range references,
+arbitrary operator graphs, fan-out, shaped terminals, generated connections or
+instances, default specialization, eager unrolling, or language memory.
+Independent simulator qualification, the F-048/F-049/F-052 handoff and every
+F-043 acceptance obligation remain open.

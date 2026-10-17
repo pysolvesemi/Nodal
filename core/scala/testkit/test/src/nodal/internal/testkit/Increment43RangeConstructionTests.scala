@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 65376)
+Total output lines: 5501
+
 package nodal.internal.testkit
 
 import java.nio.charset.StandardCharsets
@@ -923,6 +926,18 @@ final class Increment43IndependentStridedNestedGeneratedNodes extends Module:
       val nestedTap = node(Electrical)
       val _ = nestedTap
       ()
+
+final class Increment43NestedGeneratedNodeResistor extends Module:
+  val rows: Param[Integer] = param(8.integer, range = 6 to 10)
+  val columns: Param[Integer] = param(11.integer, range = 9 to 13)
+  val resistance: Param[Real] = param(2.kOhm)
+  val p = inout(Electrical)
+
+  hdlRange(1, rows, 2): _ =>
+    hdlRange(2, columns, 3): _ =>
+      val nestedTap = node(Electrical)
+      analog:
+        I(nestedTap, p) <+ (V(nestedTap, p) / resistance)
 
 final class Increment43RepeatedSiblingGeneratedNodes extends Module:
   val lanes: Param[Integer] = param(7.integer, range = 6 to 10)
@@ -2046,6 +2061,110 @@ object Increment43RangeConstructionTests extends TestSuite:
           finally delete(directory)
         case _ => assert(true)
 
+    test("nested generated node equation retains row-major child ownership"):
+      val snapshot = ConstructionKernel.inspect(new Increment43NestedGeneratedNodeResistor)
+      assert(snapshot == ConstructionKernel.inspect(new Increment43NestedGeneratedNodeResistor))
+      assert(snapshot.generatedRegions.size == 2)
+      val outer = snapshot.generatedRegions.find(_.parent.isEmpty).get
+      val child = snapshot.generatedRegions.find(_.parent.nonEmpty).get
+      assert(child.parent.contains(outer.path))
+      assert(outer.declarations.isEmpty)
+      assert(child.declarations.size == 1)
+      assert(snapshot.analogRegions.size == 1)
+      val analog = snapshot.analogRegions.head
+      assert(analog.generatedOwner.contains(child.path))
+      assert(analog.generatedInduction.contains(child.induction))
+      assert(analog.contributions.size == 1)
+      assert(analog.contributions.head.generatedOwner.contains(child.path))
+      assert(analog.contributions.head.generatedInduction.contains(child.induction))
+
+      val first = ScalaToMlirBridge.lower(new Increment43NestedGeneratedNodeResistor)
+      assert(first == ScalaToMlirBridge.lower(new Increment43NestedGeneratedNodeResistor))
+      assert(
+        first.text.sliding("\"nodal.generate\"".length).count(_ == "\"nodal.generate\"") == 2
+      )
+      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 1)
+      assert(first.text.sliding("\"nodal.branch\"".length).count(_ == "\"nodal.branch\"") == 1)
+      assert(
+        first.text.sliding("\"nodal.contribute\"".length).count(_ == "\"nodal.contribute\"") == 1
+      )
+      val sourceMapStart = first.text.indexOf("nodal.bridge.source_map")
+      val sourceMapEnd = first.text.indexOf("nodal.bridge.topology", sourceMapStart)
+      assert(sourceMapStart >= 0)
+      assert(sourceMapEnd > sourceMapStart)
+      val sourceMap = first.text.substring(sourceMapStart, sourceMapEnd)
+      snapshot.generatedRegions.foreach: region =>
+        val regionMarker = s"semantic_path = \"${region.path}\""
+        val inductionMarker = s"semantic_path = \"${region.induction}\""
+        assert(sourceMap.sliding(regionMarker.length).count(_ == regionMarker) == 1)
+        assert(sourceMap.sliding(inductionMarker.length).count(_ == inductionMarker) == 1)
+        region.declarations.foreach: declaration =>
+          val declarationMarker = s"semantic_path = \"$declaration\""
+          assert(sourceMap.sliding(declarationMarker.length).count(_ == declarationMarker) == 1)
+
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val branchLine = first.text.linesIterator.find(_.contains("\"nodal.branch\"")).get
+            val childOwner = s"generated_owner = \"${child.path}\""
+            val parentOwner = s"generated_owner = \"${outer.path}\""
+            assert(branchLine.contains(childOwner))
+            val forgedBranchLine = branchLine.replace(childOwner, parentOwner)
+            val branchOffset = first.text.indexOf(branchLine)
+            assert(branchOffset >= 0)
+            assert(forgedBranchLine != branchLine)
+            val forged = first.text.patch(branchOffset, forgedBranchLine, branchLine.length)
+            val hash = MessageDigest.getInstance("SHA-256")
+              .digest(forged.getBytes(StandardCharsets.UTF_8))
+              .map(value => f"${value & 0xff}%02x").mkString
+            NativeCompilerClient.run(
+              first.copy(text = forged, sha256 = hash),
+              NativeCompilerRequest(
+                executable = Path.of(nodalc).toAbsolutePath,
+                arguments = Vector("--pass-pipeline=builtin.module(nodal-gate-default)"),
+                workingDirectory = directory,
+                timeout = Duration.ofSeconds(30)
+              )
+            ) match
+              case failure: NativeCompilerFailure =>
+                assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
+              case success: NativeCompilerSuccess =>
+                scala.Predef.assert(false, s"forged nested generated branch accepted: $success")
+
+            def compileNestedEquation() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43NestedGeneratedNodeResistor,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val result = compileNestedEquation()
+            assert(result == compileNestedEquation())
+            val nodeName = child.declarations.head.split('.').last
+            val outerCount = "((((rows - 1) + 2) - 1) / 2)"
+            val innerCount = "((((columns - 2) + 3) - 1) / 3)"
+            val flatIndex =
+              s"((((generate_0_index - 1) / 2) * $innerCount) + ((generate_1_index - 2) / 3))"
+            assert(
+              result.verilogA.contains(
+                s"  electrical $nodeName[0:(($outerCount * $innerCount) - 1)];"
+              )
+            )
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("genvar ")) == 2)
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (")) == 2)
+            assert(result.verilogA.contains(s"I($nodeName[$flatIndex], p)"))
+            assert(result.verilogA.contains(s"V($nodeName[$flatIndex], p)"))
+          finally delete(directory)
+        case _ => assert(true)
+
     test("repeated sibling generated equations retain separate owners and target loops"):
       val snapshot =
         ConstructionKernel.inspect(new Increment43RepeatedSiblingGeneratedResistors)
@@ -2216,1271 +2335,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             val idtOffset = first.text.indexOf(idtLines(1))
             assert(idtOffset >= 0)
             val forged = first.text.patch(idtOffset, forgedIdt, idtLines(1).length)
-            val hash = MessageDigest.getInstance("SHA-256")
-              .digest(forged.getBytes(StandardCharsets.UTF_8))
-              .map(value => f"${value & 0xff}%02x").mkString
-            NativeCompilerClient.run(
-              first.copy(text = forged, sha256 = hash),
-              NativeCompilerRequest(
-                executable = Path.of(nodalc).toAbsolutePath,
-                arguments = Vector("--pass-pipeline=builtin.module(nodal-gate-default)"),
-                workingDirectory = directory,
-                timeout = Duration.ofSeconds(30)
-              )
-            ) match
-              case failure: NativeCompilerFailure =>
-                assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
-              case success: NativeCompilerSuccess =>
-                scala.Predef.assert(
-                  false,
-                  s"cross-range generated idt owner accepted: ${success.normalizedMlir}"
-                )
-
-            def compileRepeated() =
-              ScalaToMlirBridge
-                .compileToVerilogA(
-                  new Increment43RepeatedSiblingGeneratedIdtEquations,
-                  Path.of(nodalc).toAbsolutePath,
-                  Path.of(translator).toAbsolutePath,
-                  directory,
-                  Duration.ofSeconds(60)
-                )
-                .fold(
-                  failure =>
-                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                  identity
-                )
-            val result = compileRepeated()
-            assert(result == compileRepeated())
-            val names = regions.map(_.declarations.head.split('.').last)
-            val compactUpper = "(((((lanes - 1) + 2) - 1) / 2) - 1)"
-            assert(result.verilogA.contains(s"  electrical ${names.head}[0:$compactUpper];"))
-            assert(result.verilogA.contains(s"  electrical ${names(1)}[0:(groups - 1)];"))
-            assert(
-              result.verilogA.contains(
-                "for (generate_0_index = 1; generate_0_index < lanes; " +
-                  "generate_0_index = generate_0_index + 2)"
-              )
-            )
-            assert(
-              result.verilogA.contains(
-                "for (generate_1_index = 0; generate_1_index < groups; " +
-                  "generate_1_index = generate_1_index + 1)"
-              )
-            )
-            val mapped = "((generate_0_index - 1) / 2)"
-            assert(
-              result.verilogA.linesIterator.count(line =>
-                line.contains(s"V(${names.head}[$mapped], p) <+") &&
-                  line.contains(s"idt((V(${names.head}[$mapped], p) / 1), 0)")
-              ) == 1
-            )
-            assert(
-              result.verilogA.linesIterator.count(line =>
-                line.contains(s"V(${names(1)}[generate_1_index], n) <+") &&
-                  line.contains(s"idt((V(${names(1)}[generate_1_index], n) / 1), 0)")
-              ) == 1
-            )
-            assert(result.verilogA.linesIterator.count(_.contains("for (generate_")) == 2)
-            assert(result.verilogA.linesIterator.count(_.contains("idt(")) == 2)
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("generated node groups retain separate arrays and shared symbolic index identity"):
-      val snapshot = ConstructionKernel.inspect(new Increment43SymbolicGeneratedNodeGroup)
-      assert(snapshot == ConstructionKernel.inspect(new Increment43SymbolicGeneratedNodeGroup))
-      assert(snapshot.generatedRegions.size == 1)
-      val region = snapshot.generatedRegions.head
-      assert(region.lower == "1")
-      assert(region.maximumTripCount == 4)
-      val declarationNames = region.declarations.map(_.split('.').last)
-      assert(declarationNames.size == 2)
-      assert(declarationNames.count(_ == "tap") == 1)
-      val generatedName = declarationNames.find(_ != "tap").get
-      assert(generatedName.startsWith("analog_node_increment43_range_construction_tests_l31_"))
-      region.declarations.foreach: path =>
-        assert(snapshot.sourceMap.exists(_.semanticPath == path))
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
-      val first = ScalaToMlirBridge.lower(new Increment43SymbolicGeneratedNodeGroup)
-      assert(first == ScalaToMlirBridge.lower(new Increment43SymbolicGeneratedNodeGroup))
-      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            def compileGroup() =
-              ScalaToMlirBridge
-                .compileToVerilogA(
-                  new Increment43SymbolicGeneratedNodeGroup,
-                  Path.of(nodalc).toAbsolutePath,
-                  Path.of(translator).toAbsolutePath,
-                  directory,
-                  Duration.ofSeconds(60)
-                )
-                .fold(
-                  failure =>
-                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                  identity
-                )
-            val result = compileGroup()
-            assert(result == compileGroup())
-            assert(result.verilogA.contains("parameter integer lanes = 3 from [2:5];"))
-            assert(
-              result.verilogA.contains(
-                s"  electrical $generatedName[1:(lanes - 1)];\n" +
-                  "  electrical tap[1:(lanes - 1)];"
-              )
-            )
-            assert(
-              result.mlir.sliding("\"nodal.generate\"".length).count(_ == "\"nodal.generate\"") == 1
-            )
-            assert(result.mlir.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
-            assert(!result.verilogA.contains("genvar"))
-            assert(!result.verilogA.contains("analog begin"))
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("generated node contribution retains its owned indexed target"):
-      val snapshot = ConstructionKernel.inspect(new Increment43GeneratedNodeContribution)
-      assert(snapshot == ConstructionKernel.inspect(new Increment43GeneratedNodeContribution))
-      assert(snapshot.generatedRegions.size == 1)
-      val region = snapshot.generatedRegions.head
-      assert(region.declarations.size == 1)
-      assert(snapshot.analogRegions.count(_.generatedOwner.contains(region.path)) == 1)
-      val first = ScalaToMlirBridge.lower(new Increment43GeneratedNodeContribution)
-      assert(first == ScalaToMlirBridge.lower(new Increment43GeneratedNodeContribution))
-      assert(first.text.contains("\"nodal.node\""))
-      assert(first.text.contains("\"nodal.branch\""))
-      assert(first.text.contains("\"nodal.contribute\""))
-      assert(first.text.contains(s"generated_owner = \"${region.path}\""))
-      assert(first.text.contains(s"generated_induction = \"${region.induction}\""))
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            def compileMixed() =
-              ScalaToMlirBridge
-                .compileToVerilogA(
-                  new Increment43GeneratedNodeContribution,
-                  Path.of(nodalc).toAbsolutePath,
-                  Path.of(translator).toAbsolutePath,
-                  directory,
-                  Duration.ofSeconds(60)
-                )
-                .fold(
-                  failure =>
-                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                  identity
-                )
-            val result = compileMixed()
-            assert(result == compileMixed())
-            assert(result.verilogA.contains("  electrical tap[0:(lanes - 1)];"))
-            assert(result.verilogA.contains("  genvar generate_0_index;"))
-            assert(result.verilogA.linesIterator.count(
-              _.trim == "V(tap[generate_0_index], p) <+ 1;"
-            ) == 1)
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("generated node-group contribution retains separate arrays and one selected target"):
-      val snapshot = ConstructionKernel.inspect(new Increment43GeneratedNodeGroupContribution)
-      assert(
-        snapshot == ConstructionKernel.inspect(new Increment43GeneratedNodeGroupContribution)
-      )
-      assert(snapshot.generatedRegions.size == 1)
-      val region = snapshot.generatedRegions.head
-      assert(region.lower == "1")
-      assert(region.declarations.size == 2)
-      region.declarations.foreach: path =>
-        assert(snapshot.sourceMap.exists(_.semanticPath == path))
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
-      assert(snapshot.analogRegions.count(_.generatedOwner.contains(region.path)) == 1)
-      val declarationNames = region.declarations.map(_.split('.').last)
-      assert(declarationNames.count(_ == "tap") == 1)
-      val generatedName = declarationNames.find(_ != "tap").get
-      val first = ScalaToMlirBridge.lower(new Increment43GeneratedNodeGroupContribution)
-      assert(first == ScalaToMlirBridge.lower(new Increment43GeneratedNodeGroupContribution))
-      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
-      assert(first.text.sliding("\"nodal.branch\"".length).count(_ == "\"nodal.branch\"") == 1)
-      assert(
-        first.text.sliding("\"nodal.contribute\"".length).count(_ == "\"nodal.contribute\"") == 1
-      )
-      assert(first.text.contains(s"generated_owner = \"${region.path}\""))
-      assert(first.text.contains(s"generated_induction = \"${region.induction}\""))
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            def compileGroup() =
-              ScalaToMlirBridge
-                .compileToVerilogA(
-                  new Increment43GeneratedNodeGroupContribution,
-                  Path.of(nodalc).toAbsolutePath,
-                  Path.of(translator).toAbsolutePath,
-                  directory,
-                  Duration.ofSeconds(60)
-                )
-                .fold(
-                  failure =>
-                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                  identity
-                )
-            val result = compileGroup()
-            assert(result == compileGroup())
-            val generatedDeclaration = s"  electrical $generatedName[1:(lanes - 1)];"
-            val tapDeclaration = "  electrical tap[1:(lanes - 1)];"
-            assert(result.verilogA.contains(generatedDeclaration))
-            assert(result.verilogA.contains(tapDeclaration))
-            assert(
-              result.verilogA.indexOf(generatedDeclaration) <
-                result.verilogA.indexOf(tapDeclaration)
-            )
-            assert(result.verilogA.linesIterator.count(
-              _.trim == "V(tap[generate_0_index], p) <+ 1;"
-            ) == 1)
-            assert(result.verilogA.linesIterator.count(_.contains("electrical ")) == 3)
-            assert(result.verilogA.linesIterator.count(_.contains("genvar generate_0_index")) == 1)
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("generated node-group contributions retain distinct selected targets"):
-      val snapshot = ConstructionKernel.inspect(new Increment43GeneratedNodeGroupContributions)
-      assert(
-        snapshot == ConstructionKernel.inspect(new Increment43GeneratedNodeGroupContributions)
-      )
-      assert(snapshot.generatedRegions.size == 1)
-      val region = snapshot.generatedRegions.head
-      assert(region.lower == "1")
-      assert(region.declarations.size == 2)
-      region.declarations.foreach: path =>
-        assert(snapshot.sourceMap.exists(_.semanticPath == path))
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
-      assert(snapshot.analogRegions.count(_.generatedOwner.contains(region.path)) == 1)
-      val declarationNames = region.declarations.map(_.split('.').last)
-      assert(declarationNames.count(_ == "tap") == 1)
-      val generatedName = declarationNames.find(_ != "tap").get
-      val first = ScalaToMlirBridge.lower(new Increment43GeneratedNodeGroupContributions)
-      assert(first == ScalaToMlirBridge.lower(new Increment43GeneratedNodeGroupContributions))
-      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
-      assert(first.text.sliding("\"nodal.branch\"".length).count(_ == "\"nodal.branch\"") == 2)
-      assert(
-        first.text.sliding("\"nodal.contribute\"".length).count(_ == "\"nodal.contribute\"") == 2
-      )
-      assert(first.text.contains(s"generated_owner = \"${region.path}\""))
-      assert(first.text.contains(s"generated_induction = \"${region.induction}\""))
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            def compileGroup() =
-              ScalaToMlirBridge
-                .compileToVerilogA(
-                  new Increment43GeneratedNodeGroupContributions,
-                  Path.of(nodalc).toAbsolutePath,
-                  Path.of(translator).toAbsolutePath,
-                  directory,
-                  Duration.ofSeconds(60)
-                )
-                .fold(
-                  failure =>
-                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                  identity
-                )
-            val result = compileGroup()
-            assert(result == compileGroup())
-            val generatedDeclaration = s"  electrical $generatedName[1:(lanes - 1)];"
-            val tapDeclaration = "  electrical tap[1:(lanes - 1)];"
-            assert(result.verilogA.contains(generatedDeclaration))
-            assert(result.verilogA.contains(tapDeclaration))
-            assert(result.verilogA.linesIterator.count(
-              _.trim == "V(tap[generate_0_index], p) <+ 1;"
-            ) == 1)
-            assert(result.verilogA.linesIterator.count(
-              _.trim == s"V($generatedName[generate_0_index], p) <+ 2;"
-            ) == 1)
-            assert(result.verilogA.linesIterator.count(_.contains("electrical ")) == 3)
-            assert(result.verilogA.linesIterator.count(_.contains("genvar generate_0_index")) == 1)
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("compound generated node-group contributions retain symbolic array bounds"):
-      val snapshot =
-        ConstructionKernel.inspect(new Increment43CompoundGeneratedNodeGroupContributions)
-      assert(
-        snapshot ==
-          ConstructionKernel.inspect(new Increment43CompoundGeneratedNodeGroupContributions)
-      )
-      assert(snapshot.generatedRegions.size == 1)
-      val region = snapshot.generatedRegions.head
-      assert(region.lower == "1")
-      assert(region.declarations.size == 2)
-      region.declarations.foreach: path =>
-        assert(snapshot.sourceMap.exists(_.semanticPath == path))
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
-      val declarationNames = region.declarations.map(_.split('.').last)
-      assert(declarationNames.count(_ == "tap") == 1)
-      val generatedName = declarationNames.find(_ != "tap").get
-      val first = ScalaToMlirBridge.lower(new Increment43CompoundGeneratedNodeGroupContributions)
-      assert(
-        first == ScalaToMlirBridge.lower(new Increment43CompoundGeneratedNodeGroupContributions)
-      )
-      assert(first.text.contains("operator_name = \"add\""))
-      assert(first.text.contains("\"nodal.generate\"(%generated_bound_value_"))
-      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
-      assert(first.text.sliding("\"nodal.branch\"".length).count(_ == "\"nodal.branch\"") == 2)
-      assert(
-        first.text.sliding("\"nodal.contribute\"".length).count(_ == "\"nodal.contribute\"") == 2
-      )
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            def compileGroup() =
-              ScalaToMlirBridge
-                .compileToVerilogA(
-                  new Increment43CompoundGeneratedNodeGroupContributions,
-                  Path.of(nodalc).toAbsolutePath,
-                  Path.of(translator).toAbsolutePath,
-                  directory,
-                  Duration.ofSeconds(60)
-                )
-                .fold(
-                  failure =>
-                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                  identity
-                )
-            val result = compileGroup()
-            assert(result == compileGroup())
-            assert(result.verilogA.contains("parameter integer lanes = 3 from [2:4];"))
-            assert(result.verilogA.contains("parameter integer extra = 1 from [1:2];"))
-            assert(
-              result.verilogA.contains(
-                s"  electrical $generatedName[1:((lanes + extra) - 1)];\n" +
-                  "  electrical tap[1:((lanes + extra) - 1)];"
-              )
-            )
-            assert(
-              result.verilogA.contains(
-                "for (generate_0_index = 1; generate_0_index < (lanes + extra); " +
-                  "generate_0_index = generate_0_index + 1)"
-              )
-            )
-            assert(result.verilogA.linesIterator.count(
-              _.trim == "V(tap[generate_0_index], p) <+ 1;"
-            ) == 1)
-            assert(result.verilogA.linesIterator.count(
-              _.trim == s"V($generatedName[generate_0_index], p) <+ 2;"
-            ) == 1)
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("one generated node array may feed multiple direct owned branches"):
-      val snapshot = ConstructionKernel.inspect(new Increment43SharedGeneratedNodeContributions)
-      assert(
-        snapshot == ConstructionKernel.inspect(new Increment43SharedGeneratedNodeContributions)
-      )
-      assert(snapshot.generatedRegions.size == 1)
-      val region = snapshot.generatedRegions.head
-      assert(region.declarations.size == 1)
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.declarations.head))
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
-      val first = ScalaToMlirBridge.lower(new Increment43SharedGeneratedNodeContributions)
-      assert(first == ScalaToMlirBridge.lower(new Increment43SharedGeneratedNodeContributions))
-      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 1)
-      assert(first.text.sliding("\"nodal.branch\"".length).count(_ == "\"nodal.branch\"") == 2)
-      assert(
-        first.text.sliding("\"nodal.contribute\"".length).count(_ == "\"nodal.contribute\"") == 2
-      )
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            def compileShared() =
-              ScalaToMlirBridge
-                .compileToVerilogA(
-                  new Increment43SharedGeneratedNodeContributions,
-                  Path.of(nodalc).toAbsolutePath,
-                  Path.of(translator).toAbsolutePath,
-                  directory,
-                  Duration.ofSeconds(60)
-                )
-                .fold(
-                  failure =>
-                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                  identity
-                )
-            val result = compileShared()
-            assert(result == compileShared())
-            val generatedName = region.declarations.head.split('.').last
-            assert(result.verilogA.linesIterator.count(
-              _.trim == s"V($generatedName[generate_0_index], p) <+ 1;"
-            ) == 1)
-            assert(result.verilogA.linesIterator.count(
-              _.trim == s"V($generatedName[generate_0_index], n) <+ 2;"
-            ) == 1)
-            assert(result.verilogA.linesIterator.count(_.contains("electrical ")) == 3)
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("two generated node arrays may form one direct owned branch"):
-      val snapshot = ConstructionKernel.inspect(new Increment43GeneratedNodePairContribution)
-      assert(
-        snapshot == ConstructionKernel.inspect(new Increment43GeneratedNodePairContribution)
-      )
-      assert(snapshot.generatedRegions.size == 1)
-      val region = snapshot.generatedRegions.head
-      assert(region.declarations.size == 2)
-      region.declarations.foreach: path =>
-        assert(snapshot.sourceMap.exists(_.semanticPath == path))
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
-      val declarationNames = region.declarations.map(_.split('.').last)
-      assert(declarationNames.count(_ == "tap") == 1)
-      val generatedName = declarationNames.find(_ != "tap").get
-      val first = ScalaToMlirBridge.lower(new Increment43GeneratedNodePairContribution)
-      assert(first == ScalaToMlirBridge.lower(new Increment43GeneratedNodePairContribution))
-      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
-      assert(first.text.sliding("\"nodal.branch\"".length).count(_ == "\"nodal.branch\"") == 1)
-      assert(
-        first.text.sliding("\"nodal.contribute\"".length).count(_ == "\"nodal.contribute\"") == 1
-      )
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            def compilePair() =
-              ScalaToMlirBridge
-                .compileToVerilogA(
-                  new Increment43GeneratedNodePairContribution,
-                  Path.of(nodalc).toAbsolutePath,
-                  Path.of(translator).toAbsolutePath,
-                  directory,
-                  Duration.ofSeconds(60)
-                )
-                .fold(
-                  failure =>
-                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                  identity
-                )
-            val result = compilePair()
-            assert(result == compilePair())
-            assert(result.verilogA.linesIterator.count(
-              _.trim ==
-                s"V(tap[generate_0_index], $generatedName[generate_0_index]) <+ 1;"
-            ) == 1)
-            assert(result.verilogA.linesIterator.count(_.contains("electrical ")) == 2)
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("generated node resistor retains compact indexed memoryless access"):
-      val snapshot = ConstructionKernel.inspect(new Increment43GeneratedNodeResistorContribution)
-      assert(
-        snapshot == ConstructionKernel.inspect(new Increment43GeneratedNodeResistorContribution)
-      )
-      assert(snapshot.generatedRegions.size == 1)
-      val region = snapshot.generatedRegions.head
-      assert(region.declarations.size == 1)
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.declarations.head))
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
-      val first = ScalaToMlirBridge.lower(new Increment43GeneratedNodeResistorContribution)
-      assert(first == ScalaToMlirBridge.lower(new Increment43GeneratedNodeResistorContribution))
-      val accessLine = first.text.linesIterator.find(_.contains("\"nodal.access\"")).get
-      assert(first.text.contains("\"nodal.analog_div\""))
-      assert(!first.text.contains("\"nodal.analog_ddt\""))
-      assert(accessLine.contains(s"generated_owner = \"${region.path}\""))
-      assert(accessLine.contains(s"generated_induction = \"${region.induction}\""))
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            def compileResistor() =
-              ScalaToMlirBridge
-                .compileToVerilogA(
-                  new Increment43GeneratedNodeResistorContribution,
-                  Path.of(nodalc).toAbsolutePath,
-                  Path.of(translator).toAbsolutePath,
-                  directory,
-                  Duration.ofSeconds(60)
-                )
-                .fold(
-                  failure =>
-                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                  identity
-                )
-            val index = "((generate_0_index - 1) / 2)"
-            val result = compileResistor()
-            assert(result == compileResistor())
-            assert(
-              result.verilogA.linesIterator.count(line =>
-                line.contains(s"I(tap[$index], p) <+") &&
-                  line.contains(s"(V(tap[$index], p) / R)")
-              ) == 1
-            )
-            assert(
-              result.verilogA.linesIterator.count(
-                _.trim == "electrical tap[0:(((((lanes - 1) + 2) - 1) / 2) - 1)];"
-              ) == 1
-            )
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("shared generated node retains independent branch equations"):
-      val snapshot = ConstructionKernel.inspect(new Increment43SharedGeneratedNodeResistors)
-      assert(
-        snapshot == ConstructionKernel.inspect(new Increment43SharedGeneratedNodeResistors)
-      )
-      assert(snapshot.generatedRegions.size == 1)
-      val region = snapshot.generatedRegions.head
-      assert(region.declarations.size == 1)
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.declarations.head))
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
-      val first = ScalaToMlirBridge.lower(new Increment43SharedGeneratedNodeResistors)
-      assert(first == ScalaToMlirBridge.lower(new Increment43SharedGeneratedNodeResistors))
-      val accessLines = first.text.linesIterator.filter(_.contains("\"nodal.access\"")).toVector
-      // Raw capture includes the two contribution targets as well as the two voltage reads.
-      assert(accessLines.size == 4)
-      assert(accessLines.count(_.contains("kind = \"flow\"")) == 2)
-      assert(accessLines.count(_.contains("kind = \"potential\"")) == 2)
-      assert(first.text.linesIterator.count(_.contains("\"nodal.branch\"")) == 2)
-      assert(first.text.linesIterator.count(_.contains("\"nodal.contribute\"")) == 2)
-      assert(first.text.contains("\"nodal.analog_div\""))
-      assert(!first.text.contains("\"nodal.analog_ddt\""))
-      assert(accessLines.forall(_.contains(s"generated_owner = \"${region.path}\"")))
-      assert(accessLines.forall(_.contains(s"generated_induction = \"${region.induction}\"")))
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            def compileResistor() =
-              ScalaToMlirBridge
-                .compileToVerilogA(
-                  new Increment43SharedGeneratedNodeResistors,
-                  Path.of(nodalc).toAbsolutePath,
-                  Path.of(translator).toAbsolutePath,
-                  directory,
-                  Duration.ofSeconds(60)
-                )
-                .fold(
-                  failure =>
-                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                  identity
-                )
-            val index = "((generate_0_index - 1) / 2)"
-            val result = compileResistor()
-            assert(result == compileResistor())
-            val firstEquation = s"I(tap[$index], p) <+ (V(tap[$index], p) / R);"
-            val secondEquation = s"I(tap[$index], n) <+ (V(tap[$index], n) / R);"
-            val normalizedAccesses =
-              result.mlir.linesIterator.filter(_.contains("\"nodal.access\"")).toVector
-            assert(normalizedAccesses.size == 2)
-            assert(normalizedAccesses.forall(_.contains("kind = \"potential\"")))
-            assert(result.verilogA.contains(secondEquation))
-            assert(result.verilogA.indexOf(firstEquation) < result.verilogA.indexOf(secondEquation))
-            assert(result.verilogA.linesIterator.count(_.contains(" <+ ")) == 2)
-            assert(
-              result.verilogA.linesIterator.count(line =>
-                line.contains(s"I(tap[$index], p) <+") &&
-                  line.contains(s"(V(tap[$index], p) / R)")
-              ) == 1
-            )
-            assert(
-              result.verilogA.linesIterator.count(
-                _.trim == "electrical tap[0:(((((lanes - 1) + 2) - 1) / 2) - 1)];"
-              ) == 1
-            )
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("peer generated node resistor retains both indexed endpoints"):
-      val snapshot =
-        ConstructionKernel.inspect(new Increment43GeneratedPeerNodeResistorContribution)
-      assert(
-        snapshot ==
-          ConstructionKernel.inspect(new Increment43GeneratedPeerNodeResistorContribution)
-      )
-      assert(snapshot.generatedRegions.size == 1)
-      val region = snapshot.generatedRegions.head
-      assert(region.declarations.size == 2)
-      region.declarations.foreach: path =>
-        assert(snapshot.sourceMap.exists(_.semanticPath == path))
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
-      val declarationNames = region.declarations.map(_.split('.').last)
-      assert(declarationNames.count(_ == "tap") == 1)
-      val peerName = declarationNames.find(_ != "tap").get
-      val first = ScalaToMlirBridge.lower(new Increment43GeneratedPeerNodeResistorContribution)
-      assert(
-        first == ScalaToMlirBridge.lower(new Increment43GeneratedPeerNodeResistorContribution)
-      )
-      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
-      assert(first.text.sliding("\"nodal.branch\"".length).count(_ == "\"nodal.branch\"") == 1)
-      val accessLines = first.text.linesIterator.filter(_.contains("\"nodal.access\"")).toVector
-      assert(accessLines.size == 2)
-      assert(accessLines.count(_.contains("kind = \"flow\"")) == 1)
-      assert(accessLines.count(_.contains("kind = \"potential\"")) == 1)
-      assert(
-        first.text.sliding("\"nodal.analog_div\"".length).count(_ == "\"nodal.analog_div\"") == 1
-      )
-      accessLines.foreach: line =>
-        assert(line.contains(s"generated_owner = \"${region.path}\""))
-        assert(line.contains(s"generated_induction = \"${region.induction}\""))
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            def compilePeerResistor() =
-              ScalaToMlirBridge
-                .compileToVerilogA(
-                  new Increment43GeneratedPeerNodeResistorContribution,
-                  Path.of(nodalc).toAbsolutePath,
-                  Path.of(translator).toAbsolutePath,
-                  directory,
-                  Duration.ofSeconds(60)
-                )
-                .fold(
-                  failure =>
-                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                  identity
-                )
-            val index = "((generate_0_index - 1) / 2)"
-            val result = compilePeerResistor()
-            assert(result == compilePeerResistor())
-            assert(
-              result.verilogA.linesIterator.count(
-                _.trim ==
-                  s"I(tap[$index], $peerName[$index]) <+ " +
-                  s"(V(tap[$index], $peerName[$index]) / R);"
-              ) == 1
-            )
-            assert(
-              result.verilogA.linesIterator.count(
-                _.trim == "electrical tap[0:(((((lanes - 1) + 2) - 1) / 2) - 1)];"
-              ) == 1
-            )
-            assert(
-              result.verilogA.linesIterator.count(
-                _.trim ==
-                  s"electrical $peerName[0:(((((lanes - 1) + 2) - 1) / 2) - 1)];"
-              ) == 1
-            )
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("generated node access may feed one direct owned ddt contribution"):
-      val snapshot = ConstructionKernel.inspect(new Increment43GeneratedNodeDdtContribution)
-      assert(snapshot == ConstructionKernel.inspect(new Increment43GeneratedNodeDdtContribution))
-      assert(snapshot.generatedRegions.size == 1)
-      val region = snapshot.generatedRegions.head
-      assert(region.declarations.size == 1)
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.declarations.head))
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
-      val first = ScalaToMlirBridge.lower(new Increment43GeneratedNodeDdtContribution)
-      assert(first == ScalaToMlirBridge.lower(new Increment43GeneratedNodeDdtContribution))
-      val accessLine = first.text.linesIterator.find(_.contains("\"nodal.access\"")).get
-      val ddtLine = first.text.linesIterator.find(_.contains("\"nodal.analog_ddt\"")).get
-      assert(accessLine.contains(s"generated_owner = \"${region.path}\""))
-      assert(accessLine.contains(s"generated_induction = \"${region.induction}\""))
-      assert(ddtLine.contains(s"generated_owner = \"${region.path}\""))
-      assert(ddtLine.contains(s"generated_induction = \"${region.induction}\""))
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            def compileDdt() =
-              ScalaToMlirBridge
-                .compileToVerilogA(
-                  new Increment43GeneratedNodeDdtContribution,
-                  Path.of(nodalc).toAbsolutePath,
-                  Path.of(translator).toAbsolutePath,
-                  directory,
-                  Duration.ofSeconds(60)
-                )
-                .fold(
-                  failure =>
-                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                  identity
-                )
-            val result = compileDdt()
-            assert(result == compileDdt())
-            assert(
-              result.verilogA.linesIterator.count(line =>
-                line.contains("I(tap[generate_0_index], p) <+") &&
-                  line.contains("ddt(V(tap[generate_0_index], p))")
-              ) == 1
-            )
-            assert(
-              result.verilogA.linesIterator.count(
-                _.trim == "electrical tap[1:(lanes - 1)];"
-              ) == 1
-            )
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("strided peer generated node access may feed one direct owned ddt contribution"):
-      val snapshot =
-        ConstructionKernel.inspect(new Increment43StridedGeneratedPeerNodeDdtContribution)
-      assert(
-        snapshot ==
-          ConstructionKernel.inspect(new Increment43StridedGeneratedPeerNodeDdtContribution)
-      )
-      assert(snapshot.generatedRegions.size == 1)
-      val region = snapshot.generatedRegions.head
-      assert(region.lower == "1")
-      assert(region.step == "2")
-      assert(region.declarations.size == 2)
-      region.declarations.foreach: path =>
-        assert(snapshot.sourceMap.exists(_.semanticPath == path))
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
-      val declarationNames = region.declarations.map(_.split('.').last)
-      assert(declarationNames.count(_ == "tap") == 1)
-      val peerName = declarationNames.find(_ != "tap").get
-      val first = ScalaToMlirBridge.lower(new Increment43StridedGeneratedPeerNodeDdtContribution)
-      assert(
-        first == ScalaToMlirBridge.lower(new Increment43StridedGeneratedPeerNodeDdtContribution)
-      )
-      val accessLines = first.text.linesIterator.filter(_.contains("\"nodal.access\"")).toVector
-      assert(accessLines.size == 2)
-      assert(accessLines.count(_.contains("kind = \"flow\"")) == 1)
-      assert(accessLines.count(_.contains("kind = \"potential\"")) == 1)
-      accessLines.foreach: line =>
-        assert(line.contains(s"generated_owner = \"${region.path}\""))
-        assert(line.contains(s"generated_induction = \"${region.induction}\""))
-      val ddtLine = first.text.linesIterator.find(_.contains("\"nodal.analog_ddt\"")).get
-      assert(ddtLine.contains(s"generated_owner = \"${region.path}\""))
-      assert(ddtLine.contains(s"generated_induction = \"${region.induction}\""))
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            def compileDdt() =
-              ScalaToMlirBridge
-                .compileToVerilogA(
-                  new Increment43StridedGeneratedPeerNodeDdtContribution,
-                  Path.of(nodalc).toAbsolutePath,
-                  Path.of(translator).toAbsolutePath,
-                  directory,
-                  Duration.ofSeconds(60)
-                )
-                .fold(
-                  failure =>
-                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                  identity
-                )
-            val result = compileDdt()
-            assert(result == compileDdt())
-            val upper = "(((((lanes - 1) + 2) - 1) / 2) - 1)"
-            assert(
-              result.verilogA.contains(
-                s"  electrical $peerName[0:$upper];\n" +
-                  s"  electrical tap[0:$upper];"
-              )
-            )
-            assert(
-              result.verilogA.contains(
-                "for (generate_0_index = 1; generate_0_index < lanes; " +
-                  "generate_0_index = generate_0_index + 2)"
-              )
-            )
-            val mapped = "((generate_0_index - 1) / 2)"
-            assert(
-              result.verilogA.linesIterator.count(line =>
-                line.contains(s"I(tap[$mapped], $peerName[$mapped]) <+") &&
-                  line.contains(s"ddt(V(tap[$mapped], $peerName[$mapped]))")
-              ) == 1
-            )
-            assert(result.verilogA.linesIterator.count(_.contains("electrical ")) == 2)
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("generated node access may feed one memoryless path into one owned idt state"):
-      val snapshot = ConstructionKernel.inspect(new Increment43GeneratedNodeIdtContribution)
-      assert(snapshot == ConstructionKernel.inspect(new Increment43GeneratedNodeIdtContribution))
-      assert(snapshot.generatedRegions.size == 1)
-      val region = snapshot.generatedRegions.head
-      assert(region.declarations.size == 1)
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.declarations.head))
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
-      val first = ScalaToMlirBridge.lower(new Increment43GeneratedNodeIdtContribution)
-      assert(first == ScalaToMlirBridge.lower(new Increment43GeneratedNodeIdtContribution))
-      val accessLine = first.text.linesIterator.find(_.contains("\"nodal.access\"")).get
-      assert(accessLine.contains(s"generated_owner = \"${region.path}\""))
-      assert(accessLine.contains(s"generated_induction = \"${region.induction}\""))
-      val idtLine = first.text.linesIterator.find(_.contains("\"nodal.analog_idt\"")).get
-      assert(idtLine.contains(s"generated_owner = \"${region.path}\""))
-      assert(idtLine.contains(s"generated_induction = \"${region.induction}\""))
-      assert(idtLine.contains("state_id"))
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            def compileIdt() =
-              ScalaToMlirBridge
-                .compileToVerilogA(
-                  new Increment43GeneratedNodeIdtContribution,
-                  Path.of(nodalc).toAbsolutePath,
-                  Path.of(translator).toAbsolutePath,
-                  directory,
-                  Duration.ofSeconds(60)
-                )
-                .fold(
-                  failure =>
-                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                  identity
-                )
-            val result = compileIdt()
-            assert(result == compileIdt())
-            assert(result.verilogA.contains("  electrical tap[1:(4 - 1)];"))
-            assert(
-              result.verilogA.linesIterator.count(line =>
-                line.contains("V(tap[generate_0_index], p) <+") &&
-                  line.contains("idt(") &&
-                  line.contains("V(tap[generate_0_index], p)") &&
-                  line.contains(", 0)")
-              ) == 1
-            )
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("strided peer generated node access may feed one owned idt state"):
-      val snapshot =
-        ConstructionKernel.inspect(new Increment43StridedGeneratedPeerNodeIdtContribution)
-      assert(
-        snapshot ==
-          ConstructionKernel.inspect(new Increment43StridedGeneratedPeerNodeIdtContribution)
-      )
-      assert(snapshot.generatedRegions.size == 1)
-      val region = snapshot.generatedRegions.head
-      assert(region.lower == "1")
-      assert(region.step == "2")
-      assert(region.declarations.size == 2)
-      region.declarations.foreach: path =>
-        assert(snapshot.sourceMap.exists(_.semanticPath == path))
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
-      val declarationNames = region.declarations.map(_.split('.').last)
-      assert(declarationNames.count(_ == "tap") == 1)
-      val peerName = declarationNames.find(_ != "tap").get
-      val first =
-        ScalaToMlirBridge.lower(new Increment43StridedGeneratedPeerNodeIdtContribution)
-      assert(
-        first == ScalaToMlirBridge.lower(new Increment43StridedGeneratedPeerNodeIdtContribution)
-      )
-      val accessLines = first.text.linesIterator.filter(_.contains("\"nodal.access\"")).toVector
-      assert(accessLines.size == 2)
-      assert(accessLines.forall(_.contains("kind = \"potential\"")))
-      accessLines.foreach: line =>
-        assert(line.contains(s"generated_owner = \"${region.path}\""))
-        assert(line.contains(s"generated_induction = \"${region.induction}\""))
-      val idtLine = first.text.linesIterator.find(_.contains("\"nodal.analog_idt\"")).get
-      assert(idtLine.contains(s"generated_owner = \"${region.path}\""))
-      assert(idtLine.contains(s"generated_induction = \"${region.induction}\""))
-      assert(idtLine.contains("state_id"))
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            def compileIdt() =
-              ScalaToMlirBridge
-                .compileToVerilogA(
-                  new Increment43StridedGeneratedPeerNodeIdtContribution,
-                  Path.of(nodalc).toAbsolutePath,
-                  Path.of(translator).toAbsolutePath,
-                  directory,
-                  Duration.ofSeconds(60)
-                )
-                .fold(
-                  failure =>
-                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                  identity
-                )
-            val result = compileIdt()
-            assert(result == compileIdt())
-            val upper = "(((((lanes - 1) + 2) - 1) / 2) - 1)"
-            assert(
-              result.verilogA.contains(
-                s"  electrical $peerName[0:$upper];\n" +
-                  s"  electrical tap[0:$upper];"
-              )
-            )
-            assert(
-              result.verilogA.contains(
-                "for (generate_0_index = 1; generate_0_index < lanes; " +
-                  "generate_0_index = generate_0_index + 2)"
-              )
-            )
-            val mapped = "((generate_0_index - 1) / 2)"
-            assert(
-              result.verilogA.linesIterator.count(line =>
-                line.contains(s"V(tap[$mapped], $peerName[$mapped]) <+") &&
-                  line.contains(s"idt((V(tap[$mapped], $peerName[$mapped]) / 1), 0)")
-              ) == 1
-            )
-            assert(result.verilogA.linesIterator.count(_.contains("electrical ")) == 2)
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("generated node idt result may retain one owned memoryless path"):
-      val snapshot =
-        ConstructionKernel.inspect(new Increment43StridedGeneratedPeerNodeScaledIdtContribution)
-      assert(
-        snapshot ==
-          ConstructionKernel.inspect(new Increment43StridedGeneratedPeerNodeScaledIdtContribution)
-      )
-      assert(snapshot.generatedRegions.size == 1)
-      val region = snapshot.generatedRegions.head
-      assert(region.declarations.size == 2)
-      region.declarations.foreach: path =>
-        assert(snapshot.sourceMap.exists(_.semanticPath == path))
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
-      val first =
-        ScalaToMlirBridge.lower(new Increment43StridedGeneratedPeerNodeScaledIdtContribution)
-      assert(
-        first ==
-          ScalaToMlirBridge.lower(new Increment43StridedGeneratedPeerNodeScaledIdtContribution)
-      )
-      val idtLine = first.text.linesIterator.find(_.contains("\"nodal.analog_idt\"")).get
-      assert(idtLine.contains(s"generated_owner = \"${region.path}\""))
-      assert(idtLine.contains(s"generated_induction = \"${region.induction}\""))
-      assert(idtLine.contains("state_id"))
-      assert(first.text.linesIterator.count(_.contains("\"nodal.analog_div\"")) == 2)
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            def compileScaledIdt() =
-              ScalaToMlirBridge
-                .compileToVerilogA(
-                  new Increment43StridedGeneratedPeerNodeScaledIdtContribution,
-                  Path.of(nodalc).toAbsolutePath,
-                  Path.of(translator).toAbsolutePath,
-                  directory,
-                  Duration.ofSeconds(60)
-                )
-                .fold(
-                  failure =>
-                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                  identity
-                )
-            val result = compileScaledIdt()
-            assert(result == compileScaledIdt())
-            val mapped = "((generate_0_index - 1) / 2)"
-            val names = region.declarations.map(_.split('.').last)
-            val peer = names.find(_ != "tap").get
-            assert(result.verilogA.linesIterator.count(_.contains("electrical ")) == 2)
-            assert(
-              result.verilogA.linesIterator.count(line =>
-                line.contains(s"V(tap[$mapped], $peer[$mapped]) <+") &&
-                  line.contains(s"(idt((V(tap[$mapped], $peer[$mapped]) / 1), 0) / 2)")
-              ) == 1
-            )
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("strided generated node groups retain compact source-index selection"):
-      val snapshot =
-        ConstructionKernel.inspect(new Increment43StridedGeneratedNodeGroupContributions)
-      assert(
-        snapshot ==
-          ConstructionKernel.inspect(new Increment43StridedGeneratedNodeGroupContributions)
-      )
-      assert(snapshot.generatedRegions.size == 1)
-      val region = snapshot.generatedRegions.head
-      assert(region.lower == "1")
-      assert(region.step == "2")
-      assert(region.declarations.size == 2)
-      region.declarations.foreach: path =>
-        assert(snapshot.sourceMap.exists(_.semanticPath == path))
-      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
-      val declarationNames = region.declarations.map(_.split('.').last)
-      assert(declarationNames.count(_ == "tap") == 1)
-      val generatedName = declarationNames.find(_ != "tap").get
-      val first = ScalaToMlirBridge.lower(new Increment43StridedGeneratedNodeGroupContributions)
-      assert(
-        first == ScalaToMlirBridge.lower(new Increment43StridedGeneratedNodeGroupContributions)
-      )
-      assert(first.text.contains("step = 2 : i64"))
-      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
-      assert(first.text.sliding("\"nodal.branch\"".length).count(_ == "\"nodal.branch\"") == 2)
-      assert(
-        first.text.sliding("\"nodal.contribute\"".length).count(_ == "\"nodal.contribute\"") == 2
-      )
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            def compileGroup() =
-              ScalaToMlirBridge
-                .compileToVerilogA(
-                  new Increment43StridedGeneratedNodeGroupContributions,
-                  Path.of(nodalc).toAbsolutePath,
-                  Path.of(translator).toAbsolutePath,
-                  directory,
-                  Duration.ofSeconds(60)
-                )
-                .fold(
-                  failure =>
-                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                  identity
-                )
-            val result = compileGroup()
-            assert(result == compileGroup())
-            val upper = "(((((lanes - 1) + 2) - 1) / 2) - 1)"
-            assert(
-              result.verilogA.contains(
-                s"  electrical $generatedName[0:$upper];\n" +
-                  s"  electrical tap[0:$upper];"
-              )
-            )
-            assert(
-              result.verilogA.contains(
-                "for (generate_0_index = 1; generate_0_index < lanes; " +
-                  "generate_0_index = generate_0_index + 2)"
-              )
-            )
-            val mapped = "((generate_0_index - 1) / 2)"
-            assert(result.verilogA.linesIterator.count(
-              _.trim == s"V(tap[$mapped], p) <+ 1;"
-            ) == 1)
-            assert(result.verilogA.linesIterator.count(
-              _.trim == s"V($generatedName[$mapped], p) <+ 2;"
-            ) == 1)
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("public fixed generated contributions compile to one Verilog-A loop when configured"):
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            val result = ScalaToMlirBridge
-              .compileToVerilogA(
-                new Increment43GeneratedContribution,
-                Path.of(nodalc).toAbsolutePath,
-                Path.of(translator).toAbsolutePath,
-                directory,
-                Duration.ofSeconds(60)
-              )
-              .fold(
-                failure =>
-                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                identity
-              )
-            assert(result.mlir.contains("\"nodal.generate\""))
-            assert(result.mlir.contains("\"nodal.contribute\""))
-            assert(
-              result.mlir.contains(
-                "generated_owner = \"Increment43GeneratedContribution.generate_0\""
-              )
-            )
-            assert(result.verilogA.contains("  genvar generate_0_index;"))
-            assert(
-              result.verilogA.contains(
-                "for (generate_0_index = 0; generate_0_index < 2; " +
-                  "generate_0_index = generate_0_index + 1) begin : generate_0"
-              )
-            )
-            assert(result.verilogA.linesIterator.count(_.trim == "V(p, n) <+ 1;") == 1)
-            assert(result.verilogA.linesIterator.count(_.trim == "I(p, n) <+ 1;") == 1)
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("public generated ddt contribution retains one owned target expression"):
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            val result = ScalaToMlirBridge
-              .compileToVerilogA(
-                new Increment43GeneratedDdtContribution,
-                Path.of(nodalc).toAbsolutePath,
-                Path.of(translator).toAbsolutePath,
-                directory,
-                Duration.ofSeconds(60)
-              )
-              .fold(
-                failure =>
-                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                identity
-              )
-            assert(result.mlir.contains("\"nodal.analog_ddt\""))
-            val ddtLine = result.mlir.linesIterator.find(_.contains("\"nodal.analog_ddt\"")).get
-            assert(ddtLine.contains("generated_owner"))
-            assert(ddtLine.contains("generated_induction"))
-            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
-            assert(
-              result.verilogA.linesIterator.count(line =>
-                line.contains("I(p, n) <+") && line.contains("ddt(V(p, n))")
-              ) == 1
-            )
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("public generated idt contribution retains one owned stateful target expression"):
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            val result = ScalaToMlirBridge
-              .compileToVerilogA(
-                new Increment43GeneratedIdtContribution,
-                Path.of(nodalc).toAbsolutePath,
-                Path.of(translator).toAbsolutePath,
-                directory,
-                Duration.ofSeconds(60)
-              )
-              .fold(
-                failure =>
-                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                identity
-              )
-            assert(result.mlir.contains("\"nodal.analog_idt\""))
-            val idtLine = result.mlir.linesIterator.find(_.contains("\"nodal.analog_idt\"")).get
-            assert(idtLine.contains("generated_owner"))
-            assert(idtLine.contains("generated_induction"))
-            assert(idtLine.contains("state_id"))
-            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
-            assert(
-              result.verilogA.linesIterator.count(line =>
-                line.contains("V(p, n) <+") && line.contains("idt(") && line.contains(", 0)")
-              ) == 1
-            )
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("public generated transition retains one per-occurrence target expression"):
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            val result = ScalaToMlirBridge
-              .compileToVerilogA(
-                new Increment43GeneratedTransitionContribution,
-                Path.of(nodalc).toAbsolutePath,
-                Path.of(translator).toAbsolutePath,
-                directory,
-                Duration.ofSeconds(60)
-              )
-              .fold(
-                failure =>
-                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                identity
-              )
-            assert(result.mlir.contains("\"nodal.analog_transition\""))
-            val transitionLine =
-              result.mlir.linesIterator.find(_.contains("\"nodal.analog_transition\"")).get
-            assert(transitionLine.contains("generated_owner"))
-            assert(transitionLine.contains("generated_induction"))
-            assert(transitionLine.contains("state_id"))
-            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
-            assert(
-              result.verilogA.linesIterator.count(line =>
-                line.contains("V(p, n) <+") && line.contains("transition(level)")
-              ) == 1
-            )
-            assert(!result.verilogA.contains("real waveform_"))
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("public generated slew retains one per-occurrence target expression"):
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            val result = ScalaToMlirBridge
-              .compileToVerilogA(
-                new Increment43GeneratedSlewContribution,
-                Path.of(nodalc).toAbsolutePath,
-                Path.of(translator).toAbsolutePath,
-                directory,
-                Duration.ofSeconds(60)
-              )
-              .fold(
-                failure =>
-                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                identity
-              )
-            assert(result.mlir.contains("\"nodal.analog_slew\""))
-            val slewLine =
-              result.mlir.linesIterator.find(_.contains("\"nodal.analog_slew\"")).get
-            assert(slewLine.contains("generated_owner"))
-            assert(slewLine.contains("generated_induction"))
-            assert(slewLine.contains("state_id"))
-            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
-            assert(
-              result.verilogA.linesIterator.count(line =>
-                line.contains("V(p, n) <+") && line.contains("slew(level)")
-              ) == 1
-            )
-            assert(!result.verilogA.contains("real waveform_"))
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("public generated absdelay retains one per-occurrence target expression"):
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            val result = ScalaToMlirBridge
-              .compileToVerilogA(
-                new Increment43GeneratedAbsdelayContribution,
-                Path.of(nodalc).toAbsolutePath,
-                Path.of(translator).toAbsolutePath,
-                directory,
-                Duration.ofSeconds(60)
-              )
-              .fold(
-                failure =>
-                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                identity
-              )
-            assert(result.mlir.contains("\"nodal.analog_absdelay\""))
-            val absdelayLine =
-              result.mlir.linesIterator.find(_.contains("\"nodal.analog_absdelay\"")).get
-            assert(absdelayLine.contains("generated_owner"))
-            assert(absdelayLine.contains("generated_induction"))
-            assert(absdelayLine.contains("state_id"))
-            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
-            assert(
-              result.verilogA.linesIterator.count(line =>
-                line.contains("V(p, n) <+") && line.contains("absdelay(level, 1e-09)")
-              ) == 1
-            )
-            assert(!result.verilogA.contains("real waveform_"))
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("public generated abstime retains one per-occurrence target expression"):
-      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
-        case (Some(nodalc), Some(translator)) =>
-          val directory = workDirectory()
-          try
-            val result = ScalaToMlirBridge
-              .compileToVerilogA(
-                new Increment43GeneratedAbstimeContribution,
-                Path.of(nodalc).toAbsolutePath,
-                Path.of(translator).toAbsolutePath,
-                directory,
-                Duration.ofSeconds(60)
-              )
-              .fold(
-                failure =>
-                  scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
-                identity
-              )
-            assert(result.mlir.contains("\"nodal.analog_abstime\""))
-            val abstimeLine =
-              result.mlir.linesIterator.find(_.contains("\"nodal.analog_abstime\"")).get
-            assert(abstimeLine.contains("generated_owner"))
-            assert(abstimeLine.contains("generated_induction"))
-            assert(!abstimeLine.contains("state_id"))
-            assert(result.verilogA.linesIterator.count(_.contains("for (generate_0_index")) == 1)
-            assert(
-              result.verilogA.linesIterator.count(line =>
-                line.contains("V(p, n) <+") && line.contains("$abstime")
-              ) == 1
-            )
-            assert(!result.verilogA.contains("real waveform_"))
-          finally delete(directory)
-        case _ => assert(true)
-
-    test("public generated boundStep retains one per-occurrence target effect"):
+            val hash = Messag…15376 tokens truncated…ns one per-occurrence target effect"):
       (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
         case (Some(nodalc), Some(translator)) =>
           val directory = workDirectory()

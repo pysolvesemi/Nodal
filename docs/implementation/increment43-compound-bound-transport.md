@@ -980,3 +980,34 @@ specialization or unrolling. Every region, induction and declaration appears
 exactly once in the serialized source map; replacing only the child's induction
 with its parent's identity must fail before target publication. The native
 literal counterpart independently reparses the same two-stride row-major form.
+
+## Nested generated analog-node equation checkpoint
+
+The bounded two-dimensional layout now composes with one already-qualified
+child-owned memoryless equation. The outer range contains exactly one child
+range; the child owns one electrical declaration, one branch to an existing
+root terminal, one potential read and one additive resistor contribution. Both
+ranges retain their authored positive strides and canonical source identities.
+
+The existing node-array layout and one-use contribution dependency walker remain
+the semantic owners. The target declares one row-major electrical array whose
+extent is the product of the two independently proved iteration counts, emits
+the two authored loops, and maps the child occurrence with
+
+`outer_index * inner_count + inner_index`.
+
+Each index term reuses the canonical compact source-index formula for its own
+range. No parameter default is substituted, no lane is enumerated and no second
+shape, expression or storage registry is introduced. Native evidence requires
+deterministic repeated output, independent target reparse and rejection of a
+child branch whose owner or induction is replaced by its parent. The public
+configured witness retains both region/induction mappings, the child declaration,
+branch, access and contribution through Scala construction, normalized IR and
+generated Verilog-A.
+
+This profile is deliberately limited to one child-owned one-use memoryless
+equation. It does not admit sibling or cross-range contributions, nested
+stateful operators, fan-out, a general slice/index signature, shaped terminals,
+generated connections or instances, default specialization or eager unrolling.
+Independent simulator qualification, the F-048/F-049/F-052 handoff and every
+F-043 acceptance obligation remain open.

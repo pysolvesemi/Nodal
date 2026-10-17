@@ -1463,6 +1463,79 @@ int main() {
       return fail("forged nested generated analog-node branch published partial output");
   }
 
+  for (llvm::StringRef mutation : {"valid", "second-owner", "second-induction", "second-source"}) {
+    auto candidate = parse(context, kNestedGeneratedNodeEquationModule);
+    if (!candidate)
+      return fail("could not parse nested peer generated analog-node equation fixture");
+    mlir::Operation *firstNode = nullptr;
+    mlir::Operation *branch = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      if (!firstNode && operation->getName().getStringRef() == "nodal.node")
+        firstNode = operation;
+      if (operation->getName().getStringRef() == "nodal.branch")
+        branch = operation;
+    });
+    if (!firstNode || !branch)
+      return fail("nested peer generated analog-node equation lost its direct topology");
+    mlir::Operation *secondNode = firstNode->clone();
+    firstNode->getBlock()->getOperations().insert(branch->getIterator(), secondNode);
+    secondNode->setAttr("name", mlir::StringAttr::get(&context, "nestedReturn"));
+    secondNode->setAttr(
+        "source_path", mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.nestedReturn"));
+    mlir::Operation *rootTerminal = branch->getOperand(1).getDefiningOp();
+    branch->setOperand(1, secondNode->getResult(0));
+    if (!rootTerminal || !rootTerminal->use_empty())
+      return fail("nested peer generated analog-node equation retained its root endpoint");
+    rootTerminal->erase();
+    if (mutation == "second-owner")
+      secondNode->setAttr(
+          "generated_owner",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0"));
+    if (mutation == "second-induction")
+      secondNode->setAttr(
+          "generated_induction",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0.index"));
+    if (mutation == "second-source")
+      secondNode->setAttr("source_path", mlir::StringAttr::get(&context, ""));
+
+    std::string output = mutation == "valid" ? std::string() : std::string("sentinel");
+    llvm::raw_string_ostream stream(output);
+    const bool emitted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (emitted)
+        return fail("forged nested peer generated analog-node ownership passed verification");
+      if (output != "sentinel")
+        return fail("forged nested peer generated analog-node published partial output");
+      continue;
+    }
+    if (!emitted)
+      return fail("nested peer generated analog-node equation emission failed");
+    const std::string nestedExtent =
+        "0:((((((8 - 1) + 2) - 1) / 2) * ((((11 - 2) + 3) - 1) / 3)) - 1)";
+    if (output.find("  electrical nestedTap[" + nestedExtent +
+                    "];\n"
+                    "  electrical nestedReturn[" +
+                    nestedExtent + "];\n") == std::string::npos ||
+        output.find("I(nestedTap[" + nestedFlatIndex + "], nestedReturn[" + nestedFlatIndex +
+                    "]) <+ ") == std::string::npos ||
+        output.find("V(nestedTap[" + nestedFlatIndex + "], nestedReturn[" + nestedFlatIndex +
+                    "])") == std::string::npos ||
+        llvm::StringRef(output).count("  genvar ") != 2 ||
+        llvm::StringRef(output).count("    for (") != 2)
+      return fail("nested peer generated analog-node equation lost its row-major endpoints");
+    if (mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+      return fail("nested peer generated analog-node equation failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("nested peer generated analog-node equation repeated emission failed");
+    repeatedStream.flush();
+    if (output != repeated)
+      return fail("nested peer generated analog-node equation emission is nondeterministic");
+  }
+
   std::string nestedGeneratedNodeDdtSource = kNestedGeneratedNodeEquationModule.str();
   auto nestedDdtResistance = nestedGeneratedNodeDdtSource.find("          %resistance =");
   auto nestedDdtContribution =

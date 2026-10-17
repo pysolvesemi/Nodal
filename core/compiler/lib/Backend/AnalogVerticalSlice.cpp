@@ -1487,7 +1487,8 @@ Operation *nestedGeneratedNodeContribution(Operation *generate) {
     else if (name == "nodal.analog")
       analog = &operation;
   }
-  if (nodes != 1 || branches != 1 || !analog || !llvm::hasSingleElement(analog->getRegion(0)))
+  if (nodes == 0 || nodes > 2 || branches != 1 || !analog ||
+      !llvm::hasSingleElement(analog->getRegion(0)))
     return nullptr;
 
   unsigned accesses = 0, contributions = 0, derivatives = 0, integrals = 0;

@@ -1012,6 +1012,31 @@ generated connections or instances, default specialization or eager unrolling.
 Independent simulator qualification, the F-048/F-049/F-052 handoff and every
 F-043 acceptance obligation remain open.
 
+## Nested peer generated analog-node equation checkpoint
+
+The bounded two-dimensional child equation now admits a second exactly-owned
+electrical declaration as the negative endpoint of its one direct memoryless
+branch. Both child nodes retain distinct canonical source identities, share the
+same child owner and induction, and lower to separate product-extent electrical
+arrays. The branch potential read and flow contribution select both arrays with
+the same existing row-major index expression.
+
+This is a narrow admission change at the nested profile gate. It reuses the
+general generated-node renderer, canonical dependency validation, source map
+inventory and target reparser; it does not add an API, schema, storage engine or
+second index registry. Native and configured public evidence require exact
+declaration order, byte-identical repeated output, independent target reparse
+and rejection of a second node whose owner, induction or source identity is
+forged before any target text is published.
+
+The profile remains exactly one child range, at most two child-owned nodes, one
+direct branch, one potential read, one memoryless arithmetic path and one
+contribution. It does not admit multiple branches, cross-range references,
+nested peer `ddt`/`idt`, operator chains, fan-out, a general slice signature,
+generated connections or instances, reverse ranges, default specialization or
+eager unrolling. Independent simulator qualification, the F-048/F-049/F-052
+handoff and every F-043 acceptance obligation remain open.
+
 ## Nested generated analog-node idt checkpoint
 
 The bounded two-dimensional child equation now admits exactly one previously

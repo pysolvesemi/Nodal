@@ -178,6 +178,44 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kNestedGeneratedNodeGroupEquationsModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "NestedGeneratedNodeGroupEquations"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 1 : i64, upper = 8 : i64, step = 2 : i64, region_id = "NestedGeneratedNodeGroupEquations.generate_0", induction_path = "NestedGeneratedNodeGroupEquations.generate_0.index", metadata = {maximum_trip_count = 4 : i64}}> ({
+    ^bb0:
+      "nodal.generate"() <{induction = "generate_1_index", lower = 2 : i64, upper = 11 : i64, step = 3 : i64, region_id = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", induction_path = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index", metadata = {maximum_trip_count = 3 : i64}}> ({
+      ^bb0:
+        %tap = "nodal.node"() <{name = "nestedTap", source_path = "NestedGeneratedNodeGroupEquations.nestedTap", generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index"}}> : () -> !nodal.terminal<"electrical">
+        %return = "nodal.node"() <{name = "nestedReturn", source_path = "NestedGeneratedNodeGroupEquations.nestedReturn", generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index"}}> : () -> !nodal.terminal<"electrical">
+        %tap_branch = "nodal.branch"(%tap, %p) <{metadata = {generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index"}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+        %return_branch = "nodal.branch"(%return, %n) <{metadata = {generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index"}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+        "nodal.analog"() <{generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index", metadata = {}}> ({
+        ^bb0:
+          %tap_voltage = "nodal.access"(%tap_branch) <{kind = "potential", metadata = {generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index"}}> : (!nodal.branch<"electrical">) -> f64
+          %tap_resistance = "nodal.real_literal"() <{value = 1000.0 : f64, metadata = {}}> : () -> f64
+          %tap_current = "nodal.analog_div"(%tap_voltage, %tap_resistance) <{metadata = {}}> : (f64, f64) -> f64
+          "nodal.contribute"(%tap_branch, %tap_current) <{kind = "flow", generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+          %return_voltage = "nodal.access"(%return_branch) <{kind = "potential", metadata = {generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index"}}> : (!nodal.branch<"electrical">) -> f64
+          %return_resistance = "nodal.real_literal"() <{value = 2000.0 : f64, metadata = {}}> : () -> f64
+          %return_current = "nodal.analog_div"(%return_voltage, %return_resistance) <{metadata = {}}> : (f64, f64) -> f64
+          "nodal.contribute"(%return_branch, %return_current) <{kind = "flow", generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+        }) : () -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kGeneratedNodeContributionModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -1534,6 +1572,88 @@ int main() {
     repeatedStream.flush();
     if (output != repeated)
       return fail("nested peer generated analog-node equation emission is nondeterministic");
+  }
+
+  auto nestedGeneratedNodeGroupEquations = parse(context, kNestedGeneratedNodeGroupEquationsModule);
+  if (!nestedGeneratedNodeGroupEquations)
+    return fail("could not parse nested generated analog-node group equations fixture");
+  std::string nestedGeneratedNodeGroupEquationsOutput;
+  llvm::raw_string_ostream nestedGeneratedNodeGroupEquationsStream(
+      nestedGeneratedNodeGroupEquationsOutput);
+  if (mlir::failed(nodal::emitBackend(*nestedGeneratedNodeGroupEquations,
+                                      nodal::BackendKind::VerilogA,
+                                      nestedGeneratedNodeGroupEquationsStream)))
+    return fail("nested generated analog-node group equations emission failed");
+  nestedGeneratedNodeGroupEquationsStream.flush();
+  const std::string nestedGroupExtent =
+      "0:((((((8 - 1) + 2) - 1) / 2) * ((((11 - 2) + 3) - 1) / 3)) - 1)";
+  if (nestedGeneratedNodeGroupEquationsOutput.find("  electrical nestedTap[" + nestedGroupExtent +
+                                                   "];\n"
+                                                   "  electrical nestedReturn[" +
+                                                   nestedGroupExtent + "];\n") ==
+          std::string::npos ||
+      nestedGeneratedNodeGroupEquationsOutput.find(
+          "I(nestedTap[" + nestedFlatIndex + "], p) <+ (V(nestedTap[" + nestedFlatIndex + "]") ==
+          std::string::npos ||
+      nestedGeneratedNodeGroupEquationsOutput.find("I(nestedReturn[" + nestedFlatIndex +
+                                                   "], n) <+ (V(nestedReturn[" + nestedFlatIndex +
+                                                   "]") == std::string::npos ||
+      llvm::StringRef(nestedGeneratedNodeGroupEquationsOutput).count("  genvar ") != 2 ||
+      llvm::StringRef(nestedGeneratedNodeGroupEquationsOutput).count("    for (") != 2)
+    return fail("nested generated analog-node group equations lost row-major target ownership");
+  if (mlir::failed(
+          nodal::reparseBackendTarget(nestedGeneratedNodeGroupEquationsOutput, *configuration)))
+    return fail("nested generated analog-node group equations failed independent target reparse");
+  std::string repeatedNestedGeneratedNodeGroupEquationsOutput;
+  llvm::raw_string_ostream repeatedNestedGeneratedNodeGroupEquationsStream(
+      repeatedNestedGeneratedNodeGroupEquationsOutput);
+  if (mlir::failed(nodal::emitBackend(*nestedGeneratedNodeGroupEquations,
+                                      nodal::BackendKind::VerilogA,
+                                      repeatedNestedGeneratedNodeGroupEquationsStream)))
+    return fail("nested generated analog-node group equations repeated emission failed");
+  repeatedNestedGeneratedNodeGroupEquationsStream.flush();
+  if (nestedGeneratedNodeGroupEquationsOutput != repeatedNestedGeneratedNodeGroupEquationsOutput)
+    return fail("nested generated analog-node group equations emission is nondeterministic");
+
+  for (llvm::StringRef mutation :
+       {"second-branch-owner", "second-access-owner", "second-contribution-destination"}) {
+    auto invalid = parse(context, kNestedGeneratedNodeGroupEquationsModule);
+    if (!invalid)
+      return fail("could not parse nested generated analog-node group mutation fixture");
+    llvm::SmallVector<mlir::Operation *, 2> branches;
+    llvm::SmallVector<mlir::Operation *, 2> accesses;
+    llvm::SmallVector<mlir::Operation *, 2> contributions;
+    invalid->walk([&](mlir::Operation *operation) {
+      llvm::StringRef name = operation->getName().getStringRef();
+      if (name == "nodal.branch")
+        branches.push_back(operation);
+      else if (name == "nodal.access")
+        accesses.push_back(operation);
+      else if (name == "nodal.contribute")
+        contributions.push_back(operation);
+    });
+    if (branches.size() != 2 || accesses.size() != 2 || contributions.size() != 2)
+      return fail("nested generated analog-node group mutation lost its direct equations");
+    if (mutation == "second-branch-owner") {
+      mlir::NamedAttrList metadata(branches[1]->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set("generated_owner",
+                   mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.generate_0"));
+      branches[1]->setAttr("metadata", metadata.getDictionary(&context));
+    } else if (mutation == "second-access-owner") {
+      mlir::NamedAttrList metadata(accesses[1]->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set("generated_owner",
+                   mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.generate_0"));
+      accesses[1]->setAttr("metadata", metadata.getDictionary(&context));
+    } else {
+      contributions[1]->setOperand(0, branches[0]->getResult(0));
+    }
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    if (mlir::succeeded(nodal::emitBackend(*invalid, nodal::BackendKind::VerilogA, stream)))
+      return fail("forged nested generated analog-node group equation passed verification");
+    stream.flush();
+    if (output != "sentinel")
+      return fail("forged nested generated analog-node group equation published partial output");
   }
 
   std::string nestedGeneratedNodeDdtSource = kNestedGeneratedNodeEquationModule.str();

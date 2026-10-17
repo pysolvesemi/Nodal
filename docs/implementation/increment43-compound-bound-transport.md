@@ -1043,6 +1043,35 @@ derive both unsupported peer-operator forms from the qualified one-node
 fixtures and require rejection without partial target publication. The existing
 one-node nested `ddt`/`idt` paths and two-node memoryless path remain unchanged.
 
+## Nested generated analog-node group equations checkpoint
+
+The bounded two-dimensional child may now retain two exactly-owned electrical
+declarations and two independent direct memoryless equations. Each child node
+forms one branch to an existing root terminal, has one potential read, and
+receives one additive contribution on that same branch. The declarations share
+the child owner and induction while retaining distinct source identities.
+
+This admission reuses the existing product-extent row-major layout, compact
+source-index formulas, generated branch inventory and one-use dependency
+walker. The target declares one array per node, emits the two authored loops,
+and indexes both equations with the same canonical child occurrence. No
+parameter default is substituted, no occurrence is unrolled, and no second
+ownership, expression, shape or storage engine is introduced.
+
+Native and configured public witnesses retain declaration, branch and equation
+order, byte-identical repeated IR and target output, compact source maps and
+independent target reparse. A forged second branch owner, forged second access
+owner or contribution redirected to the other branch rejects before any target
+text is published.
+
+The profile remains one direct child range with at most two child-owned nodes
+and no more branches than nodes. Stateful operators remain restricted to the
+qualified one-node, one-branch, one-access path. Cross-range dependencies,
+fan-out, general slices, shaped terminals, generated connections or instances,
+reverse ranges, default specialization and eager unrolling remain unsupported.
+Independent simulator qualification, the F-048/F-049/F-052 handoff and every
+F-043 acceptance obligation remain open.
+
 ## Nested generated analog-node idt checkpoint
 
 The bounded two-dimensional child equation now admits exactly one previously

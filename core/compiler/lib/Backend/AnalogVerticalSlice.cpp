@@ -1487,7 +1487,7 @@ Operation *nestedGeneratedNodeContribution(Operation *generate) {
     else if (name == "nodal.analog")
       analog = &operation;
   }
-  if (nodes == 0 || nodes > 2 || branches != 1 || !analog ||
+  if (nodes == 0 || nodes > 2 || branches == 0 || branches > nodes || !analog ||
       !llvm::hasSingleElement(analog->getRegion(0)))
     return nullptr;
 
@@ -1508,9 +1508,11 @@ Operation *nestedGeneratedNodeContribution(Operation *generate) {
       return nullptr;
   }
   const unsigned operators = derivatives + integrals;
-  if (nodes > 1 && operators != 0)
-    return nullptr;
-  return accesses == 1 && contributions == 1 && operators <= 1 ? &child : nullptr;
+  if (operators != 0)
+    return nodes == 1 && branches == 1 && accesses == 1 && contributions == 1 && operators == 1
+               ? &child
+               : nullptr;
+  return accesses == branches && contributions == branches ? &child : nullptr;
 }
 
 LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState &state,

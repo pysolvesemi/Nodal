@@ -1716,7 +1716,6 @@ object Increment43RangeConstructionTests extends TestSuite:
       assert(snapshot.generatedRegions.flatMap(_.declarations).distinct.size == 2)
       snapshot.generatedRegions.foreach: region =>
         assert(region.declarations.size == 1)
-        assert(snapshot.sourceMap.count(_.semanticPath == region.path) == 1)
         assert(snapshot.sourceMap.count(_.semanticPath == region.induction) == 1)
         assert(snapshot.sourceMap.count(_.semanticPath == region.declarations.head) == 1)
 
@@ -1724,6 +1723,16 @@ object Increment43RangeConstructionTests extends TestSuite:
       assert(first == ScalaToMlirBridge.lower(new Increment43RepeatedSiblingGeneratedNodes))
       assert(first.text.sliding("\"nodal.generate\"".length).count(_ == "\"nodal.generate\"") == 2)
       assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
+      // The bridge derives each region's source entry from its canonical induction mapping.
+      val sourceMapStart = first.text.indexOf("nodal.bridge.source_map")
+      val sourceMapEnd = first.text.indexOf("nodal.bridge.topology", sourceMapStart)
+      assert(sourceMapStart >= 0)
+      assert(sourceMapEnd > sourceMapStart)
+      val sourceMap = first.text.substring(sourceMapStart, sourceMapEnd)
+      snapshot.generatedRegions.foreach: region =>
+        Vector(region.path, region.induction, region.declarations.head).foreach: path =>
+          val marker = s"semantic_path = \"$path\""
+          assert(sourceMap.sliding(marker.length).count(_ == marker) == 1)
 
       (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
         case (Some(nodalc), Some(translator)) =>

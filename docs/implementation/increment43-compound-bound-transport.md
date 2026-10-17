@@ -871,6 +871,11 @@ existing compact array bound; the other uses a separate symbolic unit-step
 bound. Repeated construction, lowering and target emission must remain
 byte-identical.
 
+Construction snapshots retain the induction and declaration source mappings;
+the canonical bridge derives a missing region source entry from its induction.
+The witness checks unique snapshot induction/declaration mappings and exactly
+one serialized source-map entry for each region, induction and declaration.
+
 No backend admission rule, schema or public API is widened. The witness uses
 the already-qualified direct node-array profile and verifies that the two
 ranges retain distinct declarations, source identities and target arrays in

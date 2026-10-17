@@ -888,3 +888,27 @@ terminals, general slices, generated connections or instances, contributions
 between sibling ranges, default specialization or eager unrolling. Those
 profiles, independent simulator qualification, the F-048/F-049/F-052 handoff
 and every F-043 acceptance obligation remain open.
+
+## Repeated sibling generated-node equation checkpoint
+
+Two independent top-level generated ranges now retain separate memoryless
+equations through the actual public Scala-to-normalized-IR-to-Verilog-A path.
+The first range preserves a symbolic positive stride and compact source-index
+map; the second preserves an independent symbolic unit-step bound. Each range
+owns one electrical array, branch, potential read, flow target and additive
+resistor contribution, with distinct region, induction, declaration and source
+identities.
+
+No backend admission rule, schema or public API is widened. The witness composes
+the already-qualified sibling-array and one-use memoryless-equation profiles,
+requires byte-identical repeated construction/lowering/target output, and checks
+the two authored target loops and equations separately. A configured native
+negative rewrites only a second-range operation owner to the first range and
+requires exact ownership rejection before target publication. Existing raw and
+normalized access-count contracts remain unchanged.
+
+This does not admit cross-range references or contributions, nested target
+generation, general slices, shaped terminals, generated connections or
+instances, stateful fan-out, default specialization or eager unrolling.
+Independent simulator qualification, the F-048/F-049/F-052 handoff and every
+F-043 acceptance obligation remain open.

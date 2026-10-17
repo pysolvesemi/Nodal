@@ -928,6 +928,24 @@ final class Increment43RepeatedSiblingGeneratedNodes extends Module:
     val _ = secondTap
     ()
 
+final class Increment43RepeatedSiblingGeneratedResistors extends Module:
+  val lanes: Param[Integer] = param(7.integer, range = 6 to 10)
+  val groups: Param[Integer] = param(3.integer, range = 2 to 5)
+  val firstResistance: Param[Real] = param(1.kOhm)
+  val secondResistance: Param[Real] = param(2.kOhm)
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+
+  hdlRange(1, lanes, 2): _ =>
+    val firstTap = node(Electrical)
+    analog:
+      I(firstTap, p) <+ (V(firstTap, p) / firstResistance)
+
+  hdlRange(0, groups): _ =>
+    val secondTap = node(Electrical)
+    analog:
+      I(secondTap, n) <+ (V(secondTap, n) / secondResistance)
+
 object Increment43RangeConstructionTests extends TestSuite:
   private def workDirectory(): Path =
     Files.createTempDirectory("nodal-increment43-range-")
@@ -1800,6 +1818,122 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
             assert(!result.verilogA.contains("genvar"))
             assert(!result.verilogA.contains("analog begin"))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("repeated sibling generated equations retain separate owners and target loops"):
+      val snapshot =
+        ConstructionKernel.inspect(new Increment43RepeatedSiblingGeneratedResistors)
+      assert(
+        snapshot ==
+          ConstructionKernel.inspect(new Increment43RepeatedSiblingGeneratedResistors)
+      )
+      assert(snapshot.generatedRegions.size == 2)
+      assert(snapshot.generatedRegions.forall(_.parent.isEmpty))
+      val regions = snapshot.generatedRegions.sortBy(_.path)
+      assert(regions.map(_.path).distinct.size == 2)
+      assert(regions.map(_.induction).distinct.size == 2)
+      assert(regions.flatMap(_.declarations).distinct.size == 2)
+      regions.foreach: region =>
+        assert(region.declarations.size == 1)
+        assert(snapshot.sourceMap.count(_.semanticPath == region.induction) == 1)
+        assert(snapshot.sourceMap.count(_.semanticPath == region.declarations.head) == 1)
+
+      val first = ScalaToMlirBridge.lower(new Increment43RepeatedSiblingGeneratedResistors)
+      assert(
+        first == ScalaToMlirBridge.lower(new Increment43RepeatedSiblingGeneratedResistors)
+      )
+      assert(first.text.sliding("\"nodal.generate\"".length).count(_ == "\"nodal.generate\"") == 2)
+      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
+      assert(first.text.sliding("\"nodal.branch\"".length).count(_ == "\"nodal.branch\"") == 2)
+      assert(
+        first.text.sliding("\"nodal.contribute\"".length).count(_ == "\"nodal.contribute\"") == 2
+      )
+      val accessLines = first.text.linesIterator.filter(_.contains("\"nodal.access\"")).toVector
+      assert(accessLines.size == 4)
+      assert(accessLines.count(_.contains("kind = \"flow\"")) == 2)
+      assert(accessLines.count(_.contains("kind = \"potential\"")) == 2)
+      regions.foreach: region =>
+        assert(first.text.contains(s"generated_owner = \"${region.path}\""))
+        assert(first.text.contains(s"generated_induction = \"${region.induction}\""))
+
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val secondOwner = s"generated_owner = \"${regions(1).path}\""
+            val forgedOwner = s"generated_owner = \"${regions.head.path}\""
+            val secondOwnerOffset = first.text.lastIndexOf(secondOwner)
+            assert(secondOwnerOffset >= 0)
+            val forged = first.text.patch(secondOwnerOffset, forgedOwner, secondOwner.length)
+            val hash = MessageDigest.getInstance("SHA-256")
+              .digest(forged.getBytes(StandardCharsets.UTF_8))
+              .map(value => f"${value & 0xff}%02x").mkString
+            NativeCompilerClient.run(
+              first.copy(text = forged, sha256 = hash),
+              NativeCompilerRequest(
+                executable = Path.of(nodalc).toAbsolutePath,
+                arguments = Vector("--pass-pipeline=builtin.module(nodal-gate-default)"),
+                workingDirectory = directory,
+                timeout = Duration.ofSeconds(30)
+              )
+            ) match
+              case failure: NativeCompilerFailure =>
+                assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
+              case success: NativeCompilerSuccess =>
+                scala.Predef.assert(
+                  false,
+                  s"cross-range generated owner accepted: ${success.normalizedMlir}"
+                )
+
+            def compileRepeated() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43RepeatedSiblingGeneratedResistors,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val result = compileRepeated()
+            assert(result == compileRepeated())
+            val names = regions.map(_.declarations.head.split('.').last)
+            val compactUpper = "(((((lanes - 1) + 2) - 1) / 2) - 1)"
+            assert(result.verilogA.contains(s"  electrical ${names.head}[0:$compactUpper];"))
+            assert(result.verilogA.contains(s"  electrical ${names(1)}[0:(groups - 1)];"))
+            assert(
+              result.verilogA.contains(
+                "for (generate_0_index = 1; generate_0_index < lanes; " +
+                  "generate_0_index = generate_0_index + 2)"
+              )
+            )
+            assert(
+              result.verilogA.contains(
+                "for (generate_1_index = 0; generate_1_index < groups; " +
+                  "generate_1_index = generate_1_index + 1)"
+              )
+            )
+            val mapped = "((generate_0_index - 1) / 2)"
+            assert(
+              result.verilogA.linesIterator.count(
+                _.trim ==
+                  s"I(${names.head}[$mapped], p) <+ " +
+                    s"(V(${names.head}[$mapped], p) / firstResistance);"
+              ) == 1
+            )
+            assert(
+              result.verilogA.linesIterator.count(
+                _.trim ==
+                  s"I(${names(1)}[generate_1_index], n) <+ " +
+                    s"(V(${names(1)}[generate_1_index], n) / secondResistance);"
+              ) == 1
+            )
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_")) == 2)
           finally delete(directory)
         case _ => assert(true)
 

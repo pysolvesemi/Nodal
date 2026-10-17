@@ -1923,14 +1923,14 @@ object Increment43RangeConstructionTests extends TestSuite:
               result.verilogA.linesIterator.count(
                 _.trim ==
                   s"I(${names.head}[$mapped], p) <+ " +
-                    s"(V(${names.head}[$mapped], p) / firstResistance);"
+                  s"(V(${names.head}[$mapped], p) / firstResistance);"
               ) == 1
             )
             assert(
               result.verilogA.linesIterator.count(
                 _.trim ==
                   s"I(${names(1)}[generate_1_index], n) <+ " +
-                    s"(V(${names(1)}[generate_1_index], n) / secondResistance);"
+                  s"(V(${names(1)}[generate_1_index], n) / secondResistance);"
               ) == 1
             )
             assert(result.verilogA.linesIterator.count(_.contains("for (generate_")) == 2)

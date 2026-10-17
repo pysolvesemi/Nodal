@@ -1038,3 +1038,28 @@ cross-range state, a general slice/index signature, shaped terminals, generated
 connections or instances, reverse ranges, default specialization or eager
 unrolling. Independent simulator qualification, the F-048/F-049/F-052 handoff
 and every F-043 acceptance obligation remain open.
+
+## Nested generated analog-node ddt checkpoint
+
+The same bounded two-dimensional child equation now composes with exactly one
+previously qualified direct generated-node `ddt` path. The child-owned potential
+access feeds the child-owned derivative directly; its result may traverse the
+existing one-use memoryless contribution path on the same branch. The outer
+range owns no declaration, branch, access or operator.
+
+The target reuses the product-extent row-major electrical array, both authored
+positive-stride loops and the canonical flattened occurrence expression. No
+lane is enumerated, no parameter default is substituted and no second shape,
+expression or operator registry is introduced. Native evidence rejects a `ddt`
+whose owner or induction is replaced by its parent before partial target
+publication, and requires deterministic repeated emission plus independent
+target reparse. The public witness retains both range source maps, the child
+declaration, access, operator and contribution through Scala construction,
+normalized IR and configured Verilog-A generation.
+
+This remains one child range, one node, one branch, one access, one `ddt` and
+one contribution. It does not admit an operator chain, fan-out, sibling or
+cross-range operators, a general slice/index signature, shaped terminals,
+generated connections or instances, reverse ranges, default specialization or
+eager unrolling. Independent simulator qualification, the F-048/F-049/F-052
+handoff and every F-043 acceptance obligation remain open.

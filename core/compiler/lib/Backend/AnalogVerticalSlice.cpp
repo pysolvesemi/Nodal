@@ -1490,11 +1490,13 @@ Operation *nestedGeneratedNodeContribution(Operation *generate) {
   if (nodes != 1 || branches != 1 || !analog || !llvm::hasSingleElement(analog->getRegion(0)))
     return nullptr;
 
-  unsigned accesses = 0, contributions = 0, integrals = 0;
+  unsigned accesses = 0, contributions = 0, derivatives = 0, integrals = 0;
   for (Operation &operation : analog->getRegion(0).front()) {
     llvm::StringRef name = operation.getName().getStringRef();
     if (name == "nodal.access")
       ++accesses;
+    else if (name == "nodal.analog_ddt")
+      ++derivatives;
     else if (name == "nodal.analog_idt")
       ++integrals;
     else if (name == "nodal.contribute")
@@ -1504,7 +1506,7 @@ Operation *nestedGeneratedNodeContribution(Operation *generate) {
              name != "nodal.analog_mul" && name != "nodal.analog_div" && name != "nodal.analog_neg")
       return nullptr;
   }
-  return accesses == 1 && contributions == 1 && integrals <= 1 ? &child : nullptr;
+  return accesses == 1 && contributions == 1 && derivatives + integrals <= 1 ? &child : nullptr;
 }
 
 LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState &state,

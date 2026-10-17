@@ -136,9 +136,9 @@ module attributes {
 } {
   "nodal.module"() <{metadata = {root = true}, sym_name = "NestedGeneratedNodeArray"}> ({
   ^bb0:
-    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 3 : i64, step = 1 : i64, region_id = "NestedGeneratedNodeArray.generate_0", induction_path = "NestedGeneratedNodeArray.generate_0.index", metadata = {maximum_trip_count = 3 : i64}}> ({
+    "nodal.generate"() <{induction = "generate_0_index", lower = 1 : i64, upper = 8 : i64, step = 2 : i64, region_id = "NestedGeneratedNodeArray.generate_0", induction_path = "NestedGeneratedNodeArray.generate_0.index", metadata = {maximum_trip_count = 4 : i64}}> ({
     ^bb0:
-      "nodal.generate"() <{induction = "generate_1_index", lower = 1 : i64, upper = 4 : i64, step = 1 : i64, region_id = "NestedGeneratedNodeArray.generate_0.generate_1", induction_path = "NestedGeneratedNodeArray.generate_0.generate_1.index", metadata = {maximum_trip_count = 3 : i64}}> ({
+      "nodal.generate"() <{induction = "generate_1_index", lower = 2 : i64, upper = 11 : i64, step = 3 : i64, region_id = "NestedGeneratedNodeArray.generate_0.generate_1", induction_path = "NestedGeneratedNodeArray.generate_0.generate_1.index", metadata = {maximum_trip_count = 3 : i64}}> ({
       ^bb0:
         %tap = "nodal.node"() <{name = "nestedTap", source_path = "NestedGeneratedNodeArray.nestedTap", generated_owner = "NestedGeneratedNodeArray.generate_0.generate_1", generated_induction = "NestedGeneratedNodeArray.generate_0.generate_1.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "NestedGeneratedNodeArray.generate_0.generate_1", induction = "NestedGeneratedNodeArray.generate_0.generate_1.index"}}> : () -> !nodal.terminal<"electrical">
       }) : () -> ()
@@ -1334,8 +1334,9 @@ int main() {
                                       nestedGeneratedNodeArrayStream)))
     return fail("nested generated analog-node array emission failed");
   nestedGeneratedNodeArrayStream.flush();
-  if (nestedGeneratedNodeArrayOutput.find(
-          "  electrical nestedTap[0:(((3 - 0) * (4 - 1)) - 1)];\n") == std::string::npos ||
+  if (nestedGeneratedNodeArrayOutput.find("  electrical nestedTap[0:((((((8 - 1) + 2) - 1) / 2) * "
+                                          "((((11 - 2) + 3) - 1) / 3)) - 1)];\n") ==
+          std::string::npos ||
       nestedGeneratedNodeArrayOutput.find("genvar") != std::string::npos ||
       nestedGeneratedNodeArrayOutput.find("analog begin") != std::string::npos)
     return fail("nested generated analog node lost its explicit row-major topology layout");

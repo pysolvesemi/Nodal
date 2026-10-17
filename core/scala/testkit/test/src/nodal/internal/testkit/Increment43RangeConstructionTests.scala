@@ -914,6 +914,16 @@ final class Increment43RepeatedSymbolicGeneratedNodes extends Module:
       val _ = nested
       ()
 
+final class Increment43IndependentStridedNestedGeneratedNodes extends Module:
+  val rows: Param[Integer] = param(8.integer, range = 6 to 10)
+  val columns: Param[Integer] = param(11.integer, range = 9 to 13)
+
+  hdlRange(1, rows, 2): _ =>
+    hdlRange(2, columns, 3): _ =>
+      val nestedTap = node(Electrical)
+      val _ = nestedTap
+      ()
+
 final class Increment43RepeatedSiblingGeneratedNodes extends Module:
   val lanes: Param[Integer] = param(7.integer, range = 6 to 10)
   val groups: Param[Integer] = param(3.integer, range = 2 to 5)
@@ -1921,6 +1931,116 @@ object Increment43RangeConstructionTests extends TestSuite:
               )
             )
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
+            assert(!result.verilogA.contains("genvar"))
+            assert(!result.verilogA.contains("analog begin"))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("independent strided nested nodes retain product layout and exact identities"):
+      val snapshot =
+        ConstructionKernel.inspect(new Increment43IndependentStridedNestedGeneratedNodes)
+      assert(
+        snapshot ==
+          ConstructionKernel.inspect(new Increment43IndependentStridedNestedGeneratedNodes)
+      )
+      assert(snapshot.generatedRegions.size == 2)
+      val outer = snapshot.generatedRegions.find(_.parent.isEmpty).get
+      val child = snapshot.generatedRegions.find(_.parent.nonEmpty).get
+      assert(child.parent.contains(outer.path))
+      assert(outer.lower == "1")
+      assert(outer.step == "2")
+      assert(child.lower == "2")
+      assert(child.step == "3")
+      assert(outer.declarations.isEmpty)
+      assert(child.declarations.size == 1)
+      snapshot.generatedRegions.foreach: region =>
+        assert(snapshot.sourceMap.count(_.semanticPath == region.induction) == 1)
+        region.declarations.foreach: declaration =>
+          assert(snapshot.sourceMap.count(_.semanticPath == declaration) == 1)
+
+      val first =
+        ScalaToMlirBridge.lower(new Increment43IndependentStridedNestedGeneratedNodes)
+      assert(
+        first == ScalaToMlirBridge.lower(new Increment43IndependentStridedNestedGeneratedNodes)
+      )
+      assert(first.text.sliding("\"nodal.generate\"".length).count(_ == "\"nodal.generate\"") == 2)
+      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 1)
+      val sourceMapStart = first.text.indexOf("nodal.bridge.source_map")
+      val sourceMapEnd = first.text.indexOf("nodal.bridge.topology", sourceMapStart)
+      assert(sourceMapStart >= 0)
+      assert(sourceMapEnd > sourceMapStart)
+      val sourceMap = first.text.substring(sourceMapStart, sourceMapEnd)
+      snapshot.generatedRegions.foreach: region =>
+        val regionMarker = s"semantic_path = \"${region.path}\""
+        val inductionMarker = s"semantic_path = \"${region.induction}\""
+        assert(sourceMap.sliding(regionMarker.length).count(_ == regionMarker) == 1)
+        assert(sourceMap.sliding(inductionMarker.length).count(_ == inductionMarker) == 1)
+        region.declarations.foreach: declaration =>
+          val declarationMarker = s"semantic_path = \"$declaration\""
+          assert(sourceMap.sliding(declarationMarker.length).count(_ == declarationMarker) == 1)
+
+      val childNodeLine = first.text.linesIterator
+        .find(line => line.contains("\"nodal.node\"") && line.contains(child.path))
+        .get
+      assert(childNodeLine.contains(s"generated_owner = \"${child.path}\""))
+      assert(childNodeLine.contains(s"generated_induction = \"${child.induction}\""))
+
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val childInduction = s"generated_induction = \"${child.induction}\""
+            val parentInduction = s"generated_induction = \"${outer.induction}\""
+            val forgedNodeLine = childNodeLine.replace(childInduction, parentInduction)
+            val nodeOffset = first.text.indexOf(childNodeLine)
+            assert(nodeOffset >= 0)
+            assert(forgedNodeLine != childNodeLine)
+            val forged = first.text.patch(nodeOffset, forgedNodeLine, childNodeLine.length)
+            val hash = MessageDigest.getInstance("SHA-256")
+              .digest(forged.getBytes(StandardCharsets.UTF_8))
+              .map(value => f"${value & 0xff}%02x").mkString
+            NativeCompilerClient.run(
+              first.copy(text = forged, sha256 = hash),
+              NativeCompilerRequest(
+                executable = Path.of(nodalc).toAbsolutePath,
+                arguments = Vector("--pass-pipeline=builtin.module(nodal-gate-default)"),
+                workingDirectory = directory,
+                timeout = Duration.ofSeconds(30)
+              )
+            ) match
+              case failure: NativeCompilerFailure =>
+                assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
+              case success: NativeCompilerSuccess =>
+                scala.Predef.assert(
+                  false,
+                  s"forged nested generated induction accepted: ${success.normalizedMlir}"
+                )
+
+            def compileNested() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43IndependentStridedNestedGeneratedNodes,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val result = compileNested()
+            assert(result == compileNested())
+            val name = child.declarations.head.split('.').last
+            val outerCount = "((((rows - 1) + 2) - 1) / 2)"
+            val innerCount = "((((columns - 2) + 3) - 1) / 3)"
+            assert(
+              result.verilogA.contains(
+                s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
+              )
+            )
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 1)
             assert(!result.verilogA.contains("genvar"))
             assert(!result.verilogA.contains("analog begin"))
           finally delete(directory)

@@ -972,3 +972,11 @@ state, cross-range references, general slices, shaped terminals, generated
 connections or instances, default specialization and eager unrolling remain
 unsupported. Independent simulator qualification, the F-048/F-049/F-052 handoff
 and every F-043 acceptance obligation remain open.
+
+An additional scale witness uses independent symbolic envelopes and positive
+strides on both nested dimensions. It requires the target extent to remain the
+product of the two canonical ceiling-divided iteration counts, with no default
+specialization or unrolling. Every region, induction and declaration appears
+exactly once in the serialized source map; replacing only the child's induction
+with its parent's identity must fail before target publication. The native
+literal counterpart independently reparses the same two-stride row-major form.

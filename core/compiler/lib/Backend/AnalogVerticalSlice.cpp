@@ -1466,7 +1466,7 @@ bool isGeneratedNodeContributionProfile(Operation *generate) {
   return ++operation == body.front().end();
 }
 
-Operation *nestedGeneratedNodeMemorylessContribution(Operation *generate) {
+Operation *nestedGeneratedNodeContribution(Operation *generate) {
   Region &body = generate->getRegion(0);
   if (!llvm::hasSingleElement(body) || body.front().getOperations().size() != 1)
     return nullptr;
@@ -1490,11 +1490,13 @@ Operation *nestedGeneratedNodeMemorylessContribution(Operation *generate) {
   if (nodes != 1 || branches != 1 || !analog || !llvm::hasSingleElement(analog->getRegion(0)))
     return nullptr;
 
-  unsigned accesses = 0, contributions = 0;
+  unsigned accesses = 0, contributions = 0, integrals = 0;
   for (Operation &operation : analog->getRegion(0).front()) {
     llvm::StringRef name = operation.getName().getStringRef();
     if (name == "nodal.access")
       ++accesses;
+    else if (name == "nodal.analog_idt")
+      ++integrals;
     else if (name == "nodal.contribute")
       ++contributions;
     else if (name != "nodal.real_literal" && name != "nodal.parameter_reference" &&
@@ -1502,7 +1504,7 @@ Operation *nestedGeneratedNodeMemorylessContribution(Operation *generate) {
              name != "nodal.analog_mul" && name != "nodal.analog_div" && name != "nodal.analog_neg")
       return nullptr;
   }
-  return accesses == 1 && contributions == 1 ? &child : nullptr;
+  return accesses == 1 && contributions == 1 && integrals <= 1 ? &child : nullptr;
 }
 
 LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState &state,
@@ -1546,10 +1548,10 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
   std::optional<GeneratedTargetBound> parentUpper;
   std::optional<GeneratedTargetBound> parentStep;
   if (parentGenerate) {
-    if (nestedGeneratedNodeMemorylessContribution(parentGenerate) != generate)
+    if (nestedGeneratedNodeContribution(parentGenerate) != generate)
       return emitMappedFailure(
           generate, "NODAL-BACKEND-CAPABILITY-001",
-          "nested generated analog-node equation requires one direct memoryless child profile");
+          "nested generated analog-node equation requires one direct child equation profile");
     const bool parentCompound = parentGenerate->getNumOperands() == 3;
     if (parentGenerate->getNumOperands() != 0 && !parentCompound)
       return emitMappedFailure(
@@ -2868,17 +2870,16 @@ bool isGeneratedNodeArrayTreeProfile(Operation *generate, unsigned depth = 0) {
 
 bool hasGeneratedNodeArray(Operation *generate) {
   return isGeneratedNodeArrayTreeProfile(generate) ||
-         isGeneratedNodeContributionProfile(generate) ||
-         nestedGeneratedNodeMemorylessContribution(generate);
+         isGeneratedNodeContributionProfile(generate) || nestedGeneratedNodeContribution(generate);
 }
 
 LogicalResult renderNestedGeneratedNodeContributionArray(Operation *generate,
                                                          llvm::raw_ostream &output) {
-  Operation *child = nestedGeneratedNodeMemorylessContribution(generate);
+  Operation *child = nestedGeneratedNodeContribution(generate);
   if (!child)
     return emitMappedFailure(
         generate, "NODAL-BACKEND-CAPABILITY-001",
-        "nested generated analog-node equation requires one direct memoryless child profile");
+        "nested generated analog-node equation requires one direct child equation profile");
 
   auto resolveLayout = [&](Operation *range) -> FailureOr<GeneratedNodeArrayLayout> {
     if (range->getNumOperands() != 0 && range->getNumOperands() != 3)
@@ -3025,7 +3026,7 @@ LogicalResult renderGeneratedNodeArrayTree(Operation *generate, llvm::raw_ostrea
 LogicalResult renderGeneratedNodeArray(Operation *generate, llvm::raw_ostream &output) {
   if (isGeneratedNodeArrayTreeProfile(generate))
     return renderGeneratedNodeArrayTree(generate, output);
-  if (nestedGeneratedNodeMemorylessContribution(generate))
+  if (nestedGeneratedNodeContribution(generate))
     return renderNestedGeneratedNodeContributionArray(generate, output);
 
   if (generate->getNumOperands() != 0 && generate->getNumOperands() != 3)
@@ -3211,7 +3212,7 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
   llvm::StringSet<> generatedLabels;
   for (Operation *generate : generates) {
     llvm::SmallVector<Operation *, 2> targetRanges{generate};
-    if (Operation *child = nestedGeneratedNodeMemorylessContribution(generate))
+    if (Operation *child = nestedGeneratedNodeContribution(generate))
       targetRanges.push_back(child);
     for (Operation *range : targetRanges) {
       auto induction = range->getAttrOfType<StringAttr>("induction");
@@ -3316,7 +3317,7 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
   }
   for (Operation *generate : generates)
     if (!isGeneratedNodeArrayTreeProfile(generate)) {
-      if (Operation *child = nestedGeneratedNodeMemorylessContribution(generate)) {
+      if (Operation *child = nestedGeneratedNodeContribution(generate)) {
         if (failed(renderGeneratedContribution(child, state, output, generate)))
           return failure();
       } else if (failed(renderGeneratedContribution(generate, state, output))) {

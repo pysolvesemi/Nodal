@@ -1011,3 +1011,30 @@ stateful operators, fan-out, a general slice/index signature, shaped terminals,
 generated connections or instances, default specialization or eager unrolling.
 Independent simulator qualification, the F-048/F-049/F-052 handoff and every
 F-043 acceptance obligation remain open.
+
+## Nested generated analog-node idt checkpoint
+
+The bounded two-dimensional child equation now admits exactly one previously
+qualified generated-node `idt` path. The child-owned potential access traverses
+one memoryless dimension-conversion expression into one child-owned `idt`; its
+result feeds the additive contribution on the same branch. The operator retains
+the exact child region and induction plus its canonical operator-owned
+`state_id`. The outer range owns no declaration, branch, operator or state.
+
+The target continues to use one product-extent row-major electrical array and
+the two authored positive-stride loops. Both the indexed access and contribution
+reuse the existing flattened occurrence expression; the `idt` remains one
+simulator-owned stateful expression per generated occurrence. No language
+memory, state array, second storage registry, default specialization or eager
+unrolling is introduced. Native evidence rejects forged child operator owner,
+induction or state identity before partial publication and requires deterministic
+emission plus independent target reparse. The public witness preserves the two
+range source maps, child declaration, access, operator, state and contribution
+through Scala construction, normalized IR and configured Verilog-A generation.
+
+This remains one child range, one node, one branch, one access, one `idt` and one
+contribution. It does not admit nested operator chains, fan-out, sibling or
+cross-range state, a general slice/index signature, shaped terminals, generated
+connections or instances, reverse ranges, default specialization or eager
+unrolling. Independent simulator qualification, the F-048/F-049/F-052 handoff
+and every F-043 acceptance obligation remain open.

@@ -936,6 +936,19 @@ final class Increment43NestedGeneratedNodeResistor extends Module:
       analog:
         I(nestedTap, p) <+ (V(nestedTap, p) / resistance)
 
+final class Increment43NestedGeneratedNodeIdt extends Module:
+  val rows: Param[Integer] = param(8.integer, range = 6 to 10)
+  val columns: Param[Integer] = param(11.integer, range = 9 to 13)
+  val p = inout(Electrical)
+
+  hdlRange(1, rows, 2): _ =>
+    hdlRange(2, columns, 3): _ =>
+      val nestedTap = node(Electrical)
+      analog:
+        val voltage = V(nestedTap, p)
+        val voltageRate = voltage / 1.0.s
+        V(nestedTap, p) <+ idt(voltageRate, 0.0.V)
+
 final class Increment43RepeatedSiblingGeneratedNodes extends Module:
   val lanes: Param[Integer] = param(7.integer, range = 6 to 10)
   val groups: Param[Integer] = param(3.integer, range = 2 to 5)
@@ -2159,6 +2172,99 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (")) == 2)
             assert(result.verilogA.contains(s"I($nodeName[$flatIndex], p)"))
             assert(result.verilogA.contains(s"V($nodeName[$flatIndex], p)"))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("nested generated node idt retains child-owned row-major state"):
+      val snapshot = ConstructionKernel.inspect(new Increment43NestedGeneratedNodeIdt)
+      assert(snapshot == ConstructionKernel.inspect(new Increment43NestedGeneratedNodeIdt))
+      assert(snapshot.generatedRegions.size == 2)
+      val outer = snapshot.generatedRegions.find(_.parent.isEmpty).get
+      val child = snapshot.generatedRegions.find(_.parent.nonEmpty).get
+      assert(child.parent.contains(outer.path))
+      assert(outer.declarations.isEmpty)
+      assert(child.declarations.size == 1)
+      assert(snapshot.analogRegions.size == 1)
+      assert(snapshot.analogRegions.head.generatedOwner.contains(child.path))
+      assert(snapshot.analogRegions.head.generatedInduction.contains(child.induction))
+
+      val first = ScalaToMlirBridge.lower(new Increment43NestedGeneratedNodeIdt)
+      assert(first == ScalaToMlirBridge.lower(new Increment43NestedGeneratedNodeIdt))
+      assert(
+        first.text.sliding("\"nodal.generate\"".length).count(_ == "\"nodal.generate\"") == 2
+      )
+      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 1)
+      val idtLine = first.text.linesIterator.find(_.contains("\"nodal.analog_idt\"")).get
+      assert(idtLine.contains(s"generated_owner = \"${child.path}\""))
+      assert(idtLine.contains(s"generated_induction = \"${child.induction}\""))
+      assert(idtLine.contains("state_id"))
+      snapshot.generatedRegions.foreach: region =>
+        assert(snapshot.sourceMap.count(_.semanticPath == region.induction) == 1)
+        region.declarations.foreach: declaration =>
+          assert(snapshot.sourceMap.count(_.semanticPath == declaration) == 1)
+
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val childOwner = s"generated_owner = \"${child.path}\""
+            val parentOwner = s"generated_owner = \"${outer.path}\""
+            val forgedIdtLine = idtLine.replace(childOwner, parentOwner)
+            val idtOffset = first.text.indexOf(idtLine)
+            assert(idtOffset >= 0)
+            assert(forgedIdtLine != idtLine)
+            val forged = first.text.patch(idtOffset, forgedIdtLine, idtLine.length)
+            val hash = MessageDigest.getInstance("SHA-256")
+              .digest(forged.getBytes(StandardCharsets.UTF_8))
+              .map(value => f"${value & 0xff}%02x").mkString
+            NativeCompilerClient.run(
+              first.copy(text = forged, sha256 = hash),
+              NativeCompilerRequest(
+                executable = Path.of(nodalc).toAbsolutePath,
+                arguments = Vector("--pass-pipeline=builtin.module(nodal-gate-default)"),
+                workingDirectory = directory,
+                timeout = Duration.ofSeconds(30)
+              )
+            ) match
+              case failure: NativeCompilerFailure =>
+                assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
+              case success: NativeCompilerSuccess =>
+                scala.Predef.assert(false, s"forged nested generated idt accepted: $success")
+
+            def compileNestedIdt() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43NestedGeneratedNodeIdt,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val result = compileNestedIdt()
+            assert(result == compileNestedIdt())
+            val nodeName = child.declarations.head.split('.').last
+            val outerCount = "((((rows - 1) + 2) - 1) / 2)"
+            val innerCount = "((((columns - 2) + 3) - 1) / 3)"
+            val flatIndex =
+              s"((((generate_0_index - 1) / 2) * $innerCount) + ((generate_1_index - 2) / 3))"
+            assert(
+              result.verilogA.contains(
+                s"  electrical $nodeName[0:(($outerCount * $innerCount) - 1)];"
+              )
+            )
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("genvar ")) == 2)
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (")) == 2)
+            assert(
+              result.verilogA.linesIterator.count(line =>
+                line.contains(s"V($nodeName[$flatIndex], p) <+") &&
+                  line.contains(s"idt((V($nodeName[$flatIndex], p) / 1), 0)")
+              ) == 1
+            )
           finally delete(directory)
         case _ => assert(true)
 

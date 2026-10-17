@@ -946,6 +946,26 @@ final class Increment43RepeatedSiblingGeneratedResistors extends Module:
     analog:
       I(secondTap, n) <+ (V(secondTap, n) / secondResistance)
 
+final class Increment43RepeatedSiblingGeneratedIdtEquations extends Module:
+  val lanes: Param[Integer] = param(7.integer, range = 6 to 10)
+  val groups: Param[Integer] = param(3.integer, range = 2 to 5)
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+
+  hdlRange(1, lanes, 2): _ =>
+    val firstTap = node(Electrical)
+    analog:
+      val firstVoltage = V(firstTap, p)
+      val firstRate = firstVoltage / 1.0.s
+      V(firstTap, p) <+ idt(firstRate, 0.0.V)
+
+  hdlRange(0, groups): _ =>
+    val secondTap = node(Electrical)
+    analog:
+      val secondVoltage = V(secondTap, n)
+      val secondRate = secondVoltage / 1.0.s
+      V(secondTap, n) <+ idt(secondRate, 0.0.V)
+
 object Increment43RangeConstructionTests extends TestSuite:
   private def workDirectory(): Path =
     Files.createTempDirectory("nodal-increment43-range-")
@@ -1934,6 +1954,127 @@ object Increment43RangeConstructionTests extends TestSuite:
               ) == 1
             )
             assert(result.verilogA.linesIterator.count(_.contains("for (generate_")) == 2)
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("repeated sibling generated idt equations retain separate owned state"):
+      val snapshot =
+        ConstructionKernel.inspect(new Increment43RepeatedSiblingGeneratedIdtEquations)
+      assert(
+        snapshot ==
+          ConstructionKernel.inspect(new Increment43RepeatedSiblingGeneratedIdtEquations)
+      )
+      assert(snapshot.generatedRegions.size == 2)
+      assert(snapshot.generatedRegions.forall(_.parent.isEmpty))
+      val regions = snapshot.generatedRegions.sortBy(_.path)
+      assert(regions.map(_.path).distinct.size == 2)
+      assert(regions.map(_.induction).distinct.size == 2)
+      assert(regions.flatMap(_.declarations).distinct.size == 2)
+      regions.foreach: region =>
+        assert(region.declarations.size == 1)
+        assert(snapshot.sourceMap.count(_.semanticPath == region.induction) == 1)
+        assert(snapshot.sourceMap.count(_.semanticPath == region.declarations.head) == 1)
+
+      val first = ScalaToMlirBridge.lower(new Increment43RepeatedSiblingGeneratedIdtEquations)
+      assert(
+        first == ScalaToMlirBridge.lower(new Increment43RepeatedSiblingGeneratedIdtEquations)
+      )
+      assert(first.text.sliding("\"nodal.generate\"".length).count(_ == "\"nodal.generate\"") == 2)
+      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
+      assert(first.text.sliding("\"nodal.branch\"".length).count(_ == "\"nodal.branch\"") == 2)
+      assert(
+        first.text.sliding("\"nodal.contribute\"".length).count(_ == "\"nodal.contribute\"") == 2
+      )
+      val accessLines = first.text.linesIterator.filter(_.contains("\"nodal.access\"")).toVector
+      assert(accessLines.size == 4)
+      assert(accessLines.count(_.contains("kind = \"flow\"")) == 2)
+      assert(accessLines.count(_.contains("kind = \"potential\"")) == 2)
+      val idtLines = first.text.linesIterator.filter(_.contains("\"nodal.analog_idt\"")).toVector
+      assert(idtLines.size == 2)
+      assert(idtLines.distinct.size == 2)
+      regions.zip(idtLines).foreach: (region, line) =>
+        assert(line.contains(s"generated_owner = \"${region.path}\""))
+        assert(line.contains(s"generated_induction = \"${region.induction}\""))
+        assert(line.contains("state_id"))
+
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val secondOwner = s"generated_owner = \"${regions(1).path}\""
+            val forgedOwner = s"generated_owner = \"${regions.head.path}\""
+            assert(idtLines(1).contains(secondOwner))
+            val forgedIdt = idtLines(1).replace(secondOwner, forgedOwner)
+            val idtOffset = first.text.indexOf(idtLines(1))
+            assert(idtOffset >= 0)
+            val forged = first.text.patch(idtOffset, forgedIdt, idtLines(1).length)
+            val hash = MessageDigest.getInstance("SHA-256")
+              .digest(forged.getBytes(StandardCharsets.UTF_8))
+              .map(value => f"${value & 0xff}%02x").mkString
+            NativeCompilerClient.run(
+              first.copy(text = forged, sha256 = hash),
+              NativeCompilerRequest(
+                executable = Path.of(nodalc).toAbsolutePath,
+                arguments = Vector("--pass-pipeline=builtin.module(nodal-gate-default)"),
+                workingDirectory = directory,
+                timeout = Duration.ofSeconds(30)
+              )
+            ) match
+              case failure: NativeCompilerFailure =>
+                assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
+              case success: NativeCompilerSuccess =>
+                scala.Predef.assert(
+                  false,
+                  s"cross-range generated idt owner accepted: ${success.normalizedMlir}"
+                )
+
+            def compileRepeated() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43RepeatedSiblingGeneratedIdtEquations,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val result = compileRepeated()
+            assert(result == compileRepeated())
+            val names = regions.map(_.declarations.head.split('.').last)
+            val compactUpper = "(((((lanes - 1) + 2) - 1) / 2) - 1)"
+            assert(result.verilogA.contains(s"  electrical ${names.head}[0:$compactUpper];"))
+            assert(result.verilogA.contains(s"  electrical ${names(1)}[0:(groups - 1)];"))
+            assert(
+              result.verilogA.contains(
+                "for (generate_0_index = 1; generate_0_index < lanes; " +
+                  "generate_0_index = generate_0_index + 2)"
+              )
+            )
+            assert(
+              result.verilogA.contains(
+                "for (generate_1_index = 0; generate_1_index < groups; " +
+                  "generate_1_index = generate_1_index + 1)"
+              )
+            )
+            val mapped = "((generate_0_index - 1) / 2)"
+            assert(
+              result.verilogA.linesIterator.count(line =>
+                line.contains(s"V(${names.head}[$mapped], p) <+") &&
+                  line.contains(s"idt((V(${names.head}[$mapped], p) / 1), 0)")
+              ) == 1
+            )
+            assert(
+              result.verilogA.linesIterator.count(line =>
+                line.contains(s"V(${names(1)}[generate_1_index], n) <+") &&
+                  line.contains(s"idt((V(${names(1)}[generate_1_index], n) / 1), 0)")
+              ) == 1
+            )
+            assert(result.verilogA.linesIterator.count(_.contains("for (generate_")) == 2)
+            assert(result.verilogA.linesIterator.count(_.contains("idt(")) == 2)
           finally delete(directory)
         case _ => assert(true)
 

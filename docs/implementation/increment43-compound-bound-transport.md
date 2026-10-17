@@ -912,3 +912,29 @@ generation, general slices, shaped terminals, generated connections or
 instances, stateful fan-out, default specialization or eager unrolling.
 Independent simulator qualification, the F-048/F-049/F-052 handoff and every
 F-043 acceptance obligation remain open.
+
+## Repeated sibling generated-node idt checkpoint
+
+Two independent top-level generated ranges now retain separate stateful `idt`
+equations through the actual public Scala-to-normalized-IR-to-Verilog-A path.
+The first range keeps its symbolic positive stride and compact source-index map;
+the second keeps its independent symbolic unit-step bound. Each range owns one
+electrical array, branch, potential read, flow target, `idt` operator and
+additive contribution, with distinct region, induction, declaration and state
+identities.
+
+No backend admission rule, schema, state registry or public API is widened. The
+witness composes the qualified sibling-array and generated-node `idt` profiles,
+requires byte-identical repeated construction, lowering and target output, and
+checks both authored target loops and stateful equations. A configured native
+negative rewrites only the second `idt` owner to the first range and requires
+the existing exact-ownership verifier to reject it before target publication.
+Existing source-map, raw/normalized access-count and single-state-path contracts
+remain unchanged.
+
+This does not admit cross-range references or contributions, shared or escaping
+state, operator fan-out, nested target generation, general slices, shaped
+terminals, generated connections or instances, default specialization or eager
+unrolling. Internal target reparse remains compiler evidence rather than
+independent numerical simulation. The F-048/F-049/F-052 handoff and every
+F-043 acceptance obligation remain open.

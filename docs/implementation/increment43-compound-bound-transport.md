@@ -1037,6 +1037,12 @@ generated connections or instances, reverse ranges, default specialization or
 eager unrolling. Independent simulator qualification, the F-048/F-049/F-052
 handoff and every F-043 acceptance obligation remain open.
 
+The nested profile gate also enforces that boundary directly: a two-node child
+body is accepted only when it has no `ddt` or `idt`. Native negative witnesses
+derive both unsupported peer-operator forms from the qualified one-node
+fixtures and require rejection without partial target publication. The existing
+one-node nested `ddt`/`idt` paths and two-node memoryless path remain unchanged.
+
 ## Nested generated analog-node idt checkpoint
 
 The bounded two-dimensional child equation now admits exactly one previously

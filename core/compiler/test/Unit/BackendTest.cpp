@@ -1692,6 +1692,46 @@ int main() {
       return fail("nested generated analog-node idt emission is nondeterministic");
   }
 
+  for (const auto &[kind, source] : std::array<std::pair<llvm::StringRef, llvm::StringRef>, 2>{
+           std::pair<llvm::StringRef, llvm::StringRef>{"ddt", nestedGeneratedNodeDdtSource},
+           std::pair<llvm::StringRef, llvm::StringRef>{"idt", nestedGeneratedNodeIdtSource}}) {
+    auto candidate = parse(context, source);
+    if (!candidate)
+      return fail("could not parse nested peer generated analog-node operator fixture");
+    mlir::Operation *firstNode = nullptr;
+    mlir::Operation *branch = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      if (!firstNode && operation->getName().getStringRef() == "nodal.node")
+        firstNode = operation;
+      if (operation->getName().getStringRef() == "nodal.branch")
+        branch = operation;
+    });
+    if (!firstNode || !branch)
+      return fail("nested peer generated analog-node operator fixture lost its topology");
+    mlir::Operation *secondNode = firstNode->clone();
+    firstNode->getBlock()->getOperations().insert(branch->getIterator(), secondNode);
+    secondNode->setAttr("name", mlir::StringAttr::get(&context, "nestedReturn"));
+    secondNode->setAttr(
+        "source_path", mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.nestedReturn"));
+    mlir::Operation *rootTerminal = branch->getOperand(1).getDefiningOp();
+    branch->setOperand(1, secondNode->getResult(0));
+    if (!rootTerminal || !rootTerminal->use_empty())
+      return fail("nested peer generated analog-node operator retained its root endpoint");
+    rootTerminal->erase();
+
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    if (mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream)))
+      return fail(
+          ("unsupported nested peer generated analog-node " + kind + " passed backend verification")
+              .str());
+    stream.flush();
+    if (output != "sentinel")
+      return fail(
+          ("unsupported nested peer generated analog-node " + kind + " published partial output")
+              .str());
+  }
+
   for (llvm::StringRef mutation : {"valid", "owner", "induction", "name", "source"}) {
     auto group = parse(context, kGeneratedNodeArrayModule);
     if (!group)

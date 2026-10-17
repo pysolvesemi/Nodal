@@ -1507,7 +1507,10 @@ Operation *nestedGeneratedNodeContribution(Operation *generate) {
              name != "nodal.analog_mul" && name != "nodal.analog_div" && name != "nodal.analog_neg")
       return nullptr;
   }
-  return accesses == 1 && contributions == 1 && derivatives + integrals <= 1 ? &child : nullptr;
+  const unsigned operators = derivatives + integrals;
+  if (nodes > 1 && operators != 0)
+    return nullptr;
+  return accesses == 1 && contributions == 1 && operators <= 1 ? &child : nullptr;
 }
 
 LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState &state,

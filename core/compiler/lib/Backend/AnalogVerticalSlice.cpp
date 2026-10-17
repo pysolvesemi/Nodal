@@ -1445,8 +1445,35 @@ bool generatedValueFeedsOneContribution(Value value, Block &body,
                                         false, contributionBranch);
 }
 
-bool generatedValueFeedsOneIdtInput(Value value, Block &body, llvm::DenseSet<Operation *> &active) {
-  return generatedValueFeedsOneEndpoint(value, body, active, GeneratedValueEndpoint::IdtInput);
+bool generatedValueFeedsOneIdtInput(Value value, Block &body, llvm::DenseSet<Operation *> &active,
+                                    Value contributionBranch = {}) {
+  Operation *definition = value.getDefiningOp();
+  if (!definition || !value.hasOneUse() || !active.insert(definition).second)
+    return false;
+
+  OpOperand &use = *value.getUses().begin();
+  Operation *user = use.getOwner();
+  if (user->getBlock() != &body) {
+    active.erase(definition);
+    return false;
+  }
+  llvm::StringRef name = user->getName().getStringRef();
+  if (name == "nodal.analog_idt" && use.getOperandNumber() == 0) {
+    llvm::DenseSet<Operation *> downstream;
+    const bool result = user->getNumResults() == 1 &&
+                        generatedValueFeedsOneContribution(user->getResult(0), body, downstream,
+                                                           contributionBranch);
+    active.erase(definition);
+    return result;
+  }
+  const bool expression = name == "nodal.analog_add" || name == "nodal.analog_sub" ||
+                          name == "nodal.analog_mul" || name == "nodal.analog_div" ||
+                          name == "nodal.analog_neg";
+  const bool result =
+      expression && user->getNumResults() == 1 &&
+      generatedValueFeedsOneIdtInput(user->getResult(0), body, active, contributionBranch);
+  active.erase(definition);
+  return result;
 }
 
 bool isGeneratedNodeContributionProfile(Operation *generate) {
@@ -1508,10 +1535,13 @@ Operation *nestedGeneratedNodeContribution(Operation *generate) {
       return nullptr;
   }
   const unsigned operators = derivatives + integrals;
-  if (operators != 0)
-    return nodes == 1 && branches == 1 && accesses == 1 && contributions == 1 && operators == 1
-               ? &child
-               : nullptr;
+  if (operators != 0) {
+    const bool singleNodeOperator =
+        nodes == 1 && branches == 1 && accesses == 1 && contributions == 1 && operators == 1;
+    const bool groupIdt = nodes == 2 && branches == 2 && accesses == 2 && contributions == 2 &&
+                          derivatives == 0 && integrals == 1;
+    return singleNodeOperator || groupIdt ? &child : nullptr;
+  }
   return accesses == branches && contributions == branches ? &child : nullptr;
 }
 
@@ -2784,8 +2814,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       const bool directDdt = user->getBlock() == &analogBody && use.getOperandNumber() == 0 &&
                              user->getName().getStringRef() == "nodal.analog_ddt";
       llvm::DenseSet<Operation *> active;
-      const bool ownedIdtInput =
-          generatedValueFeedsOneIdtInput(operation.getResult(0), analogBody, active);
+      const bool ownedIdtInput = generatedValueFeedsOneIdtInput(operation.getResult(0), analogBody,
+                                                                active, operation.getOperand(0));
       if (!directDdt && !ownedIdtInput &&
           !generatedValueFeedsOneContribution(operation.getResult(0), analogBody, active,
                                               operation.getOperand(0)))
@@ -2824,11 +2854,15 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
         analog, "NODAL-BACKEND-CAPABILITY-001",
         "generated analog-node contribution profile requires one additive contribution per "
         "owned indexed branch");
-  if (generatedNodeOperatorAccesses != 0 &&
-      (generatedNodeAccesses != 1 || generatedBranches.size() != 1))
+  const bool singleBranchOperatorProfile =
+      generatedNodeAccesses == 1 && generatedBranches.size() == 1;
+  const bool nestedGroupIdtProfile = parentGenerate && generatedNodeOperatorAccesses == 1 &&
+                                     generatedNodeAccesses == 2 && generatedBranches.size() == 2;
+  if (generatedNodeOperatorAccesses != 0 && !singleBranchOperatorProfile && !nestedGroupIdtProfile)
     return emitMappedFailure(
         analog, "NODAL-BACKEND-CAPABILITY-001",
-        "generated analog-node operator access profile requires one access on one owned branch");
+        "generated analog-node operator access profile requires one access on one owned branch "
+        "or one owned idt path among two nested group branches");
 
   output << "  analog begin\n";
   if (parentGenerate) {

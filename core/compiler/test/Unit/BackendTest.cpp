@@ -1656,6 +1656,111 @@ int main() {
       return fail("forged nested generated analog-node group equation published partial output");
   }
 
+  std::string nestedGeneratedNodeGroupIdtSource = kNestedGeneratedNodeGroupEquationsModule.str();
+  auto nestedGroupIdtExpression =
+      nestedGeneratedNodeGroupIdtSource.find("          %tap_resistance =");
+  auto nestedGroupIdtContribution = nestedGeneratedNodeGroupIdtSource.find(
+      "          \"nodal.contribute\"", nestedGroupIdtExpression);
+  if (nestedGroupIdtExpression == std::string::npos ||
+      nestedGroupIdtContribution == std::string::npos)
+    return fail("nested generated analog-node group idt fixture lost its expression anchors");
+  nestedGeneratedNodeGroupIdtSource.replace(
+      nestedGroupIdtExpression, nestedGroupIdtContribution - nestedGroupIdtExpression,
+      "          %tap_second = \"nodal.real_literal\"() <{value = 1.0 : f64, metadata = {}}> "
+      ": () -> f64\n"
+      "          %tap_rate = \"nodal.analog_div\"(%tap_voltage, %tap_second) <{metadata = {}}> "
+      ": (f64, f64) -> f64\n"
+      "          %tap_initial = \"nodal.real_literal\"() <{value = 0.0 : f64, metadata = {}}> "
+      ": () -> f64\n"
+      "          %tap_integral = \"nodal.analog_idt\"(%tap_rate, %tap_initial) <{analyses = "
+      "[\"ac\", \"dc\", \"initialization\", \"noise\", \"operating-point\", "
+      "\"transient\"], context = \"contribution\", generated_owner = "
+      "\"NestedGeneratedNodeGroupEquations.generate_0.generate_1\", generated_induction = "
+      "\"NestedGeneratedNodeGroupEquations.generate_0.generate_1.index\", initial_dimension = "
+      "\"voltage\", initialization = \"fixed\", input_dimension = \"time^-1*voltage\", "
+      "metadata = {identity = \"tap_integral\"}, operator_contract = \"increment35\", "
+      "operator_id = \"NestedGeneratedNodeGroupEquations.tap_integral\", owner = "
+      "\"NestedGeneratedNodeGroupEquations\", result_dimension = \"voltage\", state_id = "
+      "\"NestedGeneratedNodeGroupEquations.tap_integral.state\"}> : (f64, f64) -> f64\n");
+  nestedGroupIdtContribution = nestedGeneratedNodeGroupIdtSource.find("%tap_branch, %tap_current");
+  if (nestedGroupIdtContribution == std::string::npos)
+    return fail("nested generated analog-node group idt fixture lost its contribution operand");
+  nestedGeneratedNodeGroupIdtSource.replace(nestedGroupIdtContribution,
+                                            std::string("%tap_branch, %tap_current").size(),
+                                            "%tap_branch, %tap_integral");
+  auto nestedGroupIdtKind =
+      nestedGeneratedNodeGroupIdtSource.find("kind = \"flow\"", nestedGroupIdtContribution);
+  if (nestedGroupIdtKind == std::string::npos)
+    return fail("nested generated analog-node group idt fixture lost its contribution kind");
+  nestedGeneratedNodeGroupIdtSource.replace(
+      nestedGroupIdtKind, std::string("kind = \"flow\"").size(), "kind = \"potential\"");
+
+  for (llvm::StringRef mutation :
+       {"valid", "operator-owner", "operator-induction", "state", "wrong-branch"}) {
+    auto candidate = parse(context, nestedGeneratedNodeGroupIdtSource);
+    if (!candidate)
+      return fail("could not parse nested generated analog-node group idt fixture");
+    mlir::Operation *integral = nullptr;
+    llvm::SmallVector<mlir::Operation *, 2> branches;
+    llvm::SmallVector<mlir::Operation *, 2> contributions;
+    candidate->walk([&](mlir::Operation *operation) {
+      llvm::StringRef name = operation->getName().getStringRef();
+      if (name == "nodal.analog_idt")
+        integral = operation;
+      else if (name == "nodal.branch")
+        branches.push_back(operation);
+      else if (name == "nodal.contribute")
+        contributions.push_back(operation);
+    });
+    if (!integral || branches.size() != 2 || contributions.size() != 2)
+      return fail("nested generated analog-node group idt fixture lost its owned topology");
+    if (mutation == "operator-owner")
+      integral->setAttr(
+          "generated_owner",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.generate_0"));
+    if (mutation == "operator-induction")
+      integral->setAttr(
+          "generated_induction",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.generate_0.index"));
+    if (mutation == "state")
+      integral->setAttr(
+          "state_id",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.tap_integral.forged"));
+    if (mutation == "wrong-branch")
+      contributions[0]->setOperand(0, branches[1]->getResult(0));
+
+    std::string output = mutation == "valid" ? std::string() : std::string("sentinel");
+    llvm::raw_string_ostream stream(output);
+    const bool emitted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (emitted)
+        return fail("forged nested generated analog-node group idt ownership passed verification");
+      if (output != "sentinel")
+        return fail("forged nested generated analog-node group idt published partial output");
+      continue;
+    }
+    if (!emitted)
+      return fail("nested generated analog-node group idt emission failed");
+    if (output.find("V(nestedTap[" + nestedFlatIndex + "] , p)") != std::string::npos)
+      return fail("nested generated analog-node group idt introduced unstable target spacing");
+    if (output.find("V(nestedTap[" + nestedFlatIndex + "], p) <+ idt((V(nestedTap[" +
+                    nestedFlatIndex + "], p) / 1), 0)") == std::string::npos ||
+        output.find("I(nestedReturn[" + nestedFlatIndex + "], n) <+ (V(nestedReturn[" +
+                    nestedFlatIndex + "], n) / 2000)") == std::string::npos)
+      return fail("nested generated analog-node group idt lost its independent owned equations");
+    if (mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+      return fail("nested generated analog-node group idt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("nested generated analog-node group idt repeated emission failed");
+    repeatedStream.flush();
+    if (output != repeated)
+      return fail("nested generated analog-node group idt emission is nondeterministic");
+  }
+
   std::string nestedGeneratedNodeDdtSource = kNestedGeneratedNodeEquationModule.str();
   auto nestedDdtResistance = nestedGeneratedNodeDdtSource.find("          %resistance =");
   auto nestedDdtContribution =

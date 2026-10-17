@@ -2142,7 +2142,10 @@ object Increment43RangeConstructionTests extends TestSuite:
       val first = ScalaToMlirBridge.lower(new Increment43SharedGeneratedNodeResistors)
       assert(first == ScalaToMlirBridge.lower(new Increment43SharedGeneratedNodeResistors))
       val accessLines = first.text.linesIterator.filter(_.contains("\"nodal.access\"")).toVector
-      assert(accessLines.size == 2)
+      // Raw capture includes the two contribution targets as well as the two voltage reads.
+      assert(accessLines.size == 4)
+      assert(accessLines.count(_.contains("kind = \"flow\"")) == 2)
+      assert(accessLines.count(_.contains("kind = \"potential\"")) == 2)
       assert(first.text.linesIterator.count(_.contains("\"nodal.branch\"")) == 2)
       assert(first.text.linesIterator.count(_.contains("\"nodal.contribute\"")) == 2)
       assert(first.text.contains("\"nodal.analog_div\""))
@@ -2172,6 +2175,10 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result == compileResistor())
             val firstEquation = s"I(tap[$index], p) <+ (V(tap[$index], p) / R);"
             val secondEquation = s"I(tap[$index], n) <+ (V(tap[$index], n) / R);"
+            val normalizedAccesses =
+              result.mlir.linesIterator.filter(_.contains("\"nodal.access\"")).toVector
+            assert(normalizedAccesses.size == 2)
+            assert(normalizedAccesses.forall(_.contains("kind = \"potential\"")))
             assert(result.verilogA.contains(secondEquation))
             assert(result.verilogA.indexOf(firstEquation) < result.verilogA.indexOf(secondEquation))
             assert(result.verilogA.linesIterator.count(_.contains(" <+ ")) == 2)

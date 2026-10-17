@@ -850,6 +850,12 @@ rejects swapped destinations, duplicate branch access and forged access ownershi
 or induction without partial output. Stateful access still requires exactly one
 access on one branch; the two-branch `ddt` negative preserves that boundary.
 
+The raw public bridge witness contains four accesses: two flow handles used to
+construct contribution targets and two potential reads in the resistor values.
+The existing normalization removes the unused target handles, leaving exactly
+two potential accesses for backend consumption. The test checks both stages
+explicitly; the one-access-per-branch backend contract applies after normalization.
+
 This does not admit fan-out, cross-branch expression dependencies, broader
 stateful graphs, general slices, shaped terminals, generated connections or
 instances, default specialization, eager unrolling or language memory. All

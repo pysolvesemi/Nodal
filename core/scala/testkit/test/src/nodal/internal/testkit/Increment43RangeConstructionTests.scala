@@ -1841,6 +1841,91 @@ object Increment43RangeConstructionTests extends TestSuite:
           finally delete(directory)
         case _ => assert(true)
 
+    test("nested generated nodes retain explicit row-major target layout and source maps"):
+      val snapshot = ConstructionKernel.inspect(new Increment43RepeatedSymbolicGeneratedNodes)
+      assert(snapshot == ConstructionKernel.inspect(new Increment43RepeatedSymbolicGeneratedNodes))
+      assert(snapshot.generatedRegions.size == 3)
+      assert(snapshot.generatedRegions.count(_.parent.nonEmpty) == 1)
+      val declaredRegions = snapshot.generatedRegions.filter(_.declarations.nonEmpty).sortBy(_.path)
+      assert(declaredRegions.size == 2)
+      assert(declaredRegions.head.parent.isEmpty)
+      assert(declaredRegions(1).parent.nonEmpty)
+      snapshot.generatedRegions.foreach: region =>
+        assert(snapshot.sourceMap.count(_.semanticPath == region.induction) == 1)
+        region.declarations.foreach: declaration =>
+          assert(snapshot.sourceMap.count(_.semanticPath == declaration) == 1)
+
+      val first = ScalaToMlirBridge.lower(new Increment43RepeatedSymbolicGeneratedNodes)
+      assert(first == ScalaToMlirBridge.lower(new Increment43RepeatedSymbolicGeneratedNodes))
+      assert(first.text.sliding("\"nodal.generate\"".length).count(_ == "\"nodal.generate\"") == 3)
+      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
+      val child = declaredRegions(1)
+      val childNodeLine = first.text.linesIterator
+        .find(line => line.contains("\"nodal.node\"") && line.contains(child.path))
+        .get
+      assert(childNodeLine.contains(s"generated_owner = \"${child.path}\""))
+      assert(childNodeLine.contains(s"generated_induction = \"${child.induction}\""))
+
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val childOwner = s"generated_owner = \"${child.path}\""
+            val parentOwner = s"generated_owner = \"${child.parent.get}\""
+            val forgedNodeLine = childNodeLine.replace(childOwner, parentOwner)
+            val nodeOffset = first.text.indexOf(childNodeLine)
+            assert(nodeOffset >= 0)
+            assert(forgedNodeLine != childNodeLine)
+            val forged = first.text.patch(nodeOffset, forgedNodeLine, childNodeLine.length)
+            val hash = MessageDigest.getInstance("SHA-256")
+              .digest(forged.getBytes(StandardCharsets.UTF_8))
+              .map(value => f"${value & 0xff}%02x").mkString
+            NativeCompilerClient.run(
+              first.copy(text = forged, sha256 = hash),
+              NativeCompilerRequest(
+                executable = Path.of(nodalc).toAbsolutePath,
+                arguments = Vector("--pass-pipeline=builtin.module(nodal-gate-default)"),
+                workingDirectory = directory,
+                timeout = Duration.ofSeconds(30)
+              )
+            ) match
+              case failure: NativeCompilerFailure =>
+                assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
+              case success: NativeCompilerSuccess =>
+                scala.Predef.assert(
+                  false,
+                  s"forged nested generated owner accepted: ${success.normalizedMlir}"
+                )
+
+            def compileNested() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43RepeatedSymbolicGeneratedNodes,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val result = compileNested()
+            assert(result == compileNested())
+            val names = declaredRegions.map(_.declarations.head.split('.').last)
+            assert(result.verilogA.contains(s"  electrical ${names.head}[0:(lanes - 1)];"))
+            assert(
+              result.verilogA.contains(
+                s"  electrical ${names(1)}[0:(((lanes - 0) * (lanes - 0)) - 1)];"
+              )
+            )
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
+            assert(!result.verilogA.contains("genvar"))
+            assert(!result.verilogA.contains("analog begin"))
+          finally delete(directory)
+        case _ => assert(true)
+
     test("repeated sibling generated equations retain separate owners and target loops"):
       val snapshot =
         ConstructionKernel.inspect(new Increment43RepeatedSiblingGeneratedResistors)

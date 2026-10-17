@@ -32,6 +32,7 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -1229,6 +1230,7 @@ struct GeneratedNodeArrayLayout {
   std::string lower;
   std::string upper;
   std::string index;
+  std::string count;
 };
 
 GeneratedNodeArrayLayout generatedNodeArrayLayout(const GeneratedTargetBound &lower,
@@ -1236,13 +1238,15 @@ GeneratedNodeArrayLayout generatedNodeArrayLayout(const GeneratedTargetBound &lo
                                                   const GeneratedTargetBound &step,
                                                   llvm::StringRef induction) {
   if (step.range.lower == 1 && step.range.upper == 1)
-    return {lower.text, (llvm::Twine("(") + upper.text + " - 1)").str(), induction.str()};
+    return {lower.text, (llvm::Twine("(") + upper.text + " - 1)").str(), induction.str(),
+            (llvm::Twine("(") + upper.text + " - " + lower.text + ")").str()};
 
   const std::string extent = (llvm::Twine("(") + upper.text + " - " + lower.text + ")").str();
   const std::string rounded = (llvm::Twine("((") + extent + " + " + step.text + ") - 1)").str();
   const std::string count = (llvm::Twine("(") + rounded + " / " + step.text + ")").str();
   return {"0", (llvm::Twine("(") + count + " - 1)").str(),
-          (llvm::Twine("((") + induction + " - " + lower.text + ") / " + step.text + ")").str()};
+          (llvm::Twine("((") + induction + " - " + lower.text + ") / " + step.text + ")").str(),
+          count};
 }
 
 FailureOr<GeneratedTargetBound> generatedTargetBound(Operation *generate, llvm::StringRef name) {
@@ -2741,19 +2745,115 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
   return success();
 }
 
-bool isGeneratedNodeArrayProfile(Operation *generate) {
+bool isGeneratedNodeArrayTreeProfile(Operation *generate, unsigned depth = 0) {
   Region &body = generate->getRegion(0);
-  return llvm::hasSingleElement(body) && !body.front().empty() &&
-         llvm::all_of(body.front(), [](Operation &operation) {
-           return operation.getName().getStringRef() == "nodal.node";
-         });
+  if (!llvm::hasSingleElement(body) || body.front().empty())
+    return false;
+  for (Operation &operation : body.front()) {
+    llvm::StringRef name = operation.getName().getStringRef();
+    if (name == "nodal.node") {
+      if (operation.getNumResults() != 1 || !operation.getResult(0).use_empty())
+        return false;
+      continue;
+    }
+    if (name != "nodal.generate" || depth >= 1 ||
+        !isGeneratedNodeArrayTreeProfile(&operation, depth + 1))
+      return false;
+  }
+  return true;
 }
 
 bool hasGeneratedNodeArray(Operation *generate) {
-  return isGeneratedNodeArrayProfile(generate) || isGeneratedNodeContributionProfile(generate);
+  return isGeneratedNodeArrayTreeProfile(generate) || isGeneratedNodeContributionProfile(generate);
+}
+
+LogicalResult renderGeneratedNodeArrayTree(Operation *generate, llvm::raw_ostream &output) {
+  llvm::StringSet<> sourcePaths;
+  llvm::SmallVector<GeneratedNodeArrayLayout, 2> layouts;
+  std::function<LogicalResult(Operation *, unsigned)> render =
+      [&](Operation *current, unsigned depth) -> LogicalResult {
+    if (current->getNumOperands() != 0 && current->getNumOperands() != 3)
+      return emitMappedFailure(
+          current, "NODAL-BACKEND-CAPABILITY-001",
+          "generated analog-node arrays require attributes or three SSA bounds");
+    const bool compound = current->getNumOperands() == 3;
+    auto lower = compound ? generatedTargetBound(current->getOperand(0), current, "lower")
+                          : generatedTargetBound(current, "lower");
+    auto upper = compound ? generatedTargetBound(current->getOperand(1), current, "upper")
+                          : generatedTargetBound(current, "upper");
+    auto step = compound ? generatedTargetBound(current->getOperand(2), current, "step")
+                         : generatedTargetBound(current, "step");
+    if (failed(lower) || failed(upper) || failed(step))
+      return failure();
+    if (step->range.lower <= 0 || lower->range.upper >= upper->range.lower)
+      return emitMappedFailure(
+          current, "NODAL-BACKEND-CAPABILITY-001",
+          "generated analog-node arrays require a nonempty positive-step range for every legal "
+          "setting");
+
+    auto inductionPath = current->getAttrOfType<StringAttr>("induction_path");
+    auto regionId = current->getAttrOfType<StringAttr>("region_id");
+    if (!inductionPath || !regionId || depth >= 2)
+      return emitMappedFailure(
+          current, "NODAL-BACKEND-CAPABILITY-001",
+          "generated analog-node array nesting requires canonical ownership and at most two "
+          "target-visible dimensions");
+
+    layouts.push_back(generatedNodeArrayLayout(*lower, *upper, *step, ""));
+    Region &body = current->getRegion(0);
+    for (Operation &operation : body.front()) {
+      llvm::StringRef name = operation.getName().getStringRef();
+      if (name == "nodal.generate") {
+        if (failed(render(&operation, depth + 1))) {
+          layouts.pop_back();
+          return failure();
+        }
+        continue;
+      }
+      if (name != "nodal.node" || operation.getNumResults() != 1) {
+        layouts.pop_back();
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            "nested generated analog-node layout admits node declarations only");
+      }
+      auto nodeName = operation.getAttrOfType<StringAttr>("name");
+      auto sourcePath = operation.getAttrOfType<StringAttr>("source_path");
+      auto generatedOwner = operation.getAttrOfType<StringAttr>("generated_owner");
+      auto generatedInduction = operation.getAttrOfType<StringAttr>("generated_induction");
+      auto terminalType = llvm::dyn_cast<nodal::TerminalType>(operation.getResult(0).getType());
+      if (!nodeName || !sourcePath || sourcePath.getValue().trim().empty() ||
+          !isPortableVerilogIdentifier(nodeName.getValue()) || !generatedOwner ||
+          !generatedInduction || generatedOwner.getValue() != regionId.getValue() ||
+          generatedInduction.getValue() != inductionPath.getValue() || !terminalType ||
+          terminalType.getDiscipline() != "electrical" || !operation.getResult(0).use_empty() ||
+          !sourcePaths.insert(sourcePath.getValue()).second) {
+        layouts.pop_back();
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            "generated analog-node array requires an unused exactly-owned electrical node with "
+            "unique source identity");
+      }
+
+      if (layouts.size() == 1) {
+        output << "  electrical " << nodeName.getValue() << "[" << layouts.front().lower << ":"
+               << layouts.front().upper << "];\n";
+        continue;
+      }
+      std::string count = layouts.front().count;
+      for (const GeneratedNodeArrayLayout &layout : llvm::drop_begin(layouts))
+        count = (llvm::Twine("(") + count + " * " + layout.count + ")").str();
+      output << "  electrical " << nodeName.getValue() << "[0:(" << count << " - 1)];\n";
+    }
+    layouts.pop_back();
+    return success();
+  };
+  return render(generate, 0);
 }
 
 LogicalResult renderGeneratedNodeArray(Operation *generate, llvm::raw_ostream &output) {
+  if (isGeneratedNodeArrayTreeProfile(generate))
+    return renderGeneratedNodeArrayTree(generate, output);
+
   if (generate->getNumOperands() != 0 && generate->getNumOperands() != 3)
     return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
                              "generated analog-node arrays require attributes or three SSA bounds");
@@ -2951,7 +3051,7 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
     if (!isPortableVerilogIdentifier(label) || !generatedLabels.insert(label).second)
       return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
                                "generated Verilog-A label is invalid or duplicated");
-    if (!isGeneratedNodeArrayProfile(generate))
+    if (!isGeneratedNodeArrayTreeProfile(generate))
       output << "  genvar " << induction.getValue() << ";\n";
   }
 
@@ -3036,7 +3136,7 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
         return failure();
   }
   for (Operation *generate : generates)
-    if (!isGeneratedNodeArrayProfile(generate) &&
+    if (!isGeneratedNodeArrayTreeProfile(generate) &&
         failed(renderGeneratedContribution(generate, state, output)))
       return failure();
   output << "endmodule\n";

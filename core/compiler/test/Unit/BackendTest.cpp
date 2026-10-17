@@ -125,6 +125,28 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kNestedGeneratedNodeArrayModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "NestedGeneratedNodeArray"}> ({
+  ^bb0:
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 3 : i64, step = 1 : i64, region_id = "NestedGeneratedNodeArray.generate_0", induction_path = "NestedGeneratedNodeArray.generate_0.index", metadata = {maximum_trip_count = 3 : i64}}> ({
+    ^bb0:
+      "nodal.generate"() <{induction = "generate_1_index", lower = 1 : i64, upper = 4 : i64, step = 1 : i64, region_id = "NestedGeneratedNodeArray.generate_0.generate_1", induction_path = "NestedGeneratedNodeArray.generate_0.generate_1.index", metadata = {maximum_trip_count = 3 : i64}}> ({
+      ^bb0:
+        %tap = "nodal.node"() <{name = "nestedTap", source_path = "NestedGeneratedNodeArray.nestedTap", generated_owner = "NestedGeneratedNodeArray.generate_0.generate_1", generated_induction = "NestedGeneratedNodeArray.generate_0.generate_1.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "NestedGeneratedNodeArray.generate_0.generate_1", induction = "NestedGeneratedNodeArray.generate_0.generate_1.index"}}> : () -> !nodal.terminal<"electrical">
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kGeneratedNodeContributionModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -1302,6 +1324,54 @@ int main() {
   forgedGeneratedNodeStream.flush();
   if (forgedGeneratedNodeOutput != "sentinel")
     return fail("forged generated analog-node owner published partial output");
+
+  auto nestedGeneratedNodeArray = parse(context, kNestedGeneratedNodeArrayModule);
+  if (!nestedGeneratedNodeArray)
+    return fail("could not parse the nested generated analog-node array fixture");
+  std::string nestedGeneratedNodeArrayOutput;
+  llvm::raw_string_ostream nestedGeneratedNodeArrayStream(nestedGeneratedNodeArrayOutput);
+  if (mlir::failed(nodal::emitBackend(*nestedGeneratedNodeArray, nodal::BackendKind::VerilogA,
+                                      nestedGeneratedNodeArrayStream)))
+    return fail("nested generated analog-node array emission failed");
+  nestedGeneratedNodeArrayStream.flush();
+  if (nestedGeneratedNodeArrayOutput.find(
+          "  electrical nestedTap[0:(((3 - 0) * (4 - 1)) - 1)];\n") == std::string::npos ||
+      nestedGeneratedNodeArrayOutput.find("genvar") != std::string::npos ||
+      nestedGeneratedNodeArrayOutput.find("analog begin") != std::string::npos)
+    return fail("nested generated analog node lost its explicit row-major topology layout");
+  if (mlir::failed(nodal::reparseBackendTarget(nestedGeneratedNodeArrayOutput, *configuration)))
+    return fail("nested generated analog-node array failed independent target reparse");
+  std::string repeatedNestedGeneratedNodeArrayOutput;
+  llvm::raw_string_ostream repeatedNestedGeneratedNodeArrayStream(
+      repeatedNestedGeneratedNodeArrayOutput);
+  if (mlir::failed(nodal::emitBackend(*nestedGeneratedNodeArray, nodal::BackendKind::VerilogA,
+                                      repeatedNestedGeneratedNodeArrayStream)))
+    return fail("nested generated analog-node array repeated emission failed");
+  repeatedNestedGeneratedNodeArrayStream.flush();
+  if (nestedGeneratedNodeArrayOutput != repeatedNestedGeneratedNodeArrayOutput)
+    return fail("nested generated analog-node array emission is nondeterministic");
+
+  auto forgedNestedGeneratedNodeArray = parse(context, kNestedGeneratedNodeArrayModule);
+  if (!forgedNestedGeneratedNodeArray)
+    return fail("could not parse the nested generated analog-node owner mutation fixture");
+  mlir::Operation *forgedNestedGeneratedNode = nullptr;
+  forgedNestedGeneratedNodeArray->walk([&](mlir::Operation *operation) {
+    if (!forgedNestedGeneratedNode && operation->getName().getStringRef() == "nodal.node")
+      forgedNestedGeneratedNode = operation;
+  });
+  if (!forgedNestedGeneratedNode)
+    return fail("nested generated analog-node owner mutation fixture has no node");
+  forgedNestedGeneratedNode->setAttr(
+      "generated_owner", mlir::StringAttr::get(&context, "NestedGeneratedNodeArray.generate_0"));
+  std::string forgedNestedGeneratedNodeOutput = "sentinel";
+  llvm::raw_string_ostream forgedNestedGeneratedNodeStream(forgedNestedGeneratedNodeOutput);
+  if (mlir::succeeded(nodal::emitBackend(*forgedNestedGeneratedNodeArray,
+                                         nodal::BackendKind::VerilogA,
+                                         forgedNestedGeneratedNodeStream)))
+    return fail("forged nested generated analog-node owner passed backend verification");
+  forgedNestedGeneratedNodeStream.flush();
+  if (forgedNestedGeneratedNodeOutput != "sentinel")
+    return fail("forged nested generated analog-node owner published partial output");
 
   for (llvm::StringRef mutation : {"valid", "owner", "induction", "name", "source"}) {
     auto group = parse(context, kGeneratedNodeArrayModule);

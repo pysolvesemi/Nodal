@@ -945,3 +945,30 @@ terminals, generated connections or instances, default specialization or eager
 unrolling. Internal target reparse remains compiler evidence rather than
 independent numerical simulation. The F-048/F-049/F-052 handoff and every
 F-043 acceptance obligation remain open.
+
+## Nested generated analog-node layout checkpoint
+
+One bounded two-dimensional generated topology profile now reaches the existing
+Verilog-A electrical-array target. A node-only top-level `hdlRange` may contain
+one node-only child `hdlRange`; the child declaration retains both canonical
+region/induction identities and lowers to one explicit row-major electrical
+array whose extent is the product of the two proved finite iteration counts.
+The existing one-dimensional layout remains byte-compatible, including authored
+unit-step bounds and compact positive-stride bounds.
+
+This uses the canonical generated-bound analysis and node-array renderer. It
+does not substitute parameter defaults, enumerate either range, create language
+memory or introduce a second shape/index registry. Both ranges must be provably
+nonempty with positive steps, the child node must be unused topology with exact
+owner/induction/source identity, and nesting is deliberately limited to two
+target-visible dimensions. A forged child owner, deeper nesting, mixed bodies or
+any node escape rejects before target publication.
+
+The native witness requires deterministic repeated output and independent target
+reparse. The public witness retains all three region/induction source mappings,
+the direct sibling array and the nested row-major array through actual
+Scala-to-normalized-IR-to-Verilog-A generation. Nested contributions or operator
+state, cross-range references, general slices, shaped terminals, generated
+connections or instances, default specialization and eager unrolling remain
+unsupported. Independent simulator qualification, the F-048/F-049/F-052 handoff
+and every F-043 acceptance obligation remain open.

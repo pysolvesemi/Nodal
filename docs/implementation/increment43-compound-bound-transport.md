@@ -860,3 +860,26 @@ This does not admit fan-out, cross-branch expression dependencies, broader
 stateful graphs, general slices, shaped terminals, generated connections or
 instances, default specialization, eager unrolling or language memory. All
 F-043 acceptance obligations and the F-048/F-049/F-052 handoff remain open.
+
+## Repeated sibling generated-node array checkpoint
+
+Two independent top-level generated ranges now have an actual public
+Scala-to-normalized-IR-to-Verilog-A witness. Each range owns one electrical
+node declaration, its own canonical region and induction identities, and its
+own source-map entries. One range uses a symbolic positive stride and the
+existing compact array bound; the other uses a separate symbolic unit-step
+bound. Repeated construction, lowering and target emission must remain
+byte-identical.
+
+No backend admission rule, schema or public API is widened. The witness uses
+the already-qualified direct node-array profile and verifies that the two
+ranges retain distinct declarations, source identities and target arrays in
+source order. Existing native alias and orphan-identity negatives remain the
+fail-closed evidence for repeated ranges, while configured target generation
+provides the actual public counterpart.
+
+This does not admit nested target generation, cross-range references, shaped
+terminals, general slices, generated connections or instances, contributions
+between sibling ranges, default specialization or eager unrolling. Those
+profiles, independent simulator qualification, the F-048/F-049/F-052 handoff
+and every F-043 acceptance obligation remain open.

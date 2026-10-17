@@ -914,6 +914,20 @@ final class Increment43RepeatedSymbolicGeneratedNodes extends Module:
       val _ = nested
       ()
 
+final class Increment43RepeatedSiblingGeneratedNodes extends Module:
+  val lanes: Param[Integer] = param(7.integer, range = 6 to 10)
+  val groups: Param[Integer] = param(3.integer, range = 2 to 5)
+
+  hdlRange(1, lanes, 2): _ =>
+    val firstTap = node(Electrical)
+    val _ = firstTap
+    ()
+
+  hdlRange(0, groups): _ =>
+    val secondTap = node(Electrical)
+    val _ = secondTap
+    ()
+
 object Increment43RangeConstructionTests extends TestSuite:
   private def workDirectory(): Path =
     Files.createTempDirectory("nodal-increment43-range-")
@@ -1688,6 +1702,94 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.contains("parameter integer lanes = 2 from [1:4];"))
             assert(result.verilogA.contains("electrical tap[0:(lanes - 1)];"))
             assert(!result.verilogA.contains("genvar generate_0_index"))
+            assert(!result.verilogA.contains("analog begin"))
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("repeated sibling generated nodes retain distinct target arrays and source maps"):
+      val snapshot = ConstructionKernel.inspect(new Increment43RepeatedSiblingGeneratedNodes)
+      assert(snapshot == ConstructionKernel.inspect(new Increment43RepeatedSiblingGeneratedNodes))
+      assert(snapshot.generatedRegions.size == 2)
+      assert(snapshot.generatedRegions.forall(_.parent.isEmpty))
+      assert(snapshot.generatedRegions.map(_.path).distinct.size == 2)
+      assert(snapshot.generatedRegions.map(_.induction).distinct.size == 2)
+      assert(snapshot.generatedRegions.flatMap(_.declarations).distinct.size == 2)
+      snapshot.generatedRegions.foreach: region =>
+        assert(region.declarations.size == 1)
+        assert(snapshot.sourceMap.count(_.semanticPath == region.path) == 1)
+        assert(snapshot.sourceMap.count(_.semanticPath == region.induction) == 1)
+        assert(snapshot.sourceMap.count(_.semanticPath == region.declarations.head) == 1)
+
+      val first = ScalaToMlirBridge.lower(new Increment43RepeatedSiblingGeneratedNodes)
+      assert(first == ScalaToMlirBridge.lower(new Increment43RepeatedSiblingGeneratedNodes))
+      assert(first.text.sliding("\"nodal.generate\"".length).count(_ == "\"nodal.generate\"") == 2)
+      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
+
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            val regions = snapshot.generatedRegions.sortBy(_.path)
+            for (original, replacement) <- Vector(
+                regions(1).path -> regions.head.path,
+                regions(1).induction -> regions.head.induction
+              )
+            do
+              val text = first.text.replace(original, replacement)
+              assert(text != first.text)
+              val hash = MessageDigest.getInstance("SHA-256")
+                .digest(text.getBytes(StandardCharsets.UTF_8))
+                .map(value => f"${value & 0xff}%02x").mkString
+              NativeCompilerClient.run(
+                first.copy(text = text, sha256 = hash),
+                NativeCompilerRequest(
+                  executable = Path.of(nodalc).toAbsolutePath,
+                  arguments = Vector("--pass-pipeline=builtin.module(nodal-gate-default)"),
+                  workingDirectory = directory,
+                  timeout = Duration.ofSeconds(30)
+                )
+              ) match
+                case failure: NativeCompilerFailure =>
+                  assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
+                case success: NativeCompilerSuccess =>
+                  scala.Predef.assert(
+                    false,
+                    s"aliased sibling generated identity accepted: ${success.normalizedMlir}"
+                  )
+
+            def compileRepeated() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43RepeatedSiblingGeneratedNodes,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val result = compileRepeated()
+            assert(result == compileRepeated())
+            val declarationNames = snapshot.generatedRegions
+              .sortBy(_.path)
+              .map(_.declarations.head.split('.').last)
+            assert(declarationNames.distinct.size == 2)
+            val compactUpper = "(((((lanes - 1) + 2) - 1) / 2) - 1)"
+            assert(
+              result.verilogA.contains(
+                s"  electrical ${declarationNames.head}[0:$compactUpper];"
+              )
+            )
+            assert(
+              result.verilogA.contains(
+                s"  electrical ${declarationNames(1)}[0:(groups - 1)];"
+              )
+            )
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
+            assert(!result.verilogA.contains("genvar"))
             assert(!result.verilogA.contains("analog begin"))
           finally delete(directory)
         case _ => assert(true)

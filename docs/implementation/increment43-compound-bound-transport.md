@@ -932,6 +932,13 @@ the existing exact-ownership verifier to reject it before target publication.
 Existing source-map, raw/normalized access-count and single-state-path contracts
 remain unchanged.
 
+The raw bridge form has four potential accesses, two in each independent
+equation: the authored voltage-rate read before `idt` and the owned `idt` result
+read that feeds its contribution. Flow contribution targets remain direct branch
+operands rather than `nodal.access` operations. The witness checks both access
+owners and inductions exactly twice, preserving sibling separation without
+inventing flow-access records.
+
 This does not admit cross-range references or contributions, shared or escaping
 state, operator fan-out, nested target generation, general slices, shaped
 terminals, generated connections or instances, default specialization or eager

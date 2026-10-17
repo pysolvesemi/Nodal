@@ -1987,8 +1987,11 @@ object Increment43RangeConstructionTests extends TestSuite:
       )
       val accessLines = first.text.linesIterator.filter(_.contains("\"nodal.access\"")).toVector
       assert(accessLines.size == 4)
-      assert(accessLines.count(_.contains("kind = \"flow\"")) == 2)
-      assert(accessLines.count(_.contains("kind = \"potential\"")) == 2)
+      assert(accessLines.count(_.contains("kind = \"flow\"")) == 0)
+      assert(accessLines.count(_.contains("kind = \"potential\"")) == 4)
+      regions.foreach: region =>
+        assert(accessLines.count(_.contains(s"generated_owner = \"${region.path}\"")) == 2)
+        assert(accessLines.count(_.contains(s"generated_induction = \"${region.induction}\"")) == 2)
       val idtLines = first.text.linesIterator.filter(_.contains("\"nodal.analog_idt\"")).toVector
       assert(idtLines.size == 2)
       assert(idtLines.distinct.size == 2)

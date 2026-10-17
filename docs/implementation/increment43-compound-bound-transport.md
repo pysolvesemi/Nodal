@@ -831,3 +831,26 @@ stateful operator, cross-range references, general slices, shaped terminals,
 generated connections or instances, default specialization, eager unrolling or
 language memory. Independent simulator qualification, the F-048/F-049/F-052
 handoff and every F-043 acceptance obligation remain open.
+
+
+## Independent generated analog-node equations checkpoint
+
+A generated body can now retain independent memoryless equations on distinct
+exactly-owned branches, including two branches sharing one generated node.
+The canonical one-use expression walker checks the exact destination branch
+for each access; each branch has at most one access and exactly one additive
+contribution. Existing compact source-index mapping, scalar expression rendering,
+source identity and range ownership remain authoritative. The change reuses
+those owners rather than introducing an equation graph or array storage engine.
+
+The public positive-stride witness has one node array and two resistor equations,
+with deterministic normalized IR, source maps and configured target reparse.
+Native coverage verifies authored equation order and repeated emission, and
+rejects swapped destinations, duplicate branch access and forged access ownership
+or induction without partial output. Stateful access still requires exactly one
+access on one branch; the two-branch `ddt` negative preserves that boundary.
+
+This does not admit fan-out, cross-branch expression dependencies, broader
+stateful graphs, general slices, shaped terminals, generated connections or
+instances, default specialization, eager unrolling or language memory. All
+F-043 acceptance obligations and the F-048/F-049/F-052 handoff remain open.

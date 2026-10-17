@@ -1844,6 +1844,104 @@ int main() {
       return fail("generated node algebra emission is nondeterministic");
   }
 
+  for (llvm::StringRef mutation :
+       {"valid", "swapped-destinations", "duplicate-access", "owner", "induction", "stateful"}) {
+    auto candidate =
+        parse(context, mutation == "stateful" ? llvm::StringRef(kGeneratedNodeDdtContributionModule)
+                                              : llvm::StringRef(generatedNodeAlgebraSource));
+    if (!candidate)
+      return fail("could not parse independent generated-node equations");
+    mlir::Operation *terminal = nullptr;
+    mlir::Operation *branch = nullptr;
+    mlir::Operation *access = nullptr;
+    mlir::Operation *expression = nullptr;
+    mlir::Operation *contribution = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      llvm::StringRef name = operation->getName().getStringRef();
+      if (name == "nodal.terminal")
+        terminal = operation;
+      if (name == "nodal.branch")
+        branch = operation;
+      if (name == "nodal.access")
+        access = operation;
+      if (name == "nodal.analog_div" || name == "nodal.analog_ddt")
+        expression = operation;
+      if (name == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!terminal || !branch || !access || !expression || !contribution)
+      return fail("independent generated-node equations lost their topology");
+    auto insertAfter = [](mlir::Operation *anchor, mlir::Operation *copy) {
+      anchor->getBlock()->getOperations().insert(std::next(anchor->getIterator()), copy);
+    };
+    mlir::Operation *secondTerminal = terminal->clone();
+    insertAfter(terminal, secondTerminal);
+    secondTerminal->setAttr("name", mlir::StringAttr::get(&context, "n"));
+    mlir::Operation *secondBranch = branch->clone();
+    insertAfter(branch, secondBranch);
+    secondBranch->setOperand(1, secondTerminal->getResult(0));
+    mlir::Operation *secondAccess = access->clone();
+    insertAfter(contribution, secondAccess);
+    secondAccess->setOperand(0, secondBranch->getResult(0));
+    mlir::Operation *secondExpression = expression->clone();
+    insertAfter(secondAccess, secondExpression);
+    secondExpression->setOperand(0, secondAccess->getResult(0));
+    mlir::Operation *secondContribution = contribution->clone();
+    insertAfter(secondExpression, secondContribution);
+    secondContribution->setOperand(0, secondBranch->getResult(0));
+    secondContribution->setOperand(1, secondExpression->getResult(0));
+    if (mutation == "swapped-destinations") {
+      contribution->setOperand(0, secondBranch->getResult(0));
+      secondContribution->setOperand(0, branch->getResult(0));
+    }
+    if (mutation == "duplicate-access") {
+      secondAccess->setOperand(0, branch->getResult(0));
+      mlir::Operation *joined = expression->clone();
+      insertAfter(secondExpression, joined);
+      joined->setOperand(0, expression->getResult(0));
+      joined->setOperand(1, secondExpression->getResult(0));
+      contribution->moveAfter(joined);
+      contribution->setOperand(1, joined->getResult(0));
+      secondContribution->setOperand(1, expression->getOperand(1));
+    }
+    if (mutation == "owner" || mutation == "induction") {
+      mlir::NamedAttrList metadata(secondAccess->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set(mutation == "owner" ? "generated_owner" : "generated_induction",
+                   mlir::StringAttr::get(&context, "forged"));
+      secondAccess->setAttr("metadata", metadata.getDictionary(&context));
+    }
+    if (mutation == "stateful")
+      secondExpression->setAttr(
+          "operator_id", mlir::StringAttr::get(&context, "GeneratedNodeDdtContribution.second"));
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool accepted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (accepted || output != "sentinel")
+        return fail("invalid independent generated-node equations published partial output");
+      continue;
+    }
+    const std::string first =
+        "I(tap[generate_0_index], p) <+ (V(tap[generate_0_index], p) / 1000);";
+    const std::string second =
+        "I(tap[generate_0_index], n) <+ (V(tap[generate_0_index], n) / 1000);";
+    if (!accepted || output.find(first) == std::string::npos ||
+        output.find(second) == std::string::npos || output.find(first) >= output.find(second))
+      return fail("independent generated-node equations lost their indexed branches or order");
+    const std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("independent generated-node equations failed target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("independent generated-node equations repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("independent generated-node equations are nondeterministic");
+  }
+
   for (llvm::StringRef mutation : {"valid", "peer-owner", "peer-induction", "second-access"}) {
     auto candidate = parse(context, generatedNodeAlgebraSource);
     if (!candidate)

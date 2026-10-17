@@ -95,6 +95,18 @@ final class Increment43GeneratedNodeResistorContribution extends Module:
     analog:
       I(tap, p) <+ (V(tap, p) / R)
 
+final class Increment43SharedGeneratedNodeResistors extends Module:
+  val lanes: Param[Integer] = param(7.integer, range = 6 to 10)
+  val R: Param[Real] = param(1.kOhm)
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+
+  hdlRange(1, lanes, 2): _ =>
+    val tap = node(Electrical)
+    analog:
+      I(tap, p) <+ (V(tap, p) / R)
+      I(tap, n) <+ (V(tap, n) / R)
+
 final class Increment43GeneratedPeerNodeResistorContribution extends Module:
   val lanes: Param[Integer] = param(7.integer, range = 6 to 10)
   val R: Param[Real] = param(1.kOhm)
@@ -2103,6 +2115,66 @@ object Increment43RangeConstructionTests extends TestSuite:
             val index = "((generate_0_index - 1) / 2)"
             val result = compileResistor()
             assert(result == compileResistor())
+            assert(
+              result.verilogA.linesIterator.count(line =>
+                line.contains(s"I(tap[$index], p) <+") &&
+                  line.contains(s"(V(tap[$index], p) / R)")
+              ) == 1
+            )
+            assert(
+              result.verilogA.linesIterator.count(
+                _.trim == "electrical tap[0:(((((lanes - 1) + 2) - 1) / 2) - 1)];"
+              ) == 1
+            )
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("shared generated node retains independent branch equations"):
+      val snapshot = ConstructionKernel.inspect(new Increment43SharedGeneratedNodeResistors)
+      assert(
+        snapshot == ConstructionKernel.inspect(new Increment43SharedGeneratedNodeResistors)
+      )
+      assert(snapshot.generatedRegions.size == 1)
+      val region = snapshot.generatedRegions.head
+      assert(region.declarations.size == 1)
+      assert(snapshot.sourceMap.exists(_.semanticPath == region.declarations.head))
+      assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
+      val first = ScalaToMlirBridge.lower(new Increment43SharedGeneratedNodeResistors)
+      assert(first == ScalaToMlirBridge.lower(new Increment43SharedGeneratedNodeResistors))
+      val accessLines = first.text.linesIterator.filter(_.contains("\"nodal.access\"")).toVector
+      assert(accessLines.size == 2)
+      assert(first.text.linesIterator.count(_.contains("\"nodal.branch\"")) == 2)
+      assert(first.text.linesIterator.count(_.contains("\"nodal.contribute\"")) == 2)
+      assert(first.text.contains("\"nodal.analog_div\""))
+      assert(!first.text.contains("\"nodal.analog_ddt\""))
+      assert(accessLines.forall(_.contains(s"generated_owner = \"${region.path}\"")))
+      assert(accessLines.forall(_.contains(s"generated_induction = \"${region.induction}\"")))
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            def compileResistor() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43SharedGeneratedNodeResistors,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val index = "((generate_0_index - 1) / 2)"
+            val result = compileResistor()
+            assert(result == compileResistor())
+            val firstEquation = s"I(tap[$index], p) <+ (V(tap[$index], p) / R);"
+            val secondEquation = s"I(tap[$index], n) <+ (V(tap[$index], n) / R);"
+            assert(result.verilogA.contains(secondEquation))
+            assert(result.verilogA.indexOf(firstEquation) < result.verilogA.indexOf(secondEquation))
+            assert(result.verilogA.linesIterator.count(_.contains(" <+ ")) == 2)
             assert(
               result.verilogA.linesIterator.count(line =>
                 line.contains(s"I(tap[$index], p) <+") &&

@@ -1400,7 +1400,8 @@ enum class GeneratedValueEndpoint { Contribution, IdtInput };
 
 bool generatedValueFeedsOneEndpoint(Value value, Block &body, llvm::DenseSet<Operation *> &active,
                                     GeneratedValueEndpoint endpoint,
-                                    bool traversedExpression = false) {
+                                    bool traversedExpression = false,
+                                    Value contributionBranch = {}) {
   Operation *definition = value.getDefiningOp();
   if (!definition || !value.hasOneUse() || !active.insert(definition).second)
     return false;
@@ -1412,8 +1413,10 @@ bool generatedValueFeedsOneEndpoint(Value value, Block &body, llvm::DenseSet<Ope
     return false;
   }
   llvm::StringRef name = user->getName().getStringRef();
-  const bool reachedContribution = endpoint == GeneratedValueEndpoint::Contribution &&
-                                   name == "nodal.contribute" && use.getOperandNumber() == 1;
+  const bool reachedContribution =
+      endpoint == GeneratedValueEndpoint::Contribution && name == "nodal.contribute" &&
+      use.getOperandNumber() == 1 &&
+      (!contributionBranch || user->getOperand(0) == contributionBranch);
   const bool reachedIdt = endpoint == GeneratedValueEndpoint::IdtInput &&
                           name == "nodal.analog_idt" && traversedExpression &&
                           use.getOperandNumber() == 0;
@@ -1424,16 +1427,18 @@ bool generatedValueFeedsOneEndpoint(Value value, Block &body, llvm::DenseSet<Ope
   const bool expression = name == "nodal.analog_add" || name == "nodal.analog_sub" ||
                           name == "nodal.analog_mul" || name == "nodal.analog_div" ||
                           name == "nodal.analog_neg";
-  const bool result =
-      expression && user->getNumResults() == 1 &&
-      generatedValueFeedsOneEndpoint(user->getResult(0), body, active, endpoint, true);
+  const bool result = expression && user->getNumResults() == 1 &&
+                      generatedValueFeedsOneEndpoint(user->getResult(0), body, active, endpoint,
+                                                     true, contributionBranch);
   active.erase(definition);
   return result;
 }
 
 bool generatedValueFeedsOneContribution(Value value, Block &body,
-                                        llvm::DenseSet<Operation *> &active) {
-  return generatedValueFeedsOneEndpoint(value, body, active, GeneratedValueEndpoint::Contribution);
+                                        llvm::DenseSet<Operation *> &active,
+                                        Value contributionBranch = {}) {
+  return generatedValueFeedsOneEndpoint(value, body, active, GeneratedValueEndpoint::Contribution,
+                                        false, contributionBranch);
 }
 
 bool generatedValueFeedsOneIdtInput(Value value, Block &body, llvm::DenseSet<Operation *> &active) {
@@ -1632,6 +1637,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
   Block &analogBody = analog->getRegion(0).front();
   unsigned contributions = 0;
   unsigned generatedNodeAccesses = 0;
+  unsigned generatedNodeOperatorAccesses = 0;
+  llvm::DenseSet<Value> accessedGeneratedBranches;
   llvm::DenseSet<Value> contributedGeneratedBranches;
   unsigned procedures = 0;
   unsigned boundStepEffects = 0;
@@ -2677,12 +2684,19 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       const bool ownedIdtInput =
           generatedValueFeedsOneIdtInput(operation.getResult(0), analogBody, active);
       if (!directDdt && !ownedIdtInput &&
-          !generatedValueFeedsOneContribution(operation.getResult(0), analogBody, active))
+          !generatedValueFeedsOneContribution(operation.getResult(0), analogBody, active,
+                                              operation.getOperand(0)))
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
-            "generated analog-node access must feed one memoryless contribution, direct owned "
+            "generated analog-node access must feed one memoryless contribution on its branch, "
+            "direct owned "
             "ddt input, or one memoryless path into an owned idt without escaping its range");
+      if (!accessedGeneratedBranches.insert(operation.getOperand(0)).second)
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            "generated analog-node branch requires one access without fan-out");
       ++generatedNodeAccesses;
+      generatedNodeOperatorAccesses += static_cast<unsigned>(directDdt || ownedIdtInput);
     }
     if (!supportedExpression)
       return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
@@ -2707,10 +2721,11 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
         analog, "NODAL-BACKEND-CAPABILITY-001",
         "generated analog-node contribution profile requires one additive contribution per "
         "owned indexed branch");
-  if (generatedNodeAccesses != 0 && (generatedNodeAccesses != 1 || generatedBranches.size() != 1))
+  if (generatedNodeOperatorAccesses != 0 &&
+      (generatedNodeAccesses != 1 || generatedBranches.size() != 1))
     return emitMappedFailure(
         analog, "NODAL-BACKEND-CAPABILITY-001",
-        "generated analog-node access profile requires one direct access on one owned branch");
+        "generated analog-node operator access profile requires one access on one owned branch");
 
   output << "  analog begin\n";
   output << "    for (" << induction.getValue() << " = " << lower->text << "; "

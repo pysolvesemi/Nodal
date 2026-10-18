@@ -27,6 +27,23 @@ mlir::FailureOr<int64_t> inferStaticShapeMaximumCardinality(mlir::Operation *mod
 mlir::FailureOr<ParameterIntegerBounds> inferStaticShapeIndexBounds(mlir::Operation *module,
                                                                     mlir::Value value);
 
+struct StaticShapeIndexIdentity {
+  enum Kind { Literal, Parameter, Expression } kind;
+  int64_t literal = 0;
+  mlir::Operation *root = nullptr;
+  bool operator==(const StaticShapeIndexIdentity &other) const {
+    return kind == other.kind && literal == other.literal && root == other.root;
+  }
+};
+mlir::FailureOr<StaticShapeIndexIdentity> resolveStaticShapeIndexIdentity(mlir::Operation *module,
+                                                                          mlir::Value value);
+
+/// Local transformation proofs shared by operation and storage-map verification.
+/// These do not grant storage capability or establish initialization.
+mlir::LogicalResult verifyShapeIndexMapping(mlir::Operation *operation);
+mlir::LogicalResult verifyShapeViewMapping(mlir::Operation *operation);
+mlir::LogicalResult verifyShapeSliceMapping(mlir::Operation *operation);
+
 } // namespace nodal
 
 #endif // NODAL_DIALECT_NODAL_SHAPEMODEL_H

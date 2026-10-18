@@ -421,6 +421,9 @@ def Nodal_ShapeIndexOp : Nodal_Op<"shape_index"> {
   let arguments = (ins
     AnyType:$input,
     Variadic<AnyType>:$indices,
+    OptionalAttr<StrAttr>:$owner,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
@@ -446,13 +449,16 @@ def Nodal_ShapeViewOp : Nodal_Op<"shape_view"> {
     StrAttr:$origin,
     StrAttr:$materialization,
     StrAttr:$observability,
+    OptionalAttr<StrAttr>:$owner,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 
-def Nodal_ShapeSliceOp : Nodal_Op<"shape_slice", [HasParent<"ModuleOp">]> {
+def Nodal_ShapeSliceOp : Nodal_Op<"shape_slice"> {
   let summary = "Read-only half-open unit-stride structural shape slice";
   let arguments = (ins
     AnyType:$input,
@@ -463,6 +469,9 @@ def Nodal_ShapeSliceOp : Nodal_Op<"shape_slice", [HasParent<"ModuleOp">]> {
     StrAttr:$dimensions,
     StrAttr:$origin,
     StrAttr:$observability,
+    OptionalAttr<StrAttr>:$owner,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
@@ -1019,6 +1028,7 @@ def Nodal_AnalogContinueOp : Nodal_Op<"analog_continue"> {
 def Nodal_AnalogVariableOp : Nodal_Op<"analog_variable"> {
   let summary = "Declaration of one typed analog procedural variable";
   let arguments = (ins
+    Variadic<AnyType>:$initializers,
     StrAttr:$identity,
     StrAttr:$owner,
     OptionalAttr<StrAttr>:$generated_owner,
@@ -1031,14 +1041,14 @@ def Nodal_AnalogVariableOp : Nodal_Op<"analog_variable"> {
     ArrayAttr:$initializer_reads,
     DictionaryAttr:$metadata
   );
-  let results = (outs Nodal_VariableType:$result);
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 
 def Nodal_AnalogVariableReadOp : Nodal_Op<"analog_variable_read"> {
   let summary = "Read the current value of one analog procedural variable";
   let arguments = (ins
-    Nodal_VariableType:$variable,
+    AnyType:$variable,
     StrAttr:$read_id,
     StrAttr:$owner,
     OptionalAttr<StrAttr>:$generated_owner,
@@ -1052,8 +1062,9 @@ def Nodal_AnalogVariableReadOp : Nodal_Op<"analog_variable_read"> {
 def Nodal_AnalogAssignOp : Nodal_Op<"analog_assign"> {
   let summary = "Authored ordered assignment to one analog procedural variable";
   let arguments = (ins
-    Nodal_VariableType:$variable,
+    AnyType:$variable,
     Variadic<AnyType>:$values,
+    OptionalAttr<StrAttr>:$value_form,
     StrAttr:$statement_id,
     I64Attr:$authored_order,
     StrAttr:$owner,
@@ -1069,6 +1080,20 @@ def Nodal_AnalogAssignOp : Nodal_Op<"analog_assign"> {
     ArrayAttr:$guard_reads,
     DictionaryAttr:$metadata
   );
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogArrayFillOp : Nodal_Op<"analog_array_fill"> {
+  let summary = "Ordered scalar evaluation producing a shaped immutable Real value";
+  let arguments = (ins
+    Variadic<AnyType>:$reads,
+    StrAttr:$value,
+    StrAttr:$owner,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 

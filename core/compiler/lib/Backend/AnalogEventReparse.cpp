@@ -10,6 +10,8 @@
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
+#include <optional>
 #include <string>
 
 using namespace mlir;
@@ -19,8 +21,9 @@ namespace {
 // balanced parentheses alone must not accept extra tasks or raw source text.
 class Parser {
 public:
-  explicit Parser(llvm::StringRef source, const llvm::StringMap<unsigned> *functions = nullptr)
-      : source(source), functions(functions) {
+  explicit Parser(llvm::StringRef source, const llvm::StringMap<unsigned> *functions = nullptr,
+                  const AnalogEventSymbols *symbols = nullptr)
+      : source(source), functions(functions), symbols(symbols), invalid(source.contains('\0')) {
     next();
   }
   FailureOr<size_t> run() {
@@ -32,6 +35,33 @@ public:
   bool standaloneExpression() {
     transferExpressions = true;
     return expression() && token.empty() && !invalid;
+  }
+
+  bool declaration(AnalogEventSymbols &declared) {
+    const bool real = token == "real";
+    if (!eat("real") && !eat("integer") && !eat("genvar"))
+      return false;
+    auto name = token;
+    if (!identifier() || declared.contains(name))
+      return false;
+    AnalogEventSymbol symbol{real ? AnalogEventSymbolKind::Real : AnalogEventSymbolKind::Integer,
+                             true, std::nullopt, std::nullopt};
+    if (eat("[")) {
+      if (!real || !integerExpression(symbol.lowerBound) || !symbol.lowerBound ||
+          *symbol.lowerBound != 0 || !eat(":") || !integerExpression(symbol.upperBound) ||
+          (symbol.upperBound &&
+           (*symbol.upperBound < 0 || *symbol.upperBound >= std::numeric_limits<int32_t>::max())) ||
+          !eat("]"))
+        return false;
+      symbol.kind = AnalogEventSymbolKind::RealArray;
+    } else if (eat("=")) {
+      CheckedValue value;
+      if (!expression(0, real ? nullptr : &value))
+        return false;
+    }
+    if (!eat(";") || !token.empty() || invalid)
+      return false;
+    return declared.try_emplace(name, symbol).second;
   }
 
   FailureOr<size_t> functionDeclaration(llvm::StringMap<unsigned> &known) {
@@ -137,6 +167,7 @@ public:
 private:
   llvm::StringRef source, token;
   const llvm::StringMap<unsigned> *functions;
+  const AnalogEventSymbols *symbols;
   llvm::StringSet<> available;
   bool pureFunction = false;
   size_t cursor = 0, tokenStart = 0;
@@ -209,14 +240,183 @@ private:
     next();
     return true;
   }
-  bool primary(unsigned depth) {
+  // Shape maps have integer arithmetic, not the general analog-expression
+  // grammar. Concrete checks here are independent of the native shape proof;
+  // symbolic expressions retain their identifiers without substituting defaults.
+  static bool portableInteger(int64_t value) {
+    return value >= std::numeric_limits<int32_t>::min() &&
+           value <= std::numeric_limits<int32_t>::max();
+  }
+  bool integerPrimary(std::optional<int64_t> &value, unsigned depth) {
+    value.reset();
     if (invalid || depth > 256)
       return false;
-    if (eat("-") || eat("+") || eat("!"))
-      return primary(depth + 1);
+    if (token == "+" || token == "-") {
+      const bool negative = token == "-";
+      next();
+      // Parse a signed literal together so INT32_MIN remains representable.
+      if (!token.empty() && llvm::all_of(token, llvm::isDigit)) {
+        int64_t literal = 0;
+        if (token.getAsInteger(10, literal))
+          return false;
+        value = negative ? -literal : literal;
+        next();
+        return portableInteger(*value);
+      }
+      if (!integerPrimary(value, depth + 1))
+        return false;
+      if (negative && value)
+        value = -*value;
+      return !value || portableInteger(*value);
+    }
     if (eat("("))
-      return expression(depth + 1) && eat(")");
+      return integerExpression(value, depth + 1) && eat(")");
+    if (!token.empty() && llvm::all_of(token, llvm::isDigit)) {
+      int64_t literal = 0;
+      if (token.getAsInteger(10, literal) || !portableInteger(literal))
+        return false;
+      value = literal;
+      next();
+      return true;
+    }
+    auto name = token;
+    if (!identifier() || !symbols)
+      return false;
+    auto symbol = symbols->find(name);
+    return symbol != symbols->end() && symbol->second.kind == AnalogEventSymbolKind::Integer;
+  }
+  bool integerArithmetic(std::optional<int64_t> &left, char operation,
+                         const std::optional<int64_t> &right) {
+    if ((operation == '/' || operation == '%') && right && *right == 0)
+      return false;
+    if (!left || !right) {
+      left.reset();
+      return true;
+    }
+    if ((operation == '/' || operation == '%') && *left == std::numeric_limits<int32_t>::min() &&
+        *right == -1)
+      return false;
+    // Both operands have already passed the signed-32 check, so these
+    // intermediates are representable in int64_t even for multiplication.
+    int64_t result = operation == '+'   ? *left + *right
+                     : operation == '-' ? *left - *right
+                     : operation == '*' ? *left * *right
+                     : operation == '/' ? *left / *right
+                                        : *left % *right;
+    if (!portableInteger(result))
+      return false;
+    left = result;
+    return true;
+  }
+  bool integerProduct(std::optional<int64_t> &value, unsigned depth) {
+    if (!integerPrimary(value, depth))
+      return false;
+    while (token == "*" || token == "/" || token == "%") {
+      char operation = token.front();
+      next();
+      std::optional<int64_t> right;
+      if (!integerPrimary(right, depth + 1) || !integerArithmetic(value, operation, right))
+        return false;
+    }
+    return true;
+  }
+  bool integerExpression(std::optional<int64_t> &value, unsigned depth = 0) {
+    if (!integerProduct(value, depth))
+      return false;
+    while (token == "+" || token == "-") {
+      char operation = token.front();
+      next();
+      std::optional<int64_t> right;
+      if (!integerProduct(right, depth + 1) || !integerArithmetic(value, operation, right))
+        return false;
+    }
+    return true;
+  }
+  bool indexed(const AnalogEventSymbol &symbol, unsigned depth) {
+    std::optional<int64_t> value;
+    return eat("[") && integerExpression(value, depth + 1) && eat("]") &&
+           (!value || ((!symbol.lowerBound || *value >= *symbol.lowerBound) &&
+                       (!symbol.upperBound || *value <= *symbol.upperBound)));
+  }
+  bool storage(llvm::StringRef name, bool write, unsigned depth) {
+    if (!symbols)
+      return !pureFunction || available.contains(name);
+    auto found = symbols->find(name);
+    if (found == symbols->end() || (write && !found->second.writable))
+      return false;
+    const auto &symbol = found->second;
+    if (symbol.kind == AnalogEventSymbolKind::RealArray)
+      return indexed(symbol, depth);
+    return token != "[" && (symbol.kind == AnalogEventSymbolKind::Real ||
+                            symbol.kind == AnalogEventSymbolKind::Integer);
+  }
+  bool terminal(unsigned depth) {
+    auto name = token;
+    if (!identifier())
+      return false;
+    if (!symbols)
+      return true;
+    auto found = symbols->find(name);
+    if (found == symbols->end())
+      return false;
+    if (found->second.kind == AnalogEventSymbolKind::TerminalArray)
+      return indexed(found->second, depth);
+    return token != "[" && found->second.kind == AnalogEventSymbolKind::Terminal;
+  }
+  struct CheckedValue {
+    bool integer = false;
+    std::optional<int64_t> constant;
+  };
+  bool primary(unsigned depth, CheckedValue *value = nullptr) {
+    if (value)
+      *value = {};
+    if (invalid || depth > 256)
+      return false;
+    if (token == "-" || token == "+" || token == "!") {
+      auto operation = token;
+      next();
+      // As in index expressions, the signed literal INT32_MIN is valid even
+      // though its unsigned spelling is not a portable positive integer.
+      if (value && operation != "!" && !token.empty() && llvm::all_of(token, llvm::isDigit)) {
+        int64_t literal = 0;
+        if (token.getAsInteger(10, literal))
+          return false;
+        *value = {true, operation == "-" ? -literal : literal};
+        next();
+        return portableInteger(*value->constant);
+      }
+      if (!primary(depth + 1, value))
+        return false;
+      if (value && operation == "!") {
+        value->integer = true;
+        if (value->constant)
+          value->constant = !*value->constant;
+      } else if (value && operation == "-" && value->constant) {
+        value->constant = -*value->constant;
+        if (value->integer && !portableInteger(*value->constant))
+          return false;
+      }
+      return true;
+    }
+    if (eat("("))
+      return expression(depth + 1, value) && eat(")");
     if (!token.empty() && (llvm::isDigit(token.front()) || token.front() == '.')) {
+      if (value) {
+        value->integer = llvm::all_of(token, llvm::isDigit);
+        if (value->integer) {
+          int64_t literal = 0;
+          if (token.getAsInteger(10, literal) || !portableInteger(literal))
+            return false;
+          value->constant = literal;
+        } else {
+          // Retain exact small integral Real literals for concrete zero tests;
+          // Real arithmetic does not acquire signed-integer overflow rules.
+          double literal = std::strtod(token.str().c_str(), nullptr);
+          if (literal >= std::numeric_limits<int32_t>::min() &&
+              literal <= std::numeric_limits<int32_t>::max() && std::trunc(literal) == literal)
+            value->constant = static_cast<int64_t>(literal);
+        }
+      }
       next();
       return !invalid;
     }
@@ -233,15 +433,22 @@ private:
     } else if (!identifier()) {
       return false;
     }
-    if (token != "(")
-      return !pureFunction || available.contains(name);
+    if (token != "(") {
+      if (!storage(name, false, depth))
+        return false;
+      if (value)
+        value->integer = symbols->find(name)->second.kind == AnalogEventSymbolKind::Integer;
+      return true;
+    }
+    CheckedValue argument;
+    auto argumentExpression = [&]() { return expression(depth + 1, value ? &argument : nullptr); };
     if (functions) {
       auto function = functions->find(name);
       if (function != functions->end()) {
         if (!eat("("))
           return false;
         for (unsigned index = 0; index < function->second; ++index)
-          if ((index && !eat(",")) || !expression(depth + 1))
+          if ((index && !eat(",")) || !argumentExpression())
             return false;
         return eat(")");
       }
@@ -249,9 +456,9 @@ private:
     if (pureFunction && !lookupAnalogFunctionTarget(name))
       return false;
     if (transferExpressions && (name == "ddt" || name == "idt")) {
-      if (!eat("(") || !expression(depth + 1))
+      if (!eat("(") || !argumentExpression())
         return false;
-      if (name == "idt" && eat(",") && !expression(depth + 1))
+      if (name == "idt" && eat(",") && !argumentExpression())
         return false;
       return eat(")");
     }
@@ -259,13 +466,15 @@ private:
       if (!eat("(") || token.size() < 2 || token.front() != '"' || token.back() != '"' ||
           !isAnalogAnalysisTarget(token.drop_front().drop_back()) || !string(true))
         return false;
+      if (value)
+        value->integer = true;
       return eat(")");
     }
     if (auto *entry = lookupAnalogFunctionTarget(name)) {
       if (!eat("("))
         return false;
       for (unsigned i = 0; i < entry->arity; ++i)
-        if ((i && !eat(",")) || !expression(depth + 1))
+        if ((i && !eat(",")) || !argumentExpression())
           return false;
       return eat(")");
     }
@@ -275,24 +484,83 @@ private:
       return false;
     if (transferExpressions && name == "I" && eat("<"))
       return identifier() && eat(">") && eat(")");
-    if (!identifier())
+    if (!terminal(depth))
       return false;
-    if (eat(",") && !identifier())
+    if (eat(",") && !terminal(depth))
       return false;
     return eat(")");
   }
-  bool expression(unsigned depth = 0) {
-    if (!primary(depth))
+  unsigned precedence(bool checked) const {
+    if (token == "||")
+      return 1;
+    if (token == "&&")
+      return 2;
+    if (token == "==" || token == "!=")
+      return 3;
+    if (token == ">" || token == "<" || token == ">=" || token == "<=")
+      return 4;
+    if (token == "+" || token == "-")
+      return 5;
+    if (token == "*" || token == "/" || (checked && token == "%"))
+      return 6;
+    return 0;
+  }
+  bool checkedBinary(CheckedValue &left, llvm::StringRef operation, const CheckedValue &right) {
+    if (operation == "+" || operation == "-" || operation == "*" || operation == "/" ||
+        operation == "%") {
+      if ((operation == "/" || operation == "%") && right.constant && *right.constant == 0)
+        return false;
+      if (left.integer && right.integer)
+        return integerArithmetic(left.constant, operation.front(), right.constant);
+      if (operation == "%")
+        return false;
+      left = {};
+      return true;
+    }
+    std::optional<int64_t> result;
+    if (left.constant && right.constant) {
+      int64_t lhs = *left.constant, rhs = *right.constant;
+      result = operation == ">"    ? lhs > rhs
+               : operation == "<"  ? lhs < rhs
+               : operation == ">=" ? lhs >= rhs
+               : operation == "<=" ? lhs <= rhs
+               : operation == "==" ? lhs == rhs
+               : operation == "!=" ? lhs != rhs
+               : operation == "&&" ? lhs && rhs
+                                   : lhs || rhs;
+    }
+    left = {true, result};
+    return true;
+  }
+  bool binaryExpression(unsigned depth, CheckedValue *value, unsigned minimum = 1) {
+    if (!primary(depth, value))
       return false;
-    while (token == "+" || token == "-" || token == "*" || token == "/" || token == ">" ||
-           token == "<" || token == ">=" || token == "<=" || token == "&&" || token == "||" ||
-           token == "==" || token == "!=") {
+    while (unsigned priority = precedence(value != nullptr)) {
+      if (priority < minimum)
+        break;
+      auto operation = token;
       next();
-      if (!primary(depth + 1))
+      CheckedValue right;
+      if (!binaryExpression(depth + 1, value ? &right : nullptr, priority + 1) ||
+          (value && !checkedBinary(*value, operation, right)))
         return false;
     }
-    if (eat("?"))
-      return expression(depth + 1) && eat(":") && expression(depth + 1);
+    return true;
+  }
+  bool expression(unsigned depth = 0, CheckedValue *value = nullptr) {
+    if (!binaryExpression(depth, value))
+      return false;
+    if (eat("?")) {
+      CheckedValue yes, no;
+      if (!expression(depth + 1, value ? &yes : nullptr) || !eat(":") ||
+          !expression(depth + 1, value ? &no : nullptr))
+        return false;
+      if (value) {
+        auto selected = value->constant ? (*value->constant ? yes.constant : no.constant)
+                                        : std::optional<int64_t>();
+        *value = {yes.integer && no.integer, selected};
+      }
+    }
     return true;
   }
   bool event() {
@@ -319,7 +587,25 @@ private:
     } while (eat("or"));
     return true;
   }
-  bool assignment() { return identifier() && eat("=") && expression(); }
+  bool assignment(llvm::StringRef *loopCounter = nullptr) {
+    auto name = token;
+    if (symbols && loopCounter) {
+      auto found = symbols->find(name);
+      if (found == symbols->end() || found->second.kind != AnalogEventSymbolKind::Integer ||
+          (!loopCounter->empty() && *loopCounter != name))
+        return false;
+      *loopCounter = name;
+    }
+    if (!identifier() || !storage(name, true, 0) || !eat("="))
+      return false;
+    // Boolean storage also uses target Integer. Validate all arithmetic inside
+    // its comparisons and conditionals in the same pass; no unchecked retry may
+    // turn a rejected integer map into an accepted scalar expression.
+    CheckedValue value;
+    const bool checked =
+        symbols && symbols->find(name)->second.kind == AnalogEventSymbolKind::Integer;
+    return expression(0, checked ? &value : nullptr);
+  }
   bool block(unsigned depth) {
     if (depth > 256 || !eat("begin"))
       return false;
@@ -370,9 +656,11 @@ private:
       }
       return eat("endcase");
     }
-    if (eat("for"))
-      return eat("(") && assignment() && eat(";") && expression() && eat(";") && assignment() &&
-             eat(")") && block(depth + 1);
+    if (eat("for")) {
+      llvm::StringRef counter;
+      return eat("(") && assignment(&counter) && eat(";") && expression() && eat(";") &&
+             assignment(&counter) && eat(")") && block(depth + 1);
+    }
     if (eat("$strobe"))
       return eat("(") && string(false) && eat(")") && eat(";");
     if (eat("$finish"))
@@ -381,7 +669,13 @@ private:
   }
 };
 } // namespace
-FailureOr<size_t> reparseAnalogEventBlock(llvm::StringRef source) { return Parser(source).run(); }
+FailureOr<size_t> reparseAnalogEventBlock(llvm::StringRef source,
+                                          const AnalogEventSymbols *symbols) {
+  return Parser(source, nullptr, symbols).run();
+}
+LogicalResult reparseAnalogEventDeclaration(llvm::StringRef source, AnalogEventSymbols &symbols) {
+  return success(Parser(source, nullptr, &symbols).declaration(symbols));
+}
 LogicalResult reparseAnalogTransferCall(llvm::StringRef source,
                                         const llvm::StringMap<unsigned> *functions) {
   return success(Parser(source, functions).transferCall());

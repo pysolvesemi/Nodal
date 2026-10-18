@@ -329,3 +329,29 @@ llvm_update_compile_flags(nodal-node-array-unit-tests)
 target_link_libraries(nodal-node-array-unit-tests
   PRIVATE NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.node-array-unit COMMAND nodal-node-array-unit-tests)
+
+add_executable(nodal-event-reparse-unit-tests AnalogEventReparseTest.cpp)
+llvm_update_compile_flags(nodal-event-reparse-unit-tests)
+target_link_libraries(nodal-event-reparse-unit-tests
+  PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.event-reparse-unit COMMAND nodal-event-reparse-unit-tests)
+
+add_executable(nodal-storage-model-unit-tests AnalogStorageModelTest.cpp)
+llvm_update_compile_flags(nodal-storage-model-unit-tests)
+target_link_libraries(nodal-storage-model-unit-tests
+  PRIVATE NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.storage-model-unit COMMAND nodal-storage-model-unit-tests)
+
+add_executable(nodal-writable-array-backend-unit-tests WritableArrayBackendTest.cpp)
+llvm_update_compile_flags(nodal-writable-array-backend-unit-tests)
+target_link_libraries(nodal-writable-array-backend-unit-tests
+  PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.writable-array-backend-unit COMMAND nodal-writable-array-backend-unit-tests)
+
+add_test(NAME nodal.native.writable-array-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_writable_array_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-writable-array-evidence"
+)
+set_tests_properties(nodal.native.writable-array-integration PROPERTIES TIMEOUT 60)

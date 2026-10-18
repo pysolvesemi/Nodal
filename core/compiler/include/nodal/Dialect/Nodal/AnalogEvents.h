@@ -2,6 +2,7 @@
 #define NODAL_DIALECT_NODAL_ANALOGEVENTS_H
 
 #include "mlir/IR/Operation.h"
+#include "mlir/IR/Value.h"
 #include "mlir/Support/LogicalResult.h"
 
 #include <optional>
@@ -24,6 +25,9 @@ struct AnalogSourceExpression {
 };
 mlir::FailureOr<AnalogSourceExpression> parseAnalogSourceExpression(mlir::Operation *context,
                                                                     llvm::StringRef source);
+/// Actual captured scalar read binding; paths are labels, never selectors.
+mlir::FailureOr<std::string> getAnalogCapturedReadPath(mlir::Value value);
+mlir::FailureOr<mlir::Operation *> getAnalogCapturedReadIdentity(mlir::Value value);
 mlir::LogicalResult verifyAnalogEventProcedure(mlir::Operation *procedure);
 mlir::FailureOr<mlir::Operation *> resolveAnalogHeldVariable(mlir::Operation *operation);
 mlir::LogicalResult verifyAnalogHeldRead(mlir::Operation *operation);

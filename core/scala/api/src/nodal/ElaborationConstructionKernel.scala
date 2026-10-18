@@ -133,6 +133,10 @@ private[nodal] object ConstructionKernel:
 
   def analogReferencePath(value: Any): Option[String] = active.flatMap(_.pathOf(value))
 
+  def proceduralShapeDimension(value: Any): String =
+    active.getOrElse(throw new IllegalStateException("shape requires active construction"))
+      .proceduralShapeDimension(value)
+
   def analogEventConstant(value: Any): Option[Double] = value match
     case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
       expression.literal.flatMap(_.value.toDoubleOption)

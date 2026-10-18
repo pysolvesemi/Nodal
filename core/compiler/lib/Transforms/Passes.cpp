@@ -10,11 +10,13 @@
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/AnalogEvents.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
+#include "nodal/Dialect/Nodal/AnalogStorageModel.h"
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
+#include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Support/HierarchyOrder.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -193,8 +195,11 @@ LogicalResult verifyType(Type type, Operation *owner, const llvm::StringSet<> &p
         if (numeric <= 0)
           return emitFailure(owner, "NODAL-VERIFY-TYPE-002", "shaped dimensions must be positive");
       } else if (!isIdentifier(dimension) || !parameters.contains(dimension)) {
-        return emitFailure(owner, "NODAL-VERIFY-TYPE-003",
-                           llvm::Twine("unknown symbolic dimension '") + dimension + "'");
+        auto definition = owner->getParentOfType<nodal::ModuleOp>();
+        if (!definition || failed(resolveStaticShapeDimension(definition, dimension)))
+          return emitFailure(owner, "NODAL-VERIFY-TYPE-003",
+                             llvm::Twine("unknown or unproved symbolic dimension '") + dimension +
+                                 "'");
       }
     }
     return verifyType(shaped.getElementType(), owner, parameters);
@@ -512,9 +517,17 @@ LogicalResult verifyTypes(mlir::ModuleOp module) {
     if (isNamed(operation, "nodal.shape_view")) {
       if (DictionaryAttr values = metadata(operation)) {
         if (auto storage = values.getAs<StringAttr>("storage")) {
-          if (storage.getValue() != "structural" && storage.getValue() != "memory")
+          if (storage.getValue() == "procedural") {
+            // Metadata describes intent; actual typed SSA storage establishes
+            // the capability and independently checked projection mapping.
+            if (operation->getNumResults() != 1 ||
+                failed(resolveAnalogStorageReference(operation->getResult(0), operation)))
+              result = emitFailure(operation, "NODAL-VERIFY-TYPE-007",
+                                   "procedural shape view requires actual owned storage");
+          } else if (storage.getValue() != "structural" && storage.getValue() != "memory") {
             result = emitFailure(operation, "NODAL-VERIFY-TYPE-007",
                                  "shape view has an unsupported storage intent");
+          }
         }
       }
     }

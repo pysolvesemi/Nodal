@@ -253,8 +253,16 @@ private[nodal] object ReproducibilityContract:
           else shapeOf(declaration.dataType)),
           "layout" -> string(if declaration.conservativeDimensions.nonEmpty then
             "conservative-flat-row-major"
+          else if declaration.kind == "variable" &&
+            declaration.dataType.exists(_.startsWith("Vec(Real;"))
+          then
+            "procedural-real-flat-row-major"
           else layoutOf(declaration.dataType, backendProfile)),
-          "storage" -> string(storageOf(declaration.kind))
+          "storage" -> string(if declaration.kind == "variable" &&
+            declaration.dataType.exists(_.startsWith("Vec(Real;"))
+          then
+            "procedural"
+          else storageOf(declaration.kind))
         )
     array(declarations)
 

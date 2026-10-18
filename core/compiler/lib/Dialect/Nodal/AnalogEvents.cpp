@@ -5,6 +5,7 @@
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/AnalogFunctions.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
+#include "nodal/Dialect/Nodal/AnalogStorageModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
@@ -79,6 +80,37 @@ public:
   FailureOr<Expression> parse(llvm::StringRef input, unsigned depth = 0) {
     if (depth > 128 || input.empty() || input != input.trim())
       return failure();
+    // Captured selected leaves are bound to actual operand SSA before parsing
+    // source function syntax. A label may contain parentheses but is never a
+    // textual description from which storage coordinates can be manufactured.
+    if (llvm::isa<AnalogAssignOp, AnalogArrayFillOp, AnalogVariableOp>(operation)) {
+      auto captures = operation->getOperands();
+      if (llvm::isa<AnalogAssignOp>(operation))
+        captures = captures.drop_front();
+      Value matched;
+      for (Value capture : captures) {
+        auto path = getAnalogCapturedReadPath(capture);
+        if (succeeded(path) && *path == input) {
+          if (matched)
+            return failure();
+          matched = capture;
+        }
+      }
+      if (matched) {
+        auto identity = getAnalogCapturedReadIdentity(matched);
+        auto type = getAnalogNumericTypeInfo(matched.getType());
+        if (failed(identity) || failed(type))
+          return failure();
+        const std::string kind = type->kind == AnalogNumericKind::Real      ? "real"
+                                 : type->kind == AnalogNumericKind::Integer ? "integer"
+                                 : type->kind == AnalogNumericKind::Boolean ? "boolean"
+                                                                            : "";
+        if (kind.empty())
+          return failure();
+        return Expression{kind, type->dimension, std::nullopt, {input.str()}, "reference",
+                          "",   *identity};
+      }
+    }
     if (input == "true" || input == "false")
       return Expression{"boolean", "1", input == "true" ? 1.0 : 0.0, {}, "literal", input.str()};
     std::string storage = input.str();
@@ -411,6 +443,38 @@ bool isStaticAnalogSourceExpression(const AnalogSourceExpression &value) {
   return !value.operands.empty() && llvm::all_of(value.operands, isStaticAnalogSourceExpression);
 }
 
+FailureOr<Operation *> getAnalogCapturedReadIdentity(Value value) {
+  if (failed(getAnalogNumericTypeInfo(value.getType())))
+    return failure();
+  Operation *definition = value.getDefiningOp();
+  if (auto read = llvm::dyn_cast_or_null<AnalogVariableReadOp>(definition)) {
+    if (failed(resolveAnalogStorageReference(read->getOperand(0), read)))
+      return failure();
+    return read->getOperand(0).getDefiningOp();
+  }
+  if (!definition || !llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(definition) ||
+      failed(resolveAnalogArrayValue(value, definition)))
+    return failure();
+  return definition;
+}
+
+FailureOr<std::string> getAnalogCapturedReadPath(Value value) {
+  auto identity = getAnalogCapturedReadIdentity(value);
+  if (failed(identity))
+    return failure();
+  llvm::StringRef path;
+  std::string owned;
+  if (llvm::isa<AnalogVariableOp>(*identity))
+    path = text(*identity, "identity");
+  else {
+    owned = semanticPath(*identity);
+    path = owned;
+  }
+  if (path.empty() || path != path.trim())
+    return failure();
+  return path.str();
+}
+
 FailureOr<Operation *> resolveAnalogHeldVariable(Operation *op) {
   auto module = op->getParentOfType<nodal::ModuleOp>();
   if (!module || !llvm::isa<AnalogOp>(op->getParentOp()))
@@ -490,6 +554,8 @@ LogicalResult verifyAnalogEventProcedure(Operation *procedure) {
     std::set<std::string> operandReads;
     bool assignment = false;
     if (llvm::isa<AnalogVariableOp>(op)) {
+      if (llvm::isa<ShapedType>(op->getResult(0).getType()) || op->getNumOperands())
+        return;
       auto initialized = op->getAttrOfType<BoolAttr>("initialized");
       if (!initialized) {
         result = reject(op, 10, "missing initialized flag");
@@ -502,16 +568,16 @@ LogicalResult verifyAnalogEventProcedure(Operation *procedure) {
       dimension = text(op, "initializer_dimension");
       inventory = op->getAttrOfType<ArrayAttr>("initializer_reads");
     } else if (llvm::isa<AnalogAssignOp>(op)) {
+      if (text(op, "value_form") == "snapshot")
+        return;
       auto metadata = op->getAttrOfType<DictionaryAttr>("metadata");
       source = metadata ? field(metadata, "value") : llvm::StringRef();
       kind = text(op, "value_kind");
       dimension = text(op, "value_dimension");
       assignment = true;
       for (auto value : op->getOperands().drop_front()) {
-        auto read = value.getDefiningOp<AnalogVariableReadOp>();
-        auto variable =
-            read ? read->getOperand(0).getDefiningOp<AnalogVariableOp>() : AnalogVariableOp();
-        if (!variable || !operandReads.insert(text(variable, "identity").str()).second) {
+        auto path = getAnalogCapturedReadPath(value);
+        if (failed(path) || !operandReads.insert(*path).second) {
           result = reject(op, 10, "assignment reads must bind unique variable-read operations");
           return;
         }
@@ -624,9 +690,11 @@ LogicalResult verifyAnalogEventOperation(Operation *op) {
       for (Operation *between = op->getNextNode(); between != consumer;
            between = between->getNextNode())
         between->walk([&](AnalogAssignOp assignment) {
-          if (assignment->getNumOperands())
-            if (auto variable = assignment->getOperand(0).getDefiningOp<AnalogVariableOp>())
-              changed |= observed->count(text(variable, "identity").str()) != 0;
+          if (assignment->getNumOperands()) {
+            auto reference = resolveAnalogStorageReference(assignment->getOperand(0), assignment);
+            if (succeeded(reference))
+              changed |= observed->count(text(reference->declaration, "identity").str()) != 0;
+          }
         });
       if (changed)
         return reject(op, 5, "event expression cannot move across a write to observed storage");

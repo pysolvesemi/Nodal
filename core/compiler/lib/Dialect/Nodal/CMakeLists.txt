@@ -6,6 +6,7 @@ add_mlir_dialect_library(NodalDialect
   AnalogNoise.cpp
   AnalogTransfer.cpp
   AnalogEvents.cpp
+  AnalogStorageModel.cpp
   TimeWaveform.cpp
   ConservativeConnectivity.cpp
   NatureDiscipline.cpp

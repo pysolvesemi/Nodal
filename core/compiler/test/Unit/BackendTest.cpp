@@ -1241,7 +1241,7 @@ int main() {
   }
 
   const std::string eventTarget =
-      "module E;\nreal event_held = 0.0;\ninteger event_select = 1;\n"
+      "module E;\nelectrical p, n;\nreal event_held = 0.0;\ninteger event_select = 1;\n"
       "analog begin\nbegin : event_procedure\n"
       "@(initial_step or cross(V(p, n), 1, 0, 0.01) or timer(0, 1e-9)) begin\n"
       "if (event_select) begin\nevent_held = V(p, n);\nend else begin\n"

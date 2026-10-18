@@ -67,6 +67,78 @@ private[nodal] object AnalogControlFlowConstruction:
         case other => other
       copy(root = block(root))
 
+    /** Rewrites only retained semantic references, including immutable selected-access payloads. */
+    def mapReferences(path: String => String): Snapshot =
+      def condition(value: Condition): Condition = value.copy(
+        reads = value.reads.map(path),
+        valueType = value.valueType.copy(dimensions = value.valueType.dimensions.map(path)),
+        selectedReads = value.selectedReads.map(_.remap(path))
+      )
+      def selector(value: Selector): Selector = value.copy(
+        reads = value.reads.map(path),
+        selectedReads = value.selectedReads.map(_.remap(path))
+      )
+      def block(value: Block): Block = value.copy(
+        identity = path(value.identity),
+        statements = value.statements.map(statement)
+      )
+      def statement(value: Statement): Statement = value match
+        case declaration: Statement.Declare => declaration.copy(
+            identity = path(declaration.identity),
+            variable = path(declaration.variable),
+            initializerReads = declaration.initializerReads.map(path),
+            storageVariable = declaration.storageVariable.map(_.remap(path)),
+            initializerSelectedReads = declaration.initializerSelectedReads.map(_.remap(path))
+          )
+        case assignment: Statement.Assign => assignment.copy(
+            identity = path(assignment.identity),
+            target = path(assignment.target),
+            reads = assignment.reads.map(path),
+            storageTarget = assignment.storageTarget.map(_.remap(path)),
+            selectedReads = assignment.selectedReads.map(_.remap(path))
+          )
+        case read: Statement.Read => read.copy(
+            identity = path(read.identity),
+            variable = path(read.variable),
+            storageReference = read.storageReference.map(_.remap(path))
+          )
+        case event: Statement.EventControl => event.copy(
+            identity = path(event.identity),
+            event = event.event.remap(path, identity),
+            body = block(event.body)
+          )
+        case scope: Statement.Scope =>
+          scope.copy(identity = path(scope.identity), body = block(scope.body))
+        case conditional: Statement.IfThenElse => conditional.copy(
+            identity = path(conditional.identity),
+            branches = conditional.branches.map(branch =>
+              branch.copy(
+                condition = condition(branch.condition),
+                body = block(branch.body)
+              )
+            ),
+            otherwise = conditional.otherwise.map(block)
+          )
+        case selection: Statement.CaseStatement => selection.copy(
+            identity = path(selection.identity),
+            selector = selector(selection.selector),
+            arms = selection.arms.map(arm => arm.copy(body = block(arm.body))),
+            default = selection.default.map(block)
+          )
+        case loop: Statement.Loop => loop.copy(
+            identity = path(loop.identity),
+            boundReads = loop.boundReads.map(path),
+            boundValueType = loop.boundValueType.copy(
+              dimensions = loop.boundValueType.dimensions.map(path)
+            ),
+            boundSelectedReads = loop.boundSelectedReads.map(_.remap(path)),
+            body = block(loop.body)
+          )
+        case exit: Statement.Break => exit.copy(identity = path(exit.identity))
+        case next: Statement.Continue => next.copy(identity = path(next.identity))
+      val mapped = block(root)
+      copy(owner = path(owner), root = mapped, analysis = AnalogControlFlowRuntime.analyze(mapped))
+
     def remapOwner(newOwner: String): Snapshot =
       val currentOwner = requireCanonicalOwner(owner, "control-flow source owner")
       val canonical = requireCanonicalOwner(newOwner, "control-flow destination owner")
@@ -100,89 +172,7 @@ private[nodal] object AnalogControlFlowConstruction:
               cursor = end
         result.result()
 
-      def remapCondition(value: Condition): Condition =
-        value.copy(
-          rendered = remapRendered(value.rendered),
-          reads = value.reads.map(remapPath)
-        )
-
-      def remapSelector(value: Selector): Selector =
-        value.copy(
-          rendered = remapRendered(value.rendered),
-          reads = value.reads.map(remapPath)
-        )
-
-      def remapBlock(value: Block): Block =
-        value.copy(
-          identity = remapPath(value.identity),
-          statements = value.statements.map(remapStatement)
-        )
-
-      def remapStatement(value: Statement): Statement = value match
-        case declaration: Statement.Declare =>
-          declaration.copy(
-            identity = remapPath(declaration.identity),
-            variable = remapPath(declaration.variable),
-            initializerReads = declaration.initializerReads.map(remapPath)
-          )
-        case assignment: Statement.Assign =>
-          assignment.copy(
-            identity = remapPath(assignment.identity),
-            target = remapPath(assignment.target),
-            reads = assignment.reads.map(remapPath)
-          )
-        case read: Statement.Read =>
-          read.copy(
-            identity = remapPath(read.identity),
-            variable = remapPath(read.variable)
-          )
-        case event: Statement.EventControl =>
-          event.copy(
-            identity = remapPath(event.identity),
-            event = event.event.remap(remapPath, remapRendered),
-            body = remapBlock(event.body)
-          )
-        case scope: Statement.Scope =>
-          scope.copy(
-            identity = remapPath(scope.identity),
-            body = remapBlock(scope.body)
-          )
-        case conditional: Statement.IfThenElse =>
-          conditional.copy(
-            identity = remapPath(conditional.identity),
-            branches = conditional.branches.map: branch =>
-              branch.copy(
-                condition = remapCondition(branch.condition),
-                body = remapBlock(branch.body)
-              ),
-            otherwise = conditional.otherwise.map(remapBlock)
-          )
-        case selection: Statement.CaseStatement =>
-          selection.copy(
-            identity = remapPath(selection.identity),
-            selector = remapSelector(selection.selector),
-            arms = selection.arms.map: arm =>
-              arm.copy(body = remapBlock(arm.body)),
-            default = selection.default.map(remapBlock)
-          )
-        case loop: Statement.Loop =>
-          loop.copy(
-            identity = remapPath(loop.identity),
-            boundReads = loop.boundReads.map(remapPath),
-            body = remapBlock(loop.body)
-          )
-        case exit: Statement.Break =>
-          exit.copy(identity = remapPath(exit.identity))
-        case next: Statement.Continue =>
-          next.copy(identity = remapPath(next.identity))
-
-      copy(
-        owner = canonical,
-        root = remapBlock(root),
-        analysis = analysis.copy(
-          definitelyInitialized = analysis.definitelyInitialized.map(remapPath)
-        )
-      )
+      mapReferences(remapPath).mapRendered(remapRendered).copy(owner = canonical)
 
   final case class Inspection(
       construction: ConstructionSnapshot,
@@ -468,7 +458,8 @@ private[nodal] object AnalogControlFlowConstruction:
         boundReads: Set[String],
         boundValueType: AnalogProceduralRuntime.ValueType,
         staticTripCount: Option[Int],
-        source: Option[AnalogProceduralRuntime.Source]
+        source: Option[AnalogProceduralRuntime.Source],
+        boundSelectedReads: Vector[AnalogProceduralRuntime.StorageReference] = Vector.empty
     )(body: String => A): A =
       requireStatementPosition()
       val identity = nextIdentity("loop")
@@ -490,6 +481,7 @@ private[nodal] object AnalogControlFlowConstruction:
               Some(identity)
             )
           if maximumIterations != domain.tripCount || boundReads.nonEmpty ||
+            boundSelectedReads.nonEmpty ||
             !staticTripCount.contains(domain.tripCount)
           then
             AnalogControlFlowRuntime.fail(
@@ -511,7 +503,8 @@ private[nodal] object AnalogControlFlowConstruction:
           block,
           boundValueType,
           retainedStaticTripCount,
-          source
+          source,
+          boundSelectedReads
         )
       )
       result

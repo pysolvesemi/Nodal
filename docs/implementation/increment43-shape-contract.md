@@ -618,3 +618,141 @@ whitespace checks passed. No CI was run. Exact predecessor selectors were:
 .work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.Increment43ShapeContractTests -- 'nodal.internal.testkit.Increment43ShapeContractTests.{configured native accepts composed structural shape edges,bridge rejects forged static-index ownership rank and bounds}'
 .work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.Increment43ShapeSliceTests -- 'nodal.internal.testkit.Increment43ShapeSliceTests.{caught slice failures publish neither a view nor structural endpoint effects,configured native verifies public fixed symbolic and composed slice transport}'
 ```
+
+## Writable Real storage checkpoint
+
+The additive writable-storage contract is recorded in
+[`NodalWritableRealArrays-DG-v0.1`](../design-gates/NodalWritableRealArrays-DG-v0.1.md).
+This checkpoint adds a capability wrapper over actual procedural variables,
+lexical typed projections, explicit immutable reads and exact-shaped fill/copy
+values. It does not make arbitrary expression views writable. Each consuming
+assignment snapshots its RHS before writing any destination lane; a reused
+construction expression is evaluated at its new procedural use.
+
+Native `AnalogStorageModel` derives ownership, source maps and coverage from
+actual SSA roots and projections, without a parallel declaration registry.
+Reshape preserves ordinal order. Prefix selections and leading-axis slices use
+a small sum-of-products normal form over actual static identities to recognize
+contiguous aliases, including symbolic row/slice equivalence. Other selections
+retain their validated projection ancestry; fixed contiguous regions additionally
+use checked endpoint/cardinality proofs. No default parameter substitution,
+lane enumeration or general symbolic algebra is used. Whole initialization and
+finite proven literal writes remain separate coverage facts.
+
+The target map program retains each source projection and uses an ordinal stage
+per projection rather than recursively expanding composed indexing formulas.
+Shape semantics use checked signed-64 cardinality; target declarations and all
+index intermediates separately require the supported signed-32 target range.
+These are compactness and resource bounds, not measured performance claims.
+Scala region equality and ordering use exact locally interned DAG keys rather
+than recursively expanding shared coordinate subexpressions. Keys retain complete
+static tokens and do not rely on hash collision resistance or a persistent
+registry. Repeated proof setup, static-identity lookup, ancestor recomputation
+and retained ancestor key strings can still cost more than linear time or memory
+in authored depth; recursive traversal also retains an authored-depth resource
+limit.
+
+Persistent root shaped initializer emission and selected-array reads in
+control/event payloads remain explicit capability rejections in this checkpoint.
+The former needs declaration-equivalent lifetime semantics, and the latter needs
+actual typed bindings that preserve reevaluation and short-circuit behavior.
+Event-local initialization and array operations within existing scalar-controlled
+bodies do not remove those remaining F43 requirements. No Foundation parent
+checkbox is closed by this checkpoint.
+
+### Focused writable-storage native acceptance
+
+The shared descriptor passed 21 checks, including symbolic row versus flattened
+leading-slice coverage, distinct sibling regions, lexical escape and forged
+ownership, trillion-lane compactness, signed-64 maximum and overflow rejection.
+The independent native semantic matrix passed 41 cases, with exact negative
+diagnostics, deterministic roundtrips and the actual default gate pipeline for
+every positive. Fifteen selected registered native tests passed, including the
+writable matrix and affected procedural, event and shape predecessors.
+
+The writable backend unit passed fixed and symbolic overlapping copies,
+noncontiguous composed maps, generated lexical storage, dimensioned Real,
+compound extents, 48 mapping stages and signed-32 maximum compact storage.
+Four independently native-valid unsupported target cases produced causal
+rejections while preserving sentinel output. Five actual translator CLI outputs
+were byte-identical to the unit outputs; mapped Verilog-AMS emission also passed.
+Strict event syntax passed 179 checks, with noise 24 and transfer 40; the existing
+scalar/generated/node-array backend executable passed its assertions.
+
+The target profile currently requires an event-containing procedure. Ordinary
+event-free shaped storage remains a capability rejection and required F43 work.
+The finite target reparser validates emitted grammar and scalar/array roles; it
+does not replace native correlated symbolic bounds proofs. No simulator or
+numerical qualification was run.
+
+```sh
+PYTHONPATH=.work/python-tools .work/python-tools/bin/cmake --build .work/native-release --target nodalc nodal-translate nodal-storage-model-unit-tests nodal-backend-unit-tests nodal-writable-array-backend-unit-tests nodal-event-reparse-unit-tests nodal-noise-reparse-unit-tests nodal-transfer-reparse-unit-tests -j 3
+.work/native-release/core/compiler/test/Unit/nodal-storage-model-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-writable-array-backend-unit-tests .work/writable-array-backend
+.work/native-release/core/compiler/test/Unit/nodal-event-reparse-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-noise-reparse-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-transfer-reparse-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-backend-unit-tests
+```
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 tests/compiler/fixtures/increment43/run_writable_array_matrix.py --nodalc .work/native-release/bin/nodalc --work-dir .work/writable-native-final-matrix
+ctest --test-dir .work/native-release --output-on-failure -R '^nodal.native.(writable-array-integration|analog-events-matrix|analog-event-direction-review|analog-procedural-(roundtrip|rejects-read|rejects-owner|rejects-type)|analog-control-flow-(roundtrip|rejects-missing-else|rejects-zero-trip|rejects-continue-path|rejects-forward-reference)|shape-(index|view|slice)-integration)$'
+for name in fixed symbolic mapped generated deep; do
+  .work/native-release/bin/nodal-translate --nodal-to-verilog-a .work/writable-array-backend/$name.mlir -o .work/writable-array-backend/$name.cli.va
+  cmp .work/writable-array-backend/$name.va .work/writable-array-backend/$name.cli.va
+done
+```
+
+Focused review found and fixed unchecked generic-expression fallback after
+Integer arithmetic rejection. The target parser now validates nested checked
+Integer operations inside comparisons, ternaries and function arguments without
+retrying invalid numeric expressions. In this finite emitted profile, invalid
+numeric dead ternary branches also reject in strict Integer context. Plain overflow and division-by-zero
+regressions cover the earlier gap; valid Boolean forms and Real arithmetic remain
+covered. Generated induction names are reserved alongside authored names, with
+three adversarial carrier/counter/map-name collision witnesses. An affected
+module-level classification condition now sends every genvar declaration through
+the existing genvar grammar, including authored names with the temporary prefix.
+
+Inspecting real public artifacts exposed an inherited source-capture defect:
+constructor call-site preference could relabel an earlier event-local variable
+when a later variable copied its value. The shared capture-site resolver now
+prefers a nearer lexical-body frame from the exact same user class, retaining
+the constructor fallback and unrelated helper behavior. A regression checks
+separate `cells` and `copied` authored paths and their exact declaration lines;
+actual storage identities remain distinct throughout.
+
+### Focused writable-storage public acceptance
+
+Thirteen configured public methods passed with both current native tools,
+including nine positive models through the default semantic pipeline and
+byte-identical repeated Verilog-A emission. The persistent-root target-negative
+case checks its exact lifetime diagnostic. Public cases cover deferred overlap,
+symbolic quantity units, noncontiguous maps, complete literal initialization,
+nested fill projection, branch intersection, generated lexical ownership and
+symbolic row/slice aliases in both directions. The tracked 25-level coverage
+case checks exact DAG equality, sharing independence and near-equal rejection.
+Five retained public witness triplets contain source MLIR, normalized MLIR and
+Verilog-A for fixed overlap, symbolic voltage, noncontiguous, generated and
+nested-fill cases. Source names and declaration lines were checked after the
+capture-site repair. These are compiler structural checks, not numerical models
+validated by a simulator.
+
+```sh
+export NODAL_NODALC="$PWD/.work/native-release/bin/nodalc"
+export NODAL_TRANSLATE="$PWD/.work/native-release/bin/nodal-translate"
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.Increment43WritableArrayTests -- nodal.internal.testkit.Increment43WritableArrayTests
+```
+
+Eleven directly affected Scala predecessor methods passed: procedural construction
+3, control-flow construction 3, bridge chronology 2, immutable shape composition
+2 and signed-64/identity slice boundaries 1. After the shared source-capture fix,
+five SemanticOrigin methods and three scalar source/serialization methods passed.
+Pinned Scala/C++ formatting, API JSON parsing, changed Markdown/link checks,
+additive gate/contribution policy and whitespace checks passed. No CI was run.
+
+```sh
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.SemanticOriginTests -- 'nodal.internal.testkit.SemanticOriginTests.{semantic names replace traversal-counter-only names,expression source maps survive inlined origins,same-basename source files use owner context,authored declaration names outrank unrelated aliases,inherited allocations retain the declaring constructor source}'
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.ScalaToMlirBridgeTests -- 'nodal.internal.testkit.ScalaToMlirBridgeTests.{"analog procedural IR retains order, source locations, and serialization",nested procedural scopes preserve declaration and assignment chronology,initializing assignments precede dependent declarations independent of provenance}'
+```

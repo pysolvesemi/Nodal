@@ -5,6 +5,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Backend/AnalogEventBackend.h"
 #include "nodal/Backend/AnalogUserFunctionBackend.h"
+#include "nodal/Backend/ShapedValueBackend.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/AnalogEvents.h"
 #include "nodal/Dialect/Nodal/AnalogFunctions.h"
@@ -638,29 +639,6 @@ LogicalResult orderParametersByDependency(Operation *definition,
   parameters.clear();
   parameters.append(ordered.begin(), ordered.end());
   return success();
-}
-
-// Shape semantics and proofs stay in the native shape owner. The target owns
-// only deterministic compact row-major arithmetic, never per-lane expansion.
-FailureOr<std::string> staticTargetArithmetic(llvm::StringRef left, char operation,
-                                              llvm::StringRef right) {
-  int64_t lhs = 0, rhs = 0, result = 0;
-  const bool constantLeft = !left.getAsInteger(10, lhs);
-  const bool constantRight = !right.getAsInteger(10, rhs);
-  if (constantLeft && constantRight) {
-    const bool overflow = operation == '*' ? __builtin_mul_overflow(lhs, rhs, &result)
-                                           : __builtin_add_overflow(lhs, rhs, &result);
-    if (overflow)
-      return failure();
-    return std::to_string(result);
-  }
-  if (operation == '*' && ((constantLeft && lhs == 0) || (constantRight && rhs == 0)))
-    return std::string("0");
-  if (constantLeft && lhs == (operation == '*' ? 1 : 0))
-    return right.str();
-  if (constantRight && rhs == (operation == '*' ? 1 : 0))
-    return left.str();
-  return (llvm::Twine("(") + left + " " + (operation == '*' ? "*" : "+") + " " + right + ")").str();
 }
 
 FailureOr<StaticNodeArrayLayout> resolveStaticNodeArray(Operation *operation,
@@ -2512,7 +2490,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                 directContinues += llvm::isa<AnalogContinueOp>(bodyOperation);
                 return;
               }
-              if (llvm::isa<AnalogVariableReadOp, AnalogAssignOp>(bodyOperation)) {
+              if (isAnalogEventStorageStatement(bodyOperation) &&
+                  !llvm::isa<AnalogVariableOp>(bodyOperation)) {
                 if (!nonEventLoopConditionalProfile && !nonEventLoopCaseProfile &&
                     !nonEventLoopScopeProfile && bodyOperation->getParentOp() == nested)
                   return;
@@ -2677,7 +2656,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                 unsupportedStorage = true;
               return;
             }
-            if (llvm::isa<AnalogVariableReadOp, AnalogAssignOp>(bodyOperation)) {
+            if (isAnalogEventStorageStatement(bodyOperation) &&
+                !llvm::isa<AnalogVariableOp>(bodyOperation)) {
               Operation *parent = bodyOperation->getParentOp();
               if (parent == nested)
                 return;
@@ -2713,7 +2693,13 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                                 !llvm::isa<AnalogOnOp>(nested->getParentOp());
           return;
         }
-        if (!llvm::isa<AnalogVariableOp, AnalogVariableReadOp, AnalogAssignOp>(nested))
+        if (!isAnalogEventStorageStatement(nested))
+          return;
+        if (failed(verifyAnalogEventStorageStatement(nested))) {
+          unsupportedStorage = true;
+          return;
+        }
+        if (llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(nested))
           return;
         if (llvm::isa<AnalogVariableOp>(nested))
           for (Operation *parent = nested->getParentOp(); parent && parent != &operation;
@@ -3693,6 +3679,22 @@ LogicalResult verifyBackendOperations(mlir::ModuleOp module, const BackendProfil
     if (!procedure)
       procedure = operation->getParentOfType<nodal::AnalogProcedureOp>();
     if (procedure && (hasAnalogEvents(procedure) || procedure->hasAttr("generated_owner"))) {
+      if (isAnalogEventStorageStatement(operation)) {
+        const bool shaped = llvm::any_of(operation->getOperandTypes(),
+                                         [](Type type) { return llvm::isa<ShapedType>(type); }) ||
+                            llvm::any_of(operation->getResultTypes(),
+                                         [](Type type) { return llvm::isa<ShapedType>(type); });
+        if (shaped && !hasAnalogEvents(procedure)) {
+          result =
+              emitMappedFailure(operation, "NODAL-BACKEND-CAPABILITY-001",
+                                "shaped procedural storage requires an event-containing procedure");
+          return;
+        }
+        if (failed(verifyAnalogEventStorageStatement(operation)))
+          result = emitMappedFailure(operation, "NODAL-BACKEND-CAPABILITY-001",
+                                     "procedural storage has no verified native capability");
+        return;
+      }
       if (llvm::isa<nodal::AnalogProcedureOp, nodal::AnalogVariableOp, nodal::AnalogVariableReadOp,
                     nodal::AnalogAssignOp, nodal::AnalogScopeOp, nodal::AnalogIfOp,
                     nodal::AnalogIfArmOp, nodal::AnalogCaseOp, nodal::AnalogCaseArmOp,
@@ -3889,7 +3891,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
   };
   llvm::StringSet<> realNames;
   llvm::StringSet<> assignedRealNames;
-  llvm::StringSet<> eventNames;
+  AnalogEventSymbols eventSymbols;
+  std::vector<AnalogEventSymbols> eventSymbolScopes;
   llvm::StringSet<> generatedNames;
   llvm::StringSet<> generatedLabels;
   llvm::StringSet<> namedBranchNames;
@@ -4001,25 +4004,12 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
     }
     return !quoted;
   };
-  auto identifierEventDeclaration = [&](llvm::StringRef name) {
-    return !name.contains(',') && validIdentifierList(name) && eventNames.insert(name).second;
-  };
   auto eventDeclaration = [&](llvm::StringRef line) {
     if ((!line.starts_with("real event_") && !line.starts_with("integer event_") &&
          !line.starts_with("genvar event_")) ||
         !line.ends_with(";"))
       return false;
-    auto declaration = line.drop_front(line.find(' ') + 1).drop_back();
-    auto parts = declaration.split(" = ");
-    if (!identifierEventDeclaration(parts.first))
-      return false;
-    if (!parts.second.empty()) {
-      std::string check = "begin\n" + parts.first.str() + " = " + parts.second.str() + ";\nend\n";
-      auto consumed = reparseAnalogEventBlock(check);
-      if (failed(consumed) || *consumed != check.size())
-        return false;
-    }
-    return true;
+    return succeeded(reparseAnalogEventDeclaration(line, eventSymbols));
   };
 
   llvm::SmallVector<llvm::StringRef, 64> lines;
@@ -4057,7 +4047,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       currentHierarchyModule = hierarchyModules.size() - 1;
       realNames.clear();
       assignedRealNames.clear();
-      eventNames.clear();
+      eventSymbols.clear();
+      eventSymbolScopes.clear();
       generatedNames.clear();
       generatedLabels.clear();
       namedBranchNames.clear();
@@ -4093,9 +4084,13 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
     if (line == "end") {
       if (!insideAnalog)
         return failure();
-      if (generatedDepth)
+      if (generatedDepth) {
         --generatedDepth;
-      else
+        if (eventSymbolScopes.empty())
+          return failure();
+        eventSymbols = std::move(eventSymbolScopes.back());
+        eventSymbolScopes.pop_back();
+      } else
         insideAnalog = false;
       continue;
     }
@@ -4145,6 +4140,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
         int64_t step = 0;
         if (!validBound(update.second) || (parseSigned(update.second, step) && step <= 0))
           return failure();
+        eventSymbolScopes.push_back(eventSymbols);
         ++generatedDepth;
         generatedStatement = false;
         continue;
@@ -4160,7 +4156,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
         std::string remaining;
         for (size_t i = lineIndex; i < lines.size(); ++i)
           remaining += lines[i].str() + "\n";
-        auto consumed = reparseAnalogEventBlock(remaining);
+        auto consumed = reparseAnalogEventBlock(remaining, &eventSymbols);
         if (failed(consumed) || !*consumed)
           return failure();
         size_t count = llvm::count(llvm::StringRef(remaining).take_front(*consumed), '\n');
@@ -4201,15 +4197,17 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
         return failure();
       continue;
     }
-    if (line.starts_with("real event_") || line.starts_with("integer event_") ||
-        line.starts_with("genvar event_")) {
+    if (line.starts_with("real event_") || line.starts_with("integer event_")) {
       if (!eventDeclaration(line))
         return failure();
       continue;
     }
     if (line.starts_with("genvar ") && line.ends_with(";")) {
       auto identifier = line.drop_front(sizeof("genvar ") - 1).drop_back().trim();
-      if (!isPortableVerilogIdentifier(identifier) || !generatedNames.insert(identifier).second)
+      if (!isPortableVerilogIdentifier(identifier) || !generatedNames.insert(identifier).second ||
+          !eventSymbols
+               .try_emplace(identifier, AnalogEventSymbol{AnalogEventSymbolKind::Integer, true})
+               .second)
         return failure();
       continue;
     }
@@ -4218,6 +4216,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       if (identifier.contains(',') || !validIdentifierList(identifier) ||
           !realNames.insert(identifier).second)
         return failure();
+      eventSymbols.try_emplace(identifier, AnalogEventSymbol{AnalogEventSymbolKind::Real, true});
       continue;
     }
     if (line.starts_with("branch (") && line.ends_with(";")) {
@@ -4233,6 +4232,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
           !llvm::all_of(endpoints,
                         [&](llvm::StringRef endpoint) { return validEndpoint(endpoint.trim()); }))
         return failure();
+      eventSymbols.try_emplace(name, AnalogEventSymbol{AnalogEventSymbolKind::Terminal, false});
       continue;
     }
     if ((line.starts_with("input ") || line.starts_with("output ") || line.starts_with("inout ")) &&
@@ -4276,14 +4276,20 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
                .second)
         return failure();
       hierarchyModules[*currentHierarchyModule].arrays.insert(declaration.take_front(open).str());
+      eventSymbols.try_emplace(declaration.take_front(open),
+                               AnalogEventSymbol{AnalogEventSymbolKind::TerminalArray, false,
+                                                 lower.constantValue(), upper.constantValue()});
       continue;
     }
     if (line.starts_with("electrical ") && line.ends_with(";") &&
         validIdentifierList(line.drop_front(line.find(' ') + 1).drop_back())) {
       llvm::SmallVector<llvm::StringRef, 8> names;
       line.drop_front(line.find(' ') + 1).drop_back().split(names, ',', -1, true);
-      for (llvm::StringRef name : names)
+      for (llvm::StringRef name : names) {
         hierarchyModules[*currentHierarchyModule].nodes.insert(name.trim().str());
+        eventSymbols.try_emplace(name.trim(),
+                                 AnalogEventSymbol{AnalogEventSymbolKind::Terminal, false});
+      }
       continue;
     }
     if (validParameterDeclaration(line)) {
@@ -4291,6 +4297,11 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       if (!parameter)
         return failure();
       hierarchyModules[*currentHierarchyModule].parameters.insert(parameter->first);
+      eventSymbols.try_emplace(parameter->first,
+                               AnalogEventSymbol{line.contains(" integer ")
+                                                     ? AnalogEventSymbolKind::Integer
+                                                     : AnalogEventSymbolKind::Real,
+                                                 false});
       if (parameter->second)
         hierarchyModules[*currentHierarchyModule].fixedParameters.insert(parameter->first);
       continue;

@@ -255,10 +255,15 @@ private[nodal] final class SemanticOriginBuilder:
       Option(frame.getFileName)
         .flatMap(fileName => locateSource(fileName, frame.getClassName))
         .nonEmpty
-    val userCandidate = userFrames
-      .find: candidate =>
-        locatedConstructor(candidate)
-      .orElse(userFrames.headOption)
+    val userCandidate = userFrames.find(locatedConstructor).map: constructor =>
+      // A lexical body executes before its owning constructor returns. Its nearest
+      // same-class frame carries the authored statement location; the constructor
+      // frame only identifies the call that entered the body.
+      userFrames.find: candidate =>
+        candidate._2 < constructor._2 &&
+          candidate._1.getClassName == constructor._1.getClassName
+      .getOrElse(constructor)
+    .orElse(userFrames.headOption)
     val userIndex = userCandidate.map(_._2).getOrElse(-1)
     val user = userCandidate.map(_._1)
     val api =

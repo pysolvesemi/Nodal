@@ -136,6 +136,42 @@ final class Variable[A <: Data] private[nodal] (
   infix def :=(value: Expr[A]): Unit =
     CandidateRuntime.assignAnalogVariable(this, value)
 
+  def writable: VariableSelection[A] = new VariableSelection(this)
+
+/** An explicit capability for an existing procedural variable or one of its views. */
+final class VariableSelection[A <: Data] private[nodal] (
+    private[nodal] val expression: Expr[A]
+):
+  def value: Expr[A] = expression
+
+  infix def :=(value: Expr[A]): Unit =
+    AnalogProceduralConstruction.assignSelection(
+      expression,
+      value,
+      ConstructionKernel.captureAnalogProceduralSource
+    )
+
+object VariableSelection:
+  extension (selection: VariableSelection[Vec[Real]])
+    def at(indices: Dimension*): VariableSelection[Real] =
+      new VariableSelection(CandidateRuntime.shapeIndex(selection.value, indices.toVector))
+    def row(index: Dimension): VariableSelection[Vec[Real]] =
+      new VariableSelection(CandidateRuntime.shapeRow(selection.value, index))
+    def plane(index: Dimension): VariableSelection[Vec[Real]] =
+      new VariableSelection(CandidateRuntime.shapePlane(selection.value, index))
+    def slice(lower: Dimension, upperExclusive: Dimension, axis: Int = 0)
+        : VariableSelection[Vec[Real]] =
+      new VariableSelection(CandidateRuntime.shapeSlice(
+        selection.value,
+        lower,
+        upperExclusive,
+        axis
+      ))
+    def flatten: VariableSelection[Vec[Real]] =
+      new VariableSelection(CandidateRuntime.shapeFlatten(selection.value))
+    def reshape(dimensions: Dimension*): VariableSelection[Vec[Real]] =
+      new VariableSelection(CandidateRuntime.shapeView(selection.value, dimensions.toVector))
+
 /** Candidate analog node or port. */
 final class Node[D <: Discipline] private[nodal] (
     val discipline: D,
@@ -1154,6 +1190,27 @@ private[nodal] object CandidateRuntime:
     ConstructionKernel.expression(expression)
     expression
 
+  def proceduralShapeSource(value: Any, depth: Int = 0): Boolean =
+    if depth >= 512 then false
+    else
+      value match
+        case _: Variable[?] => true
+        case expression: KernelExpr[?] => expression.operation match
+            case Some("analog_array_fill") => true
+            case Some("shape_index" | "shape_view" | "shape_slice") =>
+              expression.operands.headOption.exists(proceduralShapeSource(_, depth + 1))
+            case _ => false
+        case _ => false
+
+  def shapeFill(dataType: DataType[Vec[Real]], value: Expr[Real]): Expr[Vec[Real]] =
+    val expression = new KernelExpr[Vec[Real]](
+      Vector(value),
+      resultType = Some(typeDescriptor(dataType)),
+      operation = Some("analog_array_fill")
+    )
+    ConstructionKernel.expression(expression)
+    expression
+
   def shapeIndex[A <: Data](
       value: Expr[Vec[A]],
       indices: Vector[Dimension]
@@ -1276,7 +1333,7 @@ private[nodal] object CandidateRuntime:
       case _ => integerExpr("analog_sub", integerValue(upperExclusive), integerValue(lower))
     val dimensions = sourceDimensions.updated(axis, length)
     val result = new KernelExpr[Vec[A]](
-      Vector(value, lower, upperExclusive, length),
+      Vector(value, lower, upperExclusive, length, axis),
       resultType = Some(KernelTypeDescriptor("Vec", Vector(element, dimensions))),
       operation = Some("shape_slice")
     )
@@ -1300,7 +1357,7 @@ private[nodal] object CandidateRuntime:
         expression.literal.flatMap(_.value.toLongOption).filter(_ > 0).map(BigInt(_))
       case _ => None
     val structuralCarrier =
-      value.isInstanceOf[Signal[?]] ||
+      value.isInstanceOf[Signal[?]] || proceduralShapeSource(value) ||
         (value match
           case expression: KernelExpr[?] =>
             expression.operation.exists(operation =>
@@ -1335,7 +1392,14 @@ private[nodal] object CandidateRuntime:
               )
             )
           ).get
-      val count = factors.reduceLeft((left, right) => integerExpr("analog_mul", left, right))
+      // A literal unit axis contributes no static identity to a flattened extent.
+      val nonUnitFactors = factors.filterNot:
+        case expression: KernelExpr[?] =>
+          expression.literal.exists(value => value.kind == "integer" && value.value == "1")
+        case _ => false
+      val count =
+        nonUnitFactors.reduceOption((left, right) => integerExpr("analog_mul", left, right))
+          .getOrElse(literalInteger(1))
       shapeView(value, Vector(count))
     else expr(value, "flatten")
 

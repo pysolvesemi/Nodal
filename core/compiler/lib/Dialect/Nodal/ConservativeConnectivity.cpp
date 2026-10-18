@@ -332,15 +332,7 @@ struct EndpointInfo {
   std::string flowOrientation;
 };
 
-struct ArrayIndexIdentity {
-  enum Kind { Literal, Parameter, Expression } kind;
-  int64_t literal = 0;
-  Operation *root = nullptr;
-
-  bool operator==(const ArrayIndexIdentity &other) const {
-    return kind == other.kind && literal == other.literal && root == other.root;
-  }
-};
+using ArrayIndexIdentity = nodal::StaticShapeIndexIdentity;
 
 struct ArraySelectionInfo {
   Operation *operation;
@@ -377,6 +369,10 @@ LogicalResult collectArraySelections(Operation *module,
       if (failed(bounds))
         return operation.emitOpError("NODAL-SHAPE-043-006: selection index proof is unavailable");
       selection.bounds.push_back(*bounds);
+      auto identity = nodal::resolveStaticShapeIndexIdentity(module, index);
+      if (failed(identity))
+        return operation.emitOpError("NODAL-SHAPE-043-006: static index identity is unavailable");
+      selection.indices.push_back(*identity);
       Operation *definition = index.getDefiningOp();
       std::string token;
       if (llvm::isa<nodal::ConstantOp, nodal::ConstLiteralOp>(definition)) {
@@ -384,7 +380,6 @@ LogicalResult collectArraySelections(Operation *module,
         if (!literal || !literal.getValue().isSignedIntN(64))
           return operation.emitOpError("NODAL-SHAPE-043-006: invalid literal index identity");
         int64_t value = literal.getValue().getSExtValue();
-        selection.indices.push_back({ArrayIndexIdentity::Literal, value, nullptr});
         token = "literal:" + std::to_string(value);
       } else if (llvm::isa<nodal::ConstParameterRefOp>(definition)) {
         auto reference = definition->getAttrOfType<FlatSymbolRefAttr>("parameter");
@@ -398,7 +393,6 @@ LogicalResult collectArraySelections(Operation *module,
         if (!parameter || !ownedPath(path))
           return operation.emitOpError(
               "NODAL-SHAPE-043-006: parameter index source identity is absent");
-        selection.indices.push_back({ArrayIndexIdentity::Parameter, 0, parameter});
         token = "parameter:" + path.str();
       } else {
         llvm::StringRef path = metadataText(definition, "semantic_path");
@@ -409,7 +403,6 @@ LogicalResult collectArraySelections(Operation *module,
         if (!llvm::isa<nodal::ConstExprOp>(definition) || !ownedPath(path) || matches != 1)
           return operation.emitOpError(
               "NODAL-SHAPE-043-006: compound index requires a unique owned root");
-        selection.indices.push_back({ArrayIndexIdentity::Expression, 0, definition});
         token = "expression:" + path.str();
       }
       if (selection.indices.size() > 1)

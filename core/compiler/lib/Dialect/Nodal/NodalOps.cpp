@@ -9,6 +9,7 @@
 #include "nodal/Dialect/Nodal/AnalogFunctions.h"
 #include "nodal/Dialect/Nodal/AnalogNoise.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
+#include "nodal/Dialect/Nodal/AnalogStorageModel.h"
 #include "nodal/Dialect/Nodal/AnalogTransfer.h"
 #include "nodal/Dialect/Nodal/AnalogUserFunctions.h"
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
@@ -31,6 +32,7 @@
 #include <initializer_list>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -277,6 +279,150 @@ LogicalResult verifyShapedTypeContract(Operation *module, Operation *owner, Type
           "Integer proof with structural shape dependencies");
   }
   return verifyShapedTypeContract(module, owner, shaped.getElementType());
+}
+
+bool isStorageType(Type type) {
+  if (auto shaped = llvm::dyn_cast<nodal::ShapedType>(type))
+    type = shaped.getElementType();
+  return llvm::isa<nodal::VariableType>(type);
+}
+
+bool isProceduralShapeProjection(Operation *operation) {
+  if (!operation->getParentOfType<nodal::AnalogProcedureOp>() || !operation->getNumOperands())
+    return false;
+  auto input = llvm::dyn_cast<nodal::ShapedType>(operation->getOperand(0).getType());
+  return input && llvm::isa<nodal::VariableType, nodal::QuantityType>(input.getElementType());
+}
+
+LogicalResult verifyProceduralProjectionIdentity(Operation *operation) {
+  auto procedure = operation->getParentOfType<nodal::AnalogProcedureOp>();
+  Operation *source = operation->getOperand(0).getDefiningOp();
+  auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata");
+  auto inputPath = metadata ? metadata.getAs<StringAttr>("input_path") : StringAttr();
+  auto storage = metadata ? metadata.getAs<StringAttr>("storage") : StringAttr();
+  auto access = metadata ? metadata.getAs<StringAttr>("access") : StringAttr();
+  const bool writable = isStorageType(operation->getOperand(0).getType());
+  if (!procedure || !source)
+    return operation->emitOpError(
+        "NODAL-SHAPE-043-003: procedural projection requires an owned source");
+  const std::string ownerPrefix = (textAttr(procedure, "owner") + ".").str();
+  auto path = metadataSemanticPath(operation);
+  auto sourcePath = metadataSemanticPath(source);
+  if (!inputPath || inputPath.getValue() != sourcePath || !sourcePath.starts_with(ownerPrefix) ||
+      sourcePath.size() <= ownerPrefix.size() || sourcePath != sourcePath.trim() ||
+      textAttr(operation, "owner") != textAttr(procedure, "owner") ||
+      !path.starts_with(ownerPrefix) || path.size() <= ownerPrefix.size() || path != path.trim() ||
+      !storage || storage.getValue() != (writable ? "procedural" : "structural") || !access ||
+      access.getValue() != (writable ? "read_write" : "read_only"))
+    return operation->emitOpError(
+        "NODAL-SHAPE-043-003: procedural projection identity, owner or access is invalid");
+  bool duplicate = false;
+  procedure->walk([&](Operation *candidate) {
+    if (candidate != operation && metadataSemanticPath(candidate) == path)
+      duplicate = true;
+  });
+  if (duplicate)
+    return operation->emitOpError(
+        "NODAL-SHAPE-043-003: procedural projection identity must be unique");
+  return nodal::verifyGeneratedAnalogOwnership(operation);
+}
+
+LogicalResult verifyAnalogArrayFillValue(Operation *operation);
+
+bool equalShapeDimensions(Operation *module, llvm::StringRef left, llvm::StringRef right) {
+  llvm::SmallVector<llvm::StringRef> lhs, rhs;
+  left.split(lhs, ',', -1, true);
+  right.split(rhs, ',', -1, true);
+  if (lhs.size() != rhs.size())
+    return false;
+  for (auto [a, b] : llvm::zip(lhs, rhs)) {
+    auto x = nodal::resolveStaticShapeDimension(module, a);
+    auto y = nodal::resolveStaticShapeDimension(module, b);
+    if (failed(x) || failed(y) || x->parameter != y->parameter || x->expression != y->expression ||
+        x->literal != y->literal)
+      return false;
+  }
+  return true;
+}
+
+bool isSnapshotAssignment(Operation *operation) {
+  return textAttr(operation, "value_form") == "snapshot";
+}
+
+LogicalResult verifySnapshotCapture(Value value, Operation *consumer) {
+  auto resolved = nodal::resolveAnalogArrayValue(value, consumer);
+  if (failed(resolved))
+    return consumer->emitOpError(
+        "NODAL-ANALOG-033-017: shaped payload requires an owned immutable snapshot or fill");
+  Operation *producer = resolved->producer;
+  if (producer->getBlock() != consumer->getBlock() || !producer->isBeforeInBlock(consumer))
+    return consumer->emitOpError(
+        "NODAL-ANALOG-033-017: snapshot must be captured in its consuming statement block");
+  for (Operation *between = producer->getNextNode(); between != consumer;
+       between = between->getNextNode()) {
+    if (!between || (!llvm::isa<nodal::ShapeIndexOp, nodal::ShapeViewOp, nodal::ShapeSliceOp,
+                                nodal::AnalogVariableReadOp, nodal::AnalogArrayFillOp>(between)))
+      return consumer->emitOpError(
+          "NODAL-ANALOG-033-017: snapshot cannot cross an ordered statement or scope boundary");
+  }
+  return success();
+}
+
+LogicalResult verifyCapturedScalarBindings(Operation *consumer, ValueRange values,
+                                           llvm::StringRef source) {
+  auto expression = nodal::parseAnalogSourceExpression(consumer, source);
+  if (failed(expression))
+    return consumer->emitOpError("NODAL-ANALOG-033-017: invalid captured scalar source expression");
+  std::set<std::string> paths;
+  for (Value value : values) {
+    auto path = nodal::getAnalogCapturedReadPath(value);
+    Operation *producer = value.getDefiningOp();
+    if (failed(path) || !producer || !paths.insert(*path).second ||
+        producer->getBlock() != consumer->getBlock() || !producer->isBeforeInBlock(consumer))
+      return consumer->emitOpError(
+          "NODAL-ANALOG-033-017: scalar captures require unique dominating owned reads");
+    if (llvm::isa<nodal::AnalogVariableReadOp>(producer)) {
+      if (failed(nodal::resolveAnalogStorageReference(producer->getOperand(0), consumer)))
+        return failure();
+    } else if (failed(verifySnapshotCapture(value, consumer))) {
+      return failure();
+    }
+    for (Operation *between = producer->getNextNode(); between != consumer;
+         between = between->getNextNode())
+      if (!between || !llvm::isa<nodal::ShapeIndexOp, nodal::ShapeViewOp, nodal::ShapeSliceOp,
+                                 nodal::AnalogVariableReadOp, nodal::AnalogArrayFillOp>(between))
+        return consumer->emitOpError(
+            "NODAL-ANALOG-033-017: scalar snapshot crosses an ordered statement boundary");
+  }
+  if (paths != expression->reads)
+    return consumer->emitOpError(
+        "NODAL-ANALOG-033-017: scalar capture inventory differs from its expression");
+  return success();
+}
+
+LogicalResult verifySnapshotAssignment(Operation *operation) {
+  auto destination = llvm::dyn_cast<nodal::ShapedType>(operation->getOperand(0).getType());
+  auto source = operation->getNumOperands() == 2
+                    ? llvm::dyn_cast<nodal::ShapedType>(operation->getOperand(1).getType())
+                    : nodal::ShapedType();
+  auto leaf = destination ? llvm::dyn_cast<nodal::VariableType>(destination.getElementType())
+                          : nodal::VariableType();
+  auto quantity =
+      source ? llvm::dyn_cast<nodal::QuantityType>(source.getElementType()) : nodal::QuantityType();
+  auto module = operation->getParentOfType<nodal::ModuleOp>();
+  auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata");
+  if (!module || !isSnapshotAssignment(operation) || !leaf || leaf.getKind() != "real" ||
+      !quantity || quantity.getKind() != "real" || quantity.getDimension() != leaf.getDimension() ||
+      !equalShapeDimensions(module, destination.getDimensions(), source.getDimensions()) ||
+      (metadata && metadata.get("value")) || textAttr(operation, "value_kind") != "real" ||
+      textAttr(operation, "value_dimension") != leaf.getDimension() ||
+      operation->getAttrOfType<BoolAttr>("guard_present").getValue())
+    return operation->emitOpError("NODAL-ANALOG-033-012: snapshot assignment requires exact shaped "
+                                  "Real type, explicit payload and unguarded form");
+  if (failed(nodal::resolveAnalogStorageReference(operation->getOperand(0), operation)) ||
+      failed(verifySnapshotCapture(operation->getOperand(1), operation)))
+    return failure();
+  return success();
 }
 
 LogicalResult verifyLoop(Operation *operation) {
@@ -694,7 +840,8 @@ LogicalResult verifyStructuredProceduralBlock(Block &block, llvm::StringRef owne
       continue;
     }
     if (llvm::isa<nodal::AnalogVariableOp, nodal::AnalogVariableReadOp, nodal::AnalogAssignOp,
-                  nodal::AnalogBreakOp, nodal::AnalogContinueOp>(operation)) {
+                  nodal::AnalogBreakOp, nodal::AnalogContinueOp, nodal::AnalogArrayFillOp,
+                  nodal::ShapeIndexOp, nodal::ShapeViewOp, nodal::ShapeSliceOp>(operation)) {
       if (textAttr(&operation, "owner") != owner)
         return nodal::emitMappedFailure(
             &operation, "NODAL-ANALOG-034-014",
@@ -775,7 +922,50 @@ LogicalResult verifyStructuredProceduralBlock(Block &block, llvm::StringRef owne
   return success();
 }
 
-using StructuredInitializedSet = std::set<std::string>;
+struct StructuredInitializedStorage {
+  bool whole = false;
+  std::vector<nodal::AnalogStorageReference> regions;
+  std::set<int64_t> literalOffsets;
+};
+using StructuredInitializedSet = std::map<Operation *, StructuredInitializedStorage>;
+
+bool isStructuredStorageInitialized(const StructuredInitializedSet &state,
+                                    const nodal::AnalogStorageReference &reference) {
+  auto found = state.find(reference.declaration);
+  return found != state.end() &&
+         (found->second.whole || llvm::any_of(found->second.regions, [&](const auto &region) {
+            return nodal::analogStorageReferenceCovers(region, reference);
+          }));
+}
+
+void initializeStructuredStorage(StructuredInitializedSet &state,
+                                 const nodal::AnalogStorageReference &reference) {
+  auto &facts = state[reference.declaration];
+  if (facts.whole)
+    return;
+  if (reference.wholeRoot) {
+    facts = StructuredInitializedStorage{true, {}, {}};
+    return;
+  }
+  if (!llvm::any_of(facts.regions, [&](const auto &region) {
+        return nodal::analogStorageReferenceCovers(region, reference);
+      })) {
+    facts.regions.erase(std::remove_if(facts.regions.begin(), facts.regions.end(),
+                                       [&](const auto &region) {
+                                         return nodal::analogStorageReferenceCovers(reference,
+                                                                                    region);
+                                       }),
+                        facts.regions.end());
+    facts.regions.push_back(reference);
+  }
+  if (reference.literalRootFlatOffset)
+    facts.literalOffsets.insert(*reference.literalRootFlatOffset);
+  // Count only authored, independently proven distinct literal offsets. Never
+  // enumerate an extent or promote symbolic interval coincidences to coverage.
+  if (reference.exactFixedCardinality &&
+      facts.literalOffsets.size() == static_cast<uint64_t>(*reference.exactFixedCardinality))
+    facts = StructuredInitializedStorage{true, {}, {}};
+}
 
 struct StructuredVariableInfo {
   Operation *declaration = nullptr;
@@ -801,12 +991,26 @@ intersectStructuredStates(const std::vector<StructuredInitializedSet> &states) {
     return std::nullopt;
   StructuredInitializedSet result = states.front();
   for (auto state = std::next(states.begin()); state != states.end(); ++state) {
-    for (auto value = result.begin(); value != result.end();) {
-      if (state->find(*value) == state->end())
-        value = result.erase(value);
-      else
-        ++value;
+    StructuredInitializedSet intersection;
+    for (const auto &[declaration, left] : result) {
+      auto right = state->find(declaration);
+      if (right == state->end())
+        continue;
+      if (left.whole) {
+        intersection[declaration] = right->second;
+      } else if (right->second.whole) {
+        intersection[declaration] = left;
+      } else {
+        for (const auto &a : left.regions)
+          for (const auto &b : right->second.regions) {
+            if (nodal::analogStorageReferenceCovers(a, b))
+              initializeStructuredStorage(intersection, b);
+            else if (nodal::analogStorageReferenceCovers(b, a))
+              initializeStructuredStorage(intersection, a);
+          }
+      }
     }
+    result = std::move(intersection);
   }
   return result;
 }
@@ -817,10 +1021,10 @@ void appendStructuredEscapes(StructuredFlow &destination, const StructuredFlow &
                                source.continues.end());
 }
 
-void removeStructuredLocals(StructuredFlow &flow, const std::vector<std::string> &locals) {
+void removeStructuredLocals(StructuredFlow &flow, const std::vector<Operation *> &locals) {
   auto remove = [&](StructuredInitializedSet &state) {
-    for (const std::string &identity : locals)
-      state.erase(identity);
+    for (Operation *declaration : locals)
+      state.erase(declaration);
   };
   if (flow.normal)
     remove(*flow.normal);
@@ -941,7 +1145,8 @@ LogicalResult requireStructuredRead(Operation *operation, llvm::StringRef identi
                                     const StructuredDataflowContext &context) {
   if (failed(requireStructuredReference(operation, identity, context)))
     return failure();
-  if (initialized.find(identity.str()) == initialized.end())
+  if (auto found = initialized.find(context.variables.find(identity)->second.declaration);
+      found == initialized.end() || !found->second.whole)
     return nodal::emitMappedFailure(
         operation, "NODAL-ANALOG-034-004",
         llvm::Twine("procedural variable '") + identity +
@@ -973,16 +1178,16 @@ FailureOr<std::string> structuredVariableIdentity(Operation *operation, Value va
                                                   const StructuredDataflowContext &context,
                                                   bool requireInitialized,
                                                   const StructuredInitializedSet &initialized) {
-  auto declaration = value.getDefiningOp<nodal::AnalogVariableOp>();
-  if (!declaration) {
-    (void)nodal::emitMappedFailure(
-        operation, "NODAL-ANALOG-034-014",
-        "structured procedural variable operand must resolve to an analog_variable");
+  auto reference = nodal::resolveAnalogStorageReference(value, operation);
+  if (failed(reference)) {
+    (void)nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-014",
+                                   "structured operand requires actual owned storage");
     return failure();
   }
-  llvm::StringRef identity = textAttr(declaration.getOperation(), "identity");
+  Operation *declaration = reference->declaration;
+  llvm::StringRef identity = textAttr(declaration, "identity");
   auto variable = context.variables.find(identity);
-  if (variable == context.variables.end())
+  if (variable == context.variables.end() || variable->second.declaration != declaration)
     return failure();
   if (!isVisibleFrom(operation->getBlock(), variable->second.declarationBlock)) {
     (void)nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-014",
@@ -996,7 +1201,7 @@ FailureOr<std::string> structuredVariableIdentity(Operation *operation, Value va
                                        "' must be declared before use");
     return failure();
   }
-  if (requireInitialized && initialized.find(identity.str()) == initialized.end()) {
+  if (requireInitialized && !isStructuredStorageInitialized(initialized, *reference)) {
     (void)nodal::emitMappedFailure(
         operation, "NODAL-ANALOG-034-004",
         llvm::Twine("procedural variable '") + identity +
@@ -1022,6 +1227,23 @@ LogicalResult verifyStructuredReferenceInventory(Operation *operation,
     if (failed(requireStructuredReference(operation, identity.getValue(), context)))
       return failure();
   }
+  return success();
+}
+
+LogicalResult requireStructuredCapturedValue(Operation *consumer, Value value,
+                                             const StructuredDataflowContext &context,
+                                             bool requireInitialized,
+                                             const StructuredInitializedSet &initialized) {
+  if (auto read = value.getDefiningOp<nodal::AnalogVariableReadOp>())
+    return success(succeeded(structuredVariableIdentity(consumer, read->getOperand(0), context,
+                                                        requireInitialized, initialized)));
+  auto array = nodal::resolveAnalogArrayValue(value, consumer);
+  if (failed(array))
+    return nodal::emitMappedFailure(consumer, "NODAL-ANALOG-034-014",
+                                    "assignment operands require explicit captured values");
+  if (auto read = llvm::dyn_cast<nodal::AnalogVariableReadOp>(array->producer))
+    return success(succeeded(structuredVariableIdentity(consumer, read->getOperand(0), context,
+                                                        requireInitialized, initialized)));
   return success();
 }
 
@@ -1059,17 +1281,10 @@ LogicalResult verifyStructuredReferences(Block &block, const StructuredDataflowC
                                             /*requireInitialized=*/false,
                                             noInitializationRequirement)))
         return failure();
-      for (Value value : operation.getOperands().drop_front()) {
-        auto read = value.getDefiningOp<nodal::AnalogVariableReadOp>();
-        if (!read)
-          return nodal::emitMappedFailure(
-              &operation, "NODAL-ANALOG-034-014",
-              "structured assignment operands must be explicit variable reads");
-        if (failed(structuredVariableIdentity(
-                &operation, read.getOperation()->getOperand(0), context,
-                /*requireInitialized=*/false, noInitializationRequirement)))
+      for (Value value : operation.getOperands().drop_front())
+        if (failed(requireStructuredCapturedValue(&operation, value, context, false,
+                                                  noInitializationRequirement)))
           return failure();
-      }
     }
 
     for (Region &region : operation.getRegions()) {
@@ -1233,9 +1448,11 @@ FailureOr<StructuredFlow> analyzeStructuredDataflowStatement(Operation *operatio
     StructuredInitializedSet output = input;
     if (failed(requireStructuredReads(operation, "initializer_reads", input, context)))
       return failure();
-    llvm::StringRef identity = textAttr(operation, "identity");
+    for (Value value : operation->getOperands())
+      if (failed(requireStructuredCapturedValue(operation, value, context, true, input)))
+        return failure();
     if (operation->getAttrOfType<BoolAttr>("initialized").getValue())
-      output.insert(identity.str());
+      output[operation].whole = true;
     return StructuredFlow{output, {}, {}};
   }
 
@@ -1255,23 +1472,26 @@ FailureOr<StructuredFlow> analyzeStructuredDataflowStatement(Operation *operatio
                                              /*requireInitialized=*/false, input);
     if (failed(target))
       return failure();
-    for (Value value : operation->getOperands().drop_front()) {
-      auto read = value.getDefiningOp<nodal::AnalogVariableReadOp>();
-      if (!read) {
-        (void)nodal::emitMappedFailure(
-            operation, "NODAL-ANALOG-034-014",
-            "structured assignment operands must be explicit variable reads");
+    for (Value value : operation->getOperands().drop_front())
+      if (failed(requireStructuredCapturedValue(operation, value, context, true, input)))
         return failure();
-      }
-      auto identity =
-          structuredVariableIdentity(operation, read.getOperation()->getOperand(0), context,
-                                     /*requireInitialized=*/true, input);
-      if (failed(identity))
-        return failure();
-    }
-    output.insert(*target);
+    auto reference = nodal::resolveAnalogStorageReference(operation->getOperand(0), operation);
+    if (failed(reference))
+      return failure();
+    auto guarded = operation->getAttrOfType<BoolAttr>("guard_present");
+    if (!guarded || !guarded.getValue())
+      initializeStructuredStorage(output, *reference);
     return StructuredFlow{output, {}, {}};
   }
+
+  if (llvm::isa<nodal::AnalogArrayFillOp>(operation)) {
+    for (Value value : operation->getOperands())
+      if (failed(requireStructuredCapturedValue(operation, value, context, true, input)))
+        return failure();
+    return StructuredFlow{input, {}, {}};
+  }
+  if (llvm::isa<nodal::ShapeIndexOp, nodal::ShapeViewOp, nodal::ShapeSliceOp>(operation))
+    return StructuredFlow{input, {}, {}};
 
   if (nodal::isAnalogEventExpression(operation)) {
     if (!llvm::isa<nodal::AnalogEventOrOp>(operation) &&
@@ -1319,10 +1539,10 @@ FailureOr<StructuredFlow> analyzeStructuredDataflowBlock(Block &block,
                                                          StructuredDataflowContext &context,
                                                          bool retainLocals) {
   StructuredFlow flow{input, {}, {}};
-  std::vector<std::string> locals;
+  std::vector<Operation *> locals;
   for (Operation &operation : block) {
     if (llvm::isa<nodal::AnalogVariableOp>(operation))
-      locals.push_back(textAttr(&operation, "identity").str());
+      locals.push_back(&operation);
     if (!flow.normal)
       continue;
     auto statement = analyzeStructuredDataflowStatement(&operation, *flow.normal, context);
@@ -1374,7 +1594,7 @@ LogicalResult verifySingleTopLevelProcedurePerModule(Operation *module) {
                                   "multiple analog procedural regions per component are deferred");
 }
 
-LogicalResult verifyGeneratedAnalogOwnership(Operation *operation) {
+LogicalResult verifyGeneratedAnalogOwnershipImpl(Operation *operation) {
   auto generatedOwner = operation->getAttrOfType<StringAttr>("generated_owner");
   auto generatedInduction = operation->getAttrOfType<StringAttr>("generated_induction");
   auto generated = operation->getParentOfType<nodal::GenerateOp>();
@@ -1417,7 +1637,10 @@ LogicalResult verifyAnalogProcedure(Operation *operation) {
   bool hasStructuredControl = false;
   operation->walk([&](Operation *nested) {
     if (llvm::isa<nodal::AnalogIfOp, nodal::AnalogCaseOp, nodal::AnalogLoopOp, nodal::AnalogBreakOp,
-                  nodal::AnalogContinueOp, nodal::AnalogOnOp>(nested) ||
+                  nodal::AnalogContinueOp, nodal::AnalogOnOp, nodal::AnalogArrayFillOp,
+                  nodal::ShapeIndexOp, nodal::ShapeViewOp, nodal::ShapeSliceOp>(nested) ||
+        (llvm::isa<nodal::AnalogVariableOp>(nested) &&
+         llvm::isa<nodal::ShapedType>(nested->getResult(0).getType())) ||
         nodal::isAnalogEventExpression(nested))
       hasStructuredControl = true;
   });
@@ -1433,6 +1656,10 @@ LogicalResult verifyAnalogProcedure(Operation *operation) {
 }
 
 } // namespace
+
+LogicalResult nodal::verifyGeneratedAnalogOwnership(Operation *operation) {
+  return verifyGeneratedAnalogOwnershipImpl(operation);
+}
 
 FailureOr<nodal::StaticShapeDimension>
 nodal::resolveStaticShapeDimension(Operation *module, llvm::StringRef dimension) {
@@ -1493,6 +1720,83 @@ FailureOr<nodal::ParameterIntegerBounds> nodal::inferStaticShapeIndexBounds(Oper
       !hasStaticShapeIndexDependencies(value, module, active, 0, true))
     return failure();
   return inferParameterIntegerBounds(value);
+}
+
+FailureOr<nodal::StaticShapeIndexIdentity> nodal::resolveStaticShapeIndexIdentity(Operation *module,
+                                                                                  Value value) {
+  if (failed(inferStaticShapeIndexBounds(module, value)))
+    return failure();
+  Operation *definition = value.getDefiningOp();
+  if (llvm::isa<ConstantOp, ConstLiteralOp>(definition)) {
+    auto literal = definition->getAttrOfType<IntegerAttr>("value");
+    if (!literal || !literal.getValue().isSignedIntN(64))
+      return failure();
+    return StaticShapeIndexIdentity{StaticShapeIndexIdentity::Literal,
+                                    literal.getValue().getSExtValue(), nullptr};
+  }
+  if (llvm::isa<ConstParameterRefOp>(definition)) {
+    auto name = definition->getAttrOfType<FlatSymbolRefAttr>("parameter");
+    Operation *parameter = name ? findDirectModuleParameter(module, name.getValue()) : nullptr;
+    if (!parameter)
+      return failure();
+    return StaticShapeIndexIdentity{StaticShapeIndexIdentity::Parameter, 0, parameter};
+  }
+  if (!llvm::isa<ConstExprOp>(definition))
+    return failure();
+  return StaticShapeIndexIdentity{StaticShapeIndexIdentity::Expression, 0, definition};
+}
+
+FailureOr<nodal::AnalogArrayValue> nodal::resolveAnalogArrayValue(Value value, Operation *use) {
+  if (!value || !use)
+    return failure();
+  auto procedure = use->getParentOfType<AnalogProcedureOp>();
+  if (!procedure)
+    return failure();
+  AnalogArrayValue result;
+  llvm::SmallPtrSet<Operation *, 16> seen;
+  Value cursor = value;
+  while (Operation *definition = cursor.getDefiningOp()) {
+    if (!seen.insert(definition).second || seen.size() > 512 ||
+        definition->getParentOfType<AnalogProcedureOp>() != procedure ||
+        textAttr(definition, "owner") != textAttr(procedure, "owner") ||
+        failed(verifyGeneratedAnalogOwnership(definition)) ||
+        !isVisibleFrom(use->getBlock(), definition->getBlock()) ||
+        (definition != use && !isDeclaredBeforeStructuredUse(definition, use)))
+      return failure();
+    if (llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(definition)) {
+      if (isStorageType(cursor.getType()))
+        return failure();
+      LogicalResult valid =
+          llvm::isa<ShapeIndexOp>(definition)  ? verifyShapeIndexMapping(definition)
+          : llvm::isa<ShapeViewOp>(definition) ? verifyShapeViewMapping(definition)
+                                               : verifyShapeSliceMapping(definition);
+      if (failed(valid))
+        return failure();
+      result.projections.push_back(definition);
+      cursor = definition->getOperand(0);
+      continue;
+    }
+    auto shaped = llvm::dyn_cast<ShapedType>(cursor.getType());
+    auto quantity = shaped ? llvm::dyn_cast<QuantityType>(shaped.getElementType()) : QuantityType();
+    auto module = definition->getParentOfType<nodal::ModuleOp>();
+    if (!shaped || !quantity || quantity.getKind() != "real" || !module ||
+        failed(inferStaticShapeMaximumCardinality(module, shaped.getDimensions())))
+      return failure();
+    if (llvm::isa<AnalogVariableReadOp>(definition)) {
+      auto expected = getAnalogStorageSnapshotType(definition->getOperand(0), definition);
+      if (failed(expected) || *expected != cursor.getType())
+        return failure();
+    } else if (llvm::isa<AnalogArrayFillOp>(definition)) {
+      if (failed(verifyAnalogArrayFillValue(definition)))
+        return failure();
+    } else {
+      return failure();
+    }
+    result.producer = definition;
+    std::reverse(result.projections.begin(), result.projections.end());
+    return result;
+  }
+  return failure();
 }
 
 LogicalResult nodal::PlaceholderOp::verify() {
@@ -1699,46 +2003,51 @@ LogicalResult nodal::ConstantOp::verify() {
   return success();
 }
 
-LogicalResult nodal::ShapeIndexOp::verify() {
-  auto shaped = llvm::dyn_cast<nodal::ShapedType>(getOperation()->getOperand(0).getType());
+LogicalResult nodal::verifyShapeIndexMapping(Operation *operation) {
+  auto shaped = llvm::dyn_cast<nodal::ShapedType>(operation->getOperand(0).getType());
   if (!shaped)
-    return emitOpError("NODAL-SHAPE-043-002: input must have !nodal.shaped type");
-  const unsigned indices = getOperation()->getNumOperands() - 1;
+    return operation->emitOpError("NODAL-SHAPE-043-002: input must have !nodal.shaped type");
+  if (isProceduralShapeProjection(operation) &&
+      failed(verifyProceduralProjectionIdentity(operation)))
+    return failure();
+  const unsigned indices = operation->getNumOperands() - 1;
   const unsigned rank = shapedRank(shaped.getDimensions());
   const bool conservative = llvm::isa<nodal::TerminalType>(shaped.getElementType());
   if (conservative &&
-      (!llvm::isa_and_nonnull<nodal::NodeArrayOp>(getOperation()->getOperand(0).getDefiningOp()) ||
+      (!llvm::isa_and_nonnull<nodal::NodeArrayOp>(operation->getOperand(0).getDefiningOp()) ||
        indices != rank ||
-       getOperation()->getOperand(0).getDefiningOp()->getParentOp() !=
-           getOperation()->getParentOp() ||
-       !llvm::isa_and_nonnull<nodal::ModuleOp>(getOperation()->getParentOp())))
-    return emitOpError("NODAL-SHAPE-043-006: conservative selection requires full-rank "
-                       "direct-module node-array ownership");
+       operation->getOperand(0).getDefiningOp()->getParentOp() != operation->getParentOp() ||
+       !llvm::isa_and_nonnull<nodal::ModuleOp>(operation->getParentOp())))
+    return operation->emitOpError("NODAL-SHAPE-043-006: conservative selection requires full-rank "
+                                  "direct-module node-array ownership");
   if (indices == 0 || indices > rank)
-    return emitOpError("NODAL-SHAPE-043-002: index rank is empty or exceeds shaped rank");
+    return operation->emitOpError(
+        "NODAL-SHAPE-043-002: index rank is empty or exceeds shaped rank");
   llvm::SmallVector<llvm::StringRef> dimensions;
   shaped.getDimensions().split(dimensions, ',', -1, true);
   if (indices == rank) {
-    if (getOperation()->getResult(0).getType() != shaped.getElementType())
-      return emitOpError("NODAL-SHAPE-043-002: full-rank result must match shaped element type");
+    if (operation->getResult(0).getType() != shaped.getElementType())
+      return operation->emitOpError(
+          "NODAL-SHAPE-043-002: full-rank result must match shaped element type");
   } else {
-    auto result = llvm::dyn_cast<nodal::ShapedType>(getOperation()->getResult(0).getType());
+    auto result = llvm::dyn_cast<nodal::ShapedType>(operation->getResult(0).getType());
     llvm::SmallVector<llvm::StringRef> resultDimensions;
     if (!result || result.getElementType() != shaped.getElementType())
-      return emitOpError("NODAL-SHAPE-043-002: prefix result must retain the shaped element type");
+      return operation->emitOpError(
+          "NODAL-SHAPE-043-002: prefix result must retain the shaped element type");
     result.getDimensions().split(resultDimensions, ',', -1, true);
     if (resultDimensions.size() != dimensions.size() - indices)
-      return emitOpError(
+      return operation->emitOpError(
           "NODAL-SHAPE-043-002: prefix result rank must match the unselected input axes");
     for (unsigned axis = 0; axis < resultDimensions.size(); ++axis)
       if (resultDimensions[axis].trim() != dimensions[axis + indices].trim())
-        return emitOpError(
+        return operation->emitOpError(
             "NODAL-SHAPE-043-002: prefix result dimensions must match the unselected input axes");
   }
 
-  auto owner = getOperation()->getParentOfType<nodal::ModuleOp>();
+  auto owner = operation->getParentOfType<nodal::ModuleOp>();
   if (!owner)
-    return emitOpError("NODAL-SHAPE-043-002: shaped indexing requires an owning module");
+    return operation->emitOpError("NODAL-SHAPE-043-002: shaped indexing requires an owning module");
   llvm::StringMap<int64_t> symbolicMinima;
   for (unsigned axis = 0; axis < indices; ++axis) {
     llvm::StringRef dimension = dimensions[axis].trim();
@@ -1749,21 +2058,22 @@ LogicalResult nodal::ShapeIndexOp::verify() {
     } else {
       auto inferred = inferShapeDimensionMinimum(owner, dimension);
       if (failed(inferred))
-        return emitOpError("NODAL-SHAPE-043-002: dimension has no proven finite extent");
+        return operation->emitOpError("NODAL-SHAPE-043-002: dimension has no proven finite extent");
       minimumExtent = *inferred;
       symbolicMinima.try_emplace(dimension, minimumExtent);
     }
-    Value indexValue = getOperation()->getOperand(axis + 1);
+    Value indexValue = operation->getOperand(axis + 1);
     Operation *index = indexValue.getDefiningOp();
     if (!index || index->getParentOfType<nodal::ModuleOp>() != owner)
-      return emitOpError("NODAL-SHAPE-043-002: index requires direct-module static ownership");
+      return operation->emitOpError(
+          "NODAL-SHAPE-043-002: index requires direct-module static ownership");
 
     int64_t lower = 0;
     int64_t upper = 0;
-    if (conservative) {
+    if (conservative || isStorageType(shaped)) {
       auto bounds = inferStaticShapeIndexBounds(owner, indexValue);
       if (failed(bounds))
-        return emitOpError(
+        return operation->emitOpError(
             "NODAL-SHAPE-043-002: node-array index requires a directly owned static Integer proof");
       lower = bounds->lower;
       upper = bounds->upper;
@@ -1772,28 +2082,40 @@ LogicalResult nodal::ShapeIndexOp::verify() {
       auto literal = index->getAttrOfType<IntegerAttr>("value");
       if (!llvm::isa<nodal::ConstantOp>(index) || index->hasAttr("unit") || !literal ||
           !literal.getType().isIndex() || !literal.getValue().isSignedIntN(64))
-        return emitOpError("NODAL-SHAPE-043-002: index requires a proven static index literal");
+        return operation->emitOpError(
+            "NODAL-SHAPE-043-002: index requires a proven static index literal");
       lower = upper = literal.getValue().getSExtValue();
     } else if (indexValue.getType().isInteger(64)) {
       llvm::SmallPtrSet<Operation *, 16> active;
       if (!hasStaticShapeIndexDependencies(indexValue, owner, active))
-        return emitOpError(
+        return operation->emitOpError(
             "NODAL-SHAPE-043-002: Integer index requires structural shape dependencies");
       auto bounds = nodal::inferParameterIntegerBounds(indexValue);
       if (failed(bounds))
-        return emitOpError(
+        return operation->emitOpError(
             "NODAL-SHAPE-043-002: Integer index has no proven static expression bounds");
       lower = bounds->lower;
       upper = bounds->upper;
     } else {
-      return emitOpError(
+      return operation->emitOpError(
           "NODAL-SHAPE-043-002: index must be an index literal or static i64 expression");
     }
     if (minimumExtent <= 0 || lower < 0 || upper >= minimumExtent)
-      return emitOpError(
+      return operation->emitOpError(
                  "NODAL-SHAPE-043-002: index is not in bounds for every legal shape at axis ")
              << axis;
   }
+  return success();
+}
+
+LogicalResult nodal::ShapeIndexOp::verify() {
+  Operation *operation = getOperation();
+  if (failed(verifyShapeIndexMapping(operation)))
+    return failure();
+  if (isStorageType(operation->getOperand(0).getType()))
+    return verifyAnalogStorageProjection(operation);
+  if (isProceduralShapeProjection(operation))
+    return success(succeeded(resolveAnalogArrayValue(operation->getResult(0), operation)));
   return success();
 }
 
@@ -1803,44 +2125,50 @@ LogicalResult nodal::ShapeFlattenOp::verify() {
   return requireText(getOperation(), "layout", "layout policy");
 }
 
-LogicalResult nodal::ShapeViewOp::verify() {
-  if (failed(requireText(getOperation(), "dimensions", "dimensions")) ||
-      failed(requireText(getOperation(), "origin", "origin")) ||
-      failed(requireText(getOperation(), "materialization", "materialization")) ||
-      failed(requireText(getOperation(), "observability", "observability")))
+LogicalResult nodal::verifyShapeViewMapping(Operation *operation) {
+  if (failed(requireText(operation, "dimensions", "dimensions")) ||
+      failed(requireText(operation, "origin", "origin")) ||
+      failed(requireText(operation, "materialization", "materialization")) ||
+      failed(requireText(operation, "observability", "observability")))
     return failure();
 
   // Preserve the scalar-input legacy carrier, but never allow a materialization
   // tag to opt a shaped-to-shaped transformation out of reshape verification.
-  auto materialization = textAttr(getOperation(), "materialization");
+  auto materialization = textAttr(operation, "materialization");
   if (materialization != "view" && materialization != "explicit_view")
-    return emitOpError("NODAL-SHAPE-043-003: unsupported shape-view materialization");
+    return operation->emitOpError("NODAL-SHAPE-043-003: unsupported shape-view materialization");
   if (materialization == "explicit_view") {
-    if (llvm::isa<nodal::ShapedType>(getOperation()->getOperand(0).getType()))
-      return emitOpError(
+    if (llvm::isa<nodal::ShapedType>(operation->getOperand(0).getType()))
+      return operation->emitOpError(
           "NODAL-SHAPE-043-003: shaped input requires verified view materialization");
     return success();
   }
 
-  auto input = llvm::dyn_cast<nodal::ShapedType>(getOperation()->getOperand(0).getType());
-  auto result = llvm::dyn_cast<nodal::ShapedType>(getOperation()->getResult(0).getType());
+  auto input = llvm::dyn_cast<nodal::ShapedType>(operation->getOperand(0).getType());
+  auto result = llvm::dyn_cast<nodal::ShapedType>(operation->getResult(0).getType());
   if (!input || !result || input.getElementType() != result.getElementType())
-    return emitOpError(
+    return operation->emitOpError(
         "NODAL-SHAPE-043-003: fixed shape view requires shaped input/result with equal element "
         "types");
-  if (textAttr(getOperation(), "dimensions") != result.getDimensions())
-    return emitOpError("NODAL-SHAPE-043-003: dimensions must exactly match the result shaped type");
-  if (textAttr(getOperation(), "observability") != "source_mapped")
-    return emitOpError(
+  if (textAttr(operation, "dimensions") != result.getDimensions())
+    return operation->emitOpError(
+        "NODAL-SHAPE-043-003: dimensions must exactly match the result shaped type");
+  if (textAttr(operation, "observability") != "source_mapped")
+    return operation->emitOpError(
         "NODAL-SHAPE-043-003: fixed shape view requires source-mapped observability");
-  auto metadata = getOperation()->getAttrOfType<DictionaryAttr>("metadata");
+  auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata");
   auto storage = metadata ? metadata.getAs<StringAttr>("storage") : StringAttr();
-  if (!storage || storage.getValue() != "structural")
-    return emitOpError("NODAL-SHAPE-043-003: fixed shape view requires structural storage intent");
+  const bool procedural = isProceduralShapeProjection(operation);
+  if (procedural) {
+    if (failed(verifyProceduralProjectionIdentity(operation)))
+      return failure();
+  } else if (!storage || storage.getValue() != "structural")
+    return operation->emitOpError(
+        "NODAL-SHAPE-043-003: fixed shape view requires structural storage intent");
 
-  auto owner = getOperation()->getParentOfType<nodal::ModuleOp>();
+  auto owner = operation->getParentOfType<nodal::ModuleOp>();
   if (!owner)
-    return emitOpError("NODAL-SHAPE-043-003: shape view requires an owning module");
+    return operation->emitOpError("NODAL-SHAPE-043-003: shape view requires an owning module");
   auto shapeSignature = [&](llvm::StringRef dimensions)
       -> std::optional<std::pair<uint64_t, std::multiset<std::string>>> {
     llvm::SmallVector<llvm::StringRef> tokens;
@@ -1965,26 +2293,42 @@ LogicalResult nodal::ShapeViewOp::verify() {
   auto inputSignature = shapeSignature(input.getDimensions());
   auto resultSignature = shapeSignature(result.getDimensions());
   if (!inputSignature || !resultSignature || *inputSignature != *resultSignature)
-    return emitOpError(
+    return operation->emitOpError(
         "NODAL-SHAPE-043-003: shape view requires equal literal products and bounded structural "
         "static-expression root multisets within signed 64-bit counts");
   return success();
 }
 
-LogicalResult nodal::ShapeSliceOp::verify() {
+LogicalResult nodal::ShapeViewOp::verify() {
   Operation *operation = getOperation();
+  if (failed(verifyShapeViewMapping(operation)))
+    return failure();
+  if (isStorageType(operation->getOperand(0).getType()))
+    return verifyAnalogStorageProjection(operation);
+  if (isProceduralShapeProjection(operation))
+    return success(succeeded(resolveAnalogArrayValue(operation->getResult(0), operation)));
+  return success();
+}
+
+LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
   auto input = llvm::dyn_cast<nodal::ShapedType>(operation->getOperand(0).getType());
   auto result = llvm::dyn_cast<nodal::ShapedType>(operation->getResult(0).getType());
   if (!input || !result || input.getElementType() != result.getElementType())
-    return emitOpError(
+    return operation->emitOpError(
         "NODAL-SHAPE-043-004: slice requires shaped input/result with equal element types");
   auto owner = operation->getParentOfType<nodal::ModuleOp>();
   Operation *source = operation->getOperand(0).getDefiningOp();
-  if (!owner || operation->getParentOp() != owner || !source || source->getParentOp() != owner ||
-      !llvm::isa<nodal::PortValueOp, nodal::ShapeIndexOp, nodal::ShapeViewOp, nodal::ShapeSliceOp>(
-          source) ||
-      (llvm::isa<nodal::ShapeViewOp>(source) && textAttr(source, "materialization") != "view"))
-    return emitOpError(
+  const bool procedural = isProceduralShapeProjection(operation);
+  if (procedural) {
+    if (failed(verifyProceduralProjectionIdentity(operation)))
+      return failure();
+  } else if (!owner || operation->getParentOp() != owner || !source ||
+             source->getParentOp() != owner ||
+             !llvm::isa<nodal::PortValueOp, nodal::ShapeIndexOp, nodal::ShapeViewOp,
+                        nodal::ShapeSliceOp>(source) ||
+             (llvm::isa<nodal::ShapeViewOp>(source) &&
+              textAttr(source, "materialization") != "view"))
+    return operation->emitOpError(
         "NODAL-SHAPE-043-004: slice input requires a directly owned structural shape value");
 
   auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata");
@@ -2000,16 +2344,16 @@ LogicalResult nodal::ShapeSliceOp::verify() {
   };
   llvm::StringRef sourcePath = metadataSemanticPath(source);
   llvm::StringRef resultPath = metadataSemanticPath(operation);
-  if (!storage || storage.getValue() != "structural" || !access ||
-      access.getValue() != "read_only" || textAttr(operation, "observability") != "source_mapped" ||
-      !inputPath || inputPath.getValue() != sourcePath ||
-      textAttr(operation, "origin") != sourcePath || !ownedPath(sourcePath) ||
-      !ownedPath(resultPath) || resultPath == sourcePath)
-    return emitOpError(
+  if ((!procedural && (!storage || storage.getValue() != "structural" || !access ||
+                       access.getValue() != "read_only")) ||
+      textAttr(operation, "observability") != "source_mapped" || !inputPath ||
+      inputPath.getValue() != sourcePath || textAttr(operation, "origin") != sourcePath ||
+      !ownedPath(sourcePath) || !ownedPath(resultPath) || resultPath == sourcePath)
+    return operation->emitOpError(
         "NODAL-SHAPE-043-004: slice requires owned source-mapped read-only structural identity");
   for (Operation &candidate : owner->getRegion(0).front())
     if (&candidate != operation && metadataSemanticPath(&candidate) == resultPath)
-      return emitOpError("NODAL-SHAPE-043-004: slice semantic identity must be unique");
+      return operation->emitOpError("NODAL-SHAPE-043-004: slice semantic identity must be unique");
   if (llvm::isa<nodal::PortValueOp>(source)) {
     auto port = source->getAttrOfType<FlatSymbolRefAttr>("port");
     Operation *declaration = nullptr;
@@ -2018,11 +2362,12 @@ LogicalResult nodal::ShapeSliceOp::verify() {
           textAttr(&candidate, "sym_name") == port.getValue())
         declaration = &candidate;
     if (!declaration || metadataSemanticPath(declaration) != sourcePath)
-      return emitOpError(
+      return operation->emitOpError(
           "NODAL-SHAPE-043-004: slice port input must retain its declaration source identity");
   }
   if (textAttr(operation, "dimensions") != result.getDimensions())
-    return emitOpError("NODAL-SHAPE-043-004: dimensions must exactly match the result shaped type");
+    return operation->emitOpError(
+        "NODAL-SHAPE-043-004: dimensions must exactly match the result shaped type");
 
   llvm::SmallVector<llvm::StringRef> inputDimensions, resultDimensions;
   input.getDimensions().split(inputDimensions, ',', -1, true);
@@ -2030,16 +2375,17 @@ LogicalResult nodal::ShapeSliceOp::verify() {
   const int64_t axis = operation->getAttrOfType<IntegerAttr>("axis").getInt();
   if (axis < 0 || static_cast<uint64_t>(axis) >= inputDimensions.size() ||
       inputDimensions.size() != resultDimensions.size())
-    return emitOpError("NODAL-SHAPE-043-004: slice axis or result rank is invalid");
+    return operation->emitOpError("NODAL-SHAPE-043-004: slice axis or result rank is invalid");
   for (unsigned index = 0; index < inputDimensions.size(); ++index)
     if (index != static_cast<uint64_t>(axis) && inputDimensions[index] != resultDimensions[index])
-      return emitOpError("NODAL-SHAPE-043-004: slice must preserve every unselected axis");
+      return operation->emitOpError(
+          "NODAL-SHAPE-043-004: slice must preserve every unselected axis");
 
   // Reuse the shape/parameter bounds owner for every dimension. No reshape
   // count-equality rule applies: a slice changes the selected axis length.
   if (failed(inferStaticShapeMaximumCardinality(owner, input.getDimensions())) ||
       failed(inferStaticShapeMaximumCardinality(owner, result.getDimensions())))
-    return emitOpError(
+    return operation->emitOpError(
         "NODAL-SHAPE-043-004: slice dimensions require positive finite structural proofs and "
         "signed 64-bit cardinality");
 
@@ -2094,7 +2440,7 @@ LogicalResult nodal::ShapeSliceOp::verify() {
        lengthBounds = staticBounds(length);
   if (failed(lowerBounds) || failed(upperBounds) || failed(lengthBounds) ||
       lowerBounds->lower < 0 || lengthBounds->lower <= 0)
-    return emitOpError(
+    return operation->emitOpError(
         "NODAL-SHAPE-043-004: slice endpoints and positive length require owned static Integer "
         "proofs for every legal parameter setting");
 
@@ -2117,13 +2463,24 @@ LogicalResult nodal::ShapeSliceOp::verify() {
                       sameIdentity(definition->getOperand(1), lower);
   }
   if (!canonicalLength || !dimensionMatches(resultDimensions[axis], length))
-    return emitOpError(
+    return operation->emitOpError(
         "NODAL-SHAPE-043-004: result extent must retain the exact canonical upper-minus-lower "
         "length identity");
   if (!dimensionMatches(inputDimensions[axis], upper) &&
       upperBounds->upper > resolveStaticShapeDimension(owner, inputDimensions[axis])->bounds.lower)
-    return emitOpError(
+    return operation->emitOpError(
         "NODAL-SHAPE-043-004: slice upper endpoint exceeds a legal source-axis extent");
+  return success();
+}
+
+LogicalResult nodal::ShapeSliceOp::verify() {
+  Operation *operation = getOperation();
+  if (failed(verifyShapeSliceMapping(operation)))
+    return failure();
+  if (isStorageType(operation->getOperand(0).getType()))
+    return verifyAnalogStorageProjection(operation);
+  if (isProceduralShapeProjection(operation))
+    return success(succeeded(resolveAnalogArrayValue(operation->getResult(0), operation)));
   return success();
 }
 
@@ -2398,6 +2755,20 @@ LogicalResult nodal::AnalogProcedureOp::verify() {
     getOperation()->walk([&](Operation *nested) {
       if (nested == getOperation() || unsupported)
         return;
+      if (llvm::isa<nodal::AnalogArrayFillOp>(nested)) {
+        if (failed(verifyAnalogArrayFillValue(nested)))
+          unsupported = nested;
+        return;
+      }
+      if (llvm::isa<nodal::ShapeIndexOp, nodal::ShapeViewOp, nodal::ShapeSliceOp>(nested)) {
+        const bool storage =
+            nested->getNumResults() == 1 && isStorageType(nested->getResult(0).getType());
+        if (nested->getNumResults() != 1 ||
+            (storage ? failed(resolveAnalogStorageReference(nested->getResult(0), nested))
+                     : failed(resolveAnalogArrayValue(nested->getResult(0), nested))))
+          unsupported = nested;
+        return;
+      }
       if (!llvm::isa<nodal::AnalogVariableOp, nodal::AnalogVariableReadOp, nodal::AnalogAssignOp,
                      nodal::AnalogScopeOp, nodal::AnalogIfOp, nodal::AnalogIfArmOp,
                      nodal::AnalogCaseOp, nodal::AnalogCaseArmOp, nodal::AnalogLoopOp,
@@ -2704,11 +3075,75 @@ LogicalResult nodal::AnalogVariableOp::verify() {
   if (failed(requireText(getOperation(), "identity", "procedural variable identity")) ||
       failed(requireText(getOperation(), "owner", "procedural variable owner")))
     return failure();
-  auto variableType = llvm::dyn_cast<nodal::VariableType>(getOperation()->getResult(0).getType());
+  Operation *operation = getOperation();
+  if (auto shaped = llvm::dyn_cast<nodal::ShapedType>(operation->getResult(0).getType())) {
+    auto leaf = llvm::dyn_cast<nodal::VariableType>(shaped.getElementType());
+    auto module = operation->getParentOfType<nodal::ModuleOp>();
+    auto initialized = operation->getAttrOfType<BoolAttr>("initialized");
+    auto reads = operation->getAttrOfType<ArrayAttr>("initializer_reads");
+    if (!leaf || leaf.getKind() != "real" || !module || !initialized || !reads || !reads.empty() ||
+        operation->getNumOperands() > 1 ||
+        initialized.getValue() != (operation->getNumOperands() == 1) ||
+        !textAttr(operation, "initializer_value").empty() ||
+        !textAttr(operation, "initializer_kind").empty() ||
+        !textAttr(operation, "initializer_dimension").empty() ||
+        failed(inferStaticShapeMaximumCardinality(module, shaped.getDimensions())))
+      return emitMappedFailure(operation, "NODAL-ANALOG-033-004",
+                               "shaped Real declaration requires owned positive shape and "
+                               "exclusive snapshot initializer");
+    if (!initialized.getValue())
+      return success();
+    auto source = llvm::dyn_cast<nodal::ShapedType>(operation->getOperand(0).getType());
+    auto quantity = source ? llvm::dyn_cast<nodal::QuantityType>(source.getElementType())
+                           : nodal::QuantityType();
+    if (!quantity || quantity.getKind() != "real" ||
+        quantity.getDimension() != leaf.getDimension() ||
+        !equalShapeDimensions(module, shaped.getDimensions(), source.getDimensions()) ||
+        failed(verifySnapshotCapture(operation->getOperand(0), operation)))
+      return emitMappedFailure(operation, "NODAL-ANALOG-033-004",
+                               "shaped initializer snapshot type or ordering is invalid");
+    if (llvm::isa<nodal::AnalogProcedureOp>(operation->getParentOp())) {
+      auto value = resolveAnalogArrayValue(operation->getOperand(0), operation);
+      auto fill = succeeded(value) ? llvm::dyn_cast<nodal::AnalogArrayFillOp>(value->producer)
+                                   : nodal::AnalogArrayFillOp();
+      auto expression = fill ? parseAnalogSourceExpression(fill, textAttr(fill, "value"))
+                             : FailureOr<AnalogSourceExpression>(failure());
+      if (!fill || fill->getNumOperands() || failed(expression) ||
+          !isStaticAnalogSourceExpression(*expression))
+        return emitMappedFailure(
+            operation, "NODAL-ANALOG-037-009",
+            "persistent shaped initialization requires static fill without mutable reads");
+    }
+    return success();
+  }
+  auto variableType = llvm::dyn_cast<nodal::VariableType>(operation->getResult(0).getType());
   if (!variableType)
-    return emitMappedFailure(getOperation(), "NODAL-ANALOG-033-019",
-                             "procedural variable requires !nodal.variable result type");
-  return verifyVariableInitializerShape(getOperation(), variableType);
+    return emitMappedFailure(operation, "NODAL-ANALOG-033-019",
+                             "scalar procedural variable requires !nodal.variable");
+  if (operation->getNumOperands()) {
+    auto reads = operation->getAttrOfType<ArrayAttr>("initializer_reads");
+    auto initialized = operation->getAttrOfType<BoolAttr>("initialized");
+    auto quantity = operation->getNumOperands() == 1
+                        ? llvm::dyn_cast<nodal::QuantityType>(operation->getOperand(0).getType())
+                        : nodal::QuantityType();
+    if (variableType.getKind() != "real" || !quantity || quantity.getKind() != "real" ||
+        quantity.getDimension() != variableType.getDimension() || !initialized ||
+        !initialized.getValue() || !reads || !reads.empty() ||
+        !textAttr(operation, "initializer_value").empty() ||
+        !textAttr(operation, "initializer_kind").empty() ||
+        !textAttr(operation, "initializer_dimension").empty())
+      return emitMappedFailure(operation, "NODAL-ANALOG-033-004",
+                               "scalar snapshot initializer requires exclusive typed Real capture");
+    if (llvm::isa<nodal::AnalogProcedureOp>(operation->getParentOp()))
+      return emitMappedFailure(operation, "NODAL-ANALOG-037-009",
+                               "persistent scalar initialization cannot capture mutable storage");
+    auto path = getAnalogCapturedReadPath(operation->getOperand(0));
+    if (failed(path) ||
+        failed(verifyCapturedScalarBindings(operation, operation->getOperands(), *path)))
+      return failure();
+    return success();
+  }
+  return verifyVariableInitializerShape(operation, variableType);
 }
 
 LogicalResult nodal::AnalogVariableReadOp::verify() {
@@ -2720,6 +3155,17 @@ LogicalResult nodal::AnalogVariableReadOp::verify() {
   if (failed(requireText(getOperation(), "read_id", "procedural read identity")) ||
       failed(requireText(getOperation(), "owner", "procedural read owner")))
     return failure();
+  auto reference = resolveAnalogStorageReference(getOperation()->getOperand(0), getOperation());
+  if (failed(reference))
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-033-017",
+                             "read requires actual owned procedural storage");
+  if (llvm::isa<nodal::ShapedType>(getOperation()->getOperand(0).getType())) {
+    auto expected = getAnalogStorageSnapshotType(getOperation()->getOperand(0), getOperation());
+    if (failed(expected) || *expected != getOperation()->getResult(0).getType())
+      return emitMappedFailure(getOperation(), "NODAL-ANALOG-033-012",
+                               "shaped read requires exact immutable quantity snapshot type");
+    return success();
+  }
   auto variableType = llvm::dyn_cast<nodal::VariableType>(getOperation()->getOperand(0).getType());
   auto result = getProceduralValueInfo(getOperation()->getResult(0).getType());
   if (!variableType || failed(result) || result->kind != variableType.getKind() ||
@@ -2739,6 +3185,19 @@ LogicalResult nodal::AnalogAssignOp::verify() {
   if (failed(requireText(getOperation(), "statement_id", "procedural statement identity")) ||
       failed(requireText(getOperation(), "owner", "procedural assignment owner")))
     return failure();
+  if (llvm::isa<nodal::ShapedType>(getOperation()->getOperand(0).getType())) {
+    if (failed(verifySnapshotAssignment(getOperation())) ||
+        failed(verifyAnalysisApplicability(getOperation())))
+      return failure();
+    return verifyGuardShape(getOperation());
+  }
+  if (!textAttr(getOperation(), "value_form").empty() &&
+      textAttr(getOperation(), "value_form") != "source")
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-033-012",
+                             "unknown scalar assignment payload form");
+  if (failed(resolveAnalogStorageReference(getOperation()->getOperand(0), getOperation())))
+    return emitMappedFailure(getOperation(), "NODAL-ANALOG-033-017",
+                             "assignment requires actual owned procedural storage");
   auto variableType = llvm::dyn_cast<nodal::VariableType>(getOperation()->getOperand(0).getType());
   if (!variableType)
     return emitMappedFailure(getOperation(), "NODAL-ANALOG-033-019",
@@ -2753,9 +3212,56 @@ LogicalResult nodal::AnalogAssignOp::verify() {
       valueDimension != variableType.getDimension())
     return emitMappedFailure(getOperation(), "NODAL-ANALOG-033-013",
                              "assigned value dimension does not match the target variable");
+  bool selectedCapture = !getOperation()->getOperand(0).getDefiningOp<nodal::AnalogVariableOp>();
+  for (Value value : getOperation()->getOperands().drop_front()) {
+    auto read = value.getDefiningOp<nodal::AnalogVariableReadOp>();
+    selectedCapture |= !read || !read->getOperand(0).getDefiningOp<nodal::AnalogVariableOp>();
+  }
+  if (selectedCapture) {
+    auto metadata = getOperation()->getAttrOfType<DictionaryAttr>("metadata");
+    auto source = metadata ? metadata.getAs<StringAttr>("value") : StringAttr();
+    if (!source ||
+        failed(verifyCapturedScalarBindings(
+            getOperation(), getOperation()->getOperands().drop_front(), source.getValue())))
+      return failure();
+    auto expression = parseAnalogSourceExpression(getOperation(), source.getValue());
+    if (failed(expression) || expression->dimension != valueDimension ||
+        !proceduralKindsCompatible(expression->kind, variableType.getKind()))
+      return emitMappedFailure(getOperation(), "NODAL-ANALOG-033-012",
+                               "selected assignment expression type disagrees with payload");
+  }
   if (failed(verifyAnalysisApplicability(getOperation())))
     return failure();
   return verifyGuardShape(getOperation());
+}
+
+namespace {
+LogicalResult verifyAnalogArrayFillValue(Operation *operation) {
+  auto procedure = operation->getParentOfType<nodal::AnalogProcedureOp>();
+  auto module = operation->getParentOfType<nodal::ModuleOp>();
+  auto shaped = llvm::dyn_cast<nodal::ShapedType>(operation->getResult(0).getType());
+  auto element =
+      shaped ? llvm::dyn_cast<nodal::QuantityType>(shaped.getElementType()) : nodal::QuantityType();
+  if (!procedure || !module || !element || element.getKind() != "real" ||
+      textAttr(operation, "owner") != textAttr(procedure, "owner") ||
+      failed(nodal::verifyGeneratedAnalogOwnership(operation)) ||
+      failed(nodal::inferStaticShapeMaximumCardinality(module, shaped.getDimensions())))
+    return operation->emitOpError(
+        "NODAL-ANALOG-033-012: fill requires owned shaped Real value type");
+  auto expression = nodal::parseAnalogSourceExpression(operation, textAttr(operation, "value"));
+  if (failed(expression) || expression->kind != "real" ||
+      expression->dimension != element.getDimension())
+    return operation->emitOpError(
+        "NODAL-ANALOG-033-012: fill expression does not match Real element dimension");
+  if (failed(verifyCapturedScalarBindings(operation, operation->getOperands(),
+                                          textAttr(operation, "value"))))
+    return failure();
+  return success();
+}
+} // namespace
+
+LogicalResult nodal::AnalogArrayFillOp::verify() {
+  return verifyAnalogArrayFillValue(getOperation());
 }
 
 LogicalResult nodal::RealLiteralOp::verify() {

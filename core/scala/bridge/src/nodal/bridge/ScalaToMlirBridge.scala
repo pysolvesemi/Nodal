@@ -974,6 +974,7 @@ ${indent(body, 2)}
         "NODAL-ANALOG-040-002",
         "transfer state"
       )
+      validateProceduralShapes()
       AnalogUserFunctionMlir.validate(snapshot)
       requireUnique(
         snapshot.analogFunctions.map(value => s"${value.owner}.${value.definition.name}"),
@@ -1657,7 +1658,21 @@ ${indent(body, 2)}
             accessBranches
           )
 
-      body ++= AnalogProceduralMlir.renderModule(snapshot, module.path)
+      body ++= AnalogProceduralMlir.renderModule(
+        snapshot,
+        module.path,
+        token =>
+          emitProceduralStatic(
+            token,
+            module,
+            parameterSymbols,
+            declarationsByPath,
+            expressionsByPath,
+            body,
+            shapeStaticValues,
+            () => allocateShapeStaticValue()
+          )
+      )
 
       operation(
         "nodal.module",
@@ -2492,6 +2507,237 @@ ${indent(body, 2)}
             Some(expression.path)
           )
 
+    private def validateProceduralShapes(): Unit =
+      import AnalogProceduralRuntime.*
+      snapshot.analogProcedural.foreach: program =>
+        val module = modulesByPath.getOrElse(
+          program.owner,
+          fail("NODAL-BRIDGE-049", "procedural storage has no owning module", Some(program.owner))
+        )
+        val variables =
+          program.variables.map(record => record.variable.identity -> record.variable).toMap
+        def dimensions(shape: Vector[String], path: String): Unit =
+          if shape.nonEmpty then
+            val _ = shapeViewSignature(module, shape, path)
+        def projection(
+            value: StorageProjection,
+            input: Vector[String],
+            inputPath: String
+        ): Vector[String] =
+          val (path, owner, source) = value match
+            case index: KernelShapeIndexSnapshot => (index.path, index.owner, index.input)
+            case view: KernelShapeViewSnapshot => (view.path, view.owner, view.input)
+          if owner != program.owner || source != inputPath || !path.startsWith(
+              s"${program.owner}."
+            ) || path == source
+          then
+            fail(
+              "NODAL-BRIDGE-049",
+              "procedural projection has invalid owner or immediate input identity",
+              Some(path)
+            )
+          value match
+            case index: KernelShapeIndexSnapshot =>
+              if index.sourceUses.nonEmpty || index.indices.isEmpty || index.indices.size > input.size ||
+                index.resultDimensions != input.drop(index.indices.size)
+              then
+                fail(
+                  "NODAL-BRIDGE-049",
+                  "procedural index rank or result shape is inconsistent",
+                  Some(path)
+                )
+              index.indices.zip(input).foreach: (position, extent) =>
+                val minimum = shapeDimensionMinimum(module, extent, path)
+                val staticPosition = position.toLongOption.map(_ => position).getOrElse(
+                  shapeDimensionStaticPath(module, position).getOrElse(
+                    fail(
+                      "NODAL-BRIDGE-049",
+                      "procedural index has no owned static identity",
+                      Some(path)
+                    )
+                  )
+                )
+                val bounds = shapeIndexBounds(module, staticPosition, path)
+                if bounds.lower < 0L || bounds.upper >= minimum then
+                  fail(
+                    "NODAL-BRIDGE-049",
+                    "procedural index is not in bounds for every legal shape",
+                    Some(path)
+                  )
+              index.resultDimensions
+            case view: KernelShapeViewSnapshot =>
+              if view.slice.nonEmpty then
+                def endpoint(token: String): String = token.toLongOption.map(_ => token).getOrElse(
+                  shapeDimensionStaticPath(module, token).getOrElse(
+                    fail(
+                      "NODAL-BRIDGE-049",
+                      "procedural slice has no owned static identity",
+                      Some(path)
+                    )
+                  )
+                )
+                val selected = view.slice.get
+                validateShapeSlice(
+                  module,
+                  input,
+                  view.copy(slice =
+                    Some(selected.copy(
+                      lower = endpoint(selected.lower),
+                      upperExclusive = endpoint(selected.upperExclusive)
+                    ))
+                  )
+                )
+              else if shapeViewSignature(
+                  module,
+                  input,
+                  path
+                ) != shapeViewSignature(module, view.dimensions, path)
+              then
+                fail(
+                  "NODAL-BRIDGE-049",
+                  "procedural view does not preserve exact cardinality",
+                  Some(path)
+                )
+              view.dimensions
+        def reference(value: StorageReference): Unit =
+          if !variables.get(
+              value.root.identity
+            ).contains(value.root) || value.root.owner != program.owner
+          then
+            fail(
+              "NODAL-BRIDGE-049",
+              "procedural storage reference has a forged or missing root",
+              Some(value.identity)
+            )
+          dimensions(value.root.valueType.dimensions, value.root.identity)
+          value match
+            case selection: StorageSelection =>
+              if selection.projections.size > 512 then
+                fail(
+                  "NODAL-BRIDGE-049",
+                  "procedural projection exceeds the supported dependency depth",
+                  Some(value.identity)
+                )
+              selection.projections.foldLeft(
+                value.root.valueType.dimensions -> value.root.identity
+              ):
+                case ((input, source), step) =>
+                  val result = projection(step, input, source)
+                  val path = step match
+                    case index: KernelShapeIndexSnapshot => index.path
+                    case view: KernelShapeViewSnapshot => view.path
+                  result -> path
+              ()
+            case _ => ()
+        def value(input: Value, depth: Int = 0): Unit =
+          if depth >= 512 then
+            fail(
+              "NODAL-BRIDGE-049",
+              "procedural value dependency exceeds supported depth",
+              Some(program.owner)
+            )
+          dimensions(input.valueType.dimensions, program.owner)
+          if input.valueType.dimensions.nonEmpty && input.valueType.kind != ScalarKind.Real then
+            fail(
+              "NODAL-BRIDGE-049",
+              "only Real procedural arrays are supported",
+              Some(program.owner)
+            )
+          input.allReads.foreach(reference)
+          input.source.foreach:
+            case ShapedSource.Fill(scalar) => value(scalar, depth + 1)
+            case ShapedSource.Read(source) =>
+              reference(source)
+              if source.valueType != input.valueType then
+                fail(
+                  "NODAL-BRIDGE-049",
+                  "procedural snapshot has a forged value type",
+                  Some(source.identity)
+                )
+            case ShapedSource.View(source, step) =>
+              value(source, depth + 1)
+              val sourcePath = step match
+                case index: KernelShapeIndexSnapshot => index.input
+                case view: KernelShapeViewSnapshot => view.input
+              if projection(
+                  step,
+                  source.valueType.dimensions,
+                  sourcePath
+                ) != input.valueType.dimensions ||
+                source.valueType.kind != input.valueType.kind || source.valueType.dimension != input.valueType.dimension
+              then
+                fail(
+                  "NODAL-BRIDGE-049",
+                  "immutable procedural view has a forged value type",
+                  Some(program.owner)
+                )
+        program.variables.foreach: record =>
+          dimensions(record.variable.valueType.dimensions, record.variable.identity)
+          record.initializer.foreach(value(_))
+        program.assignments.foreach: assignment =>
+          reference(assignment.target)
+          value(assignment.value)
+        program.controlExpressions.foreach(expression => value(expression.value))
+        def block(input: AnalogControlFlowRuntime.Block): Unit = input.statements.foreach:
+          case assignment: AnalogControlFlowRuntime.Statement.Assign =>
+            assignment.storageTarget.foreach(reference)
+          case scope: AnalogControlFlowRuntime.Statement.Scope => block(scope.body)
+          case event: AnalogControlFlowRuntime.Statement.EventControl => block(event.body)
+          case branch: AnalogControlFlowRuntime.Statement.IfThenElse =>
+            branch.branches.foreach(value => block(value.body))
+            branch.otherwise.foreach(block)
+          case selection: AnalogControlFlowRuntime.Statement.CaseStatement =>
+            selection.arms.foreach(arm => block(arm.body))
+            selection.default.foreach(block)
+          case loop: AnalogControlFlowRuntime.Statement.Loop => block(loop.body)
+          case _ => ()
+        program.controlFlow.foreach(control => block(control.root))
+
+    private def emitProceduralStatic(
+        token: String,
+        module: KernelModuleSnapshot,
+        parameterSymbols: Map[String, String],
+        declarationsByPath: Map[String, KernelDeclarationSnapshot],
+        expressionsByPath: Map[String, KernelParameterExpressionSnapshot],
+        rendered: mutable.ArrayBuffer[String],
+        staticValues: mutable.LinkedHashMap[String, (String, String)],
+        allocate: () => String
+    ): (String, String) = token.toLongOption match
+      case Some(literal) => staticValues.getOrElseUpdate(
+          s"literal:$literal", {
+            val result = allocate()
+            rendered += operation(
+              "nodal.const_literal",
+              results = Vector(result),
+              resultTypes = Vector("i64"),
+              attributes = Vector(
+                "value" -> s"$literal : i64",
+                "spelling" -> quoted(literal.toString),
+                "metadata" -> "{use = \"procedural_shape\"}"
+              ),
+              semanticPath = module.path
+            )
+            result -> "i64"
+          }
+        )
+      case None =>
+        val path = shapeDimensionStaticPath(module, token).getOrElse(
+          fail("NODAL-BRIDGE-049", "procedural shape has no owned static identity", Some(token))
+        )
+        val result = emitStaticValue(
+          path,
+          parameterSymbols,
+          declarationsByPath,
+          expressionsByPath,
+          rendered,
+          staticValues,
+          allocate,
+          requireStructural = true
+        )
+        if result._2 != "i64" then
+          fail("NODAL-BRIDGE-049", "procedural shape value must be Integer", Some(token))
+        result
+
     private def emitStaticValue(
         path: String,
         parameterSymbols: Map[String, String],
@@ -2911,7 +3157,22 @@ ${indent(body, 2)}
               Some(declaration.path)
             )
 
-      nested ++= AnalogProceduralMlir.renderGenerated(snapshot, module.path, region.path)
+      nested ++= AnalogProceduralMlir.renderGenerated(
+        snapshot,
+        module.path,
+        region.path,
+        token =>
+          emitProceduralStatic(
+            token,
+            module,
+            parameterSymbols,
+            declarationsByPath,
+            expressionsByPath,
+            generatedStatic,
+            generatedStaticValues,
+            allocateGeneratedStaticValue
+          )
+      )
 
       val ownedAnalogRegions = snapshot.analogRegions.filter(_.generatedOwner.contains(region.path))
       val generatedAccessExpressions = ownedAnalogRegions.flatMap(_.expressions).filter(

@@ -204,7 +204,7 @@ private final class ConstructionSession(val options: EmitOptions):
     if kind != KernelSignalKind.AnalogNode && !activeGeneratedVariable then
       requireNoGeneratedEffect(s"generated ${kind.label} declaration")
     val module = currentModule
-    dataType.foreach(validateShapeType(_, module.handle))
+    dataType.foreach(validateShapeType(_, module.handle, kind == KernelSignalKind.Variable))
     if declarationIds.containsKey(value) then
       fail("NODAL-OWNERSHIP-016", s"${kind.label} was registered twice")
     val reference = DeclarationRef(module.handle, module.declarations.size)
@@ -353,11 +353,19 @@ private final class ConstructionSession(val options: EmitOptions):
       case Right(reference: ExpressionRef) => s"expression:${expressionPath(reference)}"
     s"${declarationPath(key.array)}.at(${indices.mkString(",")})"
 
-  private def validateShapeType(dataType: DataType[?], owner: Long): Unit =
+  private def validateShapeType(
+      dataType: DataType[?],
+      owner: Long,
+      cardinality: Boolean
+  ): Unit =
     val descriptor = CandidateRuntime.typeDescriptor(dataType)
-    if descriptor.kind == "Vec" then validateShapeDescriptor(descriptor, owner)
+    if descriptor.kind == "Vec" then validateShapeDescriptor(descriptor, owner, cardinality)
 
-  private def validateShapeDescriptor(descriptor: KernelTypeDescriptor, owner: Long): Unit =
+  private def validateShapeDescriptor(
+      descriptor: KernelTypeDescriptor,
+      owner: Long,
+      cardinality: Boolean
+  ): Unit =
     val element = descriptor.arguments.headOption.collect:
       case candidate: DataType[?] => candidate
     val dimensions = descriptor.arguments.lift(1).toVector.flatMap:
@@ -367,7 +375,7 @@ private final class ConstructionSession(val options: EmitOptions):
       fail("NODAL-SHAPE-043-001", "Vec requires an element type and at least one dimension")
 
     val analysis = new StructuralBoundAnalysis(owner, "NODAL-SHAPE-043-001", "Vec dimension")
-    dimensions.foreach: dimension =>
+    val bounds = dimensions.map: dimension =>
       val bound = dimension match
         case value: Int => analysis(value)
         case value: Param[?] => analysis(value.asInstanceOf[Expr[Integer]])
@@ -382,11 +390,15 @@ private final class ConstructionSession(val options: EmitOptions):
           "NODAL-SHAPE-043-001",
           "Vec dimension must be positive for every legal parameter setting"
         )
-      bound.parameters.foreach: reference =>
-        markStructuralParameterEffect(reference, "shape")
-        markStructuralParameterEffect(reference, "rank")
-
-    validateShapeType(element.get, owner)
+      bound
+    if cardinality &&
+      bounds.foldLeft(BigInt(1))((size, bound) => size * BigInt(bound.bounds.upper)) >
+        BigInt(Long.MaxValue)
+    then fail("NODAL-SHAPE-043-001", "Vec maximum element count exceeds signed 64-bit bounds")
+    validateShapeType(element.get, owner, cardinality)
+    bounds.flatMap(_.parameters).distinct.foreach: reference =>
+      markStructuralParameterEffect(reference, "shape")
+      markStructuralParameterEffect(reference, "rank")
 
   private def minimumShapeExtent(
       value: Any,
@@ -432,11 +444,18 @@ private final class ConstructionSession(val options: EmitOptions):
     val dataType = reference match
       case declaration: DeclarationRef =>
         val record = records(declaration.module).declarations(declaration.index)
-        if record.kind == KernelSignalKind.Input || record.kind == KernelSignalKind.Output then
+        if record.kind == KernelSignalKind.Input || record.kind == KernelSignalKind.Output ||
+          (record.kind == KernelSignalKind.Variable &&
+            CandidateRuntime.proceduralShapeSource(input))
+        then
           record.dataType
         else None
       case expression: ExpressionRef =>
-        val dimensions = shapeViews.get(expression).map(_.dimensions)
+        val lexical = CandidateRuntime.proceduralShapeSource(input)
+        val dimensions = Option.when(lexical)(CandidateRuntime.expressionDataType(input).toVector
+          .flatMap(dataType => CandidateRuntime.typeDescriptor(dataType).arguments.lift(1).toVector)
+          .flatMap { case values: Seq[?] => values.toVector; case _ => Vector.empty })
+          .orElse(shapeViews.get(expression).map(_.dimensions))
           .orElse(shapeIndices.get(expression).filter(_.resultDimensions.nonEmpty)
             .map(_.resultDimensions))
           .getOrElse(
@@ -554,10 +573,11 @@ private final class ConstructionSession(val options: EmitOptions):
         val reference = captureExpression(expression).getOrElse(
           fail("NODAL-SHAPE-043-002", "shape index requires an active Module")
         )
-        shapeIndices.update(
-          reference,
-          ShapeIndexRecord(reference, inputReference, positions.map(_._1), resultDimensions)
-        )
+        if !CandidateRuntime.proceduralShapeSource(input) then
+          shapeIndices.update(
+            reference,
+            ShapeIndexRecord(reference, inputReference, positions.map(_._1), resultDimensions)
+          )
 
   private final case class ShapeViewFactor(
       literal: Option[Long],
@@ -748,7 +768,8 @@ private final class ConstructionSession(val options: EmitOptions):
       val reference = captureExpression(expression).getOrElse(
         fail(code, "shape view requires an active Module")
       )
-      shapeViews.update(reference, ShapeViewRecord(reference, inputReference, dimensions, slice))
+      if !CandidateRuntime.proceduralShapeSource(input) then
+        shapeViews.update(reference, ShapeViewRecord(reference, inputReference, dimensions, slice))
 
   private def validateShapeSlice(
       selection: ShapeSliceSelection,
@@ -835,8 +856,52 @@ private final class ConstructionSession(val options: EmitOptions):
       semanticOrigin.captureExpression(module.handle, reference.index, value, operands)
       reference
 
-  def registerExpression(value: AnyRef): Unit =
-    val _ = captureExpression(value)
+  def registerExpression(value: AnyRef): Unit = value match
+    case expression: KernelExpr[?] if CandidateRuntime.proceduralShapeSource(expression) =>
+      expression.operation match
+        case Some("analog_array_fill") =>
+          val dataType = CandidateRuntime.expressionDataType(expression).getOrElse(
+            fail("NODAL-SHAPE-043-007", "array fill requires an exact Real Vec type")
+          )
+          val descriptor = CandidateRuntime.typeDescriptor(dataType)
+          if descriptor.kind != "Vec" || descriptor.arguments.headOption != Some(Real) ||
+            expression.operands.size != 1
+          then fail("NODAL-SHAPE-043-007", "array fill requires scalar Real elements")
+          validateShapeType(dataType, currentModule.handle, cardinality = true)
+          val _ = captureExpression(value)
+        case Some("shape_index") =>
+          registerShapeIndex(
+            expression.asInstanceOf[KernelExpr[Data]],
+            expression.operands.head.asInstanceOf[Expr[Vec[Data]]],
+            expression.operands.tail.map(_.asInstanceOf[Dimension])
+          )
+        case Some("shape_view" | "shape_slice") =>
+          val dimensions = CandidateRuntime.expressionDataType(expression).toVector
+            .flatMap(dataType =>
+              CandidateRuntime.typeDescriptor(dataType).arguments.lift(1).toVector
+            )
+            .flatMap {
+              case values: Seq[?] => values.toVector.map(_.asInstanceOf[Dimension]);
+              case _ => Vector.empty
+            }
+          if expression.operation.contains("shape_slice") then
+            fail("NODAL-SHAPE-043-007", "a slice must be captured by the typed slice constructor")
+          registerShapeView(
+            expression.asInstanceOf[KernelExpr[Vec[Data]]],
+            expression.operands.head.asInstanceOf[Expr[Vec[Data]]],
+            dimensions
+          )
+        case _ => val _ = captureExpression(value)
+    case _ => val _ = captureExpression(value)
+
+  def proceduralShapeDimension(value: Any): String =
+    val owner = value match
+      case reference: AnyRef => Option(declarationIds.get(reference)).map(_.module)
+          .orElse(Option(
+            expressionIds.get(reference)
+          ).map(_.module)).getOrElse(currentModule.handle)
+      case _ => currentModule.handle
+    renderShapeDimension(value, owner)
 
   def registerContinuousOperator(
       value: KernelExpr[Real],
@@ -3101,8 +3166,16 @@ private final class ConstructionSession(val options: EmitOptions):
         Iterator(selection.lower, selection.upperExclusive)
       )
     )
+    val lexicalShapeRoots = expressionValues.valuesIterator
+      .filter(CandidateRuntime.proceduralShapeSource(_)).flatMap: expression =>
+        val dimensions =
+          CandidateRuntime.expressionDataType(expression).toVector.flatMap(shapeDimensionRoots)
+        dimensions.iterator ++
+          (if expression.operation.contains("analog_array_fill") then Iterator.empty
+           else expression.operands.drop(1).iterator)
     val reachable = capturedExpressionClosure(
-      (roots ++ generatedRoots ++ shapeIndexRoots ++ shapeDimensionExpressionRoots ++
+      (lexicalShapeRoots ++ roots ++ generatedRoots ++ shapeIndexRoots ++
+        shapeDimensionExpressionRoots ++
         shapeViewExpressionRoots).collect:
         case expression: KernelExpr[?] if expression.literal.isEmpty => expression
     )

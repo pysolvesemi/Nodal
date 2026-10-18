@@ -346,5 +346,28 @@
     "simulator_implemented": false
   },
   "roadmap_revision": "1.19",
-  "next_implementation_increment": 16
+  "next_implementation_increment": 16,
+  "writable_real_arrays": {
+    "design_gate": "docs/design-gates/NodalWritableRealArrays-DG-v0.1.md",
+    "capability": "Variable.writable: VariableSelection[A]",
+    "selection_type": "VariableSelection[A <: Data]",
+    "selection_members": [
+      "value: Expr[A]",
+      ":=(value: Expr[A]): Unit"
+    ],
+    "real_array_operations": [
+      "at",
+      "row",
+      "plane",
+      "slice",
+      "flatten",
+      "reshape"
+    ],
+    "value_producer": "Vec.fill(dataType: DataType[Vec[Real]])(value: Expr[Real]): Expr[Vec[Real]]",
+    "read_timing": "fresh snapshot at each consuming initializer or assignment",
+    "assignment_shape": "exact canonical dimensions and physical dimension",
+    "storage_ownership": "existing lexical Variable; views allocate no storage",
+    "initial_target_profile": "event-local Real arrays; persistent root initializer layout remains a required explicit capability boundary",
+    "unsupported_control_reads": "selected arrays in predicates, selectors, loop bounds and event expressions require a future typed operand contract"
+  }
 }

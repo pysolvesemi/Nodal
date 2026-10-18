@@ -230,7 +230,9 @@ private object ConstructionExpressionFacts:
                 case Vector(left, right) =>
                   inferAnalogDimension(left).divide(inferAnalogDimension(right))
                 case _ => AnalogDimension.Unknown
-            case Some("analog_neg") =>
+            case Some(
+                  "analog_neg" | "shape_index" | "shape_view" | "shape_slice" | "analog_array_fill"
+                ) =>
               expression.operands.headOption.map(
                 inferAnalogDimension
               ).getOrElse(AnalogDimension.Unknown)

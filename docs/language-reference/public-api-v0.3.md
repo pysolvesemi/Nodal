@@ -95,8 +95,8 @@ reject. The result retains rank, element type and all other dimensions.
 For example, `samples.slice(1, 3, axis = 1).row(0).at(1)` selects a read-only
 structural view and then its second element. Slices compose with prior module
 port views, slices, row/plane selection, reshape and flatten, preserving the
-immediate source mapping. Writable slices and l-values remain separate open
-Foundation obligations. Native structural IR verification does not imply
+immediate source mapping. Writable slices use the explicit variable capability
+described below. Native structural IR verification does not imply
 Verilog-A array or target-layout support; unsupported targets reject explicitly.
 
 ## Additive conservative node arrays
@@ -125,3 +125,41 @@ scalar branch/access/connection semantics and immediate-child scalar connectivit
 Arrays owned by another Module cannot be selected by bypassing that Module's
 boundary. This does not add conservative array ports, generated selections,
 array views or writable Real-array storage.
+
+## Additive writable Real arrays
+
+[Writable Real arrays v0.1](../design-gates/NodalWritableRealArrays-DG-v0.1.md)
+adds `Variable.writable: VariableSelection[A]`. The private-constructor selection
+exposes `value: Expr[A]` and `:=(value: Expr[A])`; it allocates no storage. Real-array
+selections support `at`, `row`, `plane`, `slice`, `flatten`, and `reshape`, preserving
+the existing read-only Expr methods and their return types.
+
+`Vec.fill(Vec(Real, lanes))(0.0.real)` produces an explicit shaped value for the
+existing initialized-variable constructor or an exact-shaped assignment. Units
+come from its scalar expression. Scalar broadcast is never implicit in `:=`.
+
+```scala
+analogProcedure:
+  on(initialStep):
+    val cells = variable(Vec(Real, 3), Vec.fill(Vec(Real, 3))(0.0.real))
+    cells.writable.at(0) := 1.0.real
+    cells.writable.slice(1, 3) := cells.slice(0, 2)
+```
+
+Reads remain deferred expressions. Each assignment or initializer takes a fresh
+complete RHS snapshot before writing, so overlapping copies preserve source
+values and reusing an Expr after mutation reads current storage. Shapes and
+indices must be static, owned and valid over their full legal parameter ranges.
+Partial writes initialize only proven selected regions; event writes do not
+initialize storage unconditionally outside the event.
+
+The bounded target profile covers event-local Real storage. Persistent root
+array initialization retains an explicit target capability boundary pending its
+required lifecycle-correct layout. Selected array reads in control predicates,
+selectors, loop bounds and event expressions currently reject because those
+consumers need a typed reference-operand extension. Array operations inside their
+bodies remain subject to the ordinary scope, event and definite-assignment rules.
+
+A direct selected scalar value can initialize local Real storage through an
+explicit snapshot. Compound selected scalar initializers remain unsupported in
+this checkpoint; scalar assignments can still consume their captured reads.

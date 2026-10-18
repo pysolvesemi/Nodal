@@ -133,23 +133,122 @@ private[nodal] object AnalogProceduralConstruction:
       ConstructionKernel.captureAnalogProceduralSource
     )))
 
+  private def referenceToken(
+      module: ModuleState,
+      value: AnyRef,
+      dimension: Boolean = false
+  ): String =
+    val prefix = if dimension then "@shape_dimension_" else "@event_reference_"
+    module.eventBindings.collectFirst:
+      case (token, reference) if token.startsWith(prefix) && (reference eq value) => token
+    .getOrElse:
+      val token = s"$prefix${module.eventBindings.size}@"
+      module.eventBindings.update(token, value)
+      token
+
+  private def shapeToken(module: ModuleState, value: Any): String = value match
+    case literal: Int => literal.toString
+    case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
+      expression.literal.get.value
+    case reference: AnyRef => referenceToken(module, reference, dimension = true)
+    case _ => AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+        "NODAL-SHAPE-043-007",
+        "procedural shape requires captured static Integer values"
+      ))
+
+  private def shapeDimensions(module: ModuleState, dataType: DataType[?]): Vector[String] =
+    val descriptor = CandidateRuntime.typeDescriptor(dataType)
+    if descriptor.kind != "Vec" then Vector.empty
+    else
+      descriptor.arguments.lift(1).toVector.flatMap:
+        case dimensions: Seq[?] => dimensions.map(shapeToken(module, _))
+        case _ => Vector.empty
+
+  private def projection(
+      module: ModuleState,
+      expression: KernelExpr[?],
+      input: String
+  ): KernelShapeIndexSnapshot | KernelShapeViewSnapshot =
+    if ConstructionKernel.analogReferencePath(expression).isEmpty then
+      AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+        "NODAL-SHAPE-043-007",
+        "procedural projection has no captured expression identity"
+      ))
+    val path = referenceToken(module, expression)
+    val dimensions = CandidateRuntime.expressionDataType(expression).toVector
+      .flatMap(shapeDimensions(module, _))
+    expression.operation match
+      case Some("shape_index") => KernelShapeIndexSnapshot(
+          path,
+          module.owner,
+          input,
+          expression.operands.tail.map(shapeToken(module, _)),
+          dimensions
+        )
+      case Some("shape_view") => KernelShapeViewSnapshot(path, module.owner, input, dimensions)
+      case Some("shape_slice") => KernelShapeViewSnapshot(
+          path,
+          module.owner,
+          input,
+          dimensions,
+          Some(KernelShapeSliceSnapshot(
+            expression.operands(4).asInstanceOf[Int],
+            shapeToken(module, expression.operands(1)),
+            shapeToken(module, expression.operands(2))
+          ))
+        )
+      case _ => AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+          "NODAL-SHAPE-043-007",
+          "unsupported procedural shape projection"
+        ))
+
+  private def storageReference(
+      module: ModuleState,
+      value: Any,
+      depth: Int = 0
+  ): Option[AnalogProceduralRuntime.StorageReference] =
+    if depth >= 512 then
+      AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+        "NODAL-SHAPE-043-007",
+        "procedural projection exceeds the supported dependency depth"
+      ))
+    value match
+      case variable: Variable[?] => Some(resolveVariable(module, variable))
+      case expression: KernelExpr[?]
+          if expression.operation.exists(
+            Set("shape_index", "shape_view", "shape_slice").contains
+          ) =>
+        expression.operands.headOption.flatMap(storageReference(module, _, depth + 1)).map: input =>
+          val previous = input match
+            case selection: AnalogProceduralRuntime.StorageSelection => selection.projections
+            case _ => Vector.empty
+          AnalogProceduralRuntime.StorageSelection(
+            input.root,
+            previous :+ projection(module, expression, input.identity)
+          )
+      case _ => None
+
   private def renderEventValue(module: ModuleState, value: Any): String = value match
+    case expression: KernelExpr[?] if storageReference(module, expression).nonEmpty =>
+      storageReference(module, expression).get.identity
     case expression: KernelExpr[?] if expression.literal.nonEmpty => renderValue(module, expression)
+    case expression: KernelExpr[?] if CandidateRuntime.proceduralShapeSource(expression) =>
+      referenceToken(module, expression)
     case expression: KernelExpr[?] =>
       s"${expression.operation.getOrElse("expression")}(${expression.operands.map(renderEventValue(module, _)).mkString(",")})"
     case reference: AnyRef if findVariableOwner(reference).nonEmpty =>
       resolveVariable(module, reference).identity
     case reference: AnyRef =>
-      val token = s"@event_reference_${module.eventBindings.size}@"
-      module.eventBindings.update(token, reference)
-      token
+      referenceToken(module, reference)
     case other => other.toString
 
   private def finalizeEvents(module: ModuleState): Unit =
     def resolved(value: String): String =
       module.eventBindings.foldLeft(value): (text, entry) =>
         val (token, reference) = entry
-        val path = ConstructionKernel.analogReferencePath(reference).getOrElse(
+        val path = (if token.startsWith("@shape_dimension_") then
+                      Some(ConstructionKernel.proceduralShapeDimension(reference))
+                    else ConstructionKernel.analogReferencePath(reference)).getOrElse(
           AnalogEventRuntime.fail(5, "event expression references an unregistered declaration")
         )
         text.replace(token, path)
@@ -180,6 +279,7 @@ private[nodal] object AnalogProceduralConstruction:
       definition.source,
       definition.name
     )
+    result.arguments.foreach(argument => requireScalarControl(argument.value))
     result.validate()
     result
 
@@ -239,6 +339,8 @@ private[nodal] object AnalogProceduralConstruction:
     case "Integer" => AnalogProceduralRuntime.ScalarKind.Integer
     case "Bool" => AnalogProceduralRuntime.ScalarKind.Boolean
     case "Real" => AnalogProceduralRuntime.ScalarKind.Real
+    case "Vec" if CandidateRuntime.typeDescriptor(dataType).arguments.headOption == Some(Real) =>
+      AnalogProceduralRuntime.ScalarKind.Real
     case other =>
       AnalogProceduralRuntime.reject(
         AnalogProceduralRuntime.Diagnostic(
@@ -316,10 +418,12 @@ private[nodal] object AnalogProceduralConstruction:
   private def collectReads(
       module: ModuleState,
       value: Any
-  ): Vector[AnalogProceduralRuntime.Variable] =
-    val result = mutable.LinkedHashSet.empty[AnalogProceduralRuntime.Variable]
+  ): Vector[AnalogProceduralRuntime.StorageReference] =
+    val result = mutable.LinkedHashSet.empty[AnalogProceduralRuntime.StorageReference]
 
     def visit(candidate: Any): Unit = candidate match
+      case expression: KernelExpr[?] if storageReference(module, expression).nonEmpty =>
+        result += storageReference(module, expression).get
       case iterable: Iterable[?] => iterable.foreach(visit)
       case reference: AnyRef =>
         findVariableOwner(reference) match
@@ -359,7 +463,11 @@ private[nodal] object AnalogProceduralConstruction:
     val dimension = ConstructionKernel
       .analogDimension(expression)
       .getOrElse("unknown")
-    AnalogProceduralRuntime.ValueType(kind, dimension)
+    AnalogProceduralRuntime.ValueType(
+      kind,
+      dimension,
+      CandidateRuntime.expressionDataType(expression).toVector.flatMap(shapeDimensions(module, _))
+    )
 
   private def renderValue(module: ModuleState, value: Any): String = value match
     case expression: KernelExpr[?] if expression.literal.nonEmpty =>
@@ -384,10 +492,41 @@ private[nodal] object AnalogProceduralConstruction:
       fallback: Option[AnalogProceduralRuntime.ValueType]
   ): AnalogProceduralRuntime.Value =
     val reads = collectReads(module, expression)
+    val dataType = valueType(module, expression, fallback)
+    val shaped = expression match
+      case fill: KernelExpr[?] if fill.operation.contains("analog_array_fill") =>
+        val scalar = semanticValue(module, fill.operands.head.asInstanceOf[Expr[Real]], None)
+        if scalar.valueType.dimensions.nonEmpty ||
+          scalar.valueType.kind != AnalogProceduralRuntime.ScalarKind.Real
+        then
+          AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+            "NODAL-SHAPE-043-007",
+            "array fill requires one scalar Real value"
+          ))
+        Some(AnalogProceduralRuntime.ShapedSource.Fill(scalar))
+      case other
+          if storageReference(module, other).exists(reference =>
+            reference.valueType.dimensions.nonEmpty ||
+              reference.isInstanceOf[AnalogProceduralRuntime.StorageSelection]
+          ) =>
+        Some(AnalogProceduralRuntime.ShapedSource.Read(storageReference(module, other).get))
+      case view: KernelExpr[?] if CandidateRuntime.proceduralShapeSource(view) =>
+        val input = semanticValue(module, view.operands.head.asInstanceOf[Expr[Data]], None)
+        Some(AnalogProceduralRuntime.ShapedSource.View(
+          input,
+          projection(module, view, referenceToken(module, view.operands.head.asInstanceOf[AnyRef]))
+        ))
+      case _ => None
+    if dataType.dimensions.nonEmpty && shaped.isEmpty then
+      AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+        "NODAL-SHAPE-043-007",
+        "shaped procedural values require fill or an owned variable view"
+      ))
     AnalogProceduralRuntime.Value(
       renderEventValue(module, expression),
-      valueType(module, expression, fallback),
-      reads
+      dataType,
+      reads,
+      shaped
     )
 
   private def validateInitializer(
@@ -402,6 +541,12 @@ private[nodal] object AnalogProceduralConstruction:
           Some(variable.identity)
         )
       )
+    if initializer.valueType.dimensions != variable.valueType.dimensions then
+      AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+        "NODAL-SHAPE-043-007",
+        "array assignment requires exact canonical shape",
+        Some(variable.identity)
+      ))
     if initializer.valueType.dimension != variable.valueType.dimension then
       AnalogProceduralRuntime.reject(
         AnalogProceduralRuntime.Diagnostic(
@@ -413,7 +558,7 @@ private[nodal] object AnalogProceduralConstruction:
 
   private def validateAssignment(
       identity: String,
-      target: AnalogProceduralRuntime.Variable,
+      target: AnalogProceduralRuntime.StorageReference,
       value: AnalogProceduralRuntime.Value
   ): Unit =
     if !compatible(value.valueType.kind, target.valueType.kind) then
@@ -424,6 +569,12 @@ private[nodal] object AnalogProceduralConstruction:
           Some(identity)
         )
       )
+    if value.valueType.dimensions != target.valueType.dimensions then
+      AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+        "NODAL-SHAPE-043-007",
+        "array assignment requires exact canonical shape",
+        Some(target.identity)
+      ))
     if value.valueType.dimension != target.valueType.dimension then
       AnalogProceduralRuntime.reject(
         AnalogProceduralRuntime.Diagnostic(
@@ -444,11 +595,31 @@ private[nodal] object AnalogProceduralConstruction:
           s"${record.variable.identity}.declaration",
           record.variable.identity,
           record.initializer.nonEmpty,
-          record.initializer.toVector.flatMap(_.reads).map(_.identity).toSet,
+          record.initializer.toVector.flatMap(_.allReads).map(_.identity).toSet,
           local,
-          record.source
+          record.source,
+          storageVariable = Some(record.variable),
+          initializerSelectedReads = record.initializer.toVector.flatMap(_.allReads)
         )
       )
+
+  private def validateStorageInitializer(
+      module: ModuleState,
+      value: AnalogProceduralRuntime.Value
+  ): Unit =
+    val selected = value.allReads.exists(_.root.valueType.dimensions.nonEmpty)
+    if selected && value.valueType.dimensions.isEmpty && value.source.isEmpty then
+      AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+        "NODAL-SHAPE-043-007",
+        "compound selected scalar initializers require a typed expression operand"
+      ))
+    if module.controlBuilder.exists(_.atRoot) &&
+      (selected || value.valueType.dimensions.nonEmpty && value.allReads.nonEmpty)
+    then
+      AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+        "NODAL-SHAPE-043-007",
+        "persistent array initializers require a static fill without storage reads"
+      ))
 
   private def materializeWithRecorder(
       module: ModuleState,
@@ -456,12 +627,14 @@ private[nodal] object AnalogProceduralConstruction:
   ): Unit =
     val initialValue = pending.initializer.map: initializer =>
       semanticValue(module, initializer, None)
+    initialValue.foreach(validateStorageInitializer(module, _))
     val inferredDimension = initialValue
       .map(_.valueType.dimension)
       .getOrElse("dimensionless")
     val valueType = AnalogProceduralRuntime.ValueType(
       scalarKind(pending.dataType),
-      inferredDimension
+      inferredDimension,
+      shapeDimensions(module, pending.dataType)
     )
     val variable = module.recorder.declare(
       s"variable_${pending.declarationOrder}",
@@ -491,12 +664,14 @@ private[nodal] object AnalogProceduralConstruction:
   ): Unit =
     val initialValue = pending.initializer.map: initializer =>
       semanticValue(module, initializer, None)
+    initialValue.foreach(validateStorageInitializer(module, _))
     val inferredDimension = initialValue
       .map(_.valueType.dimension)
       .getOrElse("dimensionless")
     val valueType = AnalogProceduralRuntime.ValueType(
       scalarKind(pending.dataType),
-      inferredDimension
+      inferredDimension,
+      shapeDimensions(module, pending.dataType)
     )
     val identity =
       s"${module.owner}.${module.controlScope.mkString(".")}.variable_${pending.declarationOrder}"
@@ -645,6 +820,12 @@ private[nodal] object AnalogProceduralConstruction:
       target: Variable[A],
       expression: Expr[A],
       source: Option[AnalogProceduralRuntime.Source]
+  ): Unit = assignSelection(target, expression, source)
+
+  def assignSelection[A <: Data](
+      target: Expr[A],
+      expression: Expr[A],
+      source: Option[AnalogProceduralRuntime.Source]
   ): Unit =
     val module = activeModule
     if module.procedureDepth == 0 then
@@ -655,7 +836,12 @@ private[nodal] object AnalogProceduralConstruction:
         )
       )
     materializeVariables(module)
-    val variable = resolveVariable(module, target)
+    val variable = storageReference(module, target).getOrElse(
+      AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+        "NODAL-SHAPE-043-007",
+        "assignment target is not an owned procedural variable"
+      ))
+    )
     val statement = s"${module.owner}.statement_${module.statementSerial}"
     module.statementSerial += 1
     val value = semanticValue(module, expression, Some(variable.valueType))
@@ -664,9 +850,11 @@ private[nodal] object AnalogProceduralConstruction:
     builder.appendAssignment(
       AnalogControlFlowRuntime.Statement.Assign(
         statement,
-        variable.identity,
+        variable.root.identity,
         value.reads.map(_.identity).toSet,
-        source
+        source,
+        storageTarget = Some(variable),
+        selectedReads = value.reads
       )
     )
     module.controlExpressions += AnalogProceduralRuntime.ControlExpressionRecord(
@@ -683,19 +871,28 @@ private[nodal] object AnalogProceduralConstruction:
         source = source
       )
 
+  private def requireScalarControl(value: AnalogProceduralRuntime.Value): Unit =
+    if value.allReads.exists(reference => reference.root.valueType.dimensions.nonEmpty) then
+      AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+        "NODAL-SHAPE-043-007",
+        "selected array reads in control and event expressions require explicit reference operands"
+      ))
+
   private def runtimeCondition(
       module: ModuleState,
       expression: Expr[Bool],
       source: Option[AnalogProceduralRuntime.Source]
   ): AnalogControlFlowRuntime.Condition =
     val semantic = semanticValue(module, expression, None)
+    requireScalarControl(semantic)
     AnalogControlFlowRuntime.Condition(
       semantic.rendered,
       semantic.reads.map(_.identity).toSet,
       AnalogControlFlowRuntime.Stage.Runtime,
       None,
       semantic.valueType,
-      source
+      source,
+      selectedReads = semantic.reads
     )
 
   def conditional[A](body: => A): A =
@@ -743,12 +940,14 @@ private[nodal] object AnalogProceduralConstruction:
       AnalogControlFlowRuntime.Selector.staticBoolean(value, source = source)
     case None =>
       val semantic = semanticValue(module, expression, None)
+      requireScalarControl(semantic)
       AnalogControlFlowRuntime.Selector(
         semantic.rendered,
         semantic.reads.map(_.identity).toSet,
         semantic.valueType.kind,
         semantic.valueType.dimension,
-        source = source
+        source = source,
+        selectedReads = semantic.reads
       )
 
   def integerCase[A](expression: Expr[Integer])(body: => A): A =
@@ -825,6 +1024,7 @@ private[nodal] object AnalogProceduralConstruction:
     val module = activeModule
     val source = ConstructionKernel.captureAnalogProceduralSource
     val bound = semanticValue(module, iterations, None)
+    requireScalarControl(bound)
     activeBuilder(module).loop(
       AnalogControlFlowRuntime.LoopStage.RuntimeBounded,
       minimumIterations,
@@ -832,7 +1032,8 @@ private[nodal] object AnalogProceduralConstruction:
       bound.reads.map(_.identity).toSet,
       bound.valueType,
       None,
-      source
+      source,
+      boundSelectedReads = bound.reads
     ): identity =>
       module.controlExpressions += AnalogProceduralRuntime.ControlExpressionRecord(
         identity.stripSuffix(".body"),
@@ -865,18 +1066,25 @@ private[nodal] object AnalogProceduralConstruction:
     def text(value: String): String =
       module.eventBindings.foldLeft(value): (rendered, entry) =>
         val (token, reference) = entry
-        val path = ConstructionKernel.analogReferencePath(reference).getOrElse(
+        val path = (if token.startsWith("@shape_dimension_") then
+                      Some(ConstructionKernel.proceduralShapeDimension(reference))
+                    else ConstructionKernel.analogReferencePath(reference)).getOrElse(
           AnalogEventRuntime.fail(5, "procedural expression references an unregistered declaration")
         )
         rendered.replace(token, path)
     def value(input: AnalogProceduralRuntime.Value): AnalogProceduralRuntime.Value =
-      input.copy(rendered = text(input.rendered))
+      input.remap(text, text)
     snapshot.copy(
       variables = snapshot.variables.map: record =>
         val declaration = module.pending.find(pending =>
           Option(module.variables.get(pending.value)).exists(_.identity == record.variable.identity)
         )
         record.copy(
+          variable = record.variable.copy(valueType =
+            record.variable.valueType.copy(
+              dimensions = record.variable.valueType.dimensions.map(text)
+            )
+          ),
           initializer = record.initializer.map(value),
           authoredPath =
             declaration.flatMap(pending => ConstructionKernel.analogReferencePath(pending.value))
@@ -884,11 +1092,12 @@ private[nodal] object AnalogProceduralConstruction:
       ,
       assignments = snapshot.assignments.map(record =>
         record.copy(
+          target = record.target.remap(text),
           value = value(record.value),
           guard = record.guard.map(value)
         )
       ),
-      controlFlow = snapshot.controlFlow.map(_.mapRendered(text)),
+      controlFlow = snapshot.controlFlow.map(_.mapRendered(text).mapReferences(text)),
       controlExpressions =
         snapshot.controlExpressions.map(record => record.copy(value = value(record.value)))
     )
@@ -931,10 +1140,7 @@ private[nodal] object AnalogProceduralConstruction:
     def remapValue(
         value: AnalogProceduralRuntime.Value
     ): AnalogProceduralRuntime.Value =
-      value.copy(
-        rendered = remapRendered(value.rendered, oldOwner, owner),
-        reads = value.reads.map(remapVariable)
-      )
+      value.remap(remapIdentity, remapRendered(_, oldOwner, owner))
 
     snapshot.copy(
       owner = owner,
@@ -948,7 +1154,7 @@ private[nodal] object AnalogProceduralConstruction:
       assignments = snapshot.assignments.map: assignment =>
         assignment.copy(
           identity = remapIdentity(assignment.identity),
-          target = remapVariable(assignment.target),
+          target = assignment.target.remap(remapIdentity),
           value = remapValue(assignment.value),
           guard = assignment.guard.map(remapValue)
         ),

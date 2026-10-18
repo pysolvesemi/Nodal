@@ -822,6 +822,85 @@ launch, rather than assume generic language emission implies tool acceptance.
 F43 D.1/D.2 and the lightweight handoff policy keep later tool execution from
 becoming a reverse dependency of compiler structural work.
 
+### Concrete F49/F52 numerical handoff (not executed)
+
+The following later-tool cases reuse actual compiler witnesses rather than
+claiming that internal reparse is simulation. F48 must first establish a pinned
+accepting language/tool profile, compile/load each regenerated model and its
+scalar reference, and retain exact tool, source, parameter and output identities.
+The known Real-array OpenVAF failures above remain blocked consumer cases.
+Electrical-vector, generated-local-net and private event-helper support require
+separate capability results; a successful scalar control does not establish them.
+
+- `Increment43TopologyBank` in `Increment43GeneratedTopologyTests.scala`:
+  compare `count = 2, 3, 5` and resistance 1 kOhm/2 kOhm against one independent
+  scalar resistor per lane. Drive common to zero and each lane to distinct DC
+  voltages in [-1, 1] V. The oriented model current is `V(lane, common) / R`;
+  account explicitly for opposite testbench voltage-source current convention.
+  A transient run over two periods of distinct 1 kHz, amplitude 1 V sine sources
+  has the same instantaneous algebraic reference. This checks symbolic
+  overrides, lane independence and target indexing without inventing dynamics.
+- `Increment43LocalArrayReusable` in
+  `Increment43GeneratedLocalArrayTests.scala`: each exposed lane has two child
+  instances, each containing two independent 1 kOhm generated branches in
+  parallel. The scalar reference is therefore four 1 kOhm resistors per lane,
+  or `I = 0.004 * V` amperes for voltage in volts. Repeat the distinct-lane DC
+  and transient stimuli above. Compare per-lane currents and total common-node
+  current; this specifically checks reusable-definition identity and generated
+  local net ownership, not merely module count.
+- `Increment43WritableEventArray` in `Increment43WritableArrayTests.scala`:
+  its initial-step overlap snapshot must set `sink` to 3; after the second
+  snapshot reuse `cells` is [4, 1, 2], and the copied array is [4, 1, 3].
+  `Increment43WritableFillReadsOnce` must first initialize all three cells to 3
+  and later assign all three to 7. These local states are not exposed by the
+  existing electrical outputs. F49/F52 must use supported hierarchical state
+  observation or explicitly authored observability variants, with matching
+  scalar-reference variants and retained compiler parity. Do not call the
+  current zero-volt contribution a numerical test of internal array contents.
+  Sample after the initial-step handler completes and on later transient
+  samples to distinguish lexical initialization from unintended extra resets.
+
+Initial comparison tolerances for the resistor cases are
+`abs(I_model - I_reference) <= 1e-9 A + 1e-6 * abs(I_reference)` and
+`abs(V_model - V_reference) <= 1e-8 V + 1e-6 * abs(V_reference)`.
+Use maximum transient step 10 us for the stated 1 kHz stimuli, preserve simulator
+convergence settings, and record any justified tolerance change instead of
+loosening it to conceal a discrepancy. The dimensionless state checks use
+absolute tolerance 1e-12 and exact expected update counts/order in an available
+state trace.
+
+For the shared-live extension, F48 additionally owns the exact compiler-private
+analog output-helper ABI in the regenerated `event-or`, `reuse`, `generated`
+and `diamond8` profiles of `Increment43UniformScalarTests.scala`. Their current
+VA/AMS pipeline acceptance and test-only target interpreters do not establish
+independent simulator support. F49/F52 should compare the two-monitor shared-fill
+model (`Increment43RepeatedLiveUniformScalar(3)`) against an independently authored
+scalar `cross(signal) or above(signal)` reference, and the generated model against
+one scalar reference per actual generated occurrence. Retain the same argument
+expressions, analyses, OR body and monitor occurrences in both versions.
+
+The current examples use internal initialized state; a useful numerical test
+requires explicit observability/stimulus variants. Add a persistent event counter
+updated once by the complete OR body, expose it through a legal output, and
+update the monitored scalar from -1 V to +1 V and back with a supported timed
+stimulus. Exercise coincident cross/above occurrences, separate consumers after
+source mutation, and independent generated occurrences. Require exact agreement
+of ordered event counts and final counter values with the scalar reference;
+match transition times within 1e-13 s for 1 ns stimulus spacing, with maximum
+transient step 1e-11 s and documented event tolerances. Compare exposed numeric
+values with the voltage/state tolerances above. Require tools capable of showing
+same-time convergence visits before claiming that test covers those visits;
+ordinary waveform agreement alone cannot prove private fill evaluation counts.
+Do not simulate the deliberately zero-denominator lazy-control compiler witness
+as a numerical positive: its later reached branches are intentionally useful
+for compiler reachability tests, not a well-defined analog reference model.
+Source/control traces alone do not establish simulator monitor scheduling.
+
+These are concrete F-043.D.2 handoff requirements and references. No simulator,
+DC, transient, numerical comparison or tool acceptance is reported as executed
+by this section. F48 compilation and F49/F52 execution remain their respective
+owners' work and do not reverse-block the focused F43 compiler profile.
+
 ### Focused event-free native and target acceptance
 
 The shared semantic matrix passed 49 cases with exact roundtrip and actual
@@ -2396,3 +2475,211 @@ VAMS2023 baseline, not independent simulator or OpenVAF electrical-vector
 compilation. No CI or checklist closure is claimed. Repeated shared live/event
 fill evaluation remains the next explicit gate-v0.5 obligation before the full
 existing F43 child/applicability review.
+
+## Repeated live-fill demand sharing — v0.7
+
+The required sharing obligation retained in writable-array v0.5 is implemented
+under [v0.7](../design-gates/NodalWritableRealArrays-DG-v0.7.md). Public syntax is
+unchanged. Original retained fill/view shape, ownership, bounds and effect checks
+precede derived scalar erasure. One actual fill identity has one body in the
+consumer DAG; equal-text distinct fills remain distinct. Source and native
+verification distinguish direct storage/deferred operands from exact transitive
+storage-read inventories. The new non-Pure `analog_live_fill` capability is
+non-evaluating: selected DA applies at the actual consuming control/event, not
+at the definition. It cannot escape into snapshots, persistent initializers,
+public functions or another complete consumer.
+
+The existing scalar parser owns body typing and units. Actual SSA ownership,
+dominance, acyclicity, generated ownership and the primitive/OR/on use closure
+establish the complete consumer independently of source labels. Event relocation
+barriers still observe transitive actual roots. A malformed structured region is
+now rejected before procedure dataflow enters its body; a forged zero-result
+fill user is rejected before result lookup. Reverse fill-consumer discovery has
+the explicit 128-depth guard before recursion, independently tested by its exact
+diagnostic; event graph discovery is iterative and visited. The earlier
+140-depth rejection through forward parsing alone did not prove that reverse
+traversal was bounded, and is not used as evidence for the corrected guard.
+
+Controls use a compiler-derived finite scalar plan: one body per fill, private
+cache/ready/continuation state, lazy Boolean/select paths, and a checked bounded
+for/case dispatcher. No authored variable is a plan assignment target. Later
+if-arm programs occur only in reached else scopes; flat chains are emitted
+iteratively and demand-free successors retain ordinary else-if spelling. Case
+selectors and loop bounds keep their original evaluation points. Already-proven
+static controls and ordinary single-use/immutable capture paths retain their
+existing behavior.
+
+Events keep numeric work at each original reached argument site through
+`ready ? cache : private_store(F, cache, ready)`. Only ready-flag resets precede
+the complete unchanged event statement. Each OR retains one body and separate
+primitive histories; correctness does not assume leftmost argument or OR order.
+The helper has a narrowly checked Real-input/Real-output-cache/Integer-output-ready
+ABI and no other effects. Its outputs are distinct private scalars, and its
+input cannot access its own outputs. Generated scratch belongs to the actual
+procedure occurrence. The independent target parser validates the exact helper
+signature/body and paired writable actuals, rejects own-output readback/aliasing
+and illegal effect contexts, and checks target syntax/resource limits. It does
+not infer validity from a comment or certify simulator scheduling.
+
+### Actual public source and target
+
+The `form == 3` path of `Increment43RepeatedLiveUniformScalar` in
+`core/scala/testkit/test/src/nodal/internal/testkit/Increment43UniformScalarTests.scala`
+contains this actual source:
+
+```scala
+val signal = variable(Real, 1.0.V)
+val sink = variable(Real, 0.0.real)
+analogProcedure:
+  val filled = Vec.fill(Vec(Real, 2))(signal)
+  val selected = filled.at(0)
+  on(cross(selected) or above(filled.at(1))):
+    sink := 1.0.real
+```
+
+The actual `event-or.va.source.mlir` binds one `analog_live_fill` result to both
+primitive event operands, then composes them with one `analog_event_or` and one
+`analog_on`. The actual generated `event-or.va` includes:
+
+```verilog
+analog function real event_live_store;
+  input value;
+  output cache;
+  output ready;
+  real value;
+  real cache;
+  integer ready;
+  begin
+    cache = value;
+    ready = 1;
+    event_live_store = value;
+  end
+endfunction
+```
+
+Inside the actual procedure, without renaming its emitted identifiers:
+
+```verilog
+event_live_ready_0 = 0;
+@(cross((event_live_ready_0 ? event_live_cache_0 : event_live_store(event_Increment43RepeatedLiveUniformScalar_signal, event_live_cache_0, event_live_ready_0))) or above((event_live_ready_0 ? event_live_cache_0 : event_live_store(event_Increment43RepeatedLiveUniformScalar_signal, event_live_cache_0, event_live_ready_0)))) begin
+  event_Increment43RepeatedLiveUniformScalar_sink = 1.0;
+end
+```
+
+Source, normalized IR and actual VA/AMS triplets are under
+`.work/scala-validation/live-fill-witnesses/`. The independent-tool/numerical
+handoff above identifies required accepting-tool capabilities, scalar references,
+stimuli, observability and tolerances; none of those simulator runs is claimed.
+
+### Focused native/target acceptance and resource review
+
+The matched native graph unit passes 44 checks, including causal forged binding,
+read inventory, generated owner, multiple-consumer, self-reference, zero-result
+user, malformed-region and reverse-depth negatives. It also proves initialization
+may occur after the non-evaluating definition but before its consumer. The
+independent event parser passes 426 cases, the private control-plan unit 41,
+generated-persistent predecessors 151, storage descriptors 21, and the analog
+expression and writable backend units pass their retained and new selected cases.
+The writable unit adds actual ordinary/generated inline-event, selected-storage,
+distinct-fill and deep-control witnesses; over-budget failures leave caller output
+unchanged. The final if-chain repair passes 64 ordinary arms plus one live arm,
+and a native-valid 300-arm case rejects at the existing target-depth boundary.
+No new native arm-count cap is introduced.
+
+```sh
+source .work/nodal-toolchain-env.sh
+PYTHONPATH="$PWD/.work/python-tools" cmake --build .work/native-release --target nodal-writable-array-backend-unit-tests nodal-event-reparse-unit-tests nodal-analog-live-control-plan-unit-tests nodal-live-fill-unit-tests nodal-storage-model-unit-tests nodal-analog-expression-unit-tests nodal-generated-persistent-backend-unit-tests nodalc nodal-translate -j2
+.work/native-release/core/compiler/test/Unit/nodal-live-fill-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-writable-array-backend-unit-tests .work/live-fill-backend-artifacts
+PYTHONDONTWRITEBYTECODE=1 python3 core/compiler/test/Unit/check_live_fill_trace.py .work/live-fill-backend-artifacts
+```
+
+The test-only interpreter operates on actual emitted expressions and checks both
+OR/strict-operand traversal directions, a skipped first demand, once-only reached
+fills, equal-text distinct fills and fresh visits with changed storage while
+cache values persist. It is not an analog simulator. The control-plan trace's
+40-fill diamond has 321 blocks/private scalars and executes 281 blocks. Its actual
+target is 82,705 bytes. The native 8-fill event witness has eight caches and 510
+printed demand wrappers: 62,574 bytes VA/62,570 AMS; generated variants are
+62,748/62,744 bytes. The public 8-fill profile has different roots and provenance:
+96,169-byte source MLIR and 125,987-byte VA/125,983-byte AMS output. Compactness
+refers to the derived body graph, not all metadata or rendered event text.
+
+Event caps are 4,096 wrappers/1 MiB per complete consumer and 65,536 wrappers/
+16 MiB per module definition. Source preflight uses `NODAL-SHAPE-043-010`;
+native preflight independently checks saturating DAG costs, and the backend
+checks actual allocated names, punctuation, declarations/resets/helper accounting
+before expansion and actual rendered bytes before publication. The independent
+target parser retains depth 256; the canonical native expression/deferred profile
+retains depth 128. The source retained graph/read-remap depth contract is separate.
+Twelve- and 40-level event diamonds reject before expanded output, while the
+existing 40-level retained traversal and finite control-plan checks remain valid.
+These boundaries are explicit checked limits, not an unlimited DAG-size claim.
+
+A public nested probe exposed repeated recursive fact inference before preflight.
+`ConstructionExpressionFacts` now memoizes by actual expression identity within
+one fact query, retaining cycle/depth checks and never caching across changing
+registration/parameter environments. Parameter defaults do not become static
+values. Backend complete-consumer maps avoid per-primitive storage-map copies and
+repeat whole-graph resolution; private allocations use unique ordinals. These
+remove identified duplicate traversals, without claiming a measured universal
+speedup. Native independent entry points can still resolve the same graph more
+than once, provenance paths grow with authored depth, and inline event text can
+grow exponentially within the admitted cap. A focused source probe measured an
+8-fill capture at 7.682 seconds and capture-plus-bridge at 7.974 seconds,
+12-fill rejection at 8.335 seconds and 40-fill rejection at 23.959 seconds in
+this workspace. This probe preceded the diagnostic renumbering to 043-010;
+final causal assertions use the corrected diagnostic. The earlier
+unresolved nested run was interrupted; no speedup ratio is inferred from it.
+
+Focused review found and repaired the reverse-discovery bound, malformed-user
+arity and flat-if emitter recursion issues. Remaining inspected native graph,
+private ABI, demand/reset placement and control-plan logic had no concrete
+blocker. This is focused prototype acceptance, not exhaustive certification;
+CI, full qualification and independent simulator execution were not run.
+
+The two changed public suites pass 16 source/bridge grouped methods. After the
+resource diagnostic was assigned its non-conflicting 043-010 code, the nested
+budget/selected-DA method and exact resource-boundary method were rerun and pass.
+Eleven selected fact/control/event predecessors pass, preserving physical units,
+nonfinite/domain rejection, parameter-default non-specialization, control staging,
+monitor placement, incoming initialization, unsupported effects and event reuse.
+The comma-containing physical-unit predecessor required the existing uTest Tree
+selector; earlier CLI selector mismatches executed no semantic test and are not
+counted as passes.
+
+Fourteen actual public source→default native gate→VA/AMS profiles pass on the
+final matched tools: repeated control, complete OR, equal-text/event reuse, lazy
+if/case, generated occurrences, nested diamond and mixed selected storage.
+The original 12 profiles remain byte-identical after the final backend mapping
+and iterative-chain repairs. The added mixed-storage profile emits 1,403-byte VA
+and 1,399-byte AMS targets. Exact source/tool/output hashes and commands are
+recorded under `.work/scala-validation/live-fill-*`; the source tests and target
+trace checker are maintained repository files. Changed C++ formatting, pinned
+Scala formatting, package visibility, diagnostic JSON/unique-code checks and
+changed-document checks pass. The repository ClangFormat configuration does not
+support TableGen formatting; the changed TableGen files were compiled through
+the matched native build, not reported as formatter passes.
+
+Final native-enabled public replay passes eight selected methods plus the directly
+affected ordinary live-control/symbolic-view/loop predecessor (nine total).
+`NODAL_NODALC` and `NODAL_TRANSLATE` point to the matched final binaries; the
+selected commands are retained in `.work/scala-validation/run-live-fill-native-public.sh`
+and `RunLiveFillControlPredecessor.scala`. The eight-method replay took 71 seconds.
+Pinned targeted Scalafix 0.14.7 passes on all seven changed Scala files. Focused
+source review confirms original shape/effect validation, actual identity keys,
+transitive DA and compact saturated preflight, without claiming whole-pipeline
+linearity. The final source/tool/output hash manifests are retained alongside
+the logs. This completes the implementation acceptance described in the
+[original-scope reconciliation](increment43-readiness.md#final-original-scope-reconciliation);
+verified integration remains pending.
+
+The actual normalized `event-or.va.mlir` binds one deferred `%2` from the voltage
+variable `%0`; both `nodal.analog_cross` and `nodal.analog_above` consume that same
+SSA value, each with `reference_form = "live"` and the exact transitive read
+`Increment43RepeatedLiveUniformScalar.procedure.variable_0`. Their two event
+results feed one `nodal.analog_event_or` and one `nodal.analog_on`. The deferred
+result type is `!nodal.analog_deferred<"real", "voltage">`, while the storage
+operand remains `!nodal.variable<"real", "voltage">`. This is the actual normalized
+IR corresponding to the public source and target excerpt above, not a textual
+mutable-variable fallback or a second evaluation program.

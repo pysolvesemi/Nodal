@@ -1442,6 +1442,171 @@ int main(int argc, char **argv) {
           std::string::npos ||
       llvm::StringRef(lastLaneTarget).count("real ") != 1)
     return fail("last signed32 selected lane was rejected or expanded by array cardinality");
+  // Retained live-fill graphs use the canonical native consumer and preserve
+  // inline event demand. These are generated targets, not handwritten setters.
+  const std::string deferred = "!nodal.analog_deferred<\"real\", \"1\">";
+  auto liveFill = [&](const std::string &name, const std::string &dependency,
+                      bool deferredDependency, const std::string &value) {
+    return "%" + name + " = \"nodal.analog_live_fill\"(%" + dependency +
+           ") <{identity = \"Arrays." + name + "\", value = \"" + value +
+           "\", owner = \"Arrays\", metadata = {}}> : (" +
+           (deferredDependency ? deferred : variable) + ") -> " + deferred + "\n";
+  };
+  auto livePrimitive = [&](const std::string &name, const std::string &fillName,
+                           const std::string &value, const std::string &second = "") {
+    return "%" + name + " = \"nodal.analog_above\"(%" + fillName +
+           (second.empty() ? "" : ", %" + second) +
+           ") <{reference_form = \"live\", event_id = \"Arrays." + name +
+           "\", owner = \"Arrays\", contract = \"increment37\", name = \"\", "
+           "arguments = [" +
+           eventArgument(0, value, "1", {{"liveSource"}}) +
+           "], analyses = [], event_reads = [\"Arrays.liveSource\"], metadata = {}}> : (" +
+           deferred + (second.empty() ? "" : ", " + deferred) + ") -> !nodal.analog_event\n";
+  };
+  auto liveArm = [&](const std::string &name, const std::string &fillName) {
+    return "\"nodal.analog_if_arm\"(%" + fillName +
+           ") <{reference_form = \"live\", arm_id = \"Arrays." + name +
+           "\", owner = \"Arrays\", is_else = false, stage = \"runtime\", "
+           "condition_value = \"real_gt(analog_add(Arrays." +
+           fillName + ",Arrays." + fillName +
+           "),0.0)\", condition_kind = \"boolean\", condition_dimension = \"1\", "
+           "condition_reads = [\"Arrays.liveSource\"], static_value_present = false, "
+           "static_value = false, metadata = {}}> ({\n" +
+           assignment(name + "Write", "liveSource", "", "3.0", false) + "}) : (" + deferred +
+           ") -> ()\n";
+  };
+  const std::string liveRoot = R"mlir(
+%liveSource = "nodal.analog_variable"() <{identity = "Arrays.liveSource", owner = "Arrays", declaration_order = 0 : i64, initialized = true, initializer_value = "2.0", initializer_kind = "real", initializer_dimension = "1", initializer_reads = [], metadata = {semantic_path = "Arrays.liveSource"}}> : () -> !nodal.variable<"real", "1">
+)mlir";
+  auto diamond = [&](unsigned count) {
+    std::string definitions;
+    for (unsigned i = 0; i < count; ++i) {
+      std::string previous = i ? "live" + std::to_string(i - 1) : "liveSource";
+      definitions += liveFill("live" + std::to_string(i), previous, i != 0,
+                              i ? "analog_add(Arrays." + previous + ",Arrays." + previous + ")"
+                                : "analog_div(1.0,Arrays.liveSource)");
+    }
+    return definitions;
+  };
+  for (auto kind : {nodal::BackendKind::VerilogA, nodal::BackendKind::VerilogAMS}) {
+    for (bool generated : {false, true}) {
+      const std::string graph = diamond(8);
+      const std::string source = profileSource(
+          wrap(liveRoot + graph +
+                   livePrimitive("liveLeft", "live7", "analog_select(false,Arrays.live7,7.0)") +
+                   livePrimitive("liveRight", "live7", "Arrays.live7") +
+                   eventOr("liveEither", "liveLeft", "liveRight") + on("liveOn", "liveEither"),
+               "", generated, false, true),
+          kind);
+      std::string target;
+      if (!deterministicTarget(source, target, kind))
+        return fail("shared live diamond failed actual native-to-target emission or reparse");
+      auto eventLine = statementContaining(target, "@(above(");
+      if (llvm::StringRef(target).count("real event_live_cache_") != 8 ||
+          llvm::StringRef(target).count("event_live_store(") != 510 ||
+          llvm::StringRef(target).count("@(") != 1 ||
+          llvm::StringRef(eventLine).count(" or ") != 1 ||
+          llvm::StringRef(eventLine).count("event_live_store(") != 510 ||
+          !before(target, "event_live_ready_0 = 0;", eventLine) ||
+          (generated && !before(target, "for (array_gen", "real event_live_cache_")))
+        return fail(
+            "shared inline event expanded histories, eager numeric work or cache identities");
+      llvm::outs() << "live diamond depth=8 wrappers=510 target_bytes=" << target.size()
+                   << " generated=" << generated << "\n";
+      if (!generated)
+        artifact("live-fill-diamond", source, target,
+                 kind == nodal::BackendKind::VerilogA ? ".va" : ".vams");
+    }
+    const std::string controlSource = profileSource(
+        wrap(liveRoot + diamond(40) + ifGroup("liveControl", liveArm("liveArm", "live39")), "",
+             false, false, true),
+        kind);
+    std::string controlTarget;
+    if (!deterministicTarget(controlSource, controlTarget, kind) || controlTarget.size() > 150000 ||
+        controlTarget.find("event_live_store") != std::string::npos ||
+        controlTarget.find("case (event_live_control_pc_") == std::string::npos)
+      return fail("40-fill control graph was expanded or did not use the finite plan");
+    artifact("live-fill-control", controlSource, controlTarget,
+             kind == nodal::BackendKind::VerilogA ? ".va" : ".vams");
+  }
+  const std::string selectedSource =
+      wrap(fill("selectedInitial", "2", "2.0") + declaration("values", "2", "selectedInitial") +
+               index("liveSource", "values", "2", "%c1", "i64") +
+               liveFill("selectedFill", "liveSource", false, "analog_div(1.0,Arrays.liveSource)") +
+               livePrimitive("selectedEvent", "selectedFill",
+                             "analog_add(Arrays.selectedFill,Arrays.selectedFill)") +
+               on("selectedOn", "selectedEvent"),
+           "", false, false, true);
+  std::string selectedTarget;
+  if (!deterministicTarget(selectedSource, selectedTarget) ||
+      !before(selectedTarget, "event_live_map_0 = 1;", "@(above(") ||
+      statementContaining(selectedTarget, "@(above(")
+              .find("event_Arrays_values[event_live_map_0]") == std::string::npos)
+    return fail("live fill transitive selected storage escaped its consumer map");
+  artifact("live-fill-selected", selectedSource, selectedTarget);
+  const std::string distinctSource = wrap(
+      liveRoot + liveFill("equalA", "liveSource", false, "Arrays.liveSource") +
+          liveFill("equalB", "liveSource", false, "Arrays.liveSource") +
+          livePrimitive("distinct", "equalA", "analog_add(Arrays.equalA,Arrays.equalB)", "equalB") +
+          on("distinctOn", "distinct"),
+      "", false, false, true);
+  std::string distinctTarget;
+  if (!deterministicTarget(distinctSource, distinctTarget) ||
+      llvm::StringRef(distinctTarget).count("real event_live_cache_") != 2 ||
+      llvm::StringRef(distinctTarget).count("event_live_store(") != 2)
+    return fail("equal-text live definitions lost their distinct cache identity");
+  artifact("live-fill-distinct", distinctSource, distinctTarget);
+  const std::string laterSource =
+      wrap(liveRoot + liveFill("firstFill", "liveSource", false, "Arrays.liveSource") +
+               liveFill("laterFill", "liveSource", false, "analog_div(1.0,Arrays.liveSource)") +
+               ifGroup("lazyArms",
+                       liveArm("firstLiveArm", "firstFill") + liveArm("laterLiveArm", "laterFill")),
+           "", false, false, true);
+  std::string laterTarget;
+  if (!deterministicTarget(laterSource, laterTarget) ||
+      laterTarget.find("      else begin\n        event_live_control_live_ready_") ==
+          std::string::npos)
+    return fail("later live predicate dispatcher escaped its reached else branch");
+  // An authored flat chain stays iterative even with one live predicate. Only
+  // that predicate requires a nested else prelude; ordinary arms stay else-if.
+  for (unsigned arms : {64U, 300U}) {
+    std::string body;
+    for (unsigned i = 0; i < arms; ++i)
+      body += ifArm("flat" + std::to_string(i), "real_gt(Arrays.liveSource,0.0)", {{"liveSource"}});
+    body += liveArm("flatLive", "flatFill");
+    const std::string source =
+        wrap(liveRoot + liveFill("flatFill", "liveSource", false, "Arrays.liveSource") +
+                 ifGroup("flatChain", body),
+             "", false, false, true);
+    if (arms == 64) {
+      std::string target;
+      if (!deterministicTarget(source, target) || llvm::StringRef(target).count("else if (") != 63)
+        return fail("long flat chain with one live arm lost iterative else-if placement");
+    } else {
+      auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+      if (!module || mlir::failed(mlir::verify(*module)))
+        return fail("long flat-chain target-depth fixture is not native-valid");
+      mlir::ScopedDiagnosticHandler handler(&context,
+                                            [](mlir::Diagnostic &) { return mlir::success(); });
+      std::string rejected = "sentinel";
+      if (emit(source, rejected) || rejected != "sentinel")
+        return fail("long flat chain escaped existing target-depth admission");
+    }
+  }
+  for (unsigned depth : {12U, 40U}) {
+    const std::string source =
+        wrap(liveRoot + diamond(depth) +
+                 livePrimitive("tooLarge", "live" + std::to_string(depth - 1),
+                               "analog_add(Arrays.live" + std::to_string(depth - 1) +
+                                   ",Arrays.live" + std::to_string(depth - 1) + ")") +
+                 on("largeOn", "tooLarge"),
+             "", false, false, true);
+    mlir::ScopedDiagnosticHandler handler(&context,
+                                          [](mlir::Diagnostic &) { return mlir::success(); });
+    std::string rejected = "sentinel";
+    if (emit(source, rejected) || rejected != "sentinel")
+      return fail("over-budget event graph published output instead of pre-expansion rejection");
+  }
   llvm::outs() << "writable array backend checks passed\n";
   return 0;
 }

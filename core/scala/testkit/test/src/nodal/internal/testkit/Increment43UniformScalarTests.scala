@@ -128,6 +128,77 @@ final class Increment43RepeatedLiveUniformScalar(form: Int) extends Module:
       on(timer(times.at(0), times.at(1))):
         sink := 1.0.real
 
+final class Increment43SharedLiveReuse extends Module:
+  val signal = variable(Real, 1.0.V)
+  val sink = variable(Real, 0.0.real)
+  analogProcedure:
+    val shared = Vec.fill(Vec(Real, 2))(signal + 0.5.V)
+    val equalLeft = Vec.fill(Vec(Real, 2))(signal + 0.5.V)
+    val equalRight = Vec.fill(Vec(Real, 2))(signal + 0.5.V)
+    val event = cross(shared.at(0) + equalLeft.at(0)) or
+      above(shared.at(1) + equalRight.at(1))
+    on(event):
+      sink := 1.0.real
+    signal := 2.0.V
+    on(event):
+      sink := 2.0.real
+
+final class Increment43LazySharedControl extends Module:
+  val denominator = variable(Real, 0.0.real)
+  val flag = variable(Bool, false.B)
+  val sink = variable(Real, 0.0.real)
+  analogProcedure:
+    val shared = Vec.fill(Vec(Real, 2))(1.0.real / denominator)
+    analogConditional:
+      analogWhen(flag && (shared.at(0) > shared.at(1))):
+        sink := 1.0.real
+      analogElseWhen(!flag && (shared.at(0) < shared.at(1))):
+        sink := 2.0.real
+    analogCase(shared.at(0) > shared.at(1)):
+      analogCaseArm(true):
+        sink := 3.0.real
+      analogCaseArm(false):
+        sink := 4.0.real
+
+final class Increment43GeneratedSharedLive extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val signal = variable(Real, 1.0.V)
+      val shared = Vec.fill(Vec(Real, 2))(signal + 0.5.V)
+      on(cross(shared.at(0)) or above(shared.at(1))):
+        signal := signal + 1.0.V
+
+final class Increment43LiveDiamond(levels: Int, consumers: Int = 1) extends Module:
+  val signal = variable(Real, 1.0.V)
+  val sink = variable(Real, 0.0.real)
+  analogProcedure:
+    var value: Expr[Real] = signal
+    for _ <- 0 until levels do
+      val fill = Vec.fill(Vec(Real, 2))(value)
+      value = fill.at(0) + fill.at(1)
+    val event = cross(value) or above(value)
+    for _ <- 0 until consumers do
+      on(event):
+        sink := 1.0.real
+
+final class Increment43MixedSharedLive extends Module:
+  val cells = variable(Vec(Real, 2), Vec.fill(Vec(Real, 2))(1.0.V))
+  val sink = variable(Real, 0.0.real)
+  analogProcedure:
+    val shared = Vec.fill(Vec(Real, 2))(cells.at(0) + 0.5.V)
+    on(cross(shared.at(0) + cells.at(1)) or above(shared.at(1))):
+      sink := 1.0.real
+
+final class Increment43SharedLiveMissingLane extends Module:
+  analogProcedure:
+    on(initialStep):
+      val cells = variable(Vec(Real, 2))
+      cells.writable.at(0) := 1.0.real
+      val fill = Vec.fill(Vec(Real, 2))(cells.at(1))
+      analogConditional:
+        analogWhen(fill.at(0) > fill.at(1)):
+          cells.writable.at(0) := 2.0.real
+
 final class Increment43ScalarInitializerMissingLane extends Module:
   analogProcedure:
     on(initialStep):
@@ -415,11 +486,111 @@ object Increment43UniformScalarTests extends TestSuite:
           assert(!body.contains(s"$name = "), !emitted.contains("initial_step"))
           assert(!emitted.contains("_initializer"), !emitted.contains("_copy_index"))
 
-    test("live shared fills reject repeated tokens projections event slots and OR alternatives"):
+    test("live shared fills retain one deferred identity across tokens projections slots and OR"):
       for form <- 0 to 4 do
-        val message = failure(new Increment43RepeatedLiveUniformScalar(form))
-        assert(message.contains("NODAL-SHAPE-043-007"))
-        assert(message.contains("repeated shared-fill sources"))
+        val captured = ConstructionKernel.inspect(new Increment43RepeatedLiveUniformScalar(form))
+        val text = ScalaToMlirBridge.fromSnapshot(captured).text
+        val fills = operations(text, "analog_live_fill")
+        assert(fills.size == 1, text.contains("reference_form = \"live\""))
+        assert(operations(text, "analog_array_fill").isEmpty)
+        assert(fills.head.contains("!nodal.analog_deferred<\"real\","))
+        assert(!fills.head.contains("reads ="), !fills.head.contains("reference_form"))
+        if form == 3 then assert(operations(text, "analog_event_or").size == 1)
+        native: (compiler, translator, directory) =>
+          targets(captured, compiler, translator, directory): emitted =>
+            if form >= 2 then
+              val monitors = emitted.linesIterator.filter(_.trim.startsWith("@(")).toVector
+              assert(monitors.size == 1, monitors.head.contains("event_live_store("))
+              assert(emitted.contains("event_live_ready_0 = 0;"))
+              assert(emitted.indexOf("event_live_ready_0 = 0;") < emitted.indexOf(monitors.head))
+              if form == 3 then assert(monitors.head.contains(" or "))
+            else assert(emitted.contains("case ("))
+
+    test("complete OR consumers preserve distinct equal text fills and event reuse resets"):
+      val captured = ConstructionKernel.inspect(new Increment43SharedLiveReuse)
+      val text = ScalaToMlirBridge.fromSnapshot(captured).text
+      val fills = operations(text, "analog_live_fill")
+      assert(fills.size == 6, fills.distinct.size == 6)
+      assert(operations(text, "analog_event_or").size == 2)
+      assert(operations(text, "analog_variable_read").isEmpty)
+      val bodies = "value = \"([^\"]+)\"".r
+      assert(fills.flatMap(line => bodies.findFirstMatchIn(line).map(_.group(1))).distinct.size ==
+        1)
+      native: (compiler, translator, directory) =>
+        targets(captured, compiler, translator, directory): emitted =>
+          val monitors = emitted.linesIterator.map(_.trim).filter(_.startsWith("@(")).toVector
+          val resets = emitted.linesIterator.map(_.trim)
+            .filter(line => line.startsWith("event_live_ready_") && line.endsWith(" = 0;")).toVector
+          assert(monitors.size == 2, resets.size == 6, resets.distinct.size == 6)
+          assert(monitors.forall(_.contains(" or ")))
+          val mutation = s"${targetName(variable(captured, "signal"))} = 2.0;"
+          assert(emitted.indexOf(monitors.head) < emitted.indexOf(mutation))
+          assert(emitted.indexOf(mutation) < emitted.indexOf(monitors(1)))
+          assert(resets.take(3).forall(reset =>
+            emitted.indexOf(reset) < emitted.indexOf(monitors.head)
+          ))
+          assert(resets.drop(3).forall(reset => emitted.indexOf(reset) > emitted.indexOf(mutation)))
+
+    test("lazy control consumers and generated event occurrences retain their actual owners"):
+      val captured = ConstructionKernel.inspect(new Increment43LazySharedControl)
+      val text = ScalaToMlirBridge.fromSnapshot(captured).text
+      assert(operations(text, "analog_live_fill").size == 3)
+      assert(operations(text, "analog_if_arm").size == 2)
+      assert(operations(text, "analog_case").size == 1)
+      assert(text.contains("bool_and("), text.contains("bool_not("))
+      val generated = ConstructionKernel.inspect(new Increment43GeneratedSharedLive)
+      val generatedText = ScalaToMlirBridge.fromSnapshot(generated).text
+      val definitions = operations(generatedText, "analog_live_fill")
+      assert(definitions.size == 1)
+      assert(definitions.head.contains("generated_owner ="))
+      assert(definitions.head.contains("generated_induction ="))
+      native: (compiler, translator, directory) =>
+        targets(captured, compiler, translator, directory): emitted =>
+          assert(emitted.contains("case ("), emitted.contains("else begin"))
+        targets(generated, compiler, translator, directory): emitted =>
+          assert(emitted.contains("genvar"), emitted.contains("event_live_ready_0 = 0;"))
+          assert(emitted.linesIterator.count(_.trim.startsWith("@(")) == 1)
+
+    test("shared events bind only direct handles and retain exact transitive selected reads"):
+      val captured = ConstructionKernel.inspect(new Increment43MixedSharedLive)
+      val text = ScalaToMlirBridge.fromSnapshot(captured).text
+      assert(operations(text, "analog_live_fill").size == 1)
+      assert(operations(text, "shape_index").size == 2)
+      val cross = operations(text, "analog_cross").head
+      val above = operations(text, "analog_above").head
+      assert(cross.contains("!nodal.variable<"), cross.contains("!nodal.analog_deferred<"))
+      assert(!above.contains("!nodal.variable<"), above.contains("!nodal.analog_deferred<"))
+      val provenance = AnalogProceduralMlir.sourceMapEntries(captured)
+      assert(provenance.exists(_.contains(".event.live_fill_0")))
+      assert(provenance.exists(_.contains(".event.live.reference_1.storage.projection_0")))
+      native: (compiler, translator, directory) =>
+        targets(captured, compiler, translator, directory): emitted =>
+          val monitor = emitted.linesIterator.find(_.trim.startsWith("@(")).get
+          assert(monitor.contains("event_live_store("), monitor.contains(" or above("))
+          assert(monitor.contains(s"${targetName(variable(captured, "cells"))}["))
+
+    test("nested live diamond emission preserves one cached value across a complete OR"):
+      val captured = ConstructionKernel.inspect(new Increment43LiveDiamond(8))
+      val text = ScalaToMlirBridge.fromSnapshot(captured).text
+      assert(operations(text, "analog_live_fill").size == 8)
+      assert(text.length < 250000)
+      native: (compiler, translator, directory) =>
+        targets(captured, compiler, translator, directory): emitted =>
+          val monitors = emitted.linesIterator.map(_.trim).filter(_.startsWith("@(")).toVector
+          assert(monitors.size == 1, monitors.head.contains(" or "))
+          assert("event_live_store\\(".r.findAllIn(monitors.head).size == 1020)
+          assert(emitted.getBytes(java.nio.charset.StandardCharsets.UTF_8).length < 1024 * 1024)
+    test("live event budgets reject before expansion while selected DA stays strict"):
+      for depth <- Vector(12, 40) do
+        val message = failure(new Increment43LiveDiamond(depth))
+        assert(message.contains("NODAL-SHAPE-043-010"), message.contains("before expansion"))
+      val aggregate = failure(new Increment43LiveDiamond(8, 100))
+      assert(aggregate.contains("module resource limit"), aggregate.contains("before expansion"))
+      val missing = failure(new Increment43SharedLiveMissingLane)
+      assert(
+        missing.contains("NODAL-ANALOG-034-004"),
+        missing.contains("before definite initialization")
+      )
 
     test("wrappers preserve incoming initialization effects and mutable root restrictions"):
       val missing = failure(new Increment43ScalarInitializerMissingLane)

@@ -3851,9 +3851,40 @@ LogicalResult verifyBackendTarget(llvm::StringRef candidate,
   return modules > 0 && modules == endmodules ? success() : failure();
 }
 
-LogicalResult reparseBackendTarget(llvm::StringRef candidate,
-                                   const BackendConfiguration &configuration) {
+// Structural scopes are reparsed through synthetic module wrappers. Share only
+// their resource accounting with the original module; lexical symbols and the
+// helper declaration proof are reconstructed independently in every wrapper.
+static LogicalResult reparseBackendTargetWithBudgets(
+    llvm::StringRef candidate, const BackendConfiguration &configuration,
+    std::map<std::string, std::pair<uint64_t, uint64_t>> &privateBudgets) {
   llvm::StringMap<unsigned> userFunctions;
+  AnalogEventPrivateFunctions privateFunctions;
+  // Generic continuous-expression recognizers intentionally accept a broader
+  // subset. They must never become a second route for the event-only effect ABI.
+  auto containsPrivateEventCall = [&](llvm::StringRef text) {
+    bool quoted = false;
+    for (size_t position = 0; position < text.size();) {
+      const char c = text[position];
+      if (c == '"') {
+        quoted = !quoted;
+        ++position;
+      } else if (quoted) {
+        position += c == '\\' && position + 1 < text.size() ? 2 : 1;
+      } else if (llvm::isAlpha(c) || c == '_' || c == '$') {
+        const size_t start = position++;
+        while (position < text.size() &&
+               (llvm::isAlnum(text[position]) || text[position] == '_' || text[position] == '$'))
+          ++position;
+        auto name = text.slice(start, position);
+        if (name.starts_with("event_live_store") && !userFunctions.contains(name) &&
+            text.drop_front(position).ltrim().starts_with("("))
+          return true;
+      } else {
+        ++position;
+      }
+    }
+    return false;
+  };
   auto validParameterDeclaration = [](llvm::StringRef line) {
     llvm::StringRef code = line;
     size_t comment = code.find("//");
@@ -4236,6 +4267,10 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate,
       structuralIntegerNames.clear();
       arrayBounds.clear();
       userFunctions.clear();
+      privateFunctions = {};
+      auto &budget = privateBudgets[hierarchyModules[*currentHierarchyModule].name];
+      privateFunctions.demandWrappers = budget.first;
+      privateFunctions.expressionBytes = budget.second;
       insideModule = true;
       sawModule = true;
       continue;
@@ -4249,9 +4284,14 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate,
       std::string remaining;
       for (size_t i = lineIndex; i < lines.size(); ++i)
         remaining += lines[i].str() + "\n";
-      auto consumed = reparseAnalogUserFunction(remaining, userFunctions);
+      auto consumed = reparseAnalogEventPrivateFunction(remaining, privateFunctions);
+      if (failed(consumed))
+        consumed = reparseAnalogUserFunction(remaining, userFunctions);
       if (failed(consumed) || !*consumed)
         return failure();
+      for (const auto &function : privateFunctions.names)
+        if (userFunctions.contains(function.getKey()))
+          return failure();
       auto count = llvm::count(llvm::StringRef(remaining).take_front(*consumed), '\n');
       if (!count)
         return failure();
@@ -4355,6 +4395,15 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate,
     if (line == "endmodule") {
       if (insideAnalog || assignedRealNames.size() != realNames.size())
         return failure();
+      const auto &hierarchy = hierarchyModules[*currentHierarchyModule];
+      for (const auto &function : privateFunctions.names)
+        if (eventSymbols.contains(function.getKey()) ||
+            llvm::any_of(hierarchy.instances, [&](const HierarchyInstanceSyntax &instance) {
+              return instance.name == function.getKey();
+            }))
+          return failure();
+      privateBudgets[hierarchyModules[*currentHierarchyModule].name] = {
+          privateFunctions.demandWrappers, privateFunctions.expressionBytes};
       insideModule = false;
       currentHierarchyModule.reset();
       continue;
@@ -4414,7 +4463,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate,
         std::string remaining;
         for (size_t i = lineIndex; i < lines.size(); ++i)
           remaining += lines[i].str() + "\n";
-        auto consumed = reparseAnalogEventBlock(remaining, &eventSymbols);
+        auto consumed = reparseAnalogEventBlock(remaining, &eventSymbols, &privateFunctions);
         if (failed(consumed) || !*consumed)
           return failure();
         size_t count = llvm::count(llvm::StringRef(remaining).take_front(*consumed), '\n');
@@ -4427,7 +4476,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate,
       }
       if (generatedDepth)
         generatedStatement = true;
-      if (!line.ends_with(";") || !validSelectedEndpoints(line, generatedDepth != 0) ||
+      if (containsPrivateEventCall(line) || !line.ends_with(";") ||
+          !validSelectedEndpoints(line, generatedDepth != 0) ||
           !validElectricalAccesses(line, generatedDepth != 0))
         return failure();
       if (line.contains("<+") && !line.contains(" = ")) {
@@ -4455,6 +4505,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate,
         return failure();
       continue;
     }
+    if (containsPrivateEventCall(line))
+      return failure();
     if (line.starts_with("real event_") || line.starts_with("integer event_")) {
       if (!eventDeclaration(line))
         return failure();
@@ -4661,12 +4713,18 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate,
       output << declaration << "\n";
     output << text << "\nendmodule\n";
     output.flush();
-    return succeeded(reparseBackendTarget(wrapper, configuration));
+    return succeeded(reparseBackendTargetWithBudgets(wrapper, configuration, privateBudgets));
   };
   return sawModule && !insideModule && !insideAnalog && !generatedDepth &&
                  verifyHierarchySyntax(hierarchyModules, validateScopedAnalog)
              ? success()
              : failure();
+}
+
+LogicalResult reparseBackendTarget(llvm::StringRef candidate,
+                                   const BackendConfiguration &configuration) {
+  std::map<std::string, std::pair<uint64_t, uint64_t>> privateBudgets;
+  return reparseBackendTargetWithBudgets(candidate, configuration, privateBudgets);
 }
 
 } // namespace nodal

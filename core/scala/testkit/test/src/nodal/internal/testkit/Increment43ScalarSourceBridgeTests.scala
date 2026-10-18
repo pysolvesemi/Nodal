@@ -188,6 +188,13 @@ object Increment43ScalarSourceBridgeTests extends TestSuite:
           scalarSources = Vector(left, right)
         )
       assert(diamond.allReads == Vector(root))
+      val live = deriveLiveScalars(Vector(diamond))
+      assert(live.fills.size == 40, live.requiresSharing)
+      assert(live.fills.forall(_.body.rendered.length < 200))
+      val resource = live.eventResource("Module.event")
+      assert(resource.wrappers == EventConsumerWrappers + 1)
+      val rejected = scala.util.Try(requireEventResource(resource)).failed.get
+      assert(rejected.getMessage.contains("before expansion"))
       val remapped = diamond.remap(identity, identity)
       val leftFill = remapped.scalarSources(0).source.get.asInstanceOf[ShapedSource.View].value
       val rightFill = remapped.scalarSources(1).source.get.asInstanceOf[ShapedSource.View].value
@@ -205,3 +212,19 @@ object Increment43ScalarSourceBridgeTests extends TestSuite:
       do
         val error = scala.util.Try(action()).failed.get
         assert(error.getMessage.contains("dependency depth"))
+
+    test("live event resource boundaries and module totals saturate before allocation"):
+      requireEventResource(EventResource(EventConsumerWrappers, EventConsumerBytes))
+      requireEventResource(EventResource(EventModuleWrappers, EventModuleBytes), module = true)
+      for resource <- Vector(
+          EventResource(EventConsumerWrappers + 1L, 0L),
+          EventResource(0L, EventConsumerBytes + 1L)
+        )
+      do assert(scala.util.Try(requireEventResource(resource)).isFailure)
+      for resource <- Vector(
+          EventResource(EventModuleWrappers + 1L, 0L),
+          EventResource(0L, EventModuleBytes + 1L)
+        )
+      do assert(scala.util.Try(requireEventResource(resource, module = true)).isFailure)
+      val maximum = EventResource(Long.MaxValue, Long.MaxValue) + EventResource(1L, 1L)
+      assert(maximum == EventResource(EventModuleWrappers + 1L, EventModuleBytes + 1L))

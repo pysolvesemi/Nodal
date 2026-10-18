@@ -1,10 +1,14 @@
 #include "nodal/Backend/AnalogEventBackend.h"
+#include "nodal/Backend/AnalogUserFunctionBackend.h"
+#include "nodal/Backend/AnalogVerticalSlice.h"
+#include "nodal/Backend/Backend.h"
 
 #include "llvm/Support/raw_ostream.h"
 
 #include <initializer_list>
 #include <optional>
 #include <string>
+#include <utility>
 
 int main() {
   using nodal::AnalogEventSymbolKind;
@@ -480,6 +484,262 @@ int main() {
     if (validBlock(block, &symbols)) {
       llvm::errs() << "accepted invalid live selected control/event syntax: " << block << '\n';
       return 1;
+    }
+  }
+
+  // The live event helper is an independently verified private effect ABI. It
+  // must never become an ordinary pure public function or trust a comment.
+  const std::string helper =
+      "analog function real event_live_store;\n"
+      "input value;\noutput cache;\noutput ready;\n"
+      "real value;\nreal cache;\ninteger ready;\n"
+      "begin\ncache = value;\nready = 1;\nevent_live_store = value;\nend\nendfunction\n";
+  nodal::AnalogEventPrivateFunctions privateFunctions;
+  auto parsedHelper = nodal::reparseAnalogEventPrivateFunction(helper, privateFunctions);
+  llvm::StringMap<unsigned> pureFunctions;
+  if (mlir::failed(parsedHelper) || *parsedHelper != helper.size() ||
+      !privateFunctions.names.contains("event_live_store") ||
+      mlir::succeeded(nodal::reparseAnalogUserFunction(helper, pureFunctions)) ||
+      !pureFunctions.empty() ||
+      mlir::succeeded(nodal::reparseAnalogEventPrivateFunction(helper, privateFunctions)))
+    return 1;
+  count += 4;
+  for (auto mutation :
+       {std::make_pair("function real", "function integer"),
+        std::make_pair("input value", "inout value"),
+        std::make_pair("output cache", "input cache"),
+        std::make_pair("output ready", "inout ready"),
+        std::make_pair("real value;", "integer value;"),
+        std::make_pair("real cache;", "integer cache;"),
+        std::make_pair("integer ready;", "real ready;"),
+        std::make_pair("real cache;", "real cache[0:1];"),
+        std::make_pair("cache = value;", "cache = value + 1;"),
+        std::make_pair("cache = value;", "cache = V(p);"),
+        std::make_pair("cache = value;", "cache = hidden_root;"),
+        std::make_pair("cache = value;", "cache = event_live_store(value, cache, ready);"),
+        std::make_pair("ready = 1;", "ready = 0;"),
+        std::make_pair("ready = 1;", "ready = 1; hidden_root = value;"),
+        std::make_pair("ready = 1;", "ready = 1; $strobe(\"effect\");"),
+        std::make_pair("ready = 1;", "ready = 1; @(initial_step) begin end"),
+        std::make_pair("ready = 1;", "ready = 1; V(p) <+ value;"),
+        std::make_pair("cache = value;\nready = 1;", "ready = 1; cache = value;"),
+        std::make_pair("event_live_store = value;", "event_live_store = cache;"),
+        std::make_pair("event_live_store = value;", "event_live_store = value; ready = 0;"),
+        std::make_pair("real value;", "real value; real hidden;"),
+        std::make_pair("event_live_store;", "user_store;"),
+        std::make_pair("event_live_store;", "event_live_store_00;"),
+        std::make_pair("event_live_store;", "event_live_store_bad;")}) {
+    std::string invalid = helper;
+    invalid.replace(invalid.find(mutation.first), std::string(mutation.first).size(),
+                    mutation.second);
+    nodal::AnalogEventPrivateFunctions fresh;
+    ++count;
+    if (mlir::succeeded(nodal::reparseAnalogEventPrivateFunction(invalid, fresh)) ||
+        !fresh.names.empty()) {
+      llvm::errs() << "accepted mutated live helper: " << invalid << '\n';
+      return 1;
+    }
+  }
+  std::string suffixedHelper = helper;
+  size_t helperPosition = 0;
+  while ((helperPosition = suffixedHelper.find("event_live_store", helperPosition)) !=
+         std::string::npos) {
+    helperPosition += std::string("event_live_store").size();
+    suffixedHelper.insert(helperPosition, "_12");
+    helperPosition += 3;
+  }
+  nodal::AnalogEventPrivateFunctions suffixedFunctions;
+  if (mlir::failed(nodal::reparseAnalogEventPrivateFunction(suffixedHelper, suffixedFunctions)))
+    return 1;
+  ++count;
+
+  auto liveSymbols = symbols;
+  for (unsigned index = 0; index < 4; ++index) {
+    const auto suffix = std::to_string(index);
+    if (mlir::failed(nodal::reparseAnalogEventDeclaration("real event_live_cache_" + suffix + ";",
+                                                          liveSymbols)) ||
+        mlir::failed(nodal::reparseAnalogEventDeclaration(
+            "integer event_live_ready_" + suffix + ";", liveSymbols)))
+      return 1;
+    count += 2;
+  }
+  for (llvm::StringRef declaration :
+       {"integer event_live_cache_4;", "real event_live_ready_4;", "genvar event_live_ready_4;",
+        "real event_live_cache_4[0:1];", "real event_live_cache_4 = 0;",
+        "integer event_live_ready_4 = 0;"}) {
+    ++count;
+    if (mlir::succeeded(nodal::reparseAnalogEventDeclaration(declaration, liveSymbols)))
+      return 1;
+  }
+  auto call = [](llvm::StringRef input, unsigned index) {
+    auto suffix = std::to_string(index);
+    return "event_live_store(" + input.str() + ", event_live_cache_" + suffix +
+           ", event_live_ready_" + suffix + ")";
+  };
+  auto demand = [&](llvm::StringRef input, unsigned index) {
+    auto suffix = std::to_string(index);
+    return "(event_live_ready_" + suffix + " ? event_live_cache_" + suffix + " : " +
+           call(input, index) + ")";
+  };
+  auto liveBlock = [](llvm::StringRef expression) {
+    return "begin @(above(" + expression.str() + ")) begin end end";
+  };
+  auto validLive = [&](llvm::StringRef source, const nodal::AnalogEventSymbols &environment) {
+    auto functions = privateFunctions;
+    auto result = nodal::reparseAnalogEventBlock(source, &environment, &functions);
+    return mlir::succeeded(result) && *result == source.size();
+  };
+  const auto leaf = demand("data[counter]", 3);
+  const auto diamond = demand(demand(leaf + " + 1", 1) + " + " + demand(leaf + " + 2", 2), 0);
+  for (const auto &block :
+       {liveBlock(demand("V(p)", 0)), liveBlock(diamond), liveBlock("0 && " + demand("data[0]", 0)),
+        liveBlock("1 ? 2 : " + demand("data[0]", 0)),
+        liveBlock(demand("data[0]", 0) + " + " + demand("data[0]", 1)),
+        liveBlock(demand("data[0] + 1", 0) + " + " + demand("data [ 0 ] + 1", 0)),
+        "begin event_live_ready_0 = 0; @(cross(" + demand("data[0]", 0) + ", 1) or above(" +
+            demand("data[0]", 0) + ")) begin scalar = data[1]; end end"}) {
+    ++count;
+    if (!validLive(block, liveSymbols)) {
+      llvm::errs() << "rejected valid private helper demand: " << block << '\n';
+      return 1;
+    }
+  }
+  for (const auto &block :
+       {liveBlock(call("event_live_cache_0", 0)),
+        liveBlock(call("event_live_ready_0", 0)),
+        liveBlock(call("data[event_live_ready_0]", 0)),
+        liveBlock(call("0 && event_live_cache_0", 0)),
+        liveBlock(call(call("data[0]", 0), 0)),
+        liveBlock(call(call("data[0]", 0), 1) + " + " + call("data[1]", 0)),
+        liveBlock("event_live_store(data[0], scalar, counter)"),
+        liveBlock("event_live_store(data[0], event_live_cache_0, event_live_ready_1)"),
+        liveBlock("event_live_store(data[0], event_live_cache_0, event_live_cache_0)"),
+        liveBlock("event_live_store(data[0], event_live_cache_0[0], event_live_ready_0)"),
+        liveBlock("event_live_store(data[0], event_live_ready_0, event_live_cache_0)"),
+        liveBlock("event_live_store(data[0], event_live_cache_0 + 0, event_live_ready_0)"),
+        liveBlock("event_live_store(data[0], event_live_cache_0)"),
+        liveBlock("event_live_store(data[0], event_live_cache_0, event_live_ready_0, 0)"),
+        liveBlock(call("missing", 0)),
+        liveBlock(call("ddt(V(p))", 0)),
+        liveBlock(call("$abstime", 0)),
+        liveBlock(call("data[4]", 0)),
+        "begin scalar = " + call("data[0]", 0) + "; end",
+        "begin if (" + call("data[0]", 0) + ") begin end end",
+        "begin @(initial_step) begin scalar = " + call("data[0]", 0) + "; end end",
+        liveBlock(call("data[0]", 0) + " + " + call("data[1]", 0))}) {
+    ++count;
+    if (validLive(block, liveSymbols)) {
+      llvm::errs() << "accepted invalid private helper demand: " << block << '\n';
+      return 1;
+    }
+  }
+  for (unsigned mutation = 0; mutation < 4; ++mutation) {
+    auto forged = liveSymbols;
+    auto &cache = forged.find("event_live_cache_0")->second;
+    if (mutation == 0)
+      cache.privateLive = false;
+    else if (mutation == 1)
+      cache.writable = false;
+    else if (mutation == 2)
+      cache.kind = AnalogEventSymbolKind::Integer;
+    else
+      cache.lowerBound = 0;
+    ++count;
+    if (validLive(liveBlock(call("data[0]", 0)), forged))
+      return 1;
+  }
+  if (validBlock(liveBlock(call("data[0]", 0)), &liveSymbols) ||
+      mlir::succeeded(nodal::reparseAnalogEventBlock(liveBlock(call("data[0]", 0)), nullptr,
+                                                     &privateFunctions)) ||
+      mlir::succeeded(nodal::reparseAnalogUserExpression(call("1", 0), pureFunctions)) ||
+      mlir::succeeded(nodal::reparseAnalogNoiseCall("white_noise(" + call("1", 0) + ", \"n\")")) ||
+      mlir::succeeded(
+          nodal::reparseAnalogTransferCall("laplace_nd(" + call("1", 0) + ", '{1}, '{1})")))
+    return 1;
+  count += 5;
+
+  // Resource checks use actual emitted syntax, with no source graph or comment
+  // supplying counts. Exact boundaries remain admitted; failure is transactional.
+  std::string repeated = call("data[0]", 0);
+  for (unsigned index = 1; index < 4096; ++index)
+    repeated += " + " + call("data[0]", 0);
+  if (!validLive(liveBlock(repeated), liveSymbols) ||
+      validLive(liveBlock(repeated + " + " + call("data[0]", 0)), liveSymbols) ||
+      validLive(liveBlock(std::string(1024 * 1024, ' ') + call("data[0]", 0)), liveSymbols) ||
+      validLive(liveBlock(std::string(260, '(') + call("data[0]", 0) + std::string(260, ')')),
+                liveSymbols))
+    return 1;
+  count += 4;
+  const auto single = liveBlock(call("data[0]", 0));
+  auto boundary = privateFunctions;
+  boundary.demandWrappers = 65535;
+  if (mlir::failed(nodal::reparseAnalogEventBlock(single, &liveSymbols, &boundary)) ||
+      boundary.demandWrappers != 65536 ||
+      mlir::succeeded(nodal::reparseAnalogEventBlock(single, &liveSymbols, &boundary)) ||
+      boundary.demandWrappers != 65536)
+    return 1;
+  boundary = privateFunctions;
+  const uint64_t expressionBytes = std::string("above(").size() + call("data[0]", 0).size() + 1;
+  if (!validLive(liveBlock(std::string(1024 * 1024 - expressionBytes, ' ') + call("data[0]", 0)),
+                 liveSymbols))
+    return 1;
+  boundary.expressionBytes = 16 * 1024 * 1024 - expressionBytes;
+  if (mlir::failed(nodal::reparseAnalogEventBlock(single, &liveSymbols, &boundary)) ||
+      boundary.expressionBytes != 16 * 1024 * 1024 ||
+      mlir::succeeded(nodal::reparseAnalogEventBlock(single, &liveSymbols, &boundary)) ||
+      boundary.expressionBytes != 16 * 1024 * 1024)
+    return 1;
+  count += 5;
+
+  const std::string targetPrefix =
+      "module Live;\nelectrical p;\nreal event_live_cache_0;\ninteger event_live_ready_0;\n";
+  const std::string targetEvent =
+      "analog begin\nbegin : event_procedure\nevent_live_ready_0 = 0;\n@(above(" +
+      demand("V(p)", 0) + ")) begin\nend\nend\nend\nendmodule\n";
+  const std::string purePrefixFunction =
+      "analog function real event_live_store;\ninput value;\nreal value;\nbegin\n"
+      "event_live_store = value;\nend\nendfunction\n";
+  auto scopedTarget = [&](llvm::StringRef analog) {
+    return "module ScopedLive;\nelectrical p;\n" + helper +
+           "genvar g;\ngenerate\nfor (g = 0; g < 2; g = g + 1) begin : lanes\n"
+           "real event_live_cache_0;\ninteger event_live_ready_0;\n" +
+           analog.str() + "end\nendgenerate\nendmodule\n";
+  };
+  const auto scopedAnalog =
+      llvm::StringRef(targetEvent).drop_back(std::string("endmodule\n").size());
+  for (auto kind : {nodal::BackendKind::VerilogA, nodal::BackendKind::VerilogAMS}) {
+    const nodal::BackendConfiguration configuration{
+        &nodal::getBackendProfile(kind), nodal::GateProfile::Default,
+        nodal::ShapedValueLayout::ScalarOrFlat, nodal::MaterializationPolicy::SafeInline,
+        nodal::NamingPolicy::Semantic};
+    if (mlir::failed(
+            nodal::reparseBackendTarget(targetPrefix + helper + targetEvent, configuration)) ||
+        mlir::failed(nodal::reparseBackendTarget(scopedTarget(scopedAnalog), configuration)) ||
+        mlir::failed(nodal::reparseBackendTarget(
+            targetPrefix + purePrefixFunction + suffixedHelper +
+                "analog begin\nV(p) <+ event_live_store(1);\nend\nendmodule\n",
+            configuration)))
+      return 1;
+    count += 3;
+    for (const auto &invalid :
+         {targetPrefix + "// compiler-private event_live_store\n" + targetEvent,
+          targetPrefix + helper + "analog begin\nV(p) <+ " + call("1", 0) + ";\nend\nendmodule\n",
+          targetPrefix + helper + "real w;\nanalog begin\nw = transition(" + call("1", 0) +
+              ");\nend\nendmodule\n",
+          targetPrefix + helper + "analog begin\n$bound_step(" + call("1", 0) +
+              ");\nend\nendmodule\n",
+          targetPrefix + helper + "parameter real x = " + call("1", 0) + ";\n" + targetEvent,
+          targetPrefix + helper + helper + targetEvent,
+          targetPrefix + helper + purePrefixFunction + targetEvent,
+          targetPrefix + purePrefixFunction + helper + targetEvent,
+          targetPrefix + helper + "real event_live_store;\n" + targetEvent,
+          targetPrefix + helper + "parameter real event_live_store = 0;\n" + targetEvent,
+          scopedTarget("analog begin\nV(p) <+ " + call("1", 0) + ";\nend\n")}) {
+      ++count;
+      if (mlir::succeeded(nodal::reparseBackendTarget(invalid, configuration))) {
+        llvm::errs() << "accepted private helper outside its target contract: " << invalid << '\n';
+        return 1;
+      }
     }
   }
 

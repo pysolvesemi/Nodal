@@ -844,6 +844,12 @@ LogicalResult verifyProceduralBlock(Block &block, ProceduralVerificationState &s
 
 LogicalResult verifyStructuredProceduralBlock(Block &block, llvm::StringRef owner) {
   for (Operation &operation : block) {
+    // Parent verification visits regions before each child's verifier. Reject
+    // malformed empty/multiblock controls before dereferencing their body.
+    if (llvm::isa<nodal::AnalogOnOp, nodal::AnalogScopeOp, nodal::AnalogIfOp, nodal::AnalogCaseOp,
+                  nodal::AnalogLoopOp>(operation) &&
+        failed(requireSingleBlock(&operation)))
+      return failure();
     if (nodal::isAnalogEventExpression(&operation) || llvm::isa<nodal::AnalogOnOp>(operation)) {
       if (failed(nodal::verifyAnalogEventOperation(&operation)))
         return failure();
@@ -854,7 +860,8 @@ LogicalResult verifyStructuredProceduralBlock(Block &block, llvm::StringRef owne
     }
     if (llvm::isa<nodal::AnalogVariableOp, nodal::AnalogVariableReadOp, nodal::AnalogAssignOp,
                   nodal::AnalogBreakOp, nodal::AnalogContinueOp, nodal::AnalogArrayFillOp,
-                  nodal::ShapeIndexOp, nodal::ShapeViewOp, nodal::ShapeSliceOp>(operation)) {
+                  nodal::AnalogLiveFillOp, nodal::ShapeIndexOp, nodal::ShapeViewOp,
+                  nodal::ShapeSliceOp>(operation)) {
       if (textAttr(&operation, "owner") != owner)
         return nodal::emitMappedFailure(
             &operation, "NODAL-ANALOG-034-014",
@@ -884,7 +891,8 @@ LogicalResult verifyStructuredProceduralBlock(Block &block, llvm::StringRef owne
           return nodal::emitMappedFailure(
               &nested, "NODAL-ANALOG-034-015",
               "analog conditional body may contain only analog_if_arm operations");
-        if (failed(
+        if (failed(requireSingleBlock(arm.getOperation())) ||
+            failed(
                 verifyStructuredProceduralBlock(arm.getOperation()->getRegion(0).front(), owner)))
           return failure();
       }
@@ -902,7 +910,8 @@ LogicalResult verifyStructuredProceduralBlock(Block &block, llvm::StringRef owne
           return nodal::emitMappedFailure(
               &nested, "NODAL-ANALOG-034-015",
               "analog case body may contain only analog_case_arm operations");
-        if (failed(
+        if (failed(requireSingleBlock(arm.getOperation())) ||
+            failed(
                 verifyStructuredProceduralBlock(arm.getOperation()->getRegion(0).front(), owner)))
           return failure();
       }
@@ -1050,16 +1059,16 @@ void removeStructuredLocals(StructuredFlow &flow, const std::vector<Operation *>
 bool isStructuredIdentityOperation(Operation *operation) {
   if (nodal::isAnalogEventExpression(operation) || llvm::isa<nodal::AnalogOnOp>(operation))
     return true;
-  return llvm::isa<nodal::AnalogVariableOp, nodal::AnalogVariableReadOp, nodal::AnalogAssignOp,
-                   nodal::AnalogScopeOp, nodal::AnalogIfOp, nodal::AnalogIfArmOp,
-                   nodal::AnalogCaseOp, nodal::AnalogCaseArmOp, nodal::AnalogLoopOp,
-                   nodal::AnalogBreakOp, nodal::AnalogContinueOp>(operation);
+  return llvm::isa<nodal::AnalogLiveFillOp, nodal::AnalogVariableOp, nodal::AnalogVariableReadOp,
+                   nodal::AnalogAssignOp, nodal::AnalogScopeOp, nodal::AnalogIfOp,
+                   nodal::AnalogIfArmOp, nodal::AnalogCaseOp, nodal::AnalogCaseArmOp,
+                   nodal::AnalogLoopOp, nodal::AnalogBreakOp, nodal::AnalogContinueOp>(operation);
 }
 
 llvm::StringRef structuredOperationIdentity(Operation *operation) {
   if (nodal::isAnalogEventExpression(operation))
     return textAttr(operation, "event_id");
-  if (llvm::isa<nodal::AnalogVariableOp>(operation))
+  if (llvm::isa<nodal::AnalogVariableOp, nodal::AnalogLiveFillOp>(operation))
     return textAttr(operation, "identity");
   if (llvm::isa<nodal::AnalogVariableReadOp>(operation))
     return textAttr(operation, "read_id");
@@ -1487,6 +1496,45 @@ FailureOr<StructuredFlow> analyzeStructuredLoop(nodal::AnalogLoopOp loop,
   return result;
 }
 
+// Event definitions do not evaluate live fills. A complete OR/on is the
+// selected initialization point, including an unused outer event expression.
+bool containsLiveEvent(Operation *operation) {
+  llvm::SmallVector<Operation *> pending{operation};
+  llvm::SmallPtrSet<Operation *, 16> seen;
+  while (!pending.empty()) {
+    Operation *current = pending.pop_back_val();
+    if (!current || !seen.insert(current).second)
+      continue;
+    if (llvm::isa<nodal::AnalogOnOp>(current)) {
+      if (current->getNumOperands())
+        pending.push_back(current->getOperand(0).getDefiningOp());
+    } else if (nodal::isAnalogEventExpression(current)) {
+      if (textAttr(current, "reference_form") == "live")
+        return true;
+      if (llvm::isa<nodal::AnalogEventOrOp>(current))
+        for (Value value : current->getOperands())
+          pending.push_back(value.getDefiningOp());
+    }
+  }
+  return false;
+}
+LogicalResult requireLiveEventConsumerReads(Operation *operation,
+                                            const StructuredInitializedSet &initialized,
+                                            const StructuredDataflowContext &context) {
+  if (!containsLiveEvent(operation))
+    return success();
+  auto program = nodal::resolveAnalogLiveSourceProgram(operation);
+  if (failed(program))
+    return failure();
+  if (program->consumer != operation)
+    return success();
+  for (const auto &binding : program->storageBindings)
+    if (failed(structuredVariableIdentity(operation, binding.reference, context,
+                                          /*requireInitialized=*/true, initialized)))
+      return failure();
+  return success();
+}
+
 FailureOr<StructuredFlow> analyzeStructuredDataflowStatement(Operation *operation,
                                                              const StructuredInitializedSet &input,
                                                              StructuredDataflowContext &context) {
@@ -1530,6 +1578,9 @@ FailureOr<StructuredFlow> analyzeStructuredDataflowStatement(Operation *operatio
     return StructuredFlow{output, {}, {}};
   }
 
+  if (llvm::isa<nodal::AnalogLiveFillOp>(operation))
+    return StructuredFlow{input, {}, {}};
+
   if (llvm::isa<nodal::AnalogArrayFillOp>(operation)) {
     for (Value value : operation->getOperands())
       if (failed(requireStructuredCapturedValue(operation, value, context, true, input)))
@@ -1540,12 +1591,17 @@ FailureOr<StructuredFlow> analyzeStructuredDataflowStatement(Operation *operatio
     return StructuredFlow{input, {}, {}};
 
   if (nodal::isAnalogEventExpression(operation)) {
+    if (failed(requireLiveEventConsumerReads(operation, input, context)))
+      return failure();
     if (!llvm::isa<nodal::AnalogEventOrOp>(operation) &&
+        textAttr(operation, "reference_form") != "live" &&
         failed(requireStructuredReads(operation, "event_reads", input, context)))
       return failure();
     return StructuredFlow{input, {}, {}};
   }
   if (llvm::isa<nodal::AnalogOnOp>(operation)) {
+    if (failed(requireLiveEventConsumerReads(operation, input, context)))
+      return failure();
     auto body = analyzeStructuredDataflowBlock(operation->getRegion(0).front(), input, context,
                                                /*retainLocals=*/false);
     if (failed(body))
@@ -1694,7 +1750,8 @@ LogicalResult verifyAnalogProcedure(Operation *operation) {
   operation->walk([&](Operation *nested) {
     if (llvm::isa<nodal::AnalogIfOp, nodal::AnalogCaseOp, nodal::AnalogLoopOp, nodal::AnalogBreakOp,
                   nodal::AnalogContinueOp, nodal::AnalogOnOp, nodal::AnalogArrayFillOp,
-                  nodal::ShapeIndexOp, nodal::ShapeViewOp, nodal::ShapeSliceOp>(nested) ||
+                  nodal::AnalogLiveFillOp, nodal::ShapeIndexOp, nodal::ShapeViewOp,
+                  nodal::ShapeSliceOp>(nested) ||
         (llvm::isa<nodal::AnalogVariableOp>(nested) &&
          (llvm::isa<nodal::ShapedType>(nested->getResult(0).getType()) ||
           nested->hasAttr("initializer_form"))) ||
@@ -1966,6 +2023,8 @@ LogicalResult nodal::ModuleOp::verify() {
     if (type && failed(verifyShapedTypeContract(getOperation(), &operation, type.getValue())))
       return failure();
   }
+  if (failed(verifyAnalogLiveModuleResources(getOperation())))
+    return failure();
   if (failed(verifyNodeArraySelections(getOperation())))
     return failure();
   if (failed(verifyConservativeArrayBindings(getOperation())))
@@ -2947,6 +3006,11 @@ LogicalResult nodal::AnalogProcedureOp::verify() {
     getOperation()->walk([&](Operation *nested) {
       if (nested == getOperation() || unsupported)
         return;
+      if (llvm::isa<nodal::AnalogLiveFillOp>(nested)) {
+        if (failed(verifyAnalogLiveFillOperation(nested)))
+          unsupported = nested;
+        return;
+      }
       if (llvm::isa<nodal::AnalogArrayFillOp>(nested)) {
         if (failed(verifyAnalogArrayFillValue(nested)))
           unsupported = nested;
@@ -3481,6 +3545,10 @@ LogicalResult verifyAnalogArrayFillValue(Operation *operation) {
   return success();
 }
 } // namespace
+
+LogicalResult nodal::AnalogLiveFillOp::verify() {
+  return verifyAnalogLiveFillOperation(getOperation());
+}
 
 LogicalResult nodal::AnalogArrayFillOp::verify() {
   return verifyAnalogArrayFillValue(getOperation());

@@ -374,6 +374,192 @@ private[nodal] object AnalogProceduralRuntime:
           derived
     scalarValue(input, 0)
 
+  /** Compact derived live graph. Fill labels are the actual retained source identities, never
+    * scalar text. Each body is retained once and direct demand edges remain unexpanded. Original
+    * shape/ownership/effect validation must precede bridge use of this representation.
+    */
+  final case class LiveFill(identity: String, body: Value)
+  final case class EventResource(wrappers: Long, bytes: Long):
+    def +(other: EventResource): EventResource = EventResource(
+      saturatingAdd(wrappers, other.wrappers, EventModuleWrappers),
+      saturatingAdd(bytes, other.bytes, EventModuleBytes)
+    )
+  val EventConsumerWrappers: Long = 4096L
+  val EventConsumerBytes: Long = 1024L * 1024L
+  val EventModuleWrappers: Long = 65536L
+  val EventModuleBytes: Long = 16L * 1024L * 1024L
+
+  private def saturatingAdd(left: Long, right: Long, limit: Long): Long =
+    if left > limit || right > limit || left > limit - right then limit + 1L
+    else left + right
+
+  private def saturatingMultiply(left: Long, right: Long, limit: Long): Long =
+    if left == 0L || right == 0L then 0L
+    else if left > limit || right > limit || left > limit / right then limit + 1L
+    else left * right
+
+  final case class LiveScalarProgram(roots: Vector[Value], fills: Vector[LiveFill]):
+    private lazy val identities = fills.map(_.identity)
+    def demands(value: Value): Vector[String] = scalarLeafOccurrences(value.rendered, identities)
+
+    /** Multiplicity is saturated at two; a diamond never creates an occurrence vector. */
+    lazy val requiresSharing: Boolean =
+      val counts = mutable.HashMap.empty[String, Int].withDefaultValue(0)
+      def count(identity: String, amount: Int): Unit =
+        counts.update(identity, (counts(identity) + amount).min(2))
+      roots.foreach(root => demands(root).foreach(count(_, 1)))
+      fills.reverseIterator.foreach(fill =>
+        demands(fill.body).foreach(count(_, counts(fill.identity)))
+      )
+      counts.values.exists(_ > 1)
+
+    /** Conservative target-text preflight over the unexpanded DAG. The native boundary repeats
+      * admission using its allocated target names; the target parser has an independent byte/depth
+      * bound. Both multiplicity and byte addition saturate before any output allocation.
+      */
+    def eventResource(owner: String): EventResource =
+      if !requiresSharing then EventResource(0L, 0L)
+      else
+        val costs = mutable.HashMap.empty[String, EventResource]
+        val privateNameBytes =
+          owner.getBytes(java.nio.charset.StandardCharsets.UTF_8).length.toLong +
+            64L
+        def expression(value: Value): EventResource =
+          val base = value.rendered.getBytes(java.nio.charset.StandardCharsets.UTF_8).length.toLong
+          demands(value).foldLeft(EventResource(0L, base)): (cost, identity) =>
+            val dependency = costs(identity)
+            EventResource(
+              saturatingAdd(cost.wrappers, dependency.wrappers, EventConsumerWrappers),
+              saturatingAdd(cost.bytes, dependency.bytes, EventConsumerBytes)
+            )
+        fills.foreach: fill =>
+          val body = expression(fill.body)
+          costs.update(
+            fill.identity,
+            EventResource(
+              saturatingAdd(1L, body.wrappers, EventConsumerWrappers),
+              saturatingAdd(body.bytes, 96L + 4L * privateNameBytes, EventConsumerBytes)
+            )
+          )
+        val expanded = roots.foldLeft(EventResource(0L, 0L)): (cost, root) =>
+          val body = expression(root)
+          EventResource(
+            saturatingAdd(cost.wrappers, body.wrappers, EventConsumerWrappers),
+            saturatingAdd(cost.bytes, body.bytes, EventConsumerBytes)
+          )
+        val declarations = saturatingMultiply(
+          fills.size.toLong,
+          64L + 2L * privateNameBytes,
+          EventConsumerBytes
+        )
+        EventResource(
+          expanded.wrappers,
+          saturatingAdd(expanded.bytes, declarations, EventConsumerBytes)
+        )
+
+  def requireEventResource(resource: EventResource, module: Boolean = false): Unit =
+    val wrappers = if module then EventModuleWrappers else EventConsumerWrappers
+    val bytes = if module then EventModuleBytes else EventConsumerBytes
+    if resource.wrappers > wrappers || resource.bytes > bytes then
+      reject(Diagnostic(
+        "NODAL-SHAPE-043-010",
+        s"live event ${
+            if module then "module" else "consumer"
+          } resource limit exceeded before expansion " +
+          s"(maximum $wrappers demand wrappers and $bytes expression bytes)"
+      ))
+
+  def deriveLiveScalars(inputs: Vector[Value]): LiveScalarProgram =
+    val memo = new java.util.IdentityHashMap[Value, (Value, Int)]()
+    val active = new java.util.IdentityHashMap[Value, java.lang.Boolean]()
+    val activeSources = mutable.HashSet.empty[String]
+    val fills = mutable.LinkedHashMap.empty[String, LiveFill]
+    def invalid(message: String): Nothing = reject(Diagnostic("NODAL-SHAPE-043-007", message))
+    def visit(input: Value, depth: Int): (Value, Int) =
+      if depth >= 512 || active.containsKey(input) then
+        invalid("live scalar source is cyclic or exceeds the supported dependency depth")
+      Option(memo.get(input)) match
+        case Some(result) =>
+          if depth + result._2 >= 512 then
+            invalid("live scalar source exceeds supported dependency depth")
+          result
+        case None =>
+          active.put(input, java.lang.Boolean.TRUE)
+          var height = 0
+          def child(value: Value): Value =
+            val (derived, childHeight) = visit(value, depth + 1)
+            height = height.max(childHeight + 1)
+            derived
+          try
+            val result = input.source match
+              case Some(ShapedSource.Fill(scalar)) =>
+                if input.valueType.dimensions.isEmpty || scalar.valueType.dimensions.nonEmpty ||
+                  input.valueType.kind != ScalarKind.Real ||
+                  scalar.valueType.kind != ScalarKind.Real ||
+                  input.valueType.dimension != scalar.valueType.dimension ||
+                  input.scalarSources.nonEmpty
+                then invalid("live scalar derivation requires an exact typed Real fill")
+                if !activeSources.add(input.rendered) then
+                  invalid("retained fill identities form a cycle")
+                val body = try child(scalar)
+                finally activeSources -= input.rendered
+                fills.get(input.rendered).foreach: existing =>
+                  if existing.body != body then
+                    invalid("one retained fill identity describes conflicting values")
+                fills.getOrElseUpdate(input.rendered, LiveFill(input.rendered, body))
+                Value(input.rendered, scalar.valueType, body.allReads)
+              case Some(ShapedSource.View(parent, projection)) =>
+                val (path, inputPath) = projection match
+                  case selected: KernelShapeIndexSnapshot => selected.path -> selected.input
+                  case selected: KernelShapeViewSnapshot => selected.path -> selected.input
+                if inputPath != parent.rendered || path != input.rendered || path == inputPath ||
+                  input.valueType.kind != parent.valueType.kind ||
+                  input.valueType.dimension != parent.valueType.dimension ||
+                  input.scalarSources.nonEmpty
+                then
+                  invalid(
+                    "live scalar derivation requires the actual retained view input and result"
+                  )
+                val derived = child(parent)
+                derived.copy(valueType = input.valueType.copy(dimensions = Vector.empty))
+              case _ =>
+                if input.valueType.dimensions.nonEmpty then
+                  invalid("live consumer requires a scalar result")
+                if input.source.nonEmpty && input.scalarSources.nonEmpty then
+                  invalid(
+                    "a retained scalar read cannot carry independent scalar source attachments"
+                  )
+                val tokens = input.scalarSources.map(_.rendered)
+                if tokens.distinct.size != tokens.size then
+                  invalid("duplicate retained scalar source identity")
+                if scalarLeafOccurrences(input.rendered, tokens).toSet != tokens.toSet then
+                  invalid("unused retained scalar source attachment")
+                val leaves = input.scalarSources.map: source =>
+                  if !source.source.exists(_.isInstanceOf[ShapedSource.View]) then
+                    invalid("a scalar source attachment must retain its actual projection chain")
+                  source.rendered -> child(source)
+                input.copy(
+                  rendered = replaceScalarLeaves(
+                    input.rendered,
+                    leaves.map((token, value) => token -> value.rendered)
+                  ),
+                  reads =
+                    (input.reads ++ leaves.flatMap(_._2.reads) ++ input.source.toVector.collect {
+                      case ShapedSource.Read(reference) => reference
+                    }).distinct,
+                  source = None,
+                  scalarSources = Vector.empty
+                )
+            val derived = result -> height
+            memo.put(input, derived)
+            derived
+          finally active.remove(input)
+    val roots = inputs.map(input =>
+      if input.valueType.dimensions.nonEmpty then invalid("live consumer requires a scalar result")
+      visit(input, 0)._1
+    )
+    LiveScalarProgram(roots, fills.values.toVector)
+
   final case class VariableRecord(
       variable: Variable,
       initializer: Option[Value],

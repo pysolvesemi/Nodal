@@ -17,6 +17,9 @@
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
+#include <functional>
+#include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -90,12 +93,19 @@ public:
     }
   }
 
+  ExpressionParser(Operation *operation, llvm::SmallVector<AnalogSourceStorageBinding> bindings,
+                   std::function<FailureOr<Expression>(Value)> deferred)
+      : operation(operation), module(operation->getParentOfType<ModuleOp>()),
+        storageBindings(std::move(bindings)), storageForm(true), deferred(std::move(deferred)) {}
+
   FailureOr<Expression> parse(llvm::StringRef input, unsigned depth = 0) {
     if (!validBindings || depth > 128 || input.empty() || input != input.trim())
       return failure();
     for (const auto &binding : storageBindings) {
       if (binding.path != input)
         continue;
+      if (llvm::isa<AnalogDeferredType>(binding.reference.getType()))
+        return deferred ? deferred(binding.reference) : FailureOr<Expression>(failure());
       auto type = llvm::cast<VariableType>(binding.reference.getType());
       Expression result{type.getKind().str(),
                         type.getDimension().str(),
@@ -322,6 +332,7 @@ private:
   llvm::SmallVector<AnalogSourceStorageBinding> storageBindings;
   bool validBindings = true;
   bool storageForm = false;
+  std::function<FailureOr<Expression>(Value)> deferred;
 
   Operation *declaration(llvm::StringRef path) {
     Operation *found = nullptr;
@@ -460,7 +471,495 @@ LogicalResult context(Operation *op) {
     return reject(op, 1, "history-bearing analog monitor is nested under runtime control");
   return success();
 }
+
+struct ValueLess {
+  bool operator()(Value left, Value right) const {
+    return std::less<const void *>()(left.getAsOpaquePointer(), right.getAsOpaquePointer());
+  }
+};
+using ValueSet = std::set<Value, ValueLess>;
+
+bool liveControl(Operation *op) {
+  return llvm::isa_and_nonnull<AnalogIfArmOp, AnalogCaseOp, AnalogLoopOp>(op);
+}
+bool liveForm(Operation *op) { return text(op, "reference_form") == "live"; }
+
+// An unused outer event is still a complete event expression. Derive the
+// terminal by actual SSA users; labels never authorize ownership or reuse.
+FailureOr<Operation *> eventConsumer(Operation *op) {
+  std::set<Operation *> seen;
+  while (op && isAnalogEventExpression(op)) {
+    if (!seen.insert(op).second || op->getNumResults() != 1)
+      return failure();
+    auto value = op->getResult(0);
+    if (value.use_empty())
+      return op;
+    if (!value.hasOneUse())
+      return failure();
+    auto *next = *value.getUsers().begin();
+    if (!llvm::isa<AnalogEventOrOp, AnalogOnOp>(next) || next->getBlock() != op->getBlock() ||
+        !op->isBeforeInBlock(next))
+      return failure();
+    op = next;
+  }
+  return llvm::isa_and_nonnull<AnalogOnOp>(op) ? FailureOr<Operation *>(op)
+                                               : FailureOr<Operation *>(failure());
+}
+
+class LiveSourceSession {
+public:
+  explicit LiveSourceSession(Operation *consumer) {
+    program.consumer = consumer;
+    if (auto module = consumer->getParentOfType<ModuleOp>())
+      module->walk([&](Operation *candidate) {
+        if (candidate->getParentOfType<ModuleOp>() != module ||
+            !llvm::isa<ParameterOp, TerminalOp, NodeOp, AnalogVariableOp, AnalogLiveFillOp,
+                       ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(candidate))
+          return;
+        if (llvm::isa<AnalogVariableOp, AnalogLiveFillOp, ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(
+                candidate) &&
+            candidate->getParentOfType<AnalogProcedureOp>() !=
+                consumer->getParentOfType<AnalogProcedureOp>())
+          return;
+        auto identity = text(candidate, "identity");
+        if (!identity.empty())
+          declarations[identity.str()].insert(candidate);
+        auto path = semanticPath(candidate);
+        if (!path.empty())
+          declarations[path].insert(candidate);
+      });
+  }
+
+  FailureOr<AnalogLiveSourceProgram> resolve() {
+    auto procedure = program.consumer->getParentOfType<AnalogProcedureOp>();
+    auto module = program.consumer->getParentOfType<ModuleOp>();
+    auto owner = module ? semanticPath(module) : std::string();
+    if (module && owner.empty())
+      owner = text(module, "sym_name").str();
+    if (!procedure || !module || text(program.consumer, "owner") != owner ||
+        text(procedure, "owner") != owner || failed(verifyGeneratedAnalogOwnership(procedure)) ||
+        failed(verifyGeneratedAnalogOwnership(program.consumer)))
+      return fail("live consumer requires its actual lexical/generated procedure owner");
+    if (liveControl(program.consumer)) {
+      if (!liveForm(program.consumer))
+        return fail("live control requires explicit live reference form");
+      llvm::StringRef attribute = llvm::isa<AnalogIfArmOp>(program.consumer)  ? "condition_value"
+                                  : llvm::isa<AnalogCaseOp>(program.consumer) ? "selector_value"
+                                                                              : "bound_value";
+      if (failed(addRoots(program.consumer, attribute)))
+        return failure();
+    } else {
+      Operation *event = program.consumer;
+      if (llvm::isa<AnalogOnOp>(event)) {
+        if (event->getNumOperands() != 1)
+          return fail("live event statement requires one actual event");
+        event = event->getOperand(0).getDefiningOp();
+      }
+      if (failed(addEvent(event)))
+        return failure();
+    }
+    if (program.fills.empty())
+      return fail("live consumer requires a deferred dependency");
+    for (const auto &fill : program.fills) {
+      Operation *definition = fill.reference.getDefiningOp();
+      if (fill.reference.use_empty())
+        return fail("live fill cannot be orphaned");
+      for (Operation *user : fill.reference.getUsers()) {
+        if (llvm::isa<AnalogLiveFillOp>(user)) {
+          if (user->getNumResults() != 1 || !completed.count(user->getResult(0)))
+            return fail("live fill escapes its complete consumer graph");
+        } else if (!rootOwners.count(user))
+          return fail("live fill has another consumer or an illegal escaping use");
+      }
+      if (definition->getParentOfType<AnalogProcedureOp>() !=
+              program.consumer->getParentOfType<AnalogProcedureOp>() ||
+          !analogPrecedesLexically(definition, program.consumer))
+        return fail("live fill does not dominate its actual complete consumer");
+    }
+    if (!liveControl(program.consumer) && failed(checkEventBudget()))
+      return failure();
+    return std::move(program);
+  }
+
+private:
+  AnalogLiveSourceProgram program;
+  std::map<Value, Expression, ValueLess> completed;
+  ValueSet active;
+  std::map<std::string, Value> labels;
+  std::map<std::string, std::set<Operation *>> declarations;
+  std::set<Operation *> rootOwners;
+  std::set<Operation *> eventNodes;
+  ValueSet storageSeen;
+
+  FailureOr<AnalogLiveSourceProgram> fail(llvm::StringRef message) {
+    (void)reject(program.consumer, 10, message);
+    return failure();
+  }
+  LogicalResult error(Operation *op, llvm::StringRef message) { return reject(op, 10, message); }
+  LogicalResult label(Operation *use, llvm::StringRef name, Value reference) {
+    if (name.empty() || name != name.trim())
+      return error(use, "live binding label must be nonempty and canonical");
+    auto found = declarations.find(name.str());
+    if (found != declarations.end() &&
+        (found->second.size() != 1 || !found->second.count(reference.getDefiningOp())))
+      return error(use, "live label conflicts with another actual declaration");
+    auto [it, inserted] = labels.emplace(name.str(), reference);
+    if (!inserted && it->second != reference)
+      return error(use, "live binding label identifies conflicting actual definitions");
+    return success();
+  }
+  FailureOr<llvm::SmallVector<AnalogSourceStorageBinding>> bindings(Operation *op) {
+    llvm::SmallVector<AnalogSourceStorageBinding> result;
+    ValueSet seen;
+    bool hasDeferred = false;
+    auto procedure = op->getParentOfType<AnalogProcedureOp>();
+    auto module = op->getParentOfType<ModuleOp>();
+    auto owner = module ? semanticPath(module) : std::string();
+    if (module && owner.empty())
+      owner = text(module, "sym_name").str();
+    if (!procedure || !module || text(op, "owner") != owner ||
+        text(op, "owner") != text(procedure, "owner") || failed(verifyGeneratedAnalogOwnership(op)))
+      return failure();
+    if (!llvm::isa<AnalogLiveFillOp>(op)) {
+      auto otherwise = op->getAttrOfType<BoolAttr>("is_else");
+      auto selected = op->getAttrOfType<BoolAttr>("static_value_present");
+      if (!liveForm(op) || (otherwise && otherwise.getValue()) || text(op, "stage") == "static" ||
+          (selected && selected.getValue()) ||
+          llvm::isa<AnalogInitialStepOp, AnalogFinalStepOp>(op))
+        return failure();
+    }
+    for (Value reference : op->getOperands()) {
+      if (!seen.insert(reference).second)
+        return failure();
+      Operation *definition = reference.getDefiningOp();
+      std::string name;
+      if (llvm::isa<AnalogDeferredType>(reference.getType())) {
+        hasDeferred = true;
+        if (!llvm::isa_and_nonnull<AnalogLiveFillOp>(definition) || definition == op ||
+            definition->getParentOfType<AnalogProcedureOp>() != procedure ||
+            definition->getParentOfType<GenerateOp>() != op->getParentOfType<GenerateOp>() ||
+            !analogPrecedesLexically(definition, op))
+          return failure();
+        name = text(definition, "identity").str();
+      } else {
+        if (!llvm::isa<VariableType>(reference.getType()) ||
+            failed(resolveAnalogStorageReference(reference, op)) ||
+            failed(resolveAnalogStorageReference(reference, program.consumer)))
+          return failure();
+        name = llvm::isa<AnalogVariableOp>(definition) ? text(definition, "identity").str()
+                                                       : semanticPath(definition);
+        if (storageSeen.insert(reference).second)
+          program.storageBindings.push_back({name, reference});
+      }
+      if (failed(label(op, name, reference)))
+        return failure();
+      result.push_back({name, reference});
+    }
+    if (!llvm::isa<AnalogLiveFillOp>(op) && !hasDeferred)
+      return failure();
+    return result;
+  }
+  void directReferences(const Expression &expression, ValueSet &used) {
+    if (expression.storageReference)
+      used.insert(expression.storageReference);
+    if (expression.deferredReference)
+      used.insert(expression.deferredReference);
+    for (const auto &child : expression.operands)
+      directReferences(child, used);
+  }
+  FailureOr<Expression> deferred(Value reference) {
+    if (auto found = completed.find(reference); found != completed.end())
+      return found->second;
+    if (active.size() >= 128 || !active.insert(reference).second)
+      return failure();
+    Operation *op = reference.getDefiningOp();
+    auto type = llvm::dyn_cast<AnalogDeferredType>(reference.getType());
+    if (!type || type.getKind() != "real" || !isCanonicalDimensionSignature(type.getDimension()) ||
+        !llvm::isa_and_nonnull<AnalogLiveFillOp>(op) || op->getNumResults() != 1 ||
+        op->getNumRegions() || !op->getAttrOfType<DictionaryAttr>("metadata") ||
+        op->hasAttr("reads") || op->hasAttr("reference_form") || op->hasAttr("static_value") ||
+        op->hasAttr("uniform"))
+      return failure();
+    for (NamedAttribute attribute : op->getAttrs()) {
+      auto name = attribute.getName().getValue();
+      if (name != "identity" && name != "value" && name != "owner" && name != "generated_owner" &&
+          name != "generated_induction" && name != "metadata")
+        return failure();
+    }
+    auto owner = text(op, "owner");
+    auto id = text(op, "identity");
+    if (owner.empty() || !id.starts_with((owner + ".").str()) || id.size() <= owner.size() + 1 ||
+        failed(label(op, id, reference)))
+      return failure();
+    auto direct = bindings(op);
+    if (failed(direct))
+      return failure();
+    ExpressionParser parser(op, std::move(*direct), [&](Value v) { return deferred(v); });
+    auto body = parser.parse(text(op, "value"));
+    if (failed(body) || body->kind != "real" || body->dimension != type.getDimension())
+      return failure();
+    ValueSet used;
+    directReferences(*body, used);
+    if (used != ValueSet(op->operand_begin(), op->operand_end()))
+      return failure();
+    // The leaf carries transitive reads, but never embeds or copies its body.
+    Expression leaf{"real",      type.getDimension().str(), std::nullopt,
+                    body->reads, "deferred_reference",      id.str(),
+                    op};
+    leaf.deferredReference = reference;
+    completed.emplace(reference, leaf);
+    program.fills.push_back({reference, std::move(*body)});
+    active.erase(reference);
+    return leaf;
+  }
+  LogicalResult addRoots(Operation *op, llvm::StringRef attribute) {
+    rootOwners.insert(op);
+    auto direct = liveForm(op) ? bindings(op) : resolveAnalogSourceStorageBindings(op);
+    if (failed(direct))
+      return error(op, "live direct references violate ownership, type, form, or uniqueness");
+    if (!liveForm(op))
+      for (const auto &binding : *direct) {
+        if (failed(label(op, binding.path, binding.reference)) ||
+            failed(resolveAnalogStorageReference(binding.reference, program.consumer)))
+          return failure();
+        if (storageSeen.insert(binding.reference).second)
+          program.storageBindings.push_back(binding);
+      }
+    std::unique_ptr<ExpressionParser> parser;
+    if (liveForm(op))
+      parser = std::make_unique<ExpressionParser>(op, std::move(*direct),
+                                                  [&](Value v) { return deferred(v); });
+    else
+      parser = std::make_unique<ExpressionParser>(op);
+    ValueSet used;
+    auto add = [&](llvm::StringRef value, std::optional<unsigned> slot) -> LogicalResult {
+      auto expression = parser->parse(value);
+      if (failed(expression))
+        return error(op, "live expression or fill body violates the canonical scalar contract");
+      DictionaryAttr argument;
+      llvm::StringRef kind, dimension;
+      ArrayAttr inventory;
+      if (slot) {
+        argument = llvm::cast<DictionaryAttr>(op->getAttrOfType<ArrayAttr>("arguments")[*slot]);
+        auto authoredSlot = argument.getAs<IntegerAttr>("slot");
+        if (!authoredSlot || authoredSlot.getInt() != *slot)
+          return error(op, "live event arguments require exact authored slots");
+        kind = field(argument, "kind");
+        dimension = field(argument, "dimension");
+        inventory = argument.getAs<ArrayAttr>("reads");
+      } else {
+        llvm::StringRef prefix = attribute == "condition_value"  ? "condition"
+                                 : attribute == "selector_value" ? "selector"
+                                                                 : "bound";
+        kind = text(op, (prefix + "_kind").str());
+        dimension = text(op, (prefix + "_dimension").str());
+        inventory = op->getAttrOfType<ArrayAttr>((prefix + "_reads").str());
+      }
+      auto reads = strings(inventory);
+      if (failed(reads) || *reads != expression->reads || kind != expression->kind ||
+          dimension != expression->dimension)
+        return error(op,
+                     "live source type or transitive read inventory differs from its expression");
+      directReferences(*expression, used);
+      program.roots.push_back({op, attribute.str(), slot, std::move(*expression)});
+      return success();
+    };
+    if (attribute == "arguments") {
+      auto arguments = op->getAttrOfType<ArrayAttr>(attribute);
+      if (!arguments)
+        return failure();
+      unsigned slot = 0;
+      for (auto entry : arguments) {
+        auto argument = llvm::dyn_cast<DictionaryAttr>(entry);
+        if (!argument || failed(add(field(argument, "value"), slot++)))
+          return failure();
+      }
+    } else if (failed(add(text(op, attribute), std::nullopt)))
+      return failure();
+    if (attribute == "arguments") {
+      std::set<std::string> allReads;
+      for (const auto &root : program.roots)
+        if (root.operation == op)
+          allReads.insert(root.expression.reads.begin(), root.expression.reads.end());
+      auto claimed = strings(op->getAttrOfType<ArrayAttr>("event_reads"));
+      if (failed(claimed) || *claimed != allReads)
+        return error(op, "live event read inventory differs from its actual arguments");
+    }
+    if (liveForm(op) && used != ValueSet(op->operand_begin(), op->operand_end()))
+      return error(op, "live direct operand inventory differs from actual used bindings");
+    return success();
+  }
+  LogicalResult addEvent(Operation *outer) {
+    llvm::SmallVector<Operation *> pending{outer};
+    while (!pending.empty()) {
+      Operation *event = pending.pop_back_val();
+      if (!event || !isAnalogEventExpression(event) || !eventNodes.insert(event).second ||
+          event->getParentOfType<AnalogProcedureOp>() !=
+              program.consumer->getParentOfType<AnalogProcedureOp>() ||
+          text(event, "owner") != text(program.consumer, "owner") ||
+          failed(verifyGeneratedAnalogOwnership(event)))
+        return error(program.consumer,
+                     "live event graph has invalid, cyclic, or reused occurrences");
+      auto terminal = eventConsumer(event);
+      if (failed(terminal) || *terminal != program.consumer)
+        return error(event, "live event graph must have one actual complete consumer");
+      if (llvm::isa<AnalogEventOrOp>(event)) {
+        if (event->getNumOperands() < 2)
+          return failure();
+        for (Value child : llvm::reverse(event->getOperands()))
+          pending.push_back(child.getDefiningOp());
+      } else if (failed(addRoots(event, "arguments")))
+        return failure();
+    }
+    return success();
+  }
+  LogicalResult checkEventBudget() {
+    struct Cost {
+      uint64_t wrappers = 0, bytes = 0;
+    };
+    std::map<Value, Cost, ValueLess> costs;
+    auto add = [](uint64_t a, uint64_t b, uint64_t cap) {
+      return a > cap || b > cap || a > cap - b ? cap + 1 : a + b;
+    };
+    std::function<Cost(const Expression &)> cost = [&](const Expression &expression) {
+      Cost result;
+      if (expression.deferredReference) {
+        result = costs.at(expression.deferredReference);
+        result.wrappers = add(result.wrappers, 1, analogLiveEventWrapperLimit);
+        // Includes private helper call/conditional punctuation and identifier
+        // allowance. Backend additionally accounts exact allocated names.
+        result.bytes =
+            add(result.bytes, 256 + expression.spelling.size() * 4, analogLiveEventByteLimit);
+        return result;
+      }
+      result.bytes = 32 + expression.spelling.size() + expression.operation.size();
+      if (expression.declaration)
+        result.bytes = add(result.bytes,
+                           text(expression.declaration, "identity").size() * 2 +
+                               semanticPath(expression.declaration).size() * 2,
+                           analogLiveEventByteLimit);
+      for (const auto &child : expression.operands) {
+        auto nested = cost(child);
+        result.wrappers = add(result.wrappers, nested.wrappers, analogLiveEventWrapperLimit);
+        result.bytes = add(result.bytes, nested.bytes, analogLiveEventByteLimit);
+      }
+      return result;
+    };
+    for (const auto &fill : program.fills)
+      costs.emplace(fill.reference, cost(fill.body));
+    for (const auto &root : program.roots) {
+      auto value = cost(root.expression);
+      program.eventDemandWrappers =
+          add(program.eventDemandWrappers, value.wrappers, analogLiveEventWrapperLimit);
+      program.eventExpressionBytes =
+          add(program.eventExpressionBytes, value.bytes, analogLiveEventByteLimit);
+    }
+    for (const auto &fill : program.fills)
+      program.eventExpressionBytes =
+          add(program.eventExpressionBytes,
+              256 + text(fill.reference.getDefiningOp(), "identity").size() * 4,
+              analogLiveEventByteLimit);
+    if (program.eventDemandWrappers > analogLiveEventWrapperLimit ||
+        program.eventExpressionBytes > analogLiveEventByteLimit)
+      return error(program.consumer, "live event resource limit exceeded before expansion");
+    return success();
+  }
+};
+
+FailureOr<Operation *> fillConsumer(Operation *definition, std::map<Operation *, Operation *> &memo,
+                                    std::set<Operation *> &active) {
+  if (auto found = memo.find(definition); found != memo.end())
+    return found->second;
+  if (!llvm::isa_and_nonnull<AnalogLiveFillOp>(definition) || definition->getNumResults() != 1 ||
+      definition->getResult(0).use_empty() || active.size() >= 128 ||
+      !active.insert(definition).second)
+    return failure();
+  Operation *consumer = nullptr;
+  for (Operation *user : definition->getResult(0).getUsers()) {
+    FailureOr<Operation *> candidate = failure();
+    if (llvm::isa<AnalogLiveFillOp>(user))
+      candidate = fillConsumer(user, memo, active);
+    else if (liveControl(user) && liveForm(user))
+      candidate = user;
+    else if (monitor(user) && liveForm(user))
+      candidate = eventConsumer(user);
+    if (failed(candidate) || (consumer && consumer != *candidate))
+      return failure();
+    consumer = *candidate;
+  }
+  active.erase(definition);
+  memo.emplace(definition, consumer);
+  return consumer;
+}
 } // namespace
+
+FailureOr<AnalogLiveSourceProgram> resolveAnalogLiveSourceProgram(Operation *consumer) {
+  if (!consumer)
+    return failure();
+  if (isAnalogEventExpression(consumer)) {
+    auto terminal = eventConsumer(consumer);
+    if (failed(terminal))
+      return failure();
+    consumer = *terminal;
+  }
+  return LiveSourceSession(consumer).resolve();
+}
+
+LogicalResult verifyAnalogLiveFillOperation(Operation *definition) {
+  std::map<Operation *, Operation *> memo;
+  std::set<Operation *> active;
+  auto consumer = fillConsumer(definition, memo, active);
+  if (failed(consumer))
+    return reject(definition, 10,
+                  "live fill requires one actual ultimate control or event consumer");
+  auto program = resolveAnalogLiveSourceProgram(*consumer);
+  if (failed(program))
+    return failure();
+  return success();
+}
+
+LogicalResult verifyAnalogLiveModuleResources(Operation *module) {
+  std::set<Operation *> consumers;
+  uint64_t wrappers = 0, bytes = 0;
+  LogicalResult result = success();
+  module->walk([&](Operation *op) {
+    if (failed(result) || op->getParentOfType<ModuleOp>().getOperation() != module)
+      return;
+    for (Type type : op->getResultTypes())
+      if (llvm::isa<AnalogDeferredType>(type) && !llvm::isa<AnalogLiveFillOp>(op)) {
+        result = reject(op, 10, "only analog_live_fill may define a deferred capability");
+        return;
+      }
+    for (Region &region : op->getRegions())
+      for (Block &block : region)
+        for (BlockArgument argument : block.getArguments())
+          if (llvm::isa<AnalogDeferredType>(argument.getType())) {
+            result = reject(op, 10, "deferred capabilities cannot be block arguments");
+            return;
+          }
+    if (!monitor(op) || !liveForm(op))
+      return;
+    auto consumer = eventConsumer(op);
+    if (failed(consumer)) {
+      result = reject(op, 10, "live event requires one actual complete consumer");
+      return;
+    }
+    if (!consumers.insert(*consumer).second)
+      return;
+    auto program = resolveAnalogLiveSourceProgram(*consumer);
+    if (failed(program)) {
+      result = failure();
+      return;
+    }
+    wrappers += program->eventDemandWrappers;
+    bytes += program->eventExpressionBytes;
+    if (consumers.size() == 1)
+      bytes += 1024; // One private helper ABI/body, checked again by the backend.
+    if (wrappers > analogLiveModuleWrapperLimit || bytes > analogLiveModuleByteLimit)
+      result = reject(op, 10, "module live event resource limit exceeded before expansion");
+  });
+  return result;
+}
 
 FailureOr<llvm::SmallVector<AnalogSourceStorageBinding>>
 resolveAnalogSourceStorageBindings(Operation *operation) {
@@ -472,6 +971,19 @@ resolveAnalogSourceStorageBindings(Operation *operation) {
     return failure();
   };
   llvm::SmallVector<AnalogSourceStorageBinding> result;
+  if (liveForm(operation)) {
+    auto program = resolveAnalogLiveSourceProgram(operation);
+    if (failed(program))
+      return failure();
+    std::set<std::string> reads;
+    for (const auto &root : program->roots)
+      if (root.operation == operation)
+        reads.insert(root.expression.reads.begin(), root.expression.reads.end());
+    for (const auto &binding : program->storageBindings)
+      if (reads.count(binding.path))
+        result.push_back(binding);
+    return result;
+  }
   auto form = operation->getAttrOfType<StringAttr>("reference_form");
   if (!operation->hasAttr("reference_form")) {
     if (operation->getNumOperands())
@@ -506,6 +1018,38 @@ resolveAnalogSourceStorageBindings(Operation *operation) {
 
 FailureOr<AnalogSourceExpression> parseAnalogSourceExpression(Operation *context,
                                                               llvm::StringRef source) {
+  if (llvm::isa<AnalogLiveFillOp>(context)) {
+    std::map<Operation *, Operation *> memo;
+    std::set<Operation *> active;
+    auto consumer = fillConsumer(context, memo, active);
+    if (failed(consumer) || text(context, "value") != source)
+      return failure();
+    auto program = resolveAnalogLiveSourceProgram(*consumer);
+    if (failed(program))
+      return failure();
+    for (const auto &fill : program->fills)
+      if (fill.reference.getDefiningOp() == context)
+        return fill.body;
+    return failure();
+  }
+  if (liveForm(context)) {
+    auto program = resolveAnalogLiveSourceProgram(context);
+    if (failed(program))
+      return failure();
+    for (const auto &root : program->roots) {
+      if (root.operation != context)
+        continue;
+      llvm::StringRef value;
+      if (root.argumentSlot) {
+        auto arguments = context->getAttrOfType<ArrayAttr>("arguments");
+        value = field(llvm::cast<DictionaryAttr>(arguments[*root.argumentSlot]), "value");
+      } else
+        value = text(context, root.attribute);
+      if (value == source)
+        return root.expression;
+    }
+    return failure();
+  }
   return ExpressionParser(context).parse(source);
 }
 
@@ -874,7 +1418,8 @@ LogicalResult verifyAnalogEventOperation(Operation *op) {
     auto slot = arg ? arg.getAs<IntegerAttr>("slot") : IntegerAttr();
     if (!slot || slot.getInt() != i)
       return reject(op, 2, "event arguments must retain contiguous authored slots");
-    auto expression = parser.parse(field(arg, "value"));
+    auto expression = liveForm(op) ? parseAnalogSourceExpression(op, field(arg, "value"))
+                                   : parser.parse(field(arg, "value"));
     if (failed(expression))
       return reject(op, 9, "event source expression is not in the supported canonical grammar");
     auto reads = strings(arg.getAs<ArrayAttr>("reads"));

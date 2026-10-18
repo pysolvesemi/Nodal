@@ -4,6 +4,7 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/Support/LogicalResult.h"
 #include "nodal/Backend/ShapedValueBackend.h"
+#include "nodal/Dialect/Nodal/AnalogEvents.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -11,6 +12,8 @@
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cstdint>
+#include <memory>
 #include <optional>
 
 namespace nodal {
@@ -18,6 +21,22 @@ struct AnalogMappedStorageAccess {
   std::string text;
   std::string temporary;
   ShapedProjectionProgram program;
+};
+struct AnalogLiveControlPlan;
+struct AnalogLiveFillTarget {
+  std::string cache, ready;
+};
+struct AnalogLiveConsumerTarget {
+  AnalogLiveSourceProgram program;
+  llvm::DenseMap<mlir::Value, AnalogLiveFillTarget> fills;
+  llvm::DenseMap<mlir::Value, unsigned> fillIndices;
+  std::shared_ptr<AnalogLiveControlPlan> control;
+  std::string pc, step;
+  bool event = false;
+  uint64_t declarationBytes = 0, reservedBytes = 0;
+};
+struct AnalogLiveModuleBudget {
+  uint64_t wrappers = 0, bytes = 0;
 };
 struct AnalogEventRenderState {
   llvm::DenseMap<mlir::Operation *, std::string> names;
@@ -32,6 +51,11 @@ struct AnalogEventRenderState {
   // static coordinates have private setup programs, one per actual handle.
   llvm::DenseMap<mlir::Operation *, llvm::DenseMap<mlir::Value, AnalogMappedStorageAccess>>
       liveReferences;
+  llvm::DenseMap<mlir::Operation *, AnalogLiveConsumerTarget> liveConsumers;
+  llvm::DenseMap<mlir::Operation *, mlir::Operation *> liveConsumerOwners;
+  std::string liveStoreFunction;
+  uint64_t nextLiveFillOrdinal = 0, nextLiveControlOrdinal = 0;
+  std::shared_ptr<AnalogLiveModuleBudget> liveBudget = std::make_shared<AnalogLiveModuleBudget>();
   llvm::StringMap<std::string> variables;
   llvm::StringSet<> reserved;
 };
@@ -70,10 +94,18 @@ struct AnalogEventSymbol {
   bool writable = false;
   std::optional<int64_t> lowerBound;
   std::optional<int64_t> upperBound;
+  bool privateLive = false;
 };
 using AnalogEventSymbols = llvm::StringMap<AnalogEventSymbol>;
-mlir::FailureOr<size_t> reparseAnalogEventBlock(llvm::StringRef source,
-                                                const AnalogEventSymbols *symbols = nullptr);
+struct AnalogEventPrivateFunctions {
+  llvm::StringSet<> names;
+  uint64_t demandWrappers = 0, expressionBytes = 0;
+};
+mlir::FailureOr<size_t> reparseAnalogEventPrivateFunction(llvm::StringRef source,
+                                                          AnalogEventPrivateFunctions &functions);
+mlir::FailureOr<size_t>
+reparseAnalogEventBlock(llvm::StringRef source, const AnalogEventSymbols *symbols = nullptr,
+                        AnalogEventPrivateFunctions *privateFunctions = nullptr);
 mlir::LogicalResult reparseAnalogEventDeclaration(llvm::StringRef source,
                                                   AnalogEventSymbols &symbols);
 // Independent expression grammar for emitted noise calls; not permitted in events.

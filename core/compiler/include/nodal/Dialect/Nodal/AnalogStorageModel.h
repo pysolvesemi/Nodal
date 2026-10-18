@@ -32,6 +32,7 @@ mlir::FailureOr<AnalogStorageReference> resolveAnalogStorageReference(mlir::Valu
                                                                       mlir::Operation *use);
 mlir::FailureOr<mlir::Type> getAnalogStorageSnapshotType(mlir::Value reference,
                                                          mlir::Operation *use);
+bool analogPrecedesLexically(mlir::Operation *definition, mlir::Operation *use);
 mlir::LogicalResult verifyGeneratedAnalogOwnership(mlir::Operation *operation);
 mlir::LogicalResult verifyAnalogStorageProjection(mlir::Operation *projection);
 bool analogStorageReferenceCovers(const AnalogStorageReference &initialized,

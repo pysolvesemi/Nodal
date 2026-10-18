@@ -1,6 +1,7 @@
 #include "nodal/Backend/AnalogEventBackend.h"
 
 #include "mlir/IR/BuiltinAttributes.h"
+#include "nodal/Backend/AnalogLiveControlPlan.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/AnalogEvents.h"
 #include "nodal/Dialect/Nodal/AnalogFunctions.h"
@@ -53,50 +54,8 @@ std::string nameFor(llvm::StringRef identity, AnalogEventRenderState &state) {
   return name;
 }
 using Captures = llvm::DenseMap<Operation *, std::string>;
-FailureOr<std::string> renderSource(const AnalogSourceExpression &value,
-                                    AnalogEventRenderState &state,
-                                    const Captures &captures = Captures(),
-                                    Operation *consumer = nullptr) {
-  if (value.operation == "literal") {
-    if (value.kind == "boolean")
-      return value.spelling == "true" ? std::string("1") : std::string("0");
-    if (value.kind == "integer") {
-      int64_t integer = 0;
-      if (llvm::StringRef(value.spelling).getAsInteger(10, integer) ||
-          integer < std::numeric_limits<int32_t>::min() ||
-          integer > std::numeric_limits<int32_t>::max())
-        return failure();
-    }
-    return value.spelling;
-  }
-  if (value.operation == "reference") {
-    if (value.storageReference) {
-      auto references = state.liveReferences.find(consumer);
-      if (references == state.liveReferences.end())
-        return failure();
-      auto access = references->second.find(value.storageReference);
-      return access == references->second.end() ? FailureOr<std::string>(failure())
-                                                : access->second.text;
-    }
-    if (auto found = captures.find(value.declaration); found != captures.end())
-      return found->second;
-    if (auto found = state.names.find(value.declaration); found != state.names.end())
-      return found->second;
-    if (!value.declaration)
-      return failure();
-    auto name =
-        text(value.declaration, llvm::isa<ParameterOp>(value.declaration) ? "sym_name" : "name");
-    if (!identifier(name))
-      return failure();
-    return name.str();
-  }
-  std::vector<std::string> args;
-  for (const auto &child : value.operands) {
-    auto rendered = renderSource(child, state, captures, consumer);
-    if (failed(rendered))
-      return failure();
-    args.push_back(*rendered);
-  }
+FailureOr<std::string> formatSource(const AnalogSourceExpression &value,
+                                    llvm::ArrayRef<std::string> args) {
   if (value.operation == "potential_access" || value.operation == "flow_access") {
     std::string result = value.operation == "potential_access" ? "V(" : "I(";
     for (unsigned i = 0; i < args.size(); ++i)
@@ -149,9 +108,79 @@ FailureOr<std::string> renderSource(const AnalogSourceExpression &value,
     return failure();
   return "(" + args[0] + " " + symbol.str() + " " + args[1] + ")";
 }
+FailureOr<std::string> renderSource(const AnalogSourceExpression &value,
+                                    AnalogEventRenderState &state,
+                                    const Captures &captures = Captures(),
+                                    Operation *consumer = nullptr) {
+  if (value.deferredReference) {
+    auto owner = state.liveConsumerOwners.find(consumer);
+    if (owner == state.liveConsumerOwners.end())
+      return failure();
+    auto &target = state.liveConsumers[owner->second];
+    auto index = target.fillIndices.find(value.deferredReference);
+    auto names = target.fills.find(value.deferredReference);
+    if (!target.event || index == target.fillIndices.end() || names == target.fills.end())
+      return failure();
+    auto body = renderSource(target.program.fills[index->second].body, state, captures, consumer);
+    if (failed(body))
+      return failure();
+    return "(" + names->second.ready + " ? " + names->second.cache + " : " +
+           state.liveStoreFunction + "(" + *body + ", " + names->second.cache + ", " +
+           names->second.ready + "))";
+  }
+  if (value.operation == "literal") {
+    if (value.kind == "boolean")
+      return value.spelling == "true" ? std::string("1") : std::string("0");
+    if (value.kind == "integer") {
+      int64_t integer = 0;
+      if (llvm::StringRef(value.spelling).getAsInteger(10, integer) ||
+          integer < std::numeric_limits<int32_t>::min() ||
+          integer > std::numeric_limits<int32_t>::max())
+        return failure();
+    }
+    return value.spelling;
+  }
+  if (value.operation == "reference") {
+    if (value.storageReference) {
+      Operation *mappingOwner = consumer;
+      if (auto owner = state.liveConsumerOwners.find(consumer);
+          owner != state.liveConsumerOwners.end())
+        mappingOwner = owner->second;
+      auto references = state.liveReferences.find(mappingOwner);
+      if (references == state.liveReferences.end())
+        return failure();
+      auto access = references->second.find(value.storageReference);
+      return access == references->second.end() ? FailureOr<std::string>(failure())
+                                                : access->second.text;
+    }
+    if (auto found = captures.find(value.declaration); found != captures.end())
+      return found->second;
+    if (auto found = state.names.find(value.declaration); found != state.names.end())
+      return found->second;
+    if (!value.declaration)
+      return failure();
+    auto name =
+        text(value.declaration, llvm::isa<ParameterOp>(value.declaration) ? "sym_name" : "name");
+    if (!identifier(name))
+      return failure();
+    return name.str();
+  }
+  std::vector<std::string> args;
+  for (const auto &child : value.operands) {
+    auto rendered = renderSource(child, state, captures, consumer);
+    if (failed(rendered))
+      return failure();
+    args.push_back(*rendered);
+  }
+  return formatSource(value, args);
+}
+
 FailureOr<std::string> expression(Operation *op, llvm::StringRef source,
                                   AnalogEventRenderState &state,
                                   const Captures &captures = Captures()) {
+  if (auto target = state.liveConsumers.find(op);
+      target != state.liveConsumers.end() && target->second.control)
+    return target->second.control->result;
   auto parsed = parseAnalogSourceExpression(op, source);
   return failed(parsed) ? FailureOr<std::string>(failure())
                         : renderSource(*parsed, state, captures, op);
@@ -196,13 +225,151 @@ FailureOr<std::string> eventExpression(Operation *event, AnalogEventRenderState 
       function += "\"" + name.str() + "\"";
     } else {
       auto source = field(llvm::cast<DictionaryAttr>(arguments[i]), "value");
-      auto rendered = expression(event, source, state);
+      FailureOr<std::string> rendered = failure();
+      if (auto owner = state.liveConsumerOwners.find(event);
+          owner != state.liveConsumerOwners.end()) {
+        for (const auto &root : state.liveConsumers[owner->second].program.roots)
+          if (root.operation == event && root.argumentSlot == i) {
+            rendered = renderSource(root.expression, state, Captures(), event);
+            break;
+          }
+      } else {
+        rendered = expression(event, source, state);
+      }
       if (failed(rendered))
         return failure();
       function += *rendered;
     }
   }
   return function + ")";
+}
+
+// The target preflight measures the actual allocated spellings over the retained
+// DAG. Saturation happens before any inline body expansion or output publication.
+struct LiveTextCost {
+  uint64_t bytes = 0, wrappers = 0;
+  unsigned depth = 0;
+};
+uint64_t boundedAdd(uint64_t left, uint64_t right, uint64_t cap) {
+  return left > cap || right > cap || left > cap - right ? cap + 1 : left + right;
+}
+FailureOr<LiveTextCost> liveTextCost(const AnalogSourceExpression &value,
+                                     AnalogEventRenderState &state, Operation *consumer,
+                                     const AnalogLiveConsumerTarget &target,
+                                     const llvm::DenseMap<Value, LiveTextCost> &fillCosts) {
+  if (value.deferredReference) {
+    auto cost = fillCosts.find(value.deferredReference);
+    auto names = target.fills.find(value.deferredReference);
+    if (cost == fillCosts.end() || names == target.fills.end())
+      return failure();
+    auto result = cost->second;
+    std::string wrapper = "(" + names->second.ready + " ? " + names->second.cache + " : " +
+                          state.liveStoreFunction + "(, " + names->second.cache + ", " +
+                          names->second.ready + "))";
+    result.bytes = boundedAdd(result.bytes, wrapper.size(), analogLiveEventByteLimit);
+    result.wrappers = boundedAdd(result.wrappers, 1, analogLiveEventWrapperLimit);
+    result.depth += 3;
+    return result;
+  }
+  if (value.operands.empty()) {
+    auto rendered = renderSource(value, state, Captures(), consumer);
+    if (failed(rendered))
+      return failure();
+    return LiveTextCost{rendered->size(), 0, 0};
+  }
+  std::vector<std::string> empty(value.operands.size());
+  auto punctuation = formatSource(value, empty);
+  if (failed(punctuation))
+    return failure();
+  LiveTextCost result{punctuation->size(), 0, 0};
+  for (const auto &operand : value.operands) {
+    auto child = liveTextCost(operand, state, consumer, target, fillCosts);
+    if (failed(child))
+      return failure();
+    result.bytes = boundedAdd(result.bytes, child->bytes, analogLiveEventByteLimit);
+    result.wrappers = boundedAdd(result.wrappers, child->wrappers, analogLiveEventWrapperLimit);
+    // This upper bound covers the existing target parser's parenthesis,
+    // conditional and right-hand-side recursive-descent levels.
+    result.depth = std::max(result.depth, child->depth + 2);
+  }
+  return result;
+}
+LogicalResult admitLiveEventText(AnalogLiveConsumerTarget &target, AnalogEventRenderState &state) {
+  llvm::DenseMap<Value, LiveTextCost> costs;
+  for (const auto &fill : target.program.fills) {
+    auto cost = liveTextCost(fill.body, state, target.program.consumer, target, costs);
+    if (failed(cost))
+      return reject(target.program.consumer, "live event DAG has no target cost model");
+    costs[fill.reference] = *cost;
+  }
+  LiveTextCost total{target.declarationBytes, 0, 0};
+  for (const auto &root : target.program.roots) {
+    auto cost = liveTextCost(root.expression, state, root.operation, target, costs);
+    if (failed(cost))
+      return reject(root.operation, "live event argument has no target cost model");
+    total.bytes = boundedAdd(total.bytes, cost->bytes, analogLiveEventByteLimit);
+    total.wrappers = boundedAdd(total.wrappers, cost->wrappers, analogLiveEventWrapperLimit);
+    total.depth = std::max(total.depth, cost->depth);
+  }
+  // Include resets, separators, primitive syntax and the complete event shell.
+  // Numeric expression bytes above are exact; this bounded syntax allowance is
+  // conservative and contains no source-dependent recursively expanded text.
+  total.bytes =
+      boundedAdd(total.bytes, 32 + target.program.roots.size() * 32, analogLiveEventByteLimit);
+  for (const auto &fill : target.program.fills)
+    total.bytes = boundedAdd(total.bytes, target.fills[fill.reference].ready.size() + 16,
+                             analogLiveEventByteLimit);
+  if (total.wrappers > analogLiveEventWrapperLimit || total.bytes > analogLiveEventByteLimit ||
+      total.depth > 256)
+    return reject(
+        target.program.consumer,
+        "live event resource limit: 4096 demand wrappers, 1 MiB target text, or depth 256");
+  auto &budget = *state.liveBudget;
+  if (boundedAdd(budget.wrappers, total.wrappers, analogLiveModuleWrapperLimit) >
+          analogLiveModuleWrapperLimit ||
+      boundedAdd(budget.bytes, total.bytes, analogLiveModuleByteLimit) > analogLiveModuleByteLimit)
+    return reject(target.program.consumer,
+                  "live event module resource limit: 65536 demand wrappers or 16 MiB target text");
+  budget.wrappers += total.wrappers;
+  budget.bytes += total.bytes;
+  target.reservedBytes = total.bytes;
+  return success();
+}
+FailureOr<std::string> completeEventExpression(Operation *event, AnalogEventRenderState &state) {
+  auto rendered = eventExpression(event, state);
+  if (failed(rendered))
+    return failure();
+  auto owner = state.liveConsumerOwners.find(event);
+  if (owner == state.liveConsumerOwners.end())
+    return rendered;
+  auto &target = state.liveConsumers[owner->second];
+  uint64_t actual = rendered->size() + target.declarationBytes + 16;
+  for (const auto &fill : target.program.fills)
+    actual += target.fills[fill.reference].ready.size() + 16;
+  if (actual > analogLiveEventByteLimit) {
+    (void)reject(target.program.consumer, "live event actual rendered text exceeds 1 MiB");
+    return failure();
+  }
+  if (actual > target.reservedBytes) {
+    auto extra = actual - target.reservedBytes;
+    if (boundedAdd(state.liveBudget->bytes, extra, analogLiveModuleByteLimit) >
+        analogLiveModuleByteLimit) {
+      (void)reject(target.program.consumer, "live event actual module text exceeds 16 MiB");
+      return failure();
+    }
+    state.liveBudget->bytes += extra;
+    target.reservedBytes = actual;
+  }
+  return rendered;
+}
+void resetLiveEvent(Operation *consumer, AnalogEventRenderState &state, llvm::raw_ostream &out,
+                    unsigned indent) {
+  auto owner = state.liveConsumerOwners.find(consumer);
+  if (owner == state.liveConsumerOwners.end())
+    return;
+  auto &target = state.liveConsumers[owner->second];
+  for (const auto &fill : target.program.fills)
+    out.indent(indent) << target.fills[fill.reference].ready << " = 0;\n";
 }
 
 using MappedAccess = AnalogMappedStorageAccess;
@@ -238,6 +405,11 @@ void renderReferenceMaps(Operation *consumer, AnalogEventRenderState &state, llv
   auto references = state.liveReferences.find(consumer);
   if (references == state.liveReferences.end())
     return;
+  if (auto target = state.liveConsumers.find(consumer); target != state.liveConsumers.end()) {
+    for (const auto &binding : target->second.program.storageBindings)
+      renderMap(references->second[binding.reference], out, indent);
+    return;
+  }
   // Operands retain authored binding order; DenseMap iteration does not.
   llvm::DenseSet<Value> emitted;
   for (Value operand : consumer->getOperands()) {
@@ -248,6 +420,10 @@ void renderReferenceMaps(Operation *consumer, AnalogEventRenderState &state, llv
 }
 void renderEventReferenceMaps(Operation *event, AnalogEventRenderState &state,
                               llvm::raw_ostream &out, unsigned indent) {
+  if (auto owner = state.liveConsumerOwners.find(event); owner != state.liveConsumerOwners.end()) {
+    renderReferenceMaps(owner->second, state, out, indent);
+    return;
+  }
   llvm::SmallVector<Operation *> pending{event};
   llvm::DenseSet<Operation *> visited;
   while (!pending.empty()) {
@@ -262,6 +438,43 @@ void renderEventReferenceMaps(Operation *event, AnalogEventRenderState &state,
     }
   }
 }
+void renderLiveControl(Operation *consumer, AnalogEventRenderState &state, llvm::raw_ostream &out,
+                       unsigned indent) {
+  auto found = state.liveConsumers.find(consumer);
+  if (found == state.liveConsumers.end() || !found->second.control)
+    return;
+  const auto &target = found->second;
+  const auto &plan = *target.control;
+  for (const auto &ready : plan.readyResets)
+    out.indent(indent) << ready << " = 0;\n";
+  out.indent(indent) << target.pc << " = " << plan.entry << ";\n";
+  out.indent(indent) << "for (" << target.step << " = 0; (" << target.step << " < " << plan.bound
+                     << ") && (" << target.pc << " != 0); " << target.step << " = " << target.step
+                     << " + 1) begin\n";
+  out.indent(indent + 2) << "case (" << target.pc << ")\n";
+  for (auto [index, block] : llvm::enumerate(plan.blocks)) {
+    out.indent(indent + 4) << index + 1 << ": begin\n";
+    for (const auto &assignment : block.assignments)
+      out.indent(indent + 6) << assignment.target << " = " << assignment.value << ";\n";
+    if (block.kind == AnalogLiveControlBlock::Kind::Branch) {
+      out.indent(indent + 6) << "if (" << block.condition << ") begin\n";
+      out.indent(indent + 8) << target.pc << " = " << block.target << ";\n";
+      out.indent(indent + 6) << "end else begin\n";
+      out.indent(indent + 8) << target.pc << " = " << block.falseTarget << ";\n";
+      out.indent(indent + 6) << "end\n";
+    } else {
+      out.indent(indent + 6) << target.pc << " = "
+                             << (block.kind == AnalogLiveControlBlock::Kind::Return
+                                     ? block.continuation
+                                     : std::to_string(block.target))
+                             << ";\n";
+    }
+    out.indent(indent + 4) << "end\n";
+  }
+  out.indent(indent + 2) << "endcase\n";
+  out.indent(indent) << "end\n";
+}
+
 FailureOr<MappedAccess> snapshotAccess(Value source, Operation *use, llvm::StringRef ordinal,
                                        AnalogEventRenderState &state) {
   auto value = resolveAnalogArrayValue(source, use);
@@ -330,7 +543,7 @@ LogicalResult renderBlock(Block &block, AnalogEventRenderState &state, llvm::raw
                           unsigned indent, std::optional<LoopContext> loop = std::nullopt);
 LogicalResult renderStatement(Operation *op, AnalogEventRenderState &state, llvm::raw_ostream &out,
                               unsigned indent, std::optional<LoopContext> loop) {
-  if (state.declarationOnlyValues.contains(op))
+  if (state.declarationOnlyValues.contains(op) || llvm::isa<AnalogLiveFillOp>(op))
     return success();
   auto line = [&](const llvm::Twine &value) { out.indent(indent) << value << "\n"; };
   if (llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(op)) {
@@ -429,18 +642,20 @@ LogicalResult renderStatement(Operation *op, AnalogEventRenderState &state, llvm
     // Unused monitors still request evaluation points. Used primitives are emitted
     // once, at their owning event-controlled statement, not as numeric temporaries.
     if (op->getResult(0).use_empty()) {
-      auto value = eventExpression(op, state);
+      auto value = completeEventExpression(op, state);
       if (failed(value))
         return reject(op, "unused event cannot be emitted losslessly");
       renderEventReferenceMaps(op, state, out, indent);
+      resetLiveEvent(op, state, out, indent);
       line("@(" + *value + ") begin");
       line("end");
     }
   } else if (llvm::isa<AnalogOnOp>(op)) {
-    auto value = eventExpression(op->getOperand(0).getDefiningOp(), state);
+    auto value = completeEventExpression(op->getOperand(0).getDefiningOp(), state);
     if (failed(value))
       return reject(op, "event expression cannot be emitted losslessly");
     renderEventReferenceMaps(op->getOperand(0).getDefiningOp(), state, out, indent);
+    resetLiveEvent(op, state, out, indent);
     line("@(" + *value + ") begin");
     if (failed(renderBlock(op->getRegion(0).front(), state, out, indent + 2)))
       return failure();
@@ -451,6 +666,51 @@ LogicalResult renderStatement(Operation *op, AnalogEventRenderState &state, llvm
       return failure();
     line("end");
   } else if (llvm::isa<AnalogIfOp>(op)) {
+    const bool live = llvm::any_of(op->getRegion(0).front(),
+                                   [&](Operation &arm) { return state.liveConsumers.count(&arm); });
+    if (live) {
+      // Only a reached live predicate needs a statement prelude. Ordinary
+      // coordinate maps are parameter/literal-only and retain their old setup
+      // placement; ordinary successors retain the existing else-if spelling.
+      // Open/close required else scopes iteratively, never recurse over the
+      // unbounded number of authored sibling arms.
+      auto &arms = op->getRegion(0).front();
+      for (Operation &arm : arms)
+        if (!state.liveConsumers.count(&arm))
+          renderReferenceMaps(&arm, state, out, indent);
+      unsigned level = indent, opened = 0;
+      bool previous = false;
+      for (Operation &arm : arms) {
+        const bool otherwise = arm.getAttrOfType<BoolAttr>("is_else").getValue();
+        if (!otherwise && state.liveConsumers.count(&arm)) {
+          if (previous) {
+            out.indent(level) << "else begin\n";
+            level += 2;
+            ++opened;
+            previous = false;
+          }
+          renderReferenceMaps(&arm, state, out, level);
+          renderLiveControl(&arm, state, out, level);
+        }
+        out.indent(level) << (previous ? "else " : "");
+        if (!otherwise) {
+          auto condition = expression(&arm, text(&arm, "condition_value"), state);
+          if (failed(condition))
+            return reject(&arm, "live condition cannot be emitted losslessly");
+          out << "if (" << *condition << ") ";
+        }
+        out << "begin\n";
+        if (failed(renderBlock(arm.getRegion(0).front(), state, out, level + 2, loop)))
+          return failure();
+        out.indent(level) << "end\n";
+        previous = true;
+      }
+      while (opened--) {
+        level -= 2;
+        out.indent(level) << "end\n";
+      }
+      return success();
+    }
     // Coordinate setup is parameter/literal-only. Do it before the whole
     // first-match chain; numeric loads stay inside their reached predicates.
     for (Operation &arm : op->getRegion(0).front())
@@ -472,6 +732,7 @@ LogicalResult renderStatement(Operation *op, AnalogEventRenderState &state, llvm
     }
   } else if (llvm::isa<AnalogCaseOp>(op)) {
     renderReferenceMaps(op, state, out, indent);
+    renderLiveControl(op, state, out, indent);
     auto selector = expression(op, text(op, "selector_value"), state);
     if (failed(selector))
       return reject(op, "case selector cannot be emitted losslessly");
@@ -497,6 +758,7 @@ LogicalResult renderStatement(Operation *op, AnalogEventRenderState &state, llvm
     line("endcase");
   } else if (llvm::isa<AnalogLoopOp>(op)) {
     renderReferenceMaps(op, state, out, indent);
+    renderLiveControl(op, state, out, indent);
     auto bound = expression(op, text(op, "bound_value"), state);
     if (failed(bound))
       return reject(op, "loop bound cannot be emitted losslessly");
@@ -549,6 +811,102 @@ LogicalResult renderBlock(Block &block, AnalogEventRenderState &state, llvm::raw
       out.indent(indent) << "end\n";
   }
   return success();
+}
+
+LogicalResult prepareLiveConsumers(Operation *procedure, AnalogEventRenderState &state,
+                                   llvm::raw_ostream &out, unsigned indent) {
+  LogicalResult result = success();
+  procedure->walk([&](Operation *operation) {
+    if (failed(result) || text(operation, "reference_form") != "live" ||
+        state.liveConsumerOwners.count(operation))
+      return;
+    auto program = resolveAnalogLiveSourceProgram(operation);
+    if (failed(program)) {
+      result = failure();
+      return;
+    }
+    Operation *consumer = program->consumer;
+    if (state.liveConsumers.count(consumer))
+      return;
+    AnalogLiveConsumerTarget target;
+    target.event = llvm::isa<AnalogOnOp>(consumer) || isAnalogEventExpression(consumer);
+    target.program = std::move(*program);
+    for (auto [ordinal, fill] : llvm::enumerate(target.program.fills))
+      target.fillIndices[fill.reference] = ordinal;
+    state.liveConsumerOwners[consumer] = consumer;
+    for (const auto &root : target.program.roots)
+      state.liveConsumerOwners[root.operation] = consumer;
+    // The outer OR also owns the same complete consumer, even when some of its
+    // primitives have no deferred argument of their own.
+    if (llvm::isa<AnalogOnOp>(consumer))
+      state.liveConsumerOwners[consumer->getOperand(0).getDefiningOp()] = consumer;
+    for (auto [ordinal, binding] : llvm::enumerate(target.program.storageBindings)) {
+      auto reference = resolveAnalogStorageReference(binding.reference, consumer);
+      if (failed(reference)) {
+        result = reject(consumer, "live fill transitive storage is not visible at its consumer");
+        return;
+      }
+      std::string temporary;
+      if (llvm::isa<ShapedType>(reference->root.getType()))
+        temporary = nameFor("live_map_" + std::to_string(ordinal), state);
+      auto access = storageAccess(binding.reference, consumer, "0", state, temporary);
+      if (failed(access)) {
+        result = reject(consumer, "live fill storage coordinate has no portable target map");
+        return;
+      }
+      if (!temporary.empty()) {
+        out.indent(indent) << "integer " << temporary << ";\n";
+        target.declarationBytes += indent + 10 + temporary.size();
+      }
+      state.liveReferences[consumer][binding.reference] = *access;
+    }
+    if (target.event) {
+      if (state.liveStoreFunction.empty()) {
+        result = reject(consumer, "live event has no module-private storage helper");
+        return;
+      }
+      for (const auto &fill : target.program.fills) {
+        std::string cache, ready;
+        do {
+          cache = "event_live_cache_" + std::to_string(state.nextLiveFillOrdinal);
+          ready = "event_live_ready_" + std::to_string(state.nextLiveFillOrdinal++);
+        } while (state.reserved.contains(cache) || state.reserved.contains(ready));
+        state.reserved.insert(cache);
+        state.reserved.insert(ready);
+        target.fills[fill.reference] = {cache, ready};
+        out.indent(indent) << "real " << cache << ";\n";
+        out.indent(indent) << "integer " << ready << ";\n";
+        target.declarationBytes += indent * 2 + 17 + cache.size() + ready.size();
+      }
+      if (failed(admitLiveEventText(target, state))) {
+        result = failure();
+        return;
+      }
+    } else {
+      auto allocate = [&](llvm::StringRef kind, llvm::StringRef label) {
+        auto name = nameFor(
+            ("live_control_" + label + "_" + llvm::Twine(state.nextLiveControlOrdinal++)).str(),
+            state);
+        out.indent(indent) << kind << " " << name << ";\n";
+        return name;
+      };
+      auto render = [&](const AnalogSourceExpression &expression,
+                        std::optional<llvm::ArrayRef<std::string>> children) {
+        return children ? formatSource(expression, *children)
+                        : renderSource(expression, state, Captures(), consumer);
+      };
+      auto plan = buildAnalogLiveControlPlan(target.program, allocate, render);
+      if (failed(plan)) {
+        result = reject(consumer, "live control requires a verified finite private scalar plan");
+        return;
+      }
+      target.control = std::make_shared<AnalogLiveControlPlan>(std::move(*plan));
+      target.pc = allocate("integer", "pc");
+      target.step = allocate("integer", "step");
+    }
+    state.liveConsumers[consumer] = std::move(target);
+  });
+  return result;
 }
 
 LogicalResult prepareEventStorage(Operation *procedure, AnalogEventRenderState &state,
@@ -788,7 +1146,7 @@ LogicalResult prepareEventStorage(Operation *procedure, AnalogEventRenderState &
   // All declarations are named before resolving direct live storage accesses.
   // Binding truth remains the native per-owner operand/descriptor helper.
   procedure->walk([&](Operation *op) {
-    if (failed(result) || !op->hasAttr("reference_form"))
+    if (failed(result) || !op->hasAttr("reference_form") || text(op, "reference_form") == "live")
       return;
     auto bindings = resolveAnalogSourceStorageBindings(op);
     if (failed(bindings)) {
@@ -819,7 +1177,7 @@ LogicalResult prepareEventStorage(Operation *procedure, AnalogEventRenderState &
       state.liveReferences[op].try_emplace(binding.reference, std::move(*access));
     }
   });
-  return result;
+  return failed(result) ? result : prepareLiveConsumers(procedure, state, out, indent);
 }
 } // namespace
 
@@ -879,8 +1237,8 @@ LogicalResult verifyAnalogProcedureTarget(Operation *procedure) {
       return;
     const bool storage = isAnalogEventStorageStatement(op);
     const bool control =
-        llvm::isa<AnalogScopeOp, AnalogIfOp, AnalogIfArmOp, AnalogCaseOp, AnalogCaseArmOp,
-                  AnalogLoopOp, AnalogBreakOp, AnalogContinueOp, AnalogOnOp>(op) ||
+        llvm::isa<AnalogLiveFillOp, AnalogScopeOp, AnalogIfOp, AnalogIfArmOp, AnalogCaseOp,
+                  AnalogCaseArmOp, AnalogLoopOp, AnalogBreakOp, AnalogContinueOp, AnalogOnOp>(op) ||
         isAnalogEventExpression(op);
     if ((!storage && !control) || text(op, "owner") != owner) {
       result = reject(op, "procedure contains an unsupported effect or mismatched owner");
@@ -985,8 +1343,8 @@ LogicalResult verifyAnalogProcedureTarget(Operation *procedure) {
           result = reject(op, "generated loop exit exceeds its supported lexical control profile");
         return;
       }
-      if (!isAnalogEventStorageStatement(op) || llvm::isa<AnalogVariableOp>(op) ||
-          !storageScope(parent))
+      if ((!isAnalogEventStorageStatement(op) && !llvm::isa<AnalogLiveFillOp>(op)) ||
+          llvm::isa<AnalogVariableOp>(op) || !storageScope(parent))
         result = reject(op, "generated runtime loop body has unsupported storage or effects");
     });
     if (failed(result))
@@ -1002,6 +1360,26 @@ LogicalResult prepareAnalogEventBackend(Operation *module, AnalogEventRenderStat
       if (!text(op, key).empty())
         state.reserved.insert(text(op, key));
   });
+  bool requiresStore = false;
+  module->walk([&](Operation *operation) {
+    requiresStore |=
+        isAnalogEventExpression(operation) && text(operation, "reference_form") == "live";
+  });
+  if (requiresStore && state.liveStoreFunction.empty()) {
+    std::string name = "event_live_store";
+    unsigned ordinal = 0;
+    while (!state.reserved.insert(name).second)
+      name = "event_live_store_" + std::to_string(ordinal++);
+    state.liveStoreFunction = name;
+    std::string helper = "  analog function real " + name +
+                         ";\n"
+                         "    input value;\n    output cache;\n    output ready;\n"
+                         "    real value;\n    real cache;\n    integer ready;\n"
+                         "    begin\n      cache = value;\n      ready = 1;\n      " +
+                         name + " = value;\n    end\n  endfunction\n";
+    state.liveBudget->bytes += helper.size();
+    out << helper;
+  }
   LogicalResult result = success();
   module->walk([&](AnalogProcedureOp procedure) {
     if (failed(result) || procedure->hasAttr("generated_owner"))

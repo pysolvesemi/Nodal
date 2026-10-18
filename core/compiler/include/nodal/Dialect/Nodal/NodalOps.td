@@ -920,7 +920,7 @@ def Nodal_AnalogHeldReadOp : Nodal_Op<"analog_held_read", [HasParent<"AnalogOp">
 // No Pure trait: an unused monitor must retain timestep/history effects.
 class Nodal_AnalogEventOp<string mnemonic> : Nodal_Op<mnemonic> {
   let summary = "Source-semantic analog event monitor or analysis lifecycle event";
-  let arguments = (ins Variadic<Nodal_VariableType>:$references,
+  let arguments = (ins Variadic<AnyTypeOf<[Nodal_VariableType, Nodal_AnalogDeferredType]>>:$references,
     OptionalAttr<StrAttr>:$reference_form,
     StrAttr:$event_id, StrAttr:$owner, StrAttr:$contract,
     StrAttr:$name, OptionalAttr<StrAttr>:$generated_owner,
@@ -981,7 +981,7 @@ def Nodal_AnalogIfArmOp
     : Nodal_Op<"analog_if_arm", [HasParent<"AnalogIfOp">, NoTerminator]> {
   let summary = "One retained arm of a structured analog conditional";
   let arguments = (ins
-    Variadic<Nodal_VariableType>:$references,
+    Variadic<AnyTypeOf<[Nodal_VariableType, Nodal_AnalogDeferredType]>>:$references,
     OptionalAttr<StrAttr>:$reference_form,
     OptionalAttr<StrAttr>:$generated_owner,
     OptionalAttr<StrAttr>:$generated_induction,
@@ -1004,7 +1004,7 @@ def Nodal_AnalogIfArmOp
 def Nodal_AnalogCaseOp : Nodal_Op<"analog_case", [NoTerminator]> {
   let summary = "Exact non-fall-through structured analog case selection";
   let arguments = (ins
-    Variadic<Nodal_VariableType>:$references,
+    Variadic<AnyTypeOf<[Nodal_VariableType, Nodal_AnalogDeferredType]>>:$references,
     OptionalAttr<StrAttr>:$reference_form,
     OptionalAttr<StrAttr>:$generated_owner,
     OptionalAttr<StrAttr>:$generated_induction,
@@ -1039,7 +1039,7 @@ def Nodal_AnalogCaseArmOp
 def Nodal_AnalogLoopOp : Nodal_Op<"analog_loop", [NoTerminator]> {
   let summary = "Exact static or finite runtime-bounded analog loop";
   let arguments = (ins
-    Variadic<Nodal_VariableType>:$references,
+    Variadic<AnyTypeOf<[Nodal_VariableType, Nodal_AnalogDeferredType]>>:$references,
     OptionalAttr<StrAttr>:$reference_form,
     OptionalAttr<StrAttr>:$generated_owner,
     OptionalAttr<StrAttr>:$generated_induction,
@@ -1136,6 +1136,21 @@ def Nodal_AnalogAssignOp : Nodal_Op<"analog_assign"> {
     ArrayAttr:$guard_reads,
     DictionaryAttr:$metadata
   );
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogLiveFillOp : Nodal_Op<"analog_live_fill"> {
+  let summary = "Non-evaluating actual fill identity for one live consumer";
+  let arguments = (ins
+    Variadic<AnyTypeOf<[Nodal_VariableType, Nodal_AnalogDeferredType]>>:$references,
+    StrAttr:$identity,
+    StrAttr:$value,
+    StrAttr:$owner,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs Nodal_AnalogDeferredType:$result);
   let hasVerifier = 1;
 }
 

@@ -26,7 +26,8 @@ VariableType element(Type type) {
 // All admitted procedural regions are lexical, single-block regions. Walking
 // the use's enclosing operations checks both visibility and declaration order
 // without building a fresh whole-module dominance graph for each access.
-bool precedesLexically(Operation *definition, Operation *use) {
+} // namespace
+bool analogPrecedesLexically(Operation *definition, Operation *use) {
   if (definition == use)
     return true;
   for (Operation *anchor = use; anchor; anchor = anchor->getParentOp())
@@ -34,11 +35,12 @@ bool precedesLexically(Operation *definition, Operation *use) {
       return definition->isBeforeInBlock(anchor);
   return false;
 }
+namespace {
 LogicalResult checkLexicalOwner(Operation *operation, Operation *procedure, Operation *use) {
   if (operation->getParentOfType<AnalogProcedureOp>().getOperation() != procedure ||
       use->getParentOfType<AnalogProcedureOp>().getOperation() != procedure ||
       text(operation, "owner") != text(procedure, "owner") ||
-      text(use, "owner") != text(procedure, "owner") || !precedesLexically(operation, use))
+      text(use, "owner") != text(procedure, "owner") || !analogPrecedesLexically(operation, use))
     return reject(use,
                   "storage reference escapes its procedure, lexical scope or declaration order");
   if (failed(verifyGeneratedAnalogOwnership(operation)) ||

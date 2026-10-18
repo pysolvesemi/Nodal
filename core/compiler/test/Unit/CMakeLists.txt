@@ -460,3 +460,16 @@ set_tests_properties(nodal.native.generated-local-array-integration PROPERTIES
   TIMEOUT 60
   ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
 )
+
+add_executable(nodal-live-fill-unit-tests AnalogLiveFillTest.cpp)
+llvm_update_compile_flags(nodal-live-fill-unit-tests)
+target_link_libraries(nodal-live-fill-unit-tests
+  PRIVATE NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.live-fill-unit COMMAND nodal-live-fill-unit-tests)
+
+add_executable(nodal-analog-live-control-plan-unit-tests AnalogLiveControlPlanTest.cpp)
+llvm_update_compile_flags(nodal-analog-live-control-plan-unit-tests)
+target_link_libraries(nodal-analog-live-control-plan-unit-tests
+  PRIVATE NodalDialect MLIRIR MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.analog-live-control-plan-unit
+  COMMAND nodal-analog-live-control-plan-unit-tests)

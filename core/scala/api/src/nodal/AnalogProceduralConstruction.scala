@@ -47,6 +47,7 @@ private[nodal] object AnalogProceduralConstruction:
   private final class State:
     val stack = mutable.ArrayBuffer.empty[ModuleState]
     val modules = mutable.ArrayBuffer.empty[ModuleState]
+    val eventResources = new IdentityHashMap[Module, AnalogProceduralRuntime.EventResource]()
 
   private val current = new ThreadLocal[State]
 
@@ -283,7 +284,11 @@ private[nodal] object AnalogProceduralConstruction:
     module.controlSnapshot = module.controlSnapshot.map: snapshot =>
       snapshot.mapRendered(resolved)
 
-  private def freezeEvent(module: ModuleState, event: Event): AnalogEventRuntime.Expression =
+  private def freezeEvent(
+      module: ModuleState,
+      event: Event,
+      completeConsumer: Boolean = true
+  ): AnalogEventRuntime.Expression =
     val definition = event.analogDefinition.getOrElse(
       AnalogEventRuntime.fail(6, "analog on requires an analog event, not a digital edge")
     )
@@ -303,18 +308,24 @@ private[nodal] object AnalogProceduralConstruction:
           ConstructionKernel.analogEventConstant(expression)
         ),
       definition.analyses,
-      definition.alternatives.map(freezeEvent(module, _)),
+      definition.alternatives.map(freezeEvent(module, _, completeConsumer = false)),
       definition.source,
       definition.name
     )
     definition.arguments.zip(result.arguments).foreach: (authored, argument) =>
       requireScalarControl(authored._2, argument.value)
-    def fillOccurrences(event: AnalogEventRuntime.Expression): Vector[String] =
-      event.arguments.flatMap(argument =>
-        AnalogProceduralRuntime.deriveUniformScalar(argument.value).fillOccurrences
-      ) ++ event.alternatives.flatMap(fillOccurrences)
-    requireSingleLiveFill(fillOccurrences(result))
     result.validate()
+    if completeConsumer then
+      def arguments(event: AnalogEventRuntime.Expression): Vector[AnalogProceduralRuntime.Value] =
+        event.arguments.map(_.value) ++ event.alternatives.flatMap(arguments)
+      val live = AnalogProceduralRuntime.deriveLiveScalars(arguments(result))
+      val resource = live.eventResource(module.identityOwner)
+      AnalogProceduralRuntime.requireEventResource(resource)
+      val previous = Option(state.eventResources.get(module.module))
+        .getOrElse(AnalogProceduralRuntime.EventResource(0L, 1024L))
+      val total = previous + resource
+      AnalogProceduralRuntime.requireEventResource(total, module = true)
+      state.eventResources.put(module.module, total)
     result
 
   def eventControl[A](event: Event)(body: => A): A =
@@ -460,35 +471,40 @@ private[nodal] object AnalogProceduralConstruction:
   ): Vector[AnalogProceduralRuntime.StorageReference] =
     val result = mutable.LinkedHashSet.empty[AnalogProceduralRuntime.StorageReference]
 
-    def visit(candidate: Any): Unit = candidate match
-      case expression: KernelExpr[?] if storageReference(module, expression).nonEmpty =>
-        result += storageReference(module, expression).get
-      case iterable: Iterable[?] => iterable.foreach(visit)
-      case reference: AnyRef =>
-        findVariableOwner(reference) match
-          case Some(owner) if owner eq module =>
-            val variable = resolveVariable(module, reference)
-            result += variable
-          case Some(owner) =>
-            val identity = registeredIdentity(owner, reference)
-            AnalogProceduralRuntime.reject(
-              AnalogProceduralRuntime.Diagnostic(
-                if owner.module eq module.module then "NODAL-ANALOG-033-010"
-                else "NODAL-ANALOG-033-009",
-                if owner.module eq module.module then
-                  "procedural read belongs to another generated or ordinary procedure scope"
-                else
-                  s"procedural read belongs to component '${owner.owner}', not '${module.owner}'"
-                ,
-                identity
-              )
-            )
-          case None =>
-            reference match
-              case expression: KernelExpr[?] => expression.operands.foreach(visit)
-              case _ => ()
-      case _ => ()
-
+    val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+    def visit(candidate: Any): Unit =
+      val fresh = candidate match
+        case reference: AnyRef => Option(visited.put(reference, java.lang.Boolean.TRUE)).isEmpty
+        case _ => true
+      if fresh then
+        candidate match
+          case expression: KernelExpr[?] if storageReference(module, expression).nonEmpty =>
+            result += storageReference(module, expression).get
+          case iterable: Iterable[?] => iterable.foreach(visit)
+          case reference: AnyRef =>
+            findVariableOwner(reference) match
+              case Some(owner) if owner eq module =>
+                val variable = resolveVariable(module, reference)
+                result += variable
+              case Some(owner) =>
+                val identity = registeredIdentity(owner, reference)
+                AnalogProceduralRuntime.reject(
+                  AnalogProceduralRuntime.Diagnostic(
+                    if owner.module eq module.module then "NODAL-ANALOG-033-010"
+                    else "NODAL-ANALOG-033-009",
+                    if owner.module eq module.module then
+                      "procedural read belongs to another generated or ordinary procedure scope"
+                    else
+                      s"procedural read belongs to component '${owner.owner}', not '${module.owner}'"
+                    ,
+                    identity
+                  )
+                )
+              case None =>
+                reference match
+                  case expression: KernelExpr[?] => expression.operands.foreach(visit)
+                  case _ => ()
+          case _ => ()
     visit(value)
     result.toVector
 
@@ -1021,8 +1037,7 @@ private[nodal] object AnalogProceduralConstruction:
     // Derive only from retained actual leaves. The bridge independently validates every static
     // shape proof before serialization; this check admits the source form without dropping the
     // authored dependency tree or duplicating an underlying fill scalar at a live evaluation site.
-    val derived = AnalogProceduralRuntime.deriveUniformScalar(value)
-    requireSingleLiveFill(derived.fillOccurrences)
+    val _ = AnalogProceduralRuntime.deriveLiveScalars(Vector(value))
     val visited = new IdentityHashMap[KernelExpr[?], java.lang.Boolean]()
     def visit(candidate: Any, depth: Int): Unit = candidate match
       case authored: KernelExpr[?] if !visited.containsKey(authored) =>
@@ -1032,13 +1047,6 @@ private[nodal] object AnalogProceduralConstruction:
       case values: Iterable[?] => values.foreach(visit(_, depth + 1))
       case _ => ()
     visit(expression, 0)
-
-  private def requireSingleLiveFill(occurrences: Vector[String]): Unit =
-    if occurrences.distinct.size != occurrences.size then
-      AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
-        "NODAL-SHAPE-043-007",
-        "repeated shared-fill sources in one live control or event expression are not yet supported"
-      ))
 
   private def retainedScalarSource(
       value: AnalogProceduralRuntime.Value

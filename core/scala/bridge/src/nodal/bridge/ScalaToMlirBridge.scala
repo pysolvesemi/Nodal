@@ -3163,6 +3163,7 @@ ${indent(body, 2)}
 
     private def validateProceduralShapes(): Unit =
       import AnalogProceduralRuntime.*
+      val eventResources = mutable.HashMap.empty[String, EventResource]
       snapshot.analogProcedural.foreach: program =>
         val module = modulesByPath.getOrElse(
           program.owner,
@@ -3445,29 +3446,36 @@ ${indent(body, 2)}
               "control storage reference inventory is incomplete or ambiguous",
               Some(path)
             )
-        def scalarControl(input: Value, path: String): ScalarDerivation =
+        def scalarControl(input: Value, path: String): LiveScalarProgram =
           val _ = value(input)
           if input.valueType.dimensions.nonEmpty then
             invalidValue("control value must have a scalar result", path)
-          val derived = try deriveUniformScalar(input)
+          val derived = try deriveLiveScalars(Vector(input))
           catch
             case error: IllegalArgumentException =>
               invalidValue(error.getMessage, path)
-          val reads = derived.value.allReads.distinct
+          val reads = derived.roots.head.allReads.distinct
           controlReferences(reads.map(_.identity).toSet, reads, path)
           derived
-        def uniqueLiveFills(identities: Vector[String], path: String): Unit =
-          if identities.distinct.size != identities.size then
-            invalidValue("repeated shared fill in a live scalar consumer is unsupported", path)
-        def eventReferences(event: AnalogEventRuntime.Expression, path: String): Vector[String] =
-          val direct = event.arguments.flatMap(argument =>
-            scalarControl(argument.value, s"$path.argument_${argument.slot}").fillOccurrences
-          )
-          val nested = event.alternatives.zipWithIndex.flatMap((alternative, index) =>
-            eventReferences(alternative, s"$path.alternative_$index")
-          )
-          uniqueLiveFills(direct ++ nested, path)
-          direct ++ nested
+        def eventReferences(event: AnalogEventRuntime.Expression, path: String): Unit =
+          def arguments(event: AnalogEventRuntime.Expression, path: String): Vector[Value] =
+            val direct = event.arguments.map: argument =>
+              val _ = scalarControl(argument.value, s"$path.argument_${argument.slot}")
+              argument.value
+            direct ++ event.alternatives.zipWithIndex.flatMap((alternative, index) =>
+              arguments(alternative, s"$path.alternative_$index")
+            )
+          // Validate every retained original before deriving a whole-consumer DAG or estimating
+          // expansion. This preserves invalid ownership/index/effect diagnostics ahead of erasure.
+          val originals = arguments(event, path)
+          val resource = deriveLiveScalars(originals).eventResource(path)
+          try
+            requireEventResource(resource)
+            val total = eventResources.getOrElse(program.owner, EventResource(0L, 1024L)) + resource
+            requireEventResource(total, module = true)
+            eventResources.update(program.owner, total)
+          catch
+            case error: IllegalArgumentException => invalidValue(error.getMessage, path)
         program.variables.foreach: record =>
           dimensions(record.variable.valueType.dimensions, record.variable.identity)
           record.initializer.foreach: initializer =>
@@ -3487,10 +3495,7 @@ ${indent(body, 2)}
           val _ = value(assignment.value)
         program.controlExpressions.foreach: expression =>
           if expression.role == "loop-bound" then
-            uniqueLiveFills(
-              scalarControl(expression.value, expression.identity).fillOccurrences,
-              expression.identity
-            )
+            val _ = scalarControl(expression.value, expression.identity)
           else
             val _ = value(expression.value)
         def block(input: AnalogControlFlowRuntime.Block): Unit = input.statements.foreach:
@@ -3498,7 +3503,7 @@ ${indent(body, 2)}
             assignment.storageTarget.foreach(reference)
           case scope: AnalogControlFlowRuntime.Statement.Scope => block(scope.body)
           case event: AnalogControlFlowRuntime.Statement.EventControl =>
-            val _ = eventReferences(event.event, s"${event.identity}.event")
+            eventReferences(event.event, s"${event.identity}.event")
             block(event.body)
           case branch: AnalogControlFlowRuntime.Statement.IfThenElse =>
             branch.branches.zipWithIndex.foreach: (arm, index) =>
@@ -3518,7 +3523,7 @@ ${indent(body, 2)}
                   retained.allReads.distinct != arm.condition.selectedReads ||
                   retained.allReads.map(_.identity).toSet != arm.condition.reads
                 then invalidValue("condition fields disagree with retained source value", path)
-                uniqueLiveFills(scalarControl(retained, path).fillOccurrences, path)
+                val _ = scalarControl(retained, path)
               controlReferences(
                 arm.condition.reads,
                 arm.condition.selectedReads,
@@ -3539,7 +3544,7 @@ ${indent(body, 2)}
                 retained.allReads.distinct != selection.selector.selectedReads ||
                 retained.allReads.map(_.identity).toSet != selection.selector.reads
               then invalidValue("selector fields disagree with retained source value", path)
-              uniqueLiveFills(scalarControl(retained, path).fillOccurrences, path)
+              val _ = scalarControl(retained, path)
             controlReferences(
               selection.selector.reads,
               selection.selector.selectedReads,

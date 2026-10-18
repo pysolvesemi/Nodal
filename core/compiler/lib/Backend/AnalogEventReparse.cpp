@@ -18,18 +18,37 @@
 using namespace mlir;
 namespace nodal {
 namespace {
+// These spellings are a target ABI, not a comment or an externally supplied
+// trust bit. The declaration and every output actual independently check them.
+std::optional<llvm::StringRef> privateOrdinal(llvm::StringRef name, llvm::StringRef prefix) {
+  if (!name.consume_front(prefix) || !name.consume_front("_") || name.empty() ||
+      (name.size() > 1 && name.front() == '0') || !llvm::all_of(name, llvm::isDigit))
+    return std::nullopt;
+  return name;
+}
+bool privateFunctionName(llvm::StringRef name) {
+  return name == "event_live_store" || privateOrdinal(name, "event_live_store").has_value();
+}
+constexpr uint64_t eventWrapperLimit = 4096, moduleWrapperLimit = 65536;
+constexpr uint64_t eventByteLimit = 1024 * 1024, moduleByteLimit = 16 * 1024 * 1024;
 // Independent recursive-descent check of the emitted subset. In particular,
 // balanced parentheses alone must not accept extra tasks or raw source text.
 class Parser {
 public:
   explicit Parser(llvm::StringRef source, const llvm::StringMap<unsigned> *functions = nullptr,
-                  const AnalogEventSymbols *symbols = nullptr)
-      : source(source), functions(functions), symbols(symbols), invalid(source.contains('\0')) {
+                  const AnalogEventSymbols *symbols = nullptr,
+                  AnalogEventPrivateFunctions *privateFunctions = nullptr)
+      : source(source), functions(functions), symbols(symbols), privateFunctions(privateFunctions),
+        invalid(source.contains('\0')) {
     next();
   }
   FailureOr<size_t> run() {
     if (!block(0))
       return failure();
+    if (privateFunctions) {
+      privateFunctions->demandWrappers += blockWrappers;
+      privateFunctions->expressionBytes += blockExpressionBytes;
+    }
     return tokenStart;
   }
 
@@ -47,6 +66,15 @@ public:
       return false;
     AnalogEventSymbol symbol{real ? AnalogEventSymbolKind::Real : AnalogEventSymbolKind::Integer,
                              true, std::nullopt, std::nullopt};
+    const bool privateCache = privateOrdinal(name, "event_live_cache").has_value();
+    const bool privateReady = privateOrdinal(name, "event_live_ready").has_value();
+    if (privateCache || privateReady) {
+      // Arrays, initialized storage, genvars and wrong types never acquire the
+      // compiler-private output capability merely through a similar name.
+      if (privateCache != real || token != ";" || source.ltrim().starts_with("genvar"))
+        return false;
+      symbol.privateLive = true;
+    }
     if (eat("[")) {
       size_t extentIdentity = 0;
       if (!real || !integerExpression(symbol.lowerBound) || !symbol.lowerBound ||
@@ -130,6 +158,29 @@ public:
     return tokenStart;
   }
 
+  FailureOr<size_t> privateFunctionDeclaration(AnalogEventPrivateFunctions &known) {
+    if (!eat("analog") || !eat("function") || !eat("real"))
+      return failure();
+    auto name = token;
+    if (!privateFunctionName(name) || known.names.contains(name) || !identifier())
+      return failure();
+    // Exact input/output directions, scalar types, assignment order and return.
+    // No expression parsing fallback can admit probes, globals, recursive calls,
+    // extra locals or additional effects in this compiler-private helper.
+    for (llvm::StringRef expected :
+         {";",      "input", "value",   ";",     "output", "cache", ";",
+          "output", "ready", ";",       "real",  "value",  ";",     "real",
+          "cache",  ";",     "integer", "ready", ";",      "begin", "cache",
+          "=",      "value", ";",       "ready", "=",      "1",     ";"})
+      if (!eat(expected))
+        return failure();
+    if (!eat(name) || !eat("=") || !eat("value") || !eat(";") || !eat("end") ||
+        !eat("endfunction") || invalid)
+      return failure();
+    known.names.insert(name);
+    return tokenStart;
+  }
+
   bool transferCall() {
     transferExpressions = true;
     auto function = token;
@@ -185,6 +236,7 @@ private:
   llvm::StringRef source, token;
   const llvm::StringMap<unsigned> *functions;
   const AnalogEventSymbols *symbols;
+  AnalogEventPrivateFunctions *privateFunctions;
   llvm::StringSet<> available;
   bool pureFunction = false;
   size_t cursor = 0, tokenStart = 0;
@@ -192,6 +244,12 @@ private:
   bool transferExpressions = false;
   bool staticExpression = false;
   bool mutableIntegerReference = false;
+  bool eventExpressions = false;
+  size_t eventStart = 0;
+  uint64_t eventWrappers = 0;
+  uint64_t blockWrappers = 0, blockExpressionBytes = 0;
+  std::vector<llvm::StringRef> liveInputAccesses;
+  llvm::StringMap<llvm::StringRef> liveBodies;
   struct IntegerIdentity {
     std::optional<int64_t> constant;
     llvm::StringRef parameter;
@@ -216,14 +274,29 @@ private:
              (llvm::isAlnum(source[cursor]) || source[cursor] == '_' || source[cursor] == '$'))
         ++cursor;
     } else if (llvm::isDigit(c) || c == '.') {
-      std::string tail = source.drop_front(tokenStart).str();
+      // Copy only the numeric token, not the whole remaining module for every
+      // literal in an admitted (potentially megabyte-sized) event expression.
+      while (cursor < source.size() && (llvm::isDigit(source[cursor]) || source[cursor] == '.'))
+        ++cursor;
+      if (cursor < source.size() && (source[cursor] == 'e' || source[cursor] == 'E')) {
+        ++cursor;
+        if (cursor < source.size() && (source[cursor] == '+' || source[cursor] == '-'))
+          ++cursor;
+        while (cursor < source.size() && llvm::isDigit(source[cursor]))
+          ++cursor;
+      }
+      if (eventExpressions && privateFunctions && cursor - eventStart > eventByteLimit) {
+        invalid = true;
+        token = source.slice(tokenStart, cursor);
+        return;
+      }
+      std::string tail = source.slice(tokenStart, cursor).str();
       char *end = nullptr;
       errno = 0;
       double number = std::strtod(tail.c_str(), &end);
-      if (end == tail.c_str() || errno == ERANGE || !std::isfinite(number))
+      if (end != tail.c_str() + tail.size() || errno == ERANGE || !std::isfinite(number))
         invalid = true;
       else {
-        cursor = tokenStart + static_cast<size_t>(end - tail.c_str());
         if (!llvm::Regex("^[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$")
                  .match(source.slice(tokenStart, cursor)))
           invalid = true;
@@ -245,6 +318,8 @@ private:
         ++cursor;
     }
     token = source.slice(tokenStart, cursor);
+    if (eventExpressions && privateFunctions && tokenStart - eventStart > eventByteLimit)
+      invalid = true;
   }
   bool eat(llvm::StringRef value) {
     if (invalid || token != value)
@@ -362,6 +437,8 @@ private:
     mutableIntegerReference |= symbol->second.writable;
     if (staticExpression && symbol->second.writable)
       return false;
+    if (eventExpressions)
+      liveInputAccesses.push_back(name);
     if (identity)
       *identity = rememberIntegerIdentity(value, name);
     return true;
@@ -438,6 +515,8 @@ private:
     if (staticExpression && (symbol.writable || (symbol.kind != AnalogEventSymbolKind::Real &&
                                                  symbol.kind != AnalogEventSymbolKind::Integer)))
       return false;
+    if (eventExpressions)
+      liveInputAccesses.push_back(name);
     if (symbol.kind == AnalogEventSymbolKind::RealArray)
       return indexed(symbol, depth);
     return token != "[" && (symbol.kind == AnalogEventSymbolKind::Real ||
@@ -460,6 +539,66 @@ private:
     bool integer = false;
     std::optional<int64_t> constant;
   };
+  static bool sameExpressionText(llvm::StringRef left, llvm::StringRef right) {
+    // The independently parsed grammar has no escaped strings. Preserve string
+    // contents, but permit harmless formatting differences between expansions.
+    bool quoted = false;
+    while (true) {
+      if (!quoted) {
+        left = left.ltrim();
+        right = right.ltrim();
+      }
+      if (left.empty() || right.empty())
+        return left.empty() && right.empty();
+      if (left.front() != right.front())
+        return false;
+      if (left.front() == '"')
+        quoted = !quoted;
+      left = left.drop_front();
+      right = right.drop_front();
+    }
+  }
+  bool privateCall(unsigned depth) {
+    if (!eventExpressions || !symbols || !privateFunctions || ++eventWrappers > eventWrapperLimit ||
+        !eat("("))
+      return false;
+    const size_t inputStart = tokenStart, accessStart = liveInputAccesses.size();
+    if (!expression(depth + 1))
+      return false;
+    auto input = source.slice(inputStart, tokenStart).trim();
+    if (!eat(","))
+      return false;
+    auto cache = token;
+    if (!identifier() || !eat(","))
+      return false;
+    auto ready = token;
+    if (!identifier() || !eat(")"))
+      return false;
+    auto cacheOrdinal = privateOrdinal(cache, "event_live_cache");
+    auto readyOrdinal = privateOrdinal(ready, "event_live_ready");
+    auto cacheSymbol = symbols->find(cache), readySymbol = symbols->find(ready);
+    if (!cacheOrdinal || !readyOrdinal || *cacheOrdinal != *readyOrdinal || cache == ready ||
+        cacheSymbol == symbols->end() || readySymbol == symbols->end())
+      return false;
+    auto validOutput = [](const AnalogEventSymbol &symbol, AnalogEventSymbolKind kind) {
+      return symbol.privateLive && symbol.writable && symbol.kind == kind && !symbol.lowerBound &&
+             !symbol.upperBound;
+    };
+    if (!validOutput(cacheSymbol->second, AnalogEventSymbolKind::Real) ||
+        !validOutput(readySymbol->second, AnalogEventSymbolKind::Integer))
+      return false;
+    // The numeric input must neither read nor write this call's outputs. The
+    // log includes array-index reads and all descendant calls' copy-out effects.
+    for (size_t index = accessStart; index < liveInputAccesses.size(); ++index)
+      if (liveInputAccesses[index] == cache || liveInputAccesses[index] == ready)
+        return false;
+    auto inserted = liveBodies.try_emplace(cache, input);
+    if (!inserted.second && !sameExpressionText(inserted.first->second, input))
+      return false;
+    liveInputAccesses.push_back(cache);
+    liveInputAccesses.push_back(ready);
+    return true;
+  }
   bool primary(unsigned depth, CheckedValue *value = nullptr) {
     if (value)
       *value = {};
@@ -535,6 +674,8 @@ private:
     }
     if (staticExpression && !lookupAnalogFunctionTarget(name))
       return false;
+    if (privateFunctions && privateFunctions->names.contains(name))
+      return privateCall(depth);
     CheckedValue argument;
     auto argumentExpression = [&]() { return expression(depth + 1, value ? &argument : nullptr); };
     if (functions) {
@@ -659,6 +800,11 @@ private:
     return true;
   }
   bool event() {
+    eventExpressions = true;
+    eventStart = tokenStart;
+    eventWrappers = 0;
+    liveInputAccesses.clear();
+    liveBodies.clear();
     do {
       auto function = token;
       bool lifecycle = function == "initial_step" || function == "final_step";
@@ -680,6 +826,17 @@ private:
           return false;
       }
     } while (eat("or"));
+    eventExpressions = false;
+    if (privateFunctions && eventWrappers) {
+      const uint64_t bytes = tokenStart - eventStart;
+      if (bytes > eventByteLimit || privateFunctions->demandWrappers > moduleWrapperLimit ||
+          blockWrappers + eventWrappers > moduleWrapperLimit - privateFunctions->demandWrappers ||
+          privateFunctions->expressionBytes > moduleByteLimit ||
+          blockExpressionBytes + bytes > moduleByteLimit - privateFunctions->expressionBytes)
+        return false;
+      blockWrappers += eventWrappers;
+      blockExpressionBytes += bytes;
+    }
     return true;
   }
   bool assignment(llvm::StringRef *loopCounter = nullptr) {
@@ -764,9 +921,13 @@ private:
   }
 };
 } // namespace
-FailureOr<size_t> reparseAnalogEventBlock(llvm::StringRef source,
-                                          const AnalogEventSymbols *symbols) {
-  return Parser(source, nullptr, symbols).run();
+FailureOr<size_t> reparseAnalogEventBlock(llvm::StringRef source, const AnalogEventSymbols *symbols,
+                                          AnalogEventPrivateFunctions *privateFunctions) {
+  return Parser(source, nullptr, symbols, privateFunctions).run();
+}
+FailureOr<size_t> reparseAnalogEventPrivateFunction(llvm::StringRef source,
+                                                    AnalogEventPrivateFunctions &functions) {
+  return Parser(source).privateFunctionDeclaration(functions);
 }
 LogicalResult reparseAnalogEventDeclaration(llvm::StringRef source, AnalogEventSymbols &symbols) {
   return success(Parser(source, nullptr, &symbols).declaration(symbols));

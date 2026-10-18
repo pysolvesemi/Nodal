@@ -145,6 +145,7 @@ private[nodal] object AnalogProceduralMlir:
       : Vector[StorageOccurrence] =
     import AnalogProceduralRuntime.*
     val result = Vector.newBuilder[StorageOccurrence]
+    val liveSources = mutable.HashSet.empty[String]
     def projection(
         projection: StorageProjection,
         path: String,
@@ -195,34 +196,48 @@ private[nodal] object AnalogProceduralMlir:
           Some(read.root.identity),
           Some(read.identity)
         )
-    def eventReferences(event: AnalogEventRuntime.Expression, path: String): Unit =
+    def liveOccurrences(inputs: Vector[Value], path: String, source: Option[Source]): Boolean =
+      val graph = deriveLiveScalars(inputs)
+      if graph.requiresSharing then
+        references(inputs.flatMap(_.allReads).distinct, s"$path.live", source)
+        graph.fills.zipWithIndex.foreach: (fill, index) =>
+          result += StorageOccurrence(
+            "live_fill",
+            s"$path.live_fill_$index",
+            Vector.empty,
+            source,
+            authored = Some(fill.identity)
+          )
+      graph.requiresSharing
+    def eventArguments(event: AnalogEventRuntime.Expression): Vector[Value] =
+      event.arguments.map(_.value) ++ event.alternatives.flatMap(eventArguments)
+    def eventReferences(event: AnalogEventRuntime.Expression, path: String, shared: Boolean): Unit =
       event.arguments.foreach(argument =>
         value(argument.value, s"$path.argument_${argument.slot}.source", event.source, false)
       )
-      val arguments = event.arguments.map(argument =>
-        argument.copy(value = deriveUniformScalar(argument.value).value)
-      )
-      if arguments.exists(argument => needsReferences(argument.value.allReads)) then
-        arguments.foreach: argument =>
+      if !shared && event.arguments.exists(argument => needsReferences(argument.value.allReads))
+      then
+        event.arguments.foreach: argument =>
           references(argument.value.allReads, s"$path.argument_${argument.slot}", event.source)
       event.alternatives.zipWithIndex.foreach: (child, index) =>
-        eventReferences(child, s"$path.alternative_$index")
+        eventReferences(child, s"$path.alternative_$index", shared)
     def value(
         inputValue: Value,
         path: String,
         source: Option[Source],
         captureReads: Boolean = true
     ): Unit =
-      inputValue.source match
-        case Some(ShapedSource.Read(read)) =>
-          if captureReads then reads(Vector(read), path, source)
-        case Some(ShapedSource.Fill(input)) =>
-          scalar(input, path, source, captureReads)
-          result += StorageOccurrence("array_fill", path, inputValue.valueType.dimensions, source)
-        case Some(ShapedSource.View(input, selected)) =>
-          value(input, s"$path.input", source, captureReads)
-          projection(selected, path, source, None)
-        case None => scalar(inputValue, path, source, captureReads)
+      if captureReads || liveSources.add(inputValue.rendered) then
+        inputValue.source match
+          case Some(ShapedSource.Read(read)) =>
+            if captureReads then reads(Vector(read), path, source)
+          case Some(ShapedSource.Fill(input)) =>
+            scalar(input, path, source, captureReads)
+            result += StorageOccurrence("array_fill", path, inputValue.valueType.dimensions, source)
+          case Some(ShapedSource.View(input, selected)) =>
+            value(input, s"$path.input", source, captureReads)
+            projection(selected, path, source, None)
+          case None => scalar(inputValue, path, source, captureReads)
     def scalar(
         input: Value,
         path: String,
@@ -272,19 +287,27 @@ private[nodal] object AnalogProceduralMlir:
           reads(Vector(reference), item.identity, item.source)
         )
       case item: AnalogControlFlowRuntime.Statement.EventControl =>
-        eventReferences(item.event, s"${item.identity}.event")
+        liveSources.clear()
+        val path = s"${item.identity}.event"
+        val shared = liveOccurrences(eventArguments(item.event), path, item.source)
+        eventReferences(item.event, path, shared)
         visit(item.body)
       case item: AnalogControlFlowRuntime.Statement.Scope => visit(item.body)
       case item: AnalogControlFlowRuntime.Statement.IfThenElse =>
         item.branches.zipWithIndex.foreach: (branch, index) =>
           val path = s"${item.identity}.condition_$index"
+          liveSources.clear()
           branch.condition.sourceValue.foreach(input =>
             value(input, s"$path.source", branch.condition.source, false)
           )
+          val shared =
+            branch.condition.staticValue.isEmpty && branch.condition.sourceValue.exists(input =>
+              liveOccurrences(Vector(input), path, branch.condition.source)
+            )
           val selected = branch.condition.sourceValue.map(input =>
-            deriveUniformScalar(input).value.allReads.distinct
+            input.allReads.distinct
           ).getOrElse(branch.condition.selectedReads)
-          if needsReferences(selected) then
+          if !shared && needsReferences(selected) then
             references(
               selected,
               s"${item.identity}.condition_$index",
@@ -293,13 +316,21 @@ private[nodal] object AnalogProceduralMlir:
           visit(branch.body)
         item.otherwise.foreach(visit)
       case item: AnalogControlFlowRuntime.Statement.CaseStatement =>
+        liveSources.clear()
         item.selector.sourceValue.foreach(input =>
           value(input, s"${item.identity}.selector.source", item.selector.source, false)
         )
+        val shared = item.selector.staticValue.isEmpty && item.selector.sourceValue.exists(input =>
+          liveOccurrences(
+            Vector(input),
+            s"${item.identity}.selector",
+            item.selector.source.orElse(item.source)
+          )
+        )
         val selected = item.selector.sourceValue.map(input =>
-          deriveUniformScalar(input).value.allReads.distinct
+          input.allReads.distinct
         ).getOrElse(item.selector.selectedReads)
-        if needsReferences(selected) then
+        if !shared && needsReferences(selected) then
           references(
             selected,
             s"${item.identity}.selector",
@@ -308,13 +339,22 @@ private[nodal] object AnalogProceduralMlir:
         item.arms.foreach(arm => visit(arm.body)); item.default.foreach(visit)
       case item: AnalogControlFlowRuntime.Statement.Loop =>
         val bound = expressions.get(item.identity -> "loop-bound")
+        liveSources.clear()
+        val shared =
+          item.stage == AnalogControlFlowRuntime.LoopStage.RuntimeBounded && bound.exists(record =>
+            liveOccurrences(
+              Vector(record.value),
+              s"${item.identity}.loop-bound",
+              record.source.orElse(item.source)
+            )
+          )
         bound.foreach(record =>
           value(record.value, s"${item.identity}.loop-bound.source", record.source, false)
         )
         val selected = bound.map(record =>
-          deriveUniformScalar(record.value).value.allReads.distinct
+          record.value.allReads.distinct
         ).getOrElse(item.boundSelectedReads)
-        if needsReferences(selected) then
+        if !shared && needsReferences(selected) then
           references(
             selected,
             s"${item.identity}.loop-bound",
@@ -1222,32 +1262,111 @@ private[nodal] object AnalogProceduralMlir:
       val labels = bindings.toMap
       array(reads.toVector.map(read => labels.getOrElse(read, read)).sorted.map(quoted))
 
-    def liveCondition(condition: AnalogControlFlowRuntime.Condition)
+    type References = (Vector[String], Vector[String], Vector[String], Vector[(String, String)])
+    final case class LiveEmission(
+        values: Vector[AnalogProceduralRuntime.Value],
+        definitions: Vector[String],
+        references: Vector[References]
+    )
+    var liveSerial = 0
+    def liveEmission(
+        originals: Vector[AnalogProceduralRuntime.Value],
+        path: String,
+        source: Option[AnalogProceduralRuntime.Source]
+    ): Option[LiveEmission] =
+      import AnalogProceduralRuntime.*
+      val graph = deriveLiveScalars(originals)
+      Option.when(graph.requiresSharing):
+        val reads = originals.flatMap(_.allReads).distinct
+        requireScalarControl(reads.map(_.identity).toSet, reads, "live scalar consumer")
+        val aliases = storage.references(reads, s"$path.live", source)
+        val labels = graph.fills.zipWithIndex.map((fill, index) =>
+          fill.identity -> s"$path.live_fill_$index"
+        )
+        val handles = graph.fills.map: fill =>
+          val result = s"%procedural_${programIndex}_live_fill_$liveSerial"
+          liveSerial += 1
+          val resultType =
+            s"!nodal.analog_deferred<${quoted("real")}, ${quoted(canonicalDimension(fill.body.valueType.dimension))}>"
+          fill.identity -> (result -> resultType)
+        val bindings = aliases._4 ++ labels
+        val actuals = aliases._4.map(_._1).zip(aliases._2.zip(aliases._3)).toMap ++ handles
+        require(
+          actuals.size == aliases._4.size + handles.size,
+          "live fill and storage labels must be distinct"
+        )
+        def references(value: Value): References =
+          val used = scalarLeafOccurrences(value.rendered, actuals.keys.toVector).distinct
+          val selected = used.map(actuals)
+          (Vector.empty, selected.map(_._1), selected.map(_._2), bindings)
+        val definitions = graph.fills.map: fill =>
+          val selected = references(fill.body)
+          val result = actuals(fill.identity)
+          val identity = labels.toMap.apply(fill.identity)
+          operation(
+            "nodal.analog_live_fill",
+            results = Vector(result._1),
+            operands = selected._2,
+            operandTypes = selected._3,
+            resultTypes = Vector(result._2),
+            attributes = Vector(
+              "identity" -> quoted(identity),
+              "value" -> quoted(storage.replaceLeaves(fill.body.rendered, bindings)),
+              "owner" -> quoted(program.owner)
+            ) ++ generatedAttributes(program) ++ Vector(
+              "metadata" -> metadata(
+                identity,
+                source,
+                Vector("authored_path" -> quoted(fill.identity))
+              )
+            ),
+            source = source
+          )
+        LiveEmission(graph.roots, aliases._1 ++ definitions, graph.roots.map(references))
+
+    def liveAttributes(emitted: References): Vector[(String, String)] =
+      if emitted._3.exists(_.startsWith("!nodal.analog_deferred<")) then
+        Vector("reference_form" -> quoted("live")) ++ generatedAttributes(program)
+      else Vector.empty
+
+    def liveCondition(condition: AnalogControlFlowRuntime.Condition, live: Option[LiveEmission])
         : AnalogControlFlowRuntime.Condition =
-      condition.sourceValue.fold(condition): original =>
-        val derived = AnalogProceduralRuntime.deriveUniformScalar(original).value
-        condition.copy(
-          rendered = derived.rendered,
-          reads = derived.allReads.map(_.identity).toSet,
-          valueType = derived.valueType,
-          selectedReads = derived.allReads.distinct
-        )
+      if condition.staticValue.nonEmpty then condition
+      else
+        condition.sourceValue.fold(condition): original =>
+          val derived = live.map(
+            _.values.head
+          ).getOrElse(AnalogProceduralRuntime.deriveUniformScalar(original).value)
+          condition.copy(
+            rendered = derived.rendered,
+            reads = derived.allReads.map(_.identity).toSet,
+            valueType = derived.valueType,
+            selectedReads = derived.allReads.distinct
+          )
 
-    def liveSelector(selector: AnalogControlFlowRuntime.Selector)
+    def liveSelector(selector: AnalogControlFlowRuntime.Selector, live: Option[LiveEmission])
         : AnalogControlFlowRuntime.Selector =
-      selector.sourceValue.fold(selector): original =>
-        val derived = AnalogProceduralRuntime.deriveUniformScalar(original).value
-        selector.copy(
-          rendered = derived.rendered,
-          reads = derived.allReads.map(_.identity).toSet,
-          kind = derived.valueType.kind,
-          dimension = derived.valueType.dimension,
-          selectedReads = derived.allReads.distinct
-        )
+      if selector.staticValue.nonEmpty then selector
+      else
+        selector.sourceValue.fold(selector): original =>
+          val derived = live.map(
+            _.values.head
+          ).getOrElse(AnalogProceduralRuntime.deriveUniformScalar(original).value)
+          selector.copy(
+            rendered = derived.rendered,
+            reads = derived.allReads.map(_.identity).toSet,
+            kind = derived.valueType.kind,
+            dimension = derived.valueType.dimension,
+            selectedReads = derived.allReads.distinct
+          )
 
-    def renderEvent(event: AnalogEventRuntime.Expression, path: String): (Vector[String], String) =
+    def renderEvent(
+        event: AnalogEventRuntime.Expression,
+        path: String,
+        live: Map[String, (AnalogProceduralRuntime.Value, References)]
+    ): (Vector[String], String) =
       val nested = event.alternatives.zipWithIndex.map: (child, index) =>
-        renderEvent(child, s"$path.alternative_$index")
+        renderEvent(child, s"$path.alternative_$index", live)
       val result = s"%procedural_${programIndex}_event_$eventSerial"
       eventSerial += 1
       val attrs = Vector(
@@ -1272,9 +1391,13 @@ private[nodal] object AnalogProceduralMlir:
         // Structural erasure follows bridge validation. These scalar spellings remain inside
         // the monitor expression; only non-evaluating storage aliases may precede it.
         val values = event.arguments.map(argument =>
-          argument.copy(value = AnalogProceduralRuntime.deriveUniformScalar(argument.value).value)
+          argument.copy(value =
+            live.get(s"$path.argument_${argument.slot}").map(_._1)
+              .getOrElse(AnalogProceduralRuntime.deriveUniformScalar(argument.value).value)
+          )
         )
-        val typed = values.exists(argument => needsReferences(argument.value.allReads))
+        val typed =
+          live.nonEmpty || values.exists(argument => needsReferences(argument.value.allReads))
         val references = values.map: argument =>
           val reads = argument.value.allReads.distinct
           require(
@@ -1282,9 +1405,10 @@ private[nodal] object AnalogProceduralMlir:
             "an analog event argument must have a scalar result"
           )
           requireScalarControl(reads.map(_.identity).toSet, reads, "analog event")
-          if typed then
-            storage.references(reads, s"$path.argument_${argument.slot}", event.source)
-          else (Vector.empty, Vector.empty, Vector.empty, Vector.empty)
+          live.get(s"$path.argument_${argument.slot}").map(_._2).getOrElse:
+            if typed then
+              storage.references(reads, s"$path.argument_${argument.slot}", event.source)
+            else (Vector.empty, Vector.empty, Vector.empty, Vector.empty)
         val arguments = values.zip(references).map: (argument, emitted) =>
           val labels = emitted._4.toMap
           val reads = if typed then argument.value.allReads.distinct else argument.value.reads
@@ -1301,7 +1425,11 @@ private[nodal] object AnalogProceduralMlir:
         // in several slots, but is supplied only once to this primitive consumer.
         val operands = references.flatMap(emitted => emitted._2.zip(emitted._3)).distinct
         val eventReads =
-          if typed then references.flatMap(_._4.map(_._2)).toSet
+          if typed then
+            values.zip(references).flatMap { (argument, emitted) =>
+              val labels = emitted._4.toMap
+              argument.value.allReads.map(read => labels.getOrElse(read.identity, read.identity))
+            }.toSet
           else values.flatMap(_.value.allReads.map(_.identity)).toSet
         references.flatMap(_._1) :+ operation(
           s"nodal.${event.operation}",
@@ -1310,7 +1438,10 @@ private[nodal] object AnalogProceduralMlir:
           operandTypes = operands.map(_._2),
           resultTypes = Vector("!nodal.analog_event"),
           attributes = attrs ++
-            Option.when(typed)("reference_form" -> quoted("storage")).toVector ++ Vector(
+            Option.when(typed && operands.nonEmpty)("reference_form" -> quoted(
+              if operands.exists(_._2.startsWith("!nodal.analog_deferred<")) then "live"
+              else "storage"
+            )).toVector ++ Vector(
               "arguments" -> array(arguments),
               "analyses" -> array(event.analyses.map(quoted)),
               "event_reads" -> array(eventReads.toVector.sorted.map(quoted))
@@ -1422,8 +1553,20 @@ private[nodal] object AnalogProceduralMlir:
               )
             )
         case event: AnalogControlFlowRuntime.Statement.EventControl =>
-          val (expressions, handle) = renderEvent(event.event, s"${event.identity}.event")
-          expressions :+ operation(
+          val path = s"${event.identity}.event"
+          def arguments(event: AnalogEventRuntime.Expression, path: String)
+              : Vector[(String, AnalogProceduralRuntime.Value)] =
+            event.arguments.map(argument => s"$path.argument_${argument.slot}" -> argument.value) ++
+              event.alternatives.zipWithIndex.flatMap((child, index) =>
+                arguments(child, s"$path.alternative_$index")
+              )
+          val inputs = arguments(event.event, path)
+          val live = liveEmission(inputs.map(_._2), path, event.source)
+          val roots =
+            live.map(emitted => inputs.map(_._1).zip(emitted.values.zip(emitted.references)).toMap)
+              .getOrElse(Map.empty)
+          val (expressions, handle) = renderEvent(event.event, path, roots)
+          live.toVector.flatMap(_.definitions) ++ expressions :+ operation(
             "nodal.analog_on",
             operands = Vector(handle),
             operandTypes = Vector("!nodal.analog_event"),
@@ -1454,7 +1597,19 @@ private[nodal] object AnalogProceduralMlir:
         case conditional: AnalogControlFlowRuntime.Statement.IfThenElse =>
           // The if region contains arms only. Emit pure aliases before the whole group, without
           // evaluating any predicate or moving a numeric read out of its first-match arm.
-          val conditions = conditional.branches.map(branch => liveCondition(branch.condition))
+          val lives = conditional.branches.zipWithIndex.map: (branch, index) =>
+            if branch.condition.staticValue.nonEmpty then None
+            else
+              branch.condition.sourceValue.flatMap(value =>
+                liveEmission(
+                  Vector(value),
+                  s"${conditional.identity}.condition_$index",
+                  branch.condition.source
+                )
+              )
+          val conditions = conditional.branches.zip(lives).map((branch, live) =>
+            liveCondition(branch.condition, live)
+          )
           val references = conditions.zipWithIndex.map: (condition, index) =>
             require(
               condition.valueType.dimensions.isEmpty &&
@@ -1462,13 +1617,14 @@ private[nodal] object AnalogProceduralMlir:
                   condition.reads.isEmpty && condition.selectedReads.isEmpty),
               "an analog condition must be scalar and static conditions cannot read storage"
             )
-            controlReferences(
-              condition.reads,
-              condition.selectedReads,
-              s"${conditional.identity}.condition_$index",
-              condition.source,
-              "analog condition"
-            )
+            lives(index).map(live => live.references.head.copy(_1 = live.definitions)).getOrElse:
+              controlReferences(
+                condition.reads,
+                condition.selectedReads,
+                s"${conditional.identity}.condition_$index",
+                condition.source,
+                "analog condition"
+              )
           val arms = conditional.branches.zipWithIndex.map: (branch, index) =>
             val condition = conditions(index)
             val emitted = references(index)
@@ -1476,27 +1632,29 @@ private[nodal] object AnalogProceduralMlir:
               "nodal.analog_if_arm",
               operands = emitted._2,
               operandTypes = emitted._3,
-              attributes = referenceAttributes(condition.selectedReads) ++ Vector(
-                "arm_id" -> quoted(branch.body.identity),
-                "owner" -> quoted(program.owner),
-                "is_else" -> boolean(false),
-                "stage" -> quoted(condition.stage.toString.toLowerCase),
-                "condition_value" ->
-                  quoted(condition.staticValue.map(_.toString).getOrElse(
-                    storage.replaceLeaves(condition.rendered, emitted._4)
-                  )),
-                "condition_kind" -> quoted(condition.valueType.kind.label),
-                "condition_dimension" -> quoted(
-                  canonicalDimension(condition.valueType.dimension)
+              attributes =
+                (if lives(index).nonEmpty then liveAttributes(emitted)
+                 else referenceAttributes(condition.selectedReads)) ++ Vector(
+                  "arm_id" -> quoted(branch.body.identity),
+                  "owner" -> quoted(program.owner),
+                  "is_else" -> boolean(false),
+                  "stage" -> quoted(condition.stage.toString.toLowerCase),
+                  "condition_value" ->
+                    quoted(condition.staticValue.map(_.toString).getOrElse(
+                      storage.replaceLeaves(condition.rendered, emitted._4)
+                    )),
+                  "condition_kind" -> quoted(condition.valueType.kind.label),
+                  "condition_dimension" -> quoted(
+                    canonicalDimension(condition.valueType.dimension)
+                  ),
+                  "condition_reads" -> referenceReads(condition.reads, emitted._4),
+                  "static_value_present" -> boolean(condition.staticValue.nonEmpty),
+                  "static_value" -> boolean(condition.staticValue.getOrElse(false)),
+                  "metadata" -> metadata(
+                    s"${conditional.identity}.condition_$index",
+                    condition.source
+                  )
                 ),
-                "condition_reads" -> referenceReads(condition.reads, emitted._4),
-                "static_value_present" -> boolean(condition.staticValue.nonEmpty),
-                "static_value" -> boolean(condition.staticValue.getOrElse(false)),
-                "metadata" -> metadata(
-                  s"${conditional.identity}.condition_$index",
-                  condition.source
-                )
-              ),
               regions = Vector(renderBlock(branch.body)),
               source = condition.source.orElse(branch.body.source)
             )
@@ -1531,18 +1689,29 @@ private[nodal] object AnalogProceduralMlir:
           )
 
         case selection: AnalogControlFlowRuntime.Statement.CaseStatement =>
-          val selector = liveSelector(selection.selector)
+          val live = if selection.selector.staticValue.nonEmpty then None
+          else
+            selection.selector.sourceValue.flatMap(value =>
+              liveEmission(
+                Vector(value),
+                s"${selection.identity}.selector",
+                selection.selector.source.orElse(selection.source)
+              )
+            )
+          val selector = liveSelector(selection.selector, live)
           require(
             selector.staticValue.isEmpty || selector.reads.isEmpty && selector.selectedReads.isEmpty,
             "a static analog selector cannot read storage"
           )
-          val references = controlReferences(
+          val references = live.map(emitted =>
+            emitted.references.head.copy(_1 = emitted.definitions)
+          ).getOrElse(controlReferences(
             selector.reads,
             selector.selectedReads,
             s"${selection.identity}.selector",
             selector.source.orElse(selection.source),
             "analog selector"
-          )
+          ))
           val arms = selection.arms.map: arm =>
             operation(
               "nodal.analog_case_arm",
@@ -1574,22 +1743,24 @@ private[nodal] object AnalogProceduralMlir:
             "nodal.analog_case",
             operands = references._2,
             operandTypes = references._3,
-            attributes = referenceAttributes(selector.selectedReads) ++ Vector(
-              "statement_id" -> quoted(selection.identity),
-              "owner" -> quoted(program.owner),
-              "selector_value" -> quoted(selector.staticValue.map(value =>
-                label(value).split(":", 2).last
-              ).getOrElse(storage.replaceLeaves(selector.rendered, references._4))),
-              "selector_kind" -> quoted(selector.kind.label),
-              "selector_dimension" -> quoted(canonicalDimension(selector.dimension)),
-              "selector_reads" -> referenceReads(selector.reads, references._4),
-              "static_value_present" -> boolean(selector.staticValue.nonEmpty),
-              "static_value" -> quoted(staticSelector),
-              "metadata" -> metadata(
-                s"${selection.identity}.selector",
-                selector.source.orElse(selection.source)
-              )
-            ),
+            attributes =
+              (if live.nonEmpty then liveAttributes(references)
+               else referenceAttributes(selector.selectedReads)) ++ Vector(
+                "statement_id" -> quoted(selection.identity),
+                "owner" -> quoted(program.owner),
+                "selector_value" -> quoted(selector.staticValue.map(value =>
+                  label(value).split(":", 2).last
+                ).getOrElse(storage.replaceLeaves(selector.rendered, references._4))),
+                "selector_kind" -> quoted(selector.kind.label),
+                "selector_dimension" -> quoted(canonicalDimension(selector.dimension)),
+                "selector_reads" -> referenceReads(selector.reads, references._4),
+                "static_value_present" -> boolean(selector.staticValue.nonEmpty),
+                "static_value" -> quoted(staticSelector),
+                "metadata" -> metadata(
+                  s"${selection.identity}.selector",
+                  selector.source.orElse(selection.source)
+                )
+              ),
             regions = Vector((arms ++ default).mkString("\n")),
             source = selection.source.orElse(selector.source)
           )
@@ -1598,8 +1769,22 @@ private[nodal] object AnalogProceduralMlir:
           val stage = loop.stage match
             case AnalogControlFlowRuntime.LoopStage.Static => "static"
             case AnalogControlFlowRuntime.LoopStage.RuntimeBounded => "runtime"
-          val bound = expressions.get(loop.identity -> "loop-bound").map(record =>
-            record.copy(value = AnalogProceduralRuntime.deriveUniformScalar(record.value).value)
+          val originalBound = expressions.get(loop.identity -> "loop-bound")
+          val live = if loop.stage == AnalogControlFlowRuntime.LoopStage.Static then None
+          else
+            originalBound.flatMap(record =>
+              liveEmission(
+                Vector(record.value),
+                s"${loop.identity}.loop-bound",
+                record.source.orElse(loop.source)
+              )
+            )
+          val bound = originalBound.map(record =>
+            record.copy(value =
+              live.map(
+                _.values.head
+              ).getOrElse(AnalogProceduralRuntime.deriveUniformScalar(record.value).value)
+            )
           )
           val boundReferences =
             bound.map(_.value.allReads.distinct).getOrElse(loop.boundSelectedReads)
@@ -1612,36 +1797,40 @@ private[nodal] object AnalogProceduralMlir:
                 boundReads.isEmpty && boundReferences.isEmpty),
             "an analog loop bound must be scalar and static bounds cannot read storage"
           )
-          val references = controlReferences(
+          val references = live.map(emitted =>
+            emitted.references.head.copy(_1 = emitted.definitions)
+          ).getOrElse(controlReferences(
             boundReads,
             boundReferences,
             s"${loop.identity}.loop-bound",
             bound.flatMap(_.source).orElse(loop.source),
             "analog loop bound"
-          )
+          ))
           references._1 :+ operation(
             "nodal.analog_loop",
             operands = references._2,
             operandTypes = references._3,
-            attributes = referenceAttributes(boundReferences) ++ Vector(
-              "statement_id" -> quoted(loop.identity),
-              "owner" -> quoted(program.owner),
-              "stage" -> quoted(stage),
-              "minimum_iterations" -> integer(loop.minimumIterations),
-              "maximum_iterations" -> integer(loop.maximumIterations),
-              "bound_value" -> quoted(
-                bound.map(value => storage.replaceLeaves(value.value.rendered, references._4))
-                  .getOrElse(loop.staticTripCount.map(_.toString).getOrElse(""))
+            attributes =
+              (if live.nonEmpty then liveAttributes(references)
+               else referenceAttributes(boundReferences)) ++ Vector(
+                "statement_id" -> quoted(loop.identity),
+                "owner" -> quoted(program.owner),
+                "stage" -> quoted(stage),
+                "minimum_iterations" -> integer(loop.minimumIterations),
+                "maximum_iterations" -> integer(loop.maximumIterations),
+                "bound_value" -> quoted(
+                  bound.map(value => storage.replaceLeaves(value.value.rendered, references._4))
+                    .getOrElse(loop.staticTripCount.map(_.toString).getOrElse(""))
+                ),
+                "bound_kind" -> quoted(loop.boundValueType.kind.label),
+                "bound_dimension" -> quoted(
+                  canonicalDimension(loop.boundValueType.dimension)
+                ),
+                "bound_reads" -> referenceReads(boundReads, references._4),
+                "static_trip_count_present" -> boolean(loop.staticTripCount.nonEmpty),
+                "static_trip_count" -> integer(loop.staticTripCount.getOrElse(0)),
+                "metadata" -> metadata(loop.identity, loop.source)
               ),
-              "bound_kind" -> quoted(loop.boundValueType.kind.label),
-              "bound_dimension" -> quoted(
-                canonicalDimension(loop.boundValueType.dimension)
-              ),
-              "bound_reads" -> referenceReads(boundReads, references._4),
-              "static_trip_count_present" -> boolean(loop.staticTripCount.nonEmpty),
-              "static_trip_count" -> integer(loop.staticTripCount.getOrElse(0)),
-              "metadata" -> metadata(loop.identity, loop.source)
-            ),
             regions = Vector(renderBlock(loop.body)),
             source = loop.source
           )

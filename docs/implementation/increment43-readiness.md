@@ -2,7 +2,10 @@
 
 **Initial readiness date:** 2026-10-01
 **Latest process/handoff update:** 2026-10-18
-**Status:** In progress; no F-043 acceptance or completed child is claimed.
+**Status:** Implementation children complete under focused prototype acceptance;
+F-043.G and the parent remain open pending verified integration of PR #139.
+**Refreshed integration target:** `dev` at `3d5a6f259505ea5084cf7606c0cfeb92e5843e41`
+(read-only verification, 2026-10-18).
 **Branch:** `increment/43-analog-arrays-generation`
 **Initial integration target:** `dev` at `e34d17ba2c9adb9e765ee4f0c97699128c224340`
 **Initial integration tree:** `57d402aada6561e1c51ef9b60c49fff193219d8e`
@@ -82,8 +85,8 @@ is preferable to an unneeded framework or wholesale frontend rewrite.
 | F-043.F | Required now: nested dimensions, repeated generation, parameter envelopes, deterministic source/index identities and compatibility. |
 | F-043.G | Required now: brief checklist notes, actual generation demonstration, architecture review, focused local checks and verified integration; no full qualification or separate closure gate. |
 
-No existing requirement is removed, narrowed, waived, checked or reclassified
-as non-applicable. No checklist correction is necessary for the initial work;
+At initial readiness no existing requirement was removed, narrowed, waived, checked
+or reclassified as non-applicable. No checklist correction was necessary;
 the linked amendment already resolves the preferred range spelling. Digital
 mixed-effect lowering/fusion and synthesis/formal evidence remain with
 F-055-F-058/F-159. General equation legalization remains F-141. Comprehensive
@@ -317,18 +320,64 @@ passes five public methods, nine affected Scala predecessors, 41 native cases,
 with exact replay. Public integration also repaired disconnected-root/fresh-lane
 alias proofs and comparison-only SSA names for reusable child definitions. The
 shape-contract note records architecture review, actual output, commands and
-finite limits; exact-tree publication follows with `[skip ci]`.
-Repeated shared-live/event fill consumption remains explicitly required by
-writable-array gate v0.5: cache
-on first reached use and reset per consumer reevaluation. After generated local
-arrays, implement that obligation through the existing expression/control owners,
-then review every existing F-043 child
-and linked amendment against the implemented profile. Current operator fan-out,
-cross-range storage and other explicit capability rejections are inputs to that
-scope review, not automatic requirements for unlimited compositions and not
-implicit waivers of required semantics. ADR 0017, the original checklists and
-approved gates remain the authority. No required child or parent is closed by
-these checkpoints or by this wording.
+finite limits. The exact tested tree is published as
+`1c87baaf13e27e5c3b72d9658ab2e542d3c3c7f1` with `[skip ci]` and zero
+Actions runs.
+Repeated shared-live/event fill consumption required by writable-array gate v0.5
+is implemented and focused-tested under
+[v0.7](../design-gates/NodalWritableRealArrays-DG-v0.7.md): an actual-identity
+deferred DAG, finite lazy control plans and bounded inline event demand wrappers
+with independently checked compiler-private output-helper ABI. Numeric evaluation
+stays at its reached event argument site; ready flags reset before the complete
+event statement. Final checks include 44 native graph assertions, 426 target-parser
+checks, 41 control-plan checks, affected storage/expression/generated-persistent
+and writable backend regressions, 16 source methods, 11 selected predecessors,
+nine native-enabled public methods and 14 actual VA/AMS profiles. The
+[implementation note](increment43-shape-contract.md#repeated-live-fill-demand-sharing--v07)
+records exact commands, causal negative cases, measured output and limitations.
+
+## Final original-scope reconciliation
+
+The main A–F children and three linked F-043 iteration descendants now have their
+own implementation and focused validation. This reconciles the original checklist,
+ADR 0017 and approved gates; it does not waive required semantics or add unlimited
+composition requirements. G and the parent remain open until verified integration.
+
+- A/B: shared shape/domain arithmetic, structural view maps, actual hierarchy and
+  generated-scope ownership are used across source, bridge, native and backend.
+  Fixed and parameter-envelope shapes, indexing, rank-preserving slices, writable
+  Real/quantity arrays, conservative Electrical arrays and boundary adapters,
+  ordinary Scala replication and explicit generated regions have production paths.
+  Generated local declarations, persistent/event state, selected live controls and
+  shared fill demand preserve occurrence-local identity and evaluation semantics.
+- C/D: retained causal positives/negatives cover empty iteration versus illegal
+  zero-sized shapes, singleton/invalid dimensions, rank/bounds/overflow, forged
+  owners/SSA, alias uncertainty, definite assignment, memory/packing rejection and
+  predecessor semantics. The implementation note includes actual public Scala,
+  normalized IR and emitted VA examples, plus concrete F-048/F-049/F-052 cases,
+  analyses, scalar references, observability needs and tolerances.
+- E/F: symbolic bounds and source/index maps remain structural; generated lanes
+  are not expanded at a parameter default. Nested/repeated generation, child reuse,
+  parameter envelopes and deterministic replay are exercised. Shared map/fact
+  owners and finite demand plans remove identified duplicate work. Residual
+  quadratic scans, growing provenance and bounded event text are disclosed;
+  no whole-pipeline linearity or universal speedup is claimed.
+
+Accepted capability boundaries remain explicit: analog objects do not become
+packed digital values or inferred memories; shape/selection proofs must hold over
+legal parameter envelopes; uncertain aliases and unsupported operator placements
+reject. The target profile has checked integer/layout and parser-depth limits.
+Shared event expansion is capped before expansion at 4,096 wrappers/1 MiB per
+consumer and 65,536 wrappers/16 MiB per module definition. These are tested finite
+resource boundaries, not missing required sharing/reset behavior. Internal target
+reparse is language-structural evidence. Tested OpenVAF real-array incompatibility
+and unexecuted electrical-vector/private-helper consumer capability remain explicit
+F-048 handoffs; later numerical execution remains F-049/F-052 work.
+
+Focused architecture review found no remaining concrete blocker after causal
+repairs. No CI, full qualification or simulator success is claimed. Earlier
+checkpoint sections preserve their historical partial status; this final summary
+supersedes their next-work descriptions, without changing historical evidence.
 
 Use the existing shared owners, unified `hdlRange`, approved design gates and
 public witnesses. Add only affected positive/negative checks for each changed
@@ -337,7 +386,8 @@ handoff notes concise; later simulator/numerical work is not a reverse dependenc
 Once the scoped implementation, focused checks and architecture review are
 complete, use the normal verified squash merge with `[skip ci]` and show an
 actual Scala/IR/generated-Verilog-A example. A separate evidence-closure PR is
-not required. Keep the branch and PR for dot; do not merge during this handoff.
+not required. The coordinating owner performs the final expected-head verified
+squash merge; implementation workers must not merge concurrently.
 
 Handoff policy checks: six focused positive/negative document/contribution tests,
 changed Markdown links/structure, JSON parsing, ignored `.work/` handling and

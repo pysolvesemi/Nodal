@@ -17,7 +17,8 @@
     ],
     "shaped-values": [
       "NODAL-SHAPE-043-001",
-      "NODAL-SHAPE-043-002"
+      "NODAL-SHAPE-043-002",
+      "NODAL-SHAPE-043-010"
     ],
     "interface": [
       "NODAL-INTERFACE-STORAGE-001",

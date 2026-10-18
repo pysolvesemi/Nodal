@@ -1270,3 +1270,30 @@ groups, sibling or cross-range state, general slices, shaped terminals,
 generated connections or instances, reverse ranges, default specialization and
 eager unrolling remain unsupported. Independent simulator qualification, the
 F-048/F-049/F-052 handoff and every F-043 acceptance obligation remain open.
+
+## Nested peer generated analog-node idt result-path checkpoint
+
+The qualified nested peer-node `idt` result may now traverse one existing
+memoryless scale before its additive potential contribution. Both electrical
+arrays retain the same canonical row-major occurrence index, while the
+integral keeps its exact child region, induction and operator-owned state
+identity. The scale is part of the one-use result path; it does not create or
+copy state.
+
+No backend admission rule, public API or schema is widened by this composition
+witness. It reuses the canonical generated-node layout, peer branch, one-use
+dependency walker, stateful operator renderer, source-map inventory and target
+reparser. Native evidence retains the direct predecessor, requires
+byte-identical repeated output and independently reparses the scaled target. A
+second use of the scaled result must reject before any target text is
+published. The configured public witness preserves both node source identities,
+both positive-stride dimensions and the single post-`idt` division from Scala
+construction through normalized IR and generated Verilog-A.
+
+The profile remains one direct child range, two nodes, one branch, one access,
+one `idt`, one memoryless result scale and one contribution. Result fan-out, a
+second operator or state, wider/deeper groups, sibling or cross-range state,
+general slices, shaped terminals, generated connections or instances, reverse
+ranges, default specialization and eager unrolling remain unsupported.
+Independent simulator qualification, the F-048/F-049/F-052 handoff and every
+F-043 acceptance obligation remain open.

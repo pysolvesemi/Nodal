@@ -13,6 +13,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <vector>
 
 using namespace mlir;
 namespace nodal {
@@ -47,13 +48,29 @@ public:
     AnalogEventSymbol symbol{real ? AnalogEventSymbolKind::Real : AnalogEventSymbolKind::Integer,
                              true, std::nullopt, std::nullopt};
     if (eat("[")) {
+      size_t extentIdentity = 0;
       if (!real || !integerExpression(symbol.lowerBound) || !symbol.lowerBound ||
-          *symbol.lowerBound != 0 || !eat(":") || !integerExpression(symbol.upperBound) ||
+          *symbol.lowerBound != 0 || !eat(":") ||
+          !integerExpression(symbol.upperBound, 0, &extentIdentity) ||
           (symbol.upperBound &&
            (*symbol.upperBound < 0 || *symbol.upperBound >= std::numeric_limits<int32_t>::max())) ||
           !eat("]"))
         return false;
       symbol.kind = AnalogEventSymbolKind::RealArray;
+      if (eat("=")) {
+        // Only this declaration form has an immutable, parameter-only fill.
+        // Ordinary scalar initializers and procedural expressions keep their
+        // existing grammar. Bounds must also be static when initialized.
+        staticExpression = true;
+        std::optional<int64_t> count;
+        size_t countIdentity = 0;
+        CheckedValue value;
+        if (mutableIntegerReference || !eat("'") || !eat("{") ||
+            !integerExpression(count, 0, &countIdentity) || (count && *count <= 0) ||
+            !initializerExtentMatches(symbol.upperBound, extentIdentity, count, countIdentity) ||
+            !eat("{") || !expression(0, &value) || !eat("}") || !eat("}"))
+          return false;
+      }
     } else if (eat("=")) {
       CheckedValue value;
       if (!expression(0, real ? nullptr : &value))
@@ -173,6 +190,17 @@ private:
   size_t cursor = 0, tokenStart = 0;
   bool invalid = false;
   bool transferExpressions = false;
+  bool staticExpression = false;
+  bool mutableIntegerReference = false;
+  struct IntegerIdentity {
+    std::optional<int64_t> constant;
+    llvm::StringRef parameter;
+    char operation = 0;
+    size_t left = 0, right = 0;
+  };
+  // Only declaration bounds/counts request identities. Keep a linear arena
+  // rather than repeatedly copying an ever-growing symbolic expression string.
+  std::vector<IntegerIdentity> integerIdentities;
   unsigned eventDepth = 0;
   void next() {
     while (cursor < source.size() && llvm::isSpace(source[cursor]))
@@ -247,7 +275,45 @@ private:
     return value >= std::numeric_limits<int32_t>::min() &&
            value <= std::numeric_limits<int32_t>::max();
   }
-  bool integerPrimary(std::optional<int64_t> &value, unsigned depth) {
+  size_t rememberIntegerIdentity(const std::optional<int64_t> &constant,
+                                 llvm::StringRef parameter = {}, char operation = 0,
+                                 size_t left = 0, size_t right = 0) {
+    // Fold only fully concrete checked arithmetic. Never substitute parameter
+    // defaults or rewrite symbolic expressions by algebraic equivalence.
+    integerIdentities.push_back({constant, constant ? llvm::StringRef() : parameter,
+                                 constant ? char(0) : operation, left, right});
+    return integerIdentities.size() - 1;
+  }
+  bool sameIntegerIdentity(size_t left, size_t right) const {
+    std::vector<std::pair<size_t, size_t>> pending{{left, right}};
+    while (!pending.empty()) {
+      auto pair = pending.back();
+      pending.pop_back();
+      const auto &lhs = integerIdentities[pair.first];
+      const auto &rhs = integerIdentities[pair.second];
+      if (lhs.constant != rhs.constant || lhs.parameter != rhs.parameter ||
+          lhs.operation != rhs.operation)
+        return false;
+      if (!lhs.operation)
+        continue;
+      pending.emplace_back(lhs.left, rhs.left);
+      if (lhs.operation != '~')
+        pending.emplace_back(lhs.right, rhs.right);
+    }
+    return true;
+  }
+  bool initializerExtentMatches(const std::optional<int64_t> &upper, size_t extentIdentity,
+                                const std::optional<int64_t> &count, size_t countIdentity) const {
+    if (upper || count)
+      return upper && count && *upper + 1 == *count;
+    // Symbolic declarations are emitted as [0:(COUNT - 1)]. Compare the
+    // parsed COUNT subtree exactly, ignoring only parentheses and concrete
+    // folding. Correlated symbolic bounds remain the native verifier's proof.
+    const auto &extent = integerIdentities[extentIdentity];
+    return extent.operation == '-' && integerIdentities[extent.right].constant == 1 &&
+           sameIntegerIdentity(extent.left, countIdentity);
+  }
+  bool integerPrimary(std::optional<int64_t> &value, unsigned depth, size_t *identity = nullptr) {
     value.reset();
     if (invalid || depth > 256)
       return false;
@@ -261,29 +327,44 @@ private:
           return false;
         value = negative ? -literal : literal;
         next();
+        if (identity)
+          *identity = rememberIntegerIdentity(value);
         return portableInteger(*value);
       }
-      if (!integerPrimary(value, depth + 1))
+      if (!integerPrimary(value, depth + 1, identity))
         return false;
-      if (negative && value)
-        value = -*value;
+      if (negative) {
+        if (value)
+          value = -*value;
+        if (identity)
+          *identity = rememberIntegerIdentity(value, {}, '~', *identity);
+      }
       return !value || portableInteger(*value);
     }
     if (eat("("))
-      return integerExpression(value, depth + 1) && eat(")");
+      return integerExpression(value, depth + 1, identity) && eat(")");
     if (!token.empty() && llvm::all_of(token, llvm::isDigit)) {
       int64_t literal = 0;
       if (token.getAsInteger(10, literal) || !portableInteger(literal))
         return false;
       value = literal;
       next();
+      if (identity)
+        *identity = rememberIntegerIdentity(value);
       return true;
     }
     auto name = token;
     if (!identifier() || !symbols)
       return false;
     auto symbol = symbols->find(name);
-    return symbol != symbols->end() && symbol->second.kind == AnalogEventSymbolKind::Integer;
+    if (symbol == symbols->end() || symbol->second.kind != AnalogEventSymbolKind::Integer)
+      return false;
+    mutableIntegerReference |= symbol->second.writable;
+    if (staticExpression && symbol->second.writable)
+      return false;
+    if (identity)
+      *identity = rememberIntegerIdentity(value, name);
+    return true;
   }
   bool integerArithmetic(std::optional<int64_t> &left, char operation,
                          const std::optional<int64_t> &right) {
@@ -308,27 +389,36 @@ private:
     left = result;
     return true;
   }
-  bool integerProduct(std::optional<int64_t> &value, unsigned depth) {
-    if (!integerPrimary(value, depth))
+  bool integerProduct(std::optional<int64_t> &value, unsigned depth, size_t *identity = nullptr) {
+    if (!integerPrimary(value, depth, identity))
       return false;
     while (token == "*" || token == "/" || token == "%") {
       char operation = token.front();
       next();
       std::optional<int64_t> right;
-      if (!integerPrimary(right, depth + 1) || !integerArithmetic(value, operation, right))
+      size_t rightIdentity = 0;
+      if (!integerPrimary(right, depth + 1, identity ? &rightIdentity : nullptr) ||
+          !integerArithmetic(value, operation, right))
         return false;
+      if (identity)
+        *identity = rememberIntegerIdentity(value, {}, operation, *identity, rightIdentity);
     }
     return true;
   }
-  bool integerExpression(std::optional<int64_t> &value, unsigned depth = 0) {
-    if (!integerProduct(value, depth))
+  bool integerExpression(std::optional<int64_t> &value, unsigned depth = 0,
+                         size_t *identity = nullptr) {
+    if (!integerProduct(value, depth, identity))
       return false;
     while (token == "+" || token == "-") {
       char operation = token.front();
       next();
       std::optional<int64_t> right;
-      if (!integerProduct(right, depth + 1) || !integerArithmetic(value, operation, right))
+      size_t rightIdentity = 0;
+      if (!integerProduct(right, depth + 1, identity ? &rightIdentity : nullptr) ||
+          !integerArithmetic(value, operation, right))
         return false;
+      if (identity)
+        *identity = rememberIntegerIdentity(value, {}, operation, *identity, rightIdentity);
     }
     return true;
   }
@@ -345,6 +435,9 @@ private:
     if (found == symbols->end() || (write && !found->second.writable))
       return false;
     const auto &symbol = found->second;
+    if (staticExpression && (symbol.writable || (symbol.kind != AnalogEventSymbolKind::Real &&
+                                                 symbol.kind != AnalogEventSymbolKind::Integer)))
+      return false;
     if (symbol.kind == AnalogEventSymbolKind::RealArray)
       return indexed(symbol, depth);
     return token != "[" && (symbol.kind == AnalogEventSymbolKind::Real ||
@@ -440,6 +533,8 @@ private:
         value->integer = symbols->find(name)->second.kind == AnalogEventSymbolKind::Integer;
       return true;
     }
+    if (staticExpression && !lookupAnalogFunctionTarget(name))
+      return false;
     CheckedValue argument;
     auto argumentExpression = [&]() { return expression(depth + 1, value ? &argument : nullptr); };
     if (functions) {

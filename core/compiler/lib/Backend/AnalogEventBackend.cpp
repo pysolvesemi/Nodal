@@ -283,6 +283,8 @@ LogicalResult renderBlock(Block &block, AnalogEventRenderState &state, llvm::raw
                           unsigned indent, std::optional<LoopContext> loop = std::nullopt);
 LogicalResult renderStatement(Operation *op, AnalogEventRenderState &state, llvm::raw_ostream &out,
                               unsigned indent, std::optional<LoopContext> loop) {
+  if (state.declarationOnlyValues.contains(op))
+    return success();
   auto line = [&](const llvm::Twine &value) { out.indent(indent) << value << "\n"; };
   if (llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(op)) {
     if (state.names.count(op)) {
@@ -501,6 +503,68 @@ LogicalResult prepareEventStorage(Operation *procedure, AnalogEventRenderState &
     state.shapes.try_emplace(value, *layout);
     return success();
   };
+  // Persistent roots have declaration lifetime. Resolve their actual uniform
+  // fill before allocating runtime carriers; a pure view changes the logical
+  // destination count, never the uniform scalar initializer.
+  llvm::DenseSet<Operation *> initializerValues;
+  for (Operation &operation : procedure->getRegion(0).front()) {
+    auto variable = llvm::dyn_cast<AnalogVariableOp>(operation);
+    auto shape =
+        variable ? llvm::dyn_cast<ShapedType>(variable.getResult().getType()) : ShapedType();
+    if (!shape || !operation.getAttrOfType<BoolAttr>("initialized").getValue())
+      continue;
+    if (procedure->hasAttr("generated_owner"))
+      return reject(
+          &operation,
+          "generated root shaped initializer requires per-occurrence declaration lifetime");
+    auto leaf = llvm::dyn_cast<VariableType>(shape.getElementType());
+    auto source = operation.getNumOperands() == 1
+                      ? resolveAnalogArrayValue(operation.getOperand(0), &operation)
+                      : FailureOr<AnalogArrayValue>(failure());
+    auto fill = succeeded(source) ? llvm::dyn_cast<AnalogArrayFillOp>(source->producer)
+                                  : AnalogArrayFillOp();
+    auto parsed = fill ? parseAnalogSourceExpression(fill, text(fill, "value"))
+                       : FailureOr<AnalogSourceExpression>(failure());
+    if (!leaf || leaf.getKind() != "real" || !fill || fill->getNumOperands() || failed(parsed) ||
+        parsed->kind != "real" || parsed->dimension != leaf.getDimension() ||
+        !isStaticAnalogSourceExpression(*parsed))
+      return reject(&operation, "persistent shaped initializer requires an owned static Real fill");
+    auto rendered = renderSource(*parsed, state);
+    if (failed(rendered) || failed(admitShape(variable.getResult())) ||
+        failed(admitShape(fill.getResult())) ||
+        failed(renderShapedProjectionProgram(operation.getOperand(0), "0", "initializer_index")))
+      return reject(&operation, "persistent shaped initializer exceeds the portable target layout");
+    for (Operation *projection : source->projections) {
+      if (failed(admitShape(projection->getResult(0))))
+        return failure();
+      initializerValues.insert(projection);
+    }
+    initializerValues.insert(fill);
+    state.declarationInitializers[&operation] = *rendered;
+  }
+  // Peel only paths whose every actual use is a declaration initialization.
+  // A shared scalar projection or ordinary copy keeps the producer materialized.
+  // Use counts and a worklist make branching/deep view chains linear in edges.
+  llvm::DenseMap<Operation *, unsigned> remainingUses;
+  llvm::SmallVector<Operation *> ready;
+  for (Operation *value : initializerValues) {
+    unsigned remaining = 0;
+    for (OpOperand &use : value->getResult(0).getUses())
+      if (!state.declarationInitializers.contains(use.getOwner()) || use.getOperandNumber() != 0)
+        ++remaining;
+    remainingUses[value] = remaining;
+    if (!remaining)
+      ready.push_back(value);
+  }
+  while (!ready.empty()) {
+    Operation *value = ready.pop_back_val();
+    state.declarationOnlyValues.insert(value);
+    for (Value operand : value->getOperands()) {
+      auto found = remainingUses.find(operand.getDefiningOp());
+      if (found != remainingUses.end() && --found->second == 0)
+        ready.push_back(found->first);
+    }
+  }
   auto declareCounter = [&](Operation *op) {
     auto metadata = op->getAttrOfType<DictionaryAttr>("metadata");
     auto identity = field(metadata, "semantic_path");
@@ -530,7 +594,8 @@ LogicalResult prepareEventStorage(Operation *procedure, AnalogEventRenderState &
   };
   procedure->walk([&](Operation *op) {
     auto owner = op->getParentOfType<AnalogProcedureOp>();
-    if (failed(result) || !owner || owner.getOperation() != procedure)
+    if (failed(result) || !owner || owner.getOperation() != procedure ||
+        state.declarationOnlyValues.contains(op))
       return;
     if (llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(op)) {
       if (llvm::isa<QuantityType>(op->getResult(0).getType())) {
@@ -592,13 +657,6 @@ LogicalResult prepareEventStorage(Operation *procedure, AnalogEventRenderState &
         result = reject(op, "read requires an owned storage reference");
         return;
       }
-      if (variable && shape && op->getParentOp() == procedure &&
-          op->getAttrOfType<BoolAttr>("initialized").getValue()) {
-        result = reject(
-            op,
-            "persistent root shaped initializer requires declaration-equivalent target lifetime");
-        return;
-      }
       auto id = text(op, variable ? "identity" : "read_id");
       auto metadata = op->getAttrOfType<DictionaryAttr>("metadata");
       if (fill)
@@ -619,6 +677,9 @@ LogicalResult prepareEventStorage(Operation *procedure, AnalogEventRenderState &
           out << "(" << count.text << " - 1)";
         out << "]";
       }
+      if (auto initial = state.declarationInitializers.find(op);
+          initial != state.declarationInitializers.end())
+        out << " = '{" << state.shapes[value].count.text << "{" << initial->second << "}}";
       if (variable && !shape && op->getParentOp() == procedure &&
           op->getAttrOfType<BoolAttr>("initialized").getValue()) {
         auto initial = parseAnalogSourceExpression(op, text(op, "initializer_value"));
@@ -631,10 +692,12 @@ LogicalResult prepareEventStorage(Operation *procedure, AnalogEventRenderState &
         out << " = " << *rendered;
       }
       out << ";\n";
-      if (shape && !fill && (read || op->getAttrOfType<BoolAttr>("initialized").getValue()))
+      if (shape && !fill && !state.declarationInitializers.contains(op) &&
+          (read || op->getAttrOfType<BoolAttr>("initialized").getValue()))
         declareCounter(op);
-      if (!fill && (shape || (read && llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(
-                                          op->getOperand(0).getDefiningOp()))))
+      if (!fill && !state.declarationInitializers.contains(op) &&
+          (shape || (read && llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(
+                                 op->getOperand(0).getDefiningOp()))))
         declareMaps(op);
     } else if (llvm::isa<AnalogLoopOp>(op)) {
       if (!allowLoops) {

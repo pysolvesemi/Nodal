@@ -214,15 +214,28 @@ public methods, eleven affected Scala predecessors, eight source/scalar checks,
 179 target parser checks passed, together with affected backend tests. Exact
 commands and limitations are recorded in the shape-contract note.
 
-The next required change is event-independent shared procedural validation and
-target admission under
-[v0.2](../design-gates/NodalWritableRealArrays-DG-v0.2.md), preserving authored
-ordinary execution order instead of adding artificial events or count-pattern
-whitelists. Array-derived control/event predicates and loop bounds still need
+Event-independent shared procedural validation and target admission is published
+as `df68386ced6671d572dab42359256d5082868a6f`, with exact tested-tree equality
+and no CI, under
+[v0.2](../design-gates/NodalWritableRealArrays-DG-v0.2.md). It preserves authored
+ordinary execution order and replaces generated operation-count recognition
+with shared owner/control/storage checks. Forty-nine semantic cases, 32 direct
+scalar/control predecessors, affected event/backend matrices and five configured
+public methods passed; exact scope and commands remain in the implementation note.
+
+Ordinary persistent shaped initialization is implemented under
+[v0.3](../design-gates/NodalWritableRealArrays-DG-v0.3.md): compact VAMS2.4 constant
+replicated declaration initialization, preserving the standard initialization
+phase rather than an event/runtime reset. Actual tested OpenVAF versions reject
+all Real arrays, including existing public witnesses; the concrete F48 consumer
+handoff is documented separately from language-structural acceptance. Generated
+persistent initializer lifecycle remains outside this ordinary-root extension.
+
+Array-derived control/event predicates and loop bounds still need
 actual typed reference operands; present text-only inventories reject selected
-reads rather than introduce eager snapshots or metadata-only lookup. Persistent
-root array initialization still needs declaration-equivalent target lifetime;
-an event reset is not an implicit substitute. Extra operator/state/result fan-out,
+reads rather than introduce eager snapshots or metadata-only lookup. Generated
+persistent initialization still needs per-occurrence declaration lifetime.
+Extra operator/state/result fan-out,
 cross-range storage, broader conservative ports/views and generated
 connections/instances also remain open where not implemented. No required
 child or parent is closed by these checkpoints. Do not silently treat an

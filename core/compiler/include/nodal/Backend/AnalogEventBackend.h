@@ -6,6 +6,7 @@
 #include "nodal/Backend/ShapedValueBackend.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/raw_ostream.h"
@@ -19,6 +20,9 @@ struct AnalogEventRenderState {
   llvm::DenseMap<mlir::Operation *, std::string> copyIndices;
   llvm::DenseMap<mlir::Operation *, std::pair<std::string, std::string>> mapNames;
   llvm::DenseMap<mlir::Value, TargetShapedLayout> shapes;
+  // Derived target lifetime decisions, keyed only by the verified SSA graph.
+  llvm::DenseMap<mlir::Operation *, std::string> declarationInitializers;
+  llvm::DenseSet<mlir::Operation *> declarationOnlyValues;
   llvm::StringMap<std::string> variables;
   llvm::StringSet<> reserved;
 };

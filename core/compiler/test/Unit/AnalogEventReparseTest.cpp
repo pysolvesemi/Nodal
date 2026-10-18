@@ -264,6 +264,159 @@ int main() {
       mlir::succeeded(nodal::reparseAnalogNoiseCall("white_noise(data[0], \"noise\")")))
     return 1;
   count += 6;
+  // Declaration replication is a static-only extension. Keep the original
+  // 179 declaration/event/legacy cases above independent of these symbols.
+  auto initialized = symbols;
+  initialized.try_emplace("rows", nodal::AnalogEventSymbol{AnalogEventSymbolKind::Integer, false,
+                                                           std::nullopt, std::nullopt});
+  initialized.try_emplace("readOnlyArray",
+                          nodal::AnalogEventSymbol{AnalogEventSymbolKind::RealArray, false, 0, 3});
+  for (llvm::StringRef declaration :
+       {"real fixedFill[0:3] = '{4{1.25}};", "real oneFill[0:0] = '{1{-2.5}};",
+        "real minimumFill[0:1] = '{2{-2147483648}};",
+        "real maximumFill[0:2147483646] = '{2147483647{0.0}};",
+        "real arithmeticFill[0:(2 * 3 - 1)] = '{(6 / 2 + 3){gain}};",
+        "real symbolicFill[0:(lanes - 1)] = '{lanes{gain}};",
+        "real productFill[0:(((lanes + 1) * rows) - 1)] = "
+        "'{((lanes + 1) * rows){sqrt(gain * gain)}};",
+        "real precedenceFill[0:(lanes + rows * 2 - 1)] = "
+        "'{(lanes + rows * 2){(gain + 2.0)}};",
+        "real parenthesizedFill[0:((+(lanes)) - 1)] = '{((lanes)){gain}};",
+        "real foldedFill[0:((lanes * (1 + 1)) - 1)] = '{(lanes * 2){gain}};",
+        "real quotientFill[0:((lanes / 2) - 1)] = '{(lanes / 2){gain}};",
+        "real remainderFill[0:((lanes % 3 + 1) - 1)] = '{(lanes % 3 + 1){gain}};",
+        "real conditionalFill[0:3] = "
+        "'{4{((lanes > 1 && gain > 0.0) ? min(gain, 2.0) : abs(gain))}};",
+        "real integerSelectFill[0:3] = '{4{(gain > 0.0 ? lanes + 1 : -1)}};",
+        "real realArithmeticFill[0:3] = '{4{(2147483647.0 + 1.0)}};",
+        "real checkedFill[0:3] = '{4{(2147483647 + 1 * 0)}};",
+        "real comparisonFill[0:3] = '{4{((lanes % 2) == 0 ? 0.0 : 1.0)}};",
+        "real booleanFill[0:3] = '{4{(!(lanes == 1) || gain > 0.0 ? 2.0 : 3.0)}};"}) {
+    ++count;
+    if (mlir::failed(nodal::reparseAnalogEventDeclaration(declaration, initialized))) {
+      llvm::errs() << "rejected valid persistent-array declaration: " << declaration << '\n';
+      return 1;
+    }
+  }
+  if (initialized.lookup("fixedFill").kind != AnalogEventSymbolKind::RealArray ||
+      !initialized.lookup("fixedFill").writable ||
+      initialized.lookup("fixedFill").lowerBound != 0 ||
+      initialized.lookup("fixedFill").upperBound != 3 ||
+      initialized.lookup("maximumFill").upperBound != 2147483646 ||
+      initialized.lookup("symbolicFill").upperBound ||
+      !validBlock("begin fixedFill[0] = symbolicFill[lanes - 1]; "
+                  "scalar = fixedFill[3]; end",
+                  &initialized))
+    return 1;
+  ++count;
+
+  for (llvm::StringRef declaration :
+       {"real bad = '{4{0.0}};",
+        "integer bad[0:3] = '{4{0.0}};",
+        "real bad[0:3] = {4{0.0}};",
+        "real bad[0:3] = '{0.0, 0.0, 0.0, 0.0};",
+        "real bad[0:3] = '{};",
+        "real bad[0:3] = '{{0.0}};",
+        "real bad[0:3] = '{4{}};",
+        "real bad[0:3] = '{4{0.0, 1.0}};",
+        "real bad[0:3] = '{4{'{1{0.0}}}};",
+        "real bad[0:3] = '{4{0.0};",
+        "real bad[0:3] = '{4{0.0}}};",
+        "real bad[0:3] = '{4{0.0}}, other;",
+        "real bad[0:3] = '{4{0.0}}; trailing",
+        "real bad[0:3] = '{4 + {0.0}};",
+        "real bad[0:3] = '{4.0{0.0}};",
+        "real bad[0:3] = '{4e0{0.0}};",
+        "real bad[0:3] = '{4'h4{0.0}};",
+        "real bad[0:3] = '{0{0.0}};",
+        "real bad[0:3] = '{-4{0.0}};",
+        "real bad[0:3] = '{(2 - 2){0.0}};",
+        "real bad[0:3] = '{2147483648{0.0}};",
+        "real bad[0:3] = '{((2147483647 + 1) - 2147483644){0.0}};",
+        "real bad[0:3] = '{((65536 * 65536) / 1073741824){0.0}};",
+        "real bad[0:3] = '{(-2147483648 / -1){0.0}};",
+        "real bad[0:3] = '{(-2147483648 % -1){0.0}};",
+        "real bad[0:3] = '{(4 / 0){0.0}};",
+        "real bad[0:3] = '{(4 % 0){0.0}};",
+        "real bad[0:3] = '{3{0.0}};",
+        "real bad[0:(lanes - 1)] = '{rows{0.0}};",
+        "real bad[0:(lanes - 1)] = '{4{0.0}};",
+        "real bad[0:3] = '{lanes{0.0}};",
+        "real bad[0:(lanes - 2)] = '{lanes{0.0}};",
+        "real bad[0:(lanes - 1)] = '{(lanes + 0){0.0}};",
+        "real bad[0:((lanes * 2) - 1)] = '{(2 * lanes){0.0}};",
+        "real bad[0:(((lanes + rows) + 1) - 1)] = '{(lanes + (rows + 1)){0.0}};",
+        "real bad[0:(counter - 1)] = '{counter{0.0}};",
+        "real bad[0:(lanes - 1)] = '{counter{0.0}};",
+        "real bad[0:(lanes - 1)] = '{gain{0.0}};",
+        "real bad[0:(lanes - 1)] = '{missing{0.0}};",
+        "real bad[0:(lanes - 1)] = '{data[0]{0.0}};",
+        "real bad[0:3] = '{sqrt(16){0.0}};",
+        "real bad[0:3] = '{(1 ? 4 : 2){0.0}};",
+        "real bad[0:3] = '{4{bad}};",
+        "real bad[0:3] = '{4{missing}};",
+        "real bad[0:3] = '{4{scalar}};",
+        "real bad[0:3] = '{4{counter}};",
+        "real bad[0:3] = '{4{data}};",
+        "real bad[0:3] = '{4{data[0]}};",
+        "real bad[0:3] = '{4{readOnlyArray[0]}};",
+        "real bad[0:3] = '{4{gain[0]}};",
+        "real bad[0:3] = '{4{p}};",
+        "real bad[0:3] = '{4{V(p)}};",
+        "real bad[0:3] = '{4{I(p)}};",
+        "real bad[0:3] = '{4{sqrt(V(p))}};",
+        "real bad[0:3] = '{4{analysis(\"tran\")}};",
+        "real bad[0:3] = '{4{ddt(gain)}};",
+        "real bad[0:3] = '{4{white_noise(1, \"noise\")}};",
+        "real bad[0:3] = '{4{$abstime}};",
+        "real bad[0:3] = '{4{unknownFunction(gain)}};",
+        "real bad[0:3] = '{4{min(scalar, gain)}};",
+        "real bad[0:3] = '{4{(gain > 0.0 ? 1.0 : data[0])}};",
+        "real bad[0:3] = '{4{2147483648}};",
+        "real bad[0:3] = '{4{(2147483647 + 1)}};",
+        "real bad[0:3] = '{4{(65536 * 65536)}};",
+        "real bad[0:3] = '{4{(gain > (2147483647 + 1) ? 0.0 : 1.0)}};",
+        "real bad[0:3] = '{4{sqrt(2147483647 + 1)}};",
+        "real bad[0:3] = '{4{(gain > 0.0 ? 0.0 : 1 / 0)}};",
+        "real bad[0:3] = '{4{(gain > 0.0 ? 0.0 : -(-2147483648))}};",
+        "real bad[0:3] = '{4{(gain / 0.0)}};",
+        "real bad[0:3] = '{4{1e999}};"}) {
+    ++count;
+    const auto size = initialized.size();
+    if (mlir::succeeded(nodal::reparseAnalogEventDeclaration(declaration, initialized)) ||
+        initialized.size() != size || initialized.contains("bad")) {
+      llvm::errs() << "accepted invalid persistent-array declaration or polluted symbols: "
+                   << declaration << '\n';
+      return 1;
+    }
+  }
+
+  // The retained structure can be long and flat: construction/comparison must
+  // not recursively expand it or copy every accumulated prefix. Distinct
+  // parameter names remain distinct, regardless of any equal native defaults.
+  std::string longCount = "lanes";
+  for (unsigned term = 0; term < 512; ++term)
+    longCount += " + rows";
+  std::string longDeclaration =
+      "real longFill[0:((" + longCount + ") - 1)] = '{(" + longCount + "){gain}};";
+  if (mlir::failed(nodal::reparseAnalogEventDeclaration(longDeclaration, initialized)))
+    return 1;
+  longDeclaration = "real bad[0:((" + longCount + ") - 1)] = '{(" + longCount + " + lanes){gain}};";
+  if (mlir::succeeded(nodal::reparseAnalogEventDeclaration(longDeclaration, initialized)) ||
+      initialized.contains("bad"))
+    return 1;
+  count += 2;
+
+  std::string nulPattern = "real bad[0:3] = '{4{0.0";
+  nulPattern.push_back('\0');
+  nulPattern += "}};";
+  if (mlir::succeeded(nodal::reparseAnalogEventDeclaration(nulPattern, initialized)) ||
+      initialized.contains("bad") || validBlock("begin scalar = '{4{0.0}}; end", &initialized) ||
+      mlir::succeeded(nodal::reparseAnalogTransferCall("laplace_nd(1, '{4{0.0}}, '{1})")) ||
+      mlir::succeeded(nodal::reparseAnalogNoiseCall("noise_table('{4{0.0}}, \"noise\")")))
+    return 1;
+  count += 4;
+
   llvm::outs() << "Foundation 43 event-array reparse: " << count << " cases passed\n";
   return 0;
 }

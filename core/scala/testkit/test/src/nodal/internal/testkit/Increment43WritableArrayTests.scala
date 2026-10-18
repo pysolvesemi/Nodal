@@ -95,7 +95,7 @@ final class Increment43WritableGenerated extends Module:
     V(p, n) <+ 0.0.V
 
 final class Increment43WritableRootFill extends Module:
-  val cells = variable(Vec(Real, 2), Vec.fill(Vec(Real, 2))(0.0.real))
+  val cells = variable(Vec(Real, 2), Vec.fill(Vec(Real, 2))(3.5.real))
   analogProcedure:
     on(initialStep):
       cells.writable.at(0) := 1.0.real
@@ -271,9 +271,34 @@ final class Increment43WritableOrdinaryFailure(form: Int) extends Module:
             cells.writable.at(1) := 1.0.real
 
 final class Increment43WritableOrdinaryRootFill extends Module:
-  val cells = variable(Vec(Real, 2), Vec.fill(Vec(Real, 2))(0.0.real))
+  val cells = variable(Vec(Real, 2), Vec.fill(Vec(Real, 2))(2.5.real))
+  val copied = variable(Vec(Real, 2))
   analogProcedure:
-    cells.writable.at(0) := 1.0.real
+    copied.writable := cells
+    cells.writable.at(0) := 7.0.real
+    copied.writable.at(1) := cells.at(0)
+
+final class Increment43WritablePersistentSymbolic extends Module:
+  val rows = param(2.integer, range = 2 to 4)
+  val level = param(1.25.V)
+  val cells = variable(
+    Vec(Real, rows, 2),
+    Vec.fill(Vec(Real, rows, 3))(level).slice(0, 2, axis = 1)
+  )
+  analogProcedure:
+    cells.writable.row(0).at(1) := 2.0.V
+
+final class Increment43WritableGeneratedRootFill extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      val cells = variable(Vec(Real, 2), Vec.fill(Vec(Real, 2))(4.5.real))
+      cells.writable.at(0) := 3.0.real
+
+final class Increment43WritableMutableRootFill extends Module:
+  val scalar = variable(Real, 1.0.real)
+  val cells = variable(Vec(Real, 2), Vec.fill(Vec(Real, 2))(scalar))
+  analogProcedure:
+    cells.writable.at(0) := 2.0.real
 
 object Increment43WritableArrayTests extends TestSuite:
   private def failure(top: => Module): String =
@@ -429,26 +454,127 @@ object Increment43WritableArrayTests extends TestSuite:
           ))
           assert(emitted == repeated, emitted.contains("for ("), emitted.contains("real "))
 
-    test("persistent root fill remains explicit target capability rejection"):
+    test("persistent root fills retain static units and structural view sources"):
+      val ordinary = ConstructionKernel.inspect(new Increment43WritableOrdinaryRootFill)
+      val program = ordinary.analogProcedural.head
+      assert(program.variables.map(_.initializer.nonEmpty) == Vector(true, false))
+      assert(program.variables.head.initializer.get.allReads.isEmpty)
+      assert(program.variables.map(_.authoredPath) == Vector(
+        Some("Increment43WritableOrdinaryRootFill.cells"),
+        Some("Increment43WritableOrdinaryRootFill.copied")
+      ))
+      val symbolic = ConstructionKernel.inspect(new Increment43WritablePersistentSymbolic)
+      val root = symbolic.analogProcedural.head.variables.head
+      assert(root.variable.valueType.dimensions == Vector("rows", "2"))
+      assert(root.variable.valueType.dimension == "voltage")
+      assert(root.initializer.get.source.exists(
+        _.isInstanceOf[AnalogProceduralRuntime.ShapedSource.View]
+      ))
+      assert(root.initializer.get.allReads.isEmpty)
+      assert(ScalaToMlirBridge.fromSnapshot(symbolic).text.contains("nodal.shape_slice"))
+      val generated = ConstructionKernel.inspect(new Increment43WritableGeneratedRootFill)
+      assert(generated.analogProcedural.head.generatedOwner.nonEmpty)
+      assert(generated.analogProcedural.head.variables.head.initializer.nonEmpty)
+      val rejected = failure(new Increment43WritableMutableRootFill)
+      assert(
+        rejected.contains("NODAL-SHAPE-043-007"),
+        rejected.contains("static fill without storage reads")
+      )
+
+    test("persistent root fills emit compact static declarations without runtime resets"):
       native: (compiler, translator, directory) =>
-        for source <- Vector(
-            document(new Increment43WritableRootFill),
-            document(new Increment43WritableOrdinaryRootFill)
+        for (owner, snapshot, pattern, eventful) <- Vector(
+            (
+              "Increment43WritableOrdinaryRootFill",
+              ConstructionKernel.inspect(new Increment43WritableOrdinaryRootFill),
+              "[0:1] = '{2{2.5}};",
+              false
+            ),
+            (
+              "Increment43WritableRootFill",
+              ConstructionKernel.inspect(new Increment43WritableRootFill),
+              "[0:1] = '{2{3.5}};",
+              true
+            ),
+            (
+              "Increment43WritablePersistentSymbolic",
+              ConstructionKernel.inspect(new Increment43WritablePersistentSymbolic),
+              "[0:((rows * 2) - 1)] = '{(rows * 2){level}};",
+              false
+            )
           )
         do
-          val verified =
-            success(run(source, compiler, directory, Vector("--canonicalize", "--verify-each")))
-          val rejected =
-            run(source.copy(text = verified), translator, directory, Vector("--nodal-to-verilog-a"))
-          rejected match
-            case failure: NativeCompilerFailure =>
-              assert(failure.standardError.contains("NODAL-BACKEND-EVENT-001"))
-              assert(failure.standardError.contains(
-                "persistent root shaped initializer requires declaration-equivalent target lifetime"
-              ))
-            case _ => throw new java.lang.AssertionError(
-                "persistent root shaped initializer unexpectedly lowered"
+          for (backend, language) <- Vector(
+              Backend.VerilogA -> "--nodal-to-verilog-a",
+              Backend.VerilogAMS -> "--nodal-to-verilog-ams"
+            )
+          do
+            val source = ScalaToMlirBridge.fromSnapshot(snapshot, backend)
+            val normalized = success(run(
+              source,
+              compiler,
+              directory,
+              Vector("--pass-pipeline=builtin.module(nodal-gate-default)")
+            ))
+            val emitted =
+              success(run(source.copy(text = normalized), translator, directory, Vector(language)))
+            val repeated =
+              success(run(source.copy(text = normalized), translator, directory, Vector(language)))
+            assert(emitted == repeated)
+            val declaration = s"real event_${owner}_cells$pattern"
+            assert(emitted.contains(declaration))
+            assert(emitted.indexOf(declaration) < emitted.indexOf("analog begin"))
+            assert(!emitted.contains("_initializer"), !emitted.contains("analog initial"))
+            assert(emitted.sliding("initial_step".length).count(_ == "initial_step") ==
+              (if eventful then 1 else 0))
+            val body = emitted.substring(emitted.indexOf("analog begin"))
+            val prefix = s"event_${owner}_"
+            val writes =
+              body.linesIterator.map(_.trim).filter(_.startsWith(s"${prefix}cells[")).toVector
+            assert(writes.size == 1)
+            val initialValue = owner match
+              case "Increment43WritableOrdinaryRootFill" => "2.5"
+              case "Increment43WritableRootFill" => "3.5"
+              case _ => "level"
+            assert(!body.contains(initialValue))
+            if owner == "Increment43WritableOrdinaryRootFill" then
+              assert(emitted.contains(s"real ${prefix}copied[0:1];"))
+              val sequence = Vector(
+                s"${prefix}statement_0_value_read_0[${prefix}statement_0_value_read_0_copy_index] = ${prefix}cells[${prefix}statement_0_value_read_0_copy_index];",
+                s"${prefix}copied[${prefix}statement_0_copy_index] = ${prefix}statement_0_value_read_0[${prefix}statement_0_copy_index];",
+                s"${prefix}cells[${prefix}statement_1_target_map] = 7.0;",
+                s"${prefix}statement_2_read_0 = ${prefix}cells[${prefix}statement_2_read_0_target_map];",
+                s"${prefix}copied[${prefix}statement_2_target_map] = ${prefix}statement_2_read_0;"
+              ).map(body.indexOf)
+              assert(
+                sequence.forall(_ >= 0),
+                sequence == sequence.sorted,
+                sequence.distinct.size == sequence.size
               )
+            if owner == "Increment43WritablePersistentSymbolic" then
+              assert(emitted.contains("parameter integer rows = 2 from [2:4];"))
+              assert(emitted.contains("parameter real level = 1.25;"))
+              assert(!emitted.contains("(rows * 3)"))
+
+    test("generated persistent root fill retains a causal target boundary"):
+      native: (compiler, translator, directory) =>
+        val source = document(new Increment43WritableGeneratedRootFill)
+        val verified = success(run(
+          source,
+          compiler,
+          directory,
+          Vector("--pass-pipeline=builtin.module(nodal-gate-default)")
+        ))
+        val rejected =
+          run(source.copy(text = verified), translator, directory, Vector("--nodal-to-verilog-a"))
+        rejected match
+          case failure: NativeCompilerFailure =>
+            assert(failure.standardError.contains("NODAL-BACKEND-EVENT-001"))
+            assert(failure.standardError.contains(
+              "generated root shaped initializer requires per-occurrence declaration lifetime"
+            ))
+          case _ =>
+            throw new java.lang.AssertionError("generated persistent root unexpectedly lowered")
 
     test("selected control event and compound initializer consumers reject causally"):
       for form <- 0 to 3 do

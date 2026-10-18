@@ -176,6 +176,16 @@ std::string parameter() {
 "nodal.parameter_envelope"() <{effects = ["shape"], policy = "static_generate", parameter = @COUNT, metadata = {}}> : () -> ()
 )mlir";
 }
+std::string withRealDimension(std::string source, const std::string &dimension) {
+  const std::string original = "\"real\", \"1\"";
+  const std::string replacement = "\"real\", \"" + dimension + "\"";
+  size_t position = 0;
+  while ((position = source.find(original, position)) != std::string::npos) {
+    source.replace(position, original.size(), replacement);
+    position += replacement.size();
+  }
+  return source;
+}
 int fail(llvm::StringRef message) {
   llvm::errs() << message << "\n";
   return 1;
@@ -183,22 +193,35 @@ int fail(llvm::StringRef message) {
 } // namespace
 
 int main(int argc, char **argv) {
-  auto artifact = [&](const char *name, const std::string &source, const std::string &target) {
+  auto artifact = [&](const char *name, const std::string &source, const std::string &target,
+                      const char *extension = ".va") {
     if (argc < 2)
       return;
     std::ofstream(std::string(argv[1]) + "/" + name + ".mlir") << source;
-    std::ofstream(std::string(argv[1]) + "/" + name + ".va") << target;
+    std::ofstream(std::string(argv[1]) + "/" + name + extension) << target;
   };
   mlir::DialectRegistry registry;
   registry.insert<circt::hw::HWDialect, nodal::NodalDialect>();
   mlir::MLIRContext context(registry);
   context.loadAllAvailableDialects();
-  auto emit = [&](const std::string &source, std::string &output) {
+  auto emit = [&](const std::string &source, std::string &output,
+                  nodal::BackendKind kind = nodal::BackendKind::VerilogA) {
     auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
     if (!module || mlir::failed(mlir::verify(*module)))
       return false;
     llvm::raw_string_ostream stream(output);
-    return mlir::succeeded(nodal::emitBackend(*module, nodal::BackendKind::VerilogA, stream));
+    return mlir::succeeded(nodal::emitBackend(*module, kind, stream));
+  };
+  auto deterministicTarget = [&](const std::string &source, std::string &target,
+                                 nodal::BackendKind kind = nodal::BackendKind::VerilogA) {
+    auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+    if (!module || mlir::failed(mlir::verify(*module)))
+      return false;
+    auto configuration = nodal::resolveBackendConfiguration(*module, kind);
+    std::string again;
+    return mlir::succeeded(configuration) && emit(source, target, kind) &&
+           emit(source, again, kind) && target == again &&
+           mlir::succeeded(nodal::reparseBackendTarget(target, *configuration));
   };
   const std::string fixed =
       fill("fill", "2,3") + declaration("values", "2,3", "fill") +
@@ -280,9 +303,8 @@ int main(int argc, char **argv) {
         target.find(collision + "_1") == std::string::npos)
       return fail("authored genvar collided with private array storage, counter or map");
   }
-  // Ordinary procedures share the ordered array renderer. Roots are deliberately
-  // uninitialized: explicit writes run at their authored point, while persistent
-  // shaped declaration initializers remain a separate target capability gate.
+  // Ordinary procedures share the ordered array renderer. Explicit writes still
+  // run at their authored point, independently of declaration initialization.
   auto ordinaryMapped = [&](const std::string &extent) {
     const std::string dimensions = "2," + extent;
     return declaration("values", dimensions) + fill("fill", dimensions, "0.0") +
@@ -301,15 +323,160 @@ int main(int argc, char **argv) {
                                   assignment("restore", "shifted", "2,2", "copyRead"));
   };
   auto eventFreeTarget = [&](const std::string &source, std::string &target) {
-    std::string again;
-    auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
-    if (!module || mlir::failed(mlir::verify(*module)))
-      return false;
-    auto configuration = nodal::resolveBackendConfiguration(*module, nodal::BackendKind::VerilogA);
-    return mlir::succeeded(configuration) && emit(source, target) && emit(source, again) &&
-           target == again && target.find("@(") == std::string::npos &&
-           mlir::succeeded(nodal::reparseBackendTarget(target, *configuration));
+    return deterministicTarget(source, target) && target.find("@(") == std::string::npos;
   };
+  // Persistent roots use the declaration initialization phase in either analog
+  // language profile. Subsequent ordinary writes and lexical copies retain
+  // their authored execution order and must not acquire a synthetic reset.
+  const std::string persistentFixed =
+      fill("fill", "2,3", "2.5") + declaration("values", "2,3", "fill") +
+      index("selected", "values", "2,3", "%c1, %c2", "i64, i64") +
+      assignment("write", "selected", "", "9.0", false) +
+      scope("copyScope", read("after", "values", "2,3") + declaration("copy", "2,3", "after") +
+                             read("copyRead", "copy", "2,3") +
+                             assignment("restore", "values", "2,3", "copyRead"));
+  auto profileSource = [](std::string source, nodal::BackendKind kind) {
+    if (kind == nodal::BackendKind::VerilogAMS) {
+      const std::string original = "nodal.backend.profile = \"verilog-a\"";
+      source.replace(source.find(original), original.size(),
+                     "nodal.backend.profile = \"verilog-ams\"");
+    }
+    return source;
+  };
+  for (auto kind : {nodal::BackendKind::VerilogA, nodal::BackendKind::VerilogAMS}) {
+    const bool ams = kind == nodal::BackendKind::VerilogAMS;
+    for (bool events : {false, true}) {
+      const std::string source =
+          profileSource(wrap(persistentFixed, "", false, events, !events), kind);
+      std::string target;
+      const std::string initial = "real event_Arrays_values[0:5] = '{6{2.5}};";
+      if (!deterministicTarget(source, target, kind) || !before(target, initial, "analog begin") ||
+          target.find("event_Arrays_values_copy_index") != std::string::npos ||
+          target.find("event_Arrays_values_source_map") != std::string::npos ||
+          target.find("event_Arrays_values_target_map") != std::string::npos ||
+          target.find("event_Arrays_fill") != std::string::npos ||
+          target.find("analog initial") != std::string::npos ||
+          llvm::StringRef(target).count("@(") != (events ? 1u : 0u) ||
+          !before(target, "event_Arrays_values[event_Arrays_write_target_map] = 9.0;",
+                  "event_Arrays_after[event_Arrays_after_copy_index] = ") ||
+          !before(target, "event_Arrays_after[event_Arrays_after_copy_index] = ",
+                  "event_Arrays_copy[event_Arrays_copy_copy_index] = event_Arrays_after[") ||
+          !before(target, "event_Arrays_copyRead[event_Arrays_copyRead_copy_index] = ",
+                  "event_Arrays_values[event_Arrays_restore_copy_index] = "))
+        return fail("persistent root lost declaration lifetime, carrier suppression or copy order");
+      artifact(ams ? (events ? "persistent-event-ams" : "persistent-fixed-ams")
+                   : (events ? "persistent-event" : "persistent-fixed"),
+               source, target, ams ? ".vams" : ".va");
+    }
+  }
+  // Symbolic cardinality and a dimensioned static parameter remain symbolic;
+  // parameter defaults are not substituted into the assignment pattern.
+  const std::string levelParameter = R"mlir(
+"nodal.parameter"() <{classification = "ordinary", default_value = 2.5 : f64, sym_name = "LEVEL", type = f64, parameter_kind = "real", unit = @V, variability = "symbolic", metadata = {semantic_path = "Arrays.LEVEL"}}> : () -> ()
+)mlir";
+  const std::string voltUnit = R"mlir(
+"nodal.unit"() <{dimension = "voltage", metadata = {}, native_suffix = "", scale = 1.0 : f64, sym_name = "V", symbol = "V"}> : () -> ()
+)mlir";
+  std::string persistentSymbolic =
+      wrap(withRealDimension(fill("fill", "COUNT", "Arrays.LEVEL") +
+                                 declaration("values", "COUNT", "fill") +
+                                 read("after", "values", "COUNT"),
+                             "voltage"),
+           parameter() + levelParameter, false, false, true);
+  persistentSymbolic.insert(persistentSymbolic.find("\"nodal.module\""), voltUnit);
+  for (auto kind : {nodal::BackendKind::VerilogA, nodal::BackendKind::VerilogAMS}) {
+    const bool ams = kind == nodal::BackendKind::VerilogAMS;
+    const std::string source = profileSource(persistentSymbolic, kind);
+    std::string target;
+    if (!deterministicTarget(source, target, kind) ||
+        target.find("real event_Arrays_values[0:(COUNT - 1)] = '{COUNT{LEVEL}};") ==
+            std::string::npos ||
+        target.find("parameter real LEVEL") == std::string::npos ||
+        target.find("event_Arrays_values_copy_index") != std::string::npos ||
+        target.find("event_Arrays_fill") != std::string::npos ||
+        target.find("@(") != std::string::npos)
+      return fail("persistent dimensioned parameter fill lost symbolic count or static value");
+    artifact(ams ? "persistent-symbolic-ams" : "persistent-symbolic", source, target,
+             ams ? ".vams" : ".va");
+  }
+  // A pure index/slice/view chain of a uniform fill keeps its value but changes
+  // its destination cardinality. No initializer-only carrier survives at runtime.
+  const std::string persistentView =
+      fill("fill", "2,3", "7.0") +
+      index("initializerRow", "fill", "2,3", "%c1", "i64", "3", false) +
+      slice("initializerTail", "initializerRow", "3", 1, 3, "2", 0, false) +
+      view("initializerView", "initializerTail", "2", "1,2", false) +
+      declaration("values", "1,2", "initializerView");
+  std::string viewTarget;
+  const std::string viewSource = wrap(persistentView, "", false, false, true);
+  if (!eventFreeTarget(viewSource, viewTarget) ||
+      viewTarget.find("real event_Arrays_values[0:1] = '{2{7.0}};") == std::string::npos ||
+      viewTarget.find("event_Arrays_fill") != std::string::npos ||
+      viewTarget.find("event_Arrays_initializer") != std::string::npos ||
+      viewTarget.find("copy_index") != std::string::npos ||
+      viewTarget.find("source_map") != std::string::npos ||
+      viewTarget.find("target_map") != std::string::npos ||
+      viewTarget.find("for (") != std::string::npos)
+    return fail("persistent view initializer used producer extent or left runtime carriers");
+  artifact("persistent-view", viewSource, viewTarget);
+  // Native capture freshness prohibits using a fill in a later ordered copy
+  // across its root declaration. A scalar projection before that declaration is
+  // a valid shared runtime consumer and must keep the actual SSA fill carrier.
+  const std::string sharedSource =
+      wrap(fill("fill", "4", "3.5") + index("sharedScalar", "fill", "4", "%c2", "i64", "", false) +
+               declaration("values", "4", "fill"),
+           "", false, false, true);
+  std::string sharedTarget;
+  if (!eventFreeTarget(sharedSource, sharedTarget) ||
+      sharedTarget.find("real event_Arrays_values[0:3] = '{4{3.5}};") == std::string::npos ||
+      sharedTarget.find("real event_Arrays_fill;") == std::string::npos ||
+      sharedTarget.find("event_Arrays_values_copy_index") != std::string::npos ||
+      !before(sharedTarget, "event_Arrays_fill = 3.5;",
+              "event_Arrays_sharedScalar = event_Arrays_fill;"))
+    return fail("persistent initializer suppressed or reordered a shared runtime fill carrier");
+  artifact("persistent-shared-fill", sharedSource, sharedTarget);
+  // Declaration initialization does not relax native mutable-read or snapshot
+  // freshness checks, even when the mutable source was initialized statically.
+  const std::string staticRoot = fill("fill", "4") + declaration("values", "4", "fill");
+  for (const std::string &body :
+       {staticRoot + index("first", "values", "4", "%c0", "i64") + read("captured", "first") +
+            fill("mutableFill", "4", "Arrays.first", "%captured", quantity) +
+            declaration("copy", "4", "mutableFill"),
+        staticRoot + read("captured", "values", "4") + declaration("copy", "4", "captured")}) {
+    const std::string source = wrap(body, "", false, false, true);
+    std::string diagnostics;
+    mlir::ScopedDiagnosticHandler handler(&context, [&](mlir::Diagnostic &diagnostic) {
+      llvm::raw_string_ostream stream(diagnostics);
+      diagnostic.print(stream);
+      return mlir::success();
+    });
+    auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+    if (module && mlir::succeeded(mlir::verify(*module)))
+      return fail("mutable persistent shaped initializer passed native verification");
+    std::string rejected = "sentinel";
+    if (emit(source, rejected) || rejected != "sentinel" ||
+        diagnostics.find("persistent shaped initialization requires static fill without mutable "
+                         "reads") == std::string::npos)
+      return fail("mutable persistent initializer missed native static-fill rejection");
+  }
+  {
+    const std::string source =
+        wrap(staticRoot + assignment("reuse", "values", "4", "fill"), "", false, false, true);
+    std::string diagnostics;
+    mlir::ScopedDiagnosticHandler handler(&context, [&](mlir::Diagnostic &diagnostic) {
+      llvm::raw_string_ostream stream(diagnostics);
+      diagnostic.print(stream);
+      return mlir::success();
+    });
+    auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+    if (module && mlir::succeeded(mlir::verify(*module)))
+      return fail("shared fill crossed a persistent declaration at the native boundary");
+    std::string rejected = "sentinel";
+    if (emit(source, rejected) || rejected != "sentinel" ||
+        diagnostics.find("snapshot cannot cross an ordered statement or scope boundary") ==
+            std::string::npos)
+      return fail("persistent declaration weakened native shared-fill freshness");
+  }
   for (bool symbolic : {false, true}) {
     const std::string source = wrap(ordinaryMapped(symbolic ? "COUNT" : "3"),
                                     symbolic ? parameter() : "", false, false, true);
@@ -408,11 +575,32 @@ int main(int argc, char **argv) {
             boundary) ||
       boundary.size() > 4096 || boundary.find("[0:2147483646]") == std::string::npos)
     return fail("signed32 endpoint lost compact layout or was spuriously rejected");
+  const std::string persistentBoundary =
+      wrap(fill("fill", "2147483647", "6.5") + declaration("values", "2147483647", "fill"), "",
+           false, false, true);
+  std::string persistentBoundaryTarget;
+  if (!eventFreeTarget(persistentBoundary, persistentBoundaryTarget) ||
+      persistentBoundaryTarget.size() > 4096 ||
+      persistentBoundaryTarget.find(
+          "real event_Arrays_values[0:2147483646] = '{2147483647{6.5}};") == std::string::npos ||
+      persistentBoundaryTarget.find("copy_index") != std::string::npos ||
+      persistentBoundaryTarget.find("event_Arrays_fill") != std::string::npos)
+    return fail("persistent signed32 endpoint lost compact declaration initialization");
+  artifact("persistent-signed32-boundary", persistentBoundary, persistentBoundaryTarget);
   for (const auto &source :
-       {wrap(fill("fill", "4") + declaration("values", "4", "fill"), "", false, true),
-        wrap(fill("fill", "2147483648") + declaration("values", "2147483648", "fill")),
+       {wrap(fill("fill", "2147483648") + declaration("values", "2147483648", "fill")),
+        wrap(fill("fill", "2147483648") + declaration("values", "2147483648", "fill"), "", false,
+             false, true),
+        wrap(fill("fill", "46341,46341") + declaration("values", "46341,46341", "fill"), "", false,
+             false, true),
         wrap(fill("fill", "Arrays.small") + declaration("values", "Arrays.small", "fill"),
              wideExpression),
+        wrap(fill("fill", "Arrays.small") + declaration("values", "Arrays.small", "fill"),
+             wideExpression, false, false, true),
+        wrap(fill("fill", "2147483648") +
+                 slice("smallView", "fill", "2147483648", 0, 2, "2", 0, false) +
+                 declaration("values", "2", "smallView"),
+             "", false, false, true),
         wrap(fill("fill", "COUNT") + declaration("values", "COUNT", "fill"),
              parameter() + wideExpression +
                  "\"nodal.parameter_value\"(%small) <{parameter = @COUNT, metadata = {}}> : (i64) "
@@ -423,6 +611,29 @@ int main(int argc, char **argv) {
     std::string rejected = "sentinel";
     if (emit(source, rejected) || rejected != "sentinel")
       return fail("unsupported array published target output");
+  }
+  // Module-level lifetime does not establish generated per-occurrence lifetime.
+  // Both event-containing and event-free generated roots fail transactionally.
+  for (bool events : {false, true}) {
+    const std::string source =
+        wrap(fill("fill", "4") + declaration("values", "4", "fill"), "", true, events, !events);
+    auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+    if (!module || mlir::failed(mlir::verify(*module)))
+      return fail("generated persistent initializer was not independently native-valid");
+    std::string diagnostics;
+    mlir::ScopedDiagnosticHandler handler(&context, [&](mlir::Diagnostic &diagnostic) {
+      llvm::raw_string_ostream stream(diagnostics);
+      diagnostic.print(stream);
+      return mlir::success();
+    });
+    std::string rejected = "sentinel";
+    if (emit(source, rejected) || rejected != "sentinel" ||
+        diagnostics.find(
+            "generated root shaped initializer requires per-occurrence declaration lifetime") ==
+            std::string::npos)
+      return fail("generated root initializer lost its explicit lifetime capability boundary");
+    artifact(events ? "persistent-generated-event-rejected" : "persistent-generated-rejected",
+             source, rejected);
   }
   const std::string initializedRoot = declaration("values", "4") + fill("fill", "4") +
                                       assignment("initialize", "values", "4", "fill");
@@ -440,7 +651,6 @@ int main(int argc, char **argv) {
   for (bool generated : {false, true}) {
     for (const std::string &body :
          {initializedRoot + guarded, initializedRoot + restricted,
-          fill("fill", "4") + declaration("values", "4", "fill"),
           initializedRoot +
               loop("wideControl",
                    fill("insideFill", "4") + assignment("inside", "values", "4", "insideFill"),
@@ -457,7 +667,7 @@ int main(int argc, char **argv) {
       });
       std::string rejected = "sentinel";
       if (emit(source, rejected) || rejected != "sentinel")
-        return fail("event-free guard, analysis, persistent initializer or control gate leaked");
+        return fail("event-free guard, analysis or control gate leaked");
       if ((body == initializedRoot + guarded || body == initializedRoot + restricted) &&
           diagnostics.find(
               "guarded or analysis-restricted assignment requires target legalization") ==

@@ -876,3 +876,78 @@ whitespace checks passed. No CI or simulator qualification was run.
 ```sh
 .work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.Increment43WritableArrayTests -- 'nodal.internal.testkit.Increment43WritableArrayTests.{ordinary arrays retain source order and typed event-free snapshots,ordinary arrays native verify and emit without synthesized events,ordinary array placement and captured reads retain causal rejection,persistent root fill remains explicit target capability rejection,public fixed and symbolic event arrays native verify and emit deterministically}'
 ```
+
+## Ordinary persistent shaped declaration initialization
+
+This target extension is governed by
+[`NodalWritableRealArrays-DG-v0.3`](../design-gates/NodalWritableRealArrays-DG-v0.3.md).
+It uses VAMS2.4 constant replicated declaration assignment for non-generated
+procedure roots emitted at module scope, including roots of event-containing
+procedures. This preserves declaration initialization timing rather than adding
+an event reset or an assignment on every analog evaluation. Independent
+elaboration/analysis/sweep behavior remains governed by the language and selected
+consumer; persistent does not mean once forever.
+
+The target derives the static scalar from the native-verified uniform fill and
+actual SSA projection chain, with replication count from the destination shape.
+Initializer-only carrier suppression follows actual uses. Shared native-valid
+materializations remain, and snapshot freshness is not broadened merely to
+manufacture sharing. Existing signed target bounds, static/no-mutable-read
+initialization proofs and exact units/shapes remain unchanged. Generated root
+initialization still rejects pending its separate per-occurrence lifetime work;
+lexical/event-local initialization retains authored scope-entry execution.
+
+The concrete OpenVAF failures above remain applicable: this is language-structural
+lowering, not a successful independent array compile or simulator qualification.
+
+Focused native validation passed: the strict event/declaration parser runs
+274 cases (179 inherited and 95 new), the writable and inherited backend units
+pass, and noise/transfer parsers retain 24/40 passing cases. Nine CLI outputs
+match the unit outputs exactly (six Verilog-A and three Verilog-AMS). Two
+generated-root CLI negatives retain the lifetime diagnostic and emit no output.
+The writable unit covers fixed and symbolic quantity roots, event-containing
+roots, view destination cardinality, native-valid shared scalar materialization,
+mutable-read/freshness rejection and signed-32 boundaries. No numeric simulator
+claim follows from these structural checks.
+
+```sh
+PYTHONPATH=.work/python-tools .work/python-tools/bin/cmake --build .work/native-release --target nodal-translate nodal-backend-unit-tests nodal-writable-array-backend-unit-tests nodal-event-reparse-unit-tests nodal-noise-reparse-unit-tests nodal-transfer-reparse-unit-tests -j 3
+.work/native-release/core/compiler/test/Unit/nodal-writable-array-backend-unit-tests .work/persistent-initializer-backend
+for target in nodal-event-reparse-unit-tests nodal-noise-reparse-unit-tests nodal-transfer-reparse-unit-tests nodal-backend-unit-tests; do
+  .work/native-release/core/compiler/test/Unit/$target
+done
+bash .work/check-persistent-initializer-cli.sh
+```
+
+Architecture review confirms that the declaration path follows actual fill/view
+SSA edges, keeps the destination cardinality and preserves shared ordinary
+consumers. The suppression worklist is linear in its candidate use edges; this
+is not a whole-pipeline complexity claim. The target parser uses an iterative
+identity comparison, folds only fully concrete checked arithmetic and never
+substitutes parameter defaults. Correlated symbolic positivity remains the
+native verifier's responsibility. Generated initialization, selected control/
+event references, conservative port-array mappings and broader generated
+state/topology remain open F43 work.
+
+Five configured public methods passed against the matched native tools. Three
+actual public models cover ordinary fixed roots, roots in event-containing
+procedures and symbolic quantity/view-backed roots; each uses its matching
+backend profile and repeated identical Verilog-A/Verilog-AMS output. Assertions
+pin module-scope declaration placement, destination count/value, absence of
+synthetic runtime resets and retained read/copy/mutate order. Generated-root
+causal rejection and the ordinary/event-array predecessor selections also pass.
+An initial fixture incorrectly passed a Verilog-A-profile document to the AMS
+translator; the expected profile rejection was corrected by rendering the
+snapshot for each requested backend, then rerunning all five methods. It was
+not treated as semantic acceptance.
+
+```sh
+export NODAL_NODALC="$PWD/.work/native-release/bin/nodalc"
+export NODAL_TRANSLATE="$PWD/.work/native-release/bin/nodal-translate"
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.Increment43WritableArrayTests -- 'nodal.internal.testkit.Increment43WritableArrayTests.{persistent root fills retain static units and structural view sources,persistent root fills emit compact static declarations without runtime resets,generated persistent root fill retains a causal target boundary,ordinary arrays native verify and emit without synthesized events,public fixed and symbolic event arrays native verify and emit deterministically}'
+```
+
+Logs are retained under `.work/persistent-initializer-*` and
+`.work/scala-validation/logs/writable-array-persistent-final.log`. Focused
+read-only architecture review found no blocker. No CI, full qualification or
+independent simulator acceptance was run for this checkpoint.

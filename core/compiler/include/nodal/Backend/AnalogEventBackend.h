@@ -25,6 +25,9 @@ struct AnalogEventRenderState {
 // Shared semantic admission used by generated capability checks and emission.
 bool isAnalogEventStorageStatement(mlir::Operation *operation);
 mlir::LogicalResult verifyAnalogEventStorageStatement(mlir::Operation *operation);
+// One semantic target admission for ordinary and generated procedures. Storage
+// counts do not define capability; ownership, effects and control placement do.
+mlir::LogicalResult verifyAnalogProcedureTarget(mlir::Operation *procedure);
 mlir::LogicalResult prepareAnalogEventBackend(mlir::Operation *module,
                                               AnalogEventRenderState &state,
                                               llvm::raw_ostream &declarations);

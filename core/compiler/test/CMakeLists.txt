@@ -579,12 +579,16 @@ set_tests_properties(
 )
 
 foreach(_fixture IN ITEMS break loop condition case)
+  set(_diagnostic "NODAL-ANALOG-034-")
+  if(_fixture STREQUAL "condition")
+    set(_diagnostic "NODAL-ANALOG-037-010")
+  endif()
   add_test(
     NAME nodal.native.analog-control-flow-rejects-${_fixture}
     COMMAND "${CMAKE_COMMAND}"
       "-DNODALC=$<TARGET_FILE:nodalc>"
       "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/IR/analog-control-flow-invalid-${_fixture}.mlir"
-      "-DDIAGNOSTIC=NODAL-ANALOG-034-"
+      "-DDIAGNOSTIC=${_diagnostic}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectDiagnostic.cmake"
   )
 endforeach()

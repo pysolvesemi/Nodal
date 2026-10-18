@@ -136,8 +136,9 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
             "module {", 'module attributes {nodal.target.profile = "analog"} {', 1))
         for target in ("--nodal-to-verilog-a", "--nodal-to-verilog-ams"):
             result = invoke(translate, ordinary, target)
-            require(result.returncode != 0 and "NODAL-BACKEND-CAPABILITY-001" in result.stderr,
-                    "ordinary procedures accidentally bypassed the capability gate: " + result.stderr)
+            require(result.returncode != 0 and "NODAL-BACKEND-EVENT-001" in result.stderr
+                    and "guarded or analysis-restricted assignment requires target legalization" in result.stderr,
+                    "legacy guarded/analysis-restricted assignment bypassed target admission: " + result.stderr)
             require(not result.stdout.strip(), "unsupported procedure published partial HDL")
             count += 1
         for label, old, new, diagnostic in cases:

@@ -28,6 +28,11 @@ mlir::FailureOr<AnalogSourceExpression> parseAnalogSourceExpression(mlir::Operat
 /// Actual captured scalar read binding; paths are labels, never selectors.
 mlir::FailureOr<std::string> getAnalogCapturedReadPath(mlir::Value value);
 mlir::FailureOr<mlir::Operation *> getAnalogCapturedReadIdentity(mlir::Value value);
+/// Bind and type retained procedural scalar source expressions independently of
+/// event presence. Shaped payloads retain their actual-SSA operation verifiers;
+/// event placement and ownership remain in verifyAnalogEventOperation.
+mlir::LogicalResult verifyAnalogProceduralExpressions(mlir::Operation *procedure);
+/// Compatibility entry point; delegates to event-independent expression checks.
 mlir::LogicalResult verifyAnalogEventProcedure(mlir::Operation *procedure);
 mlir::FailureOr<mlir::Operation *> resolveAnalogHeldVariable(mlir::Operation *operation);
 mlir::LogicalResult verifyAnalogHeldRead(mlir::Operation *operation);

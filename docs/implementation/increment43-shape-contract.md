@@ -756,3 +756,123 @@ additive gate/contribution policy and whitespace checks passed. No CI was run.
 .work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.SemanticOriginTests -- 'nodal.internal.testkit.SemanticOriginTests.{semantic names replace traversal-counter-only names,expression source maps survive inlined origins,same-basename source files use owner context,authored declaration names outrank unrelated aliases,inherited allocations retain the declaring constructor source}'
 .work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.ScalaToMlirBridgeTests -- 'nodal.internal.testkit.ScalaToMlirBridgeTests.{"analog procedural IR retains order, source locations, and serialization",nested procedural scopes preserve declaration and assignment chronology,initializing assignments precede dependent declarations independent of provenance}'
 ```
+
+## Event-independent procedural admission
+
+The next required F43 extension is governed by
+[`NodalWritableRealArrays-DG-v0.2`](../design-gates/NodalWritableRealArrays-DG-v0.2.md).
+The shared native captured-expression validator applies to ordinary and
+event-containing procedures: initializer/assignment values, structured conditions,
+case selectors and loop bounds. Legacy guarded assignments retain their existing
+native inventory checks and target rejection; this extension does not claim full
+guard-source validation or new guarded assignment lowering. Event placement
+checks remain separate. Previously,
+event-free payloads bypassed this validator; focused before-change probes accepted
+missing source payloads, wrong/unused captures, wrong initializer units and forged
+static conditions/loops. Those inherited acceptances are not semantic evidence.
+Canonical positive fixture repairs preserve their intended procedural behavior.
+
+Target admission now uses owner/control/storage restrictions shared with ordinary
+procedure rendering instead of generated operation-count recognition. Ordinary statements retain authored execution order in the same analog
+process, using the existing fresh snapshots and compact map/copy loops. Existing
+bounded-loop/history/operator restrictions remain; no artificial event wrapper
+or root-initializer reset is introduced. Persistent initializer language-profile
+compatibility is a separate unresolved target contract.
+
+### Concrete F48 array consumer handoff
+
+A focused consumer probe on 2026-10-18 establishes a known tool limitation,
+separate from the compiler structural acceptance above. Official OpenVAF 23.5.0
+and OpenVAF-reloaded 20260616-3-g0e83f1ed both compiled a scalar declaration/control
+model to OSDI, but rejected uninitialized, list-initialized, literal-replicated
+and symbolic-replicated Real array declarations at `[` with exit 65. Actual
+retained public `fixed-overlap` and `symbolic-voltage` emitted witnesses also
+failed at their Real array declarations with both tools. No array model compiled
+successfully and no simulation was run. These results are not a replication-only
+failure or a blanket claim about other tool versions/vendors.
+
+Tool executable SHA256 identities:
+
+- OpenVAF 23.5.0: `6918195bc6cca54016095923bea190f7a1d96dd8b062104c602e8c28578cb5e3`
+- Reloaded: `b117284d8f871dbf54609ab009cdff819f443d8d33064111b8b0782af5c7e931`
+
+Actual public target SHA256 identities from the writable checkpoint:
+
+- Fixed overlap: `6554b61ff2f278197eafe57f45a96f06335fa2795f419d0ad4540ea308872077`
+- Symbolic voltage: `6194f9d9d1f5c6515f9568321fc293fe7e9731ac7006abb9ed6133d6dc94ef51`
+
+Sources remain the public models in `Increment43WritableArrayTests.scala`;
+retained source/normalized MLIR/target triplets and exact tool/input hashes,
+commands, exit codes and diagnostics are under
+`.work/f43-array-initializer-profile/` and the writable witness directory.
+Each consumer invocation was `<pinned-openvaf> <actual-source.va> -o <case.osdi>`.
+F48 must regenerate from its reviewed source revision and preserve these blocked
+classifications until an accepting tool/profile is actually demonstrated.
+
+The official [OpenVAF compliance description](https://openvaf.semimod.de/docs/details/verilog-a-standard/)
+identifies its Verilog-AMS 2.4 analog subset. Language support and tool support
+must remain distinct: [VAMS 2.4](https://accellera.org/images/downloads/standards/v-ams/VAMS-LRM-2-4.pdf)
+section 3.4.8, pages 32–33, already demonstrates replicated mutable Real array
+declaration initialization; section 4.2.14, pages 60–61, specifies assignment
+pattern replication. This syntax is not newly introduced by the 2023 edition.
+Current public backend selection names Verilog-A/Verilog-AMS, not OpenVAF, and
+contains no enforced tool-profile attribute. A future explicit OpenVAF request
+must use pinned capability detection/fail-closed consumer classification before
+launch, rather than assume generic language emission implies tool acceptance.
+F43 D.1/D.2 and the lightweight handoff policy keep later tool execution from
+becoming a reverse dependency of compiler structural work.
+
+### Focused event-free native and target acceptance
+
+The shared semantic matrix passed 49 cases with exact roundtrip and actual
+default-gate positives. Six previously accepted forged event-free payloads now
+reject with exact `NODAL-ANALOG-037-010`. Thirty-two directly affected scalar and
+control-flow native tests passed, plus 21 descriptor and 37 node-array checks.
+Matched-tool event predecessors passed 48 semantic checks, 18 lowering cases
+and 52 direction cases. The old invalid-condition expectation now pins the
+shared validator's earlier precise rejection; the old guarded ordinary fixture
+still rejects for guard/analysis legalization with unchanged-output checks.
+
+The inherited backend executable passed unchanged. Writable target tests passed
+ordinary fixed, symbolic and generated bodies, native-valid guard/analysis
+negatives with exact diagnostics/sentinels, and preserved generated loop/history
+rejections. Event syntax 179, noise 24 and transfer 40 checks passed. Three new
+ordinary artifacts were byte-identical through actual CLI emission; symbolic
+ordinary Verilog-AMS emission/reparse also passed. Generated runtime control
+still has a finite single-nonnested-loop/topology profile; this checkpoint does
+not claim general generated-control support.
+
+```sh
+source .work/nodal-toolchain-env.sh
+PYTHONDONTWRITEBYTECODE=1 python3 tests/compiler/fixtures/increment43/run_writable_array_matrix.py --nodalc .work/native-release/bin/nodalc --work-dir .work/event-free-native-after
+ctest --test-dir .work/native-release --output-on-failure -R '^nodal.native.analog-(procedural|control-flow)-'
+ctest --test-dir .work/native-release --output-on-failure -R '^nodal.native.(analog-events-matrix|analog-event-direction-review)$'
+.work/native-release/core/compiler/test/Unit/nodal-storage-model-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-node-array-unit-tests
+PYTHONPATH=.work/python-tools .work/python-tools/bin/cmake --build .work/native-release --target nodal-translate nodal-backend-unit-tests nodal-writable-array-backend-unit-tests nodal-event-reparse-unit-tests nodal-noise-reparse-unit-tests nodal-transfer-reparse-unit-tests -j 3
+.work/native-release/core/compiler/test/Unit/nodal-writable-array-backend-unit-tests .work/event-free-backend
+.work/native-release/core/compiler/test/Unit/nodal-backend-unit-tests .work/event-free-backend
+.work/native-release/core/compiler/test/Unit/nodal-event-reparse-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-noise-reparse-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-transfer-reparse-unit-tests
+for name in ordinary-fixed ordinary-symbolic ordinary-generated; do
+  .work/native-release/bin/nodal-translate --nodal-to-verilog-a .work/event-free-backend/$name.mlir -o .work/event-free-backend/$name.cli.va
+  cmp .work/event-free-backend/$name.va .work/event-free-backend/$name.cli.va
+done
+```
+
+Five final configured public methods passed against the matched native tools:
+three ordinary positive models with repeated identical target emission, five
+construction negatives, two persistent-root target negatives and the previous
+nine-event-model integration predecessor. Actual source/normalized MLIR and
+Verilog-A triplets are retained under
+`.work/scala-validation/writable-array-ordinary-witnesses/`. Assertions inspect
+actual operations rather than duplicated module inventories and pin deferred
+read-before-write order, symbolic noncontiguous mapping and owned generated
+declaration placement. No event or reset wrapper is synthesized. Focused
+architecture review found no blocker; formatting, changed document/gate and
+whitespace checks passed. No CI or simulator qualification was run.
+
+```sh
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.Increment43WritableArrayTests -- 'nodal.internal.testkit.Increment43WritableArrayTests.{ordinary arrays retain source order and typed event-free snapshots,ordinary arrays native verify and emit without synthesized events,ordinary array placement and captured reads retain causal rejection,persistent root fill remains explicit target capability rejection,public fixed and symbolic event arrays native verify and emit deterministically}'
+```

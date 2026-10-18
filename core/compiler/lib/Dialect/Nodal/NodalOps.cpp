@@ -2784,7 +2784,7 @@ LogicalResult nodal::AnalogProcedureOp::verify() {
   }
   if (failed(verifyAnalogProcedure(getOperation())))
     return failure();
-  return verifyAnalogEventProcedure(getOperation());
+  return verifyAnalogProceduralExpressions(getOperation());
 }
 
 LogicalResult nodal::AnalogScopeOp::verify() {

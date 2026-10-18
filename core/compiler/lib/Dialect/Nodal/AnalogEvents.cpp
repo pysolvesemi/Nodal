@@ -539,11 +539,12 @@ bool hasAnalogEvents(Operation *op) {
   return found;
 }
 
-// The older procedural model retains source expression strings. Before they can
-// cross the event backend boundary, independently bind and type every payload.
-LogicalResult verifyAnalogEventProcedure(Operation *procedure) {
-  if (!hasAnalogEvents(procedure))
-    return success();
+// Retained procedural source strings have one semantic admission path, whether
+// statements run ordinarily or under event control. Event placement is checked
+// separately by verifyAnalogEventOperation.
+LogicalResult verifyAnalogProceduralExpressions(Operation *procedure) {
+  if (!llvm::isa_and_nonnull<AnalogProcedureOp>(procedure))
+    return failure();
   LogicalResult result = success();
   procedure->walk([&](Operation *op) {
     if (failed(result))
@@ -648,6 +649,10 @@ LogicalResult verifyAnalogEventProcedure(Operation *procedure) {
       result = reject(op, 10, "procedural expression reads or static value were forged");
   });
   return result;
+}
+
+LogicalResult verifyAnalogEventProcedure(Operation *procedure) {
+  return verifyAnalogProceduralExpressions(procedure);
 }
 
 bool isAnalogEventExpression(Operation *op) {

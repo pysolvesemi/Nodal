@@ -342,9 +342,52 @@ def cases():
                  types="," + shape("2", Q), snapshot=True))
     yield "nested_fill_scalar_projection", nested_fill, True
 
+    # Event-free scalar payloads use the same source, type and actual-capture
+    # proofs as event-controlled statements, rather than bypassing validation.
+    def scalar(name, order, value="1.0"):
+        return (var(name, "2", order).replace(shape("2"), V)
+                .replace("initialized=false", "initialized=true")
+                .replace('initializer_value=""', f'initializer_value="{value}"')
+                .replace('initializer_kind=""', 'initializer_kind="real"')
+                .replace('initializer_dimension=""', 'initializer_dimension="1"'))
+
+    scalar_roots = scalar("a", 0) + scalar("b", 1)
+    scalar_capture = scalar_roots + read("capture", "a", V, Q)
+    scalar_copy = assign("scalar_copy", "b", V, 0, "T.a", ",%capture", "," + Q)
+    yield "event_free_scalar_capture", scalar_capture + scalar_copy, True
+    yield ("event_free_scalar_arithmetic", scalar_capture + scalar_copy.replace(
+        'value="T.a"', 'value="analog_add(T.a,1.0)"'), True)
+    yield ("event_free_missing_source_payload", scalar_capture + scalar_copy.replace(
+        'metadata={value="T.a"}', 'metadata={}'), False)
+    yield ("event_free_forged_capture_identity", scalar_capture + scalar_copy.replace(
+        'value="T.a"', 'value="T.b"'), False)
+    yield ("event_free_unused_capture", scalar_capture + scalar_copy.replace(
+        'value="T.a"', 'value="1.0"'), False)
+    yield ("event_free_initializer_wrong_units", scalar("a", 0).replace(
+        'initializer_dimension="1"', 'initializer_dimension="voltage"').replace(
+        V, V.replace('"1"', '"voltage"')), False)
+    conditional = branch(assign("then_set", "a", V, 0), assign("else_set", "a", V, 1))
+    forged_static = conditional.replace('stage="runtime"', 'stage="static"').replace(
+        'static_value_present=false', 'static_value_present=true', 1)
+    yield "event_free_forged_static_condition", scalar_roots + forged_static, False
+    static_loop = (
+        '"nodal.analog_loop"() <{owner="T",statement_id="T.loop",stage="static",'
+        'bound_value="2",bound_kind="integer",bound_dimension="1",bound_reads=[],'
+        'minimum_iterations=3:i64,maximum_iterations=3:i64,static_trip_count_present=true,'
+        'static_trip_count=3:i64,metadata={}}> ({\n'
+        + assign("loop_set", "a", V, 0) + '}) : ()->()\n')
+    yield "event_free_forged_static_loop", scalar_roots + static_loop, False
+
 
 # Exact causal diagnostic sets. Syntax/CLI errors or crashes never count as rejections.
 EXPECTED_DIAGNOSTICS = {
+    "event_free_missing_source_payload": ["NODAL-ANALOG-037-010"],
+    "event_free_forged_capture_identity": ["NODAL-ANALOG-037-010"],
+    "event_free_unused_capture": ["NODAL-ANALOG-037-010"],
+    "event_free_initializer_wrong_units": ["NODAL-ANALOG-037-010"],
+    "event_free_forged_static_condition": ["NODAL-ANALOG-037-010"],
+    "event_free_forged_static_loop": ["NODAL-ANALOG-037-010"],
+
     "missing_source_identity": ["NODAL-ANALOG-034-014", "NODAL-SHAPE-043-003"],
     "generated_owner_forgery": ["NODAL-ITERATION-043-004"],
     "cardinality_overflow": ["NODAL-ANALOG-033-004"],
@@ -358,7 +401,7 @@ EXPECTED_DIAGNOSTICS = {
     'snapshot_payload_competitor': ['NODAL-ANALOG-033-012'],
     'snapshot_shape_mismatch': ['NODAL-ANALOG-033-012'],
     'snapshot_stale_capture': ['NODAL-ANALOG-033-017'],
-    'forged_selected_binding': ['NODAL-ANALOG-033-017'],
+    'forged_selected_binding': ['NODAL-ANALOG-037-010'],
     'selected_snapshot_order': ['NODAL-ANALOG-033-017'],
     'shaped_integer_storage_rejected': ['NODAL-ANALOG-033-019', 'NODAL-ANALOG-034-014'],
     'dimension_mismatch': ['NODAL-ANALOG-033-012'],

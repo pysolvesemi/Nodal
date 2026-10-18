@@ -486,7 +486,7 @@ LogicalResult renderBlock(Block &block, AnalogEventRenderState &state, llvm::raw
 
 LogicalResult prepareEventStorage(Operation *procedure, AnalogEventRenderState &state,
                                   llvm::raw_ostream &out, unsigned indent, bool allowLoops) {
-  if (failed(verifyAnalogEventProcedure(procedure)))
+  if (failed(verifyAnalogProcedureTarget(procedure)))
     return failure();
   LogicalResult result = success();
   auto module = procedure->getParentOfType<ModuleOp>();
@@ -692,6 +692,130 @@ LogicalResult verifyAnalogEventStorageStatement(Operation *operation) {
   return failure();
 }
 
+LogicalResult verifyAnalogProcedureTarget(Operation *procedure) {
+  if (!llvm::isa_and_nonnull<AnalogProcedureOp>(procedure) ||
+      !llvm::hasSingleElement(procedure->getRegion(0)) ||
+      failed(verifyGeneratedAnalogOwnership(procedure)) ||
+      failed(verifyAnalogProceduralExpressions(procedure)))
+    return failure();
+  const bool generated = procedure->hasAttr("generated_owner");
+  const bool events = hasAnalogEvents(procedure);
+  const auto owner = text(procedure, "owner");
+  llvm::SmallVector<Operation *> loops;
+  LogicalResult result = success();
+  procedure->walk([&](Operation *op) {
+    if (op == procedure || failed(result))
+      return;
+    const bool storage = isAnalogEventStorageStatement(op);
+    const bool control =
+        llvm::isa<AnalogScopeOp, AnalogIfOp, AnalogIfArmOp, AnalogCaseOp, AnalogCaseArmOp,
+                  AnalogLoopOp, AnalogBreakOp, AnalogContinueOp, AnalogOnOp>(op) ||
+        isAnalogEventExpression(op);
+    if ((!storage && !control) || text(op, "owner") != owner) {
+      result = reject(op, "procedure contains an unsupported effect or mismatched owner");
+      return;
+    }
+    if (storage && failed(verifyAnalogEventStorageStatement(op))) {
+      result = reject(op, "procedure storage has no verified native capability");
+      return;
+    }
+    if (llvm::isa<AnalogAssignOp>(op)) {
+      auto guard = op->getAttrOfType<BoolAttr>("guard_present");
+      auto analyses = op->getAttrOfType<ArrayAttr>("analyses");
+      if (!guard || guard.getValue() || !analyses || analyses.size() != 2 ||
+          analyses[0] != StringAttr::get(op->getContext(), "dc") ||
+          analyses[1] != StringAttr::get(op->getContext(), "transient"))
+        result =
+            reject(op, "guarded or analysis-restricted assignment requires target legalization");
+    }
+    if (!generated || failed(result))
+      return;
+    if (storage && failed(verifyGeneratedAnalogOwnership(op))) {
+      result = failure();
+      return;
+    }
+    if (llvm::isa<AnalogLoopOp>(op))
+      loops.push_back(op);
+    if (llvm::isa<AnalogVariableOp>(op) && op->getParentOfType<AnalogLoopOp>())
+      result = reject(op, "generated loop-local declarations would create unsupported histories");
+    if (!events && llvm::isa<AnalogScopeOp>(op) && op->getRegion(0).front().empty())
+      result = reject(op, "generated lexical scopes require an authored storage body");
+  });
+  if (failed(result) || !generated)
+    return result;
+  if (loops.size() > 1)
+    return reject(procedure, "generated procedure admits at most one nonnested runtime loop");
+  auto ownedRootIntegerRead = [&](Operation *op, llvm::StringRef inventory) {
+    auto reads = op->getAttrOfType<ArrayAttr>(inventory);
+    auto path = reads && reads.size() == 1 ? llvm::dyn_cast<StringAttr>(reads[0]) : StringAttr();
+    return llvm::any_of(procedure->getRegion(0).front(), [&](Operation &candidate) {
+      auto variable = llvm::dyn_cast<AnalogVariableOp>(candidate);
+      auto type =
+          variable ? llvm::dyn_cast<VariableType>(variable.getResult().getType()) : VariableType();
+      return path && type && type.getKind() == "integer" &&
+             text(&candidate, "identity") == path.getValue();
+    });
+  };
+  for (Operation *loop : loops) {
+    if (text(loop, "stage") != "runtime" || hasAnalogEvents(loop) ||
+        (events ? !llvm::isa<AnalogOnOp>(loop->getParentOp()) : loop->getParentOp() != procedure))
+      return reject(loop, "generated runtime loop has unsupported event or lexical placement");
+    if (!events && !ownedRootIntegerRead(loop, "bound_reads"))
+      return reject(loop, "generated runtime bound requires one owned root Integer variable");
+    auto directArm = [&](Operation *op) {
+      return op && llvm::isa<AnalogIfArmOp, AnalogCaseArmOp>(op) && op->getParentOp() &&
+             llvm::isa<AnalogIfOp, AnalogCaseOp>(op->getParentOp()) &&
+             op->getParentOp()->getParentOp() == loop;
+    };
+    auto storageScope = [&](Operation *parent) {
+      return parent == loop || directArm(parent) ||
+             (parent && llvm::isa<AnalogScopeOp>(parent) &&
+              (parent->getParentOp() == loop || directArm(parent->getParentOp())));
+    };
+    unsigned conditionals = 0, cases = 0, scopes = 0, breaks = 0, continues = 0, armExits = 0;
+    loop->walk([&](Operation *op) {
+      if (op == loop || failed(result))
+        return;
+      Operation *parent = op->getParentOp();
+      if (llvm::isa<AnalogIfOp, AnalogCaseOp>(op)) {
+        if (parent != loop || (llvm::isa<AnalogIfOp>(op) ? ++conditionals > 1 : ++cases > 1) ||
+            (!events && (conditionals && cases)) ||
+            (!events && llvm::isa<AnalogCaseOp>(op) && !ownedRootIntegerRead(op, "selector_reads")))
+          result = reject(op, "generated loop controls must be direct and nonnested");
+        return;
+      }
+      if (llvm::isa<AnalogIfArmOp, AnalogCaseArmOp>(op)) {
+        if (!directArm(op))
+          result = reject(op, "generated loop arm is outside its direct control");
+        return;
+      }
+      if (llvm::isa<AnalogScopeOp>(op)) {
+        bool hasStorage = llvm::any_of(op->getRegion(0).front(), [](Operation &nested) {
+          return llvm::isa<AnalogVariableReadOp, AnalogAssignOp, AnalogArrayFillOp>(nested);
+        });
+        if (++scopes > 1 || (parent != loop && !directArm(parent)) || (!events && !hasStorage))
+          result = reject(op, "generated loop admits one direct or arm-local storage scope");
+        return;
+      }
+      if (llvm::isa<AnalogBreakOp, AnalogContinueOp>(op)) {
+        const bool scoped = llvm::isa<AnalogScopeOp>(parent);
+        const bool inArm = directArm(scoped ? parent->getParentOp() : parent);
+        if (!storageScope(parent) || (events && scoped && parent->getParentOp() == loop) ||
+            (!events && (llvm::isa<AnalogBreakOp>(op) ? ++breaks > 1 : ++continues > 1)) ||
+            (inArm && (!events || scoped) && ++armExits > 1))
+          result = reject(op, "generated loop exit exceeds its supported lexical control profile");
+        return;
+      }
+      if (!isAnalogEventStorageStatement(op) || llvm::isa<AnalogVariableOp>(op) ||
+          !storageScope(parent))
+        result = reject(op, "generated runtime loop body has unsupported storage or effects");
+    });
+    if (failed(result))
+      return result;
+  }
+  return success();
+}
+
 LogicalResult prepareAnalogEventBackend(Operation *module, AnalogEventRenderState &state,
                                         llvm::raw_ostream &out) {
   module->walk([&](Operation *op) {
@@ -701,7 +825,7 @@ LogicalResult prepareAnalogEventBackend(Operation *module, AnalogEventRenderStat
   });
   LogicalResult result = success();
   module->walk([&](AnalogProcedureOp procedure) {
-    if (failed(result) || !hasAnalogEvents(procedure) || procedure->hasAttr("generated_owner"))
+    if (failed(result) || procedure->hasAttr("generated_owner"))
       return;
     result = prepareEventStorage(procedure.getOperation(), state, out, 2, true);
   });
@@ -725,10 +849,7 @@ LogicalResult prepareGeneratedAnalogEventBackend(Operation *procedure,
 }
 LogicalResult renderAnalogEventProcedure(Operation *procedure, AnalogEventRenderState &state,
                                          llvm::raw_ostream &out) {
-  if (!hasAnalogEvents(procedure) &&
-      (!procedure->hasAttr("generated_owner") || !procedure->hasAttr("generated_induction")))
-    return reject(procedure, "ordinary procedure lowering remains gated");
-  if (failed(verifyAnalogEventProcedure(procedure)))
+  if (failed(verifyAnalogProcedureTarget(procedure)))
     return failure();
   out << "    begin : " << nameFor((text(procedure, "owner") + ".procedure").str(), state) << "\n";
   if (failed(renderBlock(procedure->getRegion(0).front(), state, out, 6)))

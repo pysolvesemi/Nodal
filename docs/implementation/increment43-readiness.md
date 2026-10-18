@@ -202,23 +202,27 @@ Nineteen focused Scala cases, eleven Scala predecessors, 37 native node-array
 checks, four shape integrations and affected backend/syntax tests passed; exact
 commands and limitations remain in the existing shape-contract note.
 
-The next coordinated change is lexical writable Real storage under the
+The lexical writable Real storage checkpoint is published as
+`6bc6a3ff7c263f290d81b9263d5ac082bec91f31`, with exact tested-tree equality and
+no CI, under the
 [additive writable-array gate](../design-gates/NodalWritableRealArrays-DG-v0.1.md).
-Existing procedural records own typed selections and read snapshots; existing
-shape proofs and a shared derived native resolver preserve root, units, scope
-and generated ownership. Both procedural dataflow paths must use selected
-initialization coverage, rather than treating any indexed write as whole-array
-initialization. The target uses compact mapped snapshot/copy loops with checked
-portable integer bounds. Existing module-level immutable shape scheduling stays
-separate from procedural statement order.
+Existing procedural records own typed selections and fresh immutable read
+snapshots. Shared native storage/coverage proofs and compact mapped target loops
+preserve overlapping-copy behavior without lane expansion. Thirteen configured
+public methods, eleven affected Scala predecessors, eight source/scalar checks,
+41 native semantic cases, 15 registered native tests, 21 descriptor checks and
+179 target parser checks passed, together with affected backend tests. Exact
+commands and limitations are recorded in the shape-contract note.
 
-This selected design is not yet validation evidence. Array-derived control/event
-predicates and loop bounds need actual typed reference operands; their present
-text-only inventories must reject selected reads rather than introduce eager
-snapshots or metadata-only lookup. Array operations inside those bodies remain
-in the selected profile. Persistent root array
-initialization still needs a declaration-equivalent target lifetime; an event
-reset is not an implicit substitute. Extra operator/state/result fan-out,
+The next required change is event-independent shared procedural validation and
+target admission under
+[v0.2](../design-gates/NodalWritableRealArrays-DG-v0.2.md), preserving authored
+ordinary execution order instead of adding artificial events or count-pattern
+whitelists. Array-derived control/event predicates and loop bounds still need
+actual typed reference operands; present text-only inventories reject selected
+reads rather than introduce eager snapshots or metadata-only lookup. Persistent
+root array initialization still needs declaration-equivalent target lifetime;
+an event reset is not an implicit substitute. Extra operator/state/result fan-out,
 cross-range storage, broader conservative ports/views and generated
 connections/instances also remain open where not implemented. No required
 child or parent is closed by these checkpoints. Do not silently treat an

@@ -208,6 +208,73 @@ final class Increment43WritableFlat extends Module:
     cells.writable.at(0) := 1.0.real
     cells.writable := cells
 
+final class Increment43WritableOrdinaryArray extends Module:
+  val cells = variable(Vec(Real, 3))
+  val copied = variable(Vec(Real, 3))
+  val sink = variable(Real, 0.0.real)
+  analogProcedure:
+    cells.writable := Vec.fill(Vec(Real, 3))(0.0.real)
+    cells.writable.at(0) := 1.0.real
+    cells.writable.at(1) := 2.0.real
+    cells.writable.at(2) := 3.0.real
+    val reused = cells.slice(0, 2)
+    cells.writable.slice(1, 3) := reused
+    sink := cells.at(1) + cells.at(2)
+    cells.writable.at(0) := 4.0.real
+    cells.writable.slice(1, 3) := reused
+    copied.writable := cells
+    copied.writable.reshape(1, 3).row(0).at(2) := sink
+
+final class Increment43WritableOrdinarySymbolic extends Module:
+  val rows = param(2.integer, range = 2 to 4)
+  val lane = param(0.integer, range = 0 to 1)
+  analogProcedure:
+    analogConditional:
+      analogWhen(true.B):
+        val cells = variable(Vec(Real, rows, 3), Vec.fill(Vec(Real, rows, 3))(0.0.V))
+        cells.writable.row(lane).at(2) := 2.0.V
+        cells.writable.slice(0, 2, axis = 1) := cells.slice(1, 3, axis = 1)
+        val copied = variable(Vec(Real, rows, 3), cells)
+        copied.writable.row(lane).flatten.at(0) := cells.row(lane).at(1)
+
+final class Increment43WritableOrdinaryGenerated extends Module:
+  hdlRange(0, 2): _ =>
+    analogProcedure:
+      analogConditional:
+        analogWhen(true.B):
+          val cells = variable(Vec(Real, 2), Vec.fill(Vec(Real, 2))(0.0.real))
+          cells.writable.at(0) := 3.0.real
+          cells.writable.slice(1, 2) := cells.slice(0, 1)
+
+final class Increment43WritableOrdinaryFailure(form: Int) extends Module:
+  val cells = variable(Vec(Real, 2))
+  val sink = variable(Real, 0.0.real)
+  if form == 0 then cells.writable := Vec.fill(Vec(Real, 2))(1.0.real)
+  else
+    analogProcedure:
+      if form == 1 then
+        cells.writable.at(0) := 1.0.real
+        sink := cells.at(1)
+      else if form == 2 then
+        var escaped: Option[Expr[Real]] = None
+        analogConditional:
+          analogWhen(true.B):
+            val local = variable(Vec(Real, 2), Vec.fill(Vec(Real, 2))(0.0.real))
+            escaped = Some(local.at(0))
+        cells.writable := Vec.fill(Vec(Real, 2))(escaped.get)
+      else if form == 3 then
+        cells.writable := Vec.fill(Vec(Real, 2))(cells.at(0))
+      else
+        cells.writable := Vec.fill(Vec(Real, 2))(0.0.real)
+        analogConditional:
+          analogWhen(cells.at(0) > 0.0.real):
+            cells.writable.at(1) := 1.0.real
+
+final class Increment43WritableOrdinaryRootFill extends Module:
+  val cells = variable(Vec(Real, 2), Vec.fill(Vec(Real, 2))(0.0.real))
+  analogProcedure:
+    cells.writable.at(0) := 1.0.real
+
 object Increment43WritableArrayTests extends TestSuite:
   private def failure(top: => Module): String =
     scala.util.Try(ConstructionKernel.inspect(top)).failed.get.getMessage
@@ -364,20 +431,24 @@ object Increment43WritableArrayTests extends TestSuite:
 
     test("persistent root fill remains explicit target capability rejection"):
       native: (compiler, translator, directory) =>
-        val source = document(new Increment43WritableRootFill)
-        val verified =
-          success(run(source, compiler, directory, Vector("--canonicalize", "--verify-each")))
-        val rejected =
-          run(source.copy(text = verified), translator, directory, Vector("--nodal-to-verilog-a"))
-        rejected match
-          case failure: NativeCompilerFailure =>
-            assert(failure.standardError.contains("NODAL-BACKEND-EVENT-001"))
-            assert(failure.standardError.contains(
-              "persistent root shaped initializer requires declaration-equivalent target lifetime"
-            ))
-          case _ => throw new java.lang.AssertionError(
-              "persistent root shaped initializer unexpectedly lowered"
-            )
+        for source <- Vector(
+            document(new Increment43WritableRootFill),
+            document(new Increment43WritableOrdinaryRootFill)
+          )
+        do
+          val verified =
+            success(run(source, compiler, directory, Vector("--canonicalize", "--verify-each")))
+          val rejected =
+            run(source.copy(text = verified), translator, directory, Vector("--nodal-to-verilog-a"))
+          rejected match
+            case failure: NativeCompilerFailure =>
+              assert(failure.standardError.contains("NODAL-BACKEND-EVENT-001"))
+              assert(failure.standardError.contains(
+                "persistent root shaped initializer requires declaration-equivalent target lifetime"
+              ))
+            case _ => throw new java.lang.AssertionError(
+                "persistent root shaped initializer unexpectedly lowered"
+              )
 
     test("selected control event and compound initializer consumers reject causally"):
       for form <- 0 to 3 do
@@ -408,6 +479,135 @@ object Increment43WritableArrayTests extends TestSuite:
       val sourceMap = AnalogProceduralMlir.sourceMapEntries(snapshot)
       assert(sourceMap.exists(_.contains(".value.read_0")))
       assert(sourceMap.forall(_.contains("line =")))
+
+    test("ordinary arrays retain source order and typed event-free snapshots"):
+      val snapshot = ConstructionKernel.inspect(new Increment43WritableOrdinaryArray)
+      val program = snapshot.analogProcedural.head
+      val arrays = program.variables.filter(_.variable.valueType.dimensions.nonEmpty)
+      assert(arrays.map(_.authoredPath) == Vector(
+        Some("Increment43WritableOrdinaryArray.cells"),
+        Some("Increment43WritableOrdinaryArray.copied")
+      ))
+      assert(arrays.forall(_.initializer.isEmpty))
+      assert(arrays.map(_.source.map(_.line)) == Vector(Some(212), Some(213)))
+      assert(program.assignments.map(_.authoredOrder) == (0 until 10).toVector)
+      val source = ScalaToMlirBridge.fromSnapshot(snapshot).text
+      assert(source == document(new Increment43WritableOrdinaryArray).text)
+      assert(!source.contains("nodal.analog_event_control"))
+      assert(
+        source.contains("nodal.analog_array_fill"),
+        source.contains("value_form = \"snapshot\"")
+      )
+      val firstRead =
+        source.indexOf("read_id = \"Increment43WritableOrdinaryArray.statement_4.value.read_0\"")
+      val mutation = source.indexOf(source.linesIterator.find(line =>
+        line.contains("\"nodal.analog_assign\"") && line.contains("authored_order = 6 : i64")
+      ).get)
+      val secondRead =
+        source.indexOf("read_id = \"Increment43WritableOrdinaryArray.statement_7.value.read_0\"")
+      assert(firstRead >= 0, mutation > firstRead, secondRead > mutation)
+      val symbolic = ConstructionKernel.inspect(new Increment43WritableOrdinarySymbolic)
+      assert(symbolic.analogProcedural.head.variables.forall(_.variable.valueType.dimension ==
+        "voltage"))
+      val generated = ConstructionKernel.inspect(new Increment43WritableOrdinaryGenerated)
+      assert(generated.analogProcedural.head.generatedOwner.nonEmpty)
+      assert(generated.analogProcedural.head.generatedInduction.nonEmpty)
+      for captured <- Vector(snapshot, symbolic, generated) do
+        val entries = AnalogProceduralMlir.sourceMapEntries(captured)
+        assert(entries.exists(_.contains(".value.read_0")), entries.forall(_.contains("line =")))
+        assert(captured.analogProcedural.head.variables.forall(_.source.exists(_.line > 0)))
+
+    test("ordinary arrays native verify and emit without synthesized events"):
+      native: (compiler, translator, directory) =>
+        for (owner, source) <- Vector(
+            "Increment43WritableOrdinaryArray" -> document(new Increment43WritableOrdinaryArray),
+            "Increment43WritableOrdinarySymbolic" ->
+              document(new Increment43WritableOrdinarySymbolic),
+            "Increment43WritableOrdinaryGenerated" ->
+              document(new Increment43WritableOrdinaryGenerated)
+          )
+        do
+          val normalized = success(run(
+            source,
+            compiler,
+            directory,
+            Vector("--pass-pipeline=builtin.module(nodal-gate-default)")
+          ))
+          val emitted = success(run(
+            source.copy(text = normalized),
+            translator,
+            directory,
+            Vector("--nodal-to-verilog-a")
+          ))
+          val repeated = success(run(
+            source.copy(text = normalized),
+            translator,
+            directory,
+            Vector("--nodal-to-verilog-a")
+          ))
+          assert(emitted == repeated, emitted.contains("for ("), emitted.contains("real "))
+          assert(!emitted.contains("initial_step"), !emitted.contains("@("))
+
+          def ordered(markers: String*): Unit =
+            val positions = markers.map(emitted.indexOf)
+            assert(
+              positions.forall(_ >= 0),
+              positions == positions.sorted,
+              positions.distinct.size == positions.size
+            )
+          val prefix = s"event_${owner}_"
+          def loop(name: String): String = s"for ($prefix${name}_copy_index = 0;"
+          owner match
+            case "Increment43WritableOrdinaryArray" =>
+              assert(
+                emitted.contains(s"real ${prefix}cells[0:2];"),
+                emitted.contains(s"real ${prefix}copied[0:2];")
+              )
+              ordered(
+                "analog begin",
+                s"${prefix}statement_0_value = 0.0;",
+                loop("statement_4_value_read_0"),
+                loop("statement_4"),
+                s"${prefix}sink = (",
+                s"${prefix}cells[${prefix}statement_6_target_map] = 4.0;",
+                loop("statement_7_value_read_0"),
+                loop("statement_7"),
+                loop("statement_8_value_read_0"),
+                loop("statement_8")
+              )
+            case "Increment43WritableOrdinarySymbolic" =>
+              assert(emitted.contains(s"real ${prefix}cells[0:((rows * 3) - 1)];"))
+              assert(emitted.contains("parameter integer rows = 2 from [2:4];"))
+              val index = s"${prefix}statement_1_value_read_0_copy_index"
+              assert(emitted.contains(s"((($index / 2) * 3) + (($index % 2) + 1))"))
+              ordered(
+                "if (1) begin",
+                s"${prefix}procedure_if_0_branch_0_variable_0_initializer = 0.0;",
+                loop("statement_1_value_read_0"),
+                loop("statement_1"),
+                loop("procedure_if_0_branch_0_variable_1_initializer_read_0"),
+                loop("procedure_if_0_branch_0_variable_1")
+              )
+            case _ =>
+              assert(emitted.contains("genvar hdl_range_"))
+              ordered(
+                "begin : generate_0",
+                s"real ${prefix}cells[0:1];",
+                "if (1) begin",
+                s"${prefix}procedure_if_0_branch_0_variable_0_initializer = 0.0;",
+                s"${prefix}cells[${prefix}statement_0_target_map] = 3.0;",
+                loop("statement_1_value_read_0"),
+                loop("statement_1")
+              )
+
+    test("ordinary array placement and captured reads retain causal rejection"):
+      assert(failure(new Increment43WritableOrdinaryFailure(0)).contains("NODAL-ANALOG-033-008"))
+      for form <- Vector(1, 3) do
+        assert(
+          failure(new Increment43WritableOrdinaryFailure(form)).contains("NODAL-ANALOG-033-011")
+        )
+      assert(failure(new Increment43WritableOrdinaryFailure(2)).contains("NODAL-ANALOG-033-010"))
+      assert(failure(new Increment43WritableOrdinaryFailure(4)).contains("NODAL-SHAPE-043-007"))
 
     test("coverage keys compare shared deep coordinate DAGs exactly"):
       import AnalogStorageCoverage.Coordinate.*

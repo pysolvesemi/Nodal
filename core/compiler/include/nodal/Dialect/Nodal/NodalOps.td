@@ -679,9 +679,11 @@ def Nodal_NodeOp : Nodal_Op<"node", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let hasVerifier = 1;
 }
 
-def Nodal_NodeArrayOp : Nodal_Op<"node_array", [HasParent<"ModuleOp">]> {
+def Nodal_NodeArrayOp : Nodal_Op<"node_array", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Owned structural array of internal electrical nodes";
-  let arguments = (ins StrAttr:$name, StrAttr:$source_path, DictionaryAttr:$metadata);
+  let arguments = (ins StrAttr:$name, StrAttr:$source_path,
+    OptionalAttr<StrAttr>:$generated_owner, OptionalAttr<StrAttr>:$generated_induction,
+    DictionaryAttr:$metadata);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }

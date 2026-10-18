@@ -243,7 +243,7 @@ private[nodal] object ReproducibilityContract:
       .flatMap(module => module.declarations.map(module.path -> _))
       .sortBy(_._2.path)
       .map: (modulePath, declaration) =>
-        obj(
+        obj((Vector(
           "module" -> string(modulePath),
           "semantic_path" -> string(declaration.path),
           "declaration_kind" -> string(declaration.kind),
@@ -264,7 +264,7 @@ private[nodal] object ReproducibilityContract:
           then
             "procedural"
           else storageOf(declaration.kind))
-        )
+        ) ++ generatedScopeFields(declaration.generatedScope))*)
     array(declarations)
 
   private def shapeOf(dataType: Option[String]): String = dataType match
@@ -584,7 +584,7 @@ private[nodal] object ReproducibilityContract:
                   "attributes" -> attributes(declaration.attributes)
                 ) ++ Option.when(declaration.conservativeDimensions.nonEmpty)(
                   "conservative_dimensions" -> array(declaration.conservativeDimensions.map(string))
-                ).toVector)*)
+                ).toVector ++ generatedScopeFields(declaration.generatedScope))*)
             ),
             "instances" -> array(
               module.instances.sortBy(_.path).map: instance =>
@@ -695,7 +695,8 @@ private[nodal] object ReproducibilityContract:
     ).toVector ++
       Option.when(snapshot.modules.exists(_.instances.exists(_.generatedScope.nonEmpty)) ||
         snapshot.topology.exists(_.generatedScope.nonEmpty) ||
-        nodeSelections.exists(_.generatedScope.nonEmpty))(
+        nodeSelections.exists(_.generatedScope.nonEmpty) ||
+        snapshot.modules.exists(_.declarations.exists(_.generatedScope.nonEmpty)))(
         "generated_topology_scopes" -> array(snapshot.generatedRegions.sortBy(_.path).map(region =>
           obj(
             "path" -> string(region.path),

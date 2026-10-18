@@ -308,10 +308,21 @@ flow witness now passes; focused checks cover 39 native cases, 191 shared-query
 unit assertions, 102 backend checks, three public methods and four actual
 VA/AMS profiles. Affected predecessors and focused architecture review pass;
 the shape-contract note records commands and the preserved before failure.
-Generated local conservative-array declarations are next under F-043.B.1–B.3
-and the approved topology gate. After those implementations,
-evaluate retained shared-live-fill consumption against the original shape,
-evaluation-count and lifetime obligations, then review every existing F-043 child
+The exact tested tree is published as
+`d13f032ef75e02a8ed196924b76ffb3791058993` with zero Actions runs.
+Generated local conservative-array declarations are implemented under F-043.B.1–B.3
+and [v0.6](../design-gates/NodalConservativeNodeArrays-DG-v0.6.md). Focused acceptance
+passes five public methods, nine affected Scala predecessors, 41 native cases,
+199 shared-query assertions, 185 backend checks and 12 actual VA/AMS profiles
+with exact replay. Public integration also repaired disconnected-root/fresh-lane
+alias proofs and comparison-only SSA names for reusable child definitions. The
+shape-contract note records architecture review, actual output, commands and
+finite limits; exact-tree publication follows with `[skip ci]`.
+Repeated shared-live/event fill consumption remains explicitly required by
+writable-array gate v0.5: cache
+on first reached use and reset per consumer reevaluation. After generated local
+arrays, implement that obligation through the existing expression/control owners,
+then review every existing F-043 child
 and linked amendment against the implemented profile. Current operator fan-out,
 cross-range storage and other explicit capability rejections are inputs to that
 scope review, not automatic requirements for unlimited compositions and not

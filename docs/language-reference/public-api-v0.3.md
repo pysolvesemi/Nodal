@@ -165,6 +165,23 @@ still apply. Internal target parsing is not independent simulator acceptance.
 
 ## Generated conservative topology
 
+[Conservative node arrays v0.6](../design-gates/NodalConservativeNodeArrays-DG-v0.6.md)
+also admits `node(Electrical, dimensions...)` inside `hdlRange`. The root belongs
+to that exact generated occurrence and is visible in legal descendant scopes.
+Its dimensions remain module-owned static Integer values or expressions, with
+positive signed-64 cardinality; the induction cannot determine its dimensions.
+Boundary `in`/`out`/`inout` declarations remain module-only. Roots, views and
+selected nodes cannot escape to the module or a sibling range. Existing scalar
+and array relations use those same owned roots and physical maps.
+
+Generated-local source paths retain module-authored names and collision suffixes.
+The private declaration snapshot adds optional typed `generatedScope`, checked
+against the existing region declaration inventory; ordinary declarations omit
+this field and keep their historical artifact representation. This is an additive
+v0.3 snapshot transport field, with no public signature or artifact version change.
+Targets declare the existing ascending Electrical vector in the actual generated
+block, including constant-index scopes that need no induction SSA argument.
+
 [Conservative node arrays v0.4](../design-gates/NodalConservativeNodeArrays-DG-v0.4.md)
 extends the existing `hdlRange(lower, upperExclusive, step)` callback with owned
 structural topology. Each callback is captured once, including empty domains.

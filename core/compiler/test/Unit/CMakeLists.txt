@@ -449,3 +449,14 @@ set_tests_properties(nodal.native.generated-probe-placement PROPERTIES
   TIMEOUT 60
   ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
 )
+
+add_test(NAME nodal.native.generated-local-array-integration
+  COMMAND "${Python3_EXECUTABLE}" -B
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_generated_local_array_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${NODAL_REPOSITORY_ROOT}/.work/generated-local-array-native"
+)
+set_tests_properties(nodal.native.generated-local-array-integration PROPERTIES
+  TIMEOUT 60
+  ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+)

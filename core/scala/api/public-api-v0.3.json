@@ -99,7 +99,7 @@
     ]
   },
   "conservative_node_arrays": {
-    "design_gate": "docs/design-gates/NodalConservativeNodeArrays-DG-v0.5.md",
+    "design_gate": "docs/design-gates/NodalConservativeNodeArrays-DG-v0.6.md",
     "type": "NodeArray[D <: Discipline]",
     "constructor": "Module.node(discipline: D, dimension: Dimension, dimensions: Dimension*): NodeArray[D]",
     "selection": "NodeArray.at(indices: Dimension*): Node[D]",
@@ -125,7 +125,9 @@
     ],
     "target_layout": "ascending conservative vector; row-major logical ordinal",
     "child_shape_resolution": "final overrides and dependent defaults in exact parent-owned Integer DAGs",
-    "child_coverage": "exactly-once incident regions per actual instance occurrence; scalar selections count as singleton regions"
+    "child_coverage": "exactly-once incident regions per actual instance occurrence; scalar selections count as singleton regions",
+    "generated_local_declarations": "node(Electrical, dimensions...) creates an exact generated-scope root; immutable module-owned dimensions; descendant visibility; boundary ports remain module-owned",
+    "snapshot_scope_transport": "optional generatedScope on generated node-array declarations, cross-checked against region membership; absent for legacy declarations"
   },
   "values_and_connectivity": {
     "value_aggregate": "Struct",

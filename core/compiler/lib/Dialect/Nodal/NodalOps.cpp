@@ -2763,15 +2763,24 @@ LogicalResult nodal::NodeOp::verify() {
 
 static LogicalResult verifyConservativeArrayDeclaration(Operation *operation, bool boundary) {
   auto owner = operation->getParentOfType<nodal::ModuleOp>();
+  Operation *scope = operation->getParentOp();
+  const bool generated = llvm::isa_and_nonnull<nodal::GenerateOp>(scope);
   auto shaped = llvm::dyn_cast<nodal::ShapedType>(operation->getResult(0).getType());
   auto terminal =
       shaped ? llvm::dyn_cast<nodal::TerminalType>(shaped.getElementType()) : nodal::TerminalType();
-  if (!owner || operation->getParentOp() != owner || !terminal ||
+  if (!owner || (scope != owner && (!generated || boundary)) || !terminal ||
       terminal.getDiscipline() != "electrical" ||
       failed(nodal::resolveDisciplineDeclaration(
           operation, FlatSymbolRefAttr::get(operation->getContext(), terminal.getDiscipline()))))
     return operation->emitOpError(
         "NODAL-SHAPE-043-005: node array requires directly owned shaped Electrical terminals");
+  if (failed(nodal::verifyGeneratedStructuralOwnership(operation)))
+    return failure();
+  // Local generated roots are one declaration per captured structural
+  // occurrence. Reuse the established domain proof even without an induction
+  // block argument; do not classify unrelated legacy analog loops here.
+  if (generated && failed(nodal::resolveGeneratedDomain(scope)))
+    return failure();
   auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata");
   auto storage = metadata ? metadata.getAs<StringAttr>("storage") : StringAttr();
   llvm::StringRef name = textAttr(operation, "name"), source = textAttr(operation, "source_path");
@@ -2780,8 +2789,7 @@ static LogicalResult verifyConservativeArrayDeclaration(Operation *operation, bo
     ownerPath = textAttr(owner, "sym_name");
   if (name.empty() || name != name.trim() || source != (ownerPath + "." + name).str() ||
       metadataSemanticPath(operation) != source || !storage || storage.getValue() != "structural" ||
-      operation->hasAttr("dimensions") || operation->hasAttr("generated_owner") ||
-      operation->hasAttr("generated_induction") || (!boundary && operation->hasAttr("direction")))
+      operation->hasAttr("dimensions") || (!boundary && operation->hasAttr("direction")))
     return operation->emitOpError(
         "NODAL-SHAPE-043-005: node array requires canonical structural declaration identity");
   if (boundary && (!oneOf(textAttr(operation, "direction"), {"input", "output", "inout"}) ||
@@ -2792,11 +2800,15 @@ static LogicalResult verifyConservativeArrayDeclaration(Operation *operation, bo
     return operation->emitOpError(
         "NODAL-SHAPE-043-005: node-array dimensions require positive finite owned "
         "proofs and signed 64-bit cardinality");
-  for (Operation &candidate : owner->getRegion(0).front()) {
+  for (Operation &candidate : scope->getRegion(0).front()) {
     if (&candidate != operation &&
         (textAttr(&candidate, "name") == name || metadataSemanticPath(&candidate) == source))
       return operation->emitOpError(
           "NODAL-SHAPE-043-005: node-array declaration identity must be unique");
+  }
+  // A generated sparse declaration cannot silently satisfy its enclosing
+  // module's complete physical-equation contract.
+  for (Operation &candidate : owner->getRegion(0).front()) {
     if (llvm::isa<nodal::ComponentContractOp>(candidate) &&
         textAttr(&candidate, "kind") == "concrete")
       return operation->emitOpError(

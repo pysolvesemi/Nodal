@@ -75,13 +75,13 @@ std::string design(const std::string &child, const std::string &parent) {
 
 std::string generate(const std::string &body, const std::string &owner = scope,
                      const std::string &index = "i", int64_t lower = 0, int64_t upper = 3,
-                     int64_t step = 1) {
+                     int64_t step = 1, bool argument = true) {
   const int64_t count = upper <= lower ? 0 : (upper - lower - 1) / step + 1;
   return "\"nodal.generate\"() <{induction = \"" + index + "\", lower = " + std::to_string(lower) +
          " : i64, upper = " + std::to_string(upper) + " : i64, step = " + std::to_string(step) +
          " : i64, region_id = \"" + owner + "\", induction_path = \"" + owner +
-         ".index\", metadata = {maximum_trip_count = " + std::to_string(count) +
-         " : i64}}> ({\n^bb0(%" + index + ": i64):\n" + body + "}) : () -> ()\n";
+         ".index\", metadata = {maximum_trip_count = " + std::to_string(count) + " : i64}}> ({\n" +
+         (argument ? "^bb0(%" + index + ": i64):\n" : "") + body + "}) : () -> ()\n";
 }
 
 std::string connect(const std::string &actual, const std::string &reference,
@@ -121,7 +121,8 @@ std::string selected(const std::string &dimensions = "3", const std::string &own
   for (const auto &[value, path] : indices) {
     operands += ", %" + value;
     types += ", i64";
-    identity += (identity.empty() ? "" : ",") + std::string("induction:") + path;
+    identity += std::string(identity.empty() ? "" : ",") +
+                (path.find(':') == std::string::npos ? "induction:" : "") + path;
   }
   return owned("%selected = \"nodal.shape_index\"(" + operands +
                    ") <{metadata = {input_path = \"Parent.nodes\", semantic_path = "
@@ -477,9 +478,187 @@ int main(int argc, char **argv) {
           "mixed scalar initializer keeps declaration lifetime without a per-execution reset"))
     return 1;
 
+  // Generated local roots use the same vector layout and projection mapper,
+  // while declaration placement establishes fresh per-occurrence identity.
+  const auto localArray = owned(array("Parent", "nodes", "2,3"));
+  const auto fixedSelection = selected("2,3", scope, {{"one", "literal:1"}, {"two", "literal:2"}});
+  const auto fixedLocalSource =
+      design(scalarChild, literal("one", 1) + literal("two", 2) +
+                              generate(localArray + fixedSelection + boundChild("selected"), scope,
+                                       "i", 0, 3, 1, false));
+  std::string fixedLocal;
+  for (auto kind : {nodal::BackendKind::VerilogA, nodal::BackendKind::VerilogAMS}) {
+    std::string target;
+    if (!emit(fixedLocalSource,
+              kind == nodal::BackendKind::VerilogA ? "local-fixed" : "local-fixed-ams", target,
+              kind) ||
+        !check(contains(target, "electrical [0:5] nodes;") &&
+                   target.find("begin : gen") < target.find("electrical [0:5] nodes;") &&
+                   contains(target, "Child u(.p(nodes[5]));") &&
+                   contains(target, "// nodal.node_array ") &&
+                   contains(target, "\"source_path\":\"Parent.nodes\"") &&
+                   contains(target, "\"source_scope\":\"Parent.gen\"") &&
+                   contains(target, "\"target_name\":\"nodes\"") &&
+                   !contains(target, "analog begin"),
+               "no-argument local array stays inside its actual structural occurrence"))
+      return 1;
+    if (kind == nodal::BackendKind::VerilogA)
+      fixedLocal = target;
+  }
+  for (int64_t count : {int64_t(0), int64_t(1), int64_t(1000000)}) {
+    std::string target;
+    if (!emit(design("", generate(localArray, scope, "i", 0, count, 1, false)),
+              "local-declaration-count-" + std::to_string(count), target) ||
+        !check(
+            target.size() < 2500 && llvm::StringRef(target).count("electrical [0:5] nodes;") == 1 &&
+                contains(target, "generate\n") && !contains(target, "analog begin"),
+            "array declaration alone selects compact structural lowering, including empty scope"))
+      return 1;
+  }
+  std::string localSymbolic;
+  if (!emit(design(scalarChild,
+                   parameter("Parent", "N", 6) + literal("one", 1) +
+                       generate(owned(array("Parent", "nodes", "2,N")) +
+                                    selected("2,N", scope,
+                                             {{"one", "literal:1"}, {"one", "literal:1"}}) +
+                                    boundChild("selected"),
+                                scope, "i", 0, 2, 1, false)),
+            "local-symbolic", localSymbolic) ||
+      !check(contains(localSymbolic, "electrical [0:((2 * N) - 1)] nodes;") &&
+                 contains(localSymbolic, "(N + 1)") &&
+                 contains(localSymbolic, "Child u(.p(nodes[node_map_nodes_0_0]));"),
+             "module symbolic extents and static maps retain exact parameter identity"))
+    return 1;
+  std::string localInduction;
+  if (!emit(design(scalarChild, generate(owned(array("Parent", "nodes", "3")) + selected() +
+                                         boundChild("selected"))),
+            "local-induction", localInduction) ||
+      !check(sourceIndexActual(localInduction), "actual induction selects local root coordinates"))
+    return 1;
+  std::string localNested;
+  if (!emit(design(scalarChild,
+                   generate(owned(array("Parent", "nodes", "3,2")) +
+                            generate(selected("3,2", inner,
+                                              {{"i", scope + ".index"}, {"j", inner + ".index"}}) +
+                                         boundChild("selected", inner),
+                                     inner, "j", 0, 2))),
+            "local-descendant", localNested) ||
+      !check(localNested.find("electrical [0:5] nodes;") < localNested.find("begin : inner") &&
+                 contains(localNested, "((i * 2) + j)"),
+             "descendant map references the actual ancestor local carrier"))
+    return 1;
+  std::string localSiblings;
+  if (!emit(design("", generate(localArray) +
+                           generate(owned(array("Parent", "nodes", "2,3"), "Parent.sibling"),
+                                    "Parent.sibling", "j")),
+            "local-siblings", localSiblings) ||
+      !check(llvm::StringRef(localSiblings).count("electrical [0:5] nodes;") == 2 &&
+                 contains(localSiblings, "\"source_scope\":\"Parent.sibling\""),
+             "same-name sibling roots retain separate lexical declarations"))
+    return 1;
+  std::string localCollision;
+  auto moduleCollisionArray = array("Parent", "nodes", "2,3");
+  replace(moduleCollisionArray, "%nodes =", "%module_nodes =");
+  if (!emit(design(scalarChild, moduleCollisionArray + literal("one", 1) + literal("two", 2) +
+                                    generate(localArray + fixedSelection + boundChild("selected"))),
+            "local-name-collision", localCollision) ||
+      !check(contains(localCollision, "electrical [0:5] nodes_1;") &&
+                 contains(localCollision, "Child u(.p(nodes_1[5]));") &&
+                 contains(localCollision, "\"source_path\":\"Parent.nodes\"") &&
+                 contains(localCollision, "\"target_name\":\"nodes_1\""),
+             "hygienic root name keeps authored identity separate from physical target name"))
+    return 1;
+  auto generatedView = noncontiguousView();
+  if (!check(replace(generatedView, "metadata = {input_path",
+                     "generated_owner = \"Parent.gen\", generated_induction = "
+                     "\"Parent.gen.index\", metadata = {input_path"),
+             "local view owner fixture"))
+    return 1;
+  const auto viewPosition = generatedView.find("%columns =");
+  const auto viewConstants = generatedView.substr(0, viewPosition);
+  generatedView.erase(0, viewPosition);
+  std::string localAdapter;
+  if (!emit(design(array("Child", "p", "2,2", true),
+                   viewConstants + generate(owned(array("Parent", "nodes", "2,4")) + generatedView +
+                                            boundChild("columns", scope, "u", "ref", "2,2"))),
+            "local-view-adapter", localAdapter) ||
+      !check(contains(localAdapter, "(((binding_u_p_lane / 2) * 4) + ") &&
+                 contains(localAdapter, ".lhs(nodes[binding_u_p_stage_0])") &&
+                 contains(localAdapter, "module nodal_alias_electrical(.lhs(n), .rhs(n));") &&
+                 llvm::StringRef(localAdapter).count("nodal_alias_electrical link(") == 1 &&
+                 !contains(localAdapter, "<+"),
+             "noncontiguous generated actual uses existing compact true-net alias mapper"))
+    return 1;
+
+  auto otherSelection = selected("2,3", scope, {{"zero", "literal:0"}, {"zero", "literal:0"}});
+  replace(otherSelection, "%selected =", "%other =");
+  replace(otherSelection, ".use_selected", ".use_other");
+  const auto sourceFree = owned("\"nodal.analog\"() <{metadata = {}}> ({\n") +
+                          "%observed = \"nodal.terminal_access\"(%selected, %other) <{kind = "
+                          "\"flow\", function = \"I\", "
+                          "metadata = {semantic_path = \"Parent.observation\"}}> : (" +
+                          terminal + ", " + terminal +
+                          ") -> !nodal.quantity<\"real\", \"current\">\n" +
+                          owned("\"nodal.analog_procedure\"() <{owner = \"Parent\", metadata = "
+                                "{}}> ({\n^bb0:\n}) : () -> ()\n") +
+                          "}) : () -> ()\n";
+  std::string localProbe;
+  if (!emit(design("", literal("zero", 0) + literal("one", 1) + literal("two", 2) +
+                           generate(localArray + fixedSelection + otherSelection + sourceFree)),
+            "local-source-free-probe", localProbe) ||
+      !check(
+          contains(localProbe, "electrical [0:5] nodes;") && !contains(localProbe, "<+"),
+          "fresh local source-free observation retains checked intent without an extra equation"))
+    return 1;
+  auto commentOnly = fixedLocal;
+  if (!check(replace(commentOnly, "\"target_extent\":\"6\"", "\"target_extent\":\"999\"") &&
+                 mlir::succeeded(nodal::reparseBackendTarget(
+                     commentOnly, configuration(nodal::BackendKind::VerilogA))),
+             "declaration correspondence is non-authoritative target commentary"))
+    return 1;
+
+  auto forgedLocal = mlir::parseSourceString<mlir::ModuleOp>(fixedLocalSource, &context);
+  if (!check(forgedLocal && mlir::succeeded(mlir::verify(*forgedLocal)),
+             "forged generated root starts from native-valid fixture"))
+    return 1;
+  forgedLocal->walk([&](mlir::Operation *operation) {
+    if (operation->getName().getStringRef() == "nodal.node_array")
+      operation->setAttr("generated_owner", mlir::StringAttr::get(&context, "Parent.sibling"));
+  });
+  std::string forgedSentinel = "sentinel";
+  llvm::raw_string_ostream forgedOutput(forgedSentinel);
+  const auto forgedStatus =
+      nodal::emitBackend(*forgedLocal, nodal::BackendKind::VerilogA, forgedOutput);
+  forgedOutput.flush();
+  if (!check(mlir::failed(forgedStatus) && forgedSentinel == "sentinel",
+             "forged local declaration membership rejects before target publication"))
+    return 1;
+
+  // Native signed64 shapes remain valid; only this new structural target
+  // declaration carrier narrows them. No output may precede that rejection.
+  auto wideLocal = mlir::parseSourceString<mlir::ModuleOp>(
+      design("", generate(owned(array("Parent", "nodes", "50000,50000")))), &context);
+  if (!check(wideLocal && mlir::succeeded(mlir::verify(*wideLocal)),
+             "wide local shape is independently native-valid"))
+    return 1;
+  std::string wideSentinel = "sentinel";
+  llvm::raw_string_ostream wideOutput(wideSentinel);
+  const auto wideStatus = nodal::emitBackend(*wideLocal, nodal::BackendKind::VerilogA, wideOutput);
+  wideOutput.flush();
+  if (!check(mlir::failed(wideStatus) && wideSentinel == "sentinel",
+             "wide generated shape rejects transactionally at target carrier boundary"))
+    return 1;
+
   const auto config = configuration(nodal::BackendKind::VerilogA);
   for (const auto &[source, before, after] :
        std::vector<std::tuple<std::string, std::string, std::string>>{
+           {fixedLocal, "electrical [0:5] nodes;", "electrical [0:-1] nodes;"},
+           {fixedLocal, "electrical [0:5] nodes;", "electrical [0:4] nodes;"},
+           {fixedLocal, "Child u(.p(nodes[5]));", "Child u(.p(nodes[6]));"},
+           {fixedLocal, "Child u(.p(nodes[5]));", "Child u(.p(missing[5]));"},
+           {fixedLocal, "Child u(.p(nodes[5]));", "Child u(.p(nodes[1][2]));"},
+           {localSymbolic, "electrical [0:((2 * N) - 1)] nodes;",
+            "electrical [0:((2 * i) - 1)] nodes;"},
            {compact, "Child u(.p(shared));", "Child u(.p(missing));"},
            {joined, ".rhs(n)", ".rhs(m)"},
            {nested, "genvar j;", "genvar absent;"},

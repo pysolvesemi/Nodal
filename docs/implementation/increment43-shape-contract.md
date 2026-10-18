@@ -2270,3 +2270,129 @@ commands, case inventories and finite limits are in
 `.work/generated-probe-backend-handoff.md`. Changed Scala/native formatting,
 Markdown/link checks, diagnostic-catalog JSON parsing and diff checks pass.
 No checklist state changes or CI executions are part of this repair.
+
+## Generated local conservative array declarations
+
+This checkpoint follows published probe repair
+`d13f032ef75e02a8ed196924b76ffb3791058993` and
+[NodalConservativeNodeArrays-DG-v0.6](../design-gates/NodalConservativeNodeArrays-DG-v0.6.md).
+Existing `node(Electrical, dimensions...)` now captures actual local declarations
+inside `hdlRange`, with module-owned fixed/symbolic dimensions, fresh physical
+roots per occurrence and descendant-only visibility. Boundary ports stay
+module-owned. Signed64 semantic cardinality and signed32 generated target-carrier
+checks retain their separate roles.
+
+### Shared owners and integration correction
+
+Generated-region membership owns capture. The optional typed immutable snapshot
+scope is derived at freeze and cross-checked independently by the shared bridge
+declaration emitter; dropping membership cannot silently relabel a root as
+module-owned. Root, view and selected V/I consumers share the scope guard, including
+current Module identity during reusable-child construction. Native declarations
+reuse checked domain, static dimensions and lexical projection ownership.
+
+The target reuses scope-local physical maps and the module declaration printer,
+keeping v0.3 ascending Electrical vectors. Actual declarations trigger structural
+lowering even with constant selections and no induction argument. Unrelated legacy
+analog loops keep their existing profile. Correspondence records retain authored
+path, exact source scope/induction, dimensions and source location separately from
+hygienic target names; comments confer no semantic authority.
+
+Actual public integration found two gaps after declaration-focused checks passed:
+noncontiguous descendant local observation rejected before disconnected-root
+reachability, and a reused child's disjoint local lanes were merged into one
+fresh-root family vertex. The shared connectivity fix checks the complete graph
+of exact edges, generated families and child uncertainty before optional scalar
+point certificates. It partitions fresh-root vertices only with existing proved
+disjoint-region certificates; unknown overlap remains coarsely united, and cycles,
+shared-root aggregation and enclosing-Generate multiplicity guards remain.
+No fixture was simplified to avoid either failure. The original 8/12 receipt and
+unchanged public source hashes are retained in
+`.work/generated-local-arrays-public-native-before-proof-repair.log` and
+`.work/generated-local-arrays-before-proof-hashes.json`.
+
+The public reuse-count assertion then exposed occurrence-derived SSA spellings
+in the existing module-definition equivalence comparator. Comparison-only lexical
+SSA alpha-renaming now preserves bindings, use edges, nested block arguments,
+types, result selectors, operation order and quoted content. Emitted operation
+bodies are unchanged; identical child definitions can share their template again.
+A focused regression passes the original two-definition assertion, nested/sibling
+regions and outer captures, and quoted `%capture({})` identity text, while keeping
+different arithmetic and connection-edge bodies distinct. Final public and predecessor replay passes after this source repair. Only the
+two Reusable VA/AMS source exports change; the other ten are byte-identical.
+The pre-repair inputs and exact delta manifest are preserved separately.
+
+Focused native/backend review found no blocking defect, including the final alias
+repair and previous nested-repeat guard. It did not run tests. Existing source-map,
+scope and proof scans can remain quadratic in authored structure; no general
+speedup is claimed. The selected target template remains compact without per-lane
+expansion, including the checked million-occurrence declaration-only case.
+
+### Focused checks and actual output
+
+Final matched native checks pass 41 cases (14 positives, 27 exact-diagnostic
+negatives), 199 NodeArray assertions and affected topology (50), relation (54) and
+probe-placement (39) predecessors. ParameterModel passed before the subsequent
+connectivity-only delta. Backend checks cover 185 cases (107 retained, 78 new),
+plus probe (102), relation (140), hierarchy syntax (236) and aggregate predecessors.
+Six independent target mutations reject reversed/narrowed extents, out-of-range
+or unknown roots, double-index rank syntax and induction-dependent declaration
+extents. Comment-only extent mutation accepts. A native-valid 50,000-by-50,000
+generated shape rejects transactionally at the target carrier boundary. Four
+retained module-root VA/AMS outputs are byte-identical.
+
+All 12 unchanged public source/profile cases pass default native gating/replay
+and exact direct/repeated/gated/renamed-transport target parity. The source models
+cover fixed composed aliases, symbolic compound extents and child binding,
+descendant noncontiguous source-free flow, local noncontiguous relations,
+singleton/empty siblings and reused child definitions. Five new public test methods and nine directly affected Scala predecessors pass,
+including the existing boundary-definition reuse check. Pinned formatting, API
+consistency, changed Markdown/JSON, contribution policy and diff checks pass.
+Focused acceptance is complete; exact-tree publication follows with `[skip ci]`.
+
+Actual source from `Increment43GeneratedLocalArrayTests.scala`:
+
+```scala
+  hdlRange(0, 2): _ =>
+    val taps = node(Electrical, 2, 3)
+    val selected = taps.row(1).slice(1, 3).flatten.at(1)
+    val direct = taps.at(1, 2)
+    analog:
+      I(selected, common) <+ V(direct, common) / 1.kOhm
+```
+
+The actual Verilog-A output inside each structural `generate_0` occurrence is:
+
+```verilog
+      electrical [0:5] taps;
+      analog begin
+        I(taps[5], common) <+ (V(taps[5], common) / 1000);
+      end
+```
+
+Representative executed commands (configured tools remain under `.work`):
+
+```sh
+python3 -B tests/compiler/fixtures/increment43/run_generated_local_array_matrix.py \
+  --nodalc .work/native-release/bin/nodalc --work-dir .work/generated-local-array-native
+.work/native-release/core/compiler/test/Unit/nodal-node-array-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-generated-topology-backend-unit-tests
+NODAL_NODALC="$PWD/.work/native-release/bin/nodalc" \
+NODAL_TRANSLATE="$PWD/.work/native-release/bin/nodal-translate" \
+  .work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly \
+  nodal.internal.testkit.Increment43GeneratedLocalArrayTests -- \
+  'nodal.internal.testkit.Increment43GeneratedLocalArrayTests.generated local arrays emit owned VA AMS vectors views relations and probes'
+```
+
+The public suite exports source and normalized IR plus VA/AMS output under
+`.work/generated-local-arrays-public-final`. Parent replay uses
+`.work/check-generated-topology-public.py` with that source directory and
+`.work/check-boundary-array-targets.py`; exact commands, native case inventories
+and backend checks are recorded in the generated-local-array handoffs under
+`.work/`. Final receipts and source/tool hashes are in
+`.work/generated-local-array-final-validation.json`.
+Evidence remains compiler/structural-target acceptance under the documented
+VAMS2023 baseline, not independent simulator or OpenVAF electrical-vector
+compilation. No CI or checklist closure is claimed. Repeated shared live/event
+fill evaluation remains the next explicit gate-v0.5 obligation before the full
+existing F43 child/applicability review.

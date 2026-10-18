@@ -64,7 +64,8 @@ private[nodal] final case class KernelDeclarationSnapshot(
     dataType: Option[String],
     domain: Option[String],
     attributes: Vector[(String, String)],
-    conservativeDimensions: Vector[String] = Vector.empty
+    conservativeDimensions: Vector[String] = Vector.empty,
+    generatedScope: Option[KernelGeneratedScope] = None
 )
 
 private[nodal] final case class KernelGeneratedScope(owner: String, induction: String)

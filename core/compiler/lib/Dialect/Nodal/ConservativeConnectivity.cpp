@@ -1323,7 +1323,8 @@ FailureOr<nodal::ConservativeShape> nodal::resolveConservativeShape(Value value,
     if (root->getParentOp() != scope || failed(verifyConservativeInstanceArray(root)))
       return reject("child conservative shape escapes its exact instance scope");
   } else if (!llvm::isa_and_nonnull<NodeArrayOp, TerminalArrayOp>(root) ||
-             root->getParentOp() != module ||
+             !structuralBody(root->getParentOp()) ||
+             (llvm::isa<TerminalArrayOp>(root) && root->getParentOp() != module) ||
              failed(llvm::isa<NodeArrayOp>(root) ? llvm::cast<NodeArrayOp>(root).verify()
                                                  : llvm::cast<TerminalArrayOp>(root).verify()))
     return reject("conservative shape capability requires an actual conservative array root");
@@ -1899,12 +1900,11 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
           return Alias::Inert; // No scalar occurrence, not proof of distinct nodes.
       }
   StaticShapePoint start, target;
-  if (resolveStaticShapePoint(lhs->shape.projection, leftUse, start) !=
-          ShapeRegionProofStatus::Proved ||
-      resolveStaticShapePoint(rhs->shape.projection, rightUse, target) !=
-          ShapeRegionProofStatus::Proved)
-    return Alias::Unknown;
-  if (comparePoints(start, target) == Alias::Equal)
+  bool pointsProved = resolveStaticShapePoint(lhs->shape.projection, leftUse, start) ==
+                          ShapeRegionProofStatus::Proved &&
+                      resolveStaticShapePoint(rhs->shape.projection, rightUse, target) ==
+                          ShapeRegionProofStatus::Proved;
+  if (pointsProved && comparePoints(start, target) == Alias::Equal)
     return Alias::Equal;
   struct Edge {
     Operation *site;
@@ -2006,44 +2006,74 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
   auto isolatedFreshTree = [&](Operation *scope, Value root) {
     auto cached = familyTrees.find(scope);
     if (cached == familyTrees.end()) {
-      llvm::DenseMap<Value, unsigned> indices;
-      llvm::DenseMap<Value, Operation *> declarations;
-      for (const auto &edge : edges)
-        for (const auto *endpoint : {&edge.left, &edge.right}) {
-          Value value = endpoint->shape.projection.root;
-          indices.try_emplace(value, indices.size());
-          declarations.try_emplace(value, endpoint->declarationScope);
-        }
-      UnionFind tree(indices.size());
-      llvm::SmallVector<Value, 4> cyclic;
+      struct Vertex {
+        const ConservativeEndpoint *endpoint;
+        const std::optional<StaticShapeRegion> *region;
+      };
+      llvm::SmallVector<Vertex, 8> vertices;
       for (const auto &edge : edges) {
+        vertices.push_back({&edge.left, &edge.leftRegion});
+        vertices.push_back({&edge.right, &edge.rightRegion});
+      }
+      UnionFind tree(vertices.size());
+      // A fresh array is not one physical node. Keep its independently proved
+      // disjoint endpoint regions separate; unknown overlap retains the old
+      // conservative root aggregation. Shared roots remain aggregated because
+      // other occurrences can reach different coordinates of those roots.
+      for (unsigned i = 0; i < vertices.size(); ++i) {
+        const auto &a = *vertices[i].endpoint;
+        bool fresh = a.declarationScope == scope ||
+                     (a.declarationScope && scope->isProperAncestor(a.declarationScope));
+        for (unsigned j = 0; j < i; ++j) {
+          const auto &b = *vertices[j].endpoint;
+          if (a.shape.projection.root != b.shape.projection.root)
+            continue;
+          if (fresh && *vertices[i].region && *vertices[j].region &&
+              disjointRegions(**vertices[i].region, **vertices[j].region))
+            continue;
+          tree.unite(i, j);
+        }
+      }
+      llvm::SmallVector<unsigned, 4> cyclic;
+      for (auto [index, edge] : llvm::enumerate(edges)) {
         const auto &a = edge.left.shape.projection, &b = edge.right.shape.projection;
         if (a.root == b.root && a.canonicalKey == b.canonicalKey)
           continue;
-        unsigned x = indices.lookup(a.root), y = indices.lookup(b.root);
+        unsigned x = 2 * index, y = x + 1;
         if (tree.find(x) == tree.find(y))
-          cyclic.push_back(a.root);
+          cyclic.push_back(x);
         tree.unite(x, y);
       }
       llvm::DenseSet<unsigned> unsupported;
-      llvm::DenseMap<unsigned, unsigned> shared;
-      for (const auto &[value, declaration] : declarations) {
-        unsigned component = tree.find(indices.lookup(value));
-        if (declaration && declaration->isProperAncestor(scope))
-          ++shared[component];
-        else if (!declaration || (declaration != scope && !scope->isProperAncestor(declaration)))
-          unsupported.insert(component);
-      }
-      for (Value value : cyclic)
-        unsupported.insert(tree.find(indices.lookup(value)));
-      for (const auto &[a, b] : childUncertainty)
-        for (Value value : {a, b})
-          if (indices.count(value))
-            unsupported.insert(tree.find(indices.lookup(value)));
-      llvm::DenseMap<Value, bool> safe;
-      for (const auto &[value, index] : indices) {
+      llvm::DenseMap<unsigned, llvm::SmallVector<Value, 2>> shared;
+      for (auto [index, vertex] : llvm::enumerate(vertices)) {
+        const auto &endpoint = *vertex.endpoint;
+        Value value = endpoint.shape.projection.root;
+        Operation *declaration = endpoint.declarationScope;
         unsigned component = tree.find(index);
-        safe[value] = shared.lookup(component) == 1 && !unsupported.contains(component);
+        if (declaration && declaration->isProperAncestor(scope)) {
+          if (!llvm::is_contained(shared[component], value))
+            shared[component].push_back(value);
+        } else if (!declaration ||
+                   (declaration != scope && !scope->isProperAncestor(declaration))) {
+          unsupported.insert(component);
+        }
+      }
+      for (unsigned index : cyclic)
+        unsupported.insert(tree.find(index));
+      for (const auto &[a, b] : childUncertainty)
+        for (auto [index, vertex] : llvm::enumerate(vertices))
+          if (vertex.endpoint->shape.projection.root == a ||
+              vertex.endpoint->shape.projection.root == b)
+            unsupported.insert(tree.find(index));
+      llvm::DenseMap<Value, bool> safe;
+      for (auto [index, vertex] : llvm::enumerate(vertices)) {
+        Value value = vertex.endpoint->shape.projection.root;
+        unsigned component = tree.find(index);
+        bool proved = shared[component].size() == 1 && !unsupported.contains(component);
+        auto [entry, inserted] = safe.try_emplace(value, proved);
+        if (!inserted)
+          entry->second &= proved;
       }
       cached = familyTrees.try_emplace(scope, std::move(safe)).first;
     }
@@ -2084,7 +2114,7 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
   families.append(childUncertainty.begin(), childUncertainty.end());
   // First establish which actual roots can participate. Uncertain coordinates
   // on an unrelated component cannot make a disconnected root possibly equal.
-  llvm::SmallVector<Value, 8> roots{start.root};
+  llvm::SmallVector<Value, 8> roots{lhs->shape.projection.root};
   for (unsigned cursor = 0; cursor < roots.size(); ++cursor) {
     auto include = [&](Value a, Value b) {
       if (a == roots[cursor] && !llvm::is_contained(roots, b))
@@ -2097,8 +2127,13 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
     for (auto [a, b] : families)
       include(a, b);
   }
-  if (!llvm::is_contained(roots, target.root))
+  if (!llvm::is_contained(roots, rhs->shape.projection.root))
     return Alias::Distinct;
+  // Root capability and every possible relation/family above are already
+  // checked. Disconnected roots need no scalar coordinate certificate, while
+  // a connected component still requires the exact bounded point proof.
+  if (!pointsProved)
+    return Alias::Unknown;
   if (start.root == target.root && comparePoints(start, target) == Alias::Distinct) {
     llvm::DenseMap<Value, unsigned> indices;
     for (auto [index, root] : llvm::enumerate(roots))
@@ -2358,6 +2393,12 @@ nodal::resolveConservativeStructuralScope(Operation *scope) {
         return reject(&operation, "instance requires a unique exact lexical symbol",
                       "NODAL-VERIFY-HIERARCHY-010");
       result.instances.push_back(&operation);
+    } else if (llvm::isa<NodeArrayOp>(operation)) {
+      if (failed(llvm::cast<NodeArrayOp>(operation).verify()))
+        return failure();
+      if (!nodeNames.insert(textAttr(&operation, "name")).second)
+        return reject(&operation, "generated local node names must be unique in their scope");
+      result.nodeArrays.push_back(&operation);
     } else if (llvm::isa<NodeOp>(operation)) {
       if (!nodeNames.insert(textAttr(&operation, "name")).second)
         return reject(&operation, "generated local node names must be unique in their scope");
@@ -2411,8 +2452,8 @@ nodal::resolveConservativeStructuralScope(Operation *scope) {
       }
     }
   }
-  const bool topology =
-      !result.instances.empty() || !connections.empty() || !result.relations.empty();
+  const bool topology = !result.instances.empty() || !result.nodeArrays.empty() ||
+                        !connections.empty() || !result.relations.empty();
   if (generated && topology && failed(resolveGeneratedDomain(scope)))
     return failure();
   if (failed(verifyConservativeArrayBindings(scope)))

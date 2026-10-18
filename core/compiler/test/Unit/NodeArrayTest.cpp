@@ -759,6 +759,66 @@ int main() {
       }
     }
   }
+  {
+    auto localScope = [&](const std::string &name) {
+      const std::string scope = "Fixture." + name;
+      auto own = [&](std::string operation) {
+        return replace(operation, "metadata = {",
+                       "generated_owner = \"" + scope + "\", generated_induction = \"" + scope +
+                           ".index\", metadata = {");
+      };
+      std::string selected = selection("selected", {{"zero", "literal:0"}}, "2", "local");
+      selected = replace(selected, "Fixture.local.at(literal:0)",
+                         "Fixture.local.at(literal:0).in(" + scope + ")");
+      return "\"nodal.generate\"() <{induction = \"i\", lower = 0 : i64, upper = 2 : i64, "
+             "step = 1 : i64, region_id = \"" +
+             scope + "\", induction_path = \"" + scope +
+             ".index\", metadata = {maximum_trip_count = 2 : i64}}> ({\n" +
+             own(array("2", "local")) + own(selected) + "}) : () -> ()\n";
+    };
+    auto module = parse(literal("zero", 0) + localScope("left") + localScope("right"));
+    check(bool(module), "constant-index scopes must admit independent generated local arrays");
+    if (module) {
+      llvm::SmallVector<nodal::NodeArrayOp, 2> roots;
+      llvm::SmallVector<nodal::ShapeIndexOp, 2> selections;
+      module->walk([&](nodal::NodeArrayOp operation) { roots.push_back(operation); });
+      module->walk([&](nodal::ShapeIndexOp operation) { selections.push_back(operation); });
+      check(roots.size() == 2 && selections.size() == 2,
+            "generated local roots must remain separate actual declarations");
+      if (roots.size() == 2 && selections.size() == 2) {
+        auto left = nodal::resolveConservativeShape(roots[0]->getResult(0), selections[0]);
+        auto right = nodal::resolveConservativeShape(roots[1]->getResult(0), selections[1]);
+        check(mlir::succeeded(left) && mlir::succeeded(right) &&
+                  left->projection.root != right->projection.root,
+              "same-spelled sibling roots must not collapse physical identity");
+        auto scope = nodal::resolveConservativeStructuralScope(roots[0]->getParentOp());
+        check(mlir::succeeded(scope) && scope->nodeArrays.size() == 1 &&
+                  scope->nodeArrays.front() == roots[0].getOperation(),
+              "structural scope must expose its actual verified array declaration");
+        std::string diagnostics;
+        mlir::ScopedDiagnosticHandler handler(&context, [&](mlir::Diagnostic &diagnostic) {
+          llvm::raw_string_ostream stream(diagnostics);
+          diagnostic.print(stream);
+          return mlir::success();
+        });
+        check(mlir::failed(nodal::resolveConservativeShape(roots[0]->getResult(0), selections[1])),
+              "root resolver must reject actual sibling escape independently of text parsing");
+        auto original = selections[1]->getOperand(0);
+        selections[1]->setOperand(0, roots[0]->getResult(0));
+        check(mlir::failed(
+                  nodal::resolveConservativeSelection(selections[1]->getResult(0), selections[1])),
+              "selection resolver must reject forged cross-scope root input");
+        selections[1]->setOperand(0, original);
+        auto owner = roots[0]->getAttr("generated_owner");
+        roots[0]->setAttr("generated_owner", mlir::StringAttr::get(&context, "Fixture.right"));
+        check(mlir::failed(nodal::resolveConservativeShape(roots[0]->getResult(0), selections[0])),
+              "root resolver must independently reject forged generated owner");
+        roots[0]->setAttr("generated_owner", owner);
+        check(mlir::succeeded(mlir::verify(*module)),
+              "restoring actual root and owner must restore valid generated source");
+      }
+    }
+  }
   reject(array("9223372036854775807,2"), "NODAL-SHAPE-043-005");
   reject(replace(array(), "storage = \"structural\"", "storage = \"memory\""),
          "NODAL-SHAPE-043-005");

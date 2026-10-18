@@ -226,6 +226,15 @@ private final class ConstructionSession(val options: EmitOptions):
     domainIds.put(domain, reference)
     semanticOrigin.captureDomain(module.handle, reference.index, domain, domain.name, kind.label)
 
+  private def requireGeneratedDeclarationScope(reference: DeclarationRef): Unit =
+    val generatedDeclaration =
+      records(reference.module).generatedRegions.find(_.declarations.contains(reference))
+    if generatedDeclaration.exists(region =>
+        region.owner != currentModule.handle || !generationStack.exists(_ eq region)
+      )
+    then
+      fail("NODAL-HIERARCHY-044", "local node escaped its generated lexical scope")
+
   private def validateGeneratedDependencies(values: Iterable[Any]): Unit =
     val pending = mutable.ArrayBuffer.from(values)
     val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
@@ -244,6 +253,20 @@ private final class ConstructionSession(val options: EmitOptions):
                 "generated induction dependency escaped its active owning Module/Generate scope"
               )
           else pending ++= expression.operands
+        case node: Node[?] =>
+          node.endpointReference.foreach: reference =>
+            val selection = shapeIndices.get(reference)
+            val scope = selection.flatMap(_.generatedScope)
+              .orElse(deferredNodeArray(reference).flatMap(_._1.generatedScope))
+            if scope.exists(region =>
+                region.owner != currentModule.handle || !generationStack.exists(_ eq region)
+              )
+            then
+              fail("NODAL-HIERARCHY-044", "selected endpoint escaped its generated lexical scope")
+            selection.flatMap(_.conservative).foreach: selected =>
+              selected.array match
+                case declaration: DeclarationRef => requireGeneratedDeclarationScope(declaration)
+                case _ => ()
         case _ => ()
 
   def registerDeclaration(
@@ -257,7 +280,9 @@ private final class ConstructionSession(val options: EmitOptions):
   ): Unit =
     val activeGeneratedVariable =
       kind == KernelSignalKind.Variable && AnalogProceduralConstruction.generatedProcedureActive
-    if kind != KernelSignalKind.AnalogNode && !activeGeneratedVariable then
+    if kind != KernelSignalKind.AnalogNode && kind != KernelSignalKind.AnalogNodeArray &&
+      !activeGeneratedVariable
+    then
       requireNoGeneratedEffect(s"generated ${kind.label} declaration")
     val module = currentModule
     validateGeneratedDependencies(attributes.map(_._2))
@@ -301,9 +326,10 @@ private final class ConstructionSession(val options: EmitOptions):
     then
       fail(
         "NODAL-SHAPE-043-005",
-        "node arrays require a module-local Electrical declaration outside analog regions"
+        "node arrays require an owned Electrical declaration outside analog regions"
       )
-    requireNoGeneratedEffect("generated node-array declaration")
+    if kind != KernelSignalKind.AnalogNodeArray then
+      requireNoGeneratedEffect("generated boundary-array declaration")
     val analysis =
       new StructuralBoundAnalysis(
         module.handle,
@@ -438,6 +464,7 @@ private final class ConstructionSession(val options: EmitOptions):
             ).declarations(declaration.index).conservativeDimensions.isEmpty
           then
             fail("NODAL-SHAPE-043-006", "node-array reference must retain its local owned root")
+          requireGeneratedDeclarationScope(declaration)
           declaration
         case expression: ExpressionRef =>
           if expression.module != module || !seen.add(expression) then
@@ -1797,10 +1824,7 @@ private final class ConstructionSession(val options: EmitOptions):
       if childPort then
         parent.instances.find(_.child == reference.module).foreach(requireInstanceScope)
       if local then
-        val generatedDeclaration =
-          records(reference.module).generatedRegions.find(_.declarations.contains(reference))
-        if generatedDeclaration.exists(region => !generationStack.exists(_ eq region)) then
-          fail("NODAL-HIERARCHY-044", "local node escaped its generated lexical scope")
+        requireGeneratedDeclarationScope(reference)
         val selectionScope = value match
           case selectedNode: Node[?] =>
             selectedNode.endpointReference.flatMap(shapeIndices.get).flatMap(_.generatedScope)
@@ -2330,6 +2354,7 @@ private final class ConstructionSession(val options: EmitOptions):
         .map(reference => module.declarations(reference.index))
         .find: declaration =>
           declaration.kind != KernelSignalKind.AnalogNode &&
+            declaration.kind != KernelSignalKind.AnalogNodeArray &&
             !(declaration.kind == KernelSignalKind.Variable &&
               AnalogProceduralConstruction.retainsGeneratedVariable(
                 declaration.value,
@@ -3492,7 +3517,12 @@ private final class ConstructionSession(val options: EmitOptions):
           declaration.dataType.map(renderType(_, module.handle)),
           declarationDomain(declaration, resolved),
           declaration.attributes.map(value => value._1 -> renderAny(value._2, module.handle)),
-          declaration.conservativeDimensions.map(renderShapeDimension(_, module.handle))
+          declaration.conservativeDimensions.map(renderShapeDimension(_, module.handle)),
+          if declaration.kind == KernelSignalKind.AnalogNodeArray then
+            generatedScopeSnapshot(module.generatedRegions.find(
+              _.declarations.contains(declaration.reference)
+            ))
+          else None
         )
       val instances = module.instances.toVector.map: instance =>
         val child = records(instance.child)

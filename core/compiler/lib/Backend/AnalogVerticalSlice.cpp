@@ -702,10 +702,18 @@ FailureOr<StaticNodeArrayLayout> resolveStaticNodeArray(Operation *operation,
   auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata");
   auto semanticPath = metadata ? metadata.getAs<StringAttr>("semantic_path") : StringAttr();
   auto storage = metadata ? metadata.getAs<StringAttr>("storage") : StringAttr();
-  auto ownerMetadata = definition->getAttrOfType<DictionaryAttr>("metadata");
+  auto generated = llvm::dyn_cast<GenerateOp>(definition);
+  auto module = llvm::dyn_cast<ModuleOp>(definition);
+  if (!module)
+    module = definition->getParentOfType<ModuleOp>();
+  auto ownerMetadata =
+      module ? module->getAttrOfType<DictionaryAttr>("metadata") : DictionaryAttr();
   auto ownerPath = ownerMetadata ? ownerMetadata.getAs<StringAttr>("semantic_path") : StringAttr();
-  llvm::StringRef owner = ownerPath ? ownerPath.getValue() : symbolName(definition);
-  if (operation->getParentOp() != definition || operation->getNumOperands() || !terminal ||
+  llvm::StringRef owner = ownerPath ? ownerPath.getValue()
+                          : module  ? symbolName(module)
+                                    : llvm::StringRef();
+  if (!module || (generated && !llvm::isa<NodeArrayOp>(operation)) ||
+      operation->getParentOp() != definition || operation->getNumOperands() || !terminal ||
       terminal.getDiscipline() != "electrical" || !name ||
       !isPortableVerilogIdentifier(name.getValue()) || !sourcePath ||
       sourcePath.getValue() != (owner + "." + name.getValue()).str() || !semanticPath ||
@@ -714,7 +722,22 @@ FailureOr<StaticNodeArrayLayout> resolveStaticNodeArray(Operation *operation,
     return failure();
   if (failed(resolveConservativeShape(operation->getResult(0), operation)))
     return failure();
-  return resolveConservativeLayout(definition, shaped, name.getValue());
+  // The generated structural carrier has the same checked signed32 profile as
+  // its map stages. Module-owned direct layouts retain their signed64 profile.
+  if (generated && failed(resolveTargetShapedLayout(module, shaped.getDimensions())))
+    return failure();
+  return resolveConservativeLayout(module, shaped, name.getValue());
+}
+
+void renderConservativeArrayDeclaration(const StaticNodeArrayLayout &layout,
+                                        llvm::raw_ostream &output, llvm::StringRef direction = {}) {
+  int64_t extent = 0;
+  const std::string upper = !llvm::StringRef(layout.extent).getAsInteger(10, extent)
+                                ? std::to_string(extent - 1)
+                                : "(" + layout.extent + " - 1)";
+  if (!direction.empty())
+    output << "  " << direction << " [0:" << upper << "] " << layout.name << ";\n";
+  output << "  electrical [0:" << upper << "] " << layout.name << ";\n";
 }
 
 FailureOr<std::string> renderStaticNodeSelection(Operation *operation, Operation *definition,
@@ -818,8 +841,8 @@ bool requiresStructuralGenerate(Operation *generate) {
   if (body.getNumArguments() != 0)
     return true;
   for (Operation &operation : body) {
-    if (llvm::isa<InstanceOp, ConnectOp, ConnectArrayOp, ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(
-            operation) ||
+    if (llvm::isa<NodeArrayOp, InstanceOp, ConnectOp, ConnectArrayOp, ShapeIndexOp, ShapeViewOp,
+                  ShapeSliceOp>(operation) ||
         (llvm::isa<GenerateOp>(operation) && requiresStructuralGenerate(&operation)))
       return true;
     if (llvm::isa<AnalogOp>(operation) && llvm::hasSingleElement(operation.getRegion(0)))
@@ -1294,23 +1317,18 @@ llvm::json::Array conservativeMapProjections(const ConservativeEndpoint &endpoin
   return projections;
 }
 
-void renderConservativeRelationMap(const ConservativeRelation &relation, llvm::StringRef leftActual,
-                                   llvm::StringRef rightActual, llvm::StringRef helper,
-                                   llvm::StringRef scope,
-                                   const ShapedProjectionProgram *leftProgram,
-                                   const ShapedProjectionProgram *rightProgram,
-                                   ModuleRenderState &state, llvm::raw_ostream &output) {
+std::string conservativeSourceLocation(Operation *operation) {
   // Parser locations can name a different transport temporary on every run.
   // Only retained authored source-map fields belong in deterministic target text.
   std::string location = "unknown";
-  auto rootModule = relation.operation->getParentOfType<mlir::ModuleOp>();
+  auto rootModule = operation->getParentOfType<mlir::ModuleOp>();
   auto sourceMap =
       rootModule ? rootModule->getAttrOfType<ArrayAttr>("nodal.bridge.source_map") : ArrayAttr();
   if (sourceMap)
     for (Attribute attribute : sourceMap) {
       auto entry = llvm::dyn_cast<DictionaryAttr>(attribute);
       auto semantic = entry ? entry.getAs<StringAttr>("semantic_path") : StringAttr();
-      if (!semantic || semantic.getValue() != conservativeSourcePath(relation.operation))
+      if (!semantic || semantic.getValue() != conservativeSourcePath(operation))
         continue;
       auto path = entry.getAs<StringAttr>("source_path");
       auto line = entry.getAs<IntegerAttr>("source_line");
@@ -1326,6 +1344,16 @@ void renderConservativeRelationMap(const ConservativeRelation &relation, llvm::S
                        .str();
       break;
     }
+  return location;
+}
+
+void renderConservativeRelationMap(const ConservativeRelation &relation, llvm::StringRef leftActual,
+                                   llvm::StringRef rightActual, llvm::StringRef helper,
+                                   llvm::StringRef scope,
+                                   const ShapedProjectionProgram *leftProgram,
+                                   const ShapedProjectionProgram *rightProgram,
+                                   ModuleRenderState &state, llvm::raw_ostream &output) {
+  const std::string location = conservativeSourceLocation(relation.operation);
   auto describe = [&](const ConservativeEndpoint &endpoint, llvm::StringRef actual,
                       const ShapedProjectionProgram *program) {
     auto shaped = llvm::dyn_cast<ShapedType>(endpoint.value.getType());
@@ -3073,6 +3101,27 @@ LogicalResult renderStructuralGenerate(Operation *generate, ModuleRenderState &p
     state.terminals[node->getResult(0)] = target;
     body << "  electrical " << target << ";\n";
   }
+  for (Operation *array : topology->nodeArrays) {
+    auto layout = resolveStaticNodeArray(array, generate);
+    if (failed(layout))
+      return emitMappedFailure(array, "NODAL-BACKEND-SHAPE-001",
+                               "generated node array requires an owned bounded electrical "
+                               "shape within the signed32 structural target carrier");
+    layout->name = allocate(state, layout->name);
+    state.nodeArrays[array->getResult(0)] = *layout;
+    auto shaped = llvm::cast<ShapedType>(array->getResult(0).getType());
+    auto inductionPath = generate->getAttrOfType<StringAttr>("induction_path");
+    llvm::json::Object correspondence{
+        {"source_path", conservativeSourcePath(array)},
+        {"source_location", conservativeSourceLocation(array)},
+        {"source_scope", region.getValue()},
+        {"source_induction", inductionPath ? inductionPath.getValue() : llvm::StringRef()},
+        {"dimensions", shaped.getDimensions()},
+        {"target_name", layout->name},
+        {"target_extent", layout->extent}};
+    body << "  // nodal.node_array " << llvm::json::Value(std::move(correspondence)) << "\n";
+    renderConservativeArrayDeclaration(*layout, body);
+  }
   for (Operation *instance : topology->instances) {
     if (!isPortableVerilogIdentifier(symbolName(instance)))
       return failure();
@@ -3118,9 +3167,9 @@ LogicalResult renderStructuralGenerate(Operation *generate, ModuleRenderState &p
       // The complete native access/probe model is verified at the candidate
       // boundary. Intent records add neither an equation nor a physical branch.
       continue;
-    } else if (!llvm::isa<NodeOp, InstanceOp, InstanceTerminalOp, InstanceTerminalArrayOp,
-                          ConnectOp, ConnectArrayOp, ParameterOverrideOp, GenerateOp,
-                          ConstLiteralOp, ConstParameterRefOp, ConstExprOp, ConstantOp>(
+    } else if (!llvm::isa<NodeOp, NodeArrayOp, InstanceOp, InstanceTerminalOp,
+                          InstanceTerminalArrayOp, ConnectOp, ConnectArrayOp, ParameterOverrideOp,
+                          GenerateOp, ConstLiteralOp, ConstParameterRefOp, ConstExprOp, ConstantOp>(
                    operation)) {
       return emitMappedFailure(&operation, "NODAL-BACKEND-TOPOLOGY-004",
                                "operation has no structural occurrence lowering");
@@ -3339,13 +3388,8 @@ LogicalResult renderDefinition(Operation *definition, llvm::StringRef aliasHelpe
 
   for (Operation *array : nodeArrays) {
     const auto &layout = state.nodeArrays.find(array->getResult(0))->second;
-    int64_t extent = 0;
-    const std::string upper = !llvm::StringRef(layout.extent).getAsInteger(10, extent)
-                                  ? std::to_string(extent - 1)
-                                  : "(" + layout.extent + " - 1)";
-    if (llvm::isa<TerminalArrayOp>(array))
-      output << "  " << terminalDirection(array) << " [0:" << upper << "] " << layout.name << ";\n";
-    output << "  electrical [0:" << upper << "] " << layout.name << ";\n";
+    renderConservativeArrayDeclaration(
+        layout, output, llvm::isa<TerminalArrayOp>(array) ? terminalDirection(array) : "");
   }
   renderConservativeRootDeclarations(state, output);
   for (const auto &[name, initializer] : state.nodeMapConstants)

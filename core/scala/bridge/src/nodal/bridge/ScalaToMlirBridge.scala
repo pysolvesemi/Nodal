@@ -475,8 +475,46 @@ ${indent(body, 2)}
           "module definition has no canonical symbol attribute",
           Some(module.path)
         )
-      module.className + "\u0000" +
+      module.className + "\u0000" + normalizeDefinitionSsa(
         normalizedPath.patch(position, "sym_name = \"$module\"", symbolAttribute.length)
+      )
+
+    private def normalizeDefinitionSsa(text: String): String =
+      // Compare the renderer's generic MLIR modulo SSA binding names. Keep quoted
+      // attributes, source identities, types, operation order and use edges intact.
+      // Each region owns its bindings, including block arguments and shadowed names.
+      val tokens = """"(?:\\.|[^"\\])*"|%[\p{L}\p{N}_.$-]+|\(\{|\}\)""".r
+      var scopes = List(mutable.Map.empty[String, String])
+      var next = 0
+      text.linesIterator.map: line =>
+        val trimmed = line.dropWhile(_.isWhitespace)
+        val resultEnd = if trimmed.startsWith("%") then line.indexOf(" = ") else -1
+        val blockArguments = trimmed.startsWith("^")
+        tokens.replaceAllIn(
+          line,
+          token =>
+            val value = token.matched
+            val replacement = value match
+              case "({" =>
+                scopes = mutable.Map.empty[String, String] :: scopes
+                value
+              case "})" =>
+                scopes = scopes.tail
+                value
+              case _ if value.startsWith("%") =>
+                if token.start < resultEnd || blockArguments then
+                  val name = s"%definition_$next"
+                  next += 1
+                  scopes.head.update(value, name)
+                  name
+                else
+                  scopes.iterator.flatMap(_.get(value)).nextOption().getOrElse(
+                    fail("NODAL-BRIDGE-035", "module definition has an unbound SSA use", None)
+                  )
+              case _ => value
+            java.util.regex.Matcher.quoteReplacement(replacement)
+        )
+      .mkString("\n")
 
     private def standardConservativeDeclarations: Vector[String] =
       val needsElectrical = modules.exists(module =>
@@ -855,13 +893,23 @@ ${indent(body, 2)}
             "generated maximum count differs from its actual static domain",
             Some(region.path)
           )
-        val declarationPaths = module.declarations.map(_.path).toSet
-        region.declarations.foreach: declaration =>
-          if !declarationPaths.contains(declaration) then
+        val declarationsByPath = module.declarations.map(declaration =>
+          declaration.path -> declaration
+        ).toMap
+        region.declarations.foreach: path =>
+          val declaration = declarationsByPath.getOrElse(
+            path,
             fail(
               "NODAL-BRIDGE-043",
               "generated declaration is absent from its owning Module",
-              Some(declaration)
+              Some(path)
+            )
+          )
+          if !Set("analog-node", "analog-node-array", "variable").contains(declaration.kind) then
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated declaration must be a local conservative node, array or procedural variable",
+              Some(path)
             )
         val seen = mutable.HashSet(region.path)
         var parentPath = region.parent
@@ -1056,6 +1104,12 @@ ${indent(body, 2)}
           )
       modules.foreach: module =>
         module.declarations.foreach: declaration =>
+          if declaration.generatedScope.nonEmpty && declaration.kind != "analog-node-array" then
+            fail(
+              "NODAL-BRIDGE-043",
+              "generated declaration scope is only supported on local conservative arrays",
+              Some(declaration.path)
+            )
           if isConservativeArray(declaration) then validateNodeArray(module, declaration)
           else if declaration.conservativeDimensions.nonEmpty then
             fail(
@@ -1086,6 +1140,14 @@ ${indent(body, 2)}
           root: Option[String],
           consumer: String
       ): Unit =
+        root.flatMap(path => snapshot.generatedRegions.find(_.declarations.contains(path)))
+          .foreach: declarationRegion =>
+            if !visibleInduction(scope, declarationRegion.induction) then
+              fail(
+                "NODAL-BRIDGE-050",
+                "conservative array declaration escaped its generated scope",
+                Some(consumer)
+              )
         root.flatMap(instanceArrayRootsByPath.get).foreach: instanceRoot =>
           if instanceRoot.generatedScope != scope then
             fail(
@@ -1342,6 +1404,7 @@ ${indent(body, 2)}
         def dimensions(path: String): Vector[String] =
           module.declarations.find(_.path == path) match
             case Some(declaration) if isConservativeArray(declaration) =>
+              validateShapeUse(path, binding.generatedScope, Some(path), binding.path)
               declaration.conservativeDimensions
             case _ =>
               validatedShapes.get(path) match
@@ -1456,6 +1519,8 @@ ${indent(body, 2)}
       val declarationsByPath = module.declarations.map(declaration =>
         declaration.path -> declaration
       ).toMap
+      val generatedDeclarationPaths =
+        generatedRegionsFor(module).flatMap(_.declarations).toSet
       val instancesByChildModule = module.instances
         .groupBy(_.childModule)
         .view
@@ -1572,32 +1637,13 @@ ${indent(body, 2)}
                 Some(dimensionPath)
               )
 
-      module.declarations.filter(isConservativeArray).sortBy(_.path)
-        .zipWithIndex.foreach: (declaration, index) =>
+      module.declarations.filter(isConservativeArray)
+        .filterNot(declaration => generatedDeclarationPaths.contains(declaration.path))
+        .sortBy(_.path).zipWithIndex.foreach: (declaration, index) =>
           val boundary = declaration.kind != "analog-node-array"
           val result = if boundary then s"%terminal_array_$index" else s"%node_array_$index"
-          val resultType = nodeArrayType(declaration)
-          body += operation(
-            if boundary then "nodal.terminal_array" else "nodal.node_array",
-            results = Vector(result),
-            resultTypes = Vector(resultType),
-            attributes = Vector(
-              "name" -> quoted(declaration.name),
-              "source_path" -> quoted(declaration.path),
-              "metadata" -> bridgeMetadata(
-                declaration.path,
-                Vector(
-                  "declaration_kind" -> quoted(declaration.kind),
-                  "storage" -> quoted("structural")
-                )
-              )
-            ) ++ Option.when(boundary)(Vector(
-              "direction" -> quoted(boundaryDirection(declaration)),
-              "flow_orientation" -> quoted("into_component")
-            )).toVector.flatten,
-            semanticPath = declaration.path
-          )
-          values.update(declaration.path, result -> resultType)
+          body += renderConservativeArray(declaration, result, None)
+          values.update(declaration.path, result -> nodeArrayType(declaration))
 
       def renderShapes(
           shapeBody: mutable.ArrayBuffer[String],
@@ -1964,8 +2010,6 @@ ${indent(body, 2)}
 
       val externallyBoundTerminals =
         externallyBoundTerminalsByModule.getOrElse(module.path, Set.empty)
-      val generatedDeclarationPaths =
-        generatedRegionsFor(module).flatMap(_.declarations).toSet
       terminalDeclarations(module)
         .filterNot(declaration => generatedDeclarationPaths.contains(declaration.path))
         .zipWithIndex
@@ -3963,6 +4007,14 @@ ${indent(body, 2)}
           )
         )
         declaration.kind match
+          case "analog-node-array" =>
+            val result = "%" + stableLocalSymbol("generated_node_array", declaration.path)
+            nested += renderConservativeArray(
+              declaration,
+              result,
+              Some(KernelGeneratedScope(region.path, region.induction))
+            )
+            generatedValues.update(declaration.path, result -> nodeArrayType(declaration))
           case "analog-node" =>
             val discipline = conservativeDiscipline(declaration)
             val resultType = "!nodal.terminal<" + quoted(discipline) + ">"
@@ -4304,6 +4356,33 @@ ${indent(body, 2)}
         if offset < text.length then offset += 1
       dimensions.result()
 
+    private def renderConservativeArray(
+        declaration: KernelDeclarationSnapshot,
+        result: String,
+        scope: Option[KernelGeneratedScope]
+    ): String =
+      val boundary = declaration.kind != "analog-node-array"
+      operation(
+        if boundary then "nodal.terminal_array" else "nodal.node_array",
+        results = Vector(result),
+        resultTypes = Vector(nodeArrayType(declaration)),
+        attributes = Vector(
+          "name" -> quoted(declaration.name),
+          "source_path" -> quoted(declaration.path),
+          "metadata" -> bridgeMetadata(
+            declaration.path,
+            Vector(
+              "declaration_kind" -> quoted(declaration.kind),
+              "storage" -> quoted("structural")
+            )
+          )
+        ) ++ scopeAttributes(scope) ++ Option.when(boundary)(Vector(
+          "direction" -> quoted(boundaryDirection(declaration)),
+          "flow_orientation" -> quoted("into_component")
+        )).toVector.flatten,
+        semanticPath = declaration.path
+      )
+
     private def nodeArrayType(declaration: KernelDeclarationSnapshot): String =
       s"!nodal.shaped<${quoted(declaration.conservativeDimensions.mkString(","))}, !nodal.terminal<${quoted("electrical")}>>"
 
@@ -4314,6 +4393,16 @@ ${indent(body, 2)}
       def invalid(message: String): Nothing =
         fail("NODAL-BRIDGE-047", message, Some(declaration.path))
       val attributes = declaration.attributes.toMap
+      val declarationScope =
+        snapshot.generatedRegions.find(_.declarations.contains(declaration.path))
+          .map(region => KernelGeneratedScope(region.path, region.induction))
+      validateScope(declaration.generatedScope, module.path, declaration.path)
+      if declaration.generatedScope != declarationScope then
+        fail(
+          "NODAL-BRIDGE-043",
+          "conservative array declaration scope disagrees with its generated-region membership",
+          Some(declaration.path)
+        )
       if declaration.conservativeDimensions.isEmpty || declaration.dataType.nonEmpty || declaration.domain.nonEmpty ||
         attributes.get("discipline") != Some("electrical") ||
         attributes.get("potential_nature") != Some("voltage") ||

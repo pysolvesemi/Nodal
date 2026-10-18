@@ -76,6 +76,7 @@ struct ConservativeStructuralScope {
   mlir::Operation *scope = nullptr;
   llvm::SmallVector<mlir::Operation *, 4> instances;
   llvm::SmallVector<mlir::Operation *, 4> nodes;
+  llvm::SmallVector<mlir::Operation *, 4> nodeArrays;
   llvm::SmallVector<mlir::Operation *, 4> childScopes;
   llvm::SmallVector<ConservativeScalarGroup, 2> scalarGroups;
   llvm::SmallVector<ConservativeRelation, 2> relations;

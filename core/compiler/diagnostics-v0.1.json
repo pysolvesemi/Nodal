@@ -236,6 +236,21 @@
       "NODAL-ANALOG-045-002",
       "NODAL-ANALOG-045-003",
       "NODAL-ANALOG-045-004"
+    ],
+    "analog-semantic-lint": [
+      "NODAL-ANALOG-LINT-046-001",
+      "NODAL-ANALOG-LINT-046-002",
+      "NODAL-ANALOG-LINT-046-003",
+      "NODAL-ANALOG-LINT-046-004",
+      "NODAL-ANALOG-LINT-046-005",
+      "NODAL-ANALOG-LINT-046-006",
+      "NODAL-ANALOG-LINT-046-007"
+    ],
+    "analog-source-equations": [
+      "NODAL-ANALOG-STRUCTURE-134-001",
+      "NODAL-BACKEND-EQUATION-134-001",
+      "NODAL-ANALOG-134-001",
+      "NODAL-ANALOG-134-002"
     ]
   },
   "preserved_prefixes": [

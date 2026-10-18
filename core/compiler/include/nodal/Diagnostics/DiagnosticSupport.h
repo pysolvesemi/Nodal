@@ -27,6 +27,11 @@ DiagnosticContext collectDiagnosticContext(mlir::Operation *operation);
 mlir::LogicalResult emitMappedFailure(mlir::Operation *operation, llvm::StringRef code,
                                       const llvm::Twine &message);
 
+/// Emit an advisory without changing acceptance or weakening mandatory errors.
+/// Context uses exactly the same source-semantic mapping as mapped failures.
+void emitMappedWarning(mlir::Operation *operation, llvm::StringRef code,
+                       const llvm::Twine &message);
+
 /// Emit an inventory-derived error by resolving its semantic path back to an
 /// operation or the module-level Increment 20 source-map inventory.
 mlir::LogicalResult emitMappedFailureForPath(mlir::ModuleOp module, llvm::StringRef semanticPath,

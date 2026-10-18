@@ -896,8 +896,26 @@ def Nodal_BridgeOp : Nodal_Op<"bridge"> {
 def Nodal_AnalogOp : Nodal_Op<"analog", [ParentOneOf<["ModuleOp", "GenerateOp"]>, NoTerminator]> {
   let summary = "Continuous-time analog equation region";
   let arguments = (ins OptionalAttr<StrAttr>:$generated_owner,
-    OptionalAttr<StrAttr>:$generated_induction, DictionaryAttr:$metadata);
+    OptionalAttr<StrAttr>:$generated_induction, DictionaryAttr:$metadata,
+    OptionalAttr<DictionaryAttr>:$source_equations);
   let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+}
+
+// Source-semantic algebraic checkpoint; no Pure traits and no target assignment.
+def Nodal_AnalogUnknownOp : Nodal_Op<"analog_unknown", [HasParent<"AnalogOp">]> {
+  let summary = "Explicit owned scalar source unknown with separate initialization";
+  let arguments = (ins Variadic<AnyType>:$initializer, StrAttr:$state_id,
+    StrAttr:$owner, StrAttr:$component, StrAttr:$initialization, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogEquationOp : Nodal_Op<"analog_equation", [HasParent<"AnalogOp">]> {
+  let summary = "Unordered typed source equation preserving both authored sides";
+  let arguments = (ins AnyType:$lhs, AnyType:$rhs, StrAttr:$equation_id,
+    StrAttr:$owner, StrAttr:$component, BoolAttr:$initial_only,
+    ArrayAttr:$analyses, StrAttr:$continuity, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
 
@@ -1169,8 +1187,10 @@ def Nodal_AnalogArrayFillOp : Nodal_Op<"analog_array_fill"> {
 }
 
 def Nodal_RealLiteralOp : Nodal_Op<"real_literal", [HasParent<"AnalogOp">]> {
-  let summary = "Finite real dimensionless literal in an analog expression";
-  let arguments = (ins F64Attr:$value, DictionaryAttr:$metadata);
+  let summary = "Finite real literal, optionally with verified source-equation units";
+  let arguments = (ins F64Attr:$value, DictionaryAttr:$metadata,
+                       OptionalAttr<FlatSymbolRefAttr>:$unit,
+                       OptionalAttr<F64Attr>:$authored_value);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }

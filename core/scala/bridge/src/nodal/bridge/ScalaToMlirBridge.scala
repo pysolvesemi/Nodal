@@ -118,6 +118,7 @@ private[nodal] object ScalaToMlirBridge:
     bytes.map(value => f"${value & 0xff}%02x").mkString
 
   private final class Renderer(snapshot: ConstructionSnapshot, backend: Backend):
+    private val sourceEquations = new AnalogEquationMlir.Plan(snapshot)
     private val modules = snapshot.modules.sortBy(_.path)
     private val modulesByPath = modules.map(module => module.path -> module).toMap
     private val parameterExpressionsByOwner = snapshot.parameterExpressions
@@ -353,7 +354,9 @@ private[nodal] object ScalaToMlirBridge:
       validate()
       canonicalizeModuleDefinitions()
       val body =
-        (standardConservativeDeclarations ++ emittedModules.map(module =>
+        (standardConservativeDeclarations ++ AnalogEquationMlir.unitDeclarations(
+          sourceEquations
+        ) ++ emittedModules.map(module =>
           renderModule(module)
         )).mkString("\n\n")
       val attributes = Vector(
@@ -391,6 +394,11 @@ private[nodal] object ScalaToMlirBridge:
         (if snapshot.analogFunctions.isEmpty then Vector.empty
          else
            Vector("nodal.bridge.analog_functions" -> AnalogUserFunctionMlir.inventory(snapshot))) ++
+        Option.when(sourceEquations.active)(
+          "nodal.bridge.source_equations" -> sourceEquations.inventory(
+            emittedModules.map(_.path).toSet
+          )
+        ).toVector ++
         mandatoryVerificationAttributes
       normalize(
         s"""module attributes ${dictionary(attributes)} {
@@ -596,13 +604,14 @@ ${indent(body, 2)}
         "memory",
         "digital-inout"
       )
-      val analog = snapshot.analogRegions.nonEmpty || snapshot.analogFunctions.nonEmpty ||
-        snapshot.continuousOperators.nonEmpty ||
-        snapshot.waveformOperators.nonEmpty ||
-        snapshot.analogSemantics.equations.nonEmpty ||
-        snapshot.analogSemantics.contributions.nonEmpty ||
-        snapshot.analogProcedural.nonEmpty ||
-        declarationKinds.exists(analogKinds.contains)
+      val analog =
+        sourceEquations.active || snapshot.analogRegions.nonEmpty || snapshot.analogFunctions.nonEmpty ||
+          snapshot.continuousOperators.nonEmpty ||
+          snapshot.waveformOperators.nonEmpty ||
+          snapshot.analogSemantics.equations.nonEmpty ||
+          snapshot.analogSemantics.contributions.nonEmpty ||
+          snapshot.analogProcedural.nonEmpty ||
+          declarationKinds.exists(analogKinds.contains)
       val digital = declarationKinds.exists(digitalKinds.contains) ||
         snapshot.interfaceAbi.nonEmpty ||
         snapshot.resolvedNets.nonEmpty
@@ -2283,6 +2292,7 @@ ${indent(body, 2)}
       body ++= generatedBodies
 
       body ++= AnalogUserFunctionMlir.renderModule(snapshot, module.path)
+      body ++= sourceEquations.renderModule(module.path, parameterSymbols)
 
       analogRegionsFor(module).filter(_.generatedOwner.isEmpty).zipWithIndex.foreach:
         (region, regionIndex) =>
@@ -3040,6 +3050,8 @@ ${indent(body, 2)}
                 .filterNot(_._1 == "default")
                 .map((key, value) => normalizeKey(key) -> quoted(value))
             )
+          ) ++ AnalogEquationMlir.parameterUnit(sourceEquations, declaration).toVector.map(unit =>
+            "unit" -> symbolReference(unit)
           ),
           semanticPath = declaration.path
         )
@@ -5126,7 +5138,9 @@ ${indent(body, 2)}
         if results.isEmpty then ""
         else s"${results.mkString(", ")} = "
       val regionText = regions.map: region =>
-        if region.isEmpty then " ({\n})"
+        if region.isEmpty && (name == "nodal.module" || name == "nodal.analog") then
+          " ({\n  ^bb0:\n})"
+        else if region.isEmpty then " ({\n})"
         else s""" ({
 ${indent(region, 2)}
 })"""

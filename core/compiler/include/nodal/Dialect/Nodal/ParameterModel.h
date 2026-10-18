@@ -47,6 +47,29 @@ mlir::FailureOr<ParameterIntegerBounds> inferParameterIntegerBounds(mlir::Value 
 /// an overridable default alone is never a bound.
 mlir::FailureOr<ParameterIntegerBounds> inferParameterIntegerBounds(mlir::Operation *parameter);
 
+/// Finite zero-admissibility facts for numeric denominator lint. ZeroPermitted
+/// means a checked constant is zero or every invariant explicit constraint on a
+/// symbolic declaration admits zero; it is not a claim about runtime reachability.
+/// Unknown covers unconstrained symbols and unsupported runtime expressions.
+enum class ParameterZeroAdmissibility { ZeroExcluded, ZeroPermitted, Unknown };
+
+/// Read-only, diagnostic-free queries for a direct declaration or scalar value.
+/// Reuse checked constant folding, unit normalization, explicit constraints and
+/// integer bounds; never replace an overridable parameter by its default. Fixed
+/// defaults retain symbolic dependencies. Invalid queried declarations, defaults,
+/// constraints, units and cyclic constant dependencies fail instead of proving
+/// an empty legal set. This does not replace whole-model semantic verification.
+mlir::FailureOr<ParameterZeroAdmissibility>
+analyzeParameterZeroAdmissibility(mlir::Operation *parameter);
+mlir::FailureOr<ParameterZeroAdmissibility> analyzeParameterZeroAdmissibility(mlir::Value value);
+
+/// Checked fixed default, normalized to the declaration's unit. An empty
+/// optional means the declaration is overridable or its default still depends on
+/// an overridable parameter. Reuses the same silent, read-only validity checks as
+/// zero-admissibility; malformed/cyclic input fails instead of becoming dynamic.
+mlir::FailureOr<std::optional<mlir::Attribute>>
+getInvariantParameterDefault(mlir::Operation *parameter);
+
 /// Immutable, query-local proof DAG. Parent parameters retain declaration identity;
 /// a singleton range or equal default never converts such an atom to a literal.
 struct InstantiatedIntegerNode {

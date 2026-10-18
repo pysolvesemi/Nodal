@@ -28,6 +28,8 @@ struct AnalogFunctionEntry {
   unsigned arity;
   llvm::StringLiteral dimensionRule;
   llvm::StringLiteral verilogA;
+  // Registry-listed finite step-jump risk; false is not a continuity proof.
+  bool stepDiscontinuity;
 };
 struct AnalogAnalysisEntry {
   llvm::StringLiteral id;

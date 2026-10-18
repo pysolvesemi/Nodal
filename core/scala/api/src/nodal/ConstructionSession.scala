@@ -2485,6 +2485,113 @@ private final class ConstructionSession(val options: EmitOptions):
       val removed = analogStack.remove(analogStack.size - 1)
       if removed ne record then fail("NODAL-ANALOG-LIFECYCLE-001", "analog region stack is corrupt")
 
+  private def equationSource: AnalogEquationRuntime.SourceSpan =
+    semanticOrigin.captureSemanticSource()
+      .map(span => AnalogEquationRuntime.SourceSpan(span.path, span.line, span.column))
+      .getOrElse(AnalogEquationRuntime.SourceSpan("unknown.scala", 1, 1))
+
+  private def equationComponent(owner: String): Option[String] =
+    analogSemanticRecorder.currentComponent.map: component =>
+      if component.owner != owner then
+        fail("NODAL-ANALOG-134-001", "physical component belongs to another Module", Some(owner))
+      component.identity
+
+  def withPhysicalComponent[A](contract: PhysicalComponentContract)(body: => A): A =
+    requireNoGeneratedEffect("physical component")
+    val owner = provisionalModulePath(currentModule.handle)
+    if contract.name.trim.isEmpty then
+      fail("NODAL-ANALOG-134-001", "physical component name must be non-empty", Some(owner))
+    val record = AnalogEquationRuntime.ComponentRecord(
+      s"$owner.component.${contract.name.trim}",
+      owner,
+      contract,
+      equationSource
+    )
+    if analogSemanticRecorder.containsComponent(record.identity) then
+      fail("NODAL-ANALOG-134-001", "duplicate physical component identity", Some(record.identity))
+    analogSemanticRecorder.component(record)(body)
+
+  def declareAnalogState(state: AnalogState): Unit =
+    requireNoGeneratedEffect("analog state declaration")
+    val owner = provisionalModulePath(currentModule.handle)
+    val component = equationComponent(owner)
+    if state.name.trim.isEmpty then
+      fail("NODAL-ANALOG-134-001", "analog state name must be non-empty", Some(owner))
+    val identity = s"${component.getOrElse(owner)}.state.${state.name.trim}"
+    if analogSemanticRecorder.containsState(identity) then
+      fail("NODAL-ANALOG-134-001", "duplicate analog state identity", Some(identity))
+    val dimension = inferAnalogDimension(state)
+    if dimension.isUnknown then
+      fail(
+        "NODAL-ANALOG-134-002",
+        "analog state requires a known physical dimension",
+        Some(identity)
+      )
+    val (initialization, initializer) = state.initialization match
+      case StateInitialization.Fixed(value) => "fixed" -> Some(value)
+      case StateInitialization.Guess(value) => "guess" -> Some(value)
+      case StateInitialization.InitialEquation => "initial-equation" -> None
+      case StateInitialization.SteadyState => "steady-state" -> None
+      case StateInitialization.OperatingPoint => "operating-point" -> None
+      case StateInitialization.SolverSelected => "solver-selected" -> None
+    initializer.foreach: value =>
+      if CandidateRuntime.expressionDataType(value).exists(_ != Real) ||
+        inferAnalogDimension(value).signature != dimension.signature
+      then
+        fail(
+          "NODAL-ANALOG-134-002",
+          "state initializer has incompatible physical type",
+          Some(identity)
+        )
+    analogSemanticRecorder.state(AnalogEquationRuntime.StateRecord(
+      identity,
+      owner,
+      component,
+      state,
+      dimension.signature,
+      initialization,
+      initializer.map(value => analogExpression(value, dimension.canonical)),
+      equationSource
+    ))
+
+  private def analogSemanticSnapshot(): AnalogEquationRuntime.Snapshot =
+    val original = analogSemanticRecorder.snapshot
+    if original.components.isEmpty && original.states.isEmpty then original
+    else
+      val owners = records.valuesIterator.map(record =>
+        provisionalModulePath(record.handle) -> modulePath(record.handle)
+      ).toMap
+      def owner(path: String): String = owners.getOrElse(path, path)
+      def identity(path: String, previousOwner: String): String =
+        owner(previousOwner) + path.stripPrefix(previousOwner)
+      original.copy(
+        components = original.components.map(record =>
+          record.copy(
+            identity = identity(record.identity, record.owner),
+            owner = owner(record.owner)
+          )
+        ),
+        states = original.states.map(record =>
+          record.copy(
+            identity = identity(record.identity, record.owner),
+            owner = owner(record.owner),
+            component = record.component.map(identity(_, record.owner))
+          )
+        ),
+        equations = original.equations.map: record =>
+          val previousOwner = record.metadata.owner
+          record.copy(
+            identity = AnalogEquationRuntime.EquationIdentity(identity(
+              record.identity.value,
+              previousOwner
+            )),
+            metadata = record.metadata.copy(
+              owner = owner(previousOwner),
+              component = record.metadata.component.map(identity(_, previousOwner))
+            )
+          )
+      )
+
   def withAnalogSemanticRegion[A](
       kind: AnalogEquationRuntime.RegionKind
   )(body: => A): A =
@@ -2516,7 +2623,7 @@ private final class ConstructionSession(val options: EmitOptions):
       "equation operands"
     )
     val identity = equationIdentity(
-      owner,
+      equationComponent(owner).getOrElse(owner),
       options.id.map(_.value),
       s"${renderAnalogValue(left)}===${renderAnalogValue(right)}"
     )
@@ -2549,7 +2656,7 @@ private final class ConstructionSession(val options: EmitOptions):
       "initial-equation operands"
     )
     val identity = equationIdentity(
-      owner,
+      equationComponent(owner).getOrElse(owner),
       options.id.map(_.value),
       s"initial:${renderAnalogValue(left)}===${renderAnalogValue(right)}"
     )
@@ -2671,7 +2778,8 @@ private final class ConstructionSession(val options: EmitOptions):
       ),
       analyses,
       continuityName(continuity),
-      source
+      source,
+      equationComponent(owner)
     )
 
   private def analysisName(kind: AnalysisKind): String = kind match
@@ -2696,7 +2804,8 @@ private final class ConstructionSession(val options: EmitOptions):
     AnalogEquationRuntime.Expression(
       renderAnalogValue(value),
       dimension,
-      AnalogEquationRuntime.ValueKind.Real
+      AnalogEquationRuntime.ValueKind.Real,
+      Some(value)
     )
 
   private def requireCompatibleDimensions(
@@ -2841,25 +2950,95 @@ private final class ConstructionSession(val options: EmitOptions):
         val rendered = values.map(renderAnalogValue).mkString("(", ",", ")")
         s"$owner.branch.$rendered" -> rendered
 
-  private def renderAnalogValue(value: Any): String = value match
-    case expression: KernelExpr[?] if expression.literal.nonEmpty =>
-      val literal = expression.literal.map(_.value).getOrElse("")
-      val unit = expression.operands.lift(1).collect { case text: String => text }.getOrElse("")
-      if unit.isEmpty then literal else s"$literal $unit"
-    case expression: KernelExpr[?] =>
-      val operation = expression.operation.getOrElse("expression")
-      s"$operation${expression.operands.map(renderAnalogValue).mkString("(", ",", ")")}"
-    case branch: Branch[?] =>
-      branch.name.filter(_.trim.nonEmpty).getOrElse:
-        s"${renderAnalogValue(branch.positive)}->${renderAnalogValue(branch.negative)}"
-    case state: AnalogState => s"state:${state.name}"
-    case terminal: Terminal[?] => pathOf(terminal).getOrElse(s"terminal:${terminal.name}")
-    case node: Node[?] => pathOf(node).getOrElse("analog-node")
-    case parameter: Param[?] => pathOf(parameter).getOrElse("parameter")
-    case reference: AnyRef => pathOf(reference).getOrElse(stableClassName(reference))
-    case other => other.toString
+  /** F32 authored text is retained verbatim, but its tree expansion must be bounded before
+    * materialization. Identity memoization makes the preflight follow shared expression DAGs once;
+    * cached heights still check the full path when a dependency is reached at a greater depth.
+    */
+  private def renderAnalogValue(value: Any): String =
+    val maximumCharacters = 1024L * 1024L
+    val maximumDepth = 512
+    final case class Rendering(
+        prefix: String,
+        children: Vector[Any] = Vector.empty,
+        separator: String = "",
+        suffix: String = ""
+    )
+    val memo = new IdentityHashMap[AnyRef, (Rendering, Long, Int)]()
+    val active = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+    def invalid(): Nothing = fail(
+      "NODAL-ANALOG-134-001",
+      "authored analog expression exceeds the supported 1048576-character or 512-level limit, or is cyclic"
+    )
+    def describe(value: Any): Rendering = value match
+      case expression: KernelExpr[?] if expression.literal.nonEmpty =>
+        val literal = expression.literal.map(_.value).getOrElse("")
+        val unit = expression.operands.lift(1).collect { case text: String => text }.getOrElse("")
+        Rendering(if unit.isEmpty then literal else s"$literal $unit")
+      case expression: KernelExpr[?] =>
+        Rendering(
+          expression.operation.getOrElse("expression") + "(",
+          expression.operands,
+          ",",
+          ")"
+        )
+      case branch: Branch[?] =>
+        branch.name.filter(_.trim.nonEmpty).map(Rendering(_)).getOrElse(
+          Rendering("", Vector(branch.positive, branch.negative), "->")
+        )
+      case state: AnalogState => Rendering(s"state:${state.name}")
+      case terminal: Terminal[?] =>
+        Rendering(pathOf(terminal).getOrElse(s"terminal:${terminal.name}"))
+      case node: Node[?] => Rendering(pathOf(node).getOrElse("analog-node"))
+      case parameter: Param[?] => Rendering(pathOf(parameter).getOrElse("parameter"))
+      case reference: AnyRef =>
+        Rendering(pathOf(reference).getOrElse(stableClassName(reference)))
+      case other => Rendering(other.toString)
+    def preflight(value: Any, depth: Int): (Rendering, Long, Int) =
+      if depth >= maximumDepth then invalid()
+      val reference = value match
+        case value: AnyRef => Some(value)
+        case _ => None
+      if reference.exists(active.containsKey) then invalid()
+      reference.flatMap(value => Option(memo.get(value))) match
+        case Some(result) =>
+          if depth + result._3 >= maximumDepth then invalid()
+          result
+        case None =>
+          reference.foreach(value => active.put(value, java.lang.Boolean.TRUE))
+          try
+            val rendering = describe(value)
+            var size = rendering.prefix.length.toLong + rendering.suffix.length.toLong +
+              rendering.separator.length.toLong * (rendering.children.size - 1).max(0)
+            if size > maximumCharacters then invalid()
+            var height = 0
+            rendering.children.foreach: child =>
+              val (_, childSize, childHeight) = preflight(child, depth + 1)
+              if childSize > maximumCharacters - size then invalid()
+              size += childSize
+              height = height.max(childHeight + 1)
+            val result = (rendering, size, height)
+            reference.foreach(value => memo.put(value, result))
+            result
+          finally reference.foreach(active.remove)
+    val (_, size, _) = preflight(value, 0)
+    val rendered = new java.lang.StringBuilder(size.toInt)
+    def append(value: Any): Unit =
+      val rendering = value match
+        case reference: AnyRef => Option(memo.get(reference)).map(_._1).getOrElse(describe(value))
+        case _ => describe(value)
+      rendered.append(rendering.prefix)
+      rendering.children.zipWithIndex.foreach: (child, index) =>
+        if index != 0 then rendered.append(rendering.separator)
+        append(child)
+      rendered.append(rendering.suffix)
+    append(value)
+    rendered.toString
 
   def operation(kind: String, values: Any*): Unit =
+    if kind == "statement" then
+      analogSemanticRecorder.unsupported(
+        s"unrepresented source effect: ${values.headOption.getOrElse(kind)}"
+      )
     val generatedAnalogContribution =
       kind == "analog-contribute" && generatedContinuousRegionActive
     val structuralTopology = Set(
@@ -4080,7 +4259,8 @@ private final class ConstructionSession(val options: EmitOptions):
         snapshot.transferOperators.nonEmpty || snapshot.analogFunctions.nonEmpty ||
         snapshot.analogRegions.nonEmpty ||
         snapshot.analogProcedural.nonEmpty || snapshot.analogSemantics.equations.nonEmpty ||
-        snapshot.analogSemantics.contributions.nonEmpty
+        snapshot.analogSemantics.contributions.nonEmpty || snapshot.analogSemantics.states.nonEmpty ||
+        snapshot.analogSemantics.components.nonEmpty
     val storageKinds = if analog then Set("parameter", "variable") else Set.empty[String]
     val digital = (kinds -- analogKinds -- storageKinds).nonEmpty ||
       snapshot.interfaceAbi.nonEmpty ||
@@ -4140,6 +4320,24 @@ private final class ConstructionSession(val options: EmitOptions):
     val abi = interfaceAbi(resolved)
     val arrayBindings = conservativeArrayBindingRecords
     val topologyEdges = topologyRecords()
+    val recordedAnalogSemantics = analogSemanticSnapshot()
+    val analogSemantics =
+      if recordedAnalogSemantics.components.isEmpty && recordedAnalogSemantics.states.isEmpty then
+        recordedAnalogSemantics
+      else
+        recordedAnalogSemantics.copy(
+          parameters = records.valuesIterator.flatMap: module =>
+            module.declarations.iterator.collect:
+              case declaration if declaration.value.isInstanceOf[Param[?]] =>
+                val parameter = declaration.value.asInstanceOf[Param[?]]
+                AnalogEquationRuntime.ParameterReference(
+                  parameter,
+                  modulePath(module.handle),
+                  declarationPath(declaration.reference),
+                  inferAnalogDimension(parameter).signature
+                )
+          .toVector.sortBy(_.path)
+        )
     val snapshot = ConstructionSnapshot(
       root = modulePath(rootHandle),
       rootParameterBindings = rootParameterBindings.toVector.map:
@@ -4173,14 +4371,14 @@ private final class ConstructionSession(val options: EmitOptions):
           record.source.map(SourceMapEntry(binding.path, _))
         ) ++ AnalogUserFunctionRuntime.sourceMap(
           userFunctions.snapshots(modulePath)
-        )).sortBy(_.semanticPath),
+        ) ++ AnalogEquationRuntime.sourceMap(analogSemantics)).sortBy(_.semanticPath),
       analogRegions = analogSnapshots(),
       continuousOperators = continuousOperatorSnapshots(semantic.sourceMap),
       waveformOperators = waveformOperatorSnapshots(semantic.sourceMap),
       noiseOperators = noiseOperatorSnapshots(semantic.sourceMap),
       transferOperators = transferOperatorSnapshots(semantic.sourceMap),
       analogFunctions = userFunctions.snapshots(modulePath),
-      analogSemantics = analogSemanticRecorder.snapshot,
+      analogSemantics = analogSemantics,
       analogProcedural = AnalogProceduralConstruction.snapshots(
         module => modulePath(moduleHandle(module)),
         canonicalGeneratedOwnership

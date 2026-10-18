@@ -1,6 +1,7 @@
 package nodal.internal.bridge
 
 private[nodal] object NativeDiagnosticMapper:
+  private val DiagnosticSeverity = raw"(?:^\s*|:\s+)(error|warning|note|remark):\s*".r
   private val StableCode = raw"(NODAL-[A-Z0-9-]+):\s*([^\n]*)".r
   private val SemanticPath = raw"\[semantic-path=([^\]]+)\]".r
   private val HierarchyPath = raw"\[hierarchy-path=([^\]]+)\]".r
@@ -12,21 +13,36 @@ private[nodal] object NativeDiagnosticMapper:
 
   def classify(standardError: String, exitCode: Int): BridgeDiagnostic =
     val normalized = standardError.replace("\r\n", "\n").replace('\r', '\n')
-    val stable = StableCode.findFirstMatchIn(normalized)
-    val code = stable.map(_.group(1)).getOrElse(fallbackCode(normalized))
+    val selected = primaryDiagnostic(normalized)
+    val stable = StableCode.findFirstMatchIn(selected)
+    val code = stable.map(_.group(1)).getOrElse(fallbackCode(selected))
     val message = stable
       .map(_.group(2).takeWhile(_ != '[').trim)
       .filter(_.nonEmpty)
-      .getOrElse(fallbackMessage(normalized, exitCode))
+      .getOrElse(fallbackMessage(selected, exitCode))
     BridgeDiagnostic(
       code = code,
       message = message,
-      semanticPath = capture(SemanticPath, normalized),
-      hierarchyPath = capture(HierarchyPath, normalized),
-      indexPath = capture(BracketedIndexPath, normalized)
-        .orElse(capture(PlainIndexPath, normalized)),
-      sourceRange = capture(SourceRange, normalized)
+      semanticPath = capture(SemanticPath, selected),
+      hierarchyPath = capture(HierarchyPath, selected),
+      indexPath = capture(BracketedIndexPath, selected)
+        .orElse(capture(PlainIndexPath, selected)),
+      sourceRange = capture(SourceRange, selected)
     )
+
+  private def primaryDiagnostic(text: String): String =
+    // Native context is appended to its diagnostic line. Never borrow a code or
+    // context from a warning, note, or later error; retain legacy unprefixed output.
+    text.linesIterator
+      .find(line => capture(DiagnosticSeverity, line).contains("error"))
+      .getOrElse:
+        if text.linesIterator.exists(line => DiagnosticSeverity.findFirstIn(line).nonEmpty)
+        then ""
+        else
+          text.linesIterator
+            .find(line => StableCode.findFirstIn(line).nonEmpty)
+            .orElse(text.linesIterator.find(_.trim.nonEmpty))
+            .getOrElse("")
 
   private def capture(pattern: scala.util.matching.Regex, text: String): Option[String] =
     pattern.findFirstMatchIn(text).map(_.group(1)).filter(_.nonEmpty)

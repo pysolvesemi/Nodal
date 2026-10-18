@@ -1617,6 +1617,14 @@ private[nodal] object CandidateRuntime:
     AnalogProceduralConstruction.requireContinuousContext("analog contribution")
     ConstructionKernel.shortAnalogContribution(target, value)
 
+  def physicalComponent(contract: PhysicalComponentContract, body: => Unit): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("physical component")
+    ConstructionKernel.physicalComponent(contract)(body)
+
+  def declareAnalogState(state: AnalogState): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("analog state declaration")
+    ConstructionKernel.declareAnalogState(state)
+
   def analogSemanticBlock(
       kind: AnalogEquationRuntime.RegionKind,
       body: => Unit

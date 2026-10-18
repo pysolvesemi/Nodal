@@ -2,7 +2,9 @@
 
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/Verifier.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 
@@ -10,6 +12,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -484,15 +487,16 @@ FailureOr<EvaluatedConstant> evaluateParameterDefault(Operation *parameter,
   return result;
 }
 
-FailureOr<EvaluatedConstant> evaluateExpression(Operation *operation, Operation *scope,
-                                                llvm::DenseSet<Operation *> &parameterStack) {
+FailureOr<EvaluatedConstant>
+evaluateExpression(Operation *operation,
+                   llvm::function_ref<FailureOr<EvaluatedConstant>(Value)> evaluateOperand) {
   llvm::StringRef name = textAttr(operation, "operator_name");
   const unsigned count = operation->getNumOperands();
   const bool unary = name == "neg" || name == "not";
   if (unary ? count != 1 : count != 2)
     return failure();
 
-  auto lhs = evaluateValue(operation->getOperand(0), scope, parameterStack);
+  auto lhs = evaluateOperand(operation->getOperand(0));
   if (failed(lhs))
     return failure();
   EvaluatedConstant result;
@@ -519,7 +523,7 @@ FailureOr<EvaluatedConstant> evaluateExpression(Operation *operation, Operation 
     return result;
   }
 
-  auto rhs = evaluateValue(operation->getOperand(1), scope, parameterStack);
+  auto rhs = evaluateOperand(operation->getOperand(1));
   if (failed(rhs))
     return failure();
 
@@ -644,7 +648,8 @@ FailureOr<EvaluatedConstant> evaluateValue(Value value, Operation *scope,
     return evaluateParameterDefault(parameter, parameterStack);
   }
   if (name == "nodal.const_expr")
-    return evaluateExpression(operation, scope, parameterStack);
+    return evaluateExpression(
+        operation, [&](Value operand) { return evaluateValue(operand, scope, parameterStack); });
   if (name == "nodal.constant")
     return constantFromAttribute(operation->getAttr("value"), value.getType());
   return failure();
@@ -768,6 +773,19 @@ int compareConstants(const EvaluatedConstant &lhs, const EvaluatedConstant &rhs)
   return lhs.integerValue < rhs.integerValue ? -1 : 1;
 }
 
+bool satisfiesConstraint(Operation *constraint, const EvaluatedConstant &candidate,
+                         llvm::ArrayRef<EvaluatedConstant> values) {
+  if (textAttr(constraint, "constraint_kind") == "range") {
+    const bool lowerInclusive = constraint->getAttrOfType<BoolAttr>("lower_inclusive").getValue();
+    const bool upperInclusive = constraint->getAttrOfType<BoolAttr>("upper_inclusive").getValue();
+    const int lower = compareConstants(candidate, values[0]);
+    const int upper = compareConstants(candidate, values[1]);
+    return (lowerInclusive ? lower >= 0 : lower > 0) && (upperInclusive ? upper <= 0 : upper < 0);
+  }
+  return textAttr(constraint, "constraint_kind") != "exclude" ||
+         compareConstants(candidate, values[0]) != 0;
+}
+
 LogicalResult checkConstraints(Operation *parameter, const EvaluatedConstant &candidate,
                                llvm::StringRef code, Operation *diagnosticOwner) {
   Operation *module = enclosingNodalModule(parameter);
@@ -785,18 +803,11 @@ LogicalResult checkConstraints(Operation *parameter, const EvaluatedConstant &ca
                << code << ": constraint unit or type is incompatible";
       values.push_back(*normalized);
     }
-    llvm::StringRef kind = textAttr(constraint, "constraint_kind");
-    if (kind == "range") {
-      auto lowerInclusive = constraint->getAttrOfType<BoolAttr>("lower_inclusive");
-      auto upperInclusive = constraint->getAttrOfType<BoolAttr>("upper_inclusive");
-      const int lower = compareConstants(candidate, values[0]);
-      const int upper = compareConstants(candidate, values[1]);
-      if ((lowerInclusive.getValue() ? lower < 0 : lower <= 0) ||
-          (upperInclusive.getValue() ? upper > 0 : upper >= 0))
-        return diagnosticOwner->emitOpError() << code << ": value violates parameter range";
-    } else if (kind == "exclude" && compareConstants(candidate, values[0]) == 0) {
-      return diagnosticOwner->emitOpError() << code << ": value is explicitly excluded";
-    }
+    if (!satisfiesConstraint(constraint, candidate, values))
+      return diagnosticOwner->emitOpError() << code
+                                            << (textAttr(constraint, "constraint_kind") == "range"
+                                                    ? ": value violates parameter range"
+                                                    : ": value is explicitly excluded");
   }
   return success();
 }
@@ -1143,6 +1154,211 @@ InstanceNodePtr literalInstanceNode(int64_t value, Operation *origin = nullptr) 
   node->bounds = {value, value};
   return node;
 }
+
+// This query adds finite facts to the parameter owner, not another interval
+// engine. The cached default is only a validity witness; `invariant` determines
+// whether it may also be used as a value proof. All reachable constant DAG nodes
+// are checked once, with the same bounded recursion policy as integer bounds.
+using ZeroAdmissibility = nodal::ParameterZeroAdmissibility;
+struct CheckedParameterConstant {
+  EvaluatedConstant value;
+  bool invariant = false;
+  ZeroAdmissibility zero = ZeroAdmissibility::Unknown;
+};
+
+ZeroAdmissibility constantZeroAdmissibility(const EvaluatedConstant &value) {
+  if (value.kind == ConstantKind::Real)
+    return value.realValue == 0.0 ? ZeroAdmissibility::ZeroPermitted
+                                  : ZeroAdmissibility::ZeroExcluded;
+  if (value.kind == ConstantKind::Integer) {
+    const bool zero =
+        value.exactInteger ? value.exactInteger.getValue().isZero() : value.integerValue == 0;
+    return zero ? ZeroAdmissibility::ZeroPermitted : ZeroAdmissibility::ZeroExcluded;
+  }
+  return ZeroAdmissibility::Unknown;
+}
+
+class ParameterZeroAnalysis {
+public:
+  explicit ParameterZeroAnalysis(Operation *owner) : owner(owner), integerBounds(owner) {}
+
+  FailureOr<CheckedParameterConstant> value(Value input) {
+    if (!input)
+      return failure();
+    auto cached = values.find(input);
+    if (cached != values.end()) {
+      if (!cached->second)
+        return failure();
+      return *cached->second;
+    }
+    if (activeValues.size() + activeParameters.size() >= 512 || !activeValues.insert(input).second)
+      return failure();
+    auto result = analyzeValue(input);
+    activeValues.erase(input);
+    values.try_emplace(input, succeeded(result) ? std::optional<CheckedParameterConstant>(*result)
+                                                : std::nullopt);
+    return result;
+  }
+
+  FailureOr<CheckedParameterConstant> parameter(Operation *input) {
+    if (!input)
+      return failure();
+    auto cached = parameters.find(input);
+    if (cached != parameters.end()) {
+      if (!cached->second)
+        return failure();
+      return *cached->second;
+    }
+    if (activeValues.size() + activeParameters.size() >= 512 ||
+        !activeParameters.insert(input).second)
+      return failure();
+    auto result = analyzeParameter(input);
+    activeParameters.erase(input);
+    parameters.try_emplace(
+        input, succeeded(result) ? std::optional<CheckedParameterConstant>(*result) : std::nullopt);
+    return result;
+  }
+
+private:
+  LogicalResult checkUnit(Operation *input) {
+    if (!input->hasAttr("unit"))
+      return success();
+    Operation *unit = resolveUnit(input, input->getAttrOfType<FlatSymbolRefAttr>("unit"));
+    return success(unit && succeeded(verify(unit, false)));
+  }
+
+  Operation *referencedParameter(Operation *input) {
+    auto reference = input->getAttrOfType<FlatSymbolRefAttr>("parameter");
+    return reference ? findDirectSymbol(owner, reference.getValue(), "nodal.parameter") : nullptr;
+  }
+
+  FailureOr<CheckedParameterConstant> analyzeValue(Value input) {
+    Operation *operation = input.getDefiningOp();
+    if (!operation || enclosingNodalModule(operation) != owner ||
+        failed(verify(operation, false)) || failed(checkUnit(operation)))
+      return failure();
+    const auto name = operation->getName().getStringRef();
+    if (name == "nodal.const_parameter_ref" || name == "nodal.parameter_ref")
+      return parameter(referencedParameter(operation));
+    if (name == "nodal.const_literal" || name == "nodal.constant") {
+      auto literal = constantFromAttribute(
+          operation->getAttr("value"), input.getType(),
+          resolveUnit(operation, operation->getAttrOfType<FlatSymbolRefAttr>("unit")));
+      if (failed(literal) ||
+          (literal->kind == ConstantKind::Real && !std::isfinite(literal->realValue)))
+        return failure();
+      return CheckedParameterConstant{*literal, true, constantZeroAdmissibility(*literal)};
+    }
+    if (name != "nodal.const_expr")
+      return failure();
+    bool invariant = true;
+    auto evaluated =
+        evaluateExpression(operation, [&](Value operand) -> FailureOr<EvaluatedConstant> {
+          auto fact = value(operand);
+          if (failed(fact))
+            return failure();
+          invariant &= fact->invariant;
+          return fact->value;
+        });
+    if (failed(evaluated) ||
+        (evaluated->kind == ConstantKind::Integer && evaluated->integerIsNarrow &&
+         !boundsFitType({evaluated->integerValue, evaluated->integerValue}, input.getType())))
+      return failure();
+    CheckedParameterConstant result{*evaluated, invariant};
+    if (invariant) {
+      result.zero = constantZeroAdmissibility(*evaluated);
+    } else if (auto bounds = integerBounds.value(input);
+               succeeded(bounds) && (bounds->lower > 0 || bounds->upper < 0)) {
+      result.zero = ZeroAdmissibility::ZeroExcluded;
+    }
+    return result;
+  }
+
+  FailureOr<CheckedParameterConstant> analyzeParameter(Operation *input) {
+    if (!isNamed(input, "nodal.parameter") || input->getParentOp() != owner ||
+        !structuralBody(owner) || failed(verify(input, false)) || failed(checkUnit(input)) ||
+        hasDuplicateParameterValue(owner, symbolName(input)))
+      return failure();
+    unsigned identities = 0;
+    for (Operation &candidate : *moduleBody(owner))
+      identities +=
+          isNamed(&candidate, "nodal.parameter") && symbolName(&candidate) == symbolName(input);
+    if (identities != 1)
+      return failure();
+    const Type type = input->getAttrOfType<TypeAttr>("type").getValue();
+    Operation *expression = findParameterValue(owner, symbolName(input));
+    FailureOr<CheckedParameterConstant> initial = failure();
+    if (expression) {
+      if (failed(verify(expression, false)))
+        return failure();
+      initial = value(expression->getOperand(0));
+    } else {
+      auto constant = constantFromAttribute(
+          input->getAttr("default_value"), type,
+          resolveUnit(input, input->getAttrOfType<FlatSymbolRefAttr>("unit")));
+      if (succeeded(constant))
+        initial = CheckedParameterConstant{*constant, true};
+    }
+    if (failed(initial))
+      return failure();
+    auto physical = adoptParameterUnit(initial->value, input);
+    if (failed(physical))
+      return failure();
+    auto normalized = normalizeForParameter(*physical, input);
+    if (failed(normalized) || !attributeMatches(input->getAttr("default_value"), *normalized))
+      return failure();
+    CheckedParameterConstant result{*physical, textAttr(input, "variability") == "fixed" &&
+                                                   initial->invariant};
+    EvaluatedConstant zero;
+    zero.kind = normalized->kind;
+    bool constrained = false, allInvariant = true, zeroExcluded = false;
+    for (Operation *constraint : findParameterConstraints(owner, symbolName(input))) {
+      if (failed(verify(constraint, false)))
+        return failure();
+      constrained = true;
+      bool invariant = true;
+      llvm::SmallVector<EvaluatedConstant, 2> operands;
+      for (Value operand : constraint->getOperands()) {
+        auto fact = value(operand);
+        if (failed(fact))
+          return failure();
+        auto normalizedOperand = normalizeForParameter(fact->value, input);
+        if (failed(normalizedOperand))
+          return failure();
+        invariant &= fact->invariant;
+        operands.push_back(*normalizedOperand);
+      }
+      // An accepted default witnesses a nonempty legal set. Never infer safety
+      // from contradictory constraints or a default that violates its contract.
+      if (!satisfiesConstraint(constraint, *normalized, operands))
+        return failure();
+      allInvariant &= invariant;
+      zeroExcluded |= invariant && !satisfiesConstraint(constraint, zero, operands);
+    }
+    if (normalized->kind != ConstantKind::Integer && normalized->kind != ConstantKind::Real)
+      return result;
+    if (result.invariant)
+      result.zero = constantZeroAdmissibility(*physical);
+    else if (zeroExcluded)
+      result.zero = ZeroAdmissibility::ZeroExcluded;
+    else if (auto bounds = integerBounds.parameter(input);
+             succeeded(bounds) && (bounds->lower > 0 || bounds->upper < 0))
+      result.zero = ZeroAdmissibility::ZeroExcluded;
+    else if (textAttr(input, "variability") == "symbolic" && constrained && allInvariant)
+      result.zero = ZeroAdmissibility::ZeroPermitted;
+    else if (textAttr(input, "variability") == "fixed" && expression &&
+             (allInvariant || initial->zero == ZeroAdmissibility::ZeroExcluded))
+      result.zero = initial->zero;
+    return result;
+  }
+
+  Operation *owner;
+  IntegerBoundsAnalysis integerBounds;
+  llvm::DenseMap<Value, std::optional<CheckedParameterConstant>> values;
+  llvm::DenseMap<Operation *, std::optional<CheckedParameterConstant>> parameters;
+  llvm::DenseSet<Value> activeValues;
+  llvm::DenseSet<Operation *> activeParameters;
+};
 
 // This is a read-only interpretation of the existing parameter SSA graph, not
 // another parameter registry. Each query owns its memoization and active sets.
@@ -1954,6 +2170,74 @@ FailureOr<nodal::ParameterIntegerBounds> nodal::inferParameterIntegerBounds(Oper
   if (!owner)
     return failure();
   return IntegerBoundsAnalysis(owner).parameter(parameter);
+}
+
+FailureOr<nodal::ParameterZeroAdmissibility>
+nodal::analyzeParameterZeroAdmissibility(Operation *parameter) {
+  if (!parameter)
+    return failure();
+  ScopedDiagnosticHandler silence(parameter->getContext(), [](Diagnostic &) { return success(); });
+  auto fact = ParameterZeroAnalysis(enclosingNodalModule(parameter)).parameter(parameter);
+  if (failed(fact))
+    return failure();
+  return fact->zero;
+}
+
+FailureOr<nodal::ParameterZeroAdmissibility> nodal::analyzeParameterZeroAdmissibility(Value value) {
+  if (!value)
+    return failure();
+  Operation *operation = value.getDefiningOp();
+  if (!operation)
+    return ParameterZeroAdmissibility::Unknown;
+  ScopedDiagnosticHandler silence(operation->getContext(), [](Diagnostic &) { return success(); });
+  const auto name = operation->getName().getStringRef();
+  if (name == "nodal.real_literal" || name == "nodal.analog_integer_literal") {
+    if (failed(verify(operation, false)))
+      return failure();
+    if (auto real = operation->getAttrOfType<FloatAttr>("value"))
+      return real.getValueAsDouble() == 0.0 ? ParameterZeroAdmissibility::ZeroPermitted
+                                            : ParameterZeroAdmissibility::ZeroExcluded;
+    auto integer = operation->getAttrOfType<IntegerAttr>("value");
+    if (!integer)
+      return failure();
+    return integer.getValue().isZero() ? ParameterZeroAdmissibility::ZeroPermitted
+                                       : ParameterZeroAdmissibility::ZeroExcluded;
+  }
+  if (!oneOf(name, {"nodal.const_literal", "nodal.constant", "nodal.const_parameter_ref",
+                    "nodal.parameter_ref", "nodal.const_expr"}))
+    return ParameterZeroAdmissibility::Unknown;
+  auto fact = ParameterZeroAnalysis(enclosingNodalModule(operation)).value(value);
+  if (failed(fact))
+    return failure();
+  return fact->zero;
+}
+
+FailureOr<std::optional<Attribute>> nodal::getInvariantParameterDefault(Operation *parameter) {
+  if (!parameter)
+    return failure();
+  ScopedDiagnosticHandler silence(parameter->getContext(), [](Diagnostic &) { return success(); });
+  auto fact = ParameterZeroAnalysis(enclosingNodalModule(parameter)).parameter(parameter);
+  if (failed(fact))
+    return failure();
+  if (!fact->invariant)
+    return std::optional<Attribute>{};
+  auto normalized = normalizeForParameter(fact->value, parameter);
+  if (failed(normalized))
+    return failure();
+  MLIRContext *context = parameter->getContext();
+  if (normalized->kind == ConstantKind::Real)
+    return std::optional<Attribute>{
+        FloatAttr::get(Float64Type::get(context), normalized->realValue)};
+  if (normalized->kind == ConstantKind::Boolean)
+    return std::optional<Attribute>{BoolAttr::get(context, normalized->booleanValue)};
+  if (normalized->kind == ConstantKind::Integer) {
+    if (normalized->exactInteger)
+      return std::optional<Attribute>{normalized->exactInteger};
+    if (normalized->integerIsNarrow)
+      return std::optional<Attribute>{IntegerAttr::get(
+          IntegerType::get(context, 64, IntegerType::Signed), normalized->integerValue)};
+  }
+  return failure();
 }
 
 FailureOr<nodal::InstantiatedIntegerExpression>

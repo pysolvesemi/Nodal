@@ -28,7 +28,8 @@ private[nodal] object AnalogEquationRuntime:
   final case class Expression(
       rendered: String,
       dimension: String,
-      valueKind: ValueKind = ValueKind.Real
+      valueKind: ValueKind = ValueKind.Real,
+      root: Option[Expr[?]] = None
   ):
     require(rendered.nonEmpty, "expression text must be non-empty")
     require(dimension.nonEmpty, "expression dimension must be non-empty")
@@ -54,7 +55,8 @@ private[nodal] object AnalogEquationRuntime:
       guard: Option[Expression],
       analyses: Set[String],
       continuity: String,
-      source: SourceSpan
+      source: SourceSpan,
+      component: Option[String] = None
   ):
     require(owner.nonEmpty, "semantic owner must be non-empty")
     require(analyses.nonEmpty, "analysis applicability must be non-empty")
@@ -87,10 +89,59 @@ private[nodal] object AnalogEquationRuntime:
       terms: Vector[ContributionRecord]
   )
 
+  /** Immutable source records retain actual expression and declaration identity. */
+  final case class ComponentRecord(
+      identity: String,
+      owner: String,
+      contract: PhysicalComponentContract,
+      source: SourceSpan
+  )
+
+  final case class StateRecord(
+      identity: String,
+      owner: String,
+      component: Option[String],
+      state: AnalogState,
+      dimension: String,
+      initialization: String,
+      initializer: Option[Expression],
+      source: SourceSpan
+  )
+
+  final case class ParameterReference(
+      parameter: Param[?],
+      owner: String,
+      path: String,
+      dimension: String
+  )
+
   final case class Snapshot(
       equations: Vector[EquationRecord],
-      contributions: Vector[ContributionBucket]
+      contributions: Vector[ContributionBucket],
+      components: Vector[ComponentRecord] = Vector.empty,
+      states: Vector[StateRecord] = Vector.empty,
+      parameters: Vector[ParameterReference] = Vector.empty,
+      unsupported: Vector[String] = Vector.empty
   )
+
+  def sourceMap(snapshot: Snapshot): Vector[SourceMapEntry] =
+    if snapshot.components.isEmpty && snapshot.states.isEmpty then Vector.empty
+    else
+      val entries = snapshot.components.map(record => record.identity -> record.source) ++
+        snapshot.states.map(record => record.identity -> record.source) ++
+        snapshot.equations.map(record => record.identity.value -> record.metadata.source)
+      entries.map: (path, source) =>
+        SourceMapEntry(
+          path,
+          nodal.SourceSpan(
+            source.file,
+            source.line,
+            source.column,
+            source.line,
+            source.column
+          )
+        )
+      .sortBy(_.semanticPath)
 
   sealed trait Diagnostic:
     def code: String
@@ -99,6 +150,29 @@ private[nodal] object AnalogEquationRuntime:
   final case class SemanticError(code: String, message: String) extends Diagnostic
 
   final class Recorder:
+    private val componentRecords = mutable.LinkedHashMap.empty[String, ComponentRecord]
+    private val stateRecords = mutable.LinkedHashMap.empty[String, StateRecord]
+    private val unsupportedRecords = mutable.LinkedHashSet.empty[String]
+    private var componentStack = List.empty[ComponentRecord]
+
+    def currentComponent: Option[ComponentRecord] = componentStack.headOption
+    def containsComponent(identity: String): Boolean = componentRecords.contains(identity)
+    def containsState(identity: String): Boolean = stateRecords.contains(identity)
+
+    def component[A](record: ComponentRecord)(body: => A): A =
+      require(!componentRecords.contains(record.identity), "duplicate physical component identity")
+      if componentStack.nonEmpty then unsupportedRecords += "nested physical components"
+      componentRecords(record.identity) = record
+      componentStack = record :: componentStack
+      try body
+      finally componentStack = componentStack.tail
+
+    def state(record: StateRecord): Unit =
+      require(!stateRecords.contains(record.identity), "duplicate analog state identity")
+      stateRecords(record.identity) = record
+
+    def unsupported(reason: String): Unit = unsupportedRecords += reason
+
     private val initializationAnalyses = Set("initialization")
     private var activeRegion: Option[RegionKind] = None
     private val equationRecords = mutable.LinkedHashMap.empty[EquationIdentity, EquationRecord]
@@ -196,7 +270,13 @@ private[nodal] object AnalogEquationRuntime:
         .map { case (target, records) =>
           ContributionBucket(target, records.sortBy(_.identity.value))
         }
-      Snapshot(orderedEquations, buckets)
+      Snapshot(
+        orderedEquations,
+        buckets,
+        componentRecords.values.toVector.sortBy(_.identity),
+        stateRecords.values.toVector.sortBy(_.identity),
+        unsupported = unsupportedRecords.toVector.sorted
+      )
 
     private def validateAndStoreEquation(
         identity: EquationIdentity,

@@ -505,3 +505,24 @@ target_link_libraries(nodal-analog-canonicalization-unit-tests PRIVATE
   NodalTransforms NodalDialect MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.analog-canonicalization-unit COMMAND nodal-analog-canonicalization-unit-tests)
 set_tests_properties(nodal.native.analog-canonicalization-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-analog-semantic-lint-unit-tests AnalogSemanticLintTest.cpp)
+llvm_update_compile_flags(nodal-analog-semantic-lint-unit-tests)
+target_link_libraries(nodal-analog-semantic-lint-unit-tests PRIVATE
+  NodalTransforms NodalDialect MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.analog-semantic-lint-unit COMMAND nodal-analog-semantic-lint-unit-tests)
+set_tests_properties(nodal.native.analog-semantic-lint-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-parameter-nonzero-unit-tests ParameterNonzeroTest.cpp)
+llvm_update_compile_flags(nodal-parameter-nonzero-unit-tests)
+target_link_libraries(nodal-parameter-nonzero-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.parameter-nonzero-unit COMMAND nodal-parameter-nonzero-unit-tests)
+set_tests_properties(nodal.native.parameter-nonzero-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-analog-equation-model-unit-tests AnalogEquationModelTest.cpp)
+llvm_update_compile_flags(nodal-analog-equation-model-unit-tests)
+target_link_libraries(nodal-analog-equation-model-unit-tests PRIVATE
+  NodalDialect NodalTransforms MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.analog-equation-model-unit COMMAND nodal-analog-equation-model-unit-tests)
+set_tests_properties(nodal.native.analog-equation-model-unit PROPERTIES TIMEOUT 30)

@@ -30,6 +30,10 @@ struct AnalogNumericTypeInfo {
 /// by Increment 30.
 bool isCanonicalDimensionSignature(llvm::StringRef signature);
 
+/// Normalize the frozen source API's named dimension aliases to quantity signatures.
+/// This does not reinterpret arbitrary native dimension atoms or mutate existing types.
+mlir::FailureOr<std::string> canonicalizeAnalogSourceDimension(llvm::StringRef dimension);
+
 /// Combine canonical dimensions by adding (`subtractRhs == false`) or
 /// subtracting (`subtractRhs == true`) the right-hand exponent vector.
 mlir::FailureOr<std::string> combineAnalogDimensions(llvm::StringRef lhs, llvm::StringRef rhs,

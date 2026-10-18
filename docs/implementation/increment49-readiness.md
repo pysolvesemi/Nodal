@@ -1,9 +1,10 @@
 # Foundation 49 readiness and implementation
 
-F-049 implementation is ready for integration on `increment/49-ngspice-simulation-harness`, based on
+F-049 is complete and integrated from `increment/49-ngspice-simulation-harness`, based on
 `7fdf47329962a9f82dcfadc233910ae1e17e02c7`. F-048 is integrated and closed.
-F-049.A through F are complete. The parent and G remain open pending verified
-integration of the tested tree.
+F-049.A through G and the parent are complete after verified squash integration
+`9b8c330564098778f0f22e75a5498070ea304a69`, preserving tested tree
+`559f90aade1d26d4e8fd544a8ebeae50034256a5`.
 
 ## Scope and architecture
 
@@ -56,7 +57,7 @@ pinned writer; preserve raw bytes and use only the real frequency coordinate.
 The typed production bench/adapter/parser, original F-049 failure controls, applicable
 generated initialization/context cases, whole-model compiler capability decisions
 and bounded scale checks are complete. Architecture review and the reproducible
-demonstration are recorded below. Verified integration remains open. No CI or broad
+demonstration are recorded below. Verified integration preserves the exact tested tree. No CI or broad
 qualification was run.
 
 ## Focused boundaries observed during implementation
@@ -190,7 +191,7 @@ loading, benches, analyses, typed failures and actual numerical comparisons pass
 F-049.F: bounded scale, retained explicit options, exact source/artifact/request
 identity and repeatable numerical output pass. Original supported cases remain
 meaningful; consumer rejections are retained, not relabeled as passing simulation.
-F-049.G and the parent wait for the verified integration commit.
+F-049.G and the parent are complete after the verified integration above.
 
 Final evidence is `.work/increment49/replay-final/source-replay-8679539002980930345`.
 The earlier complete run is retained separately; a test-helper lint cleanup was

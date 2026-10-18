@@ -1225,7 +1225,7 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
 
   - Focused implementation: [F-048 pinned compiler adapter and exact evidence](../implementation/increment48-readiness.md); 43 focused Scala tests, 38 catalog checks, two native units and complete public-source compiler replay pass. Successful scalar compilation, blocked whole hierarchies/arrays and compiler crashes remain separate. Verified squash integration `4f64b50130e3e9f6d1c2df19e1a99159b490c529` preserves tested tree `544fcab4b0e067ce9cf22e3d9266200e72798bc8`; parent/G complete. No CI was run.
 
-- [ ] **Increment 49 — ngspice simulation harness**
+- [x] **Increment 49 — ngspice simulation harness**
   - [x] **F-049.A — Architecture review, modularity, scalability and extensibility.** Reuse generated-model identity and OpenVAF/OSDI output from 48; define simulator process, analysis and result ownership.
   - [x] **F-049.B — Implementation and integration.** Add OSDI loading, generated SPICE benches, transient/DC/AC runs, timeout/error handling, outputs, and local smoke simulation.
   - [x] **F-049.C — Focused positive, negative and predecessor regression.** Cover model-load failure, invalid benches, nonconvergence, timeout and malformed output; combine hierarchy, initialization and event fixtures where supported.
@@ -1234,8 +1234,8 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
     - [x] **F-049.D.2** Numerical behavior: Execute the applicable DC, transient and AC cases with declared independent references, units, stimuli and tolerances; add event/noise cases only under an explicitly qualified capability. Record numerical discrepancies and solver failures, not formal equivalence claims.
   - [x] **F-049.E — Optimization review and output quality.** Review bench generation and result collection costs; never tune tolerances to hide mismatches. Apply the proportionate review rule above; document no new optimization required when justified.
   - [x] **F-049.F — Representative scale, determinism and compatibility.** Exercise bounded sweep sizes and long transient output with reproducible seeds, parameters and solver options.
-  - [ ] **F-049.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 49; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
-  - Focused implementation and validation: [F-049 readiness](../implementation/increment49-readiness.md). Parent and G remain open pending verified integration.
+  - [x] **F-049.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 49; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
+  - Focused implementation and validation: [F-049 readiness](../implementation/increment49-readiness.md). Verified squash integration `9b8c330564098778f0f22e75a5498070ea304a69` preserves tested tree `559f90aade1d26d4e8fd544a8ebeae50034256a5`; parent/G complete. No CI was run.
 
 - [ ] **Increment 50 — Scala simulation API v0.1**
   - [ ] **F-050.A — Architecture review, modularity, scalability and extensibility.** Keep the public Scala simulation contract independent of simulator syntax; reuse 48-49 process and evidence services.

@@ -104,6 +104,8 @@ FailureOr<std::string> expression(Operation *op, const llvm::DenseMap<Value, std
 } // namespace
 
 LogicalResult renderAnalogUserFunctions(Operation *module, llvm::raw_ostream &output) {
+  if (failed(verifyAnalogDeadLocalMarkers(module)))
+    return failure();
   auto ordered = orderedAnalogUserFunctions(module);
   if (failed(ordered))
     return emitMappedFailure(module, "NODAL-ANALOG-041-007",
@@ -128,7 +130,12 @@ LogicalResult renderAnalogUserFunctions(Operation *module, llvm::raw_ostream &ou
       if (!isPortableVerilogIdentifier(localName) || functionNames.contains(localName))
         return emitMappedFailure(&op, "NODAL-BACKEND-NAMING-001",
                                  "function argument/local is reserved or shadows a function");
-      (kind == "input" ? inputs : locals).push_back(&op);
+      // Validate every original name before eliding an independently verified
+      // dead declaration; normalization must not hide reserved-name failures.
+      if (kind == "input")
+        inputs.push_back(&op);
+      else if (!isNormalizedAnalogDeadLocal(&op))
+        locals.push_back(&op);
     }
     output << "  analog function " << scalarSpelling(resultType) << " " << name << ";\n";
     output << "    input ";
@@ -148,7 +155,7 @@ LogicalResult renderAnalogUserFunctions(Operation *module, llvm::raw_ostream &ou
         output << "      " << name << " = " << value->second << ";\n";
         continue;
       }
-      if (valueKind(&op) == "local") {
+      if (valueKind(&op) == "local" && !isNormalizedAnalogDeadLocal(&op)) {
         auto value = values.find(op.getOperand(0));
         if (value == values.end())
           return failure();

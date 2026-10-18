@@ -230,6 +230,12 @@
       "NODAL-ANALOG-038-002",
       "NODAL-ANALOG-038-003",
       "NODAL-ANALOG-038-004"
+    ],
+    "analog-canonicalization": [
+      "NODAL-ANALOG-045-001",
+      "NODAL-ANALOG-045-002",
+      "NODAL-ANALOG-045-003",
+      "NODAL-ANALOG-045-004"
     ]
   },
   "preserved_prefixes": [

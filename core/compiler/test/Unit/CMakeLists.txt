@@ -485,3 +485,23 @@ llvm_update_compile_flags(nodal-analog-context-backend-unit-tests)
 target_link_libraries(nodal-analog-context-backend-unit-tests
   PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.analog-context-backend-unit COMMAND nodal-analog-context-backend-unit-tests)
+
+add_executable(nodal-analog-divisor-unit-tests AnalogDivisorTest.cpp)
+llvm_update_compile_flags(nodal-analog-divisor-unit-tests)
+target_link_libraries(nodal-analog-divisor-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.analog-divisor-unit COMMAND nodal-analog-divisor-unit-tests)
+
+add_executable(nodal-analog-dead-local-unit-tests AnalogDeadLocalTest.cpp)
+llvm_update_compile_flags(nodal-analog-dead-local-unit-tests)
+target_link_libraries(nodal-analog-dead-local-unit-tests PRIVATE
+  NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.analog-dead-local-unit COMMAND nodal-analog-dead-local-unit-tests)
+set_tests_properties(nodal.native.analog-divisor-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-analog-canonicalization-unit-tests AnalogCanonicalizationTest.cpp)
+llvm_update_compile_flags(nodal-analog-canonicalization-unit-tests)
+target_link_libraries(nodal-analog-canonicalization-unit-tests PRIVATE
+  NodalTransforms NodalDialect MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.analog-canonicalization-unit COMMAND nodal-analog-canonicalization-unit-tests)
+set_tests_properties(nodal.native.analog-canonicalization-unit PROPERTIES TIMEOUT 30)

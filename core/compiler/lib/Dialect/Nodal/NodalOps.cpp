@@ -2023,6 +2023,8 @@ LogicalResult nodal::ModuleOp::verify() {
     if (type && failed(verifyShapedTypeContract(getOperation(), &operation, type.getValue())))
       return failure();
   }
+  if (failed(verifyAnalogDeadLocalMarkers(getOperation())))
+    return failure();
   if (failed(verifyAnalogLiveModuleResources(getOperation())))
     return failure();
   if (failed(verifyNodeArraySelections(getOperation())))

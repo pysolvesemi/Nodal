@@ -18,6 +18,7 @@
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Support/HierarchyOrder.h"
+#include "nodal/Transforms/AnalogCanonicalization.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -1218,11 +1219,14 @@ NODAL_DEFINE_VERIFICATION_PASS(VerifyCapabilitiesPass, "nodal-verify-capabilitie
 
 llvm::SmallVector<llvm::StringRef, 16> stageNames(GateProfile profile) {
   if (profile == GateProfile::Fast)
-    return {"construction",   "hierarchy", "types",       "parameters",
-            "analog-numeric", "domains",   "capabilities"};
-  return {"construction", "drivers",    "latches",        "cycles",      "hierarchy",
-          "types",        "parameters", "analog-numeric", "enum-fsm",    "domains",
-          "protocols",    "effects",    "analog",         "capabilities"};
+    return {"construction", "hierarchy",      "types",
+            "parameters",   "analog-numeric", "analog-canonicalization",
+            "domains",      "capabilities"};
+  return {"construction", "drivers",        "latches",
+          "cycles",       "hierarchy",      "types",
+          "parameters",   "analog-numeric", "analog-canonicalization",
+          "enum-fsm",     "domains",        "protocols",
+          "effects",      "analog",         "capabilities"};
 }
 
 std::unique_ptr<Pass> createFoldAnalogConstantsPass();
@@ -1240,6 +1244,7 @@ void addVerifierPasses(OpPassManager &manager, GateProfile profile) {
   manager.addPass(std::make_unique<VerifyParametersPass>());
   manager.addPass(createFoldAnalogConstantsPass());
   manager.addPass(createVerifyAnalogNumericPass());
+  manager.addPass(createCanonicalizeAnalogPass());
   if (profile != GateProfile::Fast)
     manager.addPass(std::make_unique<VerifyEnumFsmPass>());
   manager.addPass(std::make_unique<VerifyDomainsPass>());
@@ -1432,6 +1437,7 @@ LogicalResult runNodalPipelineTransaction(mlir::ModuleOp module, GateProfile pro
 }
 
 void registerNodalPasses() {
+  registerAnalogCanonicalizationPass();
   static PassRegistration<MaterializeConservativeConnectivityPass> connectivity;
   static PassRegistration<VerifyConstructionPass> construction;
   static PassRegistration<VerifyDriversPass> drivers;

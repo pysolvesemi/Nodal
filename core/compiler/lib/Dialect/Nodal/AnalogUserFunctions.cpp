@@ -24,6 +24,7 @@
 using namespace mlir;
 namespace nodal {
 namespace {
+constexpr llvm::StringLiteral deadLocalMarker = "nodal.canonical.dead_local";
 llvm::StringRef text(Operation *op, llvm::StringRef key) {
   auto value = op->getAttrOfType<StringAttr>(key);
   return value ? value.getValue() : llvm::StringRef();
@@ -227,6 +228,38 @@ LogicalResult verifyValue(Operation *op) {
   return success();
 }
 
+bool eligibleDeadLocal(Operation *op) {
+  if (!named(op, "nodal.analog_function_value") || text(op, "kind") != "local" ||
+      !named(op->getParentOp(), "nodal.analog_user_function") || op->getNumResults() != 1 ||
+      op->getNumOperands() != 1 || op->getNumRegions() != 0 || !op->getResult(0).use_empty() ||
+      !scalar(op->getResult(0).getType()))
+    return false;
+  Operation *initializer = op->getOperand(0).getDefiningOp();
+  if (!named(initializer, "nodal.analog_function_value") ||
+      text(initializer, "kind") != "literal" || initializer->getBlock() != op->getBlock() ||
+      initializer->getNumResults() != 1 || initializer->getNumOperands() != 0 ||
+      initializer->getNumRegions() != 0 ||
+      initializer->getResult(0).getType() != op->getResult(0).getType() ||
+      !initializer->isBeforeInBlock(op))
+    return false;
+  // Reuse the authoritative literal/type verifier. The proof deliberately does
+  // not use constant propagation: no input, call, select, or expression graph
+  // can become evidence merely through a claimed annotation or a known result.
+  return succeeded(verifyValue(initializer)) && succeeded(verifyValue(op));
+}
+
+LogicalResult verifyDeadLocalMarker(Operation *op) {
+  Attribute marker = op->getAttr(deadLocalMarker);
+  if (!marker)
+    return success();
+  auto enabled = llvm::dyn_cast<BoolAttr>(marker);
+  if (!enabled || !enabled.getValue() || !eligibleDeadLocal(op))
+    return error(op, "NODAL-ANALOG-045-004",
+                 "dead-local marker requires an unused immutable local with a verified "
+                 "same-type finite Real/Integer literal initializer");
+  return success();
+}
+
 // Analyze constants only to reject known-invalid expressions. Do not rewrite body SSA or
 // infer constants across calls; target declarations and call identity remain observable.
 FailureOr<std::optional<double>>
@@ -422,6 +455,8 @@ FailureOr<llvm::SmallVector<Operation *>> orderedAnalogUserFunctions(Operation *
 }
 
 LogicalResult verifyAnalogUserFunctionOperation(Operation *op) {
+  if (failed(verifyAnalogDeadLocalMarkers(op)))
+    return failure();
   if (forbiddenAnnotations(op))
     return error(op, "NODAL-ANALOG-FOLD-001",
                  "unproved function folding annotations are forbidden");
@@ -440,5 +475,45 @@ LogicalResult verifyAnalogUserFunctionOperation(Operation *op) {
     return success();
   }
   return error(op, "NODAL-ANALOG-041-001", "unknown analog function operation");
+}
+
+LogicalResult verifyAnalogDeadLocalMarker(Operation *op) { return verifyDeadLocalMarker(op); }
+
+LogicalResult verifyAnalogDeadLocalMarkers(Operation *root) {
+  WalkResult result = root->walk([&](Operation *op) {
+    return failed(verifyAnalogDeadLocalMarker(op)) ? WalkResult::interrupt()
+                                                   : WalkResult::advance();
+  });
+  return failure(result.wasInterrupted());
+}
+
+FailureOr<llvm::SmallVector<AnalogDeadLocalEvidence>> normalizeAnalogDeadLocals(Operation *root) {
+  if (failed(verifyAnalogDeadLocalMarkers(root)))
+    return failure();
+  // Complete validation precedes every mutation: even a wholly unused body
+  // expression with an invalid domain/divisor must reject rather than disappear.
+  llvm::DenseSet<Operation *> checkedFunctions;
+  WalkResult verified = root->walk([&](Operation *op) {
+    Operation *function = named(op, "nodal.analog_user_function") ? op : op->getParentOp();
+    if (named(function, "nodal.analog_user_function") && checkedFunctions.insert(function).second &&
+        failed(verifyAnalogUserFunctionOperation(function)))
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  if (verified.wasInterrupted())
+    return failure();
+  llvm::SmallVector<AnalogDeadLocalEvidence> evidence;
+  root->walk([&](Operation *op) {
+    if (eligibleDeadLocal(op))
+      evidence.push_back({op, op->getOperand(0).getDefiningOp()});
+  });
+  for (const AnalogDeadLocalEvidence &record : evidence)
+    record.local->setAttr(deadLocalMarker, BoolAttr::get(root->getContext(), true));
+  return evidence;
+}
+
+bool isNormalizedAnalogDeadLocal(Operation *op) {
+  auto marker = op->getAttrOfType<BoolAttr>(deadLocalMarker);
+  return marker && marker.getValue();
 }
 } // namespace nodal

@@ -14,6 +14,7 @@
 #include "nodal/Dialect/Nodal/TimeWaveform.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -55,6 +56,19 @@ struct ConstantValue {
 struct EvaluationResult {
   EvaluationStatus status = EvaluationStatus::Dynamic;
   ConstantValue value;
+};
+
+// Own the cache for one query or walk, never across authored IR mutations.
+class ConstantEvaluator {
+public:
+  explicit ConstantEvaluator(bool reportErrors) : reportErrors(reportErrors) {}
+
+  EvaluationResult evaluate(Value value);
+  bool shouldReportErrors() const { return reportErrors; }
+
+private:
+  bool reportErrors;
+  llvm::DenseMap<Value, EvaluationResult> cache;
 };
 
 bool isNamed(Operation *operation, llvm::StringRef name) {
@@ -255,6 +269,14 @@ std::optional<double> numericAsDouble(const ConstantValue &value) {
   return std::nullopt;
 }
 
+bool isKnownNumericZero(const EvaluationResult &result) {
+  if (result.status != EvaluationStatus::Constant)
+    return false;
+  return (result.value.kind == AnalogNumericKind::Integer && result.value.integer &&
+          result.value.integer->isZero()) ||
+         (result.value.kind == AnalogNumericKind::Real && result.value.real == 0.0);
+}
+
 bool integerDivisionIsExact(const ConstantValue &lhs, const ConstantValue &rhs) {
   if (lhs.kind != AnalogNumericKind::Integer || rhs.kind != AnalogNumericKind::Integer ||
       !lhs.integer || !rhs.integer || rhs.integer->isZero())
@@ -263,7 +285,18 @@ bool integerDivisionIsExact(const ConstantValue &lhs, const ConstantValue &rhs) 
   return left.srem(right).isZero();
 }
 
-EvaluationResult evaluateValue(Value value, bool reportErrors);
+EvaluationResult evaluateValue(Value value, ConstantEvaluator &evaluator);
+
+EvaluationResult ConstantEvaluator::evaluate(Value value) {
+  auto found = cache.find(value);
+  if (found != cache.end())
+    return found->second;
+  EvaluationResult result = evaluateValue(value, *this);
+  // Re-evaluate failures so each requested diagnostic is still emitted.
+  if (result.status != EvaluationStatus::Error)
+    cache.try_emplace(value, result);
+  return result;
+}
 
 EvaluationResult evaluateParameterReference(Operation *operation, bool reportErrors) {
   auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("parameter");
@@ -323,11 +356,17 @@ EvaluationResult evaluateParameterReference(Operation *operation, bool reportErr
   return dynamicResult();
 }
 
-EvaluationResult evaluateBinary(Operation *operation, bool reportErrors) {
-  EvaluationResult lhs = evaluateValue(operation->getOperand(0), reportErrors);
-  EvaluationResult rhs = evaluateValue(operation->getOperand(1), reportErrors);
+EvaluationResult evaluateBinary(Operation *operation, ConstantEvaluator &evaluator) {
+  const bool reportErrors = evaluator.shouldReportErrors();
+  EvaluationResult lhs = evaluator.evaluate(operation->getOperand(0));
+  EvaluationResult rhs = evaluator.evaluate(operation->getOperand(1));
   if (lhs.status == EvaluationStatus::Error || rhs.status == EvaluationStatus::Error)
     return errorResult(operation, "NODAL-ANALOG-FOLD-001", "operand constant evaluation failed",
+                       reportErrors);
+  // A known zero divisor is invalid even when the numerator is dynamic.
+  llvm::StringRef name = operation->getName().getStringRef();
+  if (name == "nodal.analog_div" && isKnownNumericZero(rhs))
+    return errorResult(operation, "NODAL-ANALOG-DIVIDE-001", "statically known zero divisor",
                        reportErrors);
   if (lhs.status != EvaluationStatus::Constant || rhs.status != EvaluationStatus::Constant)
     return dynamicResult();
@@ -340,16 +379,6 @@ EvaluationResult evaluateBinary(Operation *operation, bool reportErrors) {
   ConstantValue result;
   result.kind = resultInformation->kind;
   result.dimension = resultInformation->dimension;
-  llvm::StringRef name = operation->getName().getStringRef();
-
-  if (name == "nodal.analog_div") {
-    const bool zeroInteger = rhs.value.kind == AnalogNumericKind::Integer && rhs.value.integer &&
-                             rhs.value.integer->isZero();
-    const bool zeroReal = rhs.value.kind == AnalogNumericKind::Real && rhs.value.real == 0.0;
-    if (zeroInteger || zeroReal)
-      return errorResult(operation, "NODAL-ANALOG-DIVIDE-001", "statically known zero divisor",
-                         reportErrors);
-  }
 
   if (result.kind == AnalogNumericKind::Integer) {
     if (!lhs.value.integer || !rhs.value.integer)
@@ -399,9 +428,10 @@ EvaluationResult evaluateBinary(Operation *operation, bool reportErrors) {
   return constantResult(std::move(result));
 }
 
-EvaluationResult evaluateCompare(Operation *operation, bool reportErrors) {
-  EvaluationResult lhs = evaluateValue(operation->getOperand(0), reportErrors);
-  EvaluationResult rhs = evaluateValue(operation->getOperand(1), reportErrors);
+EvaluationResult evaluateCompare(Operation *operation, ConstantEvaluator &evaluator) {
+  const bool reportErrors = evaluator.shouldReportErrors();
+  EvaluationResult lhs = evaluator.evaluate(operation->getOperand(0));
+  EvaluationResult rhs = evaluator.evaluate(operation->getOperand(1));
   if (lhs.status == EvaluationStatus::Error || rhs.status == EvaluationStatus::Error)
     return errorResult(operation, "NODAL-ANALOG-FOLD-001", "comparison operand evaluation failed",
                        reportErrors);
@@ -466,10 +496,11 @@ EvaluationResult evaluateCompare(Operation *operation, bool reportErrors) {
   return constantResult(std::move(result));
 }
 
-EvaluationResult evaluateLogic(Operation *operation, bool reportErrors) {
+EvaluationResult evaluateLogic(Operation *operation, ConstantEvaluator &evaluator) {
+  const bool reportErrors = evaluator.shouldReportErrors();
   llvm::SmallVector<EvaluationResult, 2> operands;
   for (Value operand : operation->getOperands()) {
-    operands.push_back(evaluateValue(operand, reportErrors));
+    operands.push_back(evaluator.evaluate(operand));
     if (operands.back().status == EvaluationStatus::Error)
       return errorResult(operation, "NODAL-ANALOG-FOLD-001", "logical operand evaluation failed",
                          reportErrors);
@@ -497,10 +528,11 @@ EvaluationResult evaluateLogic(Operation *operation, bool reportErrors) {
   return constantResult(std::move(result));
 }
 
-EvaluationResult evaluateSelect(Operation *operation, bool reportErrors) {
-  EvaluationResult condition = evaluateValue(operation->getOperand(0), reportErrors);
-  EvaluationResult trueValue = evaluateValue(operation->getOperand(1), reportErrors);
-  EvaluationResult falseValue = evaluateValue(operation->getOperand(2), reportErrors);
+EvaluationResult evaluateSelect(Operation *operation, ConstantEvaluator &evaluator) {
+  const bool reportErrors = evaluator.shouldReportErrors();
+  EvaluationResult condition = evaluator.evaluate(operation->getOperand(0));
+  EvaluationResult trueValue = evaluator.evaluate(operation->getOperand(1));
+  EvaluationResult falseValue = evaluator.evaluate(operation->getOperand(2));
   if (condition.status == EvaluationStatus::Error || trueValue.status == EvaluationStatus::Error ||
       falseValue.status == EvaluationStatus::Error)
     return errorResult(operation, "NODAL-ANALOG-FOLD-001", "conditional operand evaluation failed",
@@ -536,7 +568,8 @@ EvaluationResult evaluateSelect(Operation *operation, bool reportErrors) {
                      "conditional fold does not match the promoted result kind", reportErrors);
 }
 
-EvaluationResult evaluateValue(Value value, bool reportErrors) {
+EvaluationResult evaluateValue(Value value, ConstantEvaluator &evaluator) {
+  const bool reportErrors = evaluator.shouldReportErrors();
   Operation *operation = value.getDefiningOp();
   if (!operation)
     return dynamicResult();
@@ -549,7 +582,7 @@ EvaluationResult evaluateValue(Value value, bool reportErrors) {
                          reportErrors);
     llvm::SmallVector<std::optional<double>> arguments;
     for (Value operand : operation->getOperands()) {
-      auto child = evaluateValue(operand, reportErrors);
+      auto child = evaluator.evaluate(operand);
       if (child.status == EvaluationStatus::Error)
         return child;
       if (child.status == EvaluationStatus::Constant && child.value.kind != AnalogNumericKind::Real)
@@ -604,9 +637,9 @@ EvaluationResult evaluateValue(Value value, bool reportErrors) {
     return evaluateParameterReference(operation, reportErrors);
   if (name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
       name == "nodal.analog_div")
-    return evaluateBinary(operation, reportErrors);
+    return evaluateBinary(operation, evaluator);
   if (name == "nodal.analog_neg") {
-    EvaluationResult input = evaluateValue(operation->getOperand(0), reportErrors);
+    EvaluationResult input = evaluator.evaluate(operation->getOperand(0));
     if (input.status != EvaluationStatus::Constant)
       return input;
     if (input.value.kind == AnalogNumericKind::Integer && input.value.integer) {
@@ -626,11 +659,11 @@ EvaluationResult evaluateValue(Value value, bool reportErrors) {
     return dynamicResult();
   }
   if (name == "nodal.analog_compare")
-    return evaluateCompare(operation, reportErrors);
+    return evaluateCompare(operation, evaluator);
   if (name == "nodal.analog_logic")
-    return evaluateLogic(operation, reportErrors);
+    return evaluateLogic(operation, evaluator);
   if (name == "nodal.analog_select")
-    return evaluateSelect(operation, reportErrors);
+    return evaluateSelect(operation, evaluator);
   return dynamicResult();
 }
 
@@ -796,7 +829,8 @@ LogicalResult verifyContinuousContract(Operation *operation, bool stateful,
   return success();
 }
 
-LogicalResult verifyDdtSimplification(Operation *operation, llvm::StringRef resultDimension) {
+LogicalResult verifyDdtSimplification(Operation *operation, llvm::StringRef resultDimension,
+                                      ConstantEvaluator &evaluator) {
   const bool any = hasAnyAttribute(operation, kContinuousSimplificationAttributes);
   if (!any)
     return success();
@@ -811,7 +845,7 @@ LogicalResult verifyDdtSimplification(Operation *operation, llvm::StringRef resu
       provenance.getValue() != "increment35" || !value || value.getValueAsDouble() != 0.0)
     return emitMappedFailure(operation, "NODAL-ANALOG-035-007",
                              "ddt simplification metadata is incomplete or inconsistent");
-  EvaluationResult input = evaluateValue(operation->getOperand(0), false);
+  EvaluationResult input = evaluator.evaluate(operation->getOperand(0));
   if (input.status != EvaluationStatus::Constant)
     return emitMappedFailure(operation, "NODAL-ANALOG-035-007",
                              "ddt may simplify only a provably time-invariant expression");
@@ -874,7 +908,7 @@ LogicalResult verifyParameterReference(Operation *operation) {
   return success();
 }
 
-LogicalResult verifyBinary(Operation *operation) {
+LogicalResult verifyBinary(Operation *operation, ConstantEvaluator &evaluator) {
   if (operation->getNumOperands() != 2 || operation->getNumResults() != 1)
     return emitMappedFailure(operation, "NODAL-ANALOG-TYPE-001",
                              "binary analog operation requires two operands and one result");
@@ -908,13 +942,12 @@ LogicalResult verifyBinary(Operation *operation) {
       return emitMappedFailure(operation, "NODAL-ANALOG-DIMENSION-001",
                                "division could not canonicalize physical dimensions");
     resultDimension = *dimension;
+    EvaluationResult right = evaluator.evaluate(operation->getOperand(1));
+    if (isKnownNumericZero(right))
+      return emitMappedFailure(operation, "NODAL-ANALOG-DIVIDE-001",
+                               "statically known zero divisor");
     if (lhs->kind == AnalogNumericKind::Integer && rhs->kind == AnalogNumericKind::Integer) {
-      EvaluationResult left = evaluateValue(operation->getOperand(0), false);
-      EvaluationResult right = evaluateValue(operation->getOperand(1), false);
-      if (right.status == EvaluationStatus::Constant && right.value.integer &&
-          right.value.integer->isZero())
-        return emitMappedFailure(operation, "NODAL-ANALOG-DIVIDE-001",
-                                 "statically known zero divisor");
+      EvaluationResult left = evaluator.evaluate(operation->getOperand(0));
       resultKind = left.status == EvaluationStatus::Constant &&
                            right.status == EvaluationStatus::Constant &&
                            integerDivisionIsExact(left.value, right.value)
@@ -1024,7 +1057,7 @@ LogicalResult verifySelect(Operation *operation) {
   return success();
 }
 
-LogicalResult verifyDdt(Operation *operation) {
+LogicalResult verifyDdt(Operation *operation, ConstantEvaluator &evaluator) {
   const bool contracted =
       static_cast<bool>(operation->getAttrOfType<StringAttr>("operator_contract"));
   if (operation->getNumOperands() != 1 || operation->getNumResults() != 1)
@@ -1080,7 +1113,7 @@ LogicalResult verifyDdt(Operation *operation) {
   }
   if (failed(verifyContinuousContract(operation, false, inputDimension, resultDimension)))
     return failure();
-  return verifyDdtSimplification(operation, resultDimension);
+  return verifyDdtSimplification(operation, resultDimension, evaluator);
 }
 
 LogicalResult verifyIdt(Operation *operation) {
@@ -1239,7 +1272,8 @@ FailureOr<AnalogNumericTypeInfo> getAnalogNumericTypeInfo(Type type) {
 }
 
 FailureOr<std::optional<double>> getAnalogConstantRealValue(Value value) {
-  EvaluationResult result = evaluateValue(value, false);
+  ConstantEvaluator evaluator(false);
+  EvaluationResult result = evaluator.evaluate(value);
   if (result.status == EvaluationStatus::Error)
     return failure();
   if (result.status == EvaluationStatus::Constant && result.value.kind == AnalogNumericKind::Real)
@@ -1247,7 +1281,9 @@ FailureOr<std::optional<double>> getAnalogConstantRealValue(Value value) {
   return std::optional<double>{};
 }
 
-LogicalResult verifyAnalogNumericOperation(Operation *operation) {
+namespace {
+
+LogicalResult verifyNumericOperation(Operation *operation, ConstantEvaluator &evaluator) {
   auto operationName = operation->getName().getStringRef();
   if (operationName == "nodal.analog_user_function" ||
       operationName == "nodal.analog_function_value" ||
@@ -1270,7 +1306,7 @@ LogicalResult verifyAnalogNumericOperation(Operation *operation) {
     return verifyParameterReference(operation);
   if (name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
       name == "nodal.analog_div")
-    return verifyBinary(operation);
+    return verifyBinary(operation, evaluator);
   if (name == "nodal.analog_neg")
     return verifyNeg(operation);
   if (name == "nodal.analog_compare")
@@ -1280,7 +1316,7 @@ LogicalResult verifyAnalogNumericOperation(Operation *operation) {
   if (name == "nodal.analog_select")
     return verifySelect(operation);
   if (name == "nodal.analog_ddt")
-    return verifyDdt(operation);
+    return verifyDdt(operation, evaluator);
   if (name == "nodal.analog_idt")
     return verifyIdt(operation);
   if (name == "nodal.access")
@@ -1290,7 +1326,15 @@ LogicalResult verifyAnalogNumericOperation(Operation *operation) {
   return success();
 }
 
+} // namespace
+
+LogicalResult verifyAnalogNumericOperation(Operation *operation) {
+  ConstantEvaluator evaluator(false);
+  return verifyNumericOperation(operation, evaluator);
+}
+
 LogicalResult verifyAnalogNumericModel(mlir::ModuleOp module) {
+  ConstantEvaluator evaluator(false);
   LogicalResult result = success();
   llvm::StringSet<> continuousOperatorIds;
   llvm::StringSet<> continuousStateIds;
@@ -1335,7 +1379,7 @@ LogicalResult verifyAnalogNumericModel(mlir::ModuleOp module) {
         }
       }
     }
-    result = verifyAnalogNumericOperation(operation);
+    result = verifyNumericOperation(operation, evaluator);
   });
   return result;
 }
@@ -1343,6 +1387,8 @@ LogicalResult verifyAnalogNumericModel(mlir::ModuleOp module) {
 LogicalResult foldAnalogNumericConstants(mlir::ModuleOp module) {
   if (failed(verifyAnalogNumericModel(module)))
     return failure();
+  // This walk only updates fold annotations, which evaluation never reads.
+  ConstantEvaluator evaluator(true);
   LogicalResult result = success();
   module.walk([&](Operation *operation) {
     if (failed(result))
@@ -1355,7 +1401,7 @@ LogicalResult foldAnalogNumericConstants(mlir::ModuleOp module) {
       if (!contract || contract.getValue() != "increment35" || operation->getNumOperands() != 1 ||
           operation->getNumResults() != 1)
         return;
-      EvaluationResult input = evaluateValue(operation->getOperand(0), true);
+      EvaluationResult input = evaluator.evaluate(operation->getOperand(0));
       if (input.status == EvaluationStatus::Error) {
         result = failure();
         return;
@@ -1393,7 +1439,7 @@ LogicalResult foldAnalogNumericConstants(mlir::ModuleOp module) {
       return;
     }
 
-    EvaluationResult evaluated = evaluateValue(operation->getResult(0), true);
+    EvaluationResult evaluated = evaluator.evaluate(operation->getResult(0));
     if (evaluated.status == EvaluationStatus::Error) {
       result = failure();
       return;

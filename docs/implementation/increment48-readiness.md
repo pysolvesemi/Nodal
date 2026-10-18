@@ -1,7 +1,7 @@
 # Foundation 48 readiness
 
 **Date:** 2026-10-18
-**Status:** Focused implementation accepted; parent/G await verified integration.
+**Status:** Complete and integrated; Foundation 48 A–G and parent closed.
 **Branch:** `increment/48-openvaf-compile-validation`
 **Base:** `8dda1660512402bc642c2db1203be6afca9e803e`
 
@@ -165,5 +165,12 @@ malformed, unsupported and crash controls above. E is the explicit no-cache revi
 with unchanged raw logs and full request identity. F uses complete repeated/nested
 parameterized graphs, deterministic source/target decisions and the exact RC repeat;
 its unsupported tool outcomes remain blocked as required by the original F-042
-handoff. G's evidence and architecture work are ready; only verified integration
-and parent closure remain. No original required case is waived or relabeled N/A.
+handoff. G's evidence, architecture and verified integration are complete; parent closure
+is recorded below. No original required case is waived or relabeled N/A.
+
+## Verified integration
+
+PR 144 was squash-integrated as `4f64b50130e3e9f6d1c2df19e1a99159b490c529` with sole parent
+`8dda1660512402bc642c2db1203be6afca9e803e`. The merge preserves exact tested tree
+`544fcab4b0e067ce9cf22e3d9266200e72798bc8`; dev and the merge record were independently verified.
+The merge carries `[skip ci]`, and no Actions run was started.

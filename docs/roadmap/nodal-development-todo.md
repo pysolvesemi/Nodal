@@ -1212,7 +1212,7 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
 
 ## Phase 3 — Open-source analog validation and testbench support
 
-- [ ] **Increment 48 — OpenVAF compile validation**
+- [x] **Increment 48 — OpenVAF compile validation**
   - [x] **F-048.A — Architecture review, modularity, scalability and extensibility.** Bind the existing Verilog-A profile to pinned OpenVAF capabilities without making its supported subset define Nodal semantics.
   - [x] **F-048.B — Implementation and integration.** Detect versions/features, compile generated models, classify expected limitations, and retain diagnostics.
   - [x] **F-048.C — Focused positive, negative and predecessor regression.** Cover generated legal and intentionally malformed models, unsupported constructs, compiler errors, missing executables and diagnostic source mapping.
@@ -1221,9 +1221,9 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
     - [x] **F-048.D.2** Capability and failure classification: Execute malformed-model and unsupported-profile controls separately from successful compilation. Numerical execution remains owned by 49; a compiled model is not a numerical result.
   - [x] **F-048.E — Optimization review and output quality.** Review compile reuse and log normalization without caching across model/tool/profile changes. Apply the proportionate review rule above; document no new optimization required when justified.
   - [x] **F-048.F — Representative scale, determinism and compatibility.** Compile repeated hierarchical models and parameter cases; retain tool-version compatibility and repeatable classifications.
-  - [ ] **F-048.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 48; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
+  - [x] **F-048.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 48; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
 
-  - Focused implementation: [F-048 pinned compiler adapter and exact evidence](../implementation/increment48-readiness.md); 43 focused Scala tests, 38 catalog checks, two native units and complete public-source compiler replay pass. Successful scalar compilation, blocked whole hierarchies/arrays and compiler crashes remain separate. Parent/G await verified integration; no CI was run.
+  - Focused implementation: [F-048 pinned compiler adapter and exact evidence](../implementation/increment48-readiness.md); 43 focused Scala tests, 38 catalog checks, two native units and complete public-source compiler replay pass. Successful scalar compilation, blocked whole hierarchies/arrays and compiler crashes remain separate. Verified squash integration `4f64b50130e3e9f6d1c2df19e1a99159b490c529` preserves tested tree `544fcab4b0e067ce9cf22e3d9266200e72798bc8`; parent/G complete. No CI was run.
 
 - [ ] **Increment 49 — ngspice simulation harness**
   - [ ] **F-049.A — Architecture review, modularity, scalability and extensibility.** Reuse generated-model identity and OpenVAF/OSDI output from 48; define simulator process, analysis and result ownership.

@@ -629,9 +629,11 @@ LogicalResult verifyAnalogProceduralExpressions(Operation *procedure) {
     ArrayAttr inventory;
     std::optional<double> claimedStatic;
     std::set<std::string> operandReads;
-    bool assignment = false;
+    bool actualCaptures = false;
     if (llvm::isa<AnalogVariableOp>(op)) {
-      if (llvm::isa<ShapedType>(op->getResult(0).getType()) || op->getNumOperands())
+      const bool expressionInitializer = text(op, "initializer_form") == "expression";
+      if (!expressionInitializer &&
+          (llvm::isa<ShapedType>(op->getResult(0).getType()) || op->getNumOperands()))
         return;
       auto initialized = op->getAttrOfType<BoolAttr>("initialized");
       if (!initialized) {
@@ -644,6 +646,17 @@ LogicalResult verifyAnalogProceduralExpressions(Operation *procedure) {
       kind = text(op, "initializer_kind");
       dimension = text(op, "initializer_dimension");
       inventory = op->getAttrOfType<ArrayAttr>("initializer_reads");
+      if (expressionInitializer) {
+        actualCaptures = true;
+        for (Value value : op->getOperands()) {
+          auto path = getAnalogCapturedReadPath(value);
+          if (failed(path) || !operandReads.insert(*path).second) {
+            result =
+                reject(op, 10, "initializer captures must bind unique immutable scalar values");
+            return;
+          }
+        }
+      }
     } else if (llvm::isa<AnalogAssignOp>(op)) {
       if (text(op, "value_form") == "snapshot")
         return;
@@ -651,7 +664,7 @@ LogicalResult verifyAnalogProceduralExpressions(Operation *procedure) {
       source = metadata ? field(metadata, "value") : llvm::StringRef();
       kind = text(op, "value_kind");
       dimension = text(op, "value_dimension");
-      assignment = true;
+      actualCaptures = true;
       for (auto value : op->getOperands().drop_front()) {
         auto path = getAnalogCapturedReadPath(value);
         if (failed(path) || !operandReads.insert(*path).second) {
@@ -733,7 +746,8 @@ LogicalResult verifyAnalogProceduralExpressions(Operation *procedure) {
         return;
       }
     }
-    auto reads = assignment ? FailureOr<std::set<std::string>>(operandReads) : strings(inventory);
+    auto reads =
+        actualCaptures ? FailureOr<std::set<std::string>>(operandReads) : strings(inventory);
     if (failed(reads) || *reads != expression->reads ||
         (claimedStatic && expression->constant != claimedStatic))
       result = reject(op, 10, "procedural expression reads or static value were forged");

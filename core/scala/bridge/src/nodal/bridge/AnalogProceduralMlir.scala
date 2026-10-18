@@ -196,25 +196,45 @@ private[nodal] object AnalogProceduralMlir:
           Some(read.identity)
         )
     def eventReferences(event: AnalogEventRuntime.Expression, path: String): Unit =
-      if event.arguments.exists(argument => needsReferences(argument.value.allReads)) then
-        event.arguments.foreach: argument =>
+      event.arguments.foreach(argument =>
+        value(argument.value, s"$path.argument_${argument.slot}.source", event.source, false)
+      )
+      val arguments = event.arguments.map(argument =>
+        argument.copy(value = deriveUniformScalar(argument.value).value)
+      )
+      if arguments.exists(argument => needsReferences(argument.value.allReads)) then
+        arguments.foreach: argument =>
           references(argument.value.allReads, s"$path.argument_${argument.slot}", event.source)
       event.alternatives.zipWithIndex.foreach: (child, index) =>
         eventReferences(child, s"$path.alternative_$index")
-    def value(inputValue: Value, path: String, source: Option[Source]): Unit =
+    def value(
+        inputValue: Value,
+        path: String,
+        source: Option[Source],
+        captureReads: Boolean = true
+    ): Unit =
       inputValue.source match
-        case Some(ShapedSource.Read(read)) => reads(Vector(read), path, source)
+        case Some(ShapedSource.Read(read)) =>
+          if captureReads then reads(Vector(read), path, source)
         case Some(ShapedSource.Fill(input)) =>
-          scalar(input, path, source)
+          scalar(input, path, source, captureReads)
           result += StorageOccurrence("array_fill", path, inputValue.valueType.dimensions, source)
         case Some(ShapedSource.View(input, selected)) =>
-          value(input, s"$path.input", source)
+          value(input, s"$path.input", source, captureReads)
           projection(selected, path, source, None)
-        case None => ()
-    def scalar(input: Value, path: String, source: Option[Source]): Unit =
+        case None => scalar(inputValue, path, source, captureReads)
+    def scalar(
+        input: Value,
+        path: String,
+        source: Option[Source],
+        captureReads: Boolean = true
+    ): Unit =
       input.source match
-        case Some(_: ShapedSource.View) => value(input, s"$path.value", source)
-        case _ => reads(input.allReads.distinct, path, source)
+        case Some(_: ShapedSource.View) => value(input, s"$path.value", source, captureReads)
+        case _ =>
+          if captureReads then reads(scalarReads(input), path, source)
+          input.scalarSources.distinctBy(_.rendered).zipWithIndex.foreach: (leaf, index) =>
+            value(leaf, s"$path.scalar_source_$index", source, captureReads)
     def assignment(
         target: StorageReference,
         input: Value,
@@ -257,26 +277,46 @@ private[nodal] object AnalogProceduralMlir:
       case item: AnalogControlFlowRuntime.Statement.Scope => visit(item.body)
       case item: AnalogControlFlowRuntime.Statement.IfThenElse =>
         item.branches.zipWithIndex.foreach: (branch, index) =>
-          if needsReferences(branch.condition.selectedReads) then
+          val path = s"${item.identity}.condition_$index"
+          branch.condition.sourceValue.foreach(input =>
+            value(input, s"$path.source", branch.condition.source, false)
+          )
+          val selected = branch.condition.sourceValue.map(input =>
+            deriveUniformScalar(input).value.allReads.distinct
+          ).getOrElse(branch.condition.selectedReads)
+          if needsReferences(selected) then
             references(
-              branch.condition.selectedReads,
+              selected,
               s"${item.identity}.condition_$index",
               branch.condition.source
             )
           visit(branch.body)
         item.otherwise.foreach(visit)
       case item: AnalogControlFlowRuntime.Statement.CaseStatement =>
-        if needsReferences(item.selector.selectedReads) then
+        item.selector.sourceValue.foreach(input =>
+          value(input, s"${item.identity}.selector.source", item.selector.source, false)
+        )
+        val selected = item.selector.sourceValue.map(input =>
+          deriveUniformScalar(input).value.allReads.distinct
+        ).getOrElse(item.selector.selectedReads)
+        if needsReferences(selected) then
           references(
-            item.selector.selectedReads,
+            selected,
             s"${item.identity}.selector",
             item.selector.source.orElse(item.source)
           )
         item.arms.foreach(arm => visit(arm.body)); item.default.foreach(visit)
       case item: AnalogControlFlowRuntime.Statement.Loop =>
-        if needsReferences(item.boundSelectedReads) then
+        val bound = expressions.get(item.identity -> "loop-bound")
+        bound.foreach(record =>
+          value(record.value, s"${item.identity}.loop-bound.source", record.source, false)
+        )
+        val selected = bound.map(record =>
+          deriveUniformScalar(record.value).value.allReads.distinct
+        ).getOrElse(item.boundSelectedReads)
+        if needsReferences(selected) then
           references(
-            item.boundSelectedReads,
+            selected,
             s"${item.identity}.loop-bound",
             expressions.get(item.identity -> "loop-bound").flatMap(_.source).orElse(item.source)
           )
@@ -534,25 +574,11 @@ private[nodal] object AnalogProceduralMlir:
     private def ensureDimensions(dimensions: Vector[String]): Unit =
       dimensions.filter(_.toLongOption.isEmpty).distinct.foreach(staticValue)
     def replaceLeaves(text: String, bindings: Vector[(String, String)]): String =
-      val grouped = bindings.groupBy(_._1)
-      require(
-        grouped.values.forall(_.map(_._2).distinct.size == 1),
-        "one captured source leaf cannot bind different storage accesses"
-      )
-      if bindings.isEmpty then text
-      else
-        val replacements = grouped.view.mapValues(_.head._2).toMap
-        val leaves = replacements.keys.toVector.sortBy(value => (-value.length, value))
-        // One grammar-token replacement pass: never rewrite a prefix or a newly inserted path.
-        val boundary = "[A-Za-z0-9_.$#@]"
-        val pattern =
-          ("(?<!" + boundary + ")(?:" +
-            leaves.map(java.util.regex.Pattern.quote).mkString("|") + ")(?!" + boundary + ")").r
-        pattern.replaceAllIn(
-          text,
-          matched =>
-            java.util.regex.Matcher.quoteReplacement(replacements(matched.matched))
-        )
+      AnalogProceduralRuntime.replaceScalarLeaves(text, bindings)
+
+    /** A fill is evaluated once per consuming declaration/assignment, never across consumers. */
+    private final class Captures:
+      val fills = mutable.HashMap.empty[String, (String, String, String)]
 
     private def project(
         projection: StorageProjection,
@@ -711,23 +737,52 @@ private[nodal] object AnalogProceduralMlir:
     private def scalar(
         input: Value,
         path: String,
-        source: Option[Source]
+        source: Option[Source],
+        captures: Captures
     ): (Vector[String], Vector[String], Vector[String], Vector[(String, String)]) =
       input.source match
         case Some(_: ShapedSource.View) =>
-          val result = value(input, s"$path.value", source)
+          val result = value(input, s"$path.value", source, captures)
           (
             result._1,
             Vector(result._2),
             Vector(result._3),
             Vector(input.rendered -> result._4)
           )
-        case _ => reads(input.allReads.distinct, path, source)
+        case _ =>
+          val direct = reads(scalarReads(input), path, source)
+          val nested = input.scalarSources.distinctBy(_.rendered).zipWithIndex.map: (leaf, index) =>
+            val result = value(leaf, s"$path.scalar_source_$index", source, captures)
+            (result._1, result._2, result._3, leaf.rendered -> result._4)
+          (
+            direct._1 ++ nested.flatMap(_._1),
+            direct._2 ++ nested.map(_._2),
+            direct._3 ++ nested.map(_._3),
+            direct._4 ++ nested.map(_._4)
+          )
 
-    def value(
+    private def value(
         value: Value,
         path: String,
-        source: Option[Source]
+        source: Option[Source],
+        captures: Captures
+    ): (Vector[String], String, String, String) =
+      value.source match
+        case Some(_: ShapedSource.Fill) =>
+          captures.fills.get(value.rendered) match
+            case Some((result, resultType, resultPath)) =>
+              (Vector.empty, result, resultType, resultPath)
+            case None =>
+              val result = emitValue(value, path, source, captures)
+              captures.fills(value.rendered) = (result._2, result._3, result._4)
+              result
+        case _ => emitValue(value, path, source, captures)
+
+    private def emitValue(
+        value: Value,
+        path: String,
+        source: Option[Source],
+        captures: Captures
     ): (Vector[String], String, String, String) =
       ensureDimensions(value.valueType.dimensions)
       value.source match
@@ -746,7 +801,7 @@ private[nodal] object AnalogProceduralMlir:
               value.reads.forall(scalar.allReads.contains),
             "array fill must preserve its scalar Real type and physical dimension"
           )
-          val emitted = this.scalar(scalar, path, source)
+          val emitted = this.scalar(scalar, path, source, captures)
           val result = fresh()
           val resultType = valueType(value.valueType)
           val line = operation(
@@ -761,11 +816,12 @@ private[nodal] object AnalogProceduralMlir:
           )
           (emitted._1 :+ line, result, resultType, path)
         case Some(ShapedSource.View(input, projection)) =>
-          val (projectionOwner, inputPath) = projection match
-            case index: KernelShapeIndexSnapshot => index.owner -> index.input
-            case view: KernelShapeViewSnapshot => view.owner -> view.input
+          val (projectionOwner, inputPath, outputPath) = projection match
+            case index: KernelShapeIndexSnapshot => (index.owner, index.input, index.path)
+            case view: KernelShapeViewSnapshot => (view.owner, view.input, view.path)
           require(
-            projectionOwner == program.owner && input.valueType.dimensions.nonEmpty &&
+            projectionOwner == program.owner && inputPath == input.rendered &&
+              outputPath == value.rendered && input.valueType.dimensions.nonEmpty &&
               input.valueType.kind == value.valueType.kind &&
               input.valueType.dimension == value.valueType.dimension &&
               value.reads.forall(input.allReads.contains),
@@ -785,7 +841,7 @@ private[nodal] object AnalogProceduralMlir:
             "immutable projection has inconsistent output dimensions"
           )
           AnalogStorageCoverage.normalize(checked)
-          val emitted = this.value(input, s"$path.input", source)
+          val emitted = this.value(input, s"$path.input", source, captures)
           val element = valueType(value.valueType.copy(dimensions = Vector.empty))
           val projected = project(
             projection,
@@ -811,51 +867,82 @@ private[nodal] object AnalogProceduralMlir:
           variable.owner == program.owner,
         "declaration has a forged or duplicate storage root"
       )
-      if variable.valueType.dimensions.isEmpty then
+      val scalarVariable = variable.valueType.dimensions.isEmpty
+      if scalarVariable && variable.declarationScope.size <= 1 then
+        // The bridge has validated the original shape chain and static root restrictions. Keep
+        // persistent static initialization in the legacy form, without runtime captures/reset.
+        val initializer = record.initializer.map(deriveUniformScalar(_).value)
         require(
-          variable.valueType.kind == ScalarKind.Real && variable.declarationScope.size > 1 &&
-            record.initializer.exists(_.source.exists {
-              case ShapedSource.Read(_: StorageSelection) => true
-              case _: ShapedSource.View => true
-              case _ => false
-            }),
-          "scalar snapshot initializer requires a direct selected Real value in a local scope"
+          initializer.forall(_.allReads.isEmpty),
+          "persistent scalar initialization cannot capture mutable storage"
         )
-      ensureDimensions(variable.valueType.dimensions)
-      val initializer =
-        record.initializer.map(value(_, s"${variable.identity}.initializer", record.source))
-      initializer.foreach(result =>
-        require(
-          result._3 == valueType(variable.valueType),
-          "snapshot initializer has a mismatched shape or physical dimension"
-        )
-      )
-      val line = operation(
-        "nodal.analog_variable",
-        results = Vector(handles(variable.identity)),
-        operands = initializer.toVector.map(_._2),
-        operandTypes = initializer.toVector.map(_._3),
-        resultTypes = Vector(variableType(variable)),
-        attributes = Vector(
-          "identity" -> quoted(variable.identity),
-          "owner" -> quoted(program.owner)
-        ) ++ generatedAttributes(program) ++ Vector(
-          "declaration_order" -> integer(record.declarationOrder),
-          "operation_order" -> integer(record.operationOrder),
-          "initialized" -> boolean(initializer.nonEmpty),
-          "initializer_value" -> quoted(""),
-          "initializer_kind" -> quoted(""),
-          "initializer_dimension" -> quoted(""),
-          "initializer_reads" -> array(Vector.empty),
-          "metadata" -> metadata(
-            variable.identity,
-            record.source,
-            record.authoredPath.toVector.map(path => "authored_path" -> quoted(path))
+        Vector(renderDeclaration(record.copy(initializer = initializer), program, handles))
+      else
+        val directSnapshot = record.initializer.exists(_.source.exists {
+          case ShapedSource.Read(_: StorageSelection) => true
+          case _: ShapedSource.View => true
+          case _ => false
+        })
+        val expressionForm = scalarVariable && !directSnapshot
+        if scalarVariable then
+          require(
+            variable.declarationScope.size > 1 && record.initializer.nonEmpty &&
+              record.initializer.forall(input =>
+                input.valueType.dimensions.isEmpty &&
+                  input.valueType.dimension == variable.valueType.dimension &&
+                  (input.valueType.kind == variable.valueType.kind ||
+                    variable.valueType.kind == ScalarKind.Real &&
+                    input.valueType.kind == ScalarKind.Integer)
+              ),
+            "scalar captured initializer requires a compatible value in a local scope"
           )
-        ),
-        source = record.source
-      )
-      initializer.toVector.flatMap(_._1) :+ line
+        ensureDimensions(variable.valueType.dimensions)
+        val captures = new Captures
+        val emitted = record.initializer.map: input =>
+          val path = s"${variable.identity}.initializer"
+          if expressionForm then scalar(input, path, record.source, captures)
+          else
+            val result = value(input, path, record.source, captures)
+            require(
+              result._3 == valueType(variable.valueType),
+              "snapshot initializer has a mismatched shape or physical dimension"
+            )
+            (result._1, Vector(result._2), Vector(result._3), Vector.empty[(String, String)])
+        val initializer = record.initializer.filter(_ => expressionForm)
+        val bindings = emitted.toVector.flatMap(_._4)
+        val line = operation(
+          "nodal.analog_variable",
+          results = Vector(handles(variable.identity)),
+          operands = emitted.toVector.flatMap(_._2),
+          operandTypes = emitted.toVector.flatMap(_._3),
+          resultTypes = Vector(variableType(variable)),
+          attributes = Vector(
+            "identity" -> quoted(variable.identity),
+            "owner" -> quoted(program.owner)
+          ) ++ generatedAttributes(program) ++
+            Option.when(expressionForm)(
+              "initializer_form" -> quoted("expression")
+            ).toVector ++ Vector(
+              "declaration_order" -> integer(record.declarationOrder),
+              "operation_order" -> integer(record.operationOrder),
+              "initialized" -> boolean(emitted.nonEmpty),
+              "initializer_value" -> quoted(initializer.map(input =>
+                replaceLeaves(input.rendered, bindings)
+              ).getOrElse("")),
+              "initializer_kind" -> quoted(initializer.map(_.valueType.kind.label).getOrElse("")),
+              "initializer_dimension" -> quoted(initializer.map(input =>
+                canonicalDimension(input.valueType.dimension)
+              ).getOrElse("")),
+              "initializer_reads" -> array(Vector.empty),
+              "metadata" -> metadata(
+                variable.identity,
+                record.source,
+                record.authoredPath.toVector.map(path => "authored_path" -> quoted(path))
+              )
+            ),
+          source = record.source
+        )
+        emitted.toVector.flatMap(_._1) :+ line
 
     def assignment(record: AssignmentRecord): Vector[String] =
       require(
@@ -872,10 +959,11 @@ private[nodal] object AnalogProceduralMlir:
             record.value.valueType.kind == ScalarKind.Integer),
         "assignment requires exact shape and physical dimension with compatible element kind"
       )
+      val captures = new Captures
       val emitted = if shaped then
-        val result = value(record.value, s"${record.identity}.value", record.source)
+        val result = value(record.value, s"${record.identity}.value", record.source, captures)
         (result._1, Vector(result._2), Vector(result._3), Vector.empty[(String, String)])
-      else scalar(record.value, record.identity, record.source)
+      else scalar(record.value, record.identity, record.source, captures)
       val metadataFields = Vector("scope" -> array(record.scope.map(quoted))) ++
         Option.unless(shaped)("value" ->
           quoted(replaceLeaves(record.value.rendered, emitted._4))).toVector
@@ -917,8 +1005,20 @@ private[nodal] object AnalogProceduralMlir:
   ): Boolean =
     reads.exists(_.isInstanceOf[AnalogProceduralRuntime.StorageSelection])
 
+  /** Only leaves consumed by this scalar spelling are direct captures. Reads underneath retained
+    * fill sources belong to those producers, not to the enclosing expression's operand inventory.
+    */
+  private def scalarReads(input: AnalogProceduralRuntime.Value)
+      : Vector[AnalogProceduralRuntime.StorageReference] =
+    val reads = input.allReads.distinct
+    val consumed = AnalogProceduralRuntime.scalarLeafOccurrences(
+      input.rendered,
+      reads.map(_.identity) ++ input.scalarSources.map(_.rendered)
+    ).toSet
+    reads.filter(read => consumed.contains(read.identity))
+
   private def usesStorage(value: AnalogProceduralRuntime.Value): Boolean =
-    value.valueType.dimensions.nonEmpty ||
+    value.valueType.dimensions.nonEmpty || value.scalarSources.nonEmpty ||
       value.allReads.exists(_.isInstanceOf[AnalogProceduralRuntime.StorageSelection]) ||
       value.source.exists {
         case _: AnalogProceduralRuntime.ShapedSource.Fill => true
@@ -1113,6 +1213,29 @@ private[nodal] object AnalogProceduralMlir:
       val labels = bindings.toMap
       array(reads.toVector.map(read => labels.getOrElse(read, read)).sorted.map(quoted))
 
+    def liveCondition(condition: AnalogControlFlowRuntime.Condition)
+        : AnalogControlFlowRuntime.Condition =
+      condition.sourceValue.fold(condition): original =>
+        val derived = AnalogProceduralRuntime.deriveUniformScalar(original).value
+        condition.copy(
+          rendered = derived.rendered,
+          reads = derived.allReads.map(_.identity).toSet,
+          valueType = derived.valueType,
+          selectedReads = derived.allReads.distinct
+        )
+
+    def liveSelector(selector: AnalogControlFlowRuntime.Selector)
+        : AnalogControlFlowRuntime.Selector =
+      selector.sourceValue.fold(selector): original =>
+        val derived = AnalogProceduralRuntime.deriveUniformScalar(original).value
+        selector.copy(
+          rendered = derived.rendered,
+          reads = derived.allReads.map(_.identity).toSet,
+          kind = derived.valueType.kind,
+          dimension = derived.valueType.dimension,
+          selectedReads = derived.allReads.distinct
+        )
+
     def renderEvent(event: AnalogEventRuntime.Expression, path: String): (Vector[String], String) =
       val nested = event.alternatives.zipWithIndex.map: (child, index) =>
         renderEvent(child, s"$path.alternative_$index")
@@ -1137,8 +1260,13 @@ private[nodal] object AnalogProceduralMlir:
           source = event.source
         ))
       else
-        val typed = event.arguments.exists(argument => needsReferences(argument.value.allReads))
-        val references = event.arguments.map: argument =>
+        // Structural erasure follows bridge validation. These scalar spellings remain inside
+        // the monitor expression; only non-evaluating storage aliases may precede it.
+        val values = event.arguments.map(argument =>
+          argument.copy(value = AnalogProceduralRuntime.deriveUniformScalar(argument.value).value)
+        )
+        val typed = values.exists(argument => needsReferences(argument.value.allReads))
+        val references = values.map: argument =>
           val reads = argument.value.allReads.distinct
           require(
             argument.value.valueType.dimensions.isEmpty,
@@ -1148,7 +1276,7 @@ private[nodal] object AnalogProceduralMlir:
           if typed then
             storage.references(reads, s"$path.argument_${argument.slot}", event.source)
           else (Vector.empty, Vector.empty, Vector.empty, Vector.empty)
-        val arguments = event.arguments.zip(references).map: (argument, emitted) =>
+        val arguments = values.zip(references).map: (argument, emitted) =>
           val labels = emitted._4.toMap
           val reads = if typed then argument.value.allReads.distinct else argument.value.reads
           dictionary(Vector(
@@ -1164,7 +1292,8 @@ private[nodal] object AnalogProceduralMlir:
         // in several slots, but is supplied only once to this primitive consumer.
         val operands = references.flatMap(emitted => emitted._2.zip(emitted._3)).distinct
         val eventReads =
-          if typed then references.flatMap(_._4.map(_._2)).toSet else event.reads
+          if typed then references.flatMap(_._4.map(_._2)).toSet
+          else values.flatMap(_.value.allReads.map(_.identity)).toSet
         references.flatMap(_._1) :+ operation(
           s"nodal.${event.operation}",
           results = Vector(result),
@@ -1316,8 +1445,8 @@ private[nodal] object AnalogProceduralMlir:
         case conditional: AnalogControlFlowRuntime.Statement.IfThenElse =>
           // The if region contains arms only. Emit pure aliases before the whole group, without
           // evaluating any predicate or moving a numeric read out of its first-match arm.
-          val references = conditional.branches.zipWithIndex.map: (branch, index) =>
-            val condition = branch.condition
+          val conditions = conditional.branches.map(branch => liveCondition(branch.condition))
+          val references = conditions.zipWithIndex.map: (condition, index) =>
             require(
               condition.valueType.dimensions.isEmpty &&
                 (condition.stage == AnalogControlFlowRuntime.Stage.Runtime ||
@@ -1332,7 +1461,7 @@ private[nodal] object AnalogProceduralMlir:
               "analog condition"
             )
           val arms = conditional.branches.zipWithIndex.map: (branch, index) =>
-            val condition = branch.condition
+            val condition = conditions(index)
             val emitted = references(index)
             operation(
               "nodal.analog_if_arm",
@@ -1393,7 +1522,7 @@ private[nodal] object AnalogProceduralMlir:
           )
 
         case selection: AnalogControlFlowRuntime.Statement.CaseStatement =>
-          val selector = selection.selector
+          val selector = liveSelector(selection.selector)
           require(
             selector.staticValue.isEmpty || selector.reads.isEmpty && selector.selectedReads.isEmpty,
             "a static analog selector cannot read storage"
@@ -1460,17 +1589,23 @@ private[nodal] object AnalogProceduralMlir:
           val stage = loop.stage match
             case AnalogControlFlowRuntime.LoopStage.Static => "static"
             case AnalogControlFlowRuntime.LoopStage.RuntimeBounded => "runtime"
-          val bound = expressions.get(loop.identity -> "loop-bound")
+          val bound = expressions.get(loop.identity -> "loop-bound").map(record =>
+            record.copy(value = AnalogProceduralRuntime.deriveUniformScalar(record.value).value)
+          )
+          val boundReferences =
+            bound.map(_.value.allReads.distinct).getOrElse(loop.boundSelectedReads)
+          val boundReads =
+            bound.map(_.value.allReads.map(_.identity).toSet).getOrElse(loop.boundReads)
           require(
             loop.boundValueType.dimensions.isEmpty &&
               bound.forall(_.value.valueType.dimensions.isEmpty) &&
               (loop.stage == AnalogControlFlowRuntime.LoopStage.RuntimeBounded ||
-                loop.boundReads.isEmpty && loop.boundSelectedReads.isEmpty),
+                boundReads.isEmpty && boundReferences.isEmpty),
             "an analog loop bound must be scalar and static bounds cannot read storage"
           )
           val references = controlReferences(
-            loop.boundReads,
-            loop.boundSelectedReads,
+            boundReads,
+            boundReferences,
             s"${loop.identity}.loop-bound",
             bound.flatMap(_.source).orElse(loop.source),
             "analog loop bound"
@@ -1479,7 +1614,7 @@ private[nodal] object AnalogProceduralMlir:
             "nodal.analog_loop",
             operands = references._2,
             operandTypes = references._3,
-            attributes = referenceAttributes(loop.boundSelectedReads) ++ Vector(
+            attributes = referenceAttributes(boundReferences) ++ Vector(
               "statement_id" -> quoted(loop.identity),
               "owner" -> quoted(program.owner),
               "stage" -> quoted(stage),
@@ -1493,7 +1628,7 @@ private[nodal] object AnalogProceduralMlir:
               "bound_dimension" -> quoted(
                 canonicalDimension(loop.boundValueType.dimension)
               ),
-              "bound_reads" -> referenceReads(loop.boundReads, references._4),
+              "bound_reads" -> referenceReads(boundReads, references._4),
               "static_trip_count_present" -> boolean(loop.staticTripCount.nonEmpty),
               "static_trip_count" -> integer(loop.staticTripCount.getOrElse(0)),
               "metadata" -> metadata(loop.identity, loop.source)

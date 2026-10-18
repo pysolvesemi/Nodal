@@ -52,14 +52,20 @@ private[nodal] object AnalogControlFlowConstruction:
         case conditional: Statement.IfThenElse => conditional.copy(
             branches = conditional.branches.map(branch =>
               branch.copy(
-                condition = branch.condition.copy(rendered = transform(branch.condition.rendered)),
+                condition = branch.condition.copy(
+                  rendered = transform(branch.condition.rendered),
+                  sourceValue = branch.condition.sourceValue.map(_.remap(identity, transform))
+                ),
                 body = block(branch.body)
               )
             ),
             otherwise = conditional.otherwise.map(block)
           )
         case selection: Statement.CaseStatement => selection.copy(
-            selector = selection.selector.copy(rendered = transform(selection.selector.rendered)),
+            selector = selection.selector.copy(
+              rendered = transform(selection.selector.rendered),
+              sourceValue = selection.selector.sourceValue.map(_.remap(identity, transform))
+            ),
             arms = selection.arms.map(arm => arm.copy(body = block(arm.body))),
             default = selection.default.map(block)
           )
@@ -72,11 +78,13 @@ private[nodal] object AnalogControlFlowConstruction:
       def condition(value: Condition): Condition = value.copy(
         reads = value.reads.map(path),
         valueType = value.valueType.copy(dimensions = value.valueType.dimensions.map(path)),
-        selectedReads = value.selectedReads.map(_.remap(path))
+        selectedReads = value.selectedReads.map(_.remap(path)),
+        sourceValue = value.sourceValue.map(_.remap(path, identity))
       )
       def selector(value: Selector): Selector = value.copy(
         reads = value.reads.map(path),
-        selectedReads = value.selectedReads.map(_.remap(path))
+        selectedReads = value.selectedReads.map(_.remap(path)),
+        sourceValue = value.sourceValue.map(_.remap(path, identity))
       )
       def block(value: Block): Block = value.copy(
         identity = path(value.identity),

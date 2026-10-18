@@ -43,7 +43,8 @@ private[nodal] object AnalogControlFlowRuntime:
       staticValue: Option[scala.Boolean],
       valueType: AnalogProceduralRuntime.ValueType,
       source: Option[AnalogProceduralRuntime.Source] = None,
-      selectedReads: Vector[StorageReference] = Vector.empty
+      selectedReads: Vector[StorageReference] = Vector.empty,
+      sourceValue: Option[AnalogProceduralRuntime.Value] = None
   )
 
   object Condition:
@@ -88,7 +89,8 @@ private[nodal] object AnalogControlFlowRuntime:
       dimension: String,
       staticValue: Option[CaseLabel] = None,
       source: Option[AnalogProceduralRuntime.Source] = None,
-      selectedReads: Vector[StorageReference] = Vector.empty
+      selectedReads: Vector[StorageReference] = Vector.empty,
+      sourceValue: Option[AnalogProceduralRuntime.Value] = None
   )
 
   object Selector:

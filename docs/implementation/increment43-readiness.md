@@ -233,7 +233,9 @@ all Real arrays, including existing public witnesses; the concrete F48 consumer
 handoff is documented separately from language-structural acceptance. Generated
 persistent initializer lifecycle remains outside this ordinary-root extension.
 
-Live selected-control/event references are implemented under
+Live selected-control/event references are published as
+`d609a6d30e2365e1bbc5edc4bbe5e615348ca931` with exact tested-tree equality
+and no CI, under
 [v0.4](../design-gates/NodalWritableRealArrays-DG-v0.4.md): actual scalar storage
 reference operands, compact static coordinate setup and live numeric leaves at
 the existing evaluation sites. First-match/short-circuit behavior, loop-bound
@@ -241,8 +243,13 @@ evaluation once per entry and event monitor lifetime are preserved. Eleven publi
 methods, nine affected predecessors and focused native/backend checks passed;
 commands and limits are recorded in the shape-contract note. Public loop
 composition uses existing scalar Integer storage; no new Real-to-Integer cast
-is introduced. Pure uniform-fill scalar consumers and compound selected scalar
-initialization remain open. Generated
+is introduced. The tested source-consumer extension follows
+[v0.5](../design-gates/NodalWritableRealArrays-DG-v0.5.md): checked single-occurrence
+uniform-fill scalarization and compound selected local initialization, preserving
+once-only fill evaluation. Twelve new public groups, 18 affected predecessors,
+native/backend checks and eight actual dual-target models pass; commands and
+limits are in the shape-contract note. Repeated shared-fill live/event consumption remains
+explicitly open until a correct lazy evaluation contract is implemented. Generated
 persistent initialization still needs per-occurrence declaration lifetime.
 Extra operator/state/result fan-out,
 cross-range storage, broader conservative ports/views and generated

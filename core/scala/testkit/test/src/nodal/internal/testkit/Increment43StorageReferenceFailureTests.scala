@@ -159,10 +159,13 @@ object Increment43StorageReferenceFailureTests extends TestSuite:
         conditional.contains("runtime conditional")
       )
 
-    test("pure fill scalar projections remain unsupported even inside compound expressions"):
+    test("single uniform scalar projections retain live compound expression bindings"):
       for compound <- Vector(false, true); consumer <- 0 to 2 do
-        val error = failure(new Increment43StorageReferenceFillFailure(compound, consumer))
-        assert(error.contains("NODAL-SHAPE-043-007"), error.contains("deferred shaped values"))
+        val snapshot =
+          ConstructionKernel.inspect(new Increment43StorageReferenceFillFailure(compound, consumer))
+        val text = ScalaToMlirBridge.fromSnapshot(snapshot).text
+        assert(!text.contains("nodal.analog_variable_read"))
+        assert(text.contains("reference_form = \"storage\"") == compound)
 
     test("bridge checks selected if and case roots bounds and complete inventories"):
       val snapshot = ConstructionKernel.inspect(new Increment43StorageReferenceBridgeInput)

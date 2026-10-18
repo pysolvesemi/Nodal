@@ -19,6 +19,31 @@ private final class ConstructionSession(val options: EmitOptions):
   def waveformConstant(value: Any): Option[Double] =
     ConstructionExpressionFacts.waveformConstant(value)
 
+  /** Consumer placement follows actual registered results, even when source shape wrappers hide
+    * their rendered operation. The existing operator inventories remain the classification owner.
+    */
+  def requireProceduralSources(expressions: Vector[KernelExpr[?]]): Unit =
+    val references = expressions.flatMap(value => Option(expressionIds.get(value))).toSet
+    def reject(reference: ExpressionRef, code: String, role: String): Nothing =
+      AnalogProceduralConstruction.requireContinuousContext(role)
+      fail(
+        code,
+        s"$role is not permitted in analog procedural expressions",
+        Some(expressionPath(reference))
+      )
+    continuousOperators.find(value => references.contains(value.reference)).foreach: value =>
+      reject(
+        value.reference,
+        "NODAL-ANALOG-035-001",
+        s"stateful or continuous-time operator '${value.operation}'"
+      )
+    waveformOperators.find(value => references.contains(value._1)).foreach: value =>
+      reject(value._1, "NODAL-ANALOG-036-001", s"time/waveform operator '${value._2}'")
+    transferOperators.find(value => references.contains(value._1)).foreach: value =>
+      reject(value._1, "NODAL-ANALOG-040-001", s"stateful transfer operator '${value._2}'")
+    noiseOperators.find(value => references.contains(value._1)).foreach: value =>
+      reject(value._1, "NODAL-ANALOG-039-001", s"noise effect '${value._2}'")
+
   private val userFunctions = new AnalogUserFunctionRuntime.Registry
   private var nextModule: Long = 0L
   private val moduleIds = new IdentityHashMap[AnyRef, java.lang.Long]()

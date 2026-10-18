@@ -1072,3 +1072,130 @@ selectors are retained in `.work/scala-validation/run-storage-reference-tests.sh
 and logs in `storage-reference-predecessors.log` and
 `storage-reference-boundary-predecessors.log`. No CI/full qualification or
 independent consumer/simulator success is claimed.
+
+### Compound lexical initialization and checked uniform scalar sources
+
+The next source-consumer extension is governed by
+[NodalWritableRealArrays-DG-v0.5](../design-gates/NodalWritableRealArrays-DG-v0.5.md).
+It keeps one typed procedural Value graph and the existing immutable capture,
+storage descriptor and structured definite-assignment owners. Nested scalar
+leaves retain their actual uniform Fill/View source; original records are checked
+before a derived live expression may erase pure structural shape history.
+Bounds, ownership, units and actual source/result identities are obligations of
+that source/bridge boundary. The native boundary independently checks the emitted
+scalar expression and actual references; it cannot certify erased shape history
+from provenance alone.
+
+Compound lexical scalar initialization uses the additive
+`initializer_form = "expression"` on the existing variable operation. Its actual
+immutable operands, exact parsed read inventory, incoming DA and statement-local
+capture corridor are checked before the destination becomes initialized. Dispatch
+precedes the old one-operand copy form, so a one-capture expression still retains
+its arithmetic. Legacy declaration forms remain available. Persistent roots,
+shaped destinations and uninitialized variables cannot use the new form.
+
+Statement captures share a fill by its checked retained identity within that
+consumer; two separately authored equal-text fills remain distinct. Live control
+and event expressions instead substitute the scalar only at its reached leaf,
+without an eager numeric prelude. The bounded live profile permits one occurrence
+per retained fill across the complete consumer, including composed monitor
+arguments. Repeated shared-fill live consumers reject and remain required open
+work: correct demand-time reuse needs a lifetime-aware lazy binding, not eager
+function arguments or a cached value shared between reevaluations.
+
+The scoped implementation passes the focused checks below. It adds no
+independent downstream consumer claim and does not complete Foundation 43.
+
+The native implementation passed 79 writable-storage semantic checks: the 49
+predecessors plus 30 new initializer cases (11 positives with deterministic
+roundtrip/default-gate verification and 19 exact causal diagnostic negatives).
+These include scalar-only incoming DA, selected and uniform-fill captures,
+Boolean and unit-preserving results, generated/event locals, and malformed
+form/type/inventory/order/owner boundaries. The structured DA path is selected
+for scalar-only expression declarations too; empty textual inventory cannot
+hide their actual capture reads. The 32 scalar/control CTests and 47-case live
+selected-control predecessor also passed. Public source/bridge integration results are recorded below.
+
+```sh
+source .work/nodal-toolchain-env.sh
+PYTHONPATH=.work/python-tools .work/python-tools/bin/cmake --build .work/native-release --target nodalc nodal-translate nodal-writable-array-backend-unit-tests -j 3
+PYTHONDONTWRITEBYTECODE=1 python3 tests/compiler/fixtures/increment43/run_writable_array_matrix.py --nodalc .work/native-release/bin/nodalc --work-dir .work/initializer-expression-native-matrix
+PYTHONDONTWRITEBYTECODE=1 ctest --test-dir .work/native-release --output-on-failure -R '^nodal.native.(analog-(procedural|control-flow)-.*|typed-control-integration)$'
+```
+
+Native logs remain in `.work/initializer-expression-native-matrix.log` and
+`.work/initializer-expression-predecessors.log`. The native production change
+reuses parsed expressions, immutable capture checks and structured DA rather
+than adding another evaluator or proof registry. The existing per-capture
+corridor walk remains; no whole-pipeline linearity or measured speedup is claimed.
+
+The writable backend unit passed its inherited checks plus 44 positive
+profile/lifetime witnesses and 24 rejection fixtures in both VA/AMS profiles.
+Each positive repeats emission deterministically and reparses the target;
+negatives pin causal diagnostics and preserve caller-owned output sentinels.
+Twelve retained CLI outputs match the unit outputs byte-for-byte. Shared-fill
+output evaluates its scalar source once before both immutable projections and
+the compound local assignment; later mutation remains later. A one-capture
+actual Verilog-A expression is:
+
+```verilog
+event_Arrays_local = (event_Arrays_firstCapture + 1.0);
+```
+
+```sh
+source .work/nodal-toolchain-env.sh
+.work/native-release/core/compiler/test/Unit/nodal-writable-array-backend-unit-tests .work/initializer-expression-backend-unit
+```
+
+Inputs, actual VA/AMS outputs, CLI parity and logs remain under
+`.work/initializer-expression-backend-unit/`. This is compiler emission/reparse
+evidence, not independent simulator acceptance. The generic backend and event
+parser binaries were rebuilt but not separately executed for this checkpoint.
+
+A focused read-only review of the native/backend diff found no concrete blocker
+in form restrictions, exact capture/type validation, incoming DA, ownership,
+statement corridors or arithmetic-preserving scope-entry rendering. That review
+did not execute tests or review Scala's retained-shape erasure; its assurance is
+limited to the inspected native/backend paths.
+
+The two new public suites passed 12 grouped methods, and 18 directly affected
+public predecessors passed with both native tools configured. Eight actual
+public models cover compound selected/Boolean/dimensioned local initialization,
+generated locals, statement fill sharing and later reuse, symbolic live control,
+cross/timer/OR monitors, static scalar roots, mixed storage/uniform leaves and
+nested fills. All emit Verilog-A and Verilog-AMS; 16 direct translator repeats
+match exactly. Actual source/normalized MLIR and targets are retained in
+`.work/scala-validation/uniform-scalar-witnesses/`.
+
+```sh
+export NODAL_NODALC="$PWD/.work/native-release/bin/nodalc"
+export NODAL_TRANSLATE="$PWD/.work/native-release/bin/nodal-translate"
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.Increment43UniformScalarTests nodal.internal.testkit.Increment43ScalarSourceBridgeTests
+bash .work/scala-validation/run-uniform-scalar-tests.sh
+python3 .work/scala-validation/write-uniform-scalar-witnesses.py
+```
+
+The script retains exact affected predecessor selectors; final logs are
+`uniform-scalar-final.log`, `uniform-scalar-witnesses-final.log` and
+`uniform-scalar-witness-repeat.log` under `.work/scala-validation/logs/`.
+All 12 changed Scala files pass pinned formatting. Changed native formatting,
+Markdown structure/local links and whitespace checks pass.
+
+Focused source review/testing caught and repaired a wrapper effect gap: already
+captured stateful or unsupported user-call results cannot become legal procedural
+sources merely through fill/view selection. The authored expression DAG is
+checked against the existing ConstructionSession operator inventories through a
+narrow kernel query; no copied operator-family whitelist or second effect registry
+is added. Exact causal negatives cover initialization, assignment, control and
+event consumers. An inherited bridge diagnostic-order regression was repaired
+without admitting incomplete storage-reference inventories.
+
+Invocation-local identity memoization keeps retained-Value read collection,
+remapping and exact source comparison from repeatedly expanding shared DAGs.
+A 40-layer helper case and the existing 512-depth rejection exercise that narrow
+contract. Inherited authored-expression traversal and rendered arithmetic can
+still expand; operator inventory scans also remain per consumer. These are not
+whole-pipeline linearity or performance measurements. Repeated shared-fill live
+consumption remains explicitly rejected/open, and unused public event handles
+are not serialized, so no unused-monitor public witness is claimed. No CI or
+full qualification was run.

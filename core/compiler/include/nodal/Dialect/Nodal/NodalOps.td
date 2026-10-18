@@ -1049,6 +1049,7 @@ def Nodal_AnalogVariableOp : Nodal_Op<"analog_variable"> {
     OptionalAttr<StrAttr>:$generated_induction,
     I64Attr:$declaration_order,
     BoolAttr:$initialized,
+    OptionalAttr<StrAttr>:$initializer_form,
     StrAttr:$initializer_value,
     StrAttr:$initializer_kind,
     StrAttr:$initializer_dimension,

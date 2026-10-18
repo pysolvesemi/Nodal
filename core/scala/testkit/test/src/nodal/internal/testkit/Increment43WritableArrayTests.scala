@@ -576,11 +576,12 @@ object Increment43WritableArrayTests extends TestSuite:
           case _ =>
             throw new java.lang.AssertionError("generated persistent root unexpectedly lowered")
 
-    test("selected controls are live while compound selected initializers reject causally"):
+    test("selected controls and compound selected initializers retain typed captures"):
       for form <- 0 to 2 do
         assert(document(new Increment43WritableControlBoundary(form)).text
           .contains("reference_form = \"storage\""))
-      assert(failure(new Increment43WritableControlBoundary(3)).contains("NODAL-SHAPE-043-007"))
+      assert(document(new Increment43WritableControlBoundary(3)).text
+        .contains("initializer_form = \"expression\""))
 
     test("selected branch intersections and caught failures retain exact coverage"):
       assert(document(new Increment43WritableBranches(false)).text.contains("nodal.analog_if"))

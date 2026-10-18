@@ -2629,48 +2629,148 @@ ${indent(body, 2)}
                   result -> path
               ()
             case _ => ()
-        def value(input: Value, depth: Int = 0): Unit =
+        val expressionIdentities = snapshot.names.iterator
+          .filter(_.category == "expression").map(_.semanticPath).toSet
+        val valueStates = new java.util.IdentityHashMap[Value, java.lang.Integer]()
+        val valueHeights = new java.util.IdentityHashMap[Value, java.lang.Integer]()
+        final case class ValueKey(
+            rendered: String,
+            valueType: ValueType,
+            reads: Vector[StorageReference],
+            source: Option[(String, Int, Option[StorageProjection], Option[StorageReference])],
+            scalarSources: Vector[Int]
+        )
+        val valueKeys = mutable.HashMap.empty[ValueKey, Int]
+        val sourceIdentities = mutable.HashMap.empty[String, Int]
+        def invalidValue(message: String, path: String): Nothing =
+          fail("NODAL-BRIDGE-049", message, Some(path))
+        def sourceIdentity(input: Value): Unit =
+          if !input.rendered.startsWith(s"${program.owner}.") ||
+            !expressionIdentities.contains(input.rendered)
+          then
+            invalidValue("procedural value has no owned retained source identity", input.rendered)
+        def value(input: Value, depth: Int = 0): Int =
           if depth >= 512 then
-            fail(
-              "NODAL-BRIDGE-049",
-              "procedural value dependency exceeds supported depth",
-              Some(program.owner)
-            )
-          dimensions(input.valueType.dimensions, program.owner)
-          if input.valueType.dimensions.nonEmpty && input.valueType.kind != ScalarKind.Real then
-            fail(
-              "NODAL-BRIDGE-049",
-              "only Real procedural arrays are supported",
-              Some(program.owner)
-            )
-          input.allReads.foreach(reference)
-          input.source.foreach:
-            case ShapedSource.Fill(scalar) => value(scalar, depth + 1)
-            case ShapedSource.Read(source) =>
-              reference(source)
-              if source.valueType != input.valueType then
-                fail(
-                  "NODAL-BRIDGE-049",
-                  "procedural snapshot has a forged value type",
-                  Some(source.identity)
-                )
-            case ShapedSource.View(source, step) =>
-              value(source, depth + 1)
-              val sourcePath = step match
-                case index: KernelShapeIndexSnapshot => index.input
-                case view: KernelShapeViewSnapshot => view.input
-              if projection(
-                  step,
-                  source.valueType.dimensions,
-                  sourcePath
-                ) != input.valueType.dimensions ||
-                source.valueType.kind != input.valueType.kind || source.valueType.dimension != input.valueType.dimension
+            invalidValue("procedural value dependency exceeds supported depth", program.owner)
+          val previous = valueStates.get(input)
+          if previous != null then
+            if previous.intValue == -1 then
+              invalidValue("cyclic retained procedural value source", input.rendered)
+            if depth + valueHeights.get(input).intValue >= 512 then
+              invalidValue("procedural value dependency exceeds supported depth", program.owner)
+            previous.intValue
+          else
+            valueStates.put(input, -1)
+            dimensions(input.valueType.dimensions, input.rendered)
+            if input.valueType.dimensions.nonEmpty && input.valueType.kind != ScalarKind.Real then
+              invalidValue("only Real procedural arrays are supported", input.rendered)
+            input.reads.foreach(reference)
+            val nested = input.scalarSources.map: leaf =>
+              if leaf.valueType.dimensions.nonEmpty ||
+                !leaf.source.exists(_.isInstanceOf[ShapedSource.View])
               then
-                fail(
-                  "NODAL-BRIDGE-049",
-                  "immutable procedural view has a forged value type",
-                  Some(program.owner)
+                invalidValue(
+                  "nested scalar source must retain an actual scalar view",
+                  leaf.rendered
                 )
+              value(leaf, depth + 1)
+            val tokens = input.scalarSources.map(_.rendered)
+            if tokens.distinct.size != tokens.size then
+              invalidValue("duplicate retained scalar source identity", input.rendered)
+            val used = scalarLeafOccurrences(input.rendered, tokens)
+            if used.toSet != tokens.toSet then
+              invalidValue("unused retained scalar source attachment", input.rendered)
+            val sourceKey
+                : Option[(String, Int, Option[StorageProjection], Option[StorageReference])] =
+              input.source.map:
+                case ShapedSource.Fill(scalar) =>
+                  sourceIdentity(input)
+                  val child = value(scalar, depth + 1)
+                  if input.valueType.dimensions.isEmpty || scalar.valueType.dimensions.nonEmpty ||
+                    input.valueType.kind != ScalarKind.Real || scalar.valueType.kind != ScalarKind.Real ||
+                    input.valueType.dimension != scalar.valueType.dimension || input.scalarSources.nonEmpty ||
+                    input.reads.exists(read => !scalar.allReads.contains(read))
+                  then
+                    invalidValue(
+                      "array fill must preserve its actual scalar Real source and units",
+                      input.rendered
+                    )
+                  ("fill", child, None, None)
+                case ShapedSource.Read(source) =>
+                  reference(source)
+                  if source.valueType != input.valueType || input.rendered != source.identity ||
+                    input.scalarSources.nonEmpty || input.reads.exists(_ != source)
+                  then
+                    invalidValue(
+                      "procedural snapshot has a forged value type or source identity",
+                      input.rendered
+                    )
+                  ("read", 0, None, Some(source))
+                case ShapedSource.View(source, step) =>
+                  sourceIdentity(input)
+                  val child = value(source, depth + 1)
+                  val resultPath = step match
+                    case index: KernelShapeIndexSnapshot => index.path
+                    case view: KernelShapeViewSnapshot => view.path
+                  if resultPath != input.rendered then
+                    invalidValue(
+                      "immutable procedural view has a forged result identity",
+                      input.rendered
+                    )
+                  if source.valueType.dimensions.isEmpty || projection(
+                      step,
+                      source.valueType.dimensions,
+                      source.rendered
+                    ) != input.valueType.dimensions ||
+                    source.valueType.kind != input.valueType.kind ||
+                    source.valueType.dimension != input.valueType.dimension || input.scalarSources.nonEmpty ||
+                    input.reads.exists(read => !source.allReads.contains(read))
+                  then
+                    invalidValue(
+                      "immutable procedural view has a forged value type or source",
+                      input.rendered
+                    )
+                  ("view", child, Some(step), None)
+            if input.source.isEmpty then
+              if input.valueType.dimensions.nonEmpty then
+                invalidValue("shaped value is missing its retained source", input.rendered)
+              val expected = tokens.toSet ++ input.reads.map(_.identity)
+              val opaque = scalarLeafOccurrences(input.rendered, expressionIdentities.toVector)
+              if opaque.exists(token => !expected.contains(token)) then
+                invalidValue(
+                  "scalar expression is missing a retained source attachment",
+                  input.rendered
+                )
+              val nestedReads = input.scalarSources.flatMap(_.allReads).toSet
+              val directReads = input.reads.filterNot(nestedReads.contains).map(_.identity).toSet
+              if scalarLeafOccurrences(input.rendered, directReads.toVector).toSet != directReads
+              then
+                invalidValue(
+                  "scalar expression contains unused mutable read bindings",
+                  input.rendered
+                )
+            val key = ValueKey(input.rendered, input.valueType, input.reads, sourceKey, nested)
+            val identity = valueKeys.getOrElseUpdate(key, valueKeys.size + 1)
+            if input.source.exists {
+                case _: ShapedSource.Read => false
+                case _ => true
+              }
+            then
+              sourceIdentities.get(input.rendered).foreach: prior =>
+                if prior != identity then
+                  invalidValue("conflicting retained source identity", input.rendered)
+              sourceIdentities.update(input.rendered, identity)
+            val children = input.scalarSources ++ input.source.toVector.flatMap {
+              case ShapedSource.Fill(scalar) => Vector(scalar)
+              case ShapedSource.View(source, _) => Vector(source)
+              case _: ShapedSource.Read => Vector.empty
+            }
+            val height = children.foldLeft(0)((maximum, child) =>
+              maximum.max(valueHeights.get(child).intValue + 1)
+            )
+            valueHeights.put(input, height)
+            valueStates.put(input, identity)
+            identity
         def controlReferences(
             reads: Set[String],
             references: Vector[StorageReference],
@@ -2691,43 +2791,60 @@ ${indent(body, 2)}
               "control storage reference inventory is incomplete or ambiguous",
               Some(path)
             )
-        def scalarControl(input: Value, path: String): Unit =
-          value(input)
-          if input.valueType.dimensions.nonEmpty || input.source.exists {
-              case _: ShapedSource.Read => false
-              case _ => true
-            }
-          then
-            fail(
-              "NODAL-BRIDGE-049",
-              "control value requires scalar storage or ordinary scalar expression",
-              Some(path)
-            )
-          val reads = input.allReads.distinct
+        def scalarControl(input: Value, path: String): ScalarDerivation =
+          val _ = value(input)
+          if input.valueType.dimensions.nonEmpty then
+            invalidValue("control value must have a scalar result", path)
+          val derived = try deriveUniformScalar(input)
+          catch
+            case error: IllegalArgumentException =>
+              invalidValue(error.getMessage, path)
+          val reads = derived.value.allReads.distinct
           controlReferences(reads.map(_.identity).toSet, reads, path)
-        def eventReferences(event: AnalogEventRuntime.Expression, path: String): Unit =
-          event.arguments.foreach(argument =>
-            scalarControl(argument.value, s"$path.argument_${argument.slot}")
+          derived
+        def uniqueLiveFills(identities: Vector[String], path: String): Unit =
+          if identities.distinct.size != identities.size then
+            invalidValue("repeated shared fill in a live scalar consumer is unsupported", path)
+        def eventReferences(event: AnalogEventRuntime.Expression, path: String): Vector[String] =
+          val direct = event.arguments.flatMap(argument =>
+            scalarControl(argument.value, s"$path.argument_${argument.slot}").fillOccurrences
           )
-          event.alternatives.zipWithIndex.foreach((alternative, index) =>
+          val nested = event.alternatives.zipWithIndex.flatMap((alternative, index) =>
             eventReferences(alternative, s"$path.alternative_$index")
           )
+          uniqueLiveFills(direct ++ nested, path)
+          direct ++ nested
         program.variables.foreach: record =>
           dimensions(record.variable.valueType.dimensions, record.variable.identity)
-          record.initializer.foreach(value(_))
+          record.initializer.foreach: initializer =>
+            val _ = value(initializer)
+            if record.variable.declarationScope == Vector("procedure") &&
+              initializer.valueType.dimensions.isEmpty && initializer.allReads.nonEmpty &&
+              (initializer.scalarSources.nonEmpty || initializer.source.exists(
+                _.isInstanceOf[ShapedSource.View]
+              ))
+            then
+              invalidValue(
+                "persistent scalar initializer cannot retain mutable fill sources",
+                record.variable.identity
+              )
         program.assignments.foreach: assignment =>
           reference(assignment.target)
-          value(assignment.value)
+          val _ = value(assignment.value)
         program.controlExpressions.foreach: expression =>
           if expression.role == "loop-bound" then
-            scalarControl(expression.value, expression.identity)
-          else value(expression.value)
+            uniqueLiveFills(
+              scalarControl(expression.value, expression.identity).fillOccurrences,
+              expression.identity
+            )
+          else
+            val _ = value(expression.value)
         def block(input: AnalogControlFlowRuntime.Block): Unit = input.statements.foreach:
           case assignment: AnalogControlFlowRuntime.Statement.Assign =>
             assignment.storageTarget.foreach(reference)
           case scope: AnalogControlFlowRuntime.Statement.Scope => block(scope.body)
           case event: AnalogControlFlowRuntime.Statement.EventControl =>
-            eventReferences(event.event, s"${event.identity}.event")
+            val _ = eventReferences(event.event, s"${event.identity}.event")
             block(event.body)
           case branch: AnalogControlFlowRuntime.Statement.IfThenElse =>
             branch.branches.zipWithIndex.foreach: (arm, index) =>
@@ -2737,6 +2854,17 @@ ${indent(body, 2)}
                   "condition must have scalar value type",
                   Some(branch.identity)
                 )
+              if arm.condition.sourceValue.isEmpty &&
+                scalarLeafOccurrences(arm.condition.rendered, expressionIdentities.toVector)
+                  .exists(token => !arm.condition.reads.contains(token))
+              then invalidValue("condition is missing its retained source value", branch.identity)
+              arm.condition.sourceValue.foreach: retained =>
+                val path = s"${branch.identity}.condition_$index"
+                if retained.rendered != arm.condition.rendered || retained.valueType != arm.condition.valueType ||
+                  retained.allReads.distinct != arm.condition.selectedReads ||
+                  retained.allReads.map(_.identity).toSet != arm.condition.reads
+                then invalidValue("condition fields disagree with retained source value", path)
+                uniqueLiveFills(scalarControl(retained, path).fillOccurrences, path)
               controlReferences(
                 arm.condition.reads,
                 arm.condition.selectedReads,
@@ -2745,6 +2873,19 @@ ${indent(body, 2)}
               block(arm.body)
             branch.otherwise.foreach(block)
           case selection: AnalogControlFlowRuntime.Statement.CaseStatement =>
+            if selection.selector.sourceValue.isEmpty &&
+              scalarLeafOccurrences(selection.selector.rendered, expressionIdentities.toVector)
+                .exists(token => !selection.selector.reads.contains(token))
+            then invalidValue("selector is missing its retained source value", selection.identity)
+            selection.selector.sourceValue.foreach: retained =>
+              val path = s"${selection.identity}.selector"
+              if retained.rendered != selection.selector.rendered ||
+                retained.valueType.kind != selection.selector.kind ||
+                retained.valueType.dimension != selection.selector.dimension ||
+                retained.allReads.distinct != selection.selector.selectedReads ||
+                retained.allReads.map(_.identity).toSet != selection.selector.reads
+              then invalidValue("selector fields disagree with retained source value", path)
+              uniqueLiveFills(scalarControl(retained, path).fillOccurrences, path)
             controlReferences(
               selection.selector.reads,
               selection.selector.selectedReads,

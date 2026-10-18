@@ -345,6 +345,16 @@ LogicalResult renderStatement(Operation *op, AnalogEventRenderState &state, llvm
     if (llvm::isa<AnalogProcedureOp>(op->getParentOp()))
       return success();
     if (op->getAttrOfType<BoolAttr>("initialized").getValue()) {
+      if (text(op, "initializer_form") == "expression") {
+        auto captures = readCaptures(op, op->getOperands(), state);
+        auto rhs = failed(captures)
+                       ? FailureOr<std::string>(failure())
+                       : expression(op, text(op, "initializer_value"), state, *captures);
+        if (failed(rhs))
+          return reject(op, "local initializer expression cannot be captured losslessly");
+        line(state.names[op] + " = " + *rhs + ";");
+        return success();
+      }
       if (llvm::isa<ShapedType>(op->getResult(0).getType())) {
         if (op->getNumOperands() != 1)
           return reject(op, "shaped initializer requires one typed snapshot");

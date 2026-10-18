@@ -45,6 +45,18 @@ std::string declaration(const std::string &name, const std::string &dimensions,
          metadata(name) + "}> : (" + (initializer.empty() ? "" : shape(dimensions, false)) +
          ") -> " + shape(dimensions) + "\n";
 }
+std::string expressionDeclaration(const std::string &name, const std::string &source,
+                                  const std::string &captures = "",
+                                  const std::string &captureTypes = "", unsigned order = 1,
+                                  const std::string &kind = "real",
+                                  const std::string &dimension = "1") {
+  return "%" + name + " = \"nodal.analog_variable\"(" + captures + ") <{identity = \"Arrays." +
+         name + "\", owner = \"Arrays\", declaration_order = " + std::to_string(order) +
+         " : i64, initialized = true, initializer_form = \"expression\", initializer_value = \"" +
+         source + "\", initializer_kind = \"" + kind + "\", initializer_dimension = \"" +
+         dimension + "\", initializer_reads = [], " + metadata(name) + "}> : (" + captureTypes +
+         ") -> !nodal.variable<\"" + kind + "\", \"" + dimension + "\">\n";
+}
 std::string read(const std::string &name, const std::string &input,
                  const std::string &dimensions = "") {
   return "%" + name + " = \"nodal.analog_variable_read\"(%" + input + ") <{read_id = \"Arrays." +
@@ -465,6 +477,251 @@ int main(int argc, char **argv) {
     }
     return source;
   };
+  // An expression initializer is evaluated at each reached local declaration,
+  // including the one-capture case that must not take the legacy copy branch.
+  // Prefix-similar leaf names exercise exact captured binding identities.
+  const std::string expressionRoot = fill("fill", "2", "3.0") + declaration("values", "2", "fill") +
+                                     index("first", "values", "2", "%c0", "i64") +
+                                     index("firstMore", "values", "2", "%c1", "i64");
+  const std::string firstCapture = read("firstCapture", "first");
+  const std::string secondCapture = read("secondCapture", "firstMore");
+  struct InitializerWitness {
+    const char *name;
+    std::string body;
+    std::string assignment;
+  };
+  const std::vector<InitializerWitness> initializerWitnesses{
+      {"zero", expressionDeclaration("local", "analog_add(1.0,2.0)"),
+       "event_Arrays_local = (1.0 + 2.0);"},
+      {"one",
+       firstCapture + expressionDeclaration("local", "analog_add(Arrays.first,1.0)",
+                                            "%firstCapture", quantity),
+       "event_Arrays_local = (event_Arrays_firstCapture + 1.0);"},
+      {"multiple",
+       firstCapture + secondCapture +
+           expressionDeclaration("local", "analog_add(Arrays.first,Arrays.firstMore)",
+                                 "%firstCapture, %secondCapture", quantity + ", " + quantity),
+       "event_Arrays_local = (event_Arrays_firstCapture + event_Arrays_secondCapture);"},
+      {"projected",
+       firstCapture +
+           fill("scalarFill", "2", "analog_add(Arrays.first,2.0)", "%firstCapture", quantity) +
+           index("selected", "scalarFill", "2", "%c0", "i64", "", false) +
+           index("selectedMore", "scalarFill", "2", "%c1", "i64", "", false) +
+           expressionDeclaration("local", "analog_add(Arrays.selected,Arrays.selectedMore)",
+                                 "%selected, %selectedMore", quantity + ", " + quantity),
+       "event_Arrays_local = (event_Arrays_selected + event_Arrays_selectedMore);"},
+      {"boolean",
+       firstCapture + expressionDeclaration("local", "real_gt(Arrays.first,2.0)", "%firstCapture",
+                                            quantity, 1, "boolean"),
+       "event_Arrays_local = (event_Arrays_firstCapture > 2.0);"}};
+  for (auto kind : {nodal::BackendKind::VerilogA, nodal::BackendKind::VerilogAMS}) {
+    for (const auto &witness : initializerWitnesses) {
+      // Both local lifetimes are supported inside an ordinary or generated
+      // analog procedure. No generated loop-local lifetime is implied here.
+      for (bool generated : {false, true}) {
+        for (bool eventLocal : {false, true}) {
+          const std::string body = expressionRoot + witness.body +
+                                   assignment("afterInitializer", "first", "", "9.0", false);
+          const std::string source =
+              profileSource(wrap(eventLocal ? body : scope("initializerScope", body), "", generated,
+                                 false, !eventLocal),
+                            kind);
+          std::string target;
+          const bool projected = std::string(witness.name) == "projected";
+          if (!deterministicTarget(source, target, kind) ||
+              llvm::StringRef(target).count(witness.assignment) != 1 ||
+              !before(target, "event_Arrays_fill = 3.0;", witness.assignment) ||
+              !before(target, witness.assignment,
+                      "event_Arrays_values[event_Arrays_afterInitializer_target_map] = 9.0;") ||
+              (witness.body.find("%firstCapture") != std::string::npos &&
+               !before(target, "event_Arrays_firstCapture = ", witness.assignment)) ||
+              (std::string(witness.name) == "multiple" &&
+               !before(target, "event_Arrays_secondCapture = ", witness.assignment)) ||
+              (generated && !before(target, "for (array_gen", "event_Arrays_local;")) ||
+              (projected &&
+               (llvm::StringRef(target).count(
+                    "event_Arrays_scalarFill = (event_Arrays_firstCapture + 2.0);") != 1 ||
+                !before(target, "event_Arrays_scalarFill = ",
+                        "event_Arrays_selected = event_Arrays_scalarFill;") ||
+                !before(target, "event_Arrays_selectedMore = event_Arrays_scalarFill;",
+                        witness.assignment))))
+            return fail("local initializer expression lost actual captures, source arithmetic or "
+                        "declaration-entry ordering");
+          if (!generated && eventLocal) {
+            const std::string name = std::string("initializer-expression-") + witness.name +
+                                     (kind == nodal::BackendKind::VerilogAMS ? "-ams" : "");
+            artifact(name.c_str(), source, target,
+                     kind == nodal::BackendKind::VerilogAMS ? ".vams" : ".va");
+          }
+          if (generated && !eventLocal && projected)
+            artifact(kind == nodal::BackendKind::VerilogAMS ? "initializer-expression-generated-ams"
+                                                            : "initializer-expression-generated",
+                     source, target, kind == nodal::BackendKind::VerilogAMS ? ".vams" : ".va");
+        }
+      }
+    }
+    const std::string loopSource =
+        profileSource(wrap(expressionRoot + loop("initializerLoop", initializerWitnesses[1].body),
+                           "", false, false, true),
+                      kind);
+    std::string loopTarget;
+    if (!deterministicTarget(loopSource, loopTarget, kind) ||
+        !before(loopTarget, "for (event_Arrays_initializerLoop_index",
+                "event_Arrays_firstCapture = ") ||
+        !before(loopTarget, "event_Arrays_firstCapture = ", initializerWitnesses[1].assignment) ||
+        llvm::StringRef(loopTarget).count(initializerWitnesses[1].assignment) != 1)
+      return fail("loop-local expression initializer escaped reached scope entry");
+    const std::string dimensionedInitializer = withRealDimension(
+        fill("fill", "2", "3.0 V") + declaration("values", "2", "fill") +
+            index("first", "values", "2", "%c0", "i64") + firstCapture +
+            expressionDeclaration("local", "analog_add(Arrays.first,1.0 V)", "%firstCapture",
+                                  quantity, 1, "real", "voltage"),
+        "voltage");
+    std::string dimensionedTarget;
+    if (!deterministicTarget(profileSource(wrap(dimensionedInitializer), kind), dimensionedTarget,
+                             kind) ||
+        dimensionedTarget.find("event_Arrays_local = (event_Arrays_firstCapture + 1.0);") ==
+            std::string::npos)
+      return fail("dimensioned scalar expression initializer lost exact-unit rendering");
+  }
+  // Malformed native forms are rejected for their causal contract violation,
+  // and neither native nor target-only failures may modify caller-owned output.
+  auto replaceOnce = [](std::string source, const std::string &from, const std::string &to) {
+    source.replace(source.find(from), from.size(), to);
+    return source;
+  };
+  struct InitializerRejection {
+    const char *name;
+    std::string source;
+    const char *diagnostic;
+    bool nativeValid = false;
+  };
+  const char *expressionFormDiagnostic =
+      "NODAL-ANALOG-033-004: expression initializer requires initialized local scalar storage "
+      "and empty textual read inventory";
+  const char *sourceContractDiagnostic =
+      "NODAL-ANALOG-037-010: procedural source expression does not match its scalar contract";
+  const std::string zeroInitializer = expressionDeclaration("local", "1.0", "", "", 0);
+  const std::string oneInitializer =
+      expressionDeclaration("local", "analog_add(Arrays.first,1.0)", "%firstCapture", quantity);
+  const std::string projectedInitializer =
+      expressionDeclaration("local", "analog_add(Arrays.selected,1.0)", "%selected", quantity);
+  const std::string fillProjection =
+      firstCapture + fill("scalarFill", "2", "Arrays.first", "%firstCapture", quantity) +
+      index("selected", "scalarFill", "2", "%c0", "i64", "", false);
+  std::vector<InitializerRejection> initializerRejections{
+      {"root", wrap(zeroInitializer, "", false, false, true), expressionFormDiagnostic},
+      {"shaped", wrap(replaceOnce(zeroInitializer, ") -> " + variable, ") -> " + shape("2"))),
+       expressionFormDiagnostic},
+      {"uninitialized",
+       wrap(replaceOnce(zeroInitializer, "initialized = true", "initialized = false")),
+       expressionFormDiagnostic},
+      {"unknown-form",
+       wrap(replaceOnce(zeroInitializer, "initializer_form = \"expression\"",
+                        "initializer_form = \"other\"")),
+       "NODAL-ANALOG-033-004: unknown procedural initializer form"},
+      {"textual-reads",
+       wrap(expressionRoot + firstCapture +
+            replaceOnce(oneInitializer, "initializer_reads = []",
+                        "initializer_reads = [\"Arrays.values\"]")),
+       expressionFormDiagnostic},
+      {"missing-capture",
+       wrap(expressionRoot + expressionDeclaration("local", "analog_add(Arrays.first,1.0)")),
+       sourceContractDiagnostic},
+      {"extra-capture",
+       wrap(expressionRoot + firstCapture +
+            expressionDeclaration("local", "1.0", "%firstCapture", quantity)),
+       "NODAL-ANALOG-037-010: procedural expression reads or static value were forged"},
+      {"duplicate-capture",
+       wrap(expressionRoot + firstCapture +
+            expressionDeclaration("local", "analog_add(Arrays.first,1.0)",
+                                  "%firstCapture, %firstCapture", quantity + ", " + quantity)),
+       "NODAL-ANALOG-037-010: initializer captures must bind unique immutable scalar values"},
+      {"live-handle",
+       wrap(expressionRoot +
+            expressionDeclaration("local", "analog_add(Arrays.first,1.0)", "%first", variable)),
+       "NODAL-ANALOG-034-014: assignment operands require explicit captured values"},
+      {"shaped-capture",
+       wrap(expressionRoot + expressionDeclaration("local", "1.0", "%fill", shape("2", false))),
+       "NODAL-ANALOG-037-010: initializer captures must bind unique immutable scalar values"},
+      {"claimed-kind", wrap(expressionDeclaration("local", "1.0", "", "", 0, "boolean")),
+       sourceContractDiagnostic},
+      {"claimed-dimension", wrap(expressionDeclaration("local", "1.0 V", "", "", 0)),
+       sourceContractDiagnostic},
+      {"destination-dimension",
+       wrap(replaceOnce(expressionDeclaration("local", "1.0 V", "", "", 0, "real", "voltage"),
+                        ") -> !nodal.variable<\"real\", \"voltage\">",
+                        ") -> !nodal.variable<\"real\", \"time\">")),
+       "NODAL-ANALOG-033-005: procedural initializer dimension does not match the declared "
+       "variable dimension"},
+      {"ordered-write",
+       wrap(expressionRoot + firstCapture + assignment("crossedWrite", "first", "", "9.0", false) +
+            oneInitializer),
+       "NODAL-ANALOG-033-017: scalar snapshot crosses an ordered statement boundary"},
+      {"projection-ordered-write",
+       wrap(expressionRoot + fillProjection +
+            assignment("crossedWrite", "first", "", "9.0", false) + projectedInitializer),
+       "NODAL-ANALOG-033-017: snapshot cannot cross an ordered statement or scope boundary"},
+      {"future-capture", wrap(expressionRoot + oneInitializer + firstCapture),
+       "NODAL-ANALOG-033-017: scalar captures require unique dominating owned reads"},
+      {"capture-scope", wrap(expressionRoot + firstCapture + scope("localScope", oneInitializer)),
+       "NODAL-ANALOG-033-017: scalar captures require unique dominating owned reads"},
+      {"foreign-owner",
+       wrap(replaceOnce(zeroInitializer, "owner = \"Arrays\"", "owner = \"Foreign\"")),
+       "NODAL-ANALOG-034-014: structured procedural operation owner does not match the enclosing "
+       "component"},
+      {"self-reference",
+       wrap(expressionDeclaration("local", "analog_add(Arrays.local,1.0)", "", "", 0)),
+       "NODAL-ANALOG-037-010: procedural expression reads or static value were forged"},
+      {"incoming-selected-da",
+       wrap(declaration("values", "2") + index("first", "values", "2", "%c0", "i64") +
+            index("firstMore", "values", "2", "%c1", "i64") +
+            assignment("initializeFirstOnly", "first", "", "1.0", false) + secondCapture +
+            fill("scalarFill", "2", "Arrays.firstMore", "%secondCapture", quantity) +
+            index("selected", "scalarFill", "2", "%c0", "i64", "", false) + projectedInitializer),
+       "NODAL-ANALOG-034-004: procedural variable 'Arrays.values' is read before definite "
+       "initialization on this control-flow path"},
+      {"generated-loop-lifetime",
+       wrap(expressionRoot + loop("initializerLoop", firstCapture + oneInitializer), "", true,
+            false, true),
+       "generated loop-local declarations would create unsupported histories", true},
+      {"target-layout",
+       wrap(fill("fill", "2147483648") + declaration("values", "2147483648", "fill") +
+            index("first", "values", "2147483648", "%c0", "i64") + firstCapture + oneInitializer),
+       "array shape/count intermediate exceeds portable signed32 indices", true}};
+  for (const char *attribute : {"generated_owner", "generated_induction"}) {
+    std::string source = wrap(expressionRoot + firstCapture + oneInitializer, "", true);
+    const auto declarationStart = source.find("%local = \"nodal.analog_variable\"");
+    const std::string prefix = std::string(attribute) + " = \"";
+    const auto valueStart = source.find(prefix, declarationStart) + prefix.size();
+    source.replace(valueStart, source.find('"', valueStart) - valueStart, "Arrays.foreign");
+    initializerRejections.push_back(
+        {attribute, source,
+         "NODAL-ITERATION-043-004: generated analog ownership or induction does not match its "
+         "enclosing generate region"});
+  }
+  for (const auto &rejection : initializerRejections) {
+    for (auto kind : {nodal::BackendKind::VerilogA, nodal::BackendKind::VerilogAMS}) {
+      const auto source = profileSource(rejection.source, kind);
+      std::string diagnostics;
+      mlir::ScopedDiagnosticHandler handler(&context, [&](mlir::Diagnostic &diagnostic) {
+        llvm::raw_string_ostream stream(diagnostics);
+        diagnostic.print(stream);
+        return mlir::success();
+      });
+      auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+      const bool nativeValid = module && mlir::succeeded(mlir::verify(*module));
+      if (nativeValid != rejection.nativeValid)
+        return fail(std::string("initializer rejection missed its native boundary: ") +
+                    rejection.name + "\n" + diagnostics);
+      std::string rejected = "sentinel";
+      if (emit(source, rejected, kind) || rejected != "sentinel" ||
+          diagnostics.find(rejection.diagnostic) == std::string::npos)
+        return fail(std::string("initializer rejection lost causal diagnostic or transactional "
+                                "output: ") +
+                    rejection.name + "\n" + diagnostics);
+    }
+  }
   for (auto kind : {nodal::BackendKind::VerilogA, nodal::BackendKind::VerilogAMS}) {
     const bool ams = kind == nodal::BackendKind::VerilogAMS;
     for (bool events : {false, true}) {

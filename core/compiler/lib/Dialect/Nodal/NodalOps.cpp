@@ -1673,7 +1673,8 @@ LogicalResult verifyAnalogProcedure(Operation *operation) {
                   nodal::AnalogContinueOp, nodal::AnalogOnOp, nodal::AnalogArrayFillOp,
                   nodal::ShapeIndexOp, nodal::ShapeViewOp, nodal::ShapeSliceOp>(nested) ||
         (llvm::isa<nodal::AnalogVariableOp>(nested) &&
-         llvm::isa<nodal::ShapedType>(nested->getResult(0).getType())) ||
+         (llvm::isa<nodal::ShapedType>(nested->getResult(0).getType()) ||
+          nested->hasAttr("initializer_form"))) ||
         nodal::isAnalogEventExpression(nested))
       hasStructuredControl = true;
   });
@@ -3115,6 +3116,30 @@ LogicalResult nodal::AnalogVariableOp::verify() {
       failed(requireText(getOperation(), "owner", "procedural variable owner")))
     return failure();
   Operation *operation = getOperation();
+  if (operation->hasAttr("initializer_form")) {
+    auto form = operation->getAttrOfType<StringAttr>("initializer_form");
+    if (!form || form.getValue() != "expression")
+      return emitMappedFailure(operation, "NODAL-ANALOG-033-004",
+                               "unknown procedural initializer form");
+    auto variable = llvm::dyn_cast<nodal::VariableType>(operation->getResult(0).getType());
+    auto initialized = operation->getAttrOfType<BoolAttr>("initialized");
+    auto reads = operation->getAttrOfType<ArrayAttr>("initializer_reads");
+    if (!variable || !initialized || !initialized.getValue() || !reads || !reads.empty() ||
+        llvm::isa<nodal::AnalogProcedureOp>(operation->getParentOp()))
+      return emitMappedFailure(operation, "NODAL-ANALOG-033-004",
+                               "expression initializer requires initialized local scalar storage "
+                               "and empty textual read inventory");
+    if (failed(verifyVariableInitializerShape(operation, variable)) ||
+        failed(verifyCapturedScalarBindings(operation, operation->getOperands(),
+                                            textAttr(operation, "initializer_value"))))
+      return failure();
+    auto source = parseAnalogSourceExpression(operation, textAttr(operation, "initializer_value"));
+    if (failed(source) || source->kind != textAttr(operation, "initializer_kind") ||
+        source->dimension != textAttr(operation, "initializer_dimension"))
+      return emitMappedFailure(operation, "NODAL-ANALOG-033-004",
+                               "expression initializer source differs from its scalar type");
+    return success();
+  }
   if (auto shaped = llvm::dyn_cast<nodal::ShapedType>(operation->getResult(0).getType())) {
     auto leaf = llvm::dyn_cast<nodal::VariableType>(shaped.getElementType());
     auto module = operation->getParentOfType<nodal::ModuleOp>();

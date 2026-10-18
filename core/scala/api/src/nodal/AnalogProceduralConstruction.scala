@@ -280,7 +280,12 @@ private[nodal] object AnalogProceduralConstruction:
       definition.name
     )
     definition.arguments.zip(result.arguments).foreach: (authored, argument) =>
-      requireScalarControl(module, authored._2, argument.value)
+      requireScalarControl(authored._2, argument.value)
+    def fillOccurrences(event: AnalogEventRuntime.Expression): Vector[String] =
+      event.arguments.flatMap(argument =>
+        AnalogProceduralRuntime.deriveUniformScalar(argument.value).fillOccurrences
+      ) ++ event.alternatives.flatMap(fillOccurrences)
+    requireSingleLiveFill(fillOccurrences(result))
     result.validate()
     result
 
@@ -492,43 +497,134 @@ private[nodal] object AnalogProceduralConstruction:
       expression: Expr[? <: Data],
       fallback: Option[AnalogProceduralRuntime.ValueType]
   ): AnalogProceduralRuntime.Value =
-    val reads = collectReads(module, expression)
-    val dataType = valueType(module, expression, fallback)
-    val shaped = expression match
-      case fill: KernelExpr[?] if fill.operation.contains("analog_array_fill") =>
-        val scalar = semanticValue(module, fill.operands.head.asInstanceOf[Expr[Real]], None)
-        if scalar.valueType.dimensions.nonEmpty ||
-          scalar.valueType.kind != AnalogProceduralRuntime.ScalarKind.Real
-        then
-          AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
-            "NODAL-SHAPE-043-007",
-            "array fill requires one scalar Real value"
-          ))
-        Some(AnalogProceduralRuntime.ShapedSource.Fill(scalar))
-      case other
-          if storageReference(module, other).exists(reference =>
-            reference.valueType.dimensions.nonEmpty ||
-              reference.isInstanceOf[AnalogProceduralRuntime.StorageSelection]
-          ) =>
-        Some(AnalogProceduralRuntime.ShapedSource.Read(storageReference(module, other).get))
-      case view: KernelExpr[?] if CandidateRuntime.proceduralShapeSource(view) =>
-        val input = semanticValue(module, view.operands.head.asInstanceOf[Expr[Data]], None)
-        Some(AnalogProceduralRuntime.ShapedSource.View(
-          input,
-          projection(module, view, referenceToken(module, view.operands.head.asInstanceOf[AnyRef]))
+    requireProceduralSource(expression)
+    val memo = new IdentityHashMap[Expr[? <: Data], AnalogProceduralRuntime.Value]()
+    val active = new IdentityHashMap[Expr[? <: Data], java.lang.Boolean]()
+    def capture(
+        expression: Expr[? <: Data],
+        fallback: Option[AnalogProceduralRuntime.ValueType],
+        depth: Int
+    ): AnalogProceduralRuntime.Value =
+      if depth >= 512 || active.containsKey(expression) then
+        AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+          "NODAL-SHAPE-043-007",
+          "procedural scalar source is cyclic or exceeds the supported dependency depth"
         ))
-      case _ => None
-    if dataType.dimensions.nonEmpty && shaped.isEmpty then
+      Option(memo.get(expression)).getOrElse:
+        active.put(expression, java.lang.Boolean.TRUE)
+        try
+          val reads = collectReads(module, expression)
+          val dataType = valueType(module, expression, fallback)
+          val shaped = expression match
+            case fill: KernelExpr[?] if fill.operation.contains("analog_array_fill") =>
+              val scalar = capture(fill.operands.head.asInstanceOf[Expr[Real]], None, depth + 1)
+              if scalar.valueType.dimensions.nonEmpty ||
+                scalar.valueType.kind != AnalogProceduralRuntime.ScalarKind.Real
+              then
+                AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+                  "NODAL-SHAPE-043-007",
+                  "array fill requires one scalar Real value"
+                ))
+              Some(AnalogProceduralRuntime.ShapedSource.Fill(scalar))
+            case other
+                if storageReference(module, other).exists(reference =>
+                  reference.valueType.dimensions.nonEmpty ||
+                    reference.isInstanceOf[AnalogProceduralRuntime.StorageSelection]
+                ) =>
+              Some(AnalogProceduralRuntime.ShapedSource.Read(storageReference(module, other).get))
+            case view: KernelExpr[?] if CandidateRuntime.proceduralShapeSource(view) =>
+              val input = capture(view.operands.head.asInstanceOf[Expr[Data]], None, depth + 1)
+              Some(AnalogProceduralRuntime.ShapedSource.View(
+                input,
+                projection(module, view, input.rendered)
+              ))
+            case _ => None
+          if dataType.dimensions.nonEmpty && shaped.isEmpty then
+            AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+              "NODAL-SHAPE-043-007",
+              "shaped procedural values require fill or an owned variable view"
+            ))
+          val leaves = mutable.LinkedHashMap.empty[String, AnalogProceduralRuntime.Value]
+          val visited = new IdentityHashMap[KernelExpr[?], java.lang.Boolean]()
+          def visit(candidate: Any, leafDepth: Int): Unit =
+            if leafDepth >= 512 then
+              AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+                "NODAL-SHAPE-043-007",
+                "procedural scalar source exceeds the supported dependency depth"
+              ))
+            candidate match
+              case leaf: KernelExpr[?] if !visited.containsKey(leaf) =>
+                visited.put(leaf, java.lang.Boolean.TRUE)
+                if CandidateRuntime.proceduralShapeSource(leaf) &&
+                  storageReference(module, leaf).isEmpty
+                then
+                  val retained = capture(leaf, None, leafDepth)
+                  if retained.valueType.dimensions.nonEmpty then
+                    AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+                      "NODAL-SHAPE-043-007",
+                      "a nested procedural shape source must be a scalar projection"
+                    ))
+                  leaves.update(retained.rendered, retained)
+                else leaf.operands.foreach(visit(_, leafDepth + 1))
+              case values: Iterable[?] => values.foreach(visit(_, leafDepth + 1))
+              case _ => ()
+          if shaped.isEmpty then
+            expression match
+              case authored: KernelExpr[?] => authored.operands.foreach(visit(_, depth + 1))
+              case _ => ()
+          val result = AnalogProceduralRuntime.Value(
+            renderEventValue(module, expression),
+            dataType,
+            reads,
+            shaped,
+            leaves.values.toVector
+          )
+          memo.put(expression, result)
+          result
+        finally active.remove(expression)
+    capture(expression, fallback, 0)
+
+  /** A retained expression still executes at its consumer. Check the actual dependencies before
+    * shape capture can replace a fill or projection with a reference token.
+    */
+  private def requireProceduralSource(expression: Expr[? <: Data]): Unit =
+    val heights = new IdentityHashMap[KernelExpr[?], java.lang.Integer]()
+    val active = new IdentityHashMap[KernelExpr[?], java.lang.Boolean]()
+    val dependencies = Vector.newBuilder[KernelExpr[?]]
+    def invalidDepth(): Nothing =
       AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
         "NODAL-SHAPE-043-007",
-        "shaped procedural values require fill or an owned variable view"
+        "procedural scalar source is cyclic or exceeds the supported dependency depth"
       ))
-    AnalogProceduralRuntime.Value(
-      renderEventValue(module, expression),
-      dataType,
-      reads,
-      shaped
-    )
+    def visit(candidate: Any, depth: Int): Int =
+      if depth >= 512 then invalidDepth()
+      candidate match
+        case authored: KernelExpr[?] =>
+          if active.containsKey(authored) then invalidDepth()
+          Option(heights.get(authored)) match
+            case Some(height) =>
+              if depth + height.intValue >= 512 then invalidDepth()
+              height.intValue
+            case None =>
+              active.put(authored, java.lang.Boolean.TRUE)
+              try
+                if authored.operation.exists(_.startsWith(AnalogUserFunctionRuntime.CallPrefix))
+                then
+                  AnalogUserFunctionRuntime.fail(
+                    1,
+                    "analog function calls are not permitted in analog procedural expressions"
+                  )
+                dependencies += authored
+                val height = authored.operands.foldLeft(0): (height, operand) =>
+                  height.max(visit(operand, depth + 1) + 1)
+                heights.put(authored, java.lang.Integer.valueOf(height))
+                height
+              finally active.remove(authored)
+        case values: Iterable[?] =>
+          values.foldLeft(0)((height, value) => height.max(visit(value, depth + 1) + 1))
+        case _ => 0
+    visit(expression, 0)
+    ConstructionKernel.requireProceduralSources(dependencies.result())
 
   private def validateInitializer(
       variable: AnalogProceduralRuntime.Variable,
@@ -609,11 +705,6 @@ private[nodal] object AnalogProceduralConstruction:
       value: AnalogProceduralRuntime.Value
   ): Unit =
     val selected = value.allReads.exists(_.root.valueType.dimensions.nonEmpty)
-    if selected && value.valueType.dimensions.isEmpty && value.source.isEmpty then
-      AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
-        "NODAL-SHAPE-043-007",
-        "compound selected scalar initializers require a typed expression operand"
-      ))
     if module.controlBuilder.exists(_.atRoot) &&
       (selected || value.valueType.dimensions.nonEmpty && value.allReads.nonEmpty)
     then
@@ -724,6 +815,8 @@ private[nodal] object AnalogProceduralConstruction:
     import AnalogControlFlowRuntime.*
     def constant(expression: Any): Boolean = expression match
       case _: Param[?] => true
+      case expr: KernelExpr[?] if CandidateRuntime.proceduralShapeSource(expr) =>
+        expr.operands.headOption.exists(constant)
       case expr: KernelExpr[?] => expr.literal.nonEmpty ||
         ((Set("analog_add", "analog_sub", "analog_mul", "analog_div", "analog_neg")
           .contains(expr.operation.getOrElse("")) || expr.operation.exists(
@@ -749,7 +842,13 @@ private[nodal] object AnalogProceduralConstruction:
               case loop: Statement.Loop => writes(loop.body, controlled)
               case _ => Vector.empty
           module.procedureComplete && (module.module eq activeModule.module) &&
-          initializer.exists(constant) && module.controlSnapshot.exists: snapshot =>
+          initializer.exists(initial =>
+            constant(initial) && {
+              val retained = semanticValue(module, initial, None)
+              retained.valueType.dimensions.isEmpty &&
+              AnalogProceduralRuntime.deriveUniformScalar(retained).value.reads.isEmpty
+            }
+          ) && module.controlSnapshot.exists: snapshot =>
             val rootDeclaration = snapshot.root.statements.exists:
               case declaration: Statement.Declare => declaration.variable == variable.identity
               case _ => false
@@ -852,10 +951,10 @@ private[nodal] object AnalogProceduralConstruction:
       AnalogControlFlowRuntime.Statement.Assign(
         statement,
         variable.root.identity,
-        value.reads.map(_.identity).toSet,
+        value.allReads.map(_.identity).toSet,
         source,
         storageTarget = Some(variable),
-        selectedReads = value.reads
+        selectedReads = value.allReads.distinct
       )
     )
     module.controlExpressions += AnalogProceduralRuntime.ControlExpressionRecord(
@@ -873,7 +972,6 @@ private[nodal] object AnalogProceduralConstruction:
       )
 
   private def requireScalarControl(
-      module: ModuleState,
       expression: Expr[? <: Data],
       value: AnalogProceduralRuntime.Value
   ): Unit =
@@ -885,23 +983,35 @@ private[nodal] object AnalogProceduralConstruction:
     if value.valueType.dimensions.nonEmpty ||
       value.allReads.exists(_.valueType.dimensions.nonEmpty)
     then unsupported("control and event expressions require scalar storage references")
-    // A selected immutable fill is a deferred value, not a mutable storage leaf.
-    // Check the authored DAG as well as the outer payload so compound expressions
-    // cannot hide that unsupported value-source form behind scalar arithmetic.
+    // Derive only from retained actual leaves. The bridge independently validates every static
+    // shape proof before serialization; this check admits the source form without dropping the
+    // authored dependency tree or duplicating an underlying fill scalar at a live evaluation site.
+    val derived = AnalogProceduralRuntime.deriveUniformScalar(value)
+    requireSingleLiveFill(derived.fillOccurrences)
     val visited = new IdentityHashMap[KernelExpr[?], java.lang.Boolean]()
     def visit(candidate: Any, depth: Int): Unit = candidate match
       case authored: KernelExpr[?] if !visited.containsKey(authored) =>
         if depth >= 512 then unsupported("control expression exceeds supported dependency depth")
         visited.put(authored, java.lang.Boolean.TRUE)
-        if CandidateRuntime.proceduralShapeSource(authored) then
-          if storageReference(module, authored).isEmpty then
-            unsupported(
-              "deferred shaped values in controls and events require a scalar value contract"
-            )
-        else authored.operands.foreach(visit(_, depth + 1))
+        authored.operands.foreach(visit(_, depth + 1))
       case values: Iterable[?] => values.foreach(visit(_, depth + 1))
       case _ => ()
     visit(expression, 0)
+
+  private def requireSingleLiveFill(occurrences: Vector[String]): Unit =
+    if occurrences.distinct.size != occurrences.size then
+      AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+        "NODAL-SHAPE-043-007",
+        "repeated shared-fill sources in one live control or event expression are not yet supported"
+      ))
+
+  private def retainedScalarSource(
+      value: AnalogProceduralRuntime.Value
+  ): Option[AnalogProceduralRuntime.Value] =
+    Option.when(
+      value.scalarSources.nonEmpty ||
+        value.source.exists(_.isInstanceOf[AnalogProceduralRuntime.ShapedSource.View])
+    )(value)
 
   private def runtimeCondition(
       module: ModuleState,
@@ -909,7 +1019,7 @@ private[nodal] object AnalogProceduralConstruction:
       source: Option[AnalogProceduralRuntime.Source]
   ): AnalogControlFlowRuntime.Condition =
     val semantic = semanticValue(module, expression, None)
-    requireScalarControl(module, expression, semantic)
+    requireScalarControl(expression, semantic)
     AnalogControlFlowRuntime.Condition(
       semantic.rendered,
       semantic.allReads.map(_.identity).toSet,
@@ -917,7 +1027,8 @@ private[nodal] object AnalogProceduralConstruction:
       None,
       semantic.valueType,
       source,
-      selectedReads = semantic.allReads.distinct
+      selectedReads = semantic.allReads.distinct,
+      sourceValue = retainedScalarSource(semantic)
     )
 
   def conditional[A](body: => A): A =
@@ -965,14 +1076,15 @@ private[nodal] object AnalogProceduralConstruction:
       AnalogControlFlowRuntime.Selector.staticBoolean(value, source = source)
     case None =>
       val semantic = semanticValue(module, expression, None)
-      requireScalarControl(module, expression, semantic)
+      requireScalarControl(expression, semantic)
       AnalogControlFlowRuntime.Selector(
         semantic.rendered,
         semantic.allReads.map(_.identity).toSet,
         semantic.valueType.kind,
         semantic.valueType.dimension,
         source = source,
-        selectedReads = semantic.allReads.distinct
+        selectedReads = semantic.allReads.distinct,
+        sourceValue = retainedScalarSource(semantic)
       )
 
   def integerCase[A](expression: Expr[Integer])(body: => A): A =
@@ -1049,7 +1161,7 @@ private[nodal] object AnalogProceduralConstruction:
     val module = activeModule
     val source = ConstructionKernel.captureAnalogProceduralSource
     val bound = semanticValue(module, iterations, None)
-    requireScalarControl(module, iterations, bound)
+    requireScalarControl(iterations, bound)
     activeBuilder(module).loop(
       AnalogControlFlowRuntime.LoopStage.RuntimeBounded,
       minimumIterations,

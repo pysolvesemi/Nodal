@@ -143,6 +143,22 @@ def generated_source(body):
     return NativeSource(source)
 
 
+def initializer_expression(name, source, captures=(), kind="real", dimension="1",
+                           destination_kind=None, order=1):
+    """An explicit immutable-capture initializer, evaluated at local entry."""
+    operands = ",".join("%" + name for name, _ in captures)
+    types = ",".join(value_type for _, value_type in captures)
+    destination_kind = destination_kind or kind
+    return (
+        f'%{name} = "nodal.analog_variable"({operands}) <{{identity="T.{name}", '
+        f'owner="T", declaration_order={order}:i64, initialized=true, '
+        f'initializer_form="expression", initializer_value="{source}", '
+        f'initializer_kind="{kind}", initializer_dimension="{dimension}", '
+        f'initializer_reads=[], metadata={{semantic_path="T.{name}"}}}}> '
+        f': ({types}) -> !nodal.variable<"{destination_kind}", "{dimension}">\n'
+    )
+
+
 def cases():
     roots = var('a', '2', 0) + var('b', '2', 1)
     set0 = idx('a0', 'a', '2', 0) + assign('set0', 'a0', V, 0)
@@ -379,8 +395,119 @@ def cases():
     yield "event_free_forged_static_loop", scalar_roots + static_loop, False
 
 
+    # Local expression initializers consume actual immutable scalar captures.
+    root = var("array", "2", 0)
+    selection = idx("element", "array", "2", 0)
+    written = root + selection + assign("initialize", "element", V, 0)
+    capture = read("capture", "element", V, Q)
+    expression_init = initializer_expression(
+        "local", "analog_add(T.element,1.0)", (("capture", Q),))
+    one_capture = written + scope(capture + expression_init)
+    yield "initializer_expression_zero_capture", scope(initializer_expression(
+        "local", "analog_add(1.0,2.0)", order=0)), True
+    yield "initializer_expression_one_capture", one_capture, True
+    scalar_local = scope(read("capture", "scalar", V, Q) + initializer_expression(
+        "local", "analog_add(T.scalar,1.0)", (("capture", Q),)))
+    yield "initializer_expression_scalar_only", scalar("scalar", 0) + scalar_local, True
+    yield "initializer_expression_scalar_only_uninitialized", var(
+        "scalar", "2", 0).replace(shape("2"), V) + scalar_local, False
+    yield "initializer_expression_integer_to_real", scope(initializer_expression(
+        "local", "2", kind="integer", destination_kind="real", order=0)), True
+    yield "initializer_expression_boolean_result", written + scope(
+        capture + initializer_expression("local", "real_gt(T.element,0.0)",
+                                         (("capture", Q),), kind="boolean")), True
+    second = idx("other", "array", "2", 1) + assign("initialize_other", "other", V, 1)
+    two_captures = capture + read("other_capture", "other", V, Q)
+    multi = written + second + scope(two_captures + initializer_expression(
+        "local", "analog_add(T.element,T.other)",
+        (("capture", Q), ("other_capture", Q))))
+    yield "initializer_expression_multiple_captures", multi, True
+    dimensioned = one_capture.replace('"1"', '"voltage"').replace(
+        'value="1.0"', 'value="1.0 V"').replace(
+        'analog_add(T.element,1.0)', 'analog_add(T.element,1.0 V)')
+    yield "initializer_expression_dimensioned", dimensioned, True
+    projected_fill = (fill("values", "2")
+                      + idx("value", "values", "2", 0, leaf=Q))
+    yield "initializer_expression_projected_fill", scope(
+        projected_fill + initializer_expression("local", "analog_mul(T.value,3.0)",
+                                                (("value", Q),), order=0)), True
+    yield "initializer_expression_shared_fill", scope(
+        projected_fill + idx("other_value", "values", "2", 1, leaf=Q)
+        + initializer_expression("local", "analog_add(T.value,T.other_value)",
+                                 (("value", Q), ("other_value", Q)), order=0)), True
+    yield "initializer_expression_generated_local", generated_source(one_capture), True
+    on_local = (
+        '"nodal.analog_on"(%event) <{statement_id="T.on",owner="T",metadata={}}> ({\n'
+        + capture + expression_init + '}) : (!nodal.analog_event)->()\n')
+    yield "initializer_expression_event_local", written + event + on_local, True
+
+    yield "initializer_expression_root_rejected", written + capture + expression_init, False
+    yield "initializer_expression_shaped_rejected", written + scope(
+        capture + expression_init.replace('-> ' + V, '-> ' + shape("2"))), False
+    yield "initializer_expression_uninitialized_rejected", one_capture.replace(
+        'initialized=true', 'initialized=false'), False
+    yield "initializer_expression_unknown_form", one_capture.replace(
+        'initializer_form="expression"', 'initializer_form="unknown"'), False
+    yield "initializer_expression_text_inventory", scalar("existing", 0) + scope(
+        initializer_expression("local", "1.0").replace(
+            'initializer_reads=[]', 'initializer_reads=["T.existing"]')), False
+    yield "initializer_expression_missing_capture", written + scope(
+        initializer_expression("local", "analog_add(T.element,1.0)")), False
+    yield "initializer_expression_unused_capture", one_capture.replace(
+        'analog_add(T.element,1.0)', '1.0'), False
+    yield "initializer_expression_duplicate_capture", written + scope(
+        capture + initializer_expression("local", "T.element",
+                                         (("capture", Q), ("capture", Q)))), False
+    yield "initializer_expression_live_handle", written + scope(initializer_expression(
+        "local", "T.element", (("element", V),))), False
+    yield "initializer_expression_shaped_capture", scope(
+        fill("values", "2") + initializer_expression("local", "T.values",
+                                                      (("values", shape("2", Q)),), order=0)), False
+    yield "initializer_expression_wrong_kind", one_capture.replace(
+        'initializer_kind="real"', 'initializer_kind="boolean"'), False
+    yield "initializer_expression_wrong_units", one_capture.replace(
+        'initializer_dimension="1", initializer_reads=[], metadata={semantic_path="T.local"}',
+        'initializer_dimension="voltage", initializer_reads=[], metadata={semantic_path="T.local"}'), False
+    yield "initializer_expression_wrong_destination", one_capture.replace(
+        ': (' + Q + ') -> ' + V, ': (' + Q + ') -> !nodal.variable<"boolean", "1">'), False
+    yield "initializer_expression_incoming_uninitialized", root + selection + scope(
+        capture + expression_init), False
+    yield "initializer_expression_crosses_write", written + scope(
+        capture + assign("intervening", "element", V, 1) + expression_init), False
+    yield "initializer_expression_capture_after_consumer", written + scope(
+        expression_init + capture), False
+    foreign_generated = generated_source(one_capture).replace(
+        'owner="T",generated_owner="T.generated",generated_induction="T.generated.index", '
+        'declaration_order=1',
+        'owner="T",generated_owner="T.foreign",generated_induction="T.generated.index", '
+        'declaration_order=1')
+    yield "initializer_expression_generated_owner_forgery", NativeSource(foreign_generated), False
+    yield "initializer_expression_capture_scope_escape", written + capture + scope(
+        expression_init), False
+
+
 # Exact causal diagnostic sets. Syntax/CLI errors or crashes never count as rejections.
 EXPECTED_DIAGNOSTICS = {
+    "initializer_expression_scalar_only_uninitialized": ["NODAL-ANALOG-034-004"],
+    "initializer_expression_root_rejected": ["NODAL-ANALOG-033-004"],
+    "initializer_expression_shaped_rejected": ["NODAL-ANALOG-033-004"],
+    "initializer_expression_uninitialized_rejected": ["NODAL-ANALOG-033-004"],
+    "initializer_expression_unknown_form": ["NODAL-ANALOG-033-004"],
+    "initializer_expression_text_inventory": ["NODAL-ANALOG-033-004"],
+    "initializer_expression_missing_capture": ["NODAL-ANALOG-037-010"],
+    "initializer_expression_unused_capture": ["NODAL-ANALOG-037-010"],
+    "initializer_expression_duplicate_capture": ["NODAL-ANALOG-037-010"],
+    "initializer_expression_live_handle": ["NODAL-ANALOG-034-014"],
+    "initializer_expression_shaped_capture": ["NODAL-ANALOG-037-010"],
+    "initializer_expression_wrong_kind": ["NODAL-ANALOG-037-010"],
+    "initializer_expression_wrong_units": ["NODAL-ANALOG-037-010"],
+    "initializer_expression_wrong_destination": ["NODAL-ANALOG-033-004"],
+    "initializer_expression_incoming_uninitialized": ["NODAL-ANALOG-034-004"],
+    "initializer_expression_crosses_write": ["NODAL-ANALOG-033-017"],
+    "initializer_expression_capture_after_consumer": ["NODAL-ANALOG-033-017"],
+    "initializer_expression_capture_scope_escape": ["NODAL-ANALOG-033-017"],
+    "initializer_expression_generated_owner_forgery": ["NODAL-ANALOG-034-014", "NODAL-ITERATION-043-004"],
+
     "event_free_missing_source_payload": ["NODAL-ANALOG-037-010"],
     "event_free_forged_capture_identity": ["NODAL-ANALOG-037-010"],
     "event_free_unused_capture": ["NODAL-ANALOG-037-010"],

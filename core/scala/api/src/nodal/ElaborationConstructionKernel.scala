@@ -131,6 +131,9 @@ private[nodal] object ConstructionKernel:
   def analogDimension(value: Any): Option[String] =
     active.map(_.inferAnalogDimension(value).canonical)
 
+  def requireProceduralSources(expressions: Vector[KernelExpr[?]]): Unit =
+    active.foreach(_.requireProceduralSources(expressions))
+
   def analogReferencePath(value: Any): Option[String] = active.flatMap(_.pathOf(value))
 
   def proceduralShapeDimension(value: Any): String =

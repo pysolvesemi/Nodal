@@ -207,7 +207,8 @@
       "result_kind": "real",
       "dimension_rule": "dimensionless",
       "verilog_a": "floor",
-      "effect": "pure"
+      "effect": "pure",
+      "step_discontinuity": true
     },
     {
       "id": "ceil",
@@ -216,7 +217,8 @@
       "result_kind": "real",
       "dimension_rule": "dimensionless",
       "verilog_a": "ceil",
-      "effect": "pure"
+      "effect": "pure",
+      "step_discontinuity": true
     }
   ],
   "analyses": [

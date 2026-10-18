@@ -340,6 +340,12 @@ private[nodal] object ConstructionKernel:
       session.withAnalogRegion(body)
     case None => body
 
+  def physicalComponent[A](contract: PhysicalComponentContract)(body: => A): A = active match
+    case Some(session) => session.withPhysicalComponent(contract)(body)
+    case None => body
+
+  def declareAnalogState(state: AnalogState): Unit = active.foreach(_.declareAnalogState(state))
+
   def analogSemanticBlock[A](
       kind: AnalogEquationRuntime.RegionKind
   )(body: => A): A = active match

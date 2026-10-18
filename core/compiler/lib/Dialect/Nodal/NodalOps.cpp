@@ -5,6 +5,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Support/LogicalResult.h"
 #include "nodal/Diagnostics/DiagnosticSupport.h"
+#include "nodal/Dialect/Nodal/AnalogEquationModel.h"
 #include "nodal/Dialect/Nodal/AnalogEvents.h"
 #include "nodal/Dialect/Nodal/AnalogFunctions.h"
 #include "nodal/Dialect/Nodal/AnalogNoise.h"
@@ -2976,7 +2977,8 @@ LogicalResult nodal::AnalogOp::verify() {
                    nodal::AnalogTransitionOp, nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp,
                    nodal::AnalogAbstimeOp, nodal::AnalogBoundStepOp, nodal::AnalogHeldReadOp,
                    nodal::AccessOp, nodal::TerminalAccessOp, nodal::PortFlowAccessOp,
-                   nodal::ContributeOp, nodal::AnalogProcedureOp>(operation))
+                   nodal::ContributeOp, nodal::AnalogProcedureOp, nodal::AnalogUnknownOp,
+                   nodal::AnalogEquationOp>(operation))
       return operation.emitOpError(
           "NODAL-ANALOG-REGION-002: operation is not legal in the analog numeric region");
   }
@@ -3774,3 +3776,10 @@ LogicalResult nodal::AnalogNoiseOp::verify() {
 LogicalResult nodal::AnalogFunctionOp::verify() { return verifyAnalogFunctionOperation(*this); }
 LogicalResult nodal::AnalogAnalysisOp::verify() { return verifyAnalogFunctionOperation(*this); }
 LogicalResult nodal::AnalogContextOp::verify() { return verifyAnalogFunctionOperation(*this); }
+
+LogicalResult nodal::AnalogUnknownOp::verify() {
+  return verifyAnalogUnknownOperation(getOperation());
+}
+LogicalResult nodal::AnalogEquationOp::verify() {
+  return verifyAnalogEquationOperation(getOperation());
+}

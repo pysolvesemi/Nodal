@@ -2,9 +2,8 @@ package nodal
 
 /** Public continuous-time semantic surface frozen by Increment 133.
   *
-  * These declarations are compile-time contracts only. Frontend construction, equation
-  * normalization, residual formation, solving, and target lowering remain inert until their owning
-  * implementation increments.
+  * The finite scalar algebraic checkpoint captures component, state and equation identity. Residual
+  * formation, solving, and target lowering remain with their owning increments.
   */
 enum AnalysisKind:
   case Initialization, Dc, OperatingPoint, Transient, Ac, Noise
@@ -94,8 +93,7 @@ final case class PhysicalComponentContract(
 )
 
 def physicalComponent(contract: PhysicalComponentContract)(body: => Unit): Unit =
-  CandidateRuntime.statement("candidate-physical-component", contract)
-  body
+  CandidateRuntime.physicalComponent(contract, body)
 
 def localBalance(id: BalanceId, terminalFlows: Expr[Real]*): Unit =
   CandidateRuntime.statement("candidate-local-balance", id, terminalFlows)
@@ -195,8 +193,9 @@ def analogState(
     dimension: PhysicalDimension,
     initialization: StateInitialization
 ): AnalogState =
-  CandidateRuntime.statement("candidate-analog-state-declaration", name, dimension, initialization)
-  new AnalogState(name, dimension, initialization)
+  val state = new AnalogState(name, dimension, initialization)
+  CandidateRuntime.declareAnalogState(state)
+  state
 
 def reinitialize(state: AnalogState, value: Expr[Real]): Unit =
   CandidateRuntime.statement("candidate-state-reinitialize", state, value)

@@ -1185,15 +1185,17 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
   - Implementation evidence: [F-045 readiness and focused results](../implementation/increment45-readiness.md), in this increment branch. A–G complete; verified squash integration `6bc1d37ea5909de093a9e163c618df8018374c35` preserves the tested tree `afb91b27aa53626204dbad98fb9c63c396bc54ab`. No CI or numerical simulation is claimed.
 
 - [ ] **Increment 46 — Analog semantic lint suite**
-  - [ ] **F-046.A — Architecture review, modularity, scalability and extensibility.** Reuse semantic topology, dimensions and diagnostics; distinguish the available source checks from later whole-island DAE analysis in 135.
-  - [ ] **F-046.B — Implementation and integration.** Detect floating nodes, discipline conflicts, branch misuse, unit errors, local/global equation imbalance, structural singularity, unsafe equation orientation or division, invalid structural-parameter envelopes, unreachable events, discontinuities, parameter risks, and portability hazards.
-  - [ ] **F-046.C — Focused positive, negative and predecessor regression.** Pair each important lint with a valid near-boundary case and a triggering mutation, including hierarchy, events and symbolic envelopes.
-  - [ ] **F-046.D — Focused local validation and applicability**
-    - [ ] **F-046.D.1** Compiler witnesses: Retain actual public Scala, normalized IR and generated Verilog-A witnesses for the supported compiler profile; distinguish internal reparse from independent OpenVAF compilation.
-    - [ ] **F-046.D.2** Later tool handoff: Identify representative witness cases for 48 compile and 49/52 numerical checks, with relevant analyses, references and tolerances. Preserve compiler-only acceptance limits; later tool execution is untested here and does not block this prototype increment.
-  - [ ] **F-046.E — Optimization review and output quality.** Review repeated topology traversal and diagnostic duplication; lint must not repair or silently change mathematical behavior. Apply the proportionate review rule above; document no new optimization required when justified.
-  - [ ] **F-046.F — Representative scale, determinism and compatibility.** Exercise sparse/deep connectivity and large diagnostic/source paths; compare stable issue ordering.
+  - [x] **F-046.A — Architecture review, modularity, scalability and extensibility.** Reuse semantic topology, dimensions and diagnostics; distinguish the available source checks from later whole-island DAE analysis in 135.
+  - [x] **F-046.B — Implementation and integration.** Detect floating nodes, discipline conflicts, branch misuse, unit errors, local/global equation imbalance, structural singularity, unsafe equation orientation or division, invalid structural-parameter envelopes, unreachable events, discontinuities, parameter risks, and portability hazards.
+  - [x] **F-046.C — Focused positive, negative and predecessor regression.** Pair each important lint with a valid near-boundary case and a triggering mutation, including hierarchy, events and symbolic envelopes.
+  - [x] **F-046.D — Focused local validation and applicability**
+    - [x] **F-046.D.1** Compiler witnesses: Retain actual public Scala, normalized IR and generated Verilog-A witnesses for the supported compiler profile; distinguish internal reparse from independent OpenVAF compilation.
+    - [x] **F-046.D.2** Later tool handoff: Identify representative witness cases for 48 compile and 49/52 numerical checks, with relevant analyses, references and tolerances. Preserve compiler-only acceptance limits; later tool execution is untested here and does not block this prototype increment.
+  - [x] **F-046.E — Optimization review and output quality.** Review repeated topology traversal and diagnostic duplication; lint must not repair or silently change mathematical behavior. Apply the proportionate review rule above; document no new optimization required when justified.
+  - [x] **F-046.F — Representative scale, determinism and compatibility.** Exercise sparse/deep connectivity and large diagnostic/source paths; compare stable issue ordering.
   - [ ] **F-046.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 46; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
+
+  - Focused completion: [F-046 implementation and finite structural dependency](../implementation/increment46-readiness.md); 36 Scala tests, 318 typed native assertions, affected native regressions and 77 actual-source structural replay commands pass. Parent/G await verified integration; no CI was run.
 
 - [ ] **Increment 47 — Verilog-A capability profile and feature matrix**
   - [ ] **F-047.A — Architecture review, modularity, scalability and extensibility.** Separate language capability from simulator support using existing backend profiles; keep AMS-only features outside the Verilog-A claim.
@@ -2367,6 +2369,7 @@ This independently schedulable phase closes the cross-layer continuous-time arch
   - [x] **F-133.H — Historical acceptance breakdown: Equation/component checkpoint and continuous-time gate.** Retain both approved design gates and the exact accepted head/run/merge identities below; equation normalization, solver and backend execution were inert.
 
 - [ ] **Increment 134 — Source-semantic analog IR, `AnalogIsland`, and stable identities**
+  - Dependency checkpoint implemented with F-046: [typed algebraic source and matching profile](../design-gates/NodalAnalogStructuralCheckpoint-DG-v0.1.md). The broader original children below remain open.
   - [ ] **F-134.A — Architecture review, modularity, scalability and extensibility**
     - [ ] **F-134.A.1** Preserve authored equation left/right expressions separately from later residual form and retain terminal, branch, connection-set, component, partial/concrete, local-balance, structural-parameter, hierarchy, dimension, guard, analysis, and source-span metadata.
     - [ ] **F-134.A.2** Represent source equations, contributions, procedural operations and connection sets distinctly in stable AnalogIslands.
@@ -2384,6 +2387,7 @@ This independently schedulable phase closes the cross-layer continuous-time arch
   - [ ] **F-134.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 134; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
 
 - [ ] **Increment 135 — Topology expansion, residual DAE construction, and structural verification**
+  - Dependency checkpoint implemented with F-046: [typed algebraic source and matching profile](../design-gates/NodalAnalogStructuralCheckpoint-DG-v0.1.md). The broader original children below remain open.
   - [ ] **F-135.A — Architecture review, modularity, scalability and extensibility**
     - [ ] **F-135.A.1** Keep residual construction independent of target causal orientation; reject unsupported higher-index or variable-structure systems explicitly and do not perform unapproved index reduction.
     - [ ] **F-135.A.2** Build solver-neutral residual/structural analysis independently of target equation orientation and preserve component balance provenance.

@@ -19,6 +19,7 @@
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Support/HierarchyOrder.h"
 #include "nodal/Transforms/AnalogCanonicalization.h"
+#include "nodal/Transforms/AnalogSemanticLint.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -1221,12 +1222,23 @@ llvm::SmallVector<llvm::StringRef, 16> stageNames(GateProfile profile) {
   if (profile == GateProfile::Fast)
     return {"construction", "hierarchy",      "types",
             "parameters",   "analog-numeric", "analog-canonicalization",
-            "domains",      "capabilities"};
-  return {"construction", "drivers",        "latches",
-          "cycles",       "hierarchy",      "types",
-          "parameters",   "analog-numeric", "analog-canonicalization",
-          "enum-fsm",     "domains",        "protocols",
-          "effects",      "analog",         "capabilities"};
+            "domains",      "capabilities",   "analog-semantic-lint"};
+  return {"construction",
+          "drivers",
+          "latches",
+          "cycles",
+          "hierarchy",
+          "types",
+          "parameters",
+          "analog-numeric",
+          "analog-canonicalization",
+          "enum-fsm",
+          "domains",
+          "protocols",
+          "effects",
+          "analog",
+          "capabilities",
+          "analog-semantic-lint"};
 }
 
 std::unique_ptr<Pass> createFoldAnalogConstantsPass();
@@ -1255,6 +1267,7 @@ void addVerifierPasses(OpPassManager &manager, GateProfile profile) {
   }
   manager.addPass(createCrossLayerDiagnosticPass());
   manager.addPass(std::make_unique<VerifyCapabilitiesPass>());
+  manager.addPass(createAnalogSemanticLintPass());
 }
 
 class MaterializeConservativeConnectivityPass final
@@ -1438,6 +1451,7 @@ LogicalResult runNodalPipelineTransaction(mlir::ModuleOp module, GateProfile pro
 
 void registerNodalPasses() {
   registerAnalogCanonicalizationPass();
+  registerAnalogSemanticLintPass();
   static PassRegistration<MaterializeConservativeConnectivityPass> connectivity;
   static PassRegistration<VerifyConstructionPass> construction;
   static PassRegistration<VerifyDriversPass> drivers;

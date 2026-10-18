@@ -3683,6 +3683,16 @@ bool validGeneratedBoundExpression(llvm::StringRef text, const std::set<std::str
 } // namespace
 
 LogicalResult verifyBackendOperations(mlir::ModuleOp module, const BackendProfile &profile) {
+  Operation *sourceEquations = nullptr;
+  module.walk([&](Operation *operation) {
+    if (!sourceEquations && (operation->hasAttr("source_equations") ||
+                             llvm::isa<AnalogUnknownOp, AnalogEquationOp>(operation)))
+      sourceEquations = operation;
+  });
+  if (sourceEquations)
+    return emitMappedFailure(sourceEquations, "NODAL-BACKEND-EQUATION-134-001",
+                             "typed source equations require their equation-to-target lowering; "
+                             "structural matching is not HDL emission");
   if (failed(normalizePotentialFlowAccess(module)))
     return failure();
   if (failed(verifyAnalogQuantityErasure(module)))

@@ -209,6 +209,12 @@ LogicalResult emitMappedFailure(Operation *operation, llvm::StringRef code,
   return emitWithContext(operation, code, message, collectDiagnosticContext(operation));
 }
 
+void emitMappedWarning(Operation *operation, llvm::StringRef code, const llvm::Twine &message) {
+  InFlightDiagnostic diagnostic = operation->emitWarning();
+  diagnostic << code << ": " << message.str();
+  appendContext(diagnostic, collectDiagnosticContext(operation));
+}
+
 LogicalResult emitMappedFailureForPath(mlir::ModuleOp module, llvm::StringRef semanticPathValue,
                                        llvm::StringRef code, const llvm::Twine &message) {
   if (Operation *operation = findOperationByPath(module, semanticPathValue))

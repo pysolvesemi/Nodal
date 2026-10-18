@@ -656,6 +656,7 @@ private[nodal] object ReproducibilityContract:
             )
       ),
       "analog_semantics" -> analogSemantics(snapshot),
+      "typed_equation_source" -> string(new AnalogEquationMlir.Plan(snapshot).canonical),
       "analog_regions" -> array(
         snapshot.analogRegions.map: region =>
           obj(

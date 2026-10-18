@@ -317,7 +317,16 @@ EvaluationResult evaluateParameterReference(Operation *operation, bool reportErr
   ConstantValue result;
   result.kind = resultInformation->kind;
   result.dimension = resultInformation->dimension;
-  Attribute valueAttribute = parameter->getAttr("default_value");
+  // A fixed declaration can still depend on an overridable parameter through
+  // its canonical expression. The cached default attribute is not a constancy
+  // proof; use the parameter owner's checked expression semantics instead.
+  auto invariant = getInvariantParameterDefault(parameter);
+  if (failed(invariant))
+    return errorResult(operation, "NODAL-ANALOG-FOLD-001",
+                       "fixed parameter has no valid canonical default expression", reportErrors);
+  if (!*invariant)
+    return dynamicResult();
+  Attribute valueAttribute = **invariant;
   if (result.kind == AnalogNumericKind::Real) {
     auto value = llvm::dyn_cast_or_null<FloatAttr>(valueAttribute);
     auto scale = parameterScale(parameter);
@@ -856,6 +865,24 @@ LogicalResult verifyRealLiteral(Operation *operation) {
   auto value = operation->getAttrOfType<FloatAttr>("value");
   if (!value || !std::isfinite(value.getValueAsDouble()))
     return emitMappedFailure(operation, "NODAL-ANALOG-LITERAL-001", "real literal must be finite");
+  if (operation->hasAttr("unit") || operation->hasAttr("authored_value")) {
+    Operation *parent = operation->getParentOp();
+    auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("unit");
+    auto authored = operation->getAttrOfType<FloatAttr>("authored_value");
+    Operation *unit = reference ? findTopLevelUnit(operation, reference.getValue()) : nullptr;
+    auto scale = unit ? unit->getAttrOfType<FloatAttr>("scale") : FloatAttr();
+    auto info = getAnalogNumericTypeInfo(operation->getResult(0).getType());
+    if (!parent || !parent->getAttrOfType<DictionaryAttr>("source_equations") || !unit ||
+        !authored || !std::isfinite(authored.getValueAsDouble()) || !scale ||
+        !std::isfinite(scale.getValueAsDouble()) || scale.getValueAsDouble() <= 0.0 ||
+        failed(info) || info->kind != AnalogNumericKind::Real || info->legacyF64 ||
+        info->dimension != textAttr(unit, "dimension") ||
+        authored.getValueAsDouble() * scale.getValueAsDouble() != value.getValueAsDouble())
+      return emitMappedFailure(
+          operation, "NODAL-ANALOG-LITERAL-001",
+          "source quantity literal must preserve its verified unit and canonical magnitude");
+    return success();
+  }
   if (!semanticTypeMatches(operation->getResult(0).getType(), AnalogNumericKind::Real, "1"))
     return emitMappedFailure(operation, "NODAL-ANALOG-TYPE-001",
                              "real literal requires a real dimensionless result");
@@ -1214,6 +1241,25 @@ LogicalResult verifyContribution(Operation *operation) {
 }
 
 } // namespace
+
+FailureOr<std::string> canonicalizeAnalogSourceDimension(llvm::StringRef dimension) {
+  llvm::StringRef signature = dimension;
+  if (dimension == "dimensionless")
+    signature = "1";
+  else if (dimension == "frequency")
+    signature = "time^-1";
+  else if (dimension == "charge")
+    signature = "current*time";
+  else if (dimension == "power")
+    signature = "current*voltage";
+  else if (dimension == "resistance")
+    signature = "current^-1*voltage";
+  else if (dimension == "capacitance")
+    signature = "current*time*voltage^-1";
+  if (!isCanonicalDimensionSignature(signature))
+    return failure();
+  return signature.str();
+}
 
 bool isCanonicalDimensionSignature(llvm::StringRef signature) {
   return succeeded(parseDimension(signature, true));

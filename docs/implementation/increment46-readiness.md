@@ -1,7 +1,7 @@
 # Foundation 46 readiness
 
 **Date:** 2026-10-18
-**Status:** Focused implementation complete; final publication and verified integration pending.
+**Status:** Complete and integrated; Foundation 46 A–G and parent closed.
 **Branch:** `increment/46-analog-semantic-lint`
 **Base:** `a2eed4dca32f468c73c99107d32b227773fea8aa`
 
@@ -203,7 +203,7 @@ visibility, registry regeneration and contribution-policy checks pass.
   source paths cover the changed algorithms. Existing diagnostic ownership and
   operation/category deduplication are reused. No additional emission optimization
   is needed for this lint increment.
-- F-046.G and the parent remain open until verified integration. F-134/F-135 stay
+- F-046.G and the parent are complete after verified integration. F-134/F-135 stay
   open beyond this deliberately finite dependency checkpoint. No whole-island,
   numerical solver, initialization solver or generic hierarchy analysis is claimed.
 
@@ -221,3 +221,12 @@ compiled/crashing OpenVAF inputs, so the recorded consumer results apply to thes
 exact artifacts. Final commands and source hashes are retained under
 `.work/increment46/`; the public test entry points and focused native targets above
 remain checked-in reproduction sources. No CI or numerical simulation was run.
+
+## Verified integration
+
+PR [142](https://github.com/pysolvesemi/Nodal/pull/142) was squash-merged as
+`5ac3eb845c01f20488be767d0ae3b7ab09442718`, with sole parent `a2eed4dca32f468c73c99107d32b227773fea8aa`
+and exact tested tree `a448b2c956d7ae53d3f2b5ab4b3d1dfeee74eae3`. The source head
+was `7492640bfe159139b4530b385448da5427cf5c26`. The actual merge message contains
+`[skip ci]`; remote ref/tree/parent and zero Actions were independently verified.
+This subsequent documentation-only closure does not alter the tested production tree.

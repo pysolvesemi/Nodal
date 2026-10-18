@@ -1184,7 +1184,7 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
 
   - Implementation evidence: [F-045 readiness and focused results](../implementation/increment45-readiness.md), in this increment branch. A–G complete; verified squash integration `6bc1d37ea5909de093a9e163c618df8018374c35` preserves the tested tree `afb91b27aa53626204dbad98fb9c63c396bc54ab`. No CI or numerical simulation is claimed.
 
-- [ ] **Increment 46 — Analog semantic lint suite**
+- [x] **Increment 46 — Analog semantic lint suite**
   - [x] **F-046.A — Architecture review, modularity, scalability and extensibility.** Reuse semantic topology, dimensions and diagnostics; distinguish the available source checks from later whole-island DAE analysis in 135.
   - [x] **F-046.B — Implementation and integration.** Detect floating nodes, discipline conflicts, branch misuse, unit errors, local/global equation imbalance, structural singularity, unsafe equation orientation or division, invalid structural-parameter envelopes, unreachable events, discontinuities, parameter risks, and portability hazards.
   - [x] **F-046.C — Focused positive, negative and predecessor regression.** Pair each important lint with a valid near-boundary case and a triggering mutation, including hierarchy, events and symbolic envelopes.
@@ -1193,9 +1193,9 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
     - [x] **F-046.D.2** Later tool handoff: Identify representative witness cases for 48 compile and 49/52 numerical checks, with relevant analyses, references and tolerances. Preserve compiler-only acceptance limits; later tool execution is untested here and does not block this prototype increment.
   - [x] **F-046.E — Optimization review and output quality.** Review repeated topology traversal and diagnostic duplication; lint must not repair or silently change mathematical behavior. Apply the proportionate review rule above; document no new optimization required when justified.
   - [x] **F-046.F — Representative scale, determinism and compatibility.** Exercise sparse/deep connectivity and large diagnostic/source paths; compare stable issue ordering.
-  - [ ] **F-046.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 46; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
+  - [x] **F-046.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 46; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
 
-  - Focused completion: [F-046 implementation and finite structural dependency](../implementation/increment46-readiness.md); 36 Scala tests, 318 typed native assertions, affected native regressions and 77 actual-source structural replay commands pass. Parent/G await verified integration; no CI was run.
+  - Focused completion: [F-046 implementation and finite structural dependency](../implementation/increment46-readiness.md); 36 Scala tests, 318 typed native assertions, affected native regressions and 77 actual-source structural replay commands pass. Verified squash integration `5ac3eb845c01f20488be767d0ae3b7ab09442718` preserves tested tree `a448b2c956d7ae53d3f2b5ab4b3d1dfeee74eae3`; parent/G complete. No CI was run.
 
 - [ ] **Increment 47 — Verilog-A capability profile and feature matrix**
   - [ ] **F-047.A — Architecture review, modularity, scalability and extensibility.** Separate language capability from simulator support using existing backend profiles; keep AMS-only features outside the Verilog-A claim.

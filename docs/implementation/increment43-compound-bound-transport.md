@@ -1233,10 +1233,40 @@ forged derivative ownership and a redirected contribution reject before target
 publication. The peer `idt` predecessor remains rejected, so this admission does
 not silently create peer state or a general operator graph.
 
-The profile remains one direct child range, two nodes, one branch, one access,
-one `ddt` and one contribution. Peer `idt`, a second branch or operator,
+At this checkpoint the profile remained one direct child range, two nodes, one
+branch, one access, one `ddt` and one contribution. Peer `idt`, a second branch or operator,
 operator chains, fan-out, wider/deeper groups, cross-range references, general
 slices, shaped terminals, generated connections or instances, reverse ranges,
 default specialization and eager unrolling remain unsupported. Independent
 simulator qualification, the F-048/F-049/F-052 handoff and every F-043
 acceptance obligation remain open.
+
+## Nested peer generated analog-node idt checkpoint
+
+The bounded two-dimensional peer-node equation now also admits exactly one
+child-owned `idt` state path on its single branch between two child-owned
+electrical declarations. The potential access, integral and additive potential
+contribution retain the exact child region and induction; both branch endpoints
+use the same canonical row-major occurrence index, and the integral retains its
+canonical operator-owned state identity.
+
+This is a narrow composition of the qualified nested peer memoryless equation
+and nested single-node integral profiles. It reuses the product-extent array
+layout, compact source-index formula, one-use dependency walker, branch owner,
+stateful operator renderer and target reparser. It adds no API, schema, language
+memory or state array, alternate expression/index/storage engine,
+parameter-default specialization or host-lane unrolling.
+
+Native and configured public witnesses require deterministic normalized IR and
+Verilog-A, both indexed peer endpoints, exact operator/state ownership, complete
+source maps and independent target reparse. Forged peer declaration owner,
+induction or source identity, forged integral owner/induction/state identity and
+a redirected contribution reject before target publication. The profile remains
+one direct child range, two nodes, one branch, one access, one `idt` and one
+contribution; this does not admit a general stateful operator graph.
+
+A second branch, operator or state, operator chains, fan-out, wider/deeper
+groups, sibling or cross-range state, general slices, shaped terminals,
+generated connections or instances, reverse ranges, default specialization and
+eager unrolling remain unsupported. Independent simulator qualification, the
+F-048/F-049/F-052 handoff and every F-043 acceptance obligation remain open.

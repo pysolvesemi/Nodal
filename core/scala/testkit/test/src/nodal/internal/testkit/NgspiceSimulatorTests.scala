@@ -150,8 +150,16 @@ Values:
     ): NgspiceSimulationResult =
       new NgspiceSimulator(profiles, fake).simulate(selected)
 
+    def fold(
+        fake: Fake = new Fake,
+        selected: NgspiceSimulateRequest = request
+    ): NgspiceStreamingSimulationResult[Double] =
+      new NgspiceSimulator(Vector(profile), fake).fold(selected)(_ => Right(0.0))((total, _, row) =>
+        Right(total + row(1).real)
+      )
+
   private def fixture(): Fixture =
-    val parent = Path.of(".work/increment49/adapter-tests").toAbsolutePath
+    val parent = Path.of(".work/increment51/adapter-tests").toAbsolutePath
     Files.createDirectories(parent)
     val root = Files.createTempDirectory(parent, "fixture-")
     val executable = root.resolve("fake ngspice")
@@ -203,6 +211,14 @@ Values:
       request,
       NgspiceProfile("ngspice-test", Version, executableHash, "linux-x86_64", "e" * 64)
     )
+
+  private def rawIsClosed(receipt: NgspiceSimulationResult): Boolean =
+    val path = receipt.evidenceDirectory.get.resolve("results.raw")
+    val descriptors = Files.list(Path.of("/proc/self/fd"))
+    try !descriptors.anyMatch(descriptor =>
+        Files.isSymbolicLink(descriptor) && Files.readSymbolicLink(descriptor) == path
+      )
+    finally descriptors.close()
 
   val tests = Tests:
     test("fresh verified model-dependent run retains complete evidence"):
@@ -622,3 +638,239 @@ Values:
         )
       ).simulate(transient)
       assert(wrong.outcome == NgspiceOutcome.InvalidRaw)
+
+    test("streamed simulation retains aggregate schema exact bytes and no plot"):
+      val f = fixture()
+      val collected = f.run()
+      val fake = new Fake
+      val streamed = f.fold(fake)
+      assert(
+        streamed.receipt.outcome == NgspiceOutcome.Simulated,
+        streamed.receipt.plot.isEmpty,
+        streamed.aggregate.contains(1.5),
+        streamed.pointCount == 3,
+        streamed.schema.exists(_.pointCount == 3),
+        streamed.schema.get.variables == collected.plot.get.variables,
+        streamed.receipt.validatedPoints.contains(3),
+        streamed.receipt.raw.get.sha256 == digest(bytes(DcRaw)),
+        streamed.receipt.raw.get.size == bytes(DcRaw).size,
+        streamed.receipt.identity == collected.identity,
+        fake.requests.size == 2,
+        rawIsClosed(streamed.receipt)
+      )
+      val json = Files.readString(streamed.receipt.evidenceDirectory.get.resolve("receipt.json"))
+      assert(json.contains("\"validatedPoints\":3"))
+
+    test("collected and streamed paths share schema grid and late syntax failure precedence"):
+      val f = fixture()
+      Vector(
+        DcRaw.replace("2 1\n", "2 0.9\n"),
+        DcRaw.replace("i(vdrive)", "i(other)"),
+        DcRaw.replace("No. Points: 3", "No. Points: 2")
+          .replace("2 1\n1\n-0.001\n", ""),
+        DcRaw.replace("2 1\n", "2 0.9\n") + "late malformed suffix\n",
+        DcRaw.replace("i(vdrive)", "i(other)").replace("-0.001\n", "not-a-number\n"),
+        DcRaw + DcRaw
+      ).foreach: raw =>
+        val collected = f.run(new Fake(runAction = request => emit(request, raw)))
+        val streamed = f.fold(new Fake(runAction = request => emit(request, raw)))
+        assert(
+          streamed.receipt.outcome == NgspiceOutcome.InvalidRaw,
+          streamed.receipt.message == collected.message,
+          streamed.receipt.raw.get.sha256 == digest(bytes(raw)),
+          streamed.receipt.plot.isEmpty,
+          streamed.receipt.validatedPoints.isEmpty,
+          streamed.aggregate.isEmpty,
+          streamed.schema.isEmpty,
+          streamed.pointCount == 0,
+          rawIsClosed(streamed.receipt)
+        )
+
+    test("descending DC and AC imaginary frequency garbage retain the native grid contract"):
+      val f = fixture()
+      val descending = DcRaw.replace("0 0\n", "0 1\n").replace("2 1\n", "2 0\n")
+      val dc = f.request.copy(analysis = NgspiceAnalysis.DcVoltageSweep(1, 0, -0.5))
+      val folded = f.fold(new Fake(runAction = request => emit(request, descending)), dc)
+      assert(folded.receipt.outcome == NgspiceOutcome.Simulated, folded.aggregate.contains(1.5))
+      val ac = f.request.copy(analysis = NgspiceAnalysis.AcLinearSweep(3, 1, 3))
+      val streamed = new NgspiceSimulator(
+        Vector(f.profile),
+        new Fake(runAction = request => emit(request, AcRaw))
+      ).fold(ac)(_ => Right(0.0))((sum, _, row) => Right(sum + row.head.imaginary))
+      assert(
+        streamed.receipt.outcome == NgspiceOutcome.Simulated,
+        streamed.aggregate.contains(3e-310),
+        streamed.receipt.plot.isEmpty
+      )
+      val transient = f.request.copy(analysis =
+        NgspiceAnalysis.TransientCurrent(
+          NgspiceCurrentStimulus.Ramp(0.001, 0, 0.001),
+          0.001,
+          0.003
+        )
+      )
+      val completed =
+        f.fold(new Fake(runAction = request => emit(request, TransientRaw)), transient)
+      assert(completed.receipt.outcome == NgspiceOutcome.Simulated, completed.pointCount == 4)
+      val early = f.fold(
+        new Fake(runAction =
+          request =>
+            emit(request, TransientRaw.replace("3 0.003", "3 0.0029"))
+        ),
+        transient
+      )
+      assert(
+        early.receipt.outcome == NgspiceOutcome.InvalidRaw,
+        early.aggregate.isEmpty,
+        early.pointCount == 0
+      )
+
+    test("consumer failures are distinct discard aggregates and never hide invalid raw"):
+      val f = fixture()
+      var visited = 0
+      val simulator = new NgspiceSimulator(Vector(f.profile), new Fake)
+      val rejected = simulator.fold[Int](f.request)(_ => Right(0)): (_, _, _) =>
+        visited += 1
+        Left("comparison unit is incompatible")
+      assert(
+        rejected.receipt.outcome == NgspiceOutcome.ConsumerFailure,
+        rejected.receipt.diagnosticCode == "NODAL-NGSPICE-016",
+        rejected.receipt.message == "comparison unit is incompatible",
+        rejected.receipt.raw.get.sha256 == digest(bytes(DcRaw)),
+        rejected.aggregate.isEmpty,
+        rejected.schema.isEmpty,
+        rejected.pointCount == 0,
+        visited == 1,
+        rawIsClosed(rejected.receipt)
+      )
+      val initialization = simulator.fold[Int](f.request)(_ => Left("initialization rejected"))(
+        (state, _, _) => Right(state)
+      )
+      assert(
+        initialization.receipt.outcome == NgspiceOutcome.ConsumerFailure,
+        initialization.aggregate.isEmpty,
+        rawIsClosed(initialization.receipt)
+      )
+      val thrown = simulator.fold[Int](f.request)(_ => Right(0)): (_, _, _) =>
+        require(false, "consumer threw")
+        Right(0)
+      assert(
+        thrown.receipt.outcome == NgspiceOutcome.ConsumerFailure,
+        thrown.receipt.message.contains("consumer threw"),
+        thrown.aggregate.isEmpty,
+        rawIsClosed(thrown.receipt)
+      )
+      val malformed = new NgspiceSimulator(
+        Vector(f.profile),
+        new Fake(runAction = request => emit(request, DcRaw + "late malformed suffix\n"))
+      ).fold[Int](f.request)(_ => Right(0))((_, _, _) => Left("consumer rejected"))
+      assert(
+        malformed.receipt.outcome == NgspiceOutcome.InvalidRaw,
+        malformed.receipt.message == "trailing data or multiple plots are unsupported",
+        malformed.aggregate.isEmpty,
+        rawIsClosed(malformed.receipt)
+      )
+      val wrongGrid = new NgspiceSimulator(
+        Vector(f.profile),
+        new Fake(runAction = request => emit(request, DcRaw.replace("2 1\n", "2 0.9\n")))
+      ).fold[Int](f.request)(_ => Right(0))((_, _, _) => Left("consumer rejected"))
+      assert(
+        wrongGrid.receipt.outcome == NgspiceOutcome.InvalidRaw,
+        wrongGrid.receipt.message.contains("raw axis"),
+        wrongGrid.aggregate.isEmpty
+      )
+
+    test("streaming rechecks parsed-pass identity and closes on late evidence failure"):
+      val f = fixture()
+      val fake = new Fake
+      val changed = new NgspiceSimulator(Vector(f.profile), fake)
+        .fold[Int](f.request)(_ => Right(0)): (state, index, _) =>
+          if index == 0 then
+            Files.writeString(
+              fake.requests.last.workingDirectory.resolve("results.raw"),
+              DcRaw.replace("-0.001\n", "-0.009\n"),
+              StandardCharsets.US_ASCII
+            )
+          Right(state + 1)
+      assert(
+        changed.receipt.outcome == NgspiceOutcome.InvalidRaw,
+        changed.receipt.message == "raw output changed while it was being parsed",
+        changed.receipt.raw.get.sha256 == digest(bytes(DcRaw)),
+        changed.aggregate.isEmpty,
+        changed.receipt.plot.isEmpty,
+        rawIsClosed(changed.receipt)
+      )
+      val broken = f.fold(new Fake(runAction = request =>
+        emit(request)
+        Files.createDirectory(request.workingDirectory.resolve("receipt.json"))
+        result(request)))
+      assert(
+        broken.receipt.outcome == NgspiceOutcome.EvidenceFailure,
+        broken.receipt.validatedPoints.isEmpty,
+        broken.aggregate.isEmpty,
+        broken.schema.isEmpty,
+        broken.pointCount == 0,
+        rawIsClosed(broken.receipt)
+      )
+
+    test("streamed raw ASCII bounds diagnostics and process failures stay fail closed"):
+      val f = fixture()
+      val nonAscii = f.fold(new Fake(runAction = request =>
+        Files.write(
+          request.workingDirectory.resolve("results.raw"),
+          bytes(DcRaw + "\u00e9").toArray
+        )
+        result(request)))
+      assert(
+        nonAscii.receipt.outcome == NgspiceOutcome.InvalidRaw,
+        nonAscii.receipt.message == "raw output must use the pinned ASCII protocol",
+        nonAscii.receipt.raw.isEmpty,
+        nonAscii.aggregate.isEmpty,
+        rawIsClosed(nonAscii.receipt)
+      )
+      val diagnostic = f.fold(new Fake(runAction = request =>
+        emit(request)
+        result(request, stderr = "Warning: singular matrix")))
+      assert(
+        diagnostic.receipt.outcome == NgspiceOutcome.Nonconvergence,
+        diagnostic.receipt.raw.isEmpty,
+        diagnostic.aggregate.isEmpty
+      )
+      val oversized = f.fold(new Fake(runAction = request =>
+        val raw = new java.io.RandomAccessFile(
+          request.workingDirectory.resolve("results.raw").toFile,
+          "rw"
+        )
+        try raw.setLength(16L * 1024 * 1024 + 1)
+        finally raw.close()
+        result(request)))
+      assert(
+        oversized.receipt.outcome == NgspiceOutcome.InvalidRaw,
+        oversized.receipt.raw.isEmpty,
+        oversized.aggregate.isEmpty,
+        rawIsClosed(oversized.receipt)
+      )
+
+    test("streaming callbacks cannot silently invalidate native input provenance"):
+      Vector("model.osdi", "bench.cir", "spinit", "executable").foreach: filename =>
+        val f = fixture()
+        val fake = new Fake
+        val streamed = new NgspiceSimulator(Vector(f.profile), fake)
+          .fold[Int](f.request)(_ => Right(0)): (state, index, _) =>
+            if index == 0 then
+              val path = if filename == "executable" then f.request.executable
+              else fake.requests.last.workingDirectory.resolve(filename)
+              Files.writeString(path, "changed by consumer", StandardCharsets.US_ASCII)
+            Right(state + 1)
+        val expected = if filename == "executable" then NgspiceOutcome.ProfileMismatch
+        else NgspiceOutcome.InvalidCompileArtifact
+        assert(
+          streamed.receipt.outcome == expected,
+          streamed.receipt.message.contains("while raw output was being consumed"),
+          streamed.receipt.raw.get.sha256 == digest(bytes(DcRaw)),
+          streamed.receipt.validatedPoints.isEmpty,
+          streamed.aggregate.isEmpty,
+          streamed.schema.isEmpty,
+          streamed.pointCount == 0,
+          rawIsClosed(streamed.receipt)
+        )

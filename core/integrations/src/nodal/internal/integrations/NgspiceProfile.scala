@@ -67,6 +67,7 @@ private[nodal] enum NgspiceOutcome(val diagnosticCode: String):
   case SimulatorError extends NgspiceOutcome("NODAL-NGSPICE-013")
   case InvalidRaw extends NgspiceOutcome("NODAL-NGSPICE-014")
   case EvidenceFailure extends NgspiceOutcome("NODAL-NGSPICE-015")
+  case ConsumerFailure extends NgspiceOutcome("NODAL-NGSPICE-016")
 
 private[nodal] final case class NgspiceIdentity(
     adapterVersion: String,
@@ -106,6 +107,15 @@ private[nodal] final case class NgspiceSimulationResult(
     versionProbe: Option[ToolProcessResult] = None,
     simulation: Option[ToolProcessResult] = None,
     raw: Option[NgspiceRawArtifact] = None,
-    plot: Option[NgspiceRawPlot] = None
+    plot: Option[NgspiceRawPlot] = None,
+    validatedPoints: Option[Int] = None
 ):
   def diagnosticCode: String = outcome.diagnosticCode
+
+/** Successful folds retain only caller-owned aggregate state, schema and the ordinary evidence. */
+private[nodal] final case class NgspiceStreamingSimulationResult[A](
+    receipt: NgspiceSimulationResult,
+    schema: Option[NgspiceRawSchema] = None,
+    pointCount: Int = 0,
+    aggregate: Option[A] = None
+)

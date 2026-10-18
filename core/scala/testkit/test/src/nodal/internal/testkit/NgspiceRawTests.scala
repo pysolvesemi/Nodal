@@ -1,5 +1,6 @@
 package nodal.internal.testkit
 
+import java.io.InputStream
 import java.nio.charset.StandardCharsets
 
 import nodal.internal.integrations.*
@@ -7,6 +8,60 @@ import utest.*
 
 object NgspiceRawTests extends TestSuite:
   private def bytes(value: String): Vector[Byte] = value.getBytes(StandardCharsets.UTF_8).toVector
+
+  private final class ChunkedInput(
+      chunks: Iterator[Array[Byte]],
+      chunkSize: Int = 7,
+      failAtEnd: Boolean = false
+  ) extends InputStream:
+    private var current = Array.emptyByteArray
+    private var position = 0
+    var bytesRead = 0L
+    var largestRead = 0
+    var reachedEnd = false
+    var closed = false
+
+    private def availableChunk(): Boolean =
+      while position == current.length && chunks.hasNext do
+        current = chunks.next()
+        position = 0
+      if position < current.length then true
+      else
+        reachedEnd = true
+        if failAtEnd then
+          val failed = InputStream.nullInputStream()
+          failed.close()
+          failed.read() != -1
+        else false
+
+    override def read(): Int =
+      if !availableChunk() then -1
+      else
+        val value = current(position) & 0xff
+        position += 1
+        bytesRead += 1
+        value
+
+    override def read(target: Array[Byte], offset: Int, length: Int): Int =
+      largestRead = math.max(largestRead, length)
+      if length == 0 then 0
+      else if !availableChunk() then -1
+      else
+        val count = math.min(math.min(length, chunkSize), current.length - position)
+        System.arraycopy(current, position, target, offset, count)
+        position += count
+        bytesRead += count
+        count
+
+    override def close(): Unit = closed = true
+
+  private def stream(value: String, chunkSize: Int = 7): ChunkedInput =
+    new ChunkedInput(Iterator(value.getBytes(StandardCharsets.UTF_8)), chunkSize)
+
+  private def sum(input: InputStream, asciiOnly: Boolean = false): Either[String, Double] =
+    NgspiceRaw.fold[Double](input, NgspiceAnalysisKind.Dc, asciiOnly = asciiOnly)(_ => Right(0.0))(
+      (total, _, row) => Right(total + row.head.real)
+    )
 
   private def raw(
       plotName: String = "DC transfer characteristic",
@@ -257,3 +312,161 @@ object NgspiceRawTests extends TestSuite:
       val atLineLimit = raw() + "\n" * (1000000 - raw().count(_ == '\n'))
       assert(parse(atLineLimit).isRight)
       rejected(atLineLimit + "\n", "raw output exceeds 1000000 lines")
+
+    test("streaming schema rows and indices agree with the collecting adapter"):
+      val examples = Vector(
+        NgspiceAnalysisKind.Dc -> raw().stripSuffix("\n"),
+        NgspiceAnalysisKind.Transient -> raw(
+          plotName = "Transient Analysis",
+          variables = Vector("time time", "v(节点) voltage"),
+          rows = Vector(Vector("0", "-0.0"), Vector("1e-9", "2.5")),
+          separator = "\n"
+        ).replace("generated rc", "RC café").replace("\n", "\r\n"),
+        NgspiceAnalysisKind.Ac -> raw(
+          plotName = "AC Analysis",
+          flags = "complex",
+          variables = Vector("frequency frequency grid=3", "i(vdrive) current"),
+          rows = Vector(Vector("1e3,0", "-1e-3,-6e-9"))
+        )
+      )
+      for (kind, text) <- examples do
+        val input = stream(text, chunkSize = 1)
+        val expected = parse(text, kind).toOption.get
+        val result = NgspiceRaw.fold[(NgspiceRawSchema, Vector[Vector[NgspiceComplex]])](
+          input,
+          kind
+        )(schema => Right(schema -> Vector.empty))((state, index, row) =>
+          assert(index == state._2.size)
+          Right(state._1 -> (state._2 :+ row))
+        ).toOption.get
+        assert(
+          result._1 == NgspiceRawSchema(
+            expected.title,
+            expected.plotName,
+            expected.isComplex,
+            expected.variables,
+            expected.rows.size
+          ),
+          result._2 == expected.rows,
+          input.reachedEnd,
+          !input.closed
+        )
+
+    test("streaming ASCII policy is explicit and never changes UTF-8 compatibility"):
+      val unicode = raw().replace("generated rc", "RC café")
+      assert(sum(stream(unicode)).isRight)
+      assert(sum(stream(unicode), asciiOnly = true).left.toOption.contains(
+        "raw output must use the pinned ASCII protocol"
+      ))
+      assert(sum(stream(raw()), asciiOnly = true).isRight)
+      val incomplete = new ChunkedInput(
+        Iterator(
+          "Title: ".getBytes(StandardCharsets.UTF_8),
+          Array(0xe2.toByte, 0x82.toByte)
+        ),
+        chunkSize = 1
+      )
+      assert(sum(incomplete).left.toOption.contains("raw output is not valid UTF-8 text"))
+
+    test("streaming failures discard results after already consumed rows"):
+      val failures = Vector(
+        raw() + "unexpected\n" -> "trailing data",
+        raw() + "\u0000" -> "control character",
+        raw() + "\r" -> "bare carriage return",
+        raw().replace("-1.000000000000000e-03", "NaN") -> "invalid decimal number",
+        raw().replace("No. Points: 2", "No. Points: 3") -> "missing point 2"
+      )
+      for (text, message) <- failures do
+        val input = stream(text, chunkSize = 3)
+        var observed = 0
+        val result =
+          NgspiceRaw.fold[Int](input, NgspiceAnalysisKind.Dc)(_ => Right(0))((count, _, _) =>
+            observed += 1
+            Right(count + 1)
+          )
+        assert(result.left.toOption.exists(_.contains(message)), observed >= 1, !input.closed)
+      val invalidUtf8 = new ChunkedInput(Iterator(
+        raw().getBytes(StandardCharsets.UTF_8),
+        Array(0xc3.toByte)
+      ))
+      assert(sum(invalidUtf8).left.toOption.contains("raw output is not valid UTF-8 text"))
+
+    test("stream ownership remains with caller on success read error and consumer rejection"):
+      val input = new ChunkedInput(
+        Iterator(raw().getBytes(StandardCharsets.UTF_8)),
+        failAtEnd = true
+      )
+      var observed = 0
+      val result =
+        NgspiceRaw.fold[Int](input, NgspiceAnalysisKind.Dc)(_ => Right(0))((count, _, _) =>
+          observed += 1
+          Right(count + 1)
+        )
+      assert(
+        result.left.toOption.exists(_.startsWith("unable to read raw output:")),
+        observed == 2,
+        !input.closed
+      )
+      input.close()
+      assert(input.closed)
+      val rejectedSchema = stream(raw())
+      assert(NgspiceRaw.fold[Int](rejectedSchema, NgspiceAnalysisKind.Dc)(_ =>
+        Left("schema refused")
+      )((count, _, _) => Right(count + 1)).left.toOption.contains("schema refused"))
+      assert(!rejectedSchema.closed)
+      val rejectedRow = stream(raw())
+      assert(NgspiceRaw.fold[Int](rejectedRow, NgspiceAnalysisKind.Dc)(_ => Right(0))(
+        (_, index, _) => Left(s"row $index refused")
+      ).left.toOption.contains("row 0 refused"))
+      assert(!rejectedRow.closed)
+
+    test("streaming hard point bound consumes generated rows before EOF without collecting"):
+      val single = raw(variables = Vector("sweep raw"), rows = Vector(Vector("0")))
+      val header = single.take(single.indexOf("Values:") + "Values:\n".length)
+        .replace("No. Points: 1", "No. Points: 100000")
+      val chunks = Iterator(header.getBytes(StandardCharsets.UTF_8)) ++
+        Iterator.tabulate(100000)(index => s"$index\t$index\n".getBytes(StandardCharsets.UTF_8))
+      val input = new ChunkedInput(chunks, chunkSize = Int.MaxValue)
+      var firstRowBytes = 0L
+      val result = NgspiceRaw.fold[Double](input, NgspiceAnalysisKind.Dc)(schema =>
+        assert(schema.pointCount == 100000, schema.variables.size == 1)
+        Right(0.0)
+      )((total, index, row) =>
+        assert(row.size == 1, row.head.real == index.toDouble, !input.reachedEnd)
+        if index == 0 then firstRowBytes = input.bytesRead
+        Right(total + row.head.real)
+      )
+      assert(
+        result == Right(4999950000.0),
+        input.reachedEnd,
+        !input.closed,
+        firstRowBytes <= header.length + 8192,
+        firstRowBytes < input.bytesRead,
+        input.largestRead <= 8192
+      )
+
+    test("streaming exact byte ceiling and first excess byte use bounded reads"):
+      val prefix = raw().getBytes(StandardCharsets.UTF_8)
+      val maximum = 16 * 1024 * 1024
+      val padding = (" " * (16 * 1024 - 1) + "\n").getBytes(StandardCharsets.UTF_8)
+      def boundedInput(extra: Int): ChunkedInput =
+        val remaining = maximum - prefix.length + extra
+        val chunks = Iterator(prefix) ++ Iterator.fill(remaining / padding.length)(padding) ++
+          Iterator((" " * (remaining % padding.length)).getBytes(StandardCharsets.UTF_8))
+        new ChunkedInput(chunks, chunkSize = Int.MaxValue)
+      val exact = boundedInput(0)
+      assert(sum(exact) == Right(1.0), exact.bytesRead == maximum, exact.reachedEnd)
+      val excess = boundedInput(1)
+      assert(
+        sum(excess).left.toOption.contains("raw output exceeds 16777216 bytes"),
+        excess.bytesRead == maximum.toLong + 1,
+        excess.largestRead <= 8192,
+        !excess.closed
+      )
+
+    test("zero-length bulk reads cannot stall incremental parsing"):
+      val source = stream(raw())
+      val input = new InputStream:
+        override def read(): Int = source.read()
+        override def read(target: Array[Byte], offset: Int, length: Int): Int = 0
+      assert(sum(input) == Right(1.0), source.reachedEnd, !source.closed)

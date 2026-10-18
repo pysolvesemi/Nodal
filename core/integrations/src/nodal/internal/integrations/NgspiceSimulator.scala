@@ -1,6 +1,6 @@
 package nodal.internal.integrations
 
-import java.io.{ByteArrayOutputStream, DataOutputStream}
+import java.io.{ByteArrayOutputStream, DataOutputStream, InputStream}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, LinkOption, Path, StandardOpenOption}
 import java.security.MessageDigest
@@ -17,7 +17,41 @@ private[nodal] final class NgspiceSimulator(
   import NgspiceSimulator.*
 
   def simulate(request: NgspiceSimulateRequest): NgspiceSimulationResult =
-    execute(NgspiceRunRequest(
+    collect(lower(request))
+
+  def simulate(request: NgspiceCircuitSimulateRequest): NgspiceSimulationResult =
+    collect(lower(request))
+
+  /** Callbacks can see a prefix; only a successful receipt certifies the completed raw file. */
+  def fold[A](request: NgspiceSimulateRequest)(
+      initialize: NgspiceRawSchema => Either[String, A]
+  )(consume: (A, Int, Vector[NgspiceComplex]) => Either[String, A])
+      : NgspiceStreamingSimulationResult[A] =
+    execute(lower(request), initialize, consume, (_, _) => None)
+
+  def fold[A](request: NgspiceCircuitSimulateRequest)(
+      initialize: NgspiceRawSchema => Either[String, A]
+  )(consume: (A, Int, Vector[NgspiceComplex]) => Either[String, A])
+      : NgspiceStreamingSimulationResult[A] =
+    execute(lower(request), initialize, consume, (_, _) => None)
+
+  private def collect(request: NgspiceRunRequest): NgspiceSimulationResult =
+    execute(
+      request,
+      _ => Right(Vector.newBuilder[Vector[NgspiceComplex]]),
+      (rows, _, row) => Right(rows.addOne(row)),
+      (schema, rows) =>
+        Some(NgspiceRawPlot(
+          schema.title,
+          schema.plotName,
+          schema.isComplex,
+          schema.variables,
+          rows.result()
+        ))
+    ).receipt
+
+  private def lower(request: NgspiceSimulateRequest): NgspiceRunRequest =
+    NgspiceRunRequest(
       request.executable,
       request.evidenceDirectory,
       request.profileId,
@@ -29,10 +63,10 @@ private[nodal] final class NgspiceSimulator(
       request.runTimeout,
       () => NgspiceBench.generate(request.model, request.analysis, request.options),
       None
-    ))
+    )
 
-  def simulate(request: NgspiceCircuitSimulateRequest): NgspiceSimulationResult =
-    execute(NgspiceRunRequest(
+  private def lower(request: NgspiceCircuitSimulateRequest): NgspiceRunRequest =
+    NgspiceRunRequest(
       request.executable,
       request.evidenceDirectory,
       request.profileId,
@@ -44,9 +78,15 @@ private[nodal] final class NgspiceSimulator(
       request.runTimeout,
       () => NgspiceBench.generate(request.bench),
       Some(request.bench)
-    ))
+    )
 
-  private def execute(request: NgspiceRunRequest): NgspiceSimulationResult =
+  private def execute[A](
+      request: NgspiceRunRequest,
+      initialize: NgspiceRawSchema => Either[String, A],
+      consume: (A, Int, Vector[NgspiceComplex]) => Either[String, A],
+      retainedPlot: (NgspiceRawSchema, A) => Option[NgspiceRawPlot]
+  ): NgspiceStreamingSimulationResult[A] =
+    var completed = Option.empty[(NgspiceRawSchema, A)]
     var receipt = NgspiceSimulationResult(
       NgspiceOutcome.InvalidRequest,
       "request has not been executed",
@@ -77,9 +117,22 @@ private[nodal] final class NgspiceSimulator(
       ),
       request.compiled
     )
-    def finish(outcome: NgspiceOutcome, message: String): NgspiceSimulationResult =
-      receipt = receipt.copy(outcome = outcome, message = message)
-      persist(receipt)
+    def finish(
+        outcome: NgspiceOutcome,
+        message: String
+    ): NgspiceStreamingSimulationResult[A] =
+      receipt = receipt.copy(
+        outcome = outcome,
+        message = message,
+        plot = if outcome == NgspiceOutcome.Simulated then receipt.plot else None,
+        validatedPoints = if outcome == NgspiceOutcome.Simulated then receipt.validatedPoints
+        else None
+      )
+      val saved = persist(receipt)
+      if saved.outcome == NgspiceOutcome.Simulated then
+        val (schema, aggregate) = completed.get
+        NgspiceStreamingSimulationResult(saved, Some(schema), schema.pointCount, Some(aggregate))
+      else NgspiceStreamingSimulationResult(saved)
     try
       boundary {
         validate(request) match
@@ -255,23 +308,27 @@ private[nodal] final class NgspiceSimulator(
             NgspiceOutcome.InvalidCompileArtifact,
             "staged model, deck, or startup changed during simulation"
           ))
-        val rawBytes = readRaw(rawPath) match
-          case Left(message) => boundary.break(finish(NgspiceOutcome.InvalidRaw, message))
+        val raw = readRaw(rawPath, bench, initialize, consume)
+        receipt = receipt.copy(raw = raw.artifact)
+        val (schema, aggregate) = raw.result match
+          case Left((outcome, message)) => boundary.break(finish(outcome, message))
           case Right(value) => value
-        receipt = receipt.copy(raw =
-          Some(NgspiceRawArtifact(
-            rawPath,
-            OpenVafDiagnosticMapper.sha256(rawBytes),
-            rawBytes.size.toLong
+        // Callbacks are caller code; verify that retained evidence still identifies the run.
+        if hashFile(executable) != toolDigest then
+          boundary.break(finish(
+            NgspiceOutcome.ProfileMismatch,
+            "executable changed while raw output was being consumed"
           ))
+        if !unchangedInputs(receipt.identity, modelPath, deckPath, startupPath) then
+          boundary.break(finish(
+            NgspiceOutcome.InvalidCompileArtifact,
+            "staged model, deck, or startup changed while raw output was being consumed"
+          ))
+        completed = Some(schema -> aggregate)
+        receipt = receipt.copy(
+          plot = retainedPlot(schema, aggregate),
+          validatedPoints = Some(schema.pointCount)
         )
-        val plot = NgspiceRaw.parse(rawBytes, bench.kind) match
-          case Left(message) => boundary.break(finish(NgspiceOutcome.InvalidRaw, message))
-          case Right(value) => value
-        validatePlot(plot, bench) match
-          case Some(message) => boundary.break(finish(NgspiceOutcome.InvalidRaw, message))
-          case None => ()
-        receipt = receipt.copy(plot = Some(plot))
         finish(
           NgspiceOutcome.Simulated,
           "ngspice produced the expected populated model-dependent analysis; numerical acceptance is separate"
@@ -304,6 +361,18 @@ private[nodal] object NgspiceSimulator:
 
   def simulate(request: NgspiceCircuitSimulateRequest): NgspiceSimulationResult =
     new NgspiceSimulator(NgspiceProfiles.all, ToolProcessRunner).simulate(request)
+
+  def fold[A](request: NgspiceSimulateRequest)(
+      initialize: NgspiceRawSchema => Either[String, A]
+  )(consume: (A, Int, Vector[NgspiceComplex]) => Either[String, A])
+      : NgspiceStreamingSimulationResult[A] =
+    new NgspiceSimulator(NgspiceProfiles.all, ToolProcessRunner).fold(request)(initialize)(consume)
+
+  def fold[A](request: NgspiceCircuitSimulateRequest)(
+      initialize: NgspiceRawSchema => Either[String, A]
+  )(consume: (A, Int, Vector[NgspiceComplex]) => Either[String, A])
+      : NgspiceStreamingSimulationResult[A] =
+    new NgspiceSimulator(NgspiceProfiles.all, ToolProcessRunner).fold(request)(initialize)(consume)
 
   private def platform: String =
     val os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT)
@@ -404,19 +473,101 @@ private[nodal] object NgspiceSimulator:
     finally input.close()
     if total > maximum then "" else hash.digest().map(b => f"${b & 0xff}%02x").mkString
 
-  private def readRaw(path: Path): Either[String, Vector[Byte]] =
+  private final case class RawRead[A](
+      artifact: Option[NgspiceRawArtifact],
+      result: Either[(NgspiceOutcome, String), (NgspiceRawSchema, A)]
+  )
+
+  /** Counts and hashes the very bytes consumed by the parser, including bounded error draining. */
+  private final class RawInput(source: InputStream) extends InputStream:
+    private val hash = MessageDigest.getInstance("SHA-256")
+    var count = 0L
+    var ascii = true
+    var ended = false
+    override def read(): Int =
+      val byte = new Array[Byte](1)
+      if read(byte, 0, 1) == -1 then -1 else byte(0) & 0xff
+    override def read(buffer: Array[Byte], offset: Int, length: Int): Int =
+      if length == 0 then 0
+      else if count > MaxRawBytes then -1
+      else
+        val size =
+          source.read(buffer, offset, math.min(length.toLong, MaxRawBytes + 1L - count).toInt)
+        if size == -1 then ended = true
+        else
+          count += size
+          hash.update(buffer, offset, size)
+          var index = offset
+          while index < offset + size do
+            if (buffer(index) & 0xff) > 127 then ascii = false
+            index += 1
+        size
+    def drain(): Unit =
+      val buffer = new Array[Byte](8192)
+      while !ended && count <= MaxRawBytes do
+        val _ = read(buffer, 0, buffer.length)
+    def sha256: String = hash.digest().map(byte => f"${byte & 0xff}%02x").mkString
+    override def close(): Unit = source.close()
+
+  private def readRaw[A](
+      path: Path,
+      bench: NgspiceGeneratedBench,
+      initialize: NgspiceRawSchema => Either[String, A],
+      consume: (A, Int, Vector[NgspiceComplex]) => Either[String, A]
+  ): RawRead[A] =
+    def invalid(message: String): RawRead[A] =
+      RawRead(None, Left(NgspiceOutcome.InvalidRaw -> message))
     if !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || Files.size(path) == 0 then
-      Left("successful exit did not produce a fresh nonempty regular raw output")
-    else if Files.size(path) > MaxRawBytes then Left(s"raw output exceeds $MaxRawBytes bytes")
+      invalid("successful exit did not produce a fresh nonempty regular raw output")
+    else if Files.size(path) > MaxRawBytes then invalid(s"raw output exceeds $MaxRawBytes bytes")
     else
-      val input = Files.newInputStream(path)
-      val bytes = try input.readNBytes(MaxRawBytes + 1).toVector
+      val input = new RawInput(Files.newInputStream(path))
+      val validator = new RequestedGrid(bench)
+      var schema = Option.empty[NgspiceRawSchema]
+      var aggregate = Option.empty[A]
+      var consumerError = Option.empty[String]
+      def accept(value: => Either[String, A]): Unit =
+        try
+          value match
+            case Left(message) => consumerError = Some(message)
+            case Right(result) => aggregate = Some(result)
+        catch
+          case NonFatal(error) => consumerError = Some(
+              s"raw consumer failed: ${Option(error.getMessage).getOrElse(error.getClass.getSimpleName)}"
+            )
+      val parsed = try
+        val result = NgspiceRaw.fold(input, bench.kind, asciiOnly = true)(value =>
+          schema = Some(value)
+          validator.initialize(value)
+          if validator.error.isEmpty then accept(initialize(value))
+          Right(())
+        ): (_, index, row) =>
+          validator.consume(index, row.head.real)
+          if validator.error.isEmpty && consumerError.isEmpty then
+            aggregate.foreach(value => accept(consume(value, index, row)))
+          Right(())
+        // A malformed suffix must never leave a successful prefix or a prefix-only artifact hash.
+        input.drain()
+        result
       finally input.close()
-      if bytes.isEmpty || bytes.size > MaxRawBytes then
-        Left("raw output is empty or exceeds its byte bound")
-      else if bytes.exists(byte => (byte & 0xff) > 127) then
-        Left("raw output must use the pinned ASCII protocol")
-      else Right(bytes)
+      if input.count == 0 || input.count > MaxRawBytes || !input.ended then
+        invalid("raw output is empty or exceeds its byte bound")
+      else if !input.ascii then invalid("raw output must use the pinned ASCII protocol")
+      else
+        val artifact = NgspiceRawArtifact(path, input.sha256, input.count)
+        val result =
+          for
+            _ <- parsed.left.map(NgspiceOutcome.InvalidRaw -> _)
+            _ <- validator.finish().toLeft(()).left.map(NgspiceOutcome.InvalidRaw -> _)
+            _ <- Either.cond(
+              Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) &&
+                Files.size(path) == artifact.size && hashFile(path, MaxRawBytes) == artifact.sha256,
+              (),
+              NgspiceOutcome.InvalidRaw -> "raw output changed while it was being parsed"
+            )
+            _ <- consumerError.toLeft(()).left.map(NgspiceOutcome.ConsumerFailure -> _)
+          yield (schema.get, aggregate.get)
+        RawRead(Some(artifact), result)
 
   private def processFailure(result: ToolProcessResult): Option[(NgspiceOutcome, String)] =
     result.failure.map: failure =>
@@ -476,52 +627,61 @@ private[nodal] object NgspiceSimulator:
         "ngspice emitted an unrecognized diagnostic; raw output is not accepted")
     else None
 
-  private def validatePlot(
-      plot: NgspiceRawPlot,
-      bench: NgspiceGeneratedBench
-  ): Option[String] =
-    if plot.variables.map(v => v.name -> v.kind) != bench.expectedVariables then
-      Some("raw variables do not match the generated bench")
-    else
-      val values = plot.rows.map(_.head.real)
-      def close(actual: Double, expected: Double, spacing: Double): Boolean =
-        // Offset-relative tolerance must never swallow adjacent requested grid points.
-        val tolerance = math.min(
-          math.max(math.abs(expected) * 1e-8, math.abs(spacing) * 1e-8),
-          math.abs(spacing) * 0.25
-        )
-        math.abs(actual - expected) <= tolerance
-      def monotonic(increasing: Boolean): Boolean =
-        values.sliding(2).filter(_.size == 2).forall(pair =>
-          if increasing then pair(1) > pair(0) else pair(1) < pair(0)
-        )
-      val valid = bench.axis match
+  /** One O(1)-state native grid owner for collected and non-collecting consumers. */
+  private final class RequestedGrid(bench: NgspiceGeneratedBench):
+    private var schemaError = Option.empty[String]
+    private var valid = true
+    private var count = 0
+    private var previous = Option.empty[Double]
+
+    def initialize(schema: NgspiceRawSchema): Unit =
+      if schema.variables.map(value => value.name -> value.kind) != bench.expectedVariables then
+        schemaError = Some("raw variables do not match the generated bench")
+      bench.axis match
+        case NgspiceAxis.Transient(_, _) => valid &&= schema.pointCount >= 2
+        case _ => valid &&= schema.pointCount == bench.requestedPoints
+
+    private def close(actual: Double, expected: Double, spacing: Double): Boolean =
+      // Offset-relative tolerance must never swallow adjacent requested grid points.
+      val tolerance = math.min(
+        math.max(math.abs(expected) * 1e-8, math.abs(spacing) * 1e-8),
+        math.abs(spacing) * 0.25
+      )
+      math.abs(actual - expected) <= tolerance
+
+    def consume(index: Int, value: Double): Unit =
+      def monotonic(increasing: Boolean): Boolean = previous.forall(before =>
+        if increasing then value > before else value < before
+      )
+      val pointValid = bench.axis match
         case NgspiceAxis.Dc(start, _, step) =>
-          values.size == bench.requestedPoints && monotonic(step > 0) &&
-          values.zipWithIndex.forall((value, index) =>
-            close(value, Math.fma(index.toDouble, step, start), step)
-          )
+          monotonic(step > 0) && close(value, Math.fma(index.toDouble, step, start), step)
         case NgspiceAxis.AcLinear(points, start, stop) =>
           val step = if points == 1 then start else (stop - start) / (points - 1)
-          values.size == bench.requestedPoints && monotonic(true) &&
-          values.zipWithIndex.forall((value, index) =>
-            close(value, Math.fma(index.toDouble, if points == 1 then 0.0 else step, start), step)
-          )
+          monotonic(true) &&
+          close(value, Math.fma(index.toDouble, if points == 1 then 0.0 else step, start), step)
         case NgspiceAxis.AcDecade(points, start, _) =>
           val factor = math.pow(10.0, 1.0 / points)
-          values.size == bench.requestedPoints && monotonic(true) &&
-          values.zipWithIndex.forall((value, index) =>
-            val expected = start * math.pow(10.0, index.toDouble / points)
-            close(value, expected, expected * (1 - 1 / factor))
-          )
+          val expected = start * math.pow(10.0, index.toDouble / points)
+          monotonic(true) && close(value, expected, expected * (1 - 1 / factor))
+        case NgspiceAxis.Transient(step, _) =>
+          previous match
+            case None => value >= 0 && value <= step * (1 + 1e-8)
+            case Some(before) => value > before && value - before <= step * (1 + 1e-8)
+      valid &&= pointValid
+      previous = Some(value)
+      count += 1
+
+    def error: Option[String] = schemaError.orElse(Option.unless(valid)(
+      "raw axis does not match the requested analysis grid or completed transient interval"
+    ))
+
+    def finish(): Option[String] =
+      bench.axis match
         case NgspiceAxis.Transient(step, stop) =>
-          values.size >= 2 && values.head >= 0 && values.head <= step * (1 + 1e-8) &&
-          close(values.last, stop, step) && values.sliding(2).forall(pair =>
-            pair(1) > pair(0) && pair(1) - pair(0) <= step * (1 + 1e-8)
-          )
-      Option.unless(valid)(
-        "raw axis does not match the requested analysis grid or completed transient interval"
-      )
+          valid &&= count >= 2 && previous.exists(close(_, stop, step))
+        case _ => valid &&= count == bench.requestedPoints
+      error
 
   private def persist(result: NgspiceSimulationResult): NgspiceSimulationResult =
     result.evidenceDirectory match
@@ -551,7 +711,8 @@ private[nodal] object NgspiceSimulator:
               outcome = NgspiceOutcome.EvidenceFailure,
               message =
                 s"${result.outcome}: ${result.message}; evidence retention failed: ${error.getMessage}",
-              plot = None
+              plot = None,
+              validatedPoints = None
             )
         finally if interrupted then Thread.currentThread().interrupt()
 
@@ -673,5 +834,6 @@ private[nodal] object NgspiceSimulator:
           "size" -> value.size.toString
         )
       ),
-      "validatedPoints" -> optional(result.plot)(plot => plot.rows.size.toString)
+      "validatedPoints" ->
+        optional(result.validatedPoints.orElse(result.plot.map(_.rows.size)))(_.toString)
     ) + "\n"

@@ -289,6 +289,15 @@ final class SimulationResult private[sim] (
       "SIM-MEASURE",
       "missing axis sample"
     ))
+  def waveform[A, D](
+      axis: WaveformAxis[A],
+      probe: Probe[D]
+  ): Either[SimulationError, Waveform[A, D]] =
+    val column = probes.indexWhere(_ eq probe) + 1
+    if column == 0 || !succeeded then
+      Left(SimulationError("SIM-WAVEFORM", "probe is absent or simulation did not succeed"))
+    else Waveform.fromRows(axis, probe, evidence, plot.get, column, axisUnit)
+
   def measure[D](
       probe: Probe[D],
       reduction: SampleReduction,
@@ -339,6 +348,30 @@ object SimulationSession:
       bench.lowered,
       runTimeout = tools.timeout
     ))
+    new SimulationResult(
+      evidence(result),
+      Option.when(result.outcome != NgspiceOutcome.Simulated)(SimulationError(
+        result.diagnosticCode,
+        result.message
+      )),
+      axisUnit(bench),
+      bench.probes,
+      result.plot
+    )
+
+  /** Compares a fresh simulation without retaining its plot rows. */
+  def compare[A, D](
+      bench: SimulationBench,
+      tools: SimulatorTools,
+      probe: Probe[D],
+      reference: Waveform[A, D],
+      tolerance: Tolerance[D],
+      component: ComplexComponent = ComplexComponent.Real,
+      alignment: WaveformAlignment = WaveformAlignment.Exact
+  ): StreamingComparisonResult =
+    WaveformSimulation.compare(bench, tools, probe, reference, tolerance, component, alignment)
+
+  private[sim] def evidence(result: NgspiceSimulationResult): SimulationEvidence =
     val command = result.simulation.map(value =>
       CommandEvidence(
         value.command,
@@ -348,7 +381,7 @@ object SimulationSession:
         value.failure.map(_.toString)
       )
     )
-    val evidence = SimulationEvidence(
+    SimulationEvidence(
       result.evidenceDirectory,
       result.outcome.toString,
       result.message,
@@ -361,20 +394,12 @@ object SimulationSession:
       result.raw.map(_.sha256),
       result.raw.map(_.path)
     )
-    val axisUnit = bench.analysis.lowered match
+
+  private[sim] def axisUnit(bench: SimulationBench): SimulationAxisUnit =
+    bench.analysis.lowered match
       case NgspiceCircuitAnalysis.DcSweep(id, _, _, _) =>
         if bench.lowered.sources.find(_.id == id).exists(_.kind == NgspiceSourceKind.Voltage) then
           SimulationAxisUnit.Volts
         else SimulationAxisUnit.Amperes
       case NgspiceCircuitAnalysis.Transient(_, _, _) => SimulationAxisUnit.Seconds
       case _ => SimulationAxisUnit.Hertz
-    new SimulationResult(
-      evidence,
-      Option.when(result.outcome != NgspiceOutcome.Simulated)(SimulationError(
-        result.diagnosticCode,
-        result.message
-      )),
-      axisUnit,
-      bench.probes,
-      result.plot
-    )

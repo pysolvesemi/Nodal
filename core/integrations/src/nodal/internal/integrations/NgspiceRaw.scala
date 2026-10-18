@@ -1,9 +1,11 @@
 package nodal.internal.integrations
 
+import java.io.{IOException, InputStream}
 import java.nio.ByteBuffer
 import java.nio.charset.{CodingErrorAction, StandardCharsets}
 
 import scala.collection.mutable
+import scala.util.boundary
 import scala.util.Try
 
 private[nodal] enum NgspiceAnalysisKind:
@@ -11,6 +13,13 @@ private[nodal] enum NgspiceAnalysisKind:
 
 private[nodal] final case class NgspiceRawVariable(index: Int, name: String, kind: String)
 private[nodal] final case class NgspiceComplex(real: Double, imaginary: Double)
+private[nodal] final case class NgspiceRawSchema(
+    title: String,
+    plotName: String,
+    isComplex: Boolean,
+    variables: Vector[NgspiceRawVariable],
+    pointCount: Int
+)
 private[nodal] final case class NgspiceRawPlot(
     title: String,
     plotName: String,
@@ -43,6 +52,59 @@ private[nodal] object NgspiceRaw:
       maxPoints: Int = MaxPoints,
       maxVariables: Int = MaxVariables
   ): Either[String, NgspiceRawPlot] =
+    validateLimits(maxPoints, maxVariables).flatMap: _ =>
+      if bytes.length > MaxBytes then Left(s"raw output exceeds $MaxBytes bytes")
+      else
+        val input = new InputStream:
+          private var position = 0
+          override def read(): Int =
+            if position == bytes.size then -1
+            else
+              val value = bytes(position) & 0xff
+              position += 1
+              value
+        fold(input, expectedKind, maxPoints, maxVariables)(schema =>
+          Right(schema -> Vector.newBuilder[Vector[NgspiceComplex]])
+        )((state, _, row) =>
+          state._2 += row
+          Right(state)
+        ).map: (schema, rows) =>
+          NgspiceRawPlot(
+            schema.title,
+            schema.plotName,
+            schema.isComplex,
+            schema.variables,
+            rows.result()
+          )
+
+  /** Consume one bounded row at a time without retaining the raw bytes, text or preceding rows.
+    *
+    * The input belongs to the caller and is never closed here. Success is returned only after every
+    * declared row and the complete trailing input have been validated through EOF. A failure may
+    * leave unread input; callers needing an invalid artifact's full digest own any bounded drain.
+    * Callback state must remain private until success: intermediate results are discarded on
+    * failure, but external callback side effects cannot be rolled back.
+    */
+  def fold[A](
+      input: InputStream,
+      expectedKind: NgspiceAnalysisKind,
+      maxPoints: Int = MaxPoints,
+      maxVariables: Int = MaxVariables,
+      asciiOnly: Boolean = false
+  )(initialize: NgspiceRawSchema => Either[String, A])(
+      consume: (A, Int, Vector[NgspiceComplex]) => Either[String, A]
+  ): Either[String, A] =
+    for
+      _ <- validateLimits(maxPoints, maxVariables)
+      cursor = new Cursor(input, asciiOnly)
+      schema <- readSchema(cursor, expectedKind, maxPoints, maxVariables)
+      initial <- initialize(schema)
+      result <- foldRows(cursor, schema, initial, consume)
+      trailing <- cursor.nextNonEmpty()
+      _ <- Either.cond(trailing.isEmpty, (), "trailing data or multiple plots are unsupported")
+    yield result
+
+  private def validateLimits(maxPoints: Int, maxVariables: Int): Either[String, Unit] =
     for
       _ <- Either.cond(
         maxPoints > 0 && maxPoints <= MaxPoints,
@@ -54,9 +116,15 @@ private[nodal] object NgspiceRaw:
         (),
         s"variable limit must be between 1 and $MaxVariables"
       )
-      _ <- validateBytes(bytes)
-      text <- decode(bytes)
-      cursor = new Cursor(text)
+    yield ()
+
+  private def readSchema(
+      cursor: Cursor,
+      expectedKind: NgspiceAnalysisKind,
+      maxPoints: Int,
+      maxVariables: Int
+  ): Either[String, NgspiceRawSchema] =
+    for
       headers <- readHeaders(cursor)
       title <- required(headers, "Title")
       plotName <- required(headers, "Plotname")
@@ -81,56 +149,106 @@ private[nodal] object NgspiceRaw:
         "declared values exceed line limit"
       )
       variables <- readMany(variableCount)(readVariable(cursor, _))
-      section <- cursor.next().toRight("missing Values section")
+      section <- cursor.next().flatMap(_.toRight("missing Values section"))
       _ <- Either.cond(section == "Values:", (), s"expected ASCII Values section, found: $section")
-      rows <- readMany(pointCount)(readRow(cursor, _, variableCount, complex))
-      _ <- Either.cond(
-        cursor.nextNonEmpty().isEmpty,
-        (),
-        "trailing data or multiple plots are unsupported"
-      )
-    yield NgspiceRawPlot(title, plotName, complex, variables, rows)
+    yield NgspiceRawSchema(title, plotName, complex, variables, pointCount)
 
-  // Bound the byte, line and character work before decoding or allocating any plot vectors.
-  private def validateBytes(bytes: Vector[Byte]): Either[String, Unit] =
-    if bytes.isEmpty then Left("empty raw output")
-    else if bytes.length > MaxBytes then Left(s"raw output exceeds $MaxBytes bytes")
-    else
-      var index = 0
-      var lineBytes = 0
-      var lines = 1
-      var error = Option.empty[String]
-      while index < bytes.length && error.isEmpty do
-        val value = bytes(index) & 0xff
-        if value == 10 then
-          if index + 1 < bytes.length then lines += 1
-          lineBytes = 0
-          if lines > MaxLines then error = Some(s"raw output exceeds $MaxLines lines")
-        else
-          lineBytes += 1
-          if lineBytes > MaxLineBytes then error = Some(s"raw line exceeds $MaxLineBytes bytes")
-          else if value == 13 && (index + 1 == bytes.length || bytes(index + 1) != 10) then
-            error = Some("bare carriage return in raw output")
-          else if (value < 32 && value != 9 && value != 13) || value == 127 then
-            error = Some("control character in raw output")
-        index += 1
-      error.toLeft(())
+  private def foldRows[A](
+      cursor: Cursor,
+      schema: NgspiceRawSchema,
+      initial: A,
+      consume: (A, Int, Vector[NgspiceComplex]) => Either[String, A]
+  ): Either[String, A] =
+    var state = initial
+    var point = 0
+    var error = Option.empty[String]
+    while point < schema.pointCount && error.isEmpty do
+      readRow(cursor, point, schema.variables.size, schema.isComplex)
+        .flatMap(row => consume(state, point, row)) match
+        case Left(message) => error = Some(message)
+        case Right(next) => state = next
+      point += 1
+    error.toLeft(state)
 
-  private def decode(bytes: Vector[Byte]): Either[String, String] =
-    Try(
-      StandardCharsets.UTF_8.newDecoder()
-        .onMalformedInput(CodingErrorAction.REPORT)
-        .onUnmappableCharacter(CodingErrorAction.REPORT)
-        .decode(ByteBuffer.wrap(bytes.toArray))
-        .toString
-    ).toEither.left.map(_ => "raw output is not valid UTF-8 text")
+  // All byte/line bounds and decoding live here, including bytes after the declared rows.
+  // Refill is capped at the remaining byte budget plus one sentinel, without whole-file copies.
+  private final class Cursor(input: InputStream, asciiOnly: Boolean):
+    private val buffer = new Array[Byte](8192)
+    private val line = new Array[Byte](MaxLineBytes)
+    private val decoder = StandardCharsets.UTF_8.newDecoder()
+      .onMalformedInput(CodingErrorAction.REPORT)
+      .onUnmappableCharacter(CodingErrorAction.REPORT)
+    private var position = 0
+    private var buffered = 0
+    private var received = 0
+    private var consumed = 0
+    private var lines = 0
+    private var exhausted = false
 
-  private final class Cursor(text: String):
-    private val lines = text.linesIterator
-    def next(): Option[String] = if lines.hasNext then Some(lines.next().trim) else None
-    def nextNonEmpty(): Option[String] =
+    private def readByte(): Int =
+      if position == buffered && !exhausted then
+        buffered = input.read(buffer, 0, math.min(buffer.length, MaxBytes - received + 1))
+        position = 0
+        // A nonconforming zero-length bulk read must not spin forever.
+        if buffered == 0 then
+          val value = input.read()
+          if value == -1 then buffered = -1
+          else
+            buffer(0) = value.toByte
+            buffered = 1
+        if buffered == -1 then exhausted = true
+        else received += buffered
+      if exhausted then -1
+      else
+        val value = buffer(position) & 0xff
+        position += 1
+        consumed += 1
+        value
+
+    private def decode(length: Int): Either[String, Option[String]] =
+      Try(decoder.reset().decode(ByteBuffer.wrap(line, 0, length)).toString.trim)
+        .toEither.left.map(_ => "raw output is not valid UTF-8 text").map(Some(_))
+
+    def next(): Either[String, Option[String]] =
+      try
+        boundary:
+          var length = 0
+          var first = true
+          var carriageReturn = false
+          while true do
+            val value = readByte()
+            if consumed > MaxBytes then boundary.break(Left(s"raw output exceeds $MaxBytes bytes"))
+            if carriageReturn && value != 10 then
+              boundary.break(Left("bare carriage return in raw output"))
+            if value == -1 then
+              if consumed == 0 then boundary.break(Left("empty raw output"))
+              else if first then boundary.break(Right(None))
+              else boundary.break(decode(length))
+            if first then
+              lines += 1
+              first = false
+              if lines > MaxLines then
+                boundary.break(Left(s"raw output exceeds $MaxLines lines"))
+            if value == 10 then boundary.break(decode(length))
+            if length == MaxLineBytes then
+              boundary.break(Left(s"raw line exceeds $MaxLineBytes bytes"))
+            if asciiOnly && value > 127 then
+              boundary.break(Left("raw output must use the pinned ASCII protocol"))
+            if (value < 32 && value != 9 && value != 13) || value == 127 then
+              boundary.break(Left("control character in raw output"))
+            line(length) = value.toByte
+            length += 1
+            carriageReturn = value == 13
+          Right(None)
+      catch
+        case error: IOException =>
+          Left(
+            s"unable to read raw output: ${Option(error.getMessage).getOrElse(error.getClass.getSimpleName)}"
+          )
+
+    def nextNonEmpty(): Either[String, Option[String]] =
       var line = next()
-      while line.contains("") do line = next()
+      while line == Right(Some("")) do line = next()
       line
 
   private def readHeaders(cursor: Cursor): Either[String, Map[String, String]] =
@@ -139,9 +257,10 @@ private[nodal] object NgspiceRaw:
     var error = Option.empty[String]
     while !finished && error.isEmpty do
       cursor.next() match
-        case None => error = Some("missing Variables section")
-        case Some("Variables:") => finished = true
-        case Some(line) =>
+        case Left(message) => error = Some(message)
+        case Right(None) => error = Some("missing Variables section")
+        case Right(Some("Variables:")) => finished = true
+        case Right(Some(line)) =>
           val separator = line.indexOf(':')
           if separator < 1 then error = Some(s"malformed raw header: $line")
           else
@@ -180,7 +299,7 @@ private[nodal] object NgspiceRaw:
 
   private def readVariable(cursor: Cursor, index: Int): Either[String, NgspiceRawVariable] =
     for
-      line <- cursor.next().toRight(s"missing variable $index")
+      line <- cursor.next().flatMap(_.toRight(s"missing variable $index"))
       tokens = line.split("[ \\t]+", -1).toVector
       _ <- Either.cond(
         tokens.length == 3 || (tokens.length == 4 && tokens(3) == "grid=3"),
@@ -199,7 +318,7 @@ private[nodal] object NgspiceRaw:
     readMany(variables): column =>
       for
         line <- (if column == 0 then cursor.nextNonEmpty() else cursor.next())
-          .toRight(s"missing point $point variable $column")
+          .flatMap(_.toRight(s"missing point $point variable $column"))
         tokens = line.split("[ \\t]+", -1).toVector
         _ <- Either.cond(
           tokens.length == (if column == 0 then 2 else 1),

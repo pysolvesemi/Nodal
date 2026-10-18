@@ -1251,15 +1251,17 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
   - Focused implementation and validation: [F-050 readiness](../implementation/increment50-readiness.md). Verified squash integration `9ddc4e3541c17a9edb2aba3f8b43c6a8b9a7775d` preserves tested tree `e83fe48629e6b994770c7d0a27b944daa2bee70e`; parent/G complete. No CI was run.
 
 - [ ] **Increment 51 — Waveform and result model**
-  - [ ] **F-051.A — Architecture review, modularity, scalability and extensibility.** Model time/frequency/sweep axes and units explicitly; consume 49-50 results without confusing sample order with physical time.
-  - [ ] **F-051.B — Implementation and integration.** Parse typed time/frequency/sweep results, preserve units, stream large data, and provide comparison/assertion utilities.
-  - [ ] **F-051.C — Focused positive, negative and predecessor regression.** Test malformed, non-monotonic and unit-incompatible data, missing axes, boundary interpolation and streaming versus in-memory comparison.
-  - [ ] **F-051.D — Focused local validation and applicability**
-    - [ ] **F-051.D.1** Independent result fixtures: Use retained simulator outputs and independently calculated unit/axis/comparison expectations; check streaming and in-memory results against the same reference, not merely parser success.
-    - [ ] **F-051.D.2** Applicability boundary: Record that result parsing itself is not HDL generation, synthesis or formal proof; retain provenance to the actual simulator run where a numerical-result claim is made.
-  - [ ] **F-051.E — Optimization review and output quality.** Review copying and retention of large traces; preserve precision and defined comparison semantics. Apply the proportionate review rule above; document no new optimization required when justified.
-  - [ ] **F-051.F — Representative scale, determinism and compatibility.** Measure memory against long traces and large sweeps; verify stable serialization and format compatibility.
+  - [x] **F-051.A — Architecture review, modularity, scalability and extensibility.** Model time/frequency/sweep axes and units explicitly; consume 49-50 results without confusing sample order with physical time.
+  - [x] **F-051.B — Implementation and integration.** Parse typed time/frequency/sweep results, preserve units, stream large data, and provide comparison/assertion utilities.
+  - [x] **F-051.C — Focused positive, negative and predecessor regression.** Test malformed, non-monotonic and unit-incompatible data, missing axes, boundary interpolation and streaming versus in-memory comparison.
+  - [x] **F-051.D — Focused local validation and applicability**
+    - [x] **F-051.D.1** Independent result fixtures: Use retained simulator outputs and independently calculated unit/axis/comparison expectations; check streaming and in-memory results against the same reference, not merely parser success.
+    - [x] **F-051.D.2** Applicability boundary: Record that result parsing itself is not HDL generation, synthesis or formal proof; retain provenance to the actual simulator run where a numerical-result claim is made.
+  - [x] **F-051.E — Optimization review and output quality.** Review copying and retention of large traces; preserve precision and defined comparison semantics. Apply the proportionate review rule above; document no new optimization required when justified.
+  - [x] **F-051.F — Representative scale, determinism and compatibility.** Measure memory against long traces and large sweeps; verify stable serialization and format compatibility.
   - [ ] **F-051.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 51; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
+
+  - Focused implementation and validation: [F-051 readiness](../implementation/increment51-readiness.md). A–F complete; parent/G await verified integration. No CI was run.
 
 - [ ] **Increment 52 — Analog regression suite**
   - [ ] **F-052.A — Architecture review, modularity, scalability and extensibility.** Build regression cases from the declared Verilog-A and simulator capability intersection, not an assumed universal analog profile.

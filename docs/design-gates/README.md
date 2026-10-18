@@ -67,3 +67,7 @@ Public simulation and general waveform APIs remain with F-050 and F-051.
 [NodalScalaSimulationApi-DG-v0.1.md](NodalScalaSimulationApi-DG-v0.1.md) defines
 source-correlated immutable captures, dimensioned stimuli, bounded batch analyses
 and explicit measurement/assertion evidence over F-048/F-049 shared services.
+
+- [Typed waveform results and bounded streaming v0.1](NodalWaveformResults-DG-v0.1.md):
+  Foundation 51 public typed axes, interpolation/comparison and shared bounded
+  streaming protocol/simulator ownership; preserves Foundation 50 compatibility.

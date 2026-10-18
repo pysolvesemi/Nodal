@@ -6,4 +6,4 @@ role = "bridge"
 visibility = "internal"
 owner = "@pysolvesemi"
 description = "Versioned Scala-to-MLIR serialization and native nodalc process invocation."
-dependencies = ["core.scala.api", "core.scala.frontend"]
+dependencies = ["core.scala.api", "core.scala.frontend", "core.integrations"]

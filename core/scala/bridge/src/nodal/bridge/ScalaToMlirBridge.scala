@@ -61,9 +61,10 @@ private[nodal] object ScalaToMlirBridge:
 
   def fromSnapshot(
       snapshot: ConstructionSnapshot,
-      backend: Backend = Backend.Auto
+      backend: Backend = Backend.Auto,
+      sourceProvenance: Boolean = false
   ): NodalMlirDocument =
-    val text = new Renderer(snapshot, backend).render()
+    val text = new Renderer(snapshot, backend, sourceProvenance).render()
     NodalMlirDocument(Schema, Version, text, digest(text))
 
   def compileToVerilogA(
@@ -71,9 +72,15 @@ private[nodal] object ScalaToMlirBridge:
       nodalc: Path,
       translator: Path,
       workingDirectory: Path,
-      timeout: Duration = Duration.ofSeconds(30)
+      timeout: Duration = Duration.ofSeconds(30),
+      sourceProvenance: Boolean = false
   ): Either[NativeCompilerFailure, VerilogAVerticalSliceResult] =
-    val document = lower(top, EmitOptions(backend = Backend.VerilogA))
+    val options = EmitOptions(backend = Backend.VerilogA)
+    val document = fromSnapshot(
+      ConstructionKernel.inspect(top, options),
+      options.backend,
+      sourceProvenance
+    )
     NativeCompilerClient.run(
       document,
       NativeCompilerRequest(
@@ -117,7 +124,11 @@ private[nodal] object ScalaToMlirBridge:
       .digest(text.getBytes(StandardCharsets.UTF_8))
     bytes.map(value => f"${value & 0xff}%02x").mkString
 
-  private final class Renderer(snapshot: ConstructionSnapshot, backend: Backend):
+  private final class Renderer(
+      snapshot: ConstructionSnapshot,
+      backend: Backend,
+      sourceProvenance: Boolean
+  ):
     private val sourceEquations = new AnalogEquationMlir.Plan(snapshot)
     private val modules = snapshot.modules.sortBy(_.path)
     private val modulesByPath = modules.map(module => module.path -> module).toMap
@@ -386,6 +397,7 @@ private[nodal] object ScalaToMlirBridge:
         ),
         "nodal.backend.naming" -> quoted("semantic")
       ) ++
+        Option.when(sourceProvenance)("nodal.backend.source_provenance" -> "true") ++
         (if snapshot.transferOperators.isEmpty then Vector.empty
          else
            Vector(

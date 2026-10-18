@@ -1,14 +1,15 @@
 package nodal.internal.bridge
 
-import java.io.ByteArrayOutputStream
-import java.io.InputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
-import java.util.concurrent.TimeUnit
 
 import scala.jdk.CollectionConverters.*
+
+import nodal.internal.integrations.ToolProcessFailure
+import nodal.internal.integrations.ToolProcessRequest
+import nodal.internal.integrations.ToolProcessRunner
 
 private[nodal] final case class NativeCompilerRequest(
     executable: Path,
@@ -107,89 +108,71 @@ private[nodal] object NativeCompilerClient:
         document.text,
         StandardCharsets.UTF_8
       )
-      val command =
-        request.executable.toString +: request.arguments :+ input.toString
-      val builder = new ProcessBuilder(command*)
-      builder.directory(request.workingDirectory.toFile)
-      val environment = builder.environment()
-      request.environment.toVector.sortBy(_._1).foreach:
-        case (key, value) => environment.put(key, value)
-      environment.put("NODAL_BRIDGE_SCHEMA", document.schema)
-      environment.put("NODAL_BRIDGE_VERSION", document.version.toString)
-      environment.put("NODAL_PROCESS_PROTOCOL", ProtocolVersion)
-
-      try
-        val process = builder.start()
-        process.getOutputStream.close()
-        val stdout = capture(process.getInputStream)
-        val stderr = capture(process.getErrorStream)
-        val completed = process.waitFor(
-          request.timeout.toMillis,
-          TimeUnit.MILLISECONDS
+      val process = ToolProcessRunner.run(
+        ToolProcessRequest(
+          executable = request.executable,
+          arguments = request.arguments :+ input.toString,
+          workingDirectory = request.workingDirectory,
+          environment = request.environment ++ Map(
+            "NODAL_BRIDGE_SCHEMA" -> document.schema,
+            "NODAL_BRIDGE_VERSION" -> document.version.toString,
+            "NODAL_PROCESS_PROTOCOL" -> ProtocolVersion
+          ),
+          timeout = request.timeout
         )
-        if !completed then
-          process.destroy()
-          if !process.waitFor(500, TimeUnit.MILLISECONDS) then
-            process.destroyForcibly()
-            val _ = process.waitFor(5, TimeUnit.SECONDS)
-          stdout.thread.join()
-          stderr.thread.join()
-          result = Some(
-            NativeCompilerFailure(
+      )
+      val standardOutput = normalize(process.standardOutput)
+      val standardError = normalize(process.standardError)
+      process.failure match
+        case Some(kind) =>
+          val diagnostic = kind match
+            case ToolProcessFailure.Timeout =>
               BridgeDiagnostic(
                 "NODAL-BRIDGE-PROCESS-006",
                 s"native compiler timed out after ${request.timeout.toMillis} ms"
-              ),
-              command,
-              normalize(stdout.text),
-              normalize(stderr.text),
-              None
-            )
-          )
-        else
-          stdout.thread.join()
-          stderr.thread.join()
-          val standardOutput = normalize(stdout.text)
-          val standardError = normalize(stderr.text)
-          val exitCode = process.exitValue()
-          if exitCode == 0 then
-            result = Some(
-              NativeCompilerSuccess(
-                command,
-                standardOutput,
-                standardError
               )
-            )
-          else
-            val mapped = NativeDiagnosticMapper.classify(standardError, exitCode)
-            val diagnostic =
-              if mapped.code == "NODAL-DIAGNOSTIC-EXTERNAL-001" then
-                BridgeDiagnostic(
-                  "NODAL-BRIDGE-PROCESS-007",
-                  s"native compiler exited with status $exitCode"
-                )
-              else mapped
-            result = Some(
-              NativeCompilerFailure(
-                diagnostic,
-                command,
-                standardOutput,
-                standardError,
-                Some(exitCode)
-              )
-            )
-      catch
-        case exception: java.io.IOException =>
-          result = Some(
-            NativeCompilerFailure(
+            case ToolProcessFailure.LaunchFailed | ToolProcessFailure.ToolUnavailable =>
               BridgeDiagnostic(
                 "NODAL-BRIDGE-PROCESS-005",
-                s"native compiler launch failed: ${exception.getMessage}"
-              ),
-              request.executable.toString +: request.arguments,
-              "",
-              "",
-              None
+                s"native compiler launch failed: ${process.failureMessage.getOrElse(kind.toString)}"
+              )
+            case _ =>
+              BridgeDiagnostic(
+                "NODAL-BRIDGE-PROCESS-010",
+                s"native compiler process failed: ${process.failureMessage.getOrElse(kind.toString)}"
+              )
+          result = Some(
+            NativeCompilerFailure(
+              diagnostic,
+              if kind == ToolProcessFailure.LaunchFailed ||
+                kind == ToolProcessFailure.ToolUnavailable
+              then
+                request.executable.toString +: request.arguments
+              else process.command,
+              standardOutput,
+              standardError,
+              process.exitCode
+            )
+          )
+        case None if process.exitCode.contains(0) =>
+          result = Some(NativeCompilerSuccess(process.command, standardOutput, standardError))
+        case None =>
+          val exitCode = process.exitCode.getOrElse(-1)
+          val mapped = NativeDiagnosticMapper.classify(standardError, exitCode)
+          val diagnostic =
+            if mapped.code == "NODAL-DIAGNOSTIC-EXTERNAL-001" then
+              BridgeDiagnostic(
+                "NODAL-BRIDGE-PROCESS-007",
+                s"native compiler exited with status $exitCode"
+              )
+            else mapped
+          result = Some(
+            NativeCompilerFailure(
+              diagnostic,
+              process.command,
+              standardOutput,
+              standardError,
+              process.exitCode
             )
           )
     catch
@@ -234,23 +217,6 @@ private[nodal] object NativeCompilerClient:
         request.executable.toString +: request.arguments
       )
     )
-
-  private final case class Capture(
-      thread: Thread,
-      buffer: ByteArrayOutputStream
-  ):
-    def text: String = buffer.toString(StandardCharsets.UTF_8)
-
-  private def capture(input: InputStream): Capture =
-    val buffer = new ByteArrayOutputStream()
-    val thread = Thread.ofVirtual().start(
-      new Runnable:
-        override def run(): Unit =
-          try
-            val _ = input.transferTo(buffer)
-          finally input.close()
-    )
-    Capture(thread, buffer)
 
   private def deleteRecursively(path: Path): Unit =
     if Files.isDirectory(path) then

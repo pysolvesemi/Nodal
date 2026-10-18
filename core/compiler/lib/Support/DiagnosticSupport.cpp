@@ -6,7 +6,9 @@
 #include "mlir/IR/SymbolTable.h"
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/ConvertUTF.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -140,6 +142,28 @@ Operation *findOperationByPath(mlir::ModuleOp module, llvm::StringRef path) {
   return found;
 }
 
+std::optional<AuthoredSourceSpan> sourceSpanFromEntry(DictionaryAttr entry,
+                                                      llvm::StringRef semantic) {
+  auto source = entry.getAs<StringAttr>("source_path");
+  auto line = entry.getAs<IntegerAttr>("source_line");
+  auto column = entry.getAs<IntegerAttr>("source_column");
+  auto endLine = entry.getAs<IntegerAttr>("source_end_line");
+  auto endColumn = entry.getAs<IntegerAttr>("source_end_column");
+  if (!source || !line || !column)
+    return std::nullopt;
+  return AuthoredSourceSpan{semantic.str(),
+                            source.getValue().str(),
+                            line.getInt(),
+                            column.getInt(),
+                            endLine ? endLine.getInt() : line.getInt(),
+                            endColumn ? endColumn.getInt() : column.getInt()};
+}
+
+bool validSourceText(llvm::StringRef text) {
+  auto *begin = reinterpret_cast<const llvm::UTF8 *>(text.data());
+  return !text.empty() && llvm::isLegalUTF8String(&begin, begin + text.size());
+}
+
 DiagnosticContext sourceMapContext(mlir::ModuleOp module, llvm::StringRef path) {
   DiagnosticContext context;
   context.semanticPath = path.str();
@@ -157,22 +181,73 @@ DiagnosticContext sourceMapContext(mlir::ModuleOp module, llvm::StringRef path) 
       continue;
     if (auto hierarchy = entry.getAs<StringAttr>("hierarchy_path"))
       context.hierarchyPath = hierarchy.getValue().str();
-    auto source = entry.getAs<StringAttr>("source_path");
-    auto line = entry.getAs<IntegerAttr>("source_line");
-    auto column = entry.getAs<IntegerAttr>("source_column");
-    auto endLine = entry.getAs<IntegerAttr>("source_end_line");
-    auto endColumn = entry.getAs<IntegerAttr>("source_end_column");
-    if (source && line && column) {
-      context.sourceRange = formatSourceRange(source.getValue(), line.getInt(), column.getInt(),
-                                              endLine ? endLine.getInt() : line.getInt(),
-                                              endColumn ? endColumn.getInt() : column.getInt());
-    }
+    if (auto span = sourceSpanFromEntry(entry, path))
+      context.sourceRange = formatSourceRange(span->sourcePath, span->startLine, span->startColumn,
+                                              span->endLine, span->endColumn);
     break;
   }
   return context;
 }
 
 } // namespace
+
+FailureOr<AuthoredSourceMap> AuthoredSourceMap::create(ModuleOp root) {
+  AuthoredSourceMap result(root);
+  Attribute raw = root->getAttr("nodal.bridge.source_map");
+  if (!raw)
+    return result;
+  auto sourceMap = llvm::dyn_cast<ArrayAttr>(raw);
+  auto reject = [&](const llvm::Twine &message) -> FailureOr<AuthoredSourceMap> {
+    (void)emitMappedFailure(root.getOperation(), "NODAL-SOURCE-MAP-001", message);
+    return failure();
+  };
+  if (!sourceMap)
+    return reject("authored source map must be an array attribute");
+  llvm::StringSet<> identities;
+  for (Attribute attribute : sourceMap) {
+    auto entry = llvm::dyn_cast<DictionaryAttr>(attribute);
+    if (!entry)
+      return reject("authored source map entry must be a dictionary");
+    auto semantic = entry.getAs<StringAttr>("semantic_path");
+    if (!semantic || !validSourceText(semantic.getValue()))
+      return reject("authored source map entry requires a nonempty UTF-8 semantic path");
+    if (!identities.insert(semantic.getValue()).second)
+      return reject(llvm::Twine("duplicate authored source map identity '") + semantic.getValue() +
+                    "'");
+    bool hasSpan = false;
+    for (llvm::StringRef field :
+         {"source_path", "source_line", "source_column", "source_end_line", "source_end_column"})
+      hasSpan |= static_cast<bool>(entry.get(field));
+    if (!hasSpan)
+      continue;
+    auto source = entry.getAs<StringAttr>("source_path");
+    if (!source || !validSourceText(source.getValue()))
+      return reject("authored source span requires a nonempty UTF-8 source path");
+    for (llvm::StringRef field :
+         {"source_line", "source_column", "source_end_line", "source_end_column"}) {
+      auto position = entry.getAs<IntegerAttr>(field);
+      if (!position || !position.getValue().isSignedIntN(64) || position.getInt() <= 0)
+        return reject(llvm::Twine("authored source span requires a positive signed-64 '") + field +
+                      "' coordinate");
+    }
+    auto span = sourceSpanFromEntry(entry, semantic.getValue());
+    if (span->endLine < span->startLine ||
+        (span->endLine == span->startLine && span->endColumn < span->startColumn))
+      return reject("authored source span end precedes its start");
+    result.spans.try_emplace(semantic.getValue(), std::move(*span));
+  }
+  return result;
+}
+
+const AuthoredSourceSpan *AuthoredSourceMap::resolve(Operation *operation) const {
+  if (!operation || operation->getParentOfType<ModuleOp>() != root)
+    return nullptr;
+  auto semantic = stringAttribute(metadata(operation), "semantic_path");
+  if (!semantic)
+    return nullptr;
+  auto found = spans.find(semantic.getValue());
+  return found == spans.end() ? nullptr : &found->second;
+}
 
 DiagnosticContext collectDiagnosticContext(Operation *operation) {
   DiagnosticContext context;

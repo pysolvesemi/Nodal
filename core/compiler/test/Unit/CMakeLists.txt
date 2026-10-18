@@ -533,3 +533,10 @@ target_link_libraries(nodal-target-capability-unit-tests PRIVATE
   NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.target-capability-unit COMMAND nodal-target-capability-unit-tests)
 set_tests_properties(nodal.native.target-capability-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-statement-provenance-unit-tests StatementProvenanceTest.cpp)
+llvm_update_compile_flags(nodal-statement-provenance-unit-tests)
+target_link_libraries(nodal-statement-provenance-unit-tests PRIVATE
+  NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.statement-provenance-unit COMMAND nodal-statement-provenance-unit-tests)
+set_tests_properties(nodal.native.statement-provenance-unit PROPERTIES TIMEOUT 30)

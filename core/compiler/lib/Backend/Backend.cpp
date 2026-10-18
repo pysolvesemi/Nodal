@@ -464,6 +464,17 @@ FailureOr<BackendConfiguration> resolveBackendConfiguration(ModuleOp module, Bac
     }
   }
 
+  bool sourceProvenance = false;
+  if (Attribute raw = module->getAttr("nodal.backend.source_provenance")) {
+    auto enabled = llvm::dyn_cast<BoolAttr>(raw);
+    if (!enabled) {
+      (void)emitMappedFailure(module.getOperation(), "NODAL-BACKEND-CONFIG-003",
+                              "source provenance must be a Boolean attribute");
+      return failure();
+    }
+    sourceProvenance = enabled.getValue();
+  }
+
   FailureOr<GateProfile> checkProfile = parseCheckProfile(module, profile.defaultCheckProfile);
   if (failed(checkProfile))
     return failure();
@@ -481,7 +492,8 @@ FailureOr<BackendConfiguration> resolveBackendConfiguration(ModuleOp module, Bac
     return failure();
 
   return BackendConfiguration{
-      &profile, *checkProfile, profile.shapedValueLayout, profile.materialization, profile.naming,
+      &profile,       *checkProfile,    profile.shapedValueLayout, profile.materialization,
+      profile.naming, sourceProvenance,
   };
 }
 

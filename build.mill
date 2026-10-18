@@ -113,13 +113,13 @@ object core extends Module:
       def moduleDeps = Seq(api)
 
     object bridge extends NodalScalaModule:
-      def moduleDeps = Seq(frontend, api)
+      def moduleDeps = Seq(frontend, api, core.integrations)
 
     object sim extends NodalScalaModule:
       def moduleDeps = Seq(bridge, api, core.integrations)
 
     object cli extends NodalScalaModule:
-      def moduleDeps = Seq(sim, bridge, frontend, api)
+      def moduleDeps = Seq(sim, bridge, frontend, api, core.integrations)
 
     object testkit extends NodalScalaModule:
       def moduleDeps = Seq(cli, sim, bridge, frontend, api)

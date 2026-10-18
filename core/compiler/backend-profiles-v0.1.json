@@ -1488,5 +1488,47 @@
         "detail": "This exact scalar initial-step, Boolean/Integer control and held-Real witness compiled. No array, other event form, feature-wide support or numerical execution claim follows."
       }
     ]
+  },
+  "consumer_profiles": {
+    "schema_version": 1,
+    "profile_version": "1",
+    "profiles": [
+      {
+        "id": "openvaf-23.5.0-linux-x86_64",
+        "consumer": "OpenVAF",
+        "version": "23.5.0",
+        "version_stdout": "openvaf 23.5.0",
+        "executable_sha256": "6918195bc6cca54016095923bea190f7a1d96dd8b062104c602e8c28578cb5e3",
+        "platform": "linux-x86_64",
+        "compile_arguments": [
+          "--target",
+          "x86_64-unknown-linux",
+          "--target_cpu",
+          "generic",
+          "--interface",
+          "OSDI",
+          "-O",
+          "3"
+        ]
+      },
+      {
+        "id": "openvaf-reloaded-20260616-linux-x86_64",
+        "consumer": "OpenVAF-reloaded",
+        "version": "20260616-3-g0e83f1ed",
+        "version_stdout": "OpenVAF-reloaded 20260616-3-g0e83f1ed",
+        "executable_sha256": "b117284d8f871dbf54609ab009cdff819f443d8d33064111b8b0782af5c7e931",
+        "platform": "linux-x86_64",
+        "compile_arguments": [
+          "--target",
+          "x86_64-unknown-linux",
+          "--target_cpu",
+          "generic",
+          "--interface",
+          "OSDI",
+          "-O",
+          "3"
+        ]
+      }
+    ]
   }
 }

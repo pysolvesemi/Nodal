@@ -57,6 +57,26 @@ public:
     return expression() && token.empty() && !invalid;
   }
 
+  FailureOr<bool> contextQueries(bool allowRuntime) {
+    // The structural caller already owns its surrounding expression profile.
+    // Reuse tokenization without imposing scalar numeric or endpoint syntax.
+    contextQueryScan = true;
+    cursor = 0;
+    invalid = source.contains('\0');
+    next();
+    bool found = false;
+    while (!token.empty() && !invalid) {
+      if (isContextQuery()) {
+        if (!allowRuntime || !contextQuery())
+          return failure();
+        found = true;
+      } else {
+        next();
+      }
+    }
+    return invalid ? FailureOr<bool>(failure()) : FailureOr<bool>(found);
+  }
+
   bool declaration(AnalogEventSymbols &declared) {
     const bool real = token == "real";
     if (!eat("real") && !eat("integer") && !eat("genvar"))
@@ -100,6 +120,7 @@ public:
           return false;
       }
     } else if (eat("=")) {
+      declarationInitializer = true;
       CheckedValue value;
       if (!expression(0, real ? nullptr : &value))
         return false;
@@ -243,6 +264,8 @@ private:
   bool invalid = false;
   bool transferExpressions = false;
   bool staticExpression = false;
+  bool declarationInitializer = false;
+  bool contextQueryScan = false;
   bool mutableIntegerReference = false;
   bool eventExpressions = false;
   size_t eventStart = 0;
@@ -284,6 +307,10 @@ private:
           ++cursor;
         while (cursor < source.size() && llvm::isDigit(source[cursor]))
           ++cursor;
+      }
+      if (contextQueryScan) {
+        token = source.slice(tokenStart, cursor);
+        return;
       }
       if (eventExpressions && privateFunctions && cursor - eventStart > eventByteLimit) {
         invalid = true;
@@ -599,6 +626,21 @@ private:
     liveInputAccesses.push_back(ready);
     return true;
   }
+  bool isContextQuery() const {
+    return token.starts_with("$temperature") || token.starts_with("$simparam") ||
+           token.starts_with("$abstime");
+  }
+  bool contextQuery() {
+    // This is the target trust boundary, independent of the source registry.
+    // Both temperature primitives and time are runtime Real values, including
+    // when wrapped in pure math or in an unreachable conditional branch.
+    if (pureFunction || staticExpression || declarationInitializer)
+      return false;
+    if (eat("$temperature") || eat("$abstime"))
+      return token != "(" && token != "[" && token != ".";
+    return eat("$simparam") && eat("(") && eat("\"tnom\"") && eat(")") && token != "(" &&
+           token != "[" && token != ".";
+  }
   bool primary(unsigned depth, CheckedValue *value = nullptr) {
     if (value)
       *value = {};
@@ -652,8 +694,13 @@ private:
       next();
       return !invalid;
     }
-    if (transferExpressions && eat("$abstime"))
-      return true;
+    if (isContextQuery()) {
+      // Time is newly admitted in typed procedural scopes. Keep the legacy
+      // symbol-free event grammar separate from the continuous-expression one.
+      if (token == "$abstime" && !transferExpressions && !symbols)
+        return false;
+      return contextQuery();
+    }
     auto name = token;
     // Reserved analog names are legal only in the corresponding call grammar,
     // never as bare values, port references, assignment targets, or labels.
@@ -931,6 +978,14 @@ FailureOr<size_t> reparseAnalogEventPrivateFunction(llvm::StringRef source,
 }
 LogicalResult reparseAnalogEventDeclaration(llvm::StringRef source, AnalogEventSymbols &symbols) {
   return success(Parser(source, nullptr, &symbols).declaration(symbols));
+}
+FailureOr<bool> reparseAnalogContextQueries(llvm::StringRef source, bool allowRuntime) {
+  // This classifier adds a finite query contract to intentionally broader
+  // structural profiles. Do not impose the scalar lexer on unrelated syntax.
+  if (!source.contains("$temperature") && !source.contains("$simparam") &&
+      !source.contains("$abstime"))
+    return false;
+  return Parser(source).contextQueries(allowRuntime);
 }
 LogicalResult reparseAnalogTransferCall(llvm::StringRef source,
                                         const llvm::StringMap<unsigned> *functions) {

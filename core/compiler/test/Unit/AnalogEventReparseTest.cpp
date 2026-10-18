@@ -74,6 +74,14 @@ int main() {
                                       "real bad = bad;",
                                       "real bad = data;",
                                       "real bad = data[4];",
+                                      "real bad = $temperature;",
+                                      "real bad = ($simparam(\"tnom\") + 273.15);",
+                                      "real bad = $abstime;",
+                                      "real bad = sqrt($temperature);",
+                                      "real bad = (0 * $temperature);",
+                                      "real bad = (1 ? 0.0 : $temperature);",
+                                      "integer bad = ($temperature > 273.15);",
+                                      "real bad[0:$temperature];",
                                       "real bad = scalar[0];",
                                       "real bad = 1.0; trailing",
                                       "real bad, other;",
@@ -126,6 +134,11 @@ int main() {
         "begin scalar = V(p); data[0] = I(pins[counter], p); end",
         "begin @(cross(V(p), 1)) begin scalar = sqrt(data[0]); end end",
         "begin scalar = (analysis(\"tran\") ? data[0] : data[1]); end",
+        "begin scalar = $temperature; data[0] = ($simparam(\"tnom\") + 273.15); end",
+        "begin scalar = $abstime; end",
+        "begin other = ($temperature > ($simparam(\"tnom\") + 273.15)); end",
+        "begin @(cross(($temperature - gain), 1)) begin scalar = $temperature; end end",
+        "begin if (analysis(\"tran\")) begin scalar = sqrt($temperature * $temperature); end end",
         "begin $strobe(\"missing[999] ; @(() [ ]\"); $finish; end"}) {
     ++count;
     if (!validBlock(block, &symbols)) {
@@ -221,7 +234,17 @@ int main() {
         "begin scalar = idt(V(p)); end",
         "begin scalar = white_noise(1, \"noise\"); end",
         "begin scalar = laplace_nd(V(p), '{1}, '{1}); end",
-        "begin scalar = $abstime; end",
+        "begin scalar = $temperature(); end",
+        "begin scalar = $temperature(1); end",
+        "begin scalar = $temperature_extra; end",
+        "begin scalar = $simparam(\"tnom\", 27.0); end",
+        "begin scalar = $simparam(\"temperature\"); end",
+        "begin scalar = $simparam(\"corner\"); end",
+        "begin scalar = $simparam(\"TNOM\"); end",
+        "begin scalar = $simparam(gain); end",
+        "begin scalar = $simparam(); end",
+        "begin scalar = $simparam; end",
+        "begin scalar = $abstime(); end",
         "begin scalar = $random(); end",
         "begin V(p) <+ scalar; end",
         "begin $display(\"text\"); end",
@@ -264,10 +287,11 @@ int main() {
       validBlock("begin unknown[0] = 1; end", nullptr) ||
       validBlock("begin unknown = data[0]; end", nullptr) ||
       validBlock("begin unknown = 4 % 3; end", nullptr) ||
+      validBlock("begin unknown = $abstime; end", nullptr) ||
       mlir::succeeded(nodal::reparseAnalogTransferCall("laplace_nd(data[0], '{1}, '{1})")) ||
       mlir::succeeded(nodal::reparseAnalogNoiseCall("white_noise(data[0], \"noise\")")))
     return 1;
-  count += 6;
+  count += 7;
   // Declaration replication is a static-only extension. Keep the original
   // 179 declaration/event/legacy cases above independent of these symbols.
   auto initialized = symbols;
@@ -373,6 +397,11 @@ int main() {
         "real bad[0:3] = '{4{ddt(gain)}};",
         "real bad[0:3] = '{4{white_noise(1, \"noise\")}};",
         "real bad[0:3] = '{4{$abstime}};",
+        "real bad[0:3] = '{4{$temperature}};",
+        "real bad[0:3] = '{4{($simparam(\"tnom\") + 273.15)}};",
+        "real bad[0:3] = '{4{sqrt($temperature)}};",
+        "real bad[0:3] = '{4{(0 * $temperature)}};",
+        "real bad[0:3] = '{4{(1 ? 0.0 : $temperature)}};",
         "real bad[0:3] = '{4{unknownFunction(gain)}};",
         "real bad[0:3] = '{4{min(scalar, gain)}};",
         "real bad[0:3] = '{4{(gain > 0.0 ? 1.0 : data[0])}};",
@@ -592,8 +621,10 @@ int main() {
   const auto leaf = demand("data[counter]", 3);
   const auto diamond = demand(demand(leaf + " + 1", 1) + " + " + demand(leaf + " + 2", 2), 0);
   for (const auto &block :
-       {liveBlock(demand("V(p)", 0)), liveBlock(diamond), liveBlock("0 && " + demand("data[0]", 0)),
-        liveBlock("1 ? 2 : " + demand("data[0]", 0)),
+       {liveBlock(demand("V(p)", 0)), liveBlock(demand("$abstime", 0)),
+        liveBlock(demand("$temperature", 0)),
+        liveBlock(demand("($simparam(\"tnom\") + 273.15)", 0)), liveBlock(diamond),
+        liveBlock("0 && " + demand("data[0]", 0)), liveBlock("1 ? 2 : " + demand("data[0]", 0)),
         liveBlock(demand("data[0]", 0) + " + " + demand("data[0]", 1)),
         liveBlock(demand("data[0] + 1", 0) + " + " + demand("data [ 0 ] + 1", 0)),
         "begin event_live_ready_0 = 0; @(cross(" + demand("data[0]", 0) + ", 1) or above(" +
@@ -605,7 +636,10 @@ int main() {
     }
   }
   for (const auto &block :
-       {liveBlock(call("event_live_cache_0", 0)),
+       {liveBlock(call("$abstime()", 0)),
+        liveBlock(call("$temperature()", 0)),
+        liveBlock(call("$simparam(\"tnom\", 27.0)", 0)),
+        liveBlock(call("event_live_cache_0", 0)),
         liveBlock(call("event_live_ready_0", 0)),
         liveBlock(call("data[event_live_ready_0]", 0)),
         liveBlock(call("0 && event_live_cache_0", 0)),
@@ -621,7 +655,6 @@ int main() {
         liveBlock("event_live_store(data[0], event_live_cache_0, event_live_ready_0, 0)"),
         liveBlock(call("missing", 0)),
         liveBlock(call("ddt(V(p))", 0)),
-        liveBlock(call("$abstime", 0)),
         liveBlock(call("data[4]", 0)),
         "begin scalar = " + call("data[0]", 0) + "; end",
         "begin if (" + call("data[0]", 0) + ") begin end end",
@@ -739,6 +772,73 @@ int main() {
       if (mlir::succeeded(nodal::reparseBackendTarget(invalid, configuration))) {
         llvm::errs() << "accepted private helper outside its target contract: " << invalid << '\n';
         return 1;
+      }
+    }
+  }
+
+  // The structural target parser has deliberately broader continuous profiles.
+  // New context queries must still cross the independent exact-query gate,
+  // without opting indexed/generated endpoints into a scalar-only grammar.
+  const std::string contextPrefix = "module ContextQueries;\nelectrical p;\n";
+  auto continuousContext = [&](llvm::StringRef value) {
+    return contextPrefix + "analog begin\nV(p) <+ " + value.str() + ";\nend\nendmodule\n";
+  };
+  for (auto kind : {nodal::BackendKind::VerilogA, nodal::BackendKind::VerilogAMS}) {
+    const nodal::BackendConfiguration configuration{
+        &nodal::getBackendProfile(kind), nodal::GateProfile::Default,
+        nodal::ShapedValueLayout::ScalarOrFlat, nodal::MaterializationPolicy::SafeInline,
+        nodal::NamingPolicy::Semantic};
+    for (const auto &target :
+         {continuousContext("$temperature"), continuousContext("($simparam(\"tnom\") + 273.15)"),
+          continuousContext("($temperature - ($simparam(\"tnom\") + 273.15))"),
+          continuousContext("(analysis(\"tran\") ? $temperature : $abstime)"),
+          contextPrefix + "electrical [0:1] pins;\nanalog begin\n"
+                          "V(pins[0], p) <+ ($temperature * V(pins[1], p));\nend\nendmodule\n",
+          contextPrefix + "electrical [0:1] pins;\ngenvar g;\nanalog begin\n"
+                          "for (g = 0; g < 2; g = g + 1) begin : lanes\n"
+                          "V(pins[g], p) <+ ($simparam(\"tnom\") + 273.15);\n"
+                          "end\nend\nendmodule\n",
+          contextPrefix + "real event_value;\nanalog begin\nbegin : event_read\n"
+                          "@(initial_step) begin event_value = $temperature; end\n"
+                          "event_value = $abstime;\nend\nend\nendmodule\n",
+          contextPrefix + "real w;\nanalog begin\nw = transition($temperature);\n"
+                          "V(p) <+ w;\nend\nendmodule\n"}) {
+      ++count;
+      if (mlir::failed(nodal::reparseBackendTarget(target, configuration))) {
+        llvm::errs() << "rejected valid runtime context target: " << target << '\n';
+        return 1;
+      }
+    }
+    for (llvm::StringRef query :
+         {"$temperature()", "$temperature(0)", "$temperature_extra", "$simparam", "$simparam()",
+          "$simparam(\"tnom\", 27.0)", "$simparam(\"temperature\")", "$simparam(\"corner\")",
+          "$simparam(\"TNOM\")", "$simparam(tnom)", "$simparam(\"tnom\")()", "$temperature[0]",
+          "$simparam(\"tnom\")[0]", "$temperature.member"}) {
+      for (const auto &target :
+           {continuousContext(query), contextPrefix + "real w;\nanalog begin\nw = transition(" +
+                                          query.str() + ");\nV(p) <+ w;\nend\nendmodule\n"}) {
+        ++count;
+        if (mlir::succeeded(nodal::reparseBackendTarget(target, configuration))) {
+          llvm::errs() << "accepted malformed runtime context target: " << target << '\n';
+          return 1;
+        }
+      }
+    }
+    for (llvm::StringRef value :
+         {"$temperature", "($simparam(\"tnom\") + 273.15)", "$abstime", "sqrt($temperature)",
+          "(0 * $temperature)", "(1 ? 0.0 : $temperature)"}) {
+      for (const auto &target :
+           {contextPrefix + "parameter real TEMP = " + value.str() + ";\nendmodule\n",
+            contextPrefix + "localparam real TEMP = " + value.str() + ";\nendmodule\n",
+            contextPrefix + "real event_value = " + value.str() + ";\nendmodule\n",
+            contextPrefix + "real event_values[0:1] = '{2{" + value.str() + "}};\nendmodule\n",
+            contextPrefix + "analog function real bad;\ninput x;\nreal x;\nbegin\nbad = " +
+                value.str() + ";\nend\nendfunction\nendmodule\n"}) {
+        ++count;
+        if (mlir::succeeded(nodal::reparseBackendTarget(target, configuration))) {
+          llvm::errs() << "accepted static or pure runtime context target: " << target << '\n';
+          return 1;
+        }
       }
     }
   }

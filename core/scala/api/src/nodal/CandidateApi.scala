@@ -1603,7 +1603,8 @@ private[nodal] object CandidateRuntime:
     expression
 
   def waveformOperator(operation: String, inputs: Vector[Expr[Real]]): Expr[Real] =
-    AnalogProceduralConstruction.requireContinuousContext(operation)
+    if operation != "analog_abstime" then
+      AnalogProceduralConstruction.requireContinuousContext(operation)
     val expression = new KernelExpr[Real](inputs, operation = Some(operation))
     ConstructionKernel.waveformOperator(expression, operation, inputs)
     expression

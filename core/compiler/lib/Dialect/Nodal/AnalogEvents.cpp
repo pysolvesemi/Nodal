@@ -207,6 +207,18 @@ public:
         return failure();
       return Expression{"boolean", "1", std::nullopt, {}, function.str(), "", nullptr, {}};
     }
+    if (function.starts_with(analogContextSourcePrefix)) {
+      const auto *entry =
+          lookupAnalogContext(function.drop_front(analogContextSourcePrefix.size()));
+      if (!body.empty() || !entry)
+        return failure();
+      return Expression{"real", entry->dimension.str(), std::nullopt, {}, function.str(), ""};
+    }
+    if (function == "analog_abstime") {
+      if (!body.empty())
+        return failure();
+      return Expression{"real", "time", std::nullopt, {}, function.str(), ""};
+    }
     if (function == "potential_access" || function == "flow_access") {
       if (pieces.empty() || pieces.size() > 2)
         return failure();
@@ -264,7 +276,7 @@ public:
         return failure();
       result.kind = args[1].kind;
       result.dimension = args[1].dimension;
-      if (left.constant)
+      if (left.constant && args[1].constant && args[2].constant)
         result.constant = args[*left.constant != 0.0 ? 1 : 2].constant;
     } else if (function == "bool_not" && args.size() == 1 && left.kind == "boolean") {
       if (left.constant)
@@ -1259,6 +1271,12 @@ LogicalResult verifyAnalogProceduralExpressions(Operation *procedure) {
     auto expression = parseAnalogSourceExpression(op, source);
     if (failed(expression) || expression->kind != kind || expression->dimension != dimension) {
       result = reject(op, 10, "procedural source expression does not match its scalar contract");
+      return;
+    }
+    if (llvm::isa<AnalogVariableOp>(op) && llvm::isa<AnalogProcedureOp>(op->getParentOp()) &&
+        !isStaticAnalogSourceExpression(*expression)) {
+      result =
+          reject(op, 9, "persistent scalar initialization requires a static source expression");
       return;
     }
     if (llvm::isa<AnalogCaseOp>(op) && !op->getAttrOfType<BoolAttr>("static_value_present")) {

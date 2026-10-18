@@ -47,3 +47,22 @@ private[nodal] object AnalogFunctionRegistry:
     "ac" -> "ac",
     "noise" -> "noise"
   )
+  val ContextPrefix = "analog_context_v1_"
+  final case class ContextEntry(
+      id: String,
+      resultKind: String,
+      dimension: String,
+      selectorKind: String,
+      availability: String
+  )
+  val contextEntries: Vector[ContextEntry] = Vector(
+    ContextEntry("analysis", "boolean", "1", "analysis-kind", "existing-analysis"),
+    ContextEntry("time", "real", "time", "none", "existing-time"),
+    ContextEntry("temperature", "real", "temperature", "none", "supported"),
+    ContextEntry("nominal_temperature", "real", "temperature", "none", "conditional-standard"),
+    ContextEntry("frequency", "real", "time^-1", "none", "unavailable-provider"),
+    ContextEntry("operating_condition", "real", "supplied", "name", "unavailable-provider"),
+    ContextEntry("corner", "boolean", "1", "name", "unavailable-provider"),
+    ContextEntry("sweep_coordinate", "real", "supplied", "name", "unavailable-provider"),
+    ContextEntry("random_seed", "integer", "1", "scope", "unavailable-provider")
+  )

@@ -95,6 +95,7 @@ constexpr llvm::StringLiteral kSupportedOperations[] = {
     "nodal.analog_function_return",
     "nodal.analog_user_call",
     "nodal.analog_analysis",
+    "nodal.analog_context",
     "nodal.analog_compare",
     "nodal.analog_logic",
     "nodal.analog_select",
@@ -371,6 +372,12 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
     if (!entry)
       return failure();
     rendered = "analysis(\"" + entry->verilogA.str() + "\")";
+  } else if (name == "nodal.analog_context") {
+    auto id = operation->getAttrOfType<StringAttr>("query_kind");
+    auto *entry = id ? lookupAnalogContext(id.getValue()) : nullptr;
+    if (!entry || operation->getNumOperands() != 0)
+      return failure();
+    rendered = entry->verilogA.str();
   } else if (name == "nodal.analog_abstime") {
     rendered = "$abstime";
   } else if (name == "nodal.analog_transfer") {
@@ -2427,6 +2434,19 @@ prepareGeneratedAnalogPayload(Operation *analog, Operation *generate, ModuleRend
                 .str());
       continue;
     }
+    if (name == "nodal.analog_context") {
+      auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
+      auto generatedInduction = operation.getAttrOfType<StringAttr>("generated_induction");
+      auto kind = operation.getAttrOfType<StringAttr>("query_kind");
+      if (!owner || !generatedInduction || owner.getValue() != regionId.getValue() ||
+          generatedInduction.getValue() != inductionPath.getValue() || !kind ||
+          !lookupAnalogContext(kind.getValue()) || operation.getNumOperands() != 0 ||
+          operation.getNumResults() != 1)
+        return emitMappedFailure(
+            &operation, "NODAL-BACKEND-CAPABILITY-001",
+            "generated context query ownership or identity does not match its range");
+      continue;
+    }
     if (name == "nodal.analog_abstime") {
       auto owner = operation.getAttrOfType<StringAttr>("generated_owner");
       auto generatedInduction = operation.getAttrOfType<StringAttr>("generated_induction");
@@ -3899,7 +3919,7 @@ static LogicalResult reparseBackendTargetWithBudgets(
       code = code.take_front(comment).rtrim();
     }
 
-    if (!code.ends_with(";"))
+    if (!code.ends_with(";") || failed(reparseAnalogContextQueries(code, false)))
       return false;
     code = code.drop_back().trim();
 
@@ -3995,6 +4015,11 @@ static LogicalResult reparseBackendTargetWithBudgets(
     } else
       return false;
     auto arguments = call.drop_front(open + 1).drop_back();
+    auto validArgument = [&](llvm::StringRef argument) {
+      argument = argument.trim();
+      auto context = reparseAnalogContextQueries(argument, true);
+      return !argument.empty() && succeeded(context);
+    };
     unsigned count = 1, depth = 0;
     size_t start = 0;
     for (size_t index = 0; index < arguments.size(); ++index) {
@@ -4008,13 +4033,13 @@ static LogicalResult reparseBackendTargetWithBudgets(
           return false;
         --depth;
       } else if (c == ',' && !depth) {
-        if (arguments.slice(start, index).trim().empty())
+        if (!validArgument(arguments.slice(start, index)))
           return false;
         start = index + 1;
         ++count;
       }
     }
-    return !depth && !arguments.drop_front(start).trim().empty() && count >= minimum &&
+    return !depth && validArgument(arguments.drop_front(start)) && count >= minimum &&
            count <= maximum;
   };
   llvm::StringSet<> realNames;
@@ -4479,6 +4504,9 @@ static LogicalResult reparseBackendTargetWithBudgets(
       if (containsPrivateEventCall(line) || !line.ends_with(";") ||
           !validSelectedEndpoints(line, generatedDepth != 0) ||
           !validElectricalAccesses(line, generatedDepth != 0))
+        return failure();
+      auto context = reparseAnalogContextQueries(line, true);
+      if (failed(context))
         return failure();
       if (line.contains("<+") && !line.contains(" = ")) {
         if (!userFunctions.empty()) {

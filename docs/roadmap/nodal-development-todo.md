@@ -1155,17 +1155,19 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
 
 - [ ] **Increment 44 — Analysis state and environmental constructs**
   - Original scope retained: Implement analysis-dependent behavior, temperature/environment access, initial/final semantics, and portability policy.
-  - [ ] **F-044.A — Architecture review, modularity, scalability and extensibility.** Separate analysis, environment and initialization context from ordinary parameters and pure function effects; preserve future 138-140 seams.
-  - [ ] **F-044.B — Implementation and integration**
-    - [ ] **F-044.B.1** Implement source construction and typed analysis/environment/initial/final context propagation through frontend and bridge.
-    - [ ] **F-044.B.2** Implement native context verification and supported backend spelling/lowering without folding dynamic environment state or bypassing portability limits.
-  - [ ] **F-044.C — Focused positive, negative and predecessor regression.** Test unsupported analyses, wrong units, illegal environment access in pure functions and initial/final ordering with 37-41 constructs.
-  - [ ] **F-044.D — Focused local validation and applicability**
-    - [ ] **F-044.D.1** Compiler witnesses: Retain actual public Scala, normalized IR and generated Verilog-A witnesses for the supported compiler profile; distinguish internal reparse from independent OpenVAF compilation.
-    - [ ] **F-044.D.2** Later tool handoff: Identify representative witness cases for 48 compile and 49/52 numerical checks, with relevant analyses, references and tolerances. Preserve compiler-only acceptance limits; later tool execution is untested here and does not block this prototype increment.
-  - [ ] **F-044.E — Optimization review and output quality.** Review environment-query duplication without folding dynamic analysis state or moving initialization effects. Apply the proportionate review rule above; document no new optimization required when justified.
-  - [ ] **F-044.F — Representative scale, determinism and compatibility.** Exercise analysis/environment combinations and repeated instances; retain stable context identities across runs.
+  - [x] **F-044.A — Architecture review, modularity, scalability and extensibility.** Separate analysis, environment and initialization context from ordinary parameters and pure function effects; preserve future 138-140 seams.
+  - [x] **F-044.B — Implementation and integration**
+    - [x] **F-044.B.1** Implement source construction and typed analysis/environment/initial/final context propagation through frontend and bridge.
+    - [x] **F-044.B.2** Implement native context verification and supported backend spelling/lowering without folding dynamic environment state or bypassing portability limits.
+  - [x] **F-044.C — Focused positive, negative and predecessor regression.** Test unsupported analyses, wrong units, illegal environment access in pure functions and initial/final ordering with 37-41 constructs.
+  - [x] **F-044.D — Focused local validation and applicability**
+    - [x] **F-044.D.1** Compiler witnesses: Retain actual public Scala, normalized IR and generated Verilog-A witnesses for the supported compiler profile; distinguish internal reparse from independent OpenVAF compilation.
+    - [x] **F-044.D.2** Later tool handoff: Identify representative witness cases for 48 compile and 49/52 numerical checks, with relevant analyses, references and tolerances. Preserve compiler-only acceptance limits; later tool execution is untested here and does not block this prototype increment.
+  - [x] **F-044.E — Optimization review and output quality.** Review environment-query duplication without folding dynamic analysis state or moving initialization effects. Apply the proportionate review rule above; document no new optimization required when justified.
+  - [x] **F-044.F — Representative scale, determinism and compatibility.** Exercise analysis/environment combinations and repeated instances; retain stable context identities across runs.
   - [ ] **F-044.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 44; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
+
+  - Implementation evidence: [F-044 readiness and focused results](../implementation/increment44-readiness.md), in this increment branch. A–F pass; G and parent await verified integration. No CI or numerical simulation is claimed.
 
 - [ ] **Increment 45 — Analog canonicalization passes**
   - [ ] **F-045.A — Architecture review, modularity, scalability and extensibility**

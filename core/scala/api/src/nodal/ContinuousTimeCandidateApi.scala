@@ -231,28 +231,28 @@ object AnalysisContext:
   def active(kind: AnalysisKind): Expr[Bool] =
     AnalogFunctionContract.analysis(kind)
 
-  def time: Expr[Real] = CandidateRuntime.analogExpr("candidate-analysis-time")
+  def time: Expr[Real] = abstime
 
-  def frequency: Expr[Real] = CandidateRuntime.analogExpr("candidate-analysis-frequency")
+  def frequency: Expr[Real] = AnalogContextContract.unavailable("frequency")
 
 object EnvironmentContext:
   def temperature: Expr[Real] =
-    CandidateRuntime.analogExpr("candidate-environment-temperature")
+    AnalogContextContract.query("temperature")
 
   def nominalTemperature: Expr[Real] =
-    CandidateRuntime.analogExpr("candidate-environment-nominal-temperature")
+    AnalogContextContract.query("nominal_temperature")
 
   def operatingCondition(name: String, dimension: PhysicalDimension): Expr[Real] =
-    CandidateRuntime.analogExpr("candidate-operating-condition", name, dimension)
+    AnalogContextContract.unavailable("operating_condition", Some(name), Some(dimension))
 
   def corner(name: String): Expr[Bool] =
-    CandidateRuntime.booleanExpr("candidate-environment-corner", name)
+    AnalogContextContract.unavailable("corner", Some(name))
 
   def sweepCoordinate(name: String, dimension: PhysicalDimension): Expr[Real] =
-    CandidateRuntime.analogExpr("candidate-sweep-coordinate", name, dimension)
+    AnalogContextContract.unavailable("sweep_coordinate", Some(name), Some(dimension))
 
   def randomSeed(scope: String): Expr[Integer] =
-    CandidateRuntime.expr("candidate-environment-random-seed", scope)
+    AnalogContextContract.unavailable("random_seed", Some(scope))
 
 final case class NoiseId(value: String)
 

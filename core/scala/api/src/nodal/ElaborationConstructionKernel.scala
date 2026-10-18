@@ -278,8 +278,9 @@ private[nodal] object ConstructionKernel:
             "analog_abstime",
             "analog_bound_step"
           ).contains(operation)
-      if !ownedGeneratedWaveform then
-        session.requireNoGeneratedEffect(s"analog waveform operator '$operation'")
+      if !ownedGeneratedWaveform &&
+        !(operation == "analog_abstime" && AnalogProceduralConstruction.generatedProcedureActive)
+      then session.requireNoGeneratedEffect(s"analog waveform operator '$operation'")
       session.registerWaveformOperator(value, operation, inputs)
 
   def waveformForbidden[A](body: => A): A = active match

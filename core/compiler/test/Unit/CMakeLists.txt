@@ -473,3 +473,15 @@ target_link_libraries(nodal-analog-live-control-plan-unit-tests
   PRIVATE NodalDialect MLIRIR MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.analog-live-control-plan-unit
   COMMAND nodal-analog-live-control-plan-unit-tests)
+
+add_executable(nodal-context-unit-tests AnalogContextTest.cpp)
+llvm_update_compile_flags(nodal-context-unit-tests)
+target_link_libraries(nodal-context-unit-tests
+  PRIVATE NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.context-unit COMMAND nodal-context-unit-tests)
+
+add_executable(nodal-analog-context-backend-unit-tests AnalogContextBackendTest.cpp)
+llvm_update_compile_flags(nodal-analog-context-backend-unit-tests)
+target_link_libraries(nodal-analog-context-backend-unit-tests
+  PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.analog-context-backend-unit COMMAND nodal-analog-context-backend-unit-tests)

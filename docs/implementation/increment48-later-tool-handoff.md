@@ -49,3 +49,9 @@ A finite OpenVAF consumer limitation must not redefine Nodal's language profile,
 VAMS edition or source semantics. F-052/F-053 may qualify additional tool/version
 profiles later; the F-048 historical observations cannot override a new process
 outcome or silently select different CPU/options.
+
+F-049 now records actual loading and selected RC, initialization, context and
+safe-function numerical execution in its
+[readiness and demonstration](increment49-readiness.md). Those specific outcomes
+extend this handoff; the whole-hierarchy, array and runtime-ceil limitations above
+remain visible and unchanged.

@@ -1530,5 +1530,42 @@
         ]
       }
     ]
+  },
+  "simulator_profiles": {
+    "schema_version": 1,
+    "profile_version": "1",
+    "profiles": [
+      {
+        "id": "ngspice-47-local-linux-x86_64",
+        "consumer": "ngspice",
+        "version": "47",
+        "version_stdout": "******\n** ngspice-47 : Circuit level simulation program\n** Compiled with Sparse Direct Linear Solver\n** The U. C. Berkeley CAD Group\n** Copyright 1985-1994, Regents of the University of California.\n** Copyright 2001-2026, The ngspice team.\n** Please get your ngspice manual from https://ngspice.sourceforge.io/docs.html\n** Please file your bug-reports at http://ngspice.sourceforge.net/bugrep.html\n** Creation Date: Sun Oct 18 21:53:29 UTC 2026\n******",
+        "executable_sha256": "ba254f361c728f70cbb09293750d93f541f26c256d56286ddfb755d0d2793711",
+        "platform": "linux-x86_64",
+        "build": {
+          "kind": "local-release-build-with-preprocessing-override",
+          "archive_url": "https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/47/ngspice-47.tar.gz",
+          "archive_sha256": "894e649651f1838a14095e5a5439e7d3aa63e87ede14d283173fda4fcdef675f",
+          "source_commit": "a80f6e3e95d51534905b1f23410a951802666656",
+          "compiler": "GCC 14.2.0",
+          "cflags": "-O2",
+          "configure_arguments": [
+            "--without-x",
+            "--with-readline=no",
+            "--with-editline=no",
+            "--with-fftw3=no",
+            "--disable-klu",
+            "--disable-openmp",
+            "--enable-osdi",
+            "--disable-debug"
+          ],
+          "object_override": {
+            "object": "src/xspice/icm/xtradev/seegenerator/cfunc.o",
+            "cflags": "-O2 -std=gnu11 -include stdlib.h"
+          },
+          "source_modified": false
+        }
+      }
+    ]
   }
 }

@@ -273,19 +273,32 @@ final class NodeArray[D <: Discipline] private[nodal] (
     )
 
 /** Frequency metadata carried by a clock-domain declaration. */
-sealed trait Frequency
+sealed trait Frequency:
+  def hertz: Double
 
 /** Phase metadata carried by a clock relationship. */
-sealed trait Phase
+sealed trait Phase:
+  def degrees: Double
 
-private final class CandidateFrequency(value: Double, unit: String) extends Frequency:
-  CandidateRuntime.statement(value, unit)
+object Frequency:
+  def hertz(value: Double): Frequency = new CandidateFrequency(value)
 
-private final class CandidatePhase(value: Double, unit: String) extends Phase:
-  CandidateRuntime.statement(value, unit)
+private final class CandidateFrequency(val hertz: Double) extends Frequency:
+  CandidateRuntime.metadata(hertz, "Hz")
+  require(
+    java.lang.Double.isFinite(hertz) && hertz > 0.0,
+    "frequency requires positive finite hertz"
+  )
+
+private final class CandidatePhase(val degrees: Double) extends Phase:
+  CandidateRuntime.metadata(degrees, "deg")
+  require(java.lang.Double.isFinite(degrees), "phase requires finite degrees")
 
 object Phase:
-  val Zero: Phase = new CandidatePhase(0.0, "deg")
+  private object ZeroPhase extends Phase:
+    val degrees: Double = 0.0
+
+  val Zero: Phase = ZeroPhase
 
 enum ClockEdge:
   case Rising, Falling
@@ -323,7 +336,10 @@ final class ClockDomain private[nodal] (
     private[nodal] val edge: Option[ClockEdge] = None,
     private[nodal] val resetPolicy: Option[ResetPolicy] = None,
     private[nodal] val resetPolarity: Option[ResetPolarity] = None,
-    private[nodal] val relation: Option[ClockRelation] = None
+    private[nodal] val relation: Option[ClockRelation] = None,
+    private[nodal] val frequency: Option[Frequency] = None,
+    private[nodal] val clock: Option[Expr[Clock]] = None,
+    private[nodal] val parent: Option[ClockDomain] = None
 ):
   CandidateRuntime.registerDomain(this, kind)
 
@@ -337,14 +353,15 @@ object ClockDomain:
       resetPolarity: ResetPolarity,
       frequency: Frequency
   ): ClockDomain =
-    CandidateRuntime.statement(edge, reset, resetPolarity, frequency)
+    CandidateRuntime.metadata(edge, reset, resetPolarity, frequency)
     new ClockDomain(
       name,
-      CandidateRuntime.expr(name, reset),
+      CandidateRuntime.resetExpr("external_reset", name),
       KernelDomainKind.External,
       edge = Some(edge),
       resetPolicy = Some(reset),
-      resetPolarity = Some(resetPolarity)
+      resetPolarity = Some(resetPolarity),
+      frequency = Some(frequency)
     )
 
   def from(
@@ -356,20 +373,22 @@ object ClockDomain:
       frequency: Frequency,
       name: String = "bound"
   ): ClockDomain =
-    CandidateRuntime.statement(clock, edge, policy, polarity, frequency)
+    CandidateRuntime.metadata(clock, edge, policy, polarity, frequency)
     new ClockDomain(
       name,
       reset,
       KernelDomainKind.Bound,
       edge = Some(edge),
       resetPolicy = Some(policy),
-      resetPolarity = Some(polarity)
+      resetPolarity = Some(polarity),
+      frequency = Some(frequency),
+      clock = Some(clock)
     )
 
   def required(name: String = "default"): ClockDomain =
     new ClockDomain(
       name,
-      CandidateRuntime.expr(name),
+      CandidateRuntime.resetExpr("required_reset", name),
       KernelDomainKind.Required
     )
 
@@ -380,12 +399,14 @@ object ClockDomain:
       relation: ClockRelation,
       reset: Expr[Reset]
   ): ClockDomain =
-    CandidateRuntime.statement(clock, from, relation)
+    CandidateRuntime.metadata(clock, from, relation)
     new ClockDomain(
       name,
       reset,
       KernelDomainKind.Generated,
-      relation = Some(relation)
+      relation = Some(relation),
+      clock = Some(clock),
+      parent = Some(from)
     )
 
 /** Child-instance handle with typed selector-based overrides and domain bindings. */
@@ -605,7 +626,7 @@ object Cdc:
 object Rdc:
   /** Domain-construction form: the receiving generated domain supplies the destination. */
   def sync(reset: Expr[Reset], stages: Int): Expr[Reset] =
-    CandidateRuntime.expr(reset, stages)
+    CandidateRuntime.resetExpr("rdc_sync", reset, stages)
 
   /** Existing-domain transfer form: the destination is explicit. */
   def sync(
@@ -613,7 +634,7 @@ object Rdc:
       to: ClockDomain,
       stages: Int = 2
   ): Expr[Reset] =
-    CandidateRuntime.expr(reset, to, stages)
+    CandidateRuntime.resetExpr("rdc_sync", reset, to, stages)
 
 object ResetController:
   def combine(resets: Expr[Reset]*): Expr[Reset] = CandidateRuntime.expr(resets)
@@ -626,7 +647,7 @@ object ClockGate:
       name: String = "gated"
   ): ClockDomain =
     CandidateRuntime.statement(enable, testEnable)
-    new ClockDomain(name, domain.reset, KernelDomainKind.Generated)
+    new ClockDomain(name, domain.reset, KernelDomainKind.Generated, parent = Some(domain))
 
 object ClockMux:
   def glitchless(
@@ -900,8 +921,8 @@ extension (value: Double)
   def pF: Expr[Real] = realLiteral(value * 1.0e-12, "F")
   def s: Expr[Real] = realLiteral(value, "s")
   def ns: Expr[Real] = realLiteral(value * 1.0e-9, "s")
-  def MHz: Frequency = new CandidateFrequency(value, "MHz")
-  def deg: Phase = new CandidatePhase(value, "deg")
+  def MHz: Frequency = Frequency.hertz(value * 1.0e6)
+  def deg: Phase = new CandidatePhase(value)
 
 extension (value: Int)
   def real: Expr[Real] = realLiteral(value.toDouble, "")
@@ -916,8 +937,8 @@ extension (value: Int)
   def pF: Expr[Real] = realLiteral(value.toDouble * 1.0e-12, "F")
   def s: Expr[Real] = realLiteral(value.toDouble, "s")
   def ns: Expr[Real] = realLiteral(value.toDouble * 1.0e-9, "s")
-  def MHz: Frequency = new CandidateFrequency(value.toDouble, "MHz")
-  def deg: Phase = new CandidatePhase(value.toDouble, "deg")
+  def MHz: Frequency = Frequency.hertz(value.toDouble * 1.0e6)
+  def deg: Phase = new CandidatePhase(value.toDouble)
 
 extension (value: Boolean)
   def B: Expr[Bool] = CandidateRuntime.literalBool(value)
@@ -1284,6 +1305,15 @@ private[nodal] object CandidateRuntime:
 
   def expr[A <: Data](values: Any*): Expr[A] =
     val expression = new KernelExpr[A](values.toVector)
+    ConstructionKernel.expression(expression)
+    expression
+
+  def resetExpr(operation: String, values: Any*): Expr[Reset] =
+    val expression = new KernelExpr[Reset](
+      values.toVector,
+      resultType = Some(KernelTypeDescriptor("Reset")),
+      operation = Some(operation)
+    )
     ConstructionKernel.expression(expression)
     expression
 
@@ -1662,6 +1692,10 @@ private[nodal] object CandidateRuntime:
   ): Unit =
     AnalogProceduralConstruction.requireContinuousContext("analog contribution")
     ConstructionKernel.analogContribution(target, value, options)
+
+  def metadata(values: Any*): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("candidate effect")
+    ConstructionKernel.operation("metadata", values*)
 
   def statement(values: Any*): Unit =
     AnalogProceduralConstruction.requireContinuousContext("candidate effect")

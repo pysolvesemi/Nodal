@@ -30,11 +30,19 @@ private[nodal] final case class BridgeDiagnostic(
 private[nodal] final class BridgeException(val diagnostic: BridgeDiagnostic)
     extends IllegalArgumentException(diagnostic.toString)
 
+private[nodal] final case class ScalarElectricalPort(path: String, name: String)
+
+private[nodal] final case class ScalarElectricalInterface(
+    moduleName: String,
+    ports: Vector[ScalarElectricalPort]
+)
+
 private[nodal] final case class NodalMlirDocument(
     schema: String,
     version: Int,
     text: String,
-    sha256: String
+    sha256: String,
+    electricalInterface: Option[ScalarElectricalInterface] = None
 )
 
 private[nodal] final case class VerilogAVerticalSliceResult(
@@ -64,8 +72,9 @@ private[nodal] object ScalaToMlirBridge:
       backend: Backend = Backend.Auto,
       sourceProvenance: Boolean = false
   ): NodalMlirDocument =
-    val text = new Renderer(snapshot, backend, sourceProvenance).render()
-    NodalMlirDocument(Schema, Version, text, digest(text))
+    val renderer = new Renderer(snapshot, backend, sourceProvenance)
+    val text = renderer.render()
+    NodalMlirDocument(Schema, Version, text, digest(text), renderer.scalarElectricalInterface)
 
   def compileToVerilogA(
       top: => Module,
@@ -360,6 +369,33 @@ private[nodal] object ScalaToMlirBridge:
       module.path -> stableModuleSymbol(module.path)
     ).toMap
     private var emittedModules = modules
+
+    // This is a projection of the same canonical definitions used for emission, not a
+    // second naming registry. Native target verification remains independent.
+    def scalarElectricalInterface: Option[ScalarElectricalInterface] =
+      modulesByPath.get(snapshot.root).flatMap: root =>
+        val boundaryKinds =
+          Set("analog-input", "analog-output", "analog-inout", "conservative-terminal")
+        val boundary =
+          root.declarations.filter(declaration => boundaryKinds.contains(declaration.kind))
+        val supported = boundary.nonEmpty && boundary.forall(declaration =>
+          declaration.generatedScope.isEmpty && declaration.conservativeDimensions.isEmpty &&
+            conservativeDiscipline(declaration) == "electrical"
+        ) && !root.declarations.exists(declaration =>
+          Set(
+            "input",
+            "output",
+            "digital-inout",
+            "interface-port",
+            "interface-array"
+          ).contains(declaration.kind)
+        )
+        Option.when(supported)(ScalarElectricalInterface(
+          moduleSymbols(snapshot.root),
+          boundary.sortBy(_.name).map(declaration =>
+            ScalarElectricalPort(declaration.path, declaration.name)
+          )
+        ))
 
     def render(): String =
       validate()

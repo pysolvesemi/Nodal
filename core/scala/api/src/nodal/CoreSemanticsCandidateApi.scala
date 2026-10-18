@@ -183,15 +183,16 @@ sealed trait CurrentDimension
 sealed trait ResistanceDimension
 sealed trait TimeDimension
 
-final class Quantity[D] private[nodal] (value: Double):
-  CandidateRuntime.statement(value)
+final class Quantity[D] private[nodal] (val siValue: Double):
+  CandidateRuntime.metadata(siValue)
+  require(java.lang.Double.isFinite(siValue), "quantity requires a finite SI value")
 
 object Quantity:
   extension [D](left: Quantity[D])
     @targetName("quantityAddition")
     def +(right: Quantity[D]): Quantity[D] =
-      CandidateRuntime.statement(left, right)
-      left
+      CandidateRuntime.metadata(left, right)
+      new Quantity[D](left.siValue + right.siValue)
 
 extension (value: Double)
   def volts: Quantity[VoltageDimension] = new Quantity(value)

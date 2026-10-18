@@ -61,3 +61,9 @@ statement provenance. Consumer limitations do not redefine source semantics.
 [NodalNgspiceHarness-DG-v0.1.md](NodalNgspiceHarness-DG-v0.1.md) defines the private
 bounded bench, simulator and raw-result boundary over F-048 compiled artifacts.
 Public simulation and general waveform APIs remain with F-050 and F-051.
+
+## Foundation 50 Scala simulation API
+
+[NodalScalaSimulationApi-DG-v0.1.md](NodalScalaSimulationApi-DG-v0.1.md) defines
+source-correlated immutable captures, dimensioned stimuli, bounded batch analyses
+and explicit measurement/assertion evidence over F-048/F-049 shared services.

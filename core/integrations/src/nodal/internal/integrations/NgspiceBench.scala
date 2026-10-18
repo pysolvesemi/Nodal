@@ -51,10 +51,12 @@ private[nodal] enum NgspiceAnalysis:
 private[nodal] final case class NgspiceGeneratedBench(
     deck: String,
     kind: NgspiceAnalysisKind,
-    requestedPoints: Int
+    requestedPoints: Int,
+    expectedVariables: Vector[(String, String)],
+    axis: NgspiceAxis
 )
 
-/** Finite two-terminal ngspice 47 benches, not a public simulation or circuit-description API.
+/** Finite typed ngspice 47 benches, with a byte-stable F49 two-terminal compatibility path.
   *
   * No caller-supplied deck, control command, path, node name or expression is accepted. Grid
   * cardinality is checked arithmetically before rendering; rendering never expands grid points. The
@@ -66,6 +68,9 @@ private[nodal] object NgspiceBench:
   private val MaxIdentifierLength = 128
   private val Identifier = "[A-Za-z_][A-Za-z0-9_]*".r
   private val DcStopSlack = Math.ulp(1.0) * 1000
+
+  def generate(bench: NgspiceCircuitBench): Either[String, NgspiceGeneratedBench] =
+    NgspiceCircuitRenderer.generate(bench)
 
   def generate(
       model: NgspiceModuleBinding,
@@ -95,11 +100,26 @@ private[nodal] object NgspiceBench:
           modelLine,
           optionLine
         ) ++ commands :+ ".end").mkString("", "\n", "\n")
-      NgspiceGeneratedBench(deck, analysis.kind, points)
+      val scale = analysis.kind match
+        case NgspiceAnalysisKind.Dc => "v(v-sweep)" -> "voltage"
+        case NgspiceAnalysisKind.Ac => "frequency" -> "frequency"
+        case NgspiceAnalysisKind.Transient => "time" -> "time"
+      val variables = Vector(scale, "v(p)" -> "voltage") ++
+        (if analysis.kind == NgspiceAnalysisKind.Transient then Vector.empty
+         else Vector("i(vdrive)" -> "current"))
+      NgspiceGeneratedBench(deck, analysis.kind, points, variables, axis(analysis))
+
+  private[integrations] def axis(analysis: NgspiceAnalysis): NgspiceAxis = analysis match
+    case NgspiceAnalysis.DcVoltageSweep(start, stop, step) => NgspiceAxis.Dc(start, stop, step)
+    case NgspiceAnalysis.AcLinearSweep(points, start, stop) =>
+      NgspiceAxis.AcLinear(points, start, stop)
+    case NgspiceAnalysis.AcDecadeSweep(points, start, stop) =>
+      NgspiceAxis.AcDecade(points, start, stop)
+    case NgspiceAnalysis.TransientCurrent(_, step, stop) => NgspiceAxis.Transient(step, stop)
 
   private def validateModel(model: NgspiceModuleBinding): Either[String, Unit] =
     for
-      _ <- check(validIdentifier(model.moduleName), "invalid module identifier")
+      _ <- validateParameters(model.moduleName, model.parameters)
       _ <- check(
         model.terminals.size == 2 && model.terminals.toSet == Set(
           NgspiceTerminal.Ground,
@@ -107,18 +127,24 @@ private[nodal] object NgspiceBench:
         ),
         "terminal binding must contain exactly one Ground and one Driven in declaration order"
       )
-      _ <- check(model.parameters.size <= MaxParameters, s"parameter count exceeds $MaxParameters")
-      _ <- check(
-        model.parameters.forall((name, _) => validIdentifier(name)),
-        "invalid parameter identifier"
-      )
-      _ <- check(model.parameters.forall((_, value) => value.isFinite), "parameters must be finite")
-      names = model.parameters.map(_._1.toLowerCase(Locale.ROOT))
+    yield ()
+
+  private[integrations] def validateParameters(
+      moduleName: String,
+      parameters: Vector[(String, Double)]
+  ): Either[String, Unit] =
+    for
+      _ <- check(validIdentifier(moduleName), "invalid module identifier")
+      _ <- check(parameters.size <= MaxParameters, s"parameter count exceeds $MaxParameters")
+      _ <-
+        check(parameters.forall((name, _) => validIdentifier(name)), "invalid parameter identifier")
+      _ <- check(parameters.forall((_, value) => value.isFinite), "parameters must be finite")
+      names = parameters.map(_._1.toLowerCase(Locale.ROOT))
       _ <-
         check(names.distinct.size == names.size, "duplicate case-insensitive parameter identifier")
     yield ()
 
-  private def validateOptions(options: NgspiceSolverOptions): Either[String, Unit] =
+  private[integrations] def validateOptions(options: NgspiceSolverOptions): Either[String, Unit] =
     for
       _ <- check(
         positive(options.reltol) && options.reltol <= 1e-3 &&
@@ -132,11 +158,22 @@ private[nodal] object NgspiceBench:
       )
     yield ()
 
-  private def validateAnalysis(
+  private[integrations] def validateAnalysis(
       analysis: NgspiceAnalysis,
       options: NgspiceSolverOptions
-  ): Either[String, Int] = analysis match
-    case NgspiceAnalysis.DcVoltageSweep(start, stop, step) =>
+  ): Either[String, Int] =
+    for
+      points <- validateGrid(axis(analysis), options)
+      _ <- analysis match
+        case NgspiceAnalysis.TransientCurrent(stimulus, _, stop) => validateStimulus(stimulus, stop)
+        case _ => Right(())
+    yield points
+
+  private[integrations] def validateGrid(
+      axis: NgspiceAxis,
+      options: NgspiceSolverOptions
+  ): Either[String, Int] = axis match
+    case NgspiceAxis.Dc(start, stop, step) =>
       for
         _ <- check(
           start.isFinite && stop.isFinite && step.isFinite && step != 0,
@@ -153,7 +190,7 @@ private[nodal] object NgspiceBench:
         )
       yield count
 
-    case NgspiceAnalysis.AcLinearSweep(points, start, stop) =>
+    case NgspiceAxis.AcLinear(points, start, stop) =>
       for
         _ <- frequencies(start, stop)
         _ <- check(
@@ -167,7 +204,7 @@ private[nodal] object NgspiceBench:
         )
       yield points
 
-    case NgspiceAnalysis.AcDecadeSweep(pointsPerDecade, start, stop) =>
+    case NgspiceAxis.AcDecade(pointsPerDecade, start, stop) =>
       for
         _ <- frequencies(start, stop)
         _ <- check(
@@ -190,14 +227,13 @@ private[nodal] object NgspiceBench:
         )
       yield count
 
-    case NgspiceAnalysis.TransientCurrent(stimulus, step, stop) =>
+    case NgspiceAxis.Transient(step, stop) =>
       for
         _ <- check(
           positive(step) && positive(stop) && step <= stop,
           "transient step and stop must be finite and positive with step <= stop"
         )
         count <- boundedCount(decimal(stop) / decimal(step), roundUp = true)
-        _ <- validateStimulus(stimulus, stop)
       yield count
 
   private def validateStimulus(
@@ -292,9 +328,9 @@ private[nodal] object NgspiceBench:
   private def validIdentifier(value: String): Boolean =
     Option(value).exists(name => name.length <= MaxIdentifierLength && Identifier.matches(name))
 
-  private def positive(value: Double): Boolean = value.isFinite && value > 0
-  private def nonnegative(value: Double): Boolean = value.isFinite && value >= 0
+  private[integrations] def positive(value: Double): Boolean = value.isFinite && value > 0
+  private[integrations] def nonnegative(value: Double): Boolean = value.isFinite && value >= 0
   private def decimal(value: Double): BigDecimal = BigDecimal.decimal(value)
-  private def number(value: Double): String = java.lang.Double.toString(value)
-  private def check(condition: Boolean, message: String): Either[String, Unit] =
+  private[integrations] def number(value: Double): String = java.lang.Double.toString(value)
+  private[integrations] def check(condition: Boolean, message: String): Either[String, Unit] =
     Either.cond(condition, (), message)

@@ -17,6 +17,36 @@ private[nodal] final class NgspiceSimulator(
   import NgspiceSimulator.*
 
   def simulate(request: NgspiceSimulateRequest): NgspiceSimulationResult =
+    execute(NgspiceRunRequest(
+      request.executable,
+      request.evidenceDirectory,
+      request.profileId,
+      request.compiled,
+      request.model,
+      request.analysis,
+      request.options,
+      request.versionTimeout,
+      request.runTimeout,
+      () => NgspiceBench.generate(request.model, request.analysis, request.options),
+      None
+    ))
+
+  def simulate(request: NgspiceCircuitSimulateRequest): NgspiceSimulationResult =
+    execute(NgspiceRunRequest(
+      request.executable,
+      request.evidenceDirectory,
+      request.profileId,
+      request.compiled,
+      request.bench.model,
+      request.bench.analysis,
+      request.bench.options,
+      request.versionTimeout,
+      request.runTimeout,
+      () => NgspiceBench.generate(request.bench),
+      Some(request.bench)
+    ))
+
+  private def execute(request: NgspiceRunRequest): NgspiceSimulationResult =
     var receipt = NgspiceSimulationResult(
       NgspiceOutcome.InvalidRequest,
       "request has not been executed",
@@ -42,7 +72,8 @@ private[nodal] final class NgspiceSimulator(
         platform,
         request.versionTimeout.toString,
         request.runTimeout.toString,
-        None
+        None,
+        request.circuit
       ),
       request.compiled
     )
@@ -58,7 +89,7 @@ private[nodal] final class NgspiceSimulator(
         val directory =
           Files.createTempDirectory(request.evidenceDirectory.toRealPath(), "ngspice-")
         receipt = receipt.copy(evidenceDirectory = Some(directory))
-        val bench = NgspiceBench.generate(request.model, request.analysis, request.options) match
+        val bench = request.generate() match
           case Left(message) => boundary.break(finish(NgspiceOutcome.InvalidRequest, message))
           case Right(value) => value
         receipt =
@@ -237,7 +268,7 @@ private[nodal] final class NgspiceSimulator(
         val plot = NgspiceRaw.parse(rawBytes, bench.kind) match
           case Left(message) => boundary.break(finish(NgspiceOutcome.InvalidRaw, message))
           case Right(value) => value
-        validatePlot(plot, request.analysis, bench.requestedPoints) match
+        validatePlot(plot, bench) match
           case Some(message) => boundary.break(finish(NgspiceOutcome.InvalidRaw, message))
           case None => ()
         receipt = receipt.copy(plot = Some(plot))
@@ -271,12 +302,15 @@ private[nodal] object NgspiceSimulator:
   def simulate(request: NgspiceSimulateRequest): NgspiceSimulationResult =
     new NgspiceSimulator(NgspiceProfiles.all, ToolProcessRunner).simulate(request)
 
+  def simulate(request: NgspiceCircuitSimulateRequest): NgspiceSimulationResult =
+    new NgspiceSimulator(NgspiceProfiles.all, ToolProcessRunner).simulate(request)
+
   private def platform: String =
     val os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT)
     val arch = System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT)
     if os == "linux" && Set("amd64", "x86_64").contains(arch) then "linux-x86_64" else s"$os-$arch"
 
-  private def validate(request: NgspiceSimulateRequest): Option[String] =
+  private def validate(request: NgspiceRunRequest): Option[String] =
     def bounded(value: Duration): Boolean =
       !value.isZero && !value.isNegative && value.compareTo(Duration.ofHours(1)) <= 0
     if !request.executable.isAbsolute || !request.evidenceDirectory.isAbsolute then
@@ -444,17 +478,9 @@ private[nodal] object NgspiceSimulator:
 
   private def validatePlot(
       plot: NgspiceRawPlot,
-      analysis: NgspiceAnalysis,
-      requested: Int
+      bench: NgspiceGeneratedBench
   ): Option[String] =
-    val axis = analysis.kind match
-      case NgspiceAnalysisKind.Dc => "v(v-sweep)" -> "voltage"
-      case NgspiceAnalysisKind.Ac => "frequency" -> "frequency"
-      case NgspiceAnalysisKind.Transient => "time" -> "time"
-    val columns = Vector(axis, "v(p)" -> "voltage") ++
-      (if analysis.kind == NgspiceAnalysisKind.Transient then Vector.empty
-       else Vector("i(vdrive)" -> "current"))
-    if plot.variables.map(v => v.name -> v.kind) != columns then
+    if plot.variables.map(v => v.name -> v.kind) != bench.expectedVariables then
       Some("raw variables do not match the generated bench")
     else
       val values = plot.rows.map(_.head.real)
@@ -469,26 +495,26 @@ private[nodal] object NgspiceSimulator:
         values.sliding(2).filter(_.size == 2).forall(pair =>
           if increasing then pair(1) > pair(0) else pair(1) < pair(0)
         )
-      val valid = analysis match
-        case NgspiceAnalysis.DcVoltageSweep(start, _, step) =>
-          values.size == requested && monotonic(step > 0) &&
+      val valid = bench.axis match
+        case NgspiceAxis.Dc(start, _, step) =>
+          values.size == bench.requestedPoints && monotonic(step > 0) &&
           values.zipWithIndex.forall((value, index) =>
             close(value, Math.fma(index.toDouble, step, start), step)
           )
-        case NgspiceAnalysis.AcLinearSweep(points, start, stop) =>
+        case NgspiceAxis.AcLinear(points, start, stop) =>
           val step = if points == 1 then start else (stop - start) / (points - 1)
-          values.size == requested && monotonic(true) &&
+          values.size == bench.requestedPoints && monotonic(true) &&
           values.zipWithIndex.forall((value, index) =>
             close(value, Math.fma(index.toDouble, if points == 1 then 0.0 else step, start), step)
           )
-        case NgspiceAnalysis.AcDecadeSweep(points, start, _) =>
+        case NgspiceAxis.AcDecade(points, start, _) =>
           val factor = math.pow(10.0, 1.0 / points)
-          values.size == requested && monotonic(true) &&
+          values.size == bench.requestedPoints && monotonic(true) &&
           values.zipWithIndex.forall((value, index) =>
             val expected = start * math.pow(10.0, index.toDouble / points)
             close(value, expected, expected * (1 - 1 / factor))
           )
-        case NgspiceAnalysis.TransientCurrent(_, step, stop) =>
+        case NgspiceAxis.Transient(step, stop) =>
           values.size >= 2 && values.head >= 0 && values.head <= step * (1 + 1e-8) &&
           close(values.last, stop, step) && values.sliding(2).forall(pair =>
             pair(1) > pair(0) && pair(1) - pair(0) <= step * (1 + 1e-8)
@@ -546,6 +572,38 @@ private[nodal] object NgspiceSimulator:
     def optional[A](value: Option[A])(encode: A => String): String =
       value.map(encode).getOrElse("null")
     val identity = result.identity
+    val (moduleName, terminals, parameters) = identity.model match
+      case model: NgspiceModuleBinding =>
+        (model.moduleName, model.terminals.map(_.toString), model.parameters)
+      case model: NgspiceCircuitBinding =>
+        (model.moduleName, model.terminals.map(_.toString), model.parameters)
+    def circuitSummary(bench: NgspiceCircuitBench): String = obj(
+      "nodeCount" -> bench.nodes.size.toString,
+      "nodes" -> arr(bench.nodes.take(63).map(node => str(node.toString))),
+      "sourceCount" -> bench.sources.size.toString,
+      "sources" -> arr(bench.sources.take(63).map(source =>
+        obj(
+          "id" -> source.id.value.toString,
+          "kind" -> str(source.kind.toString),
+          "positive" -> str(source.positive.toString),
+          "negative" -> str(source.negative.toString),
+          "dc" -> str(java.lang.Double.toString(source.dc)),
+          "ac" -> optional(source.ac)(value => str(value.toString)),
+          "transient" -> optional(source.transient) {
+            case NgspiceTransientWaveform.Pwl(points) => obj(
+                "kind" -> str("Pwl"),
+                "points" -> points.size.toString,
+                "values" -> str("see bench.cir when deck generation succeeded")
+              )
+            case pulse => str(pulse.toString)
+          }
+        )
+      )),
+      "probeCount" -> bench.probes.size.toString,
+      "probes" -> arr(bench.probes.take(63).map(probe => str(probe.toString))),
+      "initialConditionCount" -> bench.initialConditions.size.toString,
+      "initialConditions" -> arr(bench.initialConditions.take(63).map(value => str(value.toString)))
+    )
     def environment(actual: Boolean): String = obj(identity.environment.toVector.sorted.map(
       (key, value) =>
         key -> str(if actual && value == EvidencePlaceholder then
@@ -585,12 +643,13 @@ private[nodal] object NgspiceSimulator:
         "modelSha256" -> str(identity.modelSha256),
         "artifactSha256" -> optional(identity.artifactSha256)(str),
         "artifactSize" -> optional(identity.artifactSize)(_.toString),
-        "moduleName" -> str(identity.model.moduleName),
-        "terminals" -> arr(identity.model.terminals.map(t => str(t.toString))),
-        "parameters" -> arr(identity.model.parameters.map((key, value) =>
+        "moduleName" -> str(moduleName),
+        "terminals" -> arr(terminals.map(str)),
+        "parameters" -> arr(parameters.map((key, value) =>
           obj("name" -> str(key), "value" -> str(java.lang.Double.toString(value)))
         )),
         "analysis" -> str(identity.analysis.toString),
+        "circuitBench" -> optional(identity.circuit)(circuitSummary),
         "solverOptions" -> str(identity.options.toString),
         "deckSha256" -> optional(identity.deckSha256)(str),
         "startupSha256" -> str(identity.startupSha256),

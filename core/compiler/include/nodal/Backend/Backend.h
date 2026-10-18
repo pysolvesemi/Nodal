@@ -47,6 +47,7 @@ struct BackendConfiguration {
   ShapedValueLayout shapedValueLayout;
   MaterializationPolicy materialization;
   NamingPolicy naming;
+  bool sourceProvenance = false;
 };
 
 class TargetVerificationHooks {

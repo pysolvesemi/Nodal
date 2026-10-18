@@ -4,12 +4,39 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Support/LogicalResult.h"
 
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 
+#include <cstdint>
 #include <string>
 
 namespace nodal {
+
+/// Authored, one-based source coordinates. These never come from MLIR transport
+/// locations and do not promise target subexpression precision.
+struct AuthoredSourceSpan {
+  std::string semanticPath;
+  std::string sourcePath;
+  int64_t startLine;
+  int64_t startColumn;
+  int64_t endLine;
+  int64_t endColumn;
+};
+
+/// Validated index of one root's bridge source inventory. Construct once per
+/// rendering transaction; resolve only an exact operation's own semantic path.
+/// Missing maps/spans are allowed, but malformed or duplicate entries fail.
+class AuthoredSourceMap {
+public:
+  static mlir::FailureOr<AuthoredSourceMap> create(mlir::ModuleOp root);
+  const AuthoredSourceSpan *resolve(mlir::Operation *operation) const;
+
+private:
+  explicit AuthoredSourceMap(mlir::ModuleOp root) : root(root) {}
+  mlir::ModuleOp root;
+  llvm::StringMap<AuthoredSourceSpan> spans;
+};
 
 struct DiagnosticContext {
   std::string semanticPath;

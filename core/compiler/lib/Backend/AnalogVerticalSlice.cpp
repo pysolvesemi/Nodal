@@ -30,6 +30,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/Support/Base64.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -104,6 +105,7 @@ struct StaticNodeArrayLayout {
 };
 
 struct ModuleRenderState {
+  const AuthoredSourceMap *sourceMap = nullptr;
   llvm::DenseMap<Value, StaticNodeArrayLayout> nodeArrays;
   llvm::SmallVector<std::pair<std::string, std::string>> nodeMapConstants;
   unsigned nodeMapOrdinal = 0;
@@ -126,6 +128,21 @@ struct ModuleRenderState {
   llvm::StringMap<std::string> parameters;
   AnalogEventRenderState eventState;
 };
+
+// Each marker covers exactly the immediately following physical statement line.
+// Base64 keeps paths and semantic identities inert even when they contain comment
+// delimiters, newlines, spaces, or non-ASCII UTF-8 characters.
+void renderStatementProvenance(Operation *operation, const ModuleRenderState &state,
+                               llvm::StringRef indent, llvm::raw_ostream &output) {
+  if (!state.sourceMap)
+    return;
+  const AuthoredSourceSpan *span = state.sourceMap->resolve(operation);
+  if (!span)
+    return;
+  output << indent << "// nodal-source-v1: " << llvm::encodeBase64(span->semanticPath) << "|"
+         << llvm::encodeBase64(span->sourcePath) << "|" << span->startLine << "|"
+         << span->startColumn << "|" << span->endLine << "|" << span->endColumn << "\n";
+}
 
 FailureOr<std::string> renderBranch(Value value, ModuleRenderState &state, llvm::StringRef access) {
   auto iterator = state.branches.find(value);
@@ -1637,6 +1654,7 @@ LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
 
   for (Operation *instance : instances) {
     const auto &entry = rendered[instance];
+    renderStatementProvenance(instance, state, "  ", output);
     output << "  " << symbolName(entry.child);
     if (!entry.parameters.empty()) {
       output << " #(";
@@ -1779,6 +1797,7 @@ LogicalResult renderAnalog(Operation *analog, ModuleRenderState &state, llvm::ra
     if (failed(target) || failed(value))
       return emitMappedFailure(&operation, "NODAL-BACKEND-RC-002",
                                "could not render RC contribution expression");
+    renderStatementProvenance(&operation, state, "    ", output);
     output << "    " << *target << " <+ " << *value << ";\n";
   }
   if (wrapped)
@@ -3214,8 +3233,9 @@ LogicalResult renderStructuralGenerate(Operation *generate, ModuleRenderState &p
 }
 
 LogicalResult renderDefinition(Operation *definition, llvm::StringRef aliasHelper,
-                               llvm::raw_ostream &output) {
+                               const AuthoredSourceMap *sourceMap, llvm::raw_ostream &output) {
   ModuleRenderState state;
+  state.sourceMap = sourceMap;
   llvm::SmallVector<Operation *, 8> parameters;
   llvm::SmallVector<Operation *, 8> ports;
   llvm::SmallVector<Operation *, 8> nodes;
@@ -3313,6 +3333,7 @@ LogicalResult renderDefinition(Operation *definition, llvm::StringRef aliasHelpe
     auto variability = parameter->getAttrOfType<StringAttr>("variability");
     llvm::StringRef declarationKeyword =
         variability && variability.getValue() == "fixed" ? "localparam" : "parameter";
+    renderStatementProvenance(parameter, state, "  ", output);
     output << "  " << declarationKeyword << " " << nativeType << " " << symbolName(parameter)
            << " = " << *initializer;
     for (Operation *constraint : findParameterConstraints(definition, symbolName(parameter))) {
@@ -3713,13 +3734,21 @@ LogicalResult renderBackendCandidate(llvm::ArrayRef<Operation *> definitions,
   // physical groups and their exact active support placements before emitting
   // any declaration. A derived record's name or owner attributes are not proof.
   llvm::DenseSet<Operation *> verifiedAccessRoots;
+  llvm::DenseMap<Operation *, AuthoredSourceMap> sourceMaps;
   for (Operation *definition : definitions) {
     auto root = definition->getParentOfType<mlir::ModuleOp>();
     if (!root)
       return failure();
-    if (verifiedAccessRoots.insert(root.getOperation()).second &&
-        failed(verifyPotentialFlowAccessModel(root)))
-      return failure();
+    if (verifiedAccessRoots.insert(root.getOperation()).second) {
+      if (failed(verifyPotentialFlowAccessModel(root)))
+        return failure();
+      if (configuration.sourceProvenance) {
+        auto sourceMap = AuthoredSourceMap::create(root);
+        if (failed(sourceMap))
+          return failure();
+        sourceMaps.try_emplace(root.getOperation(), std::move(*sourceMap));
+      }
+    }
   }
   bool requiresAlias = false;
   llvm::StringSet<> moduleNames;
@@ -3798,7 +3827,10 @@ LogicalResult renderBackendCandidate(llvm::ArrayRef<Operation *> definitions,
     if (!firstDefinition)
       output << "\n";
     firstDefinition = false;
-    if (failed(renderDefinition(definition, requiresAlias ? aliasHelper : "", output)))
+    auto sourceMap = sourceMaps.find(definition->getParentOfType<mlir::ModuleOp>().getOperation());
+    if (failed(renderDefinition(definition, requiresAlias ? aliasHelper : "",
+                                sourceMap == sourceMaps.end() ? nullptr : &sourceMap->second,
+                                output)))
       return failure();
   }
   return success();

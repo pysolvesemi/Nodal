@@ -56,7 +56,8 @@
       "NODAL-BACKEND-CAPABILITY-001",
       "NODAL-BACKEND-NAMING-001",
       "NODAL-BACKEND-VERIFY-001",
-      "NODAL-BACKEND-REPARSE-001"
+      "NODAL-BACKEND-REPARSE-001",
+      "NODAL-BACKEND-CONFIG-003"
     ],
     "analog-expression-ir": [
       "NODAL-ANALOG-REGION-001",
@@ -255,6 +256,28 @@
     "target-language-capability": [
       "NODAL-VERIFY-CAPABILITY-005",
       "NODAL-VERIFY-CAPABILITY-006"
+    ],
+    "target-source-provenance": [
+      "NODAL-SOURCE-MAP-001"
+    ],
+    "openvaf-validation": [
+      "NODAL-OPENVAF-000",
+      "NODAL-OPENVAF-001",
+      "NODAL-OPENVAF-002",
+      "NODAL-OPENVAF-003",
+      "NODAL-OPENVAF-004",
+      "NODAL-OPENVAF-005",
+      "NODAL-OPENVAF-006",
+      "NODAL-OPENVAF-007",
+      "NODAL-OPENVAF-008",
+      "NODAL-OPENVAF-009",
+      "NODAL-OPENVAF-010",
+      "NODAL-OPENVAF-011",
+      "NODAL-OPENVAF-012",
+      "NODAL-OPENVAF-013",
+      "NODAL-OPENVAF-MAP-001",
+      "NODAL-OPENVAF-CLI-001",
+      "NODAL-OPENVAF-CLI-002"
     ]
   },
   "preserved_prefixes": [
@@ -295,6 +318,7 @@
     "NODAL-PROBE-",
     "NODAL-ANALOG-033-",
     "NODAL-ANALOG-035-",
-    "NODAL-ANALOG-037-"
+    "NODAL-ANALOG-037-",
+    "NODAL-OPENVAF-"
   ]
 }

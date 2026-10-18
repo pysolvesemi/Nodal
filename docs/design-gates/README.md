@@ -49,3 +49,9 @@ backend selection. The Increment 13 and 14 gates remain candidate evidence.
 [NodalBackendCapabilities-DG-v0.1.md](NodalBackendCapabilities-DG-v0.1.md) adds the
 shared operation/feature inventory and actual-IR language gate to the existing
 backend framework. Simulator observations remain separate from language admission.
+
+## Foundation 48 compiler integration
+
+[NodalOpenVafValidation-DG-v0.1.md](NodalOpenVafValidation-DG-v0.1.md) defines the
+shared bounded process service, pinned OpenVAF receipts and finite opt-in target
+statement provenance. Consumer limitations do not redefine source semantics.

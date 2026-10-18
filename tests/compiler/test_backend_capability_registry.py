@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import json
 import re
@@ -92,12 +93,177 @@ class BackendCapabilityRegistryTests(unittest.TestCase):
 
     def test_valid_catalog_and_fresh_generated_table(self) -> None:
         self.assertIs(REGISTRY.validate_catalog(self.catalog), self.inventory)
-        self.assertEqual(REGISTRY.outputs()[REGISTRY.OUTPUT],
-                         (ROOT / REGISTRY.OUTPUT).read_text(encoding="utf-8"))
+        for output, content in REGISTRY.outputs().items():
+            self.assertEqual(content, (ROOT / output).read_text(encoding="utf-8"))
 
     def test_preserves_all_legacy_profile_fields(self) -> None:
-        legacy = {key: value for key, value in self.catalog.items() if key != "feature_inventory"}
+        legacy = {key: value for key, value in self.catalog.items()
+                  if key not in {"feature_inventory", "consumer_profiles"}}
         self.assertEqual(legacy, LEGACY_CATALOG)
+
+    def test_preserves_the_complete_historical_feature_inventory(self) -> None:
+        # Frozen F47 value identity, including every historical observation field.
+        serialized = json.dumps(self.inventory, sort_keys=True, separators=(",", ":")).encode()
+        self.assertEqual(hashlib.sha256(serialized).hexdigest(),
+                         "aeb2b8c8246dbe6e06432de8ff543d2024e565cbe97824eec4a05260250048ca")
+
+    def generated(self, serialized: bytes | None = None) -> dict[Path, str]:
+        with tempfile.TemporaryDirectory(dir=ROOT / ".work") as directory:
+            root = Path(directory)
+            for name in ("core", "docs", "examples"):
+                (root / name).symlink_to(ROOT / name, target_is_directory=True)
+            original_catalog = REGISTRY.CATALOG
+            REGISTRY.CATALOG = Path("catalog.json")
+            try:
+                data = serialized if serialized is not None else json.dumps(self.catalog).encode()
+                (root / REGISTRY.CATALOG).write_bytes(data)
+                return REGISTRY.outputs(root)
+            finally:
+                REGISTRY.CATALOG = original_catalog
+
+    def test_consumer_profiles_have_exact_independent_pins_and_arguments(self) -> None:
+        self.assertEqual(self.catalog["consumer_profiles"]["schema_version"], 1)
+        self.assertEqual(self.catalog["consumer_profiles"]["profile_version"], "1")
+        profiles = {entry["id"]: entry for entry in self.catalog["consumer_profiles"]["profiles"]}
+        pins = {
+            "openvaf-23.5.0-linux-x86_64": (
+                "openvaf 23.5.0",
+                "6918195bc6cca54016095923bea190f7a1d96dd8b062104c602e8c28578cb5e3"),
+            "openvaf-reloaded-20260616-linux-x86_64": (
+                "OpenVAF-reloaded 20260616-3-g0e83f1ed",
+                "b117284d8f871dbf54609ab009cdff819f443d8d33064111b8b0782af5c7e931"),
+        }
+        self.assertEqual(set(profiles), set(pins))
+        for identity, (version_stdout, digest) in pins.items():
+            with self.subTest(profile=identity):
+                profile = profiles[identity]
+                self.assertEqual(profile["version_stdout"], version_stdout)
+                self.assertEqual(profile["executable_sha256"], digest)
+                self.assertEqual(profile["platform"], "linux-x86_64")
+                self.assertEqual(profile["compile_arguments"], [
+                    "--target", "x86_64-unknown-linux", "--target_cpu", "generic",
+                    "--interface", "OSDI", "-O", "3",
+                ])
+
+    def test_generated_consumer_table_is_immutable_and_records_exact_catalog_bytes(self) -> None:
+        serialized = (ROOT / REGISTRY.CATALOG).read_bytes()
+        original = REGISTRY.outputs()
+        scala = original[REGISTRY.SCALA_OUTPUT]
+        self.assertIn("private[nodal] object OpenVafProfiles:", scala)
+        self.assertIn("val all: Vector[OpenVafProfile] = Vector(", scala)
+        self.assertEqual(scala.count("catalogSha256 = \"" + hashlib.sha256(serialized).hexdigest()), 2)
+        self.assertNotIn("java.nio", scala)
+        modified = self.generated(serialized + b"\n")
+        self.assertEqual(modified[REGISTRY.OUTPUT], original[REGISTRY.OUTPUT])
+        self.assertNotEqual(modified[REGISTRY.SCALA_OUTPUT], scala)
+        self.assertEqual(modified[REGISTRY.SCALA_OUTPUT].count(
+            "catalogSha256 = \"" + hashlib.sha256(serialized + b"\n").hexdigest()), 2)
+
+    def test_consumer_generation_is_deterministic_and_sorted(self) -> None:
+        original = REGISTRY.outputs()[REGISTRY.SCALA_OUTPUT]
+        self.assertEqual(REGISTRY.outputs()[REGISTRY.SCALA_OUTPUT], original)
+        self.catalog["consumer_profiles"]["profiles"].reverse()
+        self.inventory["consumer_observations"].reverse()
+        reordered = self.generated()[REGISTRY.SCALA_OUTPUT]
+        # Reordering changes the byte-level catalog identity, but not the generated facts.
+        scrub_digest = lambda text: re.sub(r'catalogSha256 = "[0-9a-f]{64}"',
+                                         'catalogSha256 = "CATALOG"', text)
+        self.assertEqual(scrub_digest(reordered), scrub_digest(original))
+
+    def test_generated_historical_observations_use_full_version_and_unknown_arguments(self) -> None:
+        original = REGISTRY.outputs()
+        scala = original[REGISTRY.SCALA_OUTPUT]
+        self.assertEqual(scala.count("OpenVafObservation("), 2)
+        self.assertEqual(scala.count('version = "OpenVAF-reloaded 20260616-3-g0e83f1ed"'), 3)
+        for observation in self.inventory["consumer_observations"]:
+            self.assertIn('modelSha256 = "' + observation["model_sha256"] + '"', scala)
+            self.assertIn('outcome = "' + observation["result"] + '"', scala)
+        # Both historical invocations predate the generic target flags. Omit the
+        # optional field, retaining its None default rather than inventing identity.
+        for block in scala.split("OpenVafObservation(")[1:]:
+            self.assertNotIn("compileArguments", block.split(")", 1)[0])
+        self.inventory["consumer_observations"] = []
+        modified = self.generated()
+        self.assertEqual(modified[REGISTRY.OUTPUT], original[REGISTRY.OUTPUT])
+        self.assertNotIn("OpenVafObservation(", modified[REGISTRY.SCALA_OUTPUT])
+
+    def test_consumer_profile_container_has_closed_fields_and_versions(self) -> None:
+        profiles = self.catalog["consumer_profiles"]
+        for field, value, message in (
+            ("schema_version", True, "unsupported schema_version"),
+            ("schema_version", 2, "unsupported schema_version"),
+            ("profile_version", "2", "unsupported profile_version"),
+            ("profiles", [], "expected list"),
+            ("profiles", {}, "expected list"),
+            ("profiles", [1], "expected objects"),
+        ):
+            original = profiles[field]
+            with self.subTest(field=field, value=value):
+                profiles[field] = value
+                self.invalid(message)
+            profiles[field] = original
+        profiles["uncontrolled_flags"] = []
+        self.invalid("unknown or missing fields")
+        del profiles["uncontrolled_flags"]
+        del profiles["profile_version"]
+        self.invalid("unknown or missing fields")
+
+    def test_consumer_profile_fields_are_validated(self) -> None:
+        profile = self.catalog["consumer_profiles"]["profiles"][0]
+        for field, value, message in (
+            ("id", "invented", "invalid consumer profile id"),
+            ("consumer", "invented", "unsupported consumer"),
+            ("consumer", [], "unsupported consumer"),
+            ("version", "23.5.0\n", "invalid consumer version"),
+            ("version", None, "invalid consumer version"),
+            ("version_stdout", "openvaf 23.5.0\n", "version stdout does not match"),
+            ("version_stdout", "OpenVAF 23.5.0", "version stdout does not match"),
+            ("version_stdout", None, "version stdout does not match"),
+            ("platform", "linux-aarch64", "unsupported platform"),
+            ("platform", None, "unsupported platform"),
+            ("executable_sha256", "a" * 63, "invalid executable_sha256"),
+            ("executable_sha256", "A" * 64, "invalid executable_sha256"),
+            ("executable_sha256", [], "invalid executable_sha256"),
+        ):
+            original = profile[field]
+            with self.subTest(field=field, value=value):
+                profile[field] = value
+                self.invalid(message)
+            profile[field] = original
+        profile["batch_cache"] = True
+        self.invalid("unknown or missing consumer profile fields")
+        del profile["batch_cache"]
+        del profile["compile_arguments"]
+        self.invalid("unknown or missing consumer profile fields")
+
+    def test_consumer_compile_arguments_are_closed_and_ordered(self) -> None:
+        profile = self.catalog["consumer_profiles"]["profiles"][0]
+        original = profile["compile_arguments"]
+        for arguments in (None, [], "--target x86_64-unknown-linux", original[:-1],
+                          list(reversed(original)), original + ["--batch"],
+                          original + ["-I", "/tmp/includes"], original + ["-D", "EXTRA=1"],
+                          ["--target", "aarch64-unknown-linux"] + original[2:]):
+            with self.subTest(arguments=arguments):
+                profile["compile_arguments"] = arguments
+                self.invalid("unsupported compile_arguments")
+        profile["compile_arguments"] = original
+
+    def test_duplicate_consumer_profiles_reject(self) -> None:
+        profiles = self.catalog["consumer_profiles"]["profiles"]
+        profiles.append(copy.deepcopy(profiles[0]))
+        self.invalid("duplicate id")
+
+    def test_observations_reference_an_exact_pinned_consumer_identity(self) -> None:
+        observation = self.inventory["consumer_observations"][0]
+        for field, value in (("consumer", "other-tool"), ("version", "different-version"),
+                             ("tool_sha256", "0" * 64)):
+            original = observation[field]
+            with self.subTest(field=field):
+                observation[field] = value
+                self.invalid("unknown observed consumer tool identity")
+            observation[field] = original
+        observation["id"] = "invalid/observation"
+        self.invalid("consumer_observations: invalid id")
 
     def test_direct_admission_exactly_preserves_previous_owner(self) -> None:
         self.assertEqual({name for name, entry in self.operations.items()
@@ -336,13 +502,21 @@ class BackendCapabilityRegistryTests(unittest.TestCase):
             (root / "examples").symlink_to(ROOT / "examples", target_is_directory=True)
             for name in ("backend-profiles-v0.1.json", "analog-functions-v1.json"):
                 (root / "core/compiler" / name).symlink_to(ROOT / "core/compiler" / name)
-            destination = root / REGISTRY.OUTPUT
-            destination.write_text("stale\n", encoding="utf-8")
-            result = subprocess.run([sys.executable, str(SCRIPT), "--root", str(root), "--check"],
-                                    capture_output=True, text=True)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("stale backend capability registry", result.stderr)
-            self.assertEqual(destination.read_text(), "stale\n")
+            outputs = REGISTRY.outputs()
+            for stale in outputs:
+                with self.subTest(output=stale):
+                    for output, content in outputs.items():
+                        destination = root / output
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        destination.write_text("stale\n" if output == stale else content,
+                                               encoding="utf-8")
+                    result = subprocess.run([sys.executable, str(SCRIPT), "--root", str(root), "--check"],
+                                            capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("stale backend capability registry: " + str(stale), result.stderr)
+                    for output, content in outputs.items():
+                        self.assertEqual((root / output).read_text(encoding="utf-8"),
+                                         "stale\n" if output == stale else content)
 
 
 if __name__ == "__main__":

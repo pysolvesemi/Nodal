@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate immutable backend operation facts from the versioned profile catalog.
+"""Generate independent language facts and pinned executable consumer profiles.
 
 Language admission is not a consumer support claim. The generated table contains
 no MLIR types or policy callbacks; existing semantic validators own those checks.
@@ -7,6 +7,7 @@ no MLIR types or policy callbacks; existing semantic validators own those checks
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -16,11 +17,18 @@ ROOT = Path(__file__).resolve().parents[1]
 CATALOG = Path("core/compiler/backend-profiles-v0.1.json")
 OPERATIONS = Path("core/compiler/include/nodal/Dialect/Nodal/NodalOps.td")
 OUTPUT = Path("core/compiler/include/nodal/Support/BackendCapabilityRegistry.inc")
+SCALA_OUTPUT = Path("core/integrations/src/nodal/internal/integrations/OpenVafProfiles.scala")
 DOMAINS = {"neutral": "Neutral", "analog": "Analog", "digital": "Digital", "mixed": "Mixed"}
 ADMISSIONS = {"direct": "Direct", "guarded": "Guarded", "normalize": "Normalize",
               "unsupported": "Unsupported"}
 SUPPORT = {"supported", "conditional", "unsupported"}
 OBSERVATIONS = {"compiled", "rejected", "crashed", "simulated"}
+CONSUMERS = {
+    "OpenVAF": (r"[0-9]+\.[0-9]+\.[0-9]+", "openvaf", "openvaf"),
+    "OpenVAF-reloaded": (r"[0-9]{8}-[0-9]+-g[0-9a-f]+", "openvaf-reloaded", "OpenVAF-reloaded"),
+}
+COMPILE_ARGUMENTS = ["--target", "x86_64-unknown-linux", "--target_cpu", "generic",
+                     "--interface", "OSDI", "-O", "3"]
 
 
 class CatalogError(ValueError):
@@ -83,11 +91,57 @@ def known_operations(root: Path) -> set[str]:
     return {"nodal." + name for name in names}
 
 
+def validate_consumers(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    consumers = catalog.get("consumer_profiles")
+    require(isinstance(consumers, dict), "consumer_profiles: expected object")
+    require(set(consumers) == {"schema_version", "profile_version", "profiles"},
+            "consumer_profiles: unknown or missing fields")
+    require(type(consumers.get("schema_version")) is int and consumers["schema_version"] == 1,
+            "consumer_profiles: unsupported schema_version")
+    require(consumers.get("profile_version") == "1",
+            "consumer_profiles: unsupported profile_version")
+    profiles = index(records(consumers.get("profiles"), "consumer_profiles.profiles"),
+                     "id", "consumer_profiles.profiles")
+    for identity, profile in profiles.items():
+        require(set(profile) == {"id", "consumer", "version", "version_stdout",
+                                 "executable_sha256", "platform", "compile_arguments"},
+                f"{identity}: unknown or missing consumer profile fields")
+        consumer = profile["consumer"]
+        require(isinstance(consumer, str) and consumer in CONSUMERS,
+                f"{identity}: unsupported consumer")
+        pattern, prefix, version_prefix = CONSUMERS[consumer]
+        version = profile["version"]
+        require(isinstance(version, str) and re.fullmatch(pattern, version) is not None,
+                f"{identity}: invalid consumer version")
+        require(profile["version_stdout"] == version_prefix + " " + version,
+                f"{identity}: version stdout does not match consumer version")
+        require(profile["platform"] == "linux-x86_64", f"{identity}: unsupported platform")
+        release = version.split("-")[0]
+        require(identity == prefix + "-" + release + "-" + profile["platform"],
+                f"{identity}: invalid consumer profile id")
+        digest = profile["executable_sha256"]
+        require(isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest) is not None,
+                f"{identity}: invalid executable_sha256")
+        require(profile["compile_arguments"] == COMPILE_ARGUMENTS,
+                f"{identity}: unsupported compile_arguments")
+    return profiles
+
+
+def observation_profile(observation: dict[str, Any],
+                        profiles: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    matching = [profile for profile in profiles.values()
+                if (profile["consumer"], profile["version"], profile["executable_sha256"]) ==
+                (observation["consumer"], observation["version"], observation["tool_sha256"])]
+    require(len(matching) == 1, f"{observation['id']}: unknown observed consumer tool identity")
+    return matching[0]
+
+
 def validate_catalog(catalog: dict[str, Any], root: Path = ROOT) -> dict[str, Any]:
     require(isinstance(catalog, dict), "catalog: expected object")
     require(type(catalog.get("schema")) is int and catalog["schema"] == 1,
             "catalog: unsupported legacy schema")
     require(catalog.get("version") == "0.1", "catalog: unsupported legacy version")
+    consumers = validate_consumers(catalog)
     profiles = index(records(catalog.get("profiles"), "profiles"), "id", "profiles")
     inventory = catalog.get("feature_inventory")
     require(isinstance(inventory, dict), "feature_inventory: expected object")
@@ -165,6 +219,8 @@ def validate_catalog(catalog: dict[str, Any], root: Path = ROOT) -> dict[str, An
     observations = index(records(inventory.get("consumer_observations"), "consumer_observations", empty=True),
                          "id", "consumer_observations")
     for identity, observation in observations.items():
+        require(re.fullmatch(r"[a-z][a-z0-9-]*", identity) is not None,
+                f"consumer_observations: invalid id {identity}")
         for field in ("consumer", "version"):
             text(observation.get(field), identity + "." + field)
         require(isinstance(observation.get("profile"), str) and observation["profile"] in profiles, f"{identity}: unknown observed profile")
@@ -183,6 +239,7 @@ def validate_catalog(catalog: dict[str, Any], root: Path = ROOT) -> dict[str, An
             digest = observation.get(field)
             require(isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest) is not None,
                     f"{identity}: invalid {field}")
+        observation_profile(observation, consumers)
         exit_code = observation.get("exit_code")
         require(type(exit_code) is int, f"{identity}: exit_code must be an integer")
         require((exit_code == 0) == (observation["result"] in {"compiled", "simulated"}),
@@ -205,7 +262,8 @@ def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def outputs(root: Path = ROOT) -> dict[Path, str]:
-    catalog = json.loads((root / CATALOG).read_text(encoding="utf-8"),
+    catalog_bytes = (root / CATALOG).read_bytes()
+    catalog = json.loads(catalog_bytes.decode("utf-8"),
                          object_pairs_hook=reject_duplicate_keys)
     inventory = validate_catalog(catalog, root)
     lines = ["// Generated by scripts/generate_backend_capability_registry.py. Do not edit.",
@@ -220,7 +278,51 @@ def outputs(root: Path = ROOT) -> dict[Path, str]:
         lines += [f"    {{{name}, {feature},",
                   f"     BackendOperationDomain::{domain}, BackendOperationAdmission::{admission}}},"]
     lines += ["};", ""]
-    return {OUTPUT: "\n".join(lines)}
+    return {OUTPUT: "\n".join(lines), SCALA_OUTPUT: consumer_output(catalog, catalog_bytes)}
+
+
+def consumer_output(catalog: dict[str, Any], catalog_bytes: bytes) -> str:
+    """The exact catalog bytes identify provenance; no generated output enters its hash."""
+    profiles = {profile["id"]: profile for profile in catalog["consumer_profiles"]["profiles"]}
+    observations = {identity: [] for identity in profiles}
+    for observation in catalog["feature_inventory"]["consumer_observations"]:
+        profile = observation_profile(observation, profiles)
+        observations[profile["id"]].append(observation)
+    digest = hashlib.sha256(catalog_bytes).hexdigest()
+    lines = ["package nodal.internal.integrations", "",
+             "// Generated by scripts/generate_backend_capability_registry.py. Do not edit.",
+             "// Source: core/compiler/backend-profiles-v0.1.json, consumer profiles v1.",
+             "// Historical observations never replace the current invocation outcome.",
+             "private[nodal] object OpenVafProfiles:",
+             "  val all: Vector[OpenVafProfile] = Vector("]
+    for position, (identity, profile) in enumerate(sorted(profiles.items())):
+        lines += ["    OpenVafProfile(",
+                  "      id = " + json.dumps(identity) + ",",
+                  "      version = " + json.dumps(profile["version_stdout"]) + ",",
+                  "      executableSha256 = " + json.dumps(profile["executable_sha256"]) + ",",
+                  "      platform = " + json.dumps(profile["platform"]) + ",",
+                  "      compileArguments = Vector("]
+        lines += ["        " + json.dumps(argument) +
+                  ("," if i + 1 < len(profile["compile_arguments"]) else "")
+                  for i, argument in enumerate(profile["compile_arguments"])]
+        lines += ["      ),", "      catalogSha256 = " + json.dumps(digest) + ","]
+        entries = sorted(observations[identity], key=lambda entry: entry["id"])
+        lines += ["      observations = Vector(" if entries else "      observations = Vector.empty"]
+        for i, observation in enumerate(entries):
+            lines += ["        OpenVafObservation(",
+                      "          id = " + json.dumps(observation["id"]) + ",",
+                      "          modelSha256 = " + json.dumps(observation["model_sha256"]) + ",",
+                      "          executableSha256 = " + json.dumps(observation["tool_sha256"]) + ",",
+                      "          version = " + json.dumps(profile["version_stdout"]) + ",",
+                      "          outcome = " + json.dumps(observation["result"]) + ",",
+                      "          description =",
+                      "            " + json.dumps(observation["detail"]),
+                      "        )" + ("," if i + 1 < len(entries) else "")]
+        if entries:
+            lines += ["      )"]
+        lines += ["    )" + ("," if position + 1 < len(profiles) else "")]
+    lines += ["  )", ""]
+    return "\n".join(lines)
 
 
 def main() -> int:
@@ -232,7 +334,7 @@ def main() -> int:
         for name, content in outputs(args.root).items():
             path = args.root / name
             if args.check:
-                if not path.is_file() or path.read_text(encoding="utf-8") != content:
+                if not path.is_file() or path.read_bytes() != content.encode("utf-8"):
                     raise CatalogError(f"stale backend capability registry: {name}")
             else:
                 path.parent.mkdir(parents=True, exist_ok=True)

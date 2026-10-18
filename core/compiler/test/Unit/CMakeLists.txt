@@ -526,3 +526,10 @@ target_link_libraries(nodal-analog-equation-model-unit-tests PRIVATE
   NodalDialect NodalTransforms MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.analog-equation-model-unit COMMAND nodal-analog-equation-model-unit-tests)
 set_tests_properties(nodal.native.analog-equation-model-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-target-capability-unit-tests TargetCapabilityTest.cpp)
+llvm_update_compile_flags(nodal-target-capability-unit-tests)
+target_link_libraries(nodal-target-capability-unit-tests PRIVATE
+  NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.target-capability-unit COMMAND nodal-target-capability-unit-tests)
+set_tests_properties(nodal.native.target-capability-unit PROPERTIES TIMEOUT 30)

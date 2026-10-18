@@ -251,6 +251,10 @@
       "NODAL-BACKEND-EQUATION-134-001",
       "NODAL-ANALOG-134-001",
       "NODAL-ANALOG-134-002"
+    ],
+    "target-language-capability": [
+      "NODAL-VERIFY-CAPABILITY-005",
+      "NODAL-VERIFY-CAPABILITY-006"
     ]
   },
   "preserved_prefixes": [

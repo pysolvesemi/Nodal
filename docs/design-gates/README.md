@@ -43,3 +43,9 @@ Increment 15 owns the unified public API v0.3 freeze.
 `NodalCoreSemanticsPipelineApi-DG-v0.3.md` is the authoritative unified
 freeze for core semantics, Interface/Role/inout, automatic pipeline, and
 backend selection. The Increment 13 and 14 gates remain candidate evidence.
+
+## Foundation 47 language capabilities
+
+[NodalBackendCapabilities-DG-v0.1.md](NodalBackendCapabilities-DG-v0.1.md) adds the
+shared operation/feature inventory and actual-IR language gate to the existing
+backend framework. Simulator observations remain separate from language admission.

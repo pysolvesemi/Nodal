@@ -17,6 +17,8 @@
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
+#include "nodal/Dialect/Nodal/TargetCapabilities.h"
+#include "nodal/Support/BackendCapabilityRegistry.h"
 #include "nodal/Support/HierarchyOrder.h"
 #include "nodal/Transforms/AnalogCanonicalization.h"
 #include "nodal/Transforms/AnalogSemanticLint.h"
@@ -1048,27 +1050,9 @@ LogicalResult verifyAnalog(mlir::ModuleOp module) {
     auto observed = proceduralTerminalUses(owner);
     owner->walk([&](Operation *operation) {
       llvm::StringRef name = operation->getName().getStringRef();
-      if (name == "nodal.component_contract" || name == "nodal.terminal" ||
-          name == "nodal.terminal_array" || name == "nodal.instance_terminal_array" ||
-          name == "nodal.connect_array" || name == "nodal.instance_terminal" ||
-          name == "nodal.node" || name == "nodal.node_array" || isNodeArraySelection(operation) ||
-          name == "nodal.connect" || name == "nodal.alias" || name == "nodal.reference" ||
-          name == "nodal.branch" || name == "nodal.connection_set" ||
-          name == "nodal.potential_equality" || name == "nodal.reference_potential" ||
-          name == "nodal.flow_conservation" || name == "nodal.access" ||
-          name == "nodal.terminal_access" || name == "nodal.port_flow_access" ||
-          name == "nodal.probe" || name == "nodal.analog" || name == "nodal.real_literal" ||
-          name == "nodal.analog_integer_literal" || name == "nodal.parameter_ref" ||
-          name == "nodal.analog_add" || name == "nodal.analog_sub" || name == "nodal.analog_mul" ||
-          name == "nodal.analog_div" || name == "nodal.analog_neg" ||
-          name == "nodal.analog_function" || name == "nodal.analog_analysis" ||
-          name == "nodal.analog_context" || name == "nodal.analog_noise" ||
-          name == "nodal.analog_compare" || name == "nodal.analog_logic" ||
-          name == "nodal.analog_select" || name == "nodal.analog_ddt" ||
-          name == "nodal.analog_idt" || name == "nodal.contribute")
+      if (isAnalogBackendOperation(name) || isNodeArraySelection(operation))
         analog = true;
-      if (name == "nodal.port" || name == "nodal.resolved_net" || name == "nodal.net_drive" ||
-          name == "nodal.crossing")
+      if (hasDigitalTargetCapability(operation))
         digital = true;
       if (name == "nodal.bridge")
         bridge = true;
@@ -1104,35 +1088,22 @@ LogicalResult verifyCapabilities(mlir::ModuleOp module) {
   LogicalResult result = success();
   module.walk([&](Operation *operation) {
     llvm::StringRef name = operation->getName().getStringRef();
-    const bool analog =
-        name == "nodal.component_contract" || name == "nodal.terminal" ||
-        name == "nodal.terminal_array" || name == "nodal.instance_terminal_array" ||
-        name == "nodal.connect_array" || name == "nodal.instance_terminal" ||
-        name == "nodal.node" || name == "nodal.node_array" || isNodeArraySelection(operation) ||
-        name == "nodal.connect" || name == "nodal.alias" || name == "nodal.reference" ||
-        name == "nodal.branch" || name == "nodal.connection_set" ||
-        name == "nodal.potential_equality" || name == "nodal.reference_potential" ||
-        name == "nodal.flow_conservation" || name == "nodal.access" ||
-        name == "nodal.terminal_access" || name == "nodal.port_flow_access" ||
-        name == "nodal.probe" || name == "nodal.bridge" || name == "nodal.analog" ||
-        name == "nodal.real_literal" || name == "nodal.analog_integer_literal" ||
-        name == "nodal.parameter_ref" || name == "nodal.analog_add" || name == "nodal.analog_sub" ||
-        name == "nodal.analog_mul" || name == "nodal.analog_div" || name == "nodal.analog_neg" ||
-        name == "nodal.analog_function" || name == "nodal.analog_analysis" ||
-        name == "nodal.analog_context" || name == "nodal.analog_noise" ||
-        name == "nodal.analog_compare" || name == "nodal.analog_logic" ||
-        name == "nodal.analog_select" || name == "nodal.analog_ddt" || name == "nodal.analog_idt" ||
-        name == "nodal.contribute";
-    const bool digital = name == "nodal.resolved_net" || name == "nodal.net_driver" ||
-                         name == "nodal.net_drive" || name == "nodal.crossing" ||
-                         name == "nodal.fsm";
-    if (profile == "digital" && analog)
+    if (profile == "digital" && (isAnalogBackendOperation(name) || isNodeArraySelection(operation)))
       result = emitFailure(operation, "NODAL-VERIFY-CAPABILITY-003",
                            "digital target profile rejects analog or mixed-signal operations");
-    if (profile == "analog" && digital)
+    if (profile == "analog" && hasDigitalTargetCapability(operation))
       result = emitFailure(operation, "NODAL-VERIFY-CAPABILITY-004",
                            "analog target profile rejects digital state/connectivity operations");
   });
+  if (failed(result))
+    return result;
+  if (Attribute raw = module->getAttr("nodal.backend.profile")) {
+    auto language = llvm::dyn_cast<StringAttr>(raw);
+    if (!language)
+      return emitFailure(module.getOperation(), "NODAL-VERIFY-CAPABILITY-005",
+                         "target language profile must be a string attribute");
+    return verifyTargetLanguageCapabilities(module, language.getValue());
+  }
   return result;
 }
 

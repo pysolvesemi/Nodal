@@ -9,6 +9,7 @@
 #include "nodal/Backend/AnalogVerticalSlice.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
+#include "nodal/Dialect/Nodal/TargetCapabilities.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
@@ -497,7 +498,8 @@ LogicalResult emitBackend(ModuleOp module, BackendKind kind, llvm::raw_ostream &
   if (failed(configuration))
     return failure();
 
-  if (failed(runNodalPipelineTransaction(*working, configuration->checkProfile)) ||
+  if (failed(verifyTargetLanguageCapabilities(*working, configuration->profile->id)) ||
+      failed(runNodalPipelineTransaction(*working, configuration->checkProfile)) ||
       failed(verifySupportedOperations(*working, *configuration->profile)))
     return failure();
 

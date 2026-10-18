@@ -2,6 +2,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
+#include "nodal/Backend/AnalogEventBackend.h"
 #include "nodal/Backend/AnalogVerticalSlice.h"
 #include "nodal/Backend/Backend.h"
 #include "nodal/Backend/ShapedValueBackend.h"
@@ -991,8 +992,8 @@ int main(int argc, char **argv) {
     if (emit(source, rejected) || rejected != "sentinel")
       return fail("unsupported array published target output");
   }
-  // Module-level lifetime does not establish generated per-occurrence lifetime.
-  // Both event-containing and event-free generated roots fail transactionally.
+  // The legacy analog-iteration caller still cannot establish per-occurrence
+  // declaration lifetime. The structural caller is covered by its own tests.
   for (bool events : {false, true}) {
     const std::string source =
         wrap(fill("fill", "4") + declaration("values", "4", "fill"), "", true, events, !events);
@@ -1006,7 +1007,16 @@ int main(int argc, char **argv) {
       return mlir::success();
     });
     std::string rejected = "sentinel";
-    if (emit(source, rejected) || rejected != "sentinel" ||
+    mlir::Operation *procedure = nullptr;
+    module->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.analog_procedure")
+        procedure = operation;
+    });
+    nodal::AnalogEventRenderState state;
+    llvm::raw_string_ostream stream(rejected);
+    if (!procedure ||
+        mlir::succeeded(nodal::prepareGeneratedAnalogEventBackend(procedure, state, stream, 2)) ||
+        rejected != "sentinel" ||
         diagnostics.find(
             "generated root shaped initializer requires per-occurrence declaration lifetime") ==
             std::string::npos)

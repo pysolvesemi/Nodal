@@ -428,8 +428,14 @@ private[nodal] object AnalogProceduralMlir:
             .sortBy(source => (source.file, source.line, source.column))
         val wrappers = allSources.headOption.toVector.flatMap: source =>
           Vector(
-            sourceMapEntry(s"${program.owner}.analogProcedural", source),
-            sourceMapEntry(s"${program.owner}.analogProcedure", source)
+            sourceMapEntry(
+              s"${program.identityPrefix.getOrElse(program.owner)}.analogProcedural",
+              source
+            ),
+            sourceMapEntry(
+              s"${program.identityPrefix.getOrElse(program.owner)}.analogProcedure",
+              source
+            )
           )
         val scopePaths =
           (program.variables.map(record => canonicalScope(record.variable.declarationScope)) ++
@@ -447,7 +453,10 @@ private[nodal] object AnalogProceduralMlir:
                 .flatMap(_.source))
               .sortBy(source => (source.file, source.line, source.column))
           sources.headOption.map(source =>
-            sourceMapEntry(s"${program.owner}.${scope.mkString(".")}", source)
+            sourceMapEntry(
+              s"${program.identityPrefix.getOrElse(program.owner)}.${scope.mkString(".")}",
+              source
+            )
           )
         val variables = program.variables.flatMap(record =>
           record.source.map(sourceMapEntry(record.variable.identity, _))
@@ -1066,7 +1075,7 @@ private[nodal] object AnalogProceduralMlir:
     val procedureSource = (variables.flatMap(_.source) ++ assignments.flatMap(_.source))
       .sortBy(source => (source.file, source.line, source.column))
       .headOption
-    val procedurePath = s"${program.owner}.analogProcedure"
+    val procedurePath = s"${program.identityPrefix.getOrElse(program.owner)}.analogProcedure"
     val procedureBody = renderScopeBody(
       root,
       program,
@@ -1085,7 +1094,7 @@ private[nodal] object AnalogProceduralMlir:
       regions = Vector(procedureBody),
       source = procedureSource
     )
-    val analogPath = s"${program.owner}.analogProcedural"
+    val analogPath = s"${program.identityPrefix.getOrElse(program.owner)}.analogProcedural"
     operation(
       "nodal.analog",
       attributes = generatedAttributes(program) ++ Vector(
@@ -1670,7 +1679,7 @@ private[nodal] object AnalogProceduralMlir:
         control.root.source.toVector)
         .sortBy(value => (value.file, value.line, value.column))
     val procedureSource = allSources.headOption
-    val procedurePath = s"${program.owner}.analogProcedure"
+    val procedurePath = s"${program.identityPrefix.getOrElse(program.owner)}.analogProcedure"
     val procedure = operation(
       "nodal.analog_procedure",
       attributes = Vector(
@@ -1681,7 +1690,7 @@ private[nodal] object AnalogProceduralMlir:
       regions = Vector(renderBlock(control.root)),
       source = procedureSource
     )
-    val analogPath = s"${program.owner}.analogProcedural"
+    val analogPath = s"${program.identityPrefix.getOrElse(program.owner)}.analogProcedural"
     operation(
       "nodal.analog",
       attributes = generatedAttributes(program) ++ Vector(
@@ -1831,7 +1840,8 @@ private[nodal] object AnalogProceduralMlir:
       case ScopeEvent(scope) =>
         val scopeSource = earliestSource(scope)
         val scopeId = scope.path.lastOption.getOrElse("scope")
-        val scopePath = s"${program.owner}.${scope.path.mkString(".")}"
+        val scopePath =
+          s"${program.identityPrefix.getOrElse(program.owner)}.${scope.path.mkString(".")}"
         Vector(
           operation(
             "nodal.analog_scope",

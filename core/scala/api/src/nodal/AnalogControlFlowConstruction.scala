@@ -216,9 +216,13 @@ private[nodal] object AnalogControlFlowConstruction:
     val arms: mutable.ArrayBuffer[CaseArm] = mutable.ArrayBuffer.empty
     var default: Option[Block] = None
 
-  final class Builder(val owner: String):
+  final class Builder(val owner: String, identityPrefix: Option[String] = None):
     private val canonicalOwner = requireCanonicalOwner(owner, "control-flow owner")
-    private val root = new MutableBlock(s"$canonicalOwner.procedure", None)
+    private val identityOwner = identityPrefix.map(requireCanonicalOwner(
+      _,
+      "control-flow identity"
+    )).getOrElse(canonicalOwner)
+    private val root = new MutableBlock(s"$identityOwner.procedure", None)
     private val blocks = mutable.ArrayBuffer(root)
     private val frames = mutable.ArrayBuffer.empty[GroupFrame]
     private var controlSerial = 0
@@ -232,12 +236,12 @@ private[nodal] object AnalogControlFlowConstruction:
     private def current: MutableBlock = blocks.last
 
     private def nextIdentity(kind: String): String =
-      val identity = s"$canonicalOwner.${kind}_$controlSerial"
+      val identity = s"$identityOwner.${kind}_$controlSerial"
       controlSerial += 1
       identity
 
     private def nextLexicalIdentity(): String =
-      val identity = s"$canonicalOwner.scope_$lexicalSerial"
+      val identity = s"$identityOwner.scope_$lexicalSerial"
       lexicalSerial += 1
       identity
 

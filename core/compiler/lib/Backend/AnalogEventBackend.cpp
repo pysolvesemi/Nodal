@@ -7,6 +7,7 @@
 #include "nodal/Dialect/Nodal/AnalogStorageModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
+#include "nodal/Dialect/Nodal/ParameterModel.h"
 
 #include "llvm/ADT/StringExtras.h"
 
@@ -29,6 +30,13 @@ llvm::StringRef field(DictionaryAttr attrs, llvm::StringRef key) {
 }
 LogicalResult reject(Operation *op, llvm::StringRef reason) {
   return emitMappedFailure(op, "NODAL-BACKEND-EVENT-001", reason);
+}
+bool persistentShapedInitializer(Operation *operation) {
+  auto variable = llvm::dyn_cast_or_null<AnalogVariableOp>(operation);
+  auto initialized = variable ? variable->getAttrOfType<BoolAttr>("initialized") : BoolAttr();
+  return variable && operation->getNumResults() == 1 && initialized && initialized.getValue() &&
+         llvm::isa<ShapedType>(variable.getResult().getType()) &&
+         llvm::isa_and_nonnull<AnalogProcedureOp>(operation->getParentOp());
 }
 bool identifier(llvm::StringRef value) {
   return !value.empty() && (llvm::isAlpha(value.front()) || value.front() == '_') &&
@@ -544,7 +552,8 @@ LogicalResult renderBlock(Block &block, AnalogEventRenderState &state, llvm::raw
 }
 
 LogicalResult prepareEventStorage(Operation *procedure, AnalogEventRenderState &state,
-                                  llvm::raw_ostream &out, unsigned indent, bool allowLoops) {
+                                  llvm::raw_ostream &out, unsigned indent, bool allowLoops,
+                                  bool structuralOccurrence = false) {
   if (failed(verifyAnalogProcedureTarget(procedure)))
     return failure();
   LogicalResult result = success();
@@ -565,12 +574,11 @@ LogicalResult prepareEventStorage(Operation *procedure, AnalogEventRenderState &
   // destination count, never the uniform scalar initializer.
   llvm::DenseSet<Operation *> initializerValues;
   for (Operation &operation : procedure->getRegion(0).front()) {
-    auto variable = llvm::dyn_cast<AnalogVariableOp>(operation);
-    auto shape =
-        variable ? llvm::dyn_cast<ShapedType>(variable.getResult().getType()) : ShapedType();
-    if (!shape || !operation.getAttrOfType<BoolAttr>("initialized").getValue())
+    if (!persistentShapedInitializer(&operation))
       continue;
-    if (procedure->hasAttr("generated_owner"))
+    auto variable = llvm::dyn_cast<AnalogVariableOp>(operation);
+    auto shape = llvm::cast<ShapedType>(variable.getResult().getType());
+    if (procedure->hasAttr("generated_owner") && !structuralOccurrence)
       return reject(
           &operation,
           "generated root shaped initializer requires per-occurrence declaration lifetime");
@@ -815,6 +823,13 @@ LogicalResult prepareEventStorage(Operation *procedure, AnalogEventRenderState &
 }
 } // namespace
 
+bool hasPersistentShapedInitializer(Operation *procedure) {
+  return llvm::isa_and_nonnull<AnalogProcedureOp>(procedure) &&
+         llvm::hasSingleElement(procedure->getRegion(0)) &&
+         llvm::any_of(procedure->getRegion(0).front(),
+                      [](Operation &operation) { return persistentShapedInitializer(&operation); });
+}
+
 bool isAnalogEventStorageStatement(Operation *operation) {
   return llvm::isa<AnalogVariableOp, AnalogVariableReadOp, AnalogAssignOp, AnalogArrayFillOp,
                    ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(operation);
@@ -998,18 +1013,33 @@ LogicalResult prepareAnalogEventBackend(Operation *module, AnalogEventRenderStat
 
 LogicalResult prepareGeneratedAnalogEventBackend(Operation *procedure,
                                                  AnalogEventRenderState &state,
-                                                 llvm::raw_ostream &out, unsigned indent) {
+                                                 llvm::raw_ostream &out, unsigned indent,
+                                                 GeneratedAnalogDeclarationContext context) {
   auto eventProcedure = llvm::dyn_cast_or_null<AnalogProcedureOp>(procedure);
   if (!eventProcedure || !procedure->hasAttr("generated_owner") ||
       !procedure->hasAttr("generated_induction"))
     return reject(procedure, "generated storage requires one owned analog procedure");
+  const bool structuralOccurrence =
+      context.kind == GeneratedAnalogDeclarationContext::Kind::StructuralOccurrence;
+  if (structuralOccurrence) {
+    auto analog = llvm::dyn_cast_or_null<AnalogOp>(procedure->getParentOp());
+    auto generate = llvm::dyn_cast_or_null<GenerateOp>(context.scope);
+    if (!analog || !generate || analog->getParentOp() != generate.getOperation() ||
+        failed(verifyGeneratedAnalogOwnership(analog)) ||
+        failed(verifyGeneratedAnalogOwnership(procedure)) ||
+        failed(resolveGeneratedDomain(generate)))
+      return reject(procedure,
+                    "structural storage declaration requires its actual generated occurrence");
+  } else if (context.scope) {
+    return reject(procedure, "analog-iteration storage cannot claim a structural occurrence");
+  }
   if (auto module = procedure->getParentOfType<ModuleOp>())
     module->walk([&](Operation *op) {
       for (auto key : {"name", "sym_name", "induction"})
         if (!text(op, key).empty())
           state.reserved.insert(text(op, key));
     });
-  return prepareEventStorage(procedure, state, out, indent, true);
+  return prepareEventStorage(procedure, state, out, indent, true, structuralOccurrence);
 }
 LogicalResult renderAnalogEventProcedure(Operation *procedure, AnalogEventRenderState &state,
                                          llvm::raw_ostream &out) {

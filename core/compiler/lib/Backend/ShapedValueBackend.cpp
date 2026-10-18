@@ -1,6 +1,7 @@
 #include "nodal/Backend/ShapedValueBackend.h"
 
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/SymbolTable.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
@@ -82,9 +83,16 @@ bool portableStaticDAG(Value value, llvm::DenseSet<Value> &active,
         break;
       }
   if (valid && llvm::isa<ConstParameterRefOp>(definition)) {
-    auto identity = resolveStaticShapeIndexIdentity(definition->getParentOp(), value);
-    valid = succeeded(identity) && identity->kind == StaticShapeIndexIdentity::Parameter &&
-            portableParameterInitializer(identity->root, active, parameters);
+    // Width checking serves shape and generated-domain consumers. The caller's
+    // native proof owns effect capability; requiring a shape envelope here
+    // would incorrectly reject topology-only parameters in generated bounds.
+    Operation *module = definition->getParentOp();
+    auto reference = definition->getAttrOfType<FlatSymbolRefAttr>("parameter");
+    Operation *parameter = llvm::isa<ModuleOp>(module) && reference
+                               ? SymbolTable::lookupSymbolIn(module, reference.getValue())
+                               : nullptr;
+    valid = llvm::isa_and_nonnull<ParameterOp>(parameter) && parameter->getParentOp() == module &&
+            portableParameterInitializer(parameter, active, parameters);
   }
   active.erase(value);
   return valid;

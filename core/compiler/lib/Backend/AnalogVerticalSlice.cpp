@@ -803,7 +803,7 @@ FailureOr<std::string> renderConservativeNodeSelection(Operation *operation, Ope
   return array->second.name + "[" + program->result + "]";
 }
 
-bool hasStructuralTopology(Operation *generate) {
+bool requiresStructuralGenerate(Operation *generate) {
   if (generate->getNumRegions() != 1 || !llvm::hasSingleElement(generate->getRegion(0)))
     return false;
   Block &body = generate->getRegion(0).front();
@@ -812,8 +812,12 @@ bool hasStructuralTopology(Operation *generate) {
   for (Operation &operation : body) {
     if (llvm::isa<InstanceOp, ConnectOp, ConnectArrayOp, ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(
             operation) ||
-        (llvm::isa<GenerateOp>(operation) && hasStructuralTopology(&operation)))
+        (llvm::isa<GenerateOp>(operation) && requiresStructuralGenerate(&operation)))
       return true;
+    if (llvm::isa<AnalogOp>(operation) && llvm::hasSingleElement(operation.getRegion(0)))
+      for (Operation &statement : operation.getRegion(0).front())
+        if (hasPersistentShapedInitializer(&statement))
+          return true;
   }
   return false;
 }
@@ -924,7 +928,7 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
       state.visibleTargetNames.insert(symbolName(&operation));
   bool validGeneratedNames = true;
   for (Operation *generate : generates) {
-    if (hasStructuralTopology(generate))
+    if (requiresStructuralGenerate(generate))
       continue;
     generate->walk([&](Operation *operation) {
       if (operation->getName().getStringRef() != "nodal.node")
@@ -2932,7 +2936,9 @@ LogicalResult renderStructuralGenerate(Operation *generate, ModuleRenderState &p
   if (boundSteps > 1)
     return emitMappedFailure(generate, "NODAL-BACKEND-TOPOLOGY-005",
                              "multiple generated boundStep effects remain unsupported");
-  if (procedure && failed(prepareGeneratedAnalogEventBackend(procedure, state.eventState, body, 2)))
+  if (procedure && failed(prepareGeneratedAnalogEventBackend(
+                       procedure, state.eventState, body, 2,
+                       {GeneratedAnalogDeclarationContext::Kind::StructuralOccurrence, generate})))
     return failure();
   // VAMS concatenates analog blocks after elaboration in textual order. Keep
   // each actual block beside its authored nested scopes; its own procedure still
@@ -3132,7 +3138,7 @@ LogicalResult renderDefinition(Operation *definition, llvm::StringRef aliasHelpe
   llvm::StringSet<> generatedInductions;
   llvm::StringSet<> generatedLabels;
   for (Operation *generate : generates) {
-    if (hasStructuralTopology(generate))
+    if (requiresStructuralGenerate(generate))
       continue;
     llvm::SmallVector<Operation *, 2> targetRanges{generate};
     if (Operation *leaf = nestedGeneratedNodeContribution(generate)) {
@@ -3167,7 +3173,7 @@ LogicalResult renderDefinition(Operation *definition, llvm::StringRef aliasHelpe
   }
 
   for (Operation *generate : generates)
-    if (!hasStructuralTopology(generate) && hasGeneratedNodeArray(generate) &&
+    if (!requiresStructuralGenerate(generate) && hasGeneratedNodeArray(generate) &&
         failed(renderGeneratedNodeArray(generate, output)))
       return failure();
 
@@ -3248,7 +3254,7 @@ LogicalResult renderDefinition(Operation *definition, llvm::StringRef aliasHelpe
         return failure();
   }
   for (Operation *generate : generates)
-    if (hasStructuralTopology(generate)) {
+    if (requiresStructuralGenerate(generate)) {
       if (failed(renderStructuralGenerate(generate, state, aliasHelper, output)))
         return failure();
     } else if (!isGeneratedNodeArrayTreeProfile(generate)) {
@@ -3470,7 +3476,7 @@ LogicalResult renderBackendCandidate(llvm::ArrayRef<Operation *> definitions,
         }
         requiresAlias |= requiresConservativeAdapter(binding->actual.projection);
       }
-      if (llvm::isa<GenerateOp>(operation) && hasStructuralTopology(operation)) {
+      if (llvm::isa<GenerateOp>(operation) && requiresStructuralGenerate(operation)) {
         auto scope = resolveConservativeStructuralScope(operation);
         if (failed(scope)) {
           topologyResult = failure();

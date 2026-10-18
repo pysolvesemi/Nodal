@@ -41,13 +41,24 @@ mlir::LogicalResult verifyAnalogEventStorageStatement(mlir::Operation *operation
 // One semantic target admission for ordinary and generated procedures. Storage
 // counts do not define capability; ownership, effects and control placement do.
 mlir::LogicalResult verifyAnalogProcedureTarget(mlir::Operation *procedure);
+// A direct initialized shaped root needs declaration lifetime. This query only
+// selects layout; native ownership, static fill and target checks still apply.
+bool hasPersistentShapedInitializer(mlir::Operation *procedure);
+struct GeneratedAnalogDeclarationContext {
+  enum class Kind { AnalogIteration, StructuralOccurrence };
+  Kind kind = Kind::AnalogIteration;
+  // StructuralOccurrence requires the actual direct Generate/Analog/procedure
+  // ancestry, independently verified by preparation. Source attributes alone
+  // cannot request a declaration lifetime.
+  mlir::Operation *scope = nullptr;
+};
 mlir::LogicalResult prepareAnalogEventBackend(mlir::Operation *module,
                                               AnalogEventRenderState &state,
                                               llvm::raw_ostream &declarations);
-mlir::LogicalResult prepareGeneratedAnalogEventBackend(mlir::Operation *procedure,
-                                                       AnalogEventRenderState &state,
-                                                       llvm::raw_ostream &declarations,
-                                                       unsigned indent);
+mlir::LogicalResult
+prepareGeneratedAnalogEventBackend(mlir::Operation *procedure, AnalogEventRenderState &state,
+                                   llvm::raw_ostream &declarations, unsigned indent,
+                                   GeneratedAnalogDeclarationContext context = {});
 mlir::LogicalResult renderAnalogEventProcedure(mlir::Operation *procedure,
                                                AnalogEventRenderState &state,
                                                llvm::raw_ostream &output);

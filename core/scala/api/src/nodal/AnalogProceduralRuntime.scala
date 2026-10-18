@@ -423,7 +423,8 @@ private[nodal] object AnalogProceduralRuntime:
       controlFlow: Option[AnalogControlFlowConstruction.Snapshot] = None,
       controlExpressions: Vector[ControlExpressionRecord] = Vector.empty,
       generatedOwner: Option[String] = None,
-      generatedInduction: Option[String] = None
+      generatedInduction: Option[String] = None,
+      identityPrefix: Option[String] = None
   )
 
   final case class Diagnostic(code: String, message: String, path: Option[String] = None):
@@ -439,7 +440,8 @@ private[nodal] object AnalogProceduralRuntime:
 
   private final case class MutableVariable(record: VariableRecord)
 
-  final class Recorder(val owner: String):
+  final class Recorder(val owner: String, identityPrefix: Option[String] = None):
+    private val identityOwner = identityPrefix.getOrElse(owner)
     require(owner.nonEmpty, "procedural owner must be non-empty")
 
     private val variables = mutable.LinkedHashMap.empty[String, MutableVariable]
@@ -612,7 +614,7 @@ private[nodal] object AnalogProceduralRuntime:
       requireProcedure(Option(identity).filter(_.nonEmpty))
       if identity.trim.isEmpty then
         fail("NODAL-ANALOG-033-001", "procedural variable identity must be non-empty")
-      val canonical = s"$owner.${scopeStack.mkString(".")}.${identity.trim}"
+      val canonical = s"$identityOwner.${scopeStack.mkString(".")}.${identity.trim}"
       if variables.contains(canonical) then
         fail(
           "NODAL-ANALOG-033-002",
@@ -681,7 +683,7 @@ private[nodal] object AnalogProceduralRuntime:
       requireProcedure(Option(identity).filter(_.nonEmpty))
       if identity.trim.isEmpty then
         fail("NODAL-ANALOG-033-006", "procedural statement identity must be non-empty")
-      val canonicalStatement = s"$owner.${identity.trim}"
+      val canonicalStatement = s"$identityOwner.${identity.trim}"
       if statements.contains(canonicalStatement) then
         fail(
           "NODAL-ANALOG-033-007",

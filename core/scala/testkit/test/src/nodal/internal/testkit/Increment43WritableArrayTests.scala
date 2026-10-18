@@ -556,7 +556,7 @@ object Increment43WritableArrayTests extends TestSuite:
               assert(emitted.contains("parameter real level = 1.25;"))
               assert(!emitted.contains("(rows * 3)"))
 
-    test("generated persistent root fill retains a causal target boundary"):
+    test("generated persistent root fill emits a per occurrence declaration"):
       native: (compiler, translator, directory) =>
         val source = document(new Increment43WritableGeneratedRootFill)
         val verified = success(run(
@@ -565,16 +565,16 @@ object Increment43WritableArrayTests extends TestSuite:
           directory,
           Vector("--pass-pipeline=builtin.module(nodal-gate-default)")
         ))
-        val rejected =
+        val emitted = success(
           run(source.copy(text = verified), translator, directory, Vector("--nodal-to-verilog-a"))
-        rejected match
-          case failure: NativeCompilerFailure =>
-            assert(failure.standardError.contains("NODAL-BACKEND-EVENT-001"))
-            assert(failure.standardError.contains(
-              "generated root shaped initializer requires per-occurrence declaration lifetime"
-            ))
-          case _ =>
-            throw new java.lang.AssertionError("generated persistent root unexpectedly lowered")
+        )
+        val declaration = "real event_Increment43WritableGeneratedRootFill_cells[0:1] = '{2{4.5}};"
+        assert(emitted.contains(declaration), emitted.contains("generate"))
+        assert(emitted.indexOf(declaration) < emitted.indexOf("analog begin"))
+        assert(!emitted.contains("initial_step"))
+        assert(emitted.linesIterator.count(
+          _.trim.startsWith("event_Increment43WritableGeneratedRootFill_cells[")
+        ) == 1)
 
     test("selected controls and compound selected initializers retain typed captures"):
       for form <- 0 to 2 do

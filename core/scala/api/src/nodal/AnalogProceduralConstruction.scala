@@ -23,8 +23,10 @@ private[nodal] object AnalogProceduralConstruction:
   private final class ModuleState(
       val module: Module,
       val owner: String,
-      val recorder: AnalogProceduralRuntime.Recorder
+      val recorder: AnalogProceduralRuntime.Recorder,
+      val identityPrefix: Option[String] = None
   ):
+    def identityOwner: String = identityPrefix.getOrElse(owner)
     val pending = mutable.ArrayBuffer.empty[PendingVariable]
     val variables = new IdentityHashMap[AnyRef, AnalogProceduralRuntime.Variable]()
     val variableRecords = mutable.ArrayBuffer.empty[AnalogProceduralRuntime.VariableRecord]
@@ -34,6 +36,7 @@ private[nodal] object AnalogProceduralConstruction:
     var scopeSerial = 0
     var procedureDepth = 0
     var procedureComplete = false
+    var procedureStarted = false
     var generatedContext: Option[(String, String)] = None
     val eventBindings = mutable.LinkedHashMap.empty[String, AnyRef]
     var eventDepth = 0
@@ -53,7 +56,7 @@ private[nodal] object AnalogProceduralConstruction:
     value
 
   private def activeModule: ModuleState =
-    state.stack.lastOption.getOrElse(
+    val base = state.stack.lastOption.getOrElse(
       AnalogProceduralRuntime.reject(
         AnalogProceduralRuntime.Diagnostic(
           "NODAL-ANALOG-033-003",
@@ -61,6 +64,28 @@ private[nodal] object AnalogProceduralConstruction:
         )
       )
     )
+    if base.procedureDepth > 0 then base
+    else
+      val context = ConstructionKernel.generatedRegionOwnership
+      state.modules.find(module =>
+        (module.module eq base.module) && module.generatedContext == context
+      ).getOrElse:
+        if base.generatedContext.isEmpty && !base.procedureStarted && !base.procedureComplete &&
+          base.pending.isEmpty && base.variableRecords.isEmpty && base.eventBindings.isEmpty
+        then
+          base.generatedContext = context
+          base
+        else
+          val prefix = context.map(_._1).getOrElse(s"${base.owner}.ordinary_procedure")
+          val selected = new ModuleState(
+            base.module,
+            base.owner,
+            new AnalogProceduralRuntime.Recorder(base.owner, Some(prefix)),
+            Some(prefix)
+          )
+          selected.generatedContext = context
+          state.modules += selected
+          selected
 
   private def activeBuilder(module: ModuleState): AnalogControlFlowConstruction.Builder =
     module.controlBuilder.getOrElse(
@@ -88,10 +113,13 @@ private[nodal] object AnalogProceduralConstruction:
       module.procedureDepth > 0 && module.generatedContext.nonEmpty)
 
   def retainsGeneratedVariable(value: AnyRef, context: (String, String)): Boolean =
-    Option(current.get()).exists(_.stack.lastOption.exists: module =>
-      val retained = Option(module.variables.get(value))
-      module.procedureComplete && module.generatedContext.contains(context) &&
-      retained.exists(variable => module.variableRecords.exists(_.variable == variable)))
+    Option(current.get()).exists: session =>
+      session.stack.lastOption.exists: active =>
+        session.modules.exists: module =>
+          val retained = Option(module.variables.get(value))
+          (module.module eq active.module) && module.procedureComplete &&
+          module.generatedContext.contains(context) &&
+          retained.exists(variable => module.variableRecords.exists(_.variable == variable))
 
   def requireDigitalEventContext(): Unit =
     requireContinuousContext("digital event process")
@@ -367,7 +395,7 @@ private[nodal] object AnalogProceduralConstruction:
     Option(module.variables.get(value)).map(_.identity).orElse:
       module.pending
         .find(pending => pending.value eq value)
-        .map(pending => s"${module.owner}.variable_${pending.declarationOrder}")
+        .map(pending => s"${module.identityOwner}.variable_${pending.declarationOrder}")
 
   private def findVariableOwner(value: AnyRef): Option[ModuleState] =
     state.modules.find: module =>
@@ -408,8 +436,13 @@ private[nodal] object AnalogProceduralConstruction:
             val identity = registeredIdentity(owner, value)
             AnalogProceduralRuntime.reject(
               AnalogProceduralRuntime.Diagnostic(
-                "NODAL-ANALOG-033-009",
-                s"procedural variable belongs to component '${owner.owner}', not '${module.owner}'",
+                if owner.module eq module.module then "NODAL-ANALOG-033-010"
+                else "NODAL-ANALOG-033-009",
+                if owner.module eq module.module then
+                  "procedural variable belongs to another generated or ordinary procedure scope"
+                else
+                  s"procedural variable belongs to component '${owner.owner}', not '${module.owner}'"
+                ,
                 identity
               )
             )
@@ -440,8 +473,13 @@ private[nodal] object AnalogProceduralConstruction:
             val identity = registeredIdentity(owner, reference)
             AnalogProceduralRuntime.reject(
               AnalogProceduralRuntime.Diagnostic(
-                "NODAL-ANALOG-033-009",
-                s"procedural read belongs to component '${owner.owner}', not '${module.owner}'",
+                if owner.module eq module.module then "NODAL-ANALOG-033-010"
+                else "NODAL-ANALOG-033-009",
+                if owner.module eq module.module then
+                  "procedural read belongs to another generated or ordinary procedure scope"
+                else
+                  s"procedural read belongs to component '${owner.owner}', not '${module.owner}'"
+                ,
                 identity
               )
             )
@@ -766,7 +804,7 @@ private[nodal] object AnalogProceduralConstruction:
       shapeDimensions(module, pending.dataType)
     )
     val identity =
-      s"${module.owner}.${module.controlScope.mkString(".")}.variable_${pending.declarationOrder}"
+      s"${module.identityOwner}.${module.controlScope.mkString(".")}.variable_${pending.declarationOrder}"
     val variable = AnalogProceduralRuntime.Variable(
       identity,
       module.owner,
@@ -858,17 +896,13 @@ private[nodal] object AnalogProceduralConstruction:
   def procedure[A](body: => A): A =
     val module = activeModule
     val generatedContext = ConstructionKernel.generatedRegionOwnership
-    generatedContext.foreach: context =>
-      module.generatedContext match
-        case Some(existing) if existing != context =>
-          ConstructionKernel.requireNoGeneratedEffect(
-            "analog procedures spanning generated ownership"
-          )
-        case _ => module.generatedContext = Some(context)
+    val pushed = state.stack.last ne module
+    if pushed then state.stack += module
+    module.procedureStarted = true
     module.procedureDepth += 1
     try
       module.recorder.procedure:
-        val builder = new AnalogControlFlowConstruction.Builder(module.owner)
+        val builder = new AnalogControlFlowConstruction.Builder(module.owner, module.identityPrefix)
         module.controlBuilder = Some(builder)
         module.controlSnapshot = None
         module.controlScope = Vector("procedure")
@@ -886,12 +920,13 @@ private[nodal] object AnalogProceduralConstruction:
       module.controlBuilder = None
       module.controlScope = Vector.empty
       module.procedureDepth -= 1
+      if pushed then state.stack.remove(state.stack.size - 1)
 
   private def withControlScope[A](
       module: ModuleState,
       identity: String
   )(body: => A): A =
-    val localIdentity = identity.stripPrefix(s"${module.owner}.")
+    val localIdentity = identity.stripPrefix(s"${module.identityOwner}.")
     module.controlScope = module.controlScope :+ localIdentity
     try body
     finally module.controlScope = module.controlScope.dropRight(1)
@@ -910,7 +945,7 @@ private[nodal] object AnalogProceduralConstruction:
         module.scopeSerial += 1
         val stableScope = s"$recorderIdentity#${module.scopeSerial}"
         val builderIdentity =
-          s"${module.owner}.${(module.controlScope :+ stableScope).mkString(".")}"
+          s"${module.identityOwner}.${(module.controlScope :+ stableScope).mkString(".")}"
         builder.lexicalScope(source, Some(builderIdentity)): _ =>
           module.controlScope = module.controlScope :+ stableScope
           try module.recorder.scope(recorderIdentity)(body)
@@ -942,7 +977,7 @@ private[nodal] object AnalogProceduralConstruction:
         "assignment target is not an owned procedural variable"
       ))
     )
-    val statement = s"${module.owner}.statement_${module.statementSerial}"
+    val statement = s"${module.identityOwner}.statement_${module.statementSerial}"
     module.statementSerial += 1
     val value = semanticValue(module, expression, Some(variable.valueType))
     validateAssignment(statement, variable, value)
@@ -965,7 +1000,7 @@ private[nodal] object AnalogProceduralConstruction:
     )
     if !builder.hasStructuredControl then
       module.recorder.assign(
-        statement.stripPrefix(s"${module.owner}."),
+        statement.stripPrefix(s"${module.identityOwner}."),
         variable,
         value,
         source = source
@@ -1283,6 +1318,7 @@ private[nodal] object AnalogProceduralConstruction:
       owner = owner,
       generatedOwner = snapshot.generatedOwner.map(remapIdentity),
       generatedInduction = snapshot.generatedInduction.map(remapIdentity),
+      identityPrefix = snapshot.identityPrefix.map(remapIdentity),
       variables = snapshot.variables.map: record =>
         record.copy(
           variable = remapVariable(record.variable),
@@ -1324,7 +1360,8 @@ private[nodal] object AnalogProceduralConstruction:
         val generatedContext = module.generatedContext.map(resolveGeneratedOwnership)
         val contextual = sourceSnapshot.copy(
           generatedOwner = generatedContext.map(_._1),
-          generatedInduction = generatedContext.map(_._2)
+          generatedInduction = generatedContext.map(_._2),
+          identityPrefix = module.identityPrefix
         )
         val retained = remapSnapshot(resolvePayloads(module, contextual), owner)
         Option.when(

@@ -393,6 +393,12 @@ target_link_libraries(nodal-generated-topology-backend-unit-tests
   PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.generated-topology-backend-unit COMMAND nodal-generated-topology-backend-unit-tests)
 
+add_executable(nodal-generated-persistent-backend-unit-tests GeneratedPersistentBackendTest.cpp)
+llvm_update_compile_flags(nodal-generated-persistent-backend-unit-tests)
+target_link_libraries(nodal-generated-persistent-backend-unit-tests
+  PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.generated-persistent-backend-unit COMMAND nodal-generated-persistent-backend-unit-tests)
+
 add_test(NAME nodal.native.generated-topology-integration
   COMMAND "${Python3_EXECUTABLE}"
     "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_generated_topology_matrix.py"

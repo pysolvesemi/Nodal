@@ -273,12 +273,22 @@ dual-target models. The shape-contract note records commands, source/output
 examples, architecture review and target-consumer limits. Source-authored
 generated topology is the next required shared-scope implementation under
 [NodalConservativeNodeArrays-DG-v0.4](../design-gates/NodalConservativeNodeArrays-DG-v0.4.md).
-Its selected implementation passes eight new public methods, 16 directly affected
+Its selected implementation is published as
+`6098797e7d666636af49a5bc7cab5280703616b1`, with exact tested-tree equality
+and zero Actions runs. It passes eight new public methods, 16 directly affected
 predecessors, 50 native cases and 13 actual dual-target models, with exact native
 and target replay. Shared ownership/domain proofs and scoped target emission
 received focused architecture review. Commands, integration repairs and finite
 limits are recorded in the shape-contract note. Generated persistent shaped-state
-declaration lifetime is the next required implementation.
+declaration lifetime is implemented under
+[NodalWritableRealArrays-DG-v0.6](../design-gates/NodalWritableRealArrays-DG-v0.6.md):
+five new public methods, 16 affected predecessors, 151 focused backend checks and
+ten actual dual-target models pass. Actual generated scopes own source recorders,
+native procedure uniqueness and target declarations independently; ordinary
+procedure behavior and lexical entry copies remain intact. The next concrete
+shared-layer target is conservative array connection relations and exact partial
+child-port coverage. The shape-contract note records commands, ownership review,
+source/IR/target examples and remaining limits.
 Extra operator/state/result fan-out,
 cross-range storage, broader conservative bindings and remaining generated compositions also remain
 open where not implemented. No required

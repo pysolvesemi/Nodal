@@ -1766,3 +1766,161 @@ prior completed artifact set. Logs are
 selectors, source inventory and limits are in
 `.work/scala-validation/generated-topology-scala-handoff.md`. No CI or full
 qualification suite was run.
+
+## Generated persistent shaped declarations (v0.6)
+
+Generated structural topology is published as
+`6098797e7d666636af49a5bc7cab5280703616b1`, with exact tested-tree equality,
+expected-head ancestry and zero Actions runs. The next required lifetime change
+is governed by [writable v0.6](../design-gates/NodalWritableRealArrays-DG-v0.6.md).
+Existing native validation already admits owned static-fill initialization of a
+generated shaped persistent root. The remaining limitation is target placement:
+a legacy analog-iteration body cannot establish one declaration per elaborated
+structural occurrence. Removing its rejection globally would change lifetime.
+
+The implementation therefore derives structural layout from actual initialized
+shaped procedure roots and distinguishes the structural-occurrence preparation
+caller from the old analog-iteration caller. Static expression/shape proof,
+actual storage ownership, definite assignment and declaration-only producer
+peeling remain shared. No new native lifetime attribute is trusted. Pure state
+must work without a dummy child instance or an unused induction argument;
+existing successful direct signed64 target profiles retain their dispatch.
+Focused source/native/target acceptance is complete for this selected contract.
+
+Sibling/nested witnesses exposed a shared-owner prerequisite: both source
+procedural construction and the native module verifier still treated every
+procedure in a component as one scope. The source repair selects the existing
+recorder by actual module and generated context, retaining distinct identities
+through snapshot remapping. Native counting now partitions by actual nearest
+Generate (or Module for ordinary procedures), never by an asserted owner string.
+One procedure per actual scope remains enforced with `NODAL-ANALOG-033-020`;
+ordinary duplicate behavior is preserved. Per-procedure definite assignment and
+actual generated ownership verification remain unchanged.
+
+A symbolic topology-only bound also exposed a target-width helper's accidental
+shape capability dependency. Integer target-width checking must resolve the
+actual direct module parameter, while the shared native domain and shape owners
+retain their separate topology/shape obligations. This is not permission to use
+parameter defaults or bypass structural-effect validation.
+
+### Focused native/backend lifetime acceptance
+
+The generated-persistent backend unit passes 151 checks on the matched native and
+translator build. These cover fixed/symbolic static fills, topology-only compound
+count, empty/singleton/million compact scopes, sibling/nested and reused-child
+storage, projected uniform values, shared runtime fill users, event writes and
+local entry-copy ordering. Positives repeat, pass actual native default-gate
+roundtrip and target reparse. Direct preparation rejects a sibling/ancestor scope
+or the legacy context before producing declarations. Same-scope duplicate
+procedures, forged ownership, live initializers, zero shapes and signed32
+bounds/count/intermediate/final-update failures remain explicit.
+
+The affected topology unit passes 107 checks; event-array and hierarchy parsers
+pass 308 and 236 checks. Existing writable/scalar backend aggregates pass. The
+ordinary duplicate-procedure fixture independently retains the original
+`NODAL-ANALOG-033-020` text. Eighty writable and 36 topology source/target artifacts
+remain byte-identical. No target parser change was needed: structural declarations
+already reuse the checked replicated-initializer grammar.
+
+```sh
+PYTHONPATH=.work/python-tools .work/python-tools/bin/cmake --build .work/native-release --target nodalc nodal-translate nodal-generated-persistent-backend-unit-tests nodal-writable-array-backend-unit-tests nodal-generated-topology-backend-unit-tests nodal-event-reparse-unit-tests nodal-hierarchy-syntax-unit-tests nodal-backend-unit-tests -j3
+bash .work/check-generated-persistent-focused.sh
+```
+
+Exact commands, per-unit results and tool hashes are recorded in
+`.work/generated-persistent-backend-handoff.md`; build and aggregate logs are
+`.work/generated-persistent-matched-build.log` and
+`.work/generated-persistent-focused.log`. Artifact comparison is
+`.work/generated-persistent-predecessor-parity.log`. Focused independent production
+review found no blocker in actual-root dispatch, verified lifetime context,
+declaration placement or native per-scope procedure counting. That review ran no
+tests. Expanded public source acceptance is recorded below.
+
+### Actual symbolic generated declaration
+
+The public `Increment43PersistentGeneratedSymbolic` witness retains separate
+symbolic topology and shape parameters and a unit-bearing static fill:
+
+```scala
+val count = param(3.integer, range = 1 to 5)
+val lanes = param(2.integer, range = 2 to 4)
+val level = param(1.25.V)
+hdlRange(1, count + 1.integer, 2): _ =>
+  analogProcedure:
+    val cells = variable(
+      Vec(Real, lanes, 2),
+      Vec.fill(Vec(Real, lanes, 3))(level).slice(1, 3, axis = 1)
+    )
+    cells.writable.at(0, 1) := cells.at(0, 0) + 1.0.V
+    on(initialStep):
+      val copied = variable(Vec(Real, lanes, 2), cells)
+      copied.writable.at(0, 0) := 2.0.V
+```
+
+The actual IR keeps the static fill, owned slice and initialized shaped root in
+one generated procedure; its generated owner is the actual enclosing region.
+No unused induction operand is required. The emitted structural scope has the
+symbolic `count + 1` upper bound, source origin one and stride two. Before its
+analog body it declares:
+
+```verilog
+real event_Increment43PersistentGeneratedSymbolic_cells[0:((lanes * 2) - 1)] = '{(lanes * 2){level}};
+```
+
+The local `copied` initialization remains a reached event-body copy rather than
+another persistent declaration initializer. Complete source, normalized IR and
+target artifacts are under `.work/generated-persistent-public-final`; independent
+target outputs are under `.work/generated-persistent-public-target-final`.
+
+All 20 exported positive profiles (ten models, VA/AMS) pass actual native default
+gate and byte-identical native replay. All 20 also pass exact direct/repeat/default
+serialization/renamed-transport target parity. The positive native selector is
+explicitly limited to the positive model inventory. The intentional probe
+initializer negative is retained separately in `.work/generated-persistent-negative`
+and independently rejects with `NODAL-ANALOG-037-009`.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 NODAL_PUBLIC_NATIVE_SOURCE=.work/generated-persistent-public-final NODAL_PUBLIC_NATIVE_GLOB='Increment43*.source.mlir' NODAL_PUBLIC_NATIVE_OUTPUT=.work/generated-persistent-public-native-final python3 .work/check-generated-topology-public.py
+PYTHONDONTWRITEBYTECODE=1 python3 .work/check-boundary-array-targets.py .work/generated-persistent-public-final .work/generated-persistent-public-target-final
+```
+
+Logs are `.work/generated-persistent-public-native-final.log` (with exact per-case
+commands in its output directory's `summary.json`) and
+`.work/generated-persistent-public-target-final.log`. This evidence establishes
+compiler structure and transactional rejection, not simulator time-domain behavior
+or OpenVAF array support. Final configured Scala assertions and affected recorder
+predecessors pass as recorded below.
+
+Focused source review also found no blocker in exact module/generated recorder
+selection, same-scope reentry rejection, isolated escaped handles/DA, or identity
+prefix transport and bridge validation. First-state adoption excludes existing
+ordinary pending storage and any started procedure, including empty or failed
+invocations. Semantic owner remains the module; the optional internal prefix only
+keeps procedure/variable/statement/control identities distinct. Existing source
+scope lookup scans can be quadratic across many scopes; no scaling improvement
+is claimed. No native lifetime flag, second procedural registry or module cloning
+was added.
+
+The configured public suite passes 5/5 methods, including ten models in both VA
+and AMS with exact declaration/scope/order/repeat assertions and the causal
+probe-root native negative. Log:
+`.work/scala-validation/generated-persistent-public-final.log`. An isolated
+second-scope control-expression reconstruction check was then added to the
+identity method without changing the 20 exported target fixtures. The final
+five-method suite passes again, including that reconstruction check, in
+`.work/scala-validation/generated-persistent-public-final-2.log`. All 16 selected
+predecessors pass: procedural ownership/restoration/DA (9), conditional DA (2),
+bridge ordering/serialization (2), empty event block (1), and generated arrays (2).
+Exact commands/selectors are in
+`.work/scala-validation/run-generated-persistent-predecessors.sh`; final evidence
+and artifact inventory are in
+`.work/scala-validation/generated-persistent-scala-handoff.md`. Seven changed Scala
+files pass pinned formatting; API/reference checks pass without a public signature
+or inventory change. Changed Markdown, contribution policy, pinned C++ formatting
+and Git diff checks pass. No CI or broad qualification suite was run.
+
+F43 remains open. The next concrete shared-layer target is conservative array
+connection relations and exact child-region coverage for selected child-port views
+and bulk joins. Remaining legal generated-array/storage/operator/evaluation
+compositions must be assessed against the original checklist and shared contracts;
+these successful lifetime paths do not close the parent checklist.

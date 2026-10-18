@@ -1622,22 +1622,32 @@ LogicalResult verifyStructuredDefiniteAssignment(Operation *procedure, llvm::Str
   return success();
 }
 
-LogicalResult verifySingleTopLevelProcedurePerModule(Operation *module) {
-  bool seenProcedure = false;
+LogicalResult verifySingleTopLevelProcedurePerScope(Operation *module) {
+  llvm::SmallPtrSet<Operation *, 8> seenScopes;
   Operation *duplicateProcedure = nullptr;
+  bool duplicateGeneratedScope = false;
   module->walk([&](nodal::AnalogProcedureOp procedure) {
     auto parentModule = procedure->getParentOfType<nodal::ModuleOp>();
     if (!parentModule || parentModule.getOperation() != module ||
         procedure->getParentOfType<nodal::AnalogProcedureOp>())
       return;
-    if (seenProcedure && !duplicateProcedure)
+    // A structural occurrence owns its own state and procedure. Use actual
+    // ancestry, never a claimed generated_owner attribute, for this partition.
+    // Each procedure's verifier independently checks generated ownership.
+    auto generate = procedure->getParentOfType<nodal::GenerateOp>();
+    Operation *scope = generate ? generate.getOperation() : module;
+    if (!seenScopes.insert(scope).second && !duplicateProcedure) {
       duplicateProcedure = procedure.getOperation();
-    seenProcedure = true;
+      duplicateGeneratedScope = static_cast<bool>(generate);
+    }
   });
   if (!duplicateProcedure)
     return success();
-  return nodal::emitMappedFailure(duplicateProcedure, "NODAL-ANALOG-033-020",
-                                  "multiple analog procedural regions per component are deferred");
+  return nodal::emitMappedFailure(
+      duplicateProcedure, "NODAL-ANALOG-033-020",
+      duplicateGeneratedScope
+          ? "multiple analog procedural regions per generated scope are deferred"
+          : "multiple analog procedural regions per component are deferred");
 }
 
 LogicalResult verifyGeneratedAnalogOwnershipImpl(Operation *operation) {
@@ -1960,7 +1970,7 @@ LogicalResult nodal::ModuleOp::verify() {
     return failure();
   if (failed(verifyConservativeArrayBindings(getOperation())))
     return failure();
-  return verifySingleTopLevelProcedurePerModule(getOperation());
+  return verifySingleTopLevelProcedurePerScope(getOperation());
 }
 
 LogicalResult nodal::PortOp::verify() {

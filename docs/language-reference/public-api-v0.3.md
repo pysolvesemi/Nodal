@@ -188,8 +188,9 @@ Whole generated child-array bindings and parameter overrides reuse the ordinary
 invariant parent-owned contracts. Child definitions cannot capture parent induction.
 The compiler retains compact lexical structural generate scopes and reusable child
 definitions rather than expanding every lane. Existing generated analog payloads
-retain their separate execution and state ownership. Per-occurrence persistent
-initialized Real storage and per-occurrence parameter values remain unfinished.
+retain their separate execution and state ownership. Generated persistent Real-array
+initialization follows the declaration-lifetime profile below. Per-occurrence
+parameter values remain unfinished.
 
 ## Additive writable Real arrays
 
@@ -218,13 +219,29 @@ indices must be static, owned and valid over their full legal parameter ranges.
 Partial writes initialize only proven selected regions; event writes do not
 initialize storage unconditionally outside the event.
 
-The bounded target profile covers event-local Real storage. Persistent root
-array initialization retains an explicit target capability boundary pending its
-required lifecycle-correct layout. Selected array reads in control predicates,
-selectors, loop bounds and event expressions currently reject because those
-consumers need a typed reference-operand extension. Array operations inside their
-bodies remain subject to the ordinary scope, event and definite-assignment rules.
+[Writable Real arrays v0.3](../design-gates/NodalWritableRealArrays-DG-v0.3.md)
+admits static uniform fills, including their shape views, as persistent root
+initializers. [v0.6](../design-gates/NodalWritableRealArrays-DG-v0.6.md) extends this
+to generated procedure roots: each structural occurrence has its own scoped
+Real-array declaration and static replicated initializer. Symbolic dimensions
+and static scalar parameters remain symbolic. Pure generated state, mixed child
+topology and nested rectangular scopes use the same declaration lifetime.
+Initialization is not repeated at analog evaluation or event entry. Lexical local
+initializers still copy their source on each reached entry. Mutable reads, probes,
+time and stateful dependencies cannot initialize persistent roots through a fill
+or view wrapper. Empty ranges retain source validation. Target shape and signed
+Integer/genvar limits remain checked; generic VAMS2023 validation does not imply
+support in external tools that reject Real arrays.
 
-A direct selected scalar value can initialize local Real storage through an
-explicit snapshot. Compound selected scalar initializers remain unsupported in
-this checkpoint; scalar assignments can still consume their captured reads.
+[v0.4](../design-gates/NodalWritableRealArrays-DG-v0.4.md) admits selected scalar
+storage reads in existing Boolean conditions/case selectors and legal event
+arguments through actual live references. Reads preserve short-circuit and event
+evaluation sites. This adds no public Real-to-Integer cast for loop bounds.
+
+[v0.5](../design-gates/NodalWritableRealArrays-DG-v0.5.md) admits compound selected
+scalar local initializers through explicit immutable captures. Checked uniform
+fill/view-derived scalar expressions retain their actual source and effects.
+Statement consumers may share one captured fill; live control/event consumers
+currently admit only one occurrence of each retained fill per complete expression,
+including all primitive argument slots, and reject a fill shared across OR monitor
+occurrences. Ordinary scope, unit, event and definite-assignment rules still apply.

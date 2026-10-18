@@ -949,7 +949,25 @@ ${indent(body, 2)}
         "NODAL-BRIDGE-043",
         "generated procedural ownership"
       )
+      requireUnique(
+        snapshot.analogProcedural.map(program => program.identityPrefix.getOrElse(program.owner)),
+        "NODAL-BRIDGE-043",
+        "procedural identity namespace"
+      )
+      requireUnique(
+        snapshot.analogProcedural.flatMap(_.variables.map(_.variable.identity)),
+        "NODAL-BRIDGE-043",
+        "procedural variable identity"
+      )
       snapshot.analogProcedural.foreach: program =>
+        program.identityPrefix.foreach: prefix =>
+          val expected = program.generatedOwner.getOrElse(s"${program.owner}.ordinary_procedure")
+          if prefix != expected then
+            fail(
+              "NODAL-BRIDGE-043",
+              "procedural identity prefix disagrees with its actual scope",
+              Some(prefix)
+            )
         if program.generatedOwner.nonEmpty != program.generatedInduction.nonEmpty then
           fail(
             "NODAL-BRIDGE-043",

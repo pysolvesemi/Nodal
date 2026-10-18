@@ -295,6 +295,28 @@ private[nodal] final case class ConstructionSnapshot(
     instanceArrayRoots: Vector[KernelInstanceArrayRootSnapshot] = Vector.empty
 )
 
+/** Immutable selected facts. Operand tags prevent authored strings from posing as references. */
+private[nodal] enum KernelSelectedOperand:
+  case Reference(path: String)
+  case Literal(kind: String, value: String)
+  case Opaque(kind: String)
+
+private[nodal] final case class KernelSelectedReference(
+    path: String,
+    owner: String,
+    kind: String,
+    dataType: Option[String],
+    operation: Option[String] = None,
+    operands: Vector[KernelSelectedOperand] = Vector.empty
+)
+
+private[nodal] final case class KernelSelectedCapture(
+    emission: Emission,
+    snapshot: ConstructionSnapshot,
+    references: Vector[KernelSelectedReference],
+    operationKinds: Vector[String] = Vector.empty
+)
+
 private final case class DomainRef(module: Long, index: Int)
 private final case class DeclarationRef(module: Long, index: Int)
 private final case class ExpressionRef(module: Long, index: Int)

@@ -10,27 +10,44 @@ private[nodal] object ConstructionKernel:
     AnalogUserFunctionRuntime.rejectEffect()
     if Current.isBound then Some(Current.get) else None
 
-  private def elaborate(top: => Module, options: EmitOptions): (Emission, ConstructionSnapshot) =
+  private def elaborate[M <: Module](
+      top: => M,
+      options: EmitOptions
+  )(select: M => Vector[AnyRef]): KernelSelectedCapture =
     ConstructorCaptureRuntime.withSession:
       AnalogProceduralConstruction.withSession:
         val session = new ConstructionSession(options)
-        var result: Option[(Emission, ConstructionSnapshot)] = None
+        var result: Option[KernelSelectedCapture] = None
         ScopedValue.where(Current, session).run(
           new Runnable:
             override def run(): Unit =
               val root = top
-              result = Some(session.finish(root))
+              val selected = select(root)
+              val (emission, snapshot) = session.finish(root)
+              result = Some(KernelSelectedCapture(
+                emission,
+                snapshot,
+                selected.map(session.selectedReference),
+                session.operationKinds
+              ))
         )
         result.getOrElse(
-          scala.util.Failure[(Emission, ConstructionSnapshot)](
+          scala.util.Failure[KernelSelectedCapture](
             new IllegalStateException("construction transaction did not publish a result")
           ).get
         )
 
-  def emit(top: => Module, options: EmitOptions): Emission = elaborate(top, options)._1
+  def emit(top: => Module, options: EmitOptions): Emission =
+    elaborate(top, options)(_ => Vector.empty).emission
 
   def inspect(top: => Module, options: EmitOptions = EmitOptions()): ConstructionSnapshot =
-    elaborate(top, options)._2
+    elaborate(top, options)(_ => Vector.empty).snapshot
+
+  /** Selection runs within construction; only canonical immutable facts leave the transaction. */
+  def capture[M <: Module](
+      top: => M,
+      options: EmitOptions = EmitOptions()
+  )(select: M => Vector[AnyRef]): KernelSelectedCapture = elaborate(top, options)(select)
 
   def failConstructor(code: String, message: String, site: String): Nothing =
     scala.util.Failure[Nothing](

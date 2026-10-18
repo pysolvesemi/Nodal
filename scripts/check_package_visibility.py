@@ -49,6 +49,8 @@ def _valid_package(module: str, package: str) -> bool:
             or package.startswith("nodal.api")
             or package.startswith("nodal.bootstrap.api")
         ) and ".internal" not in package
+    if module == "sim" and (package == "nodal.sim" or package.startswith("nodal.sim.")):
+        return True
     allowed = (
         f"nodal.internal.{module}",
         f"nodal.{module}.internal",

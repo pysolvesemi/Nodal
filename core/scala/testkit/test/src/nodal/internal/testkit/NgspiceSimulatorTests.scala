@@ -492,3 +492,133 @@ Values:
         result(request))
       val failure = f.run(broken)
       assert(failure.outcome == NgspiceOutcome.EvidenceFailure, failure.plot.isEmpty)
+
+    test("generalized bench uses identical pin artifact process and raw protections"):
+      val f = fixture()
+      val node = NgspiceNode.Node(0)
+      val id = NgspiceSourceId(0)
+      val bench = NgspiceCircuitBench(
+        NgspiceCircuitBinding("scalar", Vector(node, NgspiceNode.Ground)),
+        Vector(node),
+        Vector(NgspiceSource(
+          id,
+          NgspiceSourceKind.Voltage,
+          node,
+          NgspiceNode.Ground,
+          ac = Some(NgspiceAcExcitation(1))
+        )),
+        NgspiceCircuitAnalysis.DcSweep(id, 0, 1, 0.5),
+        Vector(NgspiceProbe.Voltage(node), NgspiceProbe.Current(id))
+      )
+      val request = NgspiceCircuitSimulateRequest(
+        f.request.executable,
+        f.root,
+        f.profile.id,
+        f.request.compiled,
+        bench
+      )
+      val dc = DcRaw.replace("v(p)", "v(n0)").replace("i(vdrive)", "i(vs0)")
+      def run(
+          raw: String,
+          selected: NgspiceCircuitSimulateRequest = request
+      ): NgspiceSimulationResult =
+        new NgspiceSimulator(Vector(f.profile), new Fake(runAction = request => emit(request, raw)))
+          .simulate(selected)
+      val actual = run(dc)
+      assert(actual.outcome == NgspiceOutcome.Simulated, actual.identity.circuit.contains(bench))
+      assert(actual.identity.model == bench.model, actual.identity.analysis == bench.analysis)
+      assert(Files.readString(actual.evidenceDirectory.get.resolve("bench.cir")) ==
+        NgspiceBench.generate(bench).toOption.get.deck)
+      assert(run(dc).identity.requestSha256 == actual.identity.requestSha256)
+      Vector(
+        dc.replace("i(vs0)", "i(other)"),
+        dc.replace("i(vs0) current", "v(n0) voltage"),
+        dc.replace("2 1\n", "2 0.9\n")
+      ).foreach(raw => assert(run(raw).outcome == NgspiceOutcome.InvalidRaw))
+      val fake = new Fake
+      val invalid = request.copy(bench =
+        bench.copy(
+          analysis = NgspiceCircuitAnalysis.DcSweep(NgspiceSourceId(1), 0, 1, 0.5)
+        )
+      )
+      assert(
+        new NgspiceSimulator(Vector(f.profile), fake).simulate(invalid).outcome ==
+          NgspiceOutcome.InvalidRequest,
+        fake.requests.isEmpty
+      )
+      assert(run(dc, request.copy(compiled = request.compiled.copy(artifact = None))).outcome ==
+        NgspiceOutcome.InvalidCompileArtifact)
+
+    test("generalized DC AC current-source and transient schemas retain high-offset axis checks"):
+      val f = fixture()
+      val node = NgspiceNode.Node(0)
+      val id = NgspiceSourceId(0)
+      val bench = NgspiceCircuitBench(
+        NgspiceCircuitBinding("scalar", Vector(node, NgspiceNode.Ground)),
+        Vector(node),
+        Vector(NgspiceSource(
+          id,
+          NgspiceSourceKind.Current,
+          NgspiceNode.Ground,
+          node,
+          ac = Some(NgspiceAcExcitation(1))
+        )),
+        NgspiceCircuitAnalysis.DcSweep(id, 0, 1, 0.5),
+        Vector(NgspiceProbe.Voltage(node), NgspiceProbe.Current(id))
+      )
+      val request = NgspiceCircuitSimulateRequest(
+        f.request.executable,
+        f.root,
+        f.profile.id,
+        f.request.compiled,
+        bench
+      )
+      val dc = DcRaw.replace("v(v-sweep) voltage", "i(i-sweep) current")
+        .replace("v(p)", "v(n0)").replace("i(vdrive)", "i(vsense0)")
+      val ac = AcRaw.replace("v(p)", "v(n0)").replace("i(vdrive)", "i(vsense0)")
+      def run(raw: String, analysis: NgspiceCircuitAnalysis): NgspiceSimulationResult =
+        new NgspiceSimulator(Vector(f.profile), new Fake(runAction = request => emit(request, raw)))
+          .simulate(request.copy(bench = bench.copy(analysis = analysis)))
+      assert(run(dc, bench.analysis).outcome == NgspiceOutcome.Simulated)
+      val start = 1e10
+      Vector(false, true).foreach: complex =>
+        val analysis = if complex then NgspiceCircuitAnalysis.AcLinearSweep(3, start, start + 2)
+        else NgspiceCircuitAnalysis.DcSweep(id, start, start + 2, 1)
+        val template = if complex then ac else dc
+        def shifted(axes: Vector[Double]): String =
+          val pattern =
+            if complex then "(?m)^([012]) [^,\\n]+,".r else "(?m)^([012]) [0-9][^\\n]*$".r
+          pattern.replaceAllIn(
+            template,
+            matched =>
+              s"${matched.group(1)} ${axes(matched.group(1).toInt)}${if complex then "," else ""}"
+          )
+        assert(run(shifted(Vector(start, start + 1, start + 2)), analysis).outcome ==
+          NgspiceOutcome.Simulated)
+        Vector(
+          Vector(start, start, start),
+          Vector(start, start + 2, start + 1),
+          Vector(start, start + 1.5, start + 2)
+        ).foreach: axes =>
+          assert(run(shifted(axes), analysis).outcome == NgspiceOutcome.InvalidRaw)
+      val transient = request.copy(bench =
+        bench.copy(
+          analysis = NgspiceCircuitAnalysis.Transient(0.001, 0.003, false),
+          probes = Vector(NgspiceProbe.Voltage(node))
+        )
+      )
+      val transientRaw = TransientRaw.replace("v(p)", "v(n0)")
+      val actual = new NgspiceSimulator(
+        Vector(f.profile),
+        new Fake(runAction = request => emit(request, transientRaw))
+      )
+        .simulate(transient)
+      assert(actual.outcome == NgspiceOutcome.Simulated)
+      val wrong = new NgspiceSimulator(
+        Vector(f.profile),
+        new Fake(runAction =
+          request =>
+            emit(request, transientRaw.replace("3 0.003", "3 0.0029"))
+        )
+      ).simulate(transient)
+      assert(wrong.outcome == NgspiceOutcome.InvalidRaw)

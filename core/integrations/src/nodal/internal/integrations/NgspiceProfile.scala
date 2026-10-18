@@ -24,6 +24,32 @@ private[nodal] final case class NgspiceSimulateRequest(
     runTimeout: Duration = Duration.ofSeconds(30)
 )
 
+/** Separate request type prevents generalized benches from silently ignoring legacy settings. */
+private[nodal] final case class NgspiceCircuitSimulateRequest(
+    executable: Path,
+    evidenceDirectory: Path,
+    profileId: String,
+    compiled: OpenVafCompileResult,
+    bench: NgspiceCircuitBench,
+    versionTimeout: Duration = Duration.ofSeconds(5),
+    runTimeout: Duration = Duration.ofSeconds(30)
+)
+
+/** Both entry points use the same process, pin, artifact and evidence owner. */
+private[integrations] final case class NgspiceRunRequest(
+    executable: Path,
+    evidenceDirectory: Path,
+    profileId: String,
+    compiled: OpenVafCompileResult,
+    model: NgspiceModuleBinding | NgspiceCircuitBinding,
+    analysis: NgspiceAnalysis | NgspiceCircuitAnalysis,
+    options: NgspiceSolverOptions,
+    versionTimeout: Duration,
+    runTimeout: Duration,
+    generate: () => Either[String, NgspiceGeneratedBench],
+    circuit: Option[NgspiceCircuitBench]
+)
+
 private[nodal] enum NgspiceOutcome(val diagnosticCode: String):
   case Simulated extends NgspiceOutcome("NODAL-NGSPICE-000")
   case InvalidRequest extends NgspiceOutcome("NODAL-NGSPICE-001")
@@ -54,8 +80,8 @@ private[nodal] final case class NgspiceIdentity(
     modelSha256: String,
     artifactSha256: Option[String],
     artifactSize: Option[Long],
-    model: NgspiceModuleBinding,
-    analysis: NgspiceAnalysis,
+    model: NgspiceModuleBinding | NgspiceCircuitBinding,
+    analysis: NgspiceAnalysis | NgspiceCircuitAnalysis,
     options: NgspiceSolverOptions,
     deckSha256: Option[String],
     startupSha256: String,
@@ -64,7 +90,8 @@ private[nodal] final case class NgspiceIdentity(
     platform: String,
     versionTimeout: String,
     runTimeout: String,
-    requestSha256: Option[String]
+    requestSha256: Option[String],
+    circuit: Option[NgspiceCircuitBench] = None
 )
 
 private[nodal] final case class NgspiceRawArtifact(path: Path, sha256: String, size: Long)

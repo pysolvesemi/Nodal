@@ -3036,9 +3036,10 @@ private final class ConstructionSession(val options: EmitOptions):
 
   def operation(kind: String, values: Any*): Unit =
     if kind == "statement" then
-      analogSemanticRecorder.unsupported(
-        s"unrepresented source effect: ${values.headOption.getOrElse(kind)}"
-      )
+      val effect = moduleStack.lastOption.flatMap(module =>
+        values.headOption.map(renderAny(_, module.handle))
+      ).getOrElse(kind)
+      analogSemanticRecorder.unsupported(s"unrepresented source effect: $effect")
     val generatedAnalogContribution =
       kind == "analog-contribute" && generatedContinuousRegionActive
     val structuralTopology = Set(
@@ -3146,8 +3147,69 @@ private final class ConstructionSession(val options: EmitOptions):
       Option(declarationIds.get(reference))
         .map(declarationPath)
         .orElse(Option(expressionIds.get(reference)).map(expressionPath))
+        .orElse(Option(domainIds.get(reference)).map(domainPath))
         .orElse(Option(moduleIds.get(reference)).map(handle => modulePath(handle.longValue)))
     case _ => None
+
+  private def selectedPath(value: AnyRef): Option[String] =
+    if declarationIds.containsKey(value) || expressionIds.containsKey(value) ||
+      domainIds.containsKey(value) || moduleIds.containsKey(value)
+    then pathOf(value)
+    else None
+
+  private def selectedOperand(value: Any): KernelSelectedOperand = value match
+    case text: String => KernelSelectedOperand.Literal("string", text)
+    case value: Int => KernelSelectedOperand.Literal("integer", value.toString)
+    case value: Long => KernelSelectedOperand.Literal("long", value.toString)
+    case value: Double =>
+      KernelSelectedOperand.Literal("real", java.lang.Double.toString(value))
+    case value: Boolean => KernelSelectedOperand.Literal("boolean", value.toString)
+    case reference: AnyRef if selectedPath(reference).nonEmpty =>
+      KernelSelectedOperand.Reference(selectedPath(reference).get)
+    case _: Expr[?] | _: ClockDomain | _: Module | _: Node[?] | _: NodeArray[?] =>
+      fail(
+        "NODAL-SELECTION-050-001",
+        "selected expression references a foreign construction handle"
+      )
+    case _ => KernelSelectedOperand.Opaque("unsupported")
+
+  def operationKinds: Vector[String] = operations.iterator.map(_.kind).toSet.toVector.sorted
+
+  /** Called only after finish has resolved final names and structural aliases. */
+  def selectedReference(value: AnyRef): KernelSelectedReference =
+    val path = selectedPath(value).getOrElse(
+      fail("NODAL-SELECTION-050-001", "selected handle is outside this construction transaction")
+    )
+    Option(declarationIds.get(value)).map: reference =>
+      val declaration = records(reference.module).declarations(reference.index)
+      KernelSelectedReference(
+        path,
+        modulePath(reference.module),
+        declaration.kind.label,
+        declaration.dataType.map(renderType(_, reference.module))
+      )
+    .orElse(Option(domainIds.get(value)).map: reference =>
+      KernelSelectedReference(
+        path,
+        modulePath(reference.module),
+        "domain",
+        None
+      )).orElse(Option(expressionIds.get(value)).map: reference =>
+      val expression = expressionValues.get(reference)
+      KernelSelectedReference(
+        path,
+        modulePath(reference.module),
+        "expression",
+        expression.flatMap(CandidateRuntime.expressionDataType).map(renderType(
+          _,
+          reference.module
+        )),
+        expression.flatMap(_.operation),
+        expression.toVector.flatMap(_.operands).map(selectedOperand)
+      )).orElse(Option(moduleIds.get(value)).map: reference =>
+      KernelSelectedReference(path, modulePath(reference.longValue), "module", None)).getOrElse(
+      fail("NODAL-SELECTION-050-001", "selected handle has no canonical reference")
+    )
 
   private def stableClassName(value: AnyRef): String =
     val name = value.getClass.getSimpleName.stripSuffix("$")
@@ -3178,6 +3240,7 @@ private final class ConstructionSession(val options: EmitOptions):
         .orElse(
           Option(expressionIds.get(reference)).map(expressionPath)
         )
+        .orElse(Option(domainIds.get(reference)).map(domainPath))
         .getOrElse(stableClassName(reference))
     case other => other.toString
 
@@ -3664,11 +3727,12 @@ private final class ConstructionSession(val options: EmitOptions):
       relation: ClockRelation
   ): Vector[(String, String)] = relation match
     case ClockRelation.Same => Vector("clock_relation" -> "alias")
-    case ClockRelation.Ratio(multiply, divide, _) =>
+    case ClockRelation.Ratio(multiply, divide, phase) =>
       Vector(
         "clock_relation" -> "ratio",
         "clock_multiply" -> multiply.toString,
-        "clock_divide" -> divide.toString
+        "clock_divide" -> divide.toString,
+        "phase_degrees" -> java.lang.Double.toString(phase.degrees)
       )
     case ClockRelation.Synchronous(phaseKnown) =>
       Vector(
@@ -3680,6 +3744,10 @@ private final class ConstructionSession(val options: EmitOptions):
     case ClockRelation.Asynchronous =>
       Vector("clock_relation" -> "asynchronous")
     case ClockRelation.Unknown => Vector("clock_relation" -> "unknown")
+
+  private def domainSourcePath(value: AnyRef): String = selectedPath(value).getOrElse(
+    fail("NODAL-DOMAIN-020", "ClockDomain source is outside this construction transaction")
+  )
 
   private def snapshots(resolved: Map[DomainRef, String]): Vector[KernelModuleSnapshot] =
     records.values.toVector.sortBy(record => modulePath(record.handle)).map: module =>
@@ -3693,7 +3761,15 @@ private final class ConstructionSession(val options: EmitOptions):
             domain.domain.relation
               .map(relationAttributes)
               .getOrElse(Vector.empty) ++
-            policyAttributes
+            policyAttributes ++
+            domain.domain.frequency.toVector.map(value =>
+              "frequency_hz" -> java.lang.Double.toString(value.hertz)
+            ) ++
+            domain.domain.parent.toVector.map(value =>
+              "clock_parent" -> domainPath(domainRef(value))
+            ) ++
+            domain.domain.clock.toVector.map(value => "clock_source" -> domainSourcePath(value)) ++
+            Vector("reset_source" -> domainSourcePath(domain.domain.reset))
         KernelDomainSnapshot(
           domainPath(domain.reference),
           domainName(domain.reference),

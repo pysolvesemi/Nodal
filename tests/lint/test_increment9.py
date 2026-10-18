@@ -55,6 +55,14 @@ class Increment9Tests(unittest.TestCase):
             codes = {problem.code for problem in PACKAGES.check_repository(root)}
             self.assertIn("NODAL-PKG-003", codes)
 
+    def test_simulation_public_package_has_one_owner(self) -> None:
+        self.assertTrue(PACKAGES._valid_package("sim", "nodal.sim"))
+        self.assertTrue(PACKAGES._valid_package("sim", "nodal.sim.measurement"))
+        self.assertTrue(PACKAGES._valid_package("sim", "nodal.bootstrap.sim"))
+        self.assertFalse(PACKAGES._valid_package("sim", "nodal.simulation"))
+        for owner in ("api", "bridge", "frontend", "integrations", "cli", "testkit"):
+            self.assertFalse(PACKAGES._valid_package(owner, "nodal.sim"))
+
     def policy_fixture(self) -> tuple[tempfile.TemporaryDirectory[str], Path]:
         temporary = tempfile.TemporaryDirectory()
         root = Path(temporary.name)

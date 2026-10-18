@@ -341,8 +341,18 @@ object Increment43GeneratedTopologyTests extends TestSuite:
         snapshot.conservativeArrayBindings.foreach: binding =>
           val record =
             rootBody.linesIterator.find(_.contains(s"\"binding\":\"${binding.path}\"")).get
-          assert(record.contains(s"\"formal\":\"${binding.port}\""))
-          assert(record.contains(s"\"root\":\"${binding.actual}\""))
+          val root = snapshot.instanceArrayRoots.find(value =>
+            Set(binding.left, binding.right).contains(value.path)
+          ).get
+          val actual = if binding.left == root.path then binding.right else binding.left
+          assert(
+            record.contains(s"\"formal\":\"${root.port}\""),
+            record.contains(s"\"root\":\"$actual\""),
+            record.contains(s"\"root_reference\":\"${root.path}\""),
+            record.contains(s"\"root_shape\":\"${root.dimensions.mkString(",")}\""),
+            record.contains("\"left\":{"),
+            record.contains("\"right\":{")
+          )
           assert(record.contains(s"\"source_scope\":\"${binding.generatedScope.get.owner}\""))
           assert(record.contains("\"generated_scope\":\"\""))
           val span = snapshot.sourceMap.find(_.semanticPath == binding.path).get.source
@@ -385,6 +395,18 @@ object Increment43GeneratedTopologyTests extends TestSuite:
               region.path == scope.owner &&
                 region.owner == module.path && region.induction == scope.induction
             ))
+        snapshot.instanceArrayRoots.foreach: arrayRoot =>
+          val instance = root.instances.find(_.path == arrayRoot.instance).get
+          assert(
+            arrayRoot.owner == root.path,
+            arrayRoot.dimensions == Vector("count"),
+            arrayRoot.generatedScope == instance.generatedScope,
+            snapshot.sourceMap.exists(_.semanticPath == arrayRoot.path)
+          )
+          val relations = snapshot.conservativeArrayBindings.filter(binding =>
+            Set(binding.left, binding.right).contains(arrayRoot.path)
+          )
+          assert(relations.size == 1, relations.head.generatedScope == arrayRoot.generatedScope)
         snapshot.shapeIndices.filter(_.generatedScope.nonEmpty).foreach: index =>
           assert(index.path.endsWith(s".in(${index.generatedScope.get.owner})"))
           assert(index.sourceUses.forall(path => snapshot.sourceMap.exists(_.semanticPath == path)))

@@ -6,6 +6,7 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LogicalResult.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 
 #include <cstdint>
@@ -49,11 +50,12 @@ mlir::FailureOr<ParameterIntegerBounds> inferParameterIntegerBounds(mlir::Operat
 /// Immutable, query-local proof DAG. Parent parameters retain declaration identity;
 /// a singleton range or equal default never converts such an atom to a literal.
 struct InstantiatedIntegerNode {
-  enum class Kind { Literal, ParentParameter, Apply };
+  enum class Kind { Literal, ParentParameter, Apply, OpaqueValue };
   Kind kind;
   int64_t literal = 0;
   mlir::Operation *parameter = nullptr;
   mlir::Operation *origin = nullptr;
+  mlir::Value identity;
   std::string opcode;
   std::vector<std::shared_ptr<const InstantiatedIntegerNode>> operands;
   ParameterIntegerBounds bounds;
@@ -76,6 +78,18 @@ resolveOwnedIntegerParameter(mlir::Operation *module, mlir::Operation *parameter
 mlir::FailureOr<InstantiatedIntegerExpression>
 resolveOwnedIntegerExpression(mlir::Operation *module, mlir::Value expression);
 InstantiatedIntegerExpression makeLiteralIntegerExpression(int64_t value);
+/// Query-only identity atom. The caller must independently prove the value's
+/// ownership and bounds; ordinary parameter interpretation never creates these.
+InstantiatedIntegerExpression makeOpaqueIntegerExpression(mlir::Value identity,
+                                                          ParameterIntegerBounds bounds);
+/// Checked composition of already proved immutable expressions. Reuses the
+/// parameter arithmetic policy and retains opaque identities through arithmetic.
+mlir::FailureOr<InstantiatedIntegerExpression>
+composeIntegerExpression(llvm::StringRef opcode,
+                         llvm::ArrayRef<InstantiatedIntegerExpression> operands);
+/// Conservative all-legal ordering, using exact identity and checked bounds.
+bool proveIntegerExpressionLess(const InstantiatedIntegerExpression &left,
+                                const InstantiatedIntegerExpression &right, bool inclusive = false);
 bool equivalentInstantiatedIntegerExpressions(const InstantiatedIntegerExpression &left,
                                               const InstantiatedIntegerExpression &right);
 

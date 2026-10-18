@@ -109,8 +109,27 @@ std::string branchSourcePath(Operation *operation) {
   return "branch";
 }
 
-bool matchingTerminalPair(Value lhs0, Value lhs1, Value rhs0, Value rhs1) {
-  return (lhs0 == rhs0 && lhs1 == rhs1) || (lhs0 == rhs1 && lhs1 == rhs0);
+bool matchingTerminal(Value left, Value right, Operation *use, LogicalResult &status) {
+  if (left == right)
+    return true;
+  if (!isNodeArraySelection(left.getDefiningOp()) && !isNodeArraySelection(right.getDefiningOp()))
+    return false;
+  auto identity = compareConservativeEndpoints(left, right, use);
+  if (identity == ConservativeAlias::Unknown || identity == ConservativeAlias::ResourceLimit ||
+      identity == ConservativeAlias::Invalid)
+    status = failure();
+  return identity == ConservativeAlias::Equal;
+}
+
+bool matchingTerminalPair(Value lhs0, Value lhs1, Value rhs0, Value rhs1, Operation *use,
+                          LogicalResult &status) {
+  LogicalResult forward = success(), reverse = success();
+  if ((matchingTerminal(lhs0, rhs0, use, forward) && matchingTerminal(lhs1, rhs1, use, forward)) ||
+      (matchingTerminal(lhs0, rhs1, use, reverse) && matchingTerminal(lhs1, rhs0, use, reverse)))
+    return true;
+  if (failed(forward) || failed(reverse))
+    status = failure();
+  return false;
 }
 
 struct AccessGroup {
@@ -132,27 +151,27 @@ bool isImplicitBranchOperation(Operation *operation) {
 }
 
 AccessGroup *findImplicitBranchGroup(llvm::MutableArrayRef<AccessGroup> groups, Value positive,
-                                     Value negative) {
+                                     Value negative, Operation *use, LogicalResult &status) {
   for (AccessGroup &group : groups) {
     if (!isImplicitBranchOperation(group.branchOperation) ||
         group.branchOperation->getNumOperands() != 2)
       continue;
     if (matchingTerminalPair(group.branchOperation->getOperand(0),
-                             group.branchOperation->getOperand(1), positive, negative))
+                             group.branchOperation->getOperand(1), positive, negative, use, status))
       return &group;
   }
   return nullptr;
 }
 
 AccessGroup *findImplicitGroup(llvm::MutableArrayRef<AccessGroup> groups, llvm::StringRef form,
-                               ValueRange subject) {
+                               ValueRange subject, Operation *use, LogicalResult &status) {
   for (AccessGroup &group : groups) {
     if (group.branchOperation || group.form != form || group.subject.size() != subject.size())
       continue;
-    if (subject.size() == 1 && group.subject[0] == subject[0])
+    if (subject.size() == 1 && matchingTerminal(group.subject[0], subject[0], use, status))
       return &group;
-    if (subject.size() == 2 &&
-        matchingTerminalPair(group.subject[0], group.subject[1], subject[0], subject[1]))
+    if (subject.size() == 2 && matchingTerminalPair(group.subject[0], group.subject[1], subject[0],
+                                                    subject[1], use, status))
       return &group;
   }
   return nullptr;
@@ -192,8 +211,10 @@ LogicalResult collectAccessGroups(Operation *module, llvm::SmallVectorImpl<Acces
     groups.push_back(std::move(group));
   });
 
+  LogicalResult grouping = success();
   module->walk([&](Operation *operation) {
-    if (enclosingNodalModule(operation) != module || !isNamed(operation, "nodal.terminal_access"))
+    if (failed(grouping) || enclosingNodalModule(operation) != module ||
+        !isNamed(operation, "nodal.terminal_access"))
       return;
     const unsigned arity = operation->getNumOperands();
     if (arity != 1 && arity != 2)
@@ -201,11 +222,12 @@ LogicalResult collectAccessGroups(Operation *module, llvm::SmallVectorImpl<Acces
 
     AccessGroup *group = nullptr;
     if (arity == 2)
-      group = findImplicitBranchGroup(groups, operation->getOperand(0), operation->getOperand(1));
+      group = findImplicitBranchGroup(groups, operation->getOperand(0), operation->getOperand(1),
+                                      operation, grouping);
     if (!group) {
       llvm::StringRef form =
           arity == 1 ? llvm::StringRef("one-terminal") : llvm::StringRef("two-terminal");
-      group = findImplicitGroup(groups, form, operation->getOperands());
+      group = findImplicitGroup(groups, form, operation->getOperands(), operation, grouping);
       if (!group) {
         AccessGroup created;
         created.form = form.str();
@@ -217,6 +239,9 @@ LogicalResult collectAccessGroups(Operation *module, llvm::SmallVectorImpl<Acces
     addAccessKind(*group, textAttr(operation, "kind"), operation);
   });
 
+  if (failed(grouping))
+    return fail(module, "NODAL-SHAPE-043-009",
+                "access grouping has unproved physical alias identity");
   for (AccessGroup &group : groups) {
     llvm::sort(group.provenance);
     group.provenance.erase(std::unique(group.provenance.begin(), group.provenance.end()),
@@ -336,8 +361,19 @@ FailureOr<std::string> accessDiscipline(Operation *operation) {
     if (failed(compatible) || !*compatible)
       return failValue<std::string>(operation, "NODAL-ACCESS-DISCIPLINE-001",
                                     "terminal access operands use incompatible disciplines");
-    if (textAttr(operation, "kind") == "flow" &&
-        operation->getOperand(0) == operation->getOperand(1))
+    ConservativeAlias identity = operation->getOperand(0) == operation->getOperand(1)
+                                     ? ConservativeAlias::Equal
+                                     : ConservativeAlias::Distinct;
+    if (isNodeArraySelection(operation->getOperand(0).getDefiningOp()) ||
+        isNodeArraySelection(operation->getOperand(1).getDefiningOp())) {
+      identity = compareConservativeEndpoints(operation->getOperand(0), operation->getOperand(1),
+                                              operation);
+      if (identity != ConservativeAlias::Equal && identity != ConservativeAlias::Distinct &&
+          identity != ConservativeAlias::Inert)
+        return failValue<std::string>(operation, "NODAL-SHAPE-043-009",
+                                      "terminal access has unproved physical alias identity");
+    }
+    if (textAttr(operation, "kind") == "flow" && identity == ConservativeAlias::Equal)
       return failValue<std::string>(operation, "NODAL-ACCESS-FORM-001",
                                     "oriented flow access requires distinct terminals");
   }

@@ -9,6 +9,19 @@ private[nodal] object StructuralParameterBinding:
   private def invalid(message: String): Nothing =
     throw new IllegalArgumentException(s"NODAL-SHAPE-043-007: $message")
 
+  final case class IntegerNode(
+      literal: Option[Long],
+      parameter: Option[String],
+      operation: Option[String],
+      operands: Vector[Int],
+      bounds: IterationDomain.Bounds
+  )
+  final case class ResolvedDimensions(
+      dimensions: Vector[Int],
+      nodes: Vector[IntegerNode],
+      existing: Map[Int, String]
+  )
+
   private enum Key:
     case Literal(value: Long)
     case Parameter(path: String)
@@ -184,6 +197,78 @@ private[nodal] object StructuralParameterBinding:
     def positive(index: Int): Unit =
       if facts(index).bounds.lower <= 0 then invalid("effective shape extent must remain positive")
 
+    def exportDimensions(owner: String, dimensions: Vector[Int]): ResolvedDimensions =
+      // Reuse is an identity lookup over facts already proved for the selected instance.
+      // Unrelated Integer defaults do not acquire shape-envelope obligations merely because
+      // they are present in the parent. Required consumers still go through resolve above.
+      val existing = mutable.LinkedHashMap.empty[Int, String]
+      val matched = mutable.HashMap.empty[String, Option[Int]]
+      val visiting = mutable.HashSet.empty[String]
+      def candidate(token: String): Option[Int] = matched.getOrElseUpdate(
+        token,
+        if visiting.size >= 512 || !visiting.add(token) then None
+        else
+          try
+            token.toLongOption.filter(_.toString == token).flatMap(value =>
+              ids.get(Key.Literal(value))
+            )
+              .orElse(declaration(owner, token).filter(value =>
+                value.kind == "parameter" && value.dataType.contains("Integer")
+              )
+                .flatMap(value => ids.get(Key.Parameter(value.path))))
+              .orElse(expressions.get(token).filter(value =>
+                value.owner == owner &&
+                  value.dataType == "Integer" && value.unit.forall(_.isEmpty)
+              ).flatMap: expression =>
+                expression.literal match
+                  case Some(value)
+                      if expression.operation == "integer" && expression.operands.isEmpty =>
+                    value.toLongOption.flatMap(value => ids.get(Key.Literal(value)))
+                  case Some(_) => None
+                  case None =>
+                    val operands = expression.operands.map(candidate)
+                    if operands.exists(_.isEmpty) then None
+                    else
+                      val inputs = operands.flatten
+                      ids.get(Key.Apply(expression.operation, inputs)).orElse:
+                        val operation = expression.operation match
+                          case "analog_add" => Some(IterationDomain.Arithmetic.Add)
+                          case "analog_sub" => Some(IterationDomain.Arithmetic.Subtract)
+                          case "analog_mul" => Some(IterationDomain.Arithmetic.Multiply)
+                          case "analog_div" => Some(IterationDomain.Arithmetic.Divide)
+                          case "analog_neg" => Some(IterationDomain.Arithmetic.Negate)
+                          case _ => None
+                        operation.filter(op =>
+                          inputs.size == (if op == IterationDomain.Arithmetic.Negate then 1 else 2)
+                        )
+                          .filter(_ =>
+                            inputs.forall(index => facts(index).key.isInstanceOf[Key.Literal])
+                          )
+                          .flatMap(op =>
+                            IterationDomain.arithmetic(op, inputs.map(facts(_).bounds)).toOption
+                          )
+                          .flatMap(value => ids.get(Key.Literal(value.lower))))
+          finally { val _ = visiting.remove(token) }
+      )
+      (module(owner).declarations.filter(value =>
+        value.kind == "parameter" && value.dataType.contains("Integer")
+      ).map(_.path) ++
+        snapshot.parameterExpressions.filter(_.owner == owner).map(_.path)).foreach: path =>
+        candidate(path).foreach(id => existing.getOrElseUpdate(id, path))
+      ResolvedDimensions(
+        dimensions,
+        facts.toVector.map: fact =>
+          fact.key match
+            case Key.Literal(value) =>
+              IntegerNode(Some(value), None, None, Vector.empty, fact.bounds)
+            case Key.Parameter(path) =>
+              IntegerNode(None, Some(path), None, Vector.empty, fact.bounds)
+            case Key.Apply(operation, operands) =>
+              IntegerNode(None, None, Some(operation), operands, fact.bounds)
+        ,
+        existing.toMap
+      )
+
     def validateOverrides(): Unit = instance.foreach: (_, value) =>
       val child = module(value.childModule)
       overrides.keys.foreach: name =>
@@ -210,34 +295,69 @@ private[nodal] object StructuralParameterBinding:
   def defaultInteger(snapshot: ConstructionSnapshot, owner: String, reference: String): Long =
     new Query(snapshot, None).checkedLiteral(owner, reference)
 
-  def validate(
+  private def instancePort(
       snapshot: ConstructionSnapshot,
-      binding: KernelConservativeArrayBindingSnapshot,
-      actualDimensions: Vector[String]
-  ): Unit =
+      ownerPath: String,
+      instancePath: String,
+      portPath: String
+  ): (KernelModuleSnapshot, KernelInstanceSnapshot, KernelDeclarationSnapshot) =
     val owner =
-      snapshot.modules.find(_.path == binding.owner).getOrElse(invalid("binding owner is missing"))
-    val instance = owner.instances.find(
-      _.path == binding.instance
-    ).getOrElse(invalid("binding is not owned by the exact immediate instance"))
-    val child = snapshot.modules.find(
-      _.path == instance.childModule
-    ).getOrElse(invalid("child definition is missing"))
-    val port = child.declarations.find(
-      _.path == binding.port
-    ).getOrElse(invalid("binding does not name the declared child port"))
+      snapshot.modules.find(_.path == ownerPath).getOrElse(invalid("binding owner is missing"))
+    val instance = owner.instances.find(_.path == instancePath)
+      .getOrElse(invalid("binding is not owned by the exact immediate instance"))
+    val child = snapshot.modules.find(_.path == instance.childModule)
+      .getOrElse(invalid("child definition is missing"))
+    val port = child.declarations.find(_.path == portPath)
+      .getOrElse(invalid("binding does not name the declared child port"))
     if !Set("analog-input", "analog-output", "analog-inout").contains(port.kind) ||
       port.conservativeDimensions.isEmpty
     then
-      invalid("whole array binding requires a conservative child boundary declaration")
-    if actualDimensions.isEmpty || actualDimensions.size != port.conservativeDimensions.size then
-      invalid("array binding rank does not match the declared child shape")
+      invalid("instance array requires a conservative child boundary declaration")
+    (owner, instance, port)
+
+  def resolveDimensions(
+      snapshot: ConstructionSnapshot,
+      owner: String,
+      instance: String,
+      port: String
+  ): ResolvedDimensions =
+    val (parent, occurrence, declaration) = instancePort(snapshot, owner, instance, port)
+    val query = new Query(snapshot, Some(parent.path -> occurrence))
+    query.validateOverrides()
+    val dimensions =
+      declaration.conservativeDimensions.map(query.resolve(occurrence.childModule, _))
+    dimensions.foreach(query.positive)
+    query.exportDimensions(parent.path, dimensions)
+
+  def validateRoot(snapshot: ConstructionSnapshot, root: KernelInstanceArrayRootSnapshot): Unit =
+    val (owner, instance, port) = instancePort(snapshot, root.owner, root.instance, root.port)
+    if root.generatedScope != instance.generatedScope then
+      invalid("instance array crossed its exact instance scope")
+    if root.dimensions.size != port.conservativeDimensions.size then
+      invalid("instance array lost full declared rank")
     val query = new Query(snapshot, Some(owner.path -> instance))
     query.validateOverrides()
-    port.conservativeDimensions.zip(actualDimensions).foreach: (formal, actual) =>
-      val expected = query.resolve(child.path, formal)
+    port.conservativeDimensions.zip(root.dimensions).foreach: (formal, actual) =>
+      val expected = query.resolve(instance.childModule, formal)
       val supplied = query.resolve(owner.path, actual)
       query.positive(expected)
       query.positive(supplied)
       if expected != supplied then
-        invalid("array binding extent is not the exact substituted child expression")
+        invalid("instance array extent is not the exact finalized child expression")
+
+  def validateRelation(
+      snapshot: ConstructionSnapshot,
+      relation: KernelConservativeArrayBindingSnapshot,
+      left: Vector[String],
+      right: Vector[String]
+  ): Unit =
+    if left.isEmpty || left.size != right.size then
+      invalid("array relation requires equal nonempty rank")
+    val query = new Query(snapshot, None)
+    left.zip(right).foreach: (a, b) =>
+      val first = query.resolve(relation.owner, a)
+      val second = query.resolve(relation.owner, b)
+      query.positive(first)
+      query.positive(second)
+      if first != second then
+        invalid("array relation extents are not the same exact finalized expression")

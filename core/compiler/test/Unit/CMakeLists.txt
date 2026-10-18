@@ -409,3 +409,26 @@ set_tests_properties(nodal.native.generated-topology-integration PROPERTIES
   TIMEOUT 60
   ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
 )
+
+add_executable(nodal-conservative-relation-backend-unit-tests ConservativeRelationBackendTest.cpp)
+llvm_update_compile_flags(nodal-conservative-relation-backend-unit-tests)
+target_link_libraries(nodal-conservative-relation-backend-unit-tests
+  PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.conservative-relation-backend-unit COMMAND nodal-conservative-relation-backend-unit-tests)
+
+add_executable(nodal-shape-region-unit-tests ShapeRegionTest.cpp)
+llvm_update_compile_flags(nodal-shape-region-unit-tests)
+target_link_libraries(nodal-shape-region-unit-tests
+  PRIVATE NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.shape-region-unit COMMAND nodal-shape-region-unit-tests)
+
+add_test(NAME nodal.native.conservative-relation-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_conservative_relation_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-conservative-relation-evidence"
+)
+set_tests_properties(nodal.native.conservative-relation-integration PROPERTIES
+  TIMEOUT 60
+  ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+)

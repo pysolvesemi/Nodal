@@ -1127,7 +1127,7 @@ bool sameIntegerNodes(InstanceNodePtr left, InstanceNodePtr right) {
     const auto &a = *pair.first;
     const auto &b = *pair.second;
     if (a.kind != b.kind || a.literal != b.literal || a.parameter != b.parameter ||
-        a.opcode != b.opcode || a.operands.size() != b.operands.size())
+        a.identity != b.identity || a.opcode != b.opcode || a.operands.size() != b.operands.size())
       return false;
     for (size_t index = 0; index < a.operands.size(); ++index)
       pending.emplace_back(a.operands[index].get(), b.operands[index].get());
@@ -1951,6 +1951,96 @@ nodal::resolveOwnedIntegerExpression(Operation *module, Value expression) {
 
 nodal::InstantiatedIntegerExpression nodal::makeLiteralIntegerExpression(int64_t value) {
   return {literalInstanceNode(value), {value, value}};
+}
+
+nodal::InstantiatedIntegerExpression
+nodal::makeOpaqueIntegerExpression(Value identity, ParameterIntegerBounds bounds) {
+  auto node = std::make_shared<InstanceNode>();
+  node->kind = InstanceNode::Kind::OpaqueValue;
+  node->identity = identity;
+  node->origin = identity.getDefiningOp();
+  node->bounds = bounds;
+  return {node, bounds};
+}
+
+FailureOr<nodal::InstantiatedIntegerExpression>
+nodal::composeIntegerExpression(llvm::StringRef opcode,
+                                llvm::ArrayRef<InstantiatedIntegerExpression> operands) {
+  llvm::SmallVector<IntegerBounds, 2> bounds;
+  bool allLiteral = true;
+  for (const auto &operand : operands) {
+    if (!operand.root || operand.bounds.lower != operand.root->bounds.lower ||
+        operand.bounds.upper != operand.root->bounds.upper)
+      return failure();
+    bounds.push_back(operand.bounds);
+    allLiteral &= operand.root->kind == InstanceNode::Kind::Literal;
+  }
+  auto result = integerOperationBounds(
+      opcode, bounds, operands.size() == 2 && sameIntegerNodes(operands[0].root, operands[1].root));
+  if (failed(result))
+    return failure();
+  if (allLiteral) {
+    int64_t value =
+        opcode == "mod" ? operands[0].root->literal % operands[1].root->literal : result->lower;
+    return makeLiteralIntegerExpression(value);
+  }
+  auto isLiteral = [&](unsigned index, int64_t value) {
+    return operands[index].root->kind == InstanceNode::Kind::Literal &&
+           operands[index].root->literal == value;
+  };
+  if (operands.size() == 2) {
+    if ((opcode == "add" || opcode == "sub") && isLiteral(1, 0))
+      return operands[0];
+    if (opcode == "add" && isLiteral(0, 0))
+      return operands[1];
+    if (opcode == "mul" && (isLiteral(0, 0) || isLiteral(1, 0)))
+      return makeLiteralIntegerExpression(0);
+    if ((opcode == "mul" || opcode == "div") && isLiteral(1, 1))
+      return operands[0];
+    if (opcode == "mul" && isLiteral(0, 1))
+      return operands[1];
+    if ((opcode == "div" || opcode == "mod") && isLiteral(0, 0))
+      return makeLiteralIntegerExpression(0);
+    if (opcode == "mod" && isLiteral(1, 1))
+      return makeLiteralIntegerExpression(0);
+    if (opcode == "sub" && sameIntegerNodes(operands[0].root, operands[1].root))
+      return makeLiteralIntegerExpression(0);
+    // Exact adjacent-map cancellation, not a general algebra solver. These
+    // rules preserve source atoms and avoid retaining spurious envelope width.
+    for (unsigned first = 0; first != 2; ++first) {
+      const auto &node = operands[first].root;
+      if (opcode == "add" && node->kind == InstanceNode::Kind::Apply && node->opcode == "sub" &&
+          node->operands.size() == 2 &&
+          sameIntegerNodes(node->operands[1], operands[1 - first].root))
+        return InstanceExpression{node->operands[0], node->operands[0]->bounds};
+    }
+    const auto &left = operands[0].root;
+    if (opcode == "sub" && left->kind == InstanceNode::Kind::Apply && left->opcode == "add" &&
+        left->operands.size() == 2)
+      for (unsigned index = 0; index != 2; ++index)
+        if (sameIntegerNodes(left->operands[index], operands[1].root))
+          return InstanceExpression{left->operands[1 - index], left->operands[1 - index]->bounds};
+  }
+  auto node = std::make_shared<InstanceNode>();
+  node->kind = InstanceNode::Kind::Apply;
+  node->opcode = opcode.str();
+  node->bounds = *result;
+  for (const auto &operand : operands)
+    node->operands.push_back(operand.root);
+  return InstanceExpression{node, *result};
+}
+
+bool nodal::proveIntegerExpressionLess(const InstantiatedIntegerExpression &left,
+                                       const InstantiatedIntegerExpression &right, bool inclusive) {
+  if (!left.root || !right.root)
+    return false;
+  if (inclusive && sameIntegerNodes(left.root, right.root))
+    return true;
+  if (inclusive ? left.bounds.upper <= right.bounds.lower : left.bounds.upper < right.bounds.lower)
+    return true;
+  auto difference = composeIntegerExpression("sub", {right, left});
+  return succeeded(difference) &&
+         (inclusive ? difference->bounds.lower >= 0 : difference->bounds.lower > 0);
 }
 
 bool nodal::equivalentInstantiatedIntegerExpressions(const InstantiatedIntegerExpression &left,

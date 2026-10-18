@@ -286,6 +286,24 @@ private[nodal] object ConstructionKernel:
     case Some(session) => session.withWaveformForbidden(body)
     case None => body
 
+  def withInstanceSelection[A](instance: Instance[?])(body: => A): A =
+    active.getOrElse(
+      throw new IllegalStateException("instance selection requires active construction")
+    )
+      .withInstanceSelection(instance)(body)
+
+  def nodeArrayUse[D <: Discipline](value: NodeArray[D]): NodeArray[D] =
+    active.getOrElse(throw new IllegalStateException("node array requires active construction"))
+      .nodeArrayUse(value)
+
+  def declareInstanceNodeArray(
+      value: NodeArray[?],
+      instance: Instance[?],
+      port: NodeArray[?]
+  ): Unit =
+    active.getOrElse(throw new IllegalStateException("instance array requires active construction"))
+      .registerInstanceNodeArray(value, instance, port)
+
   def validateInstanceSelection(instance: Instance[?]): Unit =
     active.foreach(_.validateInstanceSelection(instance))
 

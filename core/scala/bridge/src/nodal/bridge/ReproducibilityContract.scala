@@ -461,14 +461,17 @@ private[nodal] object ReproducibilityContract:
 
   private def conservativeBindingGraph(snapshot: ConstructionSnapshot)
       : Vector[(String, JsonValue)] =
-    if snapshot.conservativeArrayBindings.isEmpty then Vector.empty
+    if snapshot.conservativeArrayBindings.isEmpty && snapshot.instanceArrayRoots.isEmpty then
+      Vector.empty
     else
       val declarations =
         snapshot.modules.flatMap(_.declarations).map(value => value.path -> value).toMap
+      val roots = snapshot.instanceArrayRoots.map(value => value.path -> value).toMap
       val indices = snapshot.shapeIndices.map(value => value.path -> value).toMap
       val views = snapshot.shapeViews.map(value => value.path -> value).toMap
       def dimensions(path: String): Vector[String] =
         declarations.get(path).map(_.conservativeDimensions)
+          .orElse(roots.get(path).map(_.dimensions))
           .orElse(indices.get(path).map(_.resultDimensions))
           .orElse(views.get(path).map(_.dimensions)).getOrElse(Vector.empty)
       def chain(path: String): Vector[String] =
@@ -482,20 +485,35 @@ private[nodal] object ReproducibilityContract:
           result += current
           next = indices.get(current).map(_.input).orElse(views.get(current).map(_.input))
         result.reverse.toVector
+      def endpoint(path: String): JsonValue =
+        val projections = chain(path)
+        val root = roots.get(projections.head)
+        obj(
+          "reference" -> string(path),
+          "root" -> string(projections.head),
+          "projection_chain" -> array(projections.tail.map(string)),
+          "root_dimensions" -> array(dimensions(projections.head).map(string)),
+          "effective_dimensions" -> array(dimensions(path).map(string)),
+          "instance" -> optionalString(root.map(_.instance)),
+          "port" -> optionalString(root.map(_.port)),
+          "source" -> source(snapshot.sourceMap.find(_.semanticPath == path).map(_.source))
+        )
       Vector(
+        "instance_array_roots" -> array(snapshot.instanceArrayRoots.sortBy(_.path).map: root =>
+          obj((Vector(
+            "path" -> string(root.path),
+            "owner" -> string(root.owner),
+            "instance" -> string(root.instance),
+            "port" -> string(root.port),
+            "dimensions" -> array(root.dimensions.map(string))
+          ) ++ generatedScopeFields(root.generatedScope))*)),
         "conservative_array_bindings" ->
           array(snapshot.conservativeArrayBindings.sortBy(_.path).map: binding =>
-            val projections = chain(binding.actual)
             obj((Vector(
               "path" -> string(binding.path),
               "owner" -> string(binding.owner),
-              "instance" -> string(binding.instance),
-              "port" -> string(binding.port),
-              "actual" -> string(binding.actual),
-              "actual_root" -> string(projections.head),
-              "actual_projection_chain" -> array(projections.tail.map(string)),
-              "formal_dimensions" -> array(dimensions(binding.port).map(string)),
-              "effective_dimensions" -> array(dimensions(binding.actual).map(string)),
+              "left" -> endpoint(binding.left),
+              "right" -> endpoint(binding.right),
               "vector_orientation" -> string("ascending"),
               "source" ->
                 source(snapshot.sourceMap.find(_.semanticPath == binding.path).map(_.source))
@@ -509,7 +527,7 @@ private[nodal] object ReproducibilityContract:
             "result_dimensions" -> array(value.resultDimensions.map(string))
           ) ++ generatedScopeFields(value.generatedScope))*)),
         "structural_shape_views" -> array(snapshot.shapeViews.sortBy(_.path).map: value =>
-          obj(
+          obj((Vector(
             "path" -> string(value.path),
             "owner" -> string(value.owner),
             "input" -> string(value.input),
@@ -521,7 +539,7 @@ private[nodal] object ReproducibilityContract:
                 "upper_exclusive" -> string(slice.upperExclusive)
               )
             ).getOrElse(JNull)
-          )),
+          ) ++ generatedScopeFields(value.generatedScope))*)),
         "parameter_expressions" -> array(snapshot.parameterExpressions.sortBy(_.path).map: value =>
           obj(
             "path" -> string(value.path),

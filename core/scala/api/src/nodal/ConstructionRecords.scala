@@ -78,12 +78,20 @@ private[nodal] final case class KernelInstanceSnapshot(
     generatedScope: Option[KernelGeneratedScope] = None
 )
 
-private[nodal] final case class KernelConservativeArrayBindingSnapshot(
+private[nodal] final case class KernelInstanceArrayRootSnapshot(
     path: String,
     owner: String,
     instance: String,
     port: String,
-    actual: String,
+    dimensions: Vector[String],
+    generatedScope: Option[KernelGeneratedScope] = None
+)
+
+private[nodal] final case class KernelConservativeArrayBindingSnapshot(
+    path: String,
+    owner: String,
+    left: String,
+    right: String,
     generatedScope: Option[KernelGeneratedScope] = None
 )
 
@@ -131,7 +139,8 @@ private[nodal] final case class KernelShapeViewSnapshot(
     owner: String,
     input: String,
     dimensions: Vector[String],
-    slice: Option[KernelShapeSliceSnapshot] = None
+    slice: Option[KernelShapeSliceSnapshot] = None,
+    generatedScope: Option[KernelGeneratedScope] = None
 )
 
 private[nodal] final case class KernelModuleSnapshot(
@@ -281,7 +290,8 @@ private[nodal] final case class ConstructionSnapshot(
     generatedRegions: Vector[KernelGeneratedRegionSnapshot] = Vector.empty,
     shapeIndices: Vector[KernelShapeIndexSnapshot] = Vector.empty,
     shapeViews: Vector[KernelShapeViewSnapshot] = Vector.empty,
-    conservativeArrayBindings: Vector[KernelConservativeArrayBindingSnapshot] = Vector.empty
+    conservativeArrayBindings: Vector[KernelConservativeArrayBindingSnapshot] = Vector.empty,
+    instanceArrayRoots: Vector[KernelInstanceArrayRootSnapshot] = Vector.empty
 )
 
 private final case class DomainRef(module: Long, index: Int)
@@ -320,20 +330,55 @@ private final class GeneratedRegionRecord(
   val declarations: mutable.ArrayBuffer[DeclarationRef] = mutable.ArrayBuffer.empty
 
 private final case class ConservativeArrayBindingRecord(
-    instanceOrdinal: Int,
-    port: DeclarationRef,
-    actual: DeclarationRef | ExpressionRef,
+    left: DeclarationRef | ExpressionRef,
+    right: DeclarationRef | ExpressionRef,
     source: Option[SourceSpan]
 )
 
-private final case class NodeArrayProjection(
+private[nodal] sealed trait NodeArrayShapeIntent:
+  def rank: Int
+  def knownDimensions: Option[Vector[Dimension]]
+
+private[nodal] object NodeArrayShapeIntent:
+  final case class Declared(dimensions: Vector[Dimension]) extends NodeArrayShapeIntent:
+    def rank: Int = dimensions.size
+    def knownDimensions: Option[Vector[Dimension]] = Some(dimensions)
+  final case class InstancePort(instance: Instance[?], port: NodeArray[?])
+      extends NodeArrayShapeIntent:
+    def rank: Int = port.shapeIntent.rank
+    def knownDimensions: Option[Vector[Dimension]] = None
+  final case class Transform(
+      projection: NodeArrayProjection,
+      rank: Int,
+      knownDimensions: Option[Vector[Dimension]]
+  ) extends NodeArrayShapeIntent
+
+private[nodal] final case class NodeArrayProjection(
     input: NodeArray[?],
     indices: Vector[Dimension] = Vector.empty,
-    slice: Option[ShapeSliceSelection] = None
+    slice: Option[ShapeSliceSelection] = None,
+    reshape: Vector[Dimension] = Vector.empty,
+    flatten: Boolean = false
+)
+
+private final class InstanceArrayRootRecord(
+    val value: NodeArray[?],
+    val reference: ExpressionRef,
+    val instanceOrdinal: Int,
+    val port: DeclarationRef
+):
+  var dimensions: Option[Vector[Dimension]] = None
+
+private final case class DeferredNodeArrayRecord(
+    value: NodeArray[?] | Node[?],
+    reference: ExpressionRef,
+    input: NodeArray[?],
+    projection: Option[NodeArrayProjection],
+    indices: Vector[Dimension] = Vector.empty
 )
 
 private final case class ConservativeSelectionKey(
-    array: DeclarationRef,
+    array: DeclarationRef | ExpressionRef,
     region: StructuralShapeCoordinates.Region
 )
 
@@ -357,7 +402,8 @@ private final case class ShapeViewRecord(
     reference: ExpressionRef,
     input: DeclarationRef | ExpressionRef,
     dimensions: Vector[Dimension],
-    slice: Option[ShapeSliceSelection] = None
+    slice: Option[ShapeSliceSelection] = None,
+    generatedScope: Option[GeneratedRegionRecord] = None
 )
 
 private final class InstanceRecord(

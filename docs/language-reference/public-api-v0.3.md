@@ -117,7 +117,7 @@ analog:
   I(taps.at(1, 2), ground) <+ V(taps.at(1, 2), ground) / 1000.0
 ```
 
-Local array references support `row(index)` on rank two, `plane(index)` on rank
+Owned local and instance-qualified boundary array references support `row(index)` on rank two, `plane(index)` on rank
 three, `slice(lower, upperExclusive, axis = 0)`, `flatten`, and
 `reshape(dimensions*)`. Views preserve the owned root and Electrical capability;
 they declare no additional nodes. NodeArray flatten preserves checked signed-64
@@ -136,17 +136,25 @@ occurrences retained. Independent symbolic tuples with unproved overlap reject,
 rather than silently becoming separate nets. Selected nodes retain existing
 scalar branch/access/connection semantics and immediate-child scalar connectivity.
 Arrays owned by another Module cannot be selected by bypassing that Module's
-boundary. Bulk local array connections and writable Real-array storage are separate
-capabilities. The generated selection profile is described below.
+boundary. Conservative array connections and writable Real-array storage have separate capability contracts. The generated selection profile is described below.
 
-Whole immediate-child array ports bind to parent-owned local/boundary roots or views
-through `connect(parentActual, child(_.port))` or `parentActual <> child(_.port)`.
-Either argument order is accepted. Exact rank/extents are checked after all `.param`
-overrides, including overrides authored after connect. Dependent Integer defaults retain
-their actual expression DAG and substitute the finalized instance environment;
-equal defaults, names, envelopes or element counts are not an extent identity proof.
-One whole binding is required per child array port. Parent-side child views, partial
-bindings, child-to-child and bulk local joins remain outside this profile.
+[Conservative node arrays v0.5](../design-gates/NodalConservativeNodeArrays-DG-v0.5.md)
+uses `connect(left, right)` or `left <> right` for local/local, local/child and
+child/child relations. Select a child boundary through its exact instance, for
+example `child(_.port.slice(0, 2))` or `child(_.port).slice(0, 2)`. Child projections
+retain shape intent until all `.param` overrides are finalized, including overrides
+authored after the view or relation. Dependent Integer defaults substitute that
+final instance environment; equal defaults, names, envelopes or element counts do
+not prove extent identity. Raw child declaration handles do not identify an instance.
+
+Each child array port requires exactly-once incident coverage. Whole references,
+proved prefix/slice partitions, and scalar `at` connections participate in this
+shared native coverage check. Shapes and corresponding extents must match on both
+relation sides. Noncontiguous child regions require an exact region proof; a flat
+enclosing interval is insufficient. Generated children are checked per actual
+instance occurrence: selecting one lane in each iteration does not cover the
+other lanes of that iteration's distinct child bus. Child views retain their exact
+instance scope; ordinary local roots remain available in legal descendant scopes.
 
 The conservative target layout is one ascending vector per root, with logical
 row-major ordinal `k` mapped to vector index `k`. Whole actuals and proven contiguous

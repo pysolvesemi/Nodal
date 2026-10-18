@@ -99,13 +99,13 @@
     ]
   },
   "conservative_node_arrays": {
-    "design_gate": "docs/design-gates/NodalConservativeNodeArrays-DG-v0.3.md",
+    "design_gate": "docs/design-gates/NodalConservativeNodeArrays-DG-v0.5.md",
     "type": "NodeArray[D <: Discipline]",
     "constructor": "Module.node(discipline: D, dimension: Dimension, dimensions: Dimension*): NodeArray[D]",
     "selection": "NodeArray.at(indices: Dimension*): Node[D]",
-    "initial_profile": "owned local and boundary Electrical shapes; static selections and whole immediate-child port bindings",
+    "initial_profile": "owned local and boundary Electrical shapes; exact instance-qualified deferred views and symmetric local/local, local/child, child/child relations",
     "is_data_or_expr": false,
-    "physical_identity": "owned root declaration and canonical composed row-major map",
+    "physical_identity": "owned local root or exact instance-port occurrence and canonical composed row-major map",
     "views": [
       "NodeArray.row(index: Dimension): NodeArray[D]",
       "NodeArray.plane(index: Dimension): NodeArray[D]",
@@ -123,7 +123,9 @@
       "Module.connect[D <: Discipline](left: NodeArray[? <: D], right: NodeArray[? <: D]): Unit",
       "NodeArray.<>(other: NodeArray[?]): Unit"
     ],
-    "target_layout": "ascending conservative vector; row-major logical ordinal"
+    "target_layout": "ascending conservative vector; row-major logical ordinal",
+    "child_shape_resolution": "final overrides and dependent defaults in exact parent-owned Integer DAGs",
+    "child_coverage": "exactly-once incident regions per actual instance occurrence; scalar selections count as singleton regions"
   },
   "values_and_connectivity": {
     "value_aggregate": "Struct",

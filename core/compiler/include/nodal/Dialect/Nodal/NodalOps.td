@@ -695,8 +695,8 @@ def Nodal_TerminalArrayOp : Nodal_Op<"terminal_array", [HasParent<"ModuleOp">]> 
 }
 
 def Nodal_ConnectArrayOp : Nodal_Op<"connect_array", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
-  let summary = "Exact whole-child conservative array binding";
-  let arguments = (ins AnyType:$actual, AnyType:$child, StrAttr:$connection_id,
+  let summary = "Symmetric exact conservative endpoint relation";
+  let arguments = (ins AnyType:$left, AnyType:$right, StrAttr:$connection_id,
     StrAttr:$source_path, OptionalAttr<StrAttr>:$generated_owner,
     OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata);

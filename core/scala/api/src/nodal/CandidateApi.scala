@@ -193,45 +193,84 @@ final class Node[D <: Discipline] private[nodal] (
 /** Owned conservative node shape; selection returns a scalar endpoint reference. */
 final class NodeArray[D <: Discipline] private[nodal] (
     val discipline: D,
-    private[nodal] val dimensions: Vector[Dimension],
-    private[nodal] val projection: Option[NodeArrayProjection] = None,
+    private[nodal] val shapeIntent: NodeArrayShapeIntent,
     private[nodal] val declarationKind: KernelSignalKind = KernelSignalKind.AnalogNodeArray
 ):
-  projection match
-    case None =>
+  shapeIntent match
+    case NodeArrayShapeIntent.Declared(dimensions) =>
       AnalogProceduralConstruction.requireContinuousContext("conservative array declaration")
       ConstructionKernel.declareNodeArray(this, discipline, dimensions, declarationKind)
-    case Some(origin) => ConstructionKernel.projectNodeArray(this, origin)
+    case NodeArrayShapeIntent.InstancePort(instance, port) =>
+      ConstructionKernel.declareInstanceNodeArray(this, instance, port)
+    case NodeArrayShapeIntent.Transform(origin, _, _) =>
+      ConstructionKernel.projectNodeArray(this, origin)
+
+  private def qualified: NodeArray[D] = ConstructionKernel.nodeArrayUse(this)
 
   infix def <>(other: NodeArray[?]): Unit = CandidateRuntime.connectNodeArrays(this, other)
 
   def at(indices: Dimension*): Node[D] =
-    new Node(discipline, KernelSignalKind.AnalogNode, Some(this -> indices.toVector))
+    new Node(discipline, KernelSignalKind.AnalogNode, Some(qualified -> indices.toVector))
 
   private def prefix(index: Dimension, rank: Int): NodeArray[D] =
-    if dimensions.size != rank then
+    val input = qualified
+    if input.shapeIntent.rank != rank then
       throw new ConstructionException(KernelDiagnostic(
         "NODAL-SHAPE-043-002",
         "node-array prefix selection has the wrong rank"
       ))
-    new NodeArray(discipline, dimensions.tail, Some(NodeArrayProjection(this, Vector(index))))
+    new NodeArray(
+      discipline,
+      NodeArrayShapeIntent.Transform(
+        NodeArrayProjection(input, Vector(index)),
+        rank - 1,
+        input.shapeIntent.knownDimensions.map(_.tail)
+      )
+    )
 
   def row(index: Dimension): NodeArray[D] = prefix(index, 2)
   def plane(index: Dimension): NodeArray[D] = prefix(index, 3)
   def slice(lower: Dimension, upperExclusive: Dimension, axis: Int = 0): NodeArray[D] =
-    val result = CandidateRuntime.sliceShapeDimensions(dimensions, lower, upperExclusive, axis)
+    val input = qualified
+    if axis < 0 || axis >= input.shapeIntent.rank then
+      throw new ConstructionException(KernelDiagnostic(
+        "NODAL-SHAPE-043-004",
+        "slice axis is outside the array rank"
+      ))
+    val result = input.shapeIntent.knownDimensions.map(
+      CandidateRuntime.sliceShapeDimensions(_, lower, upperExclusive, axis)
+    )
     new NodeArray(
       discipline,
-      result,
-      Some(NodeArrayProjection(
-        this,
-        slice = Some(ShapeSliceSelection(axis, lower, upperExclusive))
-      ))
+      NodeArrayShapeIntent.Transform(
+        NodeArrayProjection(input, slice = Some(ShapeSliceSelection(axis, lower, upperExclusive))),
+        input.shapeIntent.rank,
+        result
+      )
     )
   def flatten: NodeArray[D] =
-    reshape(CandidateRuntime.flattenShapeDimensions(dimensions, signed64Literal = true)*)
+    val input = qualified
+    val result = input.shapeIntent.knownDimensions.map(
+      CandidateRuntime.flattenShapeDimensions(_, signed64Literal = true)
+    )
+    new NodeArray(
+      discipline,
+      NodeArrayShapeIntent.Transform(
+        NodeArrayProjection(input, flatten = true),
+        1,
+        result
+      )
+    )
   def reshape(dimensions: Dimension*): NodeArray[D] =
-    new NodeArray(discipline, dimensions.toVector, Some(NodeArrayProjection(this)))
+    val input = qualified
+    new NodeArray(
+      discipline,
+      NodeArrayShapeIntent.Transform(
+        NodeArrayProjection(input, reshape = dimensions.toVector),
+        dimensions.size,
+        Option.when(input.shapeIntent.knownDimensions.nonEmpty)(dimensions.toVector)
+      )
+    )
 
 /** Frequency metadata carried by a clock-domain declaration. */
 sealed trait Frequency
@@ -353,8 +392,11 @@ object ClockDomain:
 final class Instance[M <: Module] private[nodal] (private[nodal] val module: M):
 
   def apply[A](select: M => A): A =
-    ConstructionKernel.validateInstanceSelection(this)
-    select(module)
+    ConstructionKernel.withInstanceSelection(this):
+      val result = select(module)
+      result match
+        case array: NodeArray[?] => ConstructionKernel.nodeArrayUse(array).asInstanceOf[A]
+        case _ => result
 
   def param[A <: Data](select: M => Param[A], value: Expr[A]): this.type =
     val parameter = select(module)
@@ -404,7 +446,7 @@ abstract class Module:
   ): NodeArray[D] =
     new NodeArray(
       discipline,
-      dimension +: dimensions.toVector,
+      NodeArrayShapeIntent.Declared(dimension +: dimensions.toVector),
       declarationKind = KernelSignalKind.AnalogInput
     )
 
@@ -415,7 +457,7 @@ abstract class Module:
   ): NodeArray[D] =
     new NodeArray(
       discipline,
-      dimension +: dimensions.toVector,
+      NodeArrayShapeIntent.Declared(dimension +: dimensions.toVector),
       declarationKind = KernelSignalKind.AnalogOutput
     )
 
@@ -426,7 +468,7 @@ abstract class Module:
   ): NodeArray[D] =
     new NodeArray(
       discipline,
-      dimension +: dimensions.toVector,
+      NodeArrayShapeIntent.Declared(dimension +: dimensions.toVector),
       declarationKind = KernelSignalKind.AnalogInout
     )
 
@@ -438,7 +480,7 @@ abstract class Module:
       dimension: Dimension,
       dimensions: Dimension*
   ): NodeArray[D] =
-    new NodeArray(discipline, dimension +: dimensions.toVector)
+    new NodeArray(discipline, NodeArrayShapeIntent.Declared(dimension +: dimensions.toVector))
 
   protected final def wire[A <: Data](dataType: DataType[A]): Signal[A] =
     new Signal(dataType, KernelSignalKind.Wire)

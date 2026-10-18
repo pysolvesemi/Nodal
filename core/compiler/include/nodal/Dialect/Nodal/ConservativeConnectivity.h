@@ -28,19 +28,35 @@ mlir::FailureOr<ConservativeShape> resolveConservativeShape(mlir::Value value,
 mlir::FailureOr<ConservativeShape> resolveConservativeSelection(mlir::Value value,
                                                                 mlir::Operation *use);
 
-/// One independently verified whole-child relation. Logical child ordinal q
-/// aliases actual.projection(q); no physical lanes are enumerated.
-struct ConservativeArrayBinding {
-  mlir::Operation *operation = nullptr;
+/// An actual endpoint occurrence. Child incidence is separate from its physical
+/// root/map, and the full child root type is checked before any projection.
+struct ConservativeEndpoint {
+  mlir::Value value;
+  ConservativeShape shape;
   mlir::Operation *instance = nullptr;
   mlir::Operation *port = nullptr;
-  mlir::Value child;
-  ConservativeShape actual;
+  mlir::Operation *declarationScope = nullptr;
+  mlir::Operation *useScope = nullptr;
 };
-mlir::FailureOr<ConservativeArrayBinding>
-resolveConservativeArrayBinding(mlir::Operation *operation);
+mlir::FailureOr<ConservativeEndpoint> resolveConservativeEndpoint(mlir::Value value,
+                                                                  mlir::Operation *use);
+
+/// Both maps consume the same logical ordinal. Whole bindings, partial joins
+/// and scalar array selections share this one relation representation.
+struct ConservativeRelation {
+  mlir::Operation *operation = nullptr;
+  ConservativeEndpoint left, right;
+};
+bool isConservativeRelation(mlir::Operation *operation);
+mlir::FailureOr<ConservativeRelation> resolveConservativeRelation(mlir::Operation *operation);
 mlir::LogicalResult verifyConservativeInstanceArray(mlir::Operation *operation);
 mlir::LogicalResult verifyConservativeArrayBindings(mlir::Operation *module);
+
+/// Query actual scalar identity through the same scoped endpoint relations.
+/// Unknown or exhausted proof never establishes distinct physical nodes.
+enum class ConservativeAlias { Equal, Distinct, Inert, Unknown, ResourceLimit, Invalid };
+ConservativeAlias compareConservativeEndpoints(mlir::Value left, mlir::Value right,
+                                               mlir::Operation *use);
 
 /// Derived single-occurrence relations for one immediate Module/Generate scope.
 /// No generated endpoint is inserted into the module-level connectivity graph.
@@ -55,7 +71,7 @@ struct ConservativeStructuralScope {
   llvm::SmallVector<mlir::Operation *, 4> nodes;
   llvm::SmallVector<mlir::Operation *, 4> childScopes;
   llvm::SmallVector<ConservativeScalarGroup, 2> scalarGroups;
-  llvm::SmallVector<ConservativeArrayBinding, 2> arrayBindings;
+  llvm::SmallVector<ConservativeRelation, 2> relations;
 };
 mlir::FailureOr<ConservativeStructuralScope>
 resolveConservativeStructuralScope(mlir::Operation *scope);

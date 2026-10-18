@@ -1924,3 +1924,211 @@ connection relations and exact child-region coverage for selected child-port vie
 and bulk joins. Remaining legal generated-array/storage/operator/evaluation
 compositions must be assessed against the original checklist and shared contracts;
 these successful lifetime paths do not close the parent checklist.
+
+## Conservative endpoint relations and exact child coverage
+
+The generated persistent lifetime checkpoint is published as
+`be57bd4cd206fd6f8b0a57af3462cce57c1b0d4a`, with tree
+`923e4b0cb55b4559cfda4409a0f1c3ccb0978138`, parent
+`6098797e7d666636af49a5bc7cab5280703616b1` and zero Actions runs.
+The next integrated change follows
+[NodalConservativeNodeArrays-DG-v0.5](../design-gates/NodalConservativeNodeArrays-DG-v0.5.md).
+It generalizes the existing connectivity relation rather than adding a separate
+local-join or partial-binding engine. Source child views retain actual instance
+identity and defer effective dimensions until finalized overrides; native
+verification independently resolves complete roots and exact child-region
+coverage; the backend maps both relation endpoints over a shared logical ordinal.
+
+The selected coverage certificates are exact root-coordinate boxes and proven
+contiguous ordinal intervals. Columns cannot be approximated by enclosing flat
+intervals. Required alias queries that exceed the finite proof profile must fail
+explicitly, without assuming distinct nets or enumerating symbolic lanes.
+Focused implementation and final predecessor replay are recorded below. Fixed
+generated local array declarations remain subsequent required work; retained
+shared-live-fill demand still needs an explicit obligation/lifetime decision
+against the original checklist and approved gates. This extension is not F43
+closure.
+
+### Open generated probe-placement repair
+
+The relation review exposed an inherited native normalization defect: an
+otherwise valid source-free flow access inside a nested Generate can cause
+PotentialFlowAccess to insert its derived `nodal.probe` in the enclosing Module.
+The probe operands are defined inside the Generate, so the default gate fails SSA
+dominance. The retained reproducer is
+`.work/conservative-relation-nested-before/nested_singleton_family_distinct_lanes.mlir`;
+`.work/conservative-relation-control-before.log` records the failure. Repair the
+actual access-group/probe placement owner next, preserving generated scope and
+source-free probe semantics. This required generated-flow work remains open.
+
+The relation alias regression deliberately keeps its real flow consumer: an outer
+repeated Generate plus an inner singleton must not claim that shared array lanes
+are physically distinct. A separate selection-only singleton control isolates the
+relation-family proof. That control does not establish source-free generated-flow
+support or resolve the probe-placement defect. Neither F43 nor its generated-flow
+obligation is closed by the relation checkpoint.
+
+### Relation implementation and shared ownership
+
+The source keeps declared, exact instance-port and transform shape intents in the
+existing operation inventory. Child rank is known at capture; dimensions resolve
+after all overrides, including dependent defaults and missing derived parent
+Integer DAGs. `flatten` therefore cannot manufacture a parent expression from a
+raw child formal. Required shape dependencies remain strict. Optional reuse
+candidate discovery no longer evaluates unrelated Integer expressions: a fixed
+binding with unrelated unbounded `p` and default `q = p + 1` causally failed
+`NODAL-SHAPE-043-007` before repair and passes after it. The bridge independently
+checks exact full roots, scoped projections, corresponding relation shapes and
+actual incidence; exact region partition coverage belongs to the native owner.
+
+ConservativeConnectivity replaces the asymmetric whole-binding interpretation
+with two actual endpoints. ParameterModel independently substitutes the complete
+child type; ShapeModel derives exact boxes or contiguous intervals, checks exact
+once-only child coverage and maps scalar points through the same actual chains.
+Coverage cut equality and scalar selector identity stay distinct: scalar queries
+retain opaque actual SSA selector provenance. Coordinate boxes are preferred
+before ordinal conversion, preserving the simple symbolic `[2,N]` row partition
+without inventing `N+N == 2*N` algebraic rewriting.
+
+Physical alias queries feed both topology and potential/flow grouping. Visible
+ancestor joins are retained; other nonempty generated families and relevant
+internal child true-net shortcuts produce conservative uncertainty, never
+fabricated distinct nets. Every repeated enclosing Generate is considered against
+actual root declaration scopes, including a singleton inner range. Child
+summaries consider only explicit connection/alias operations, not conductive
+device equations. Verified injective tree wiring preserves independent same-root
+lanes. Repeated-scope components preserve that proof only when they are
+injective acyclic trees with exactly one ancestor-shared physical root and fresh
+per-occurrence remaining roots. Child shortcut summaries, cycles/parallel maps
+or another shared root prevent that exemption. This retains existing generated
+disjoint-column wiring without admitting the nested repeated-family short.
+Unresolved cross-child correspondence, cycles or other shared generated families
+remain explicit capability boundaries. Proven empty occurrences are `Inert`, not
+a proof that physical nodes differ. Unknown, invalid and exhausted required
+queries reject transactionally.
+
+Coverage uses at most 200,000 query work units and 16,384 memoized states; scalar
+alias traversal uses 16,384 steps and 1,024 derived states. Fixed ordinal intervals
+split into at most `2*rank+1` boxes. These are explicit proof resource boundaries,
+not physical lane limits. Authored cut/rank combinations may be combinatorial,
+while repeated source/definition scans and comparison calls can remain quadratic
+or worse in authored structure. No whole-pipeline linearity or measured speedup
+is claimed. The implementation does not expand symbolic lanes or add a second
+mutable topology registry, storage DA engine or general algebra solver.
+Focused source and native/backend architecture review found no remaining concrete
+blocker after the unrelated-parent-default and nested-family findings were fixed.
+The final fresh-tree compatibility delta was independently inspected. Review
+was read-only; the executed checks below belong to the implementation replay.
+
+The backend allocates each full child bus once and maps both relation sides over
+one logical ordinal with the existing true-net alias helper. Scalar partitions
+use the same bus. A validated derived potential-equality record for a partial
+owner is admitted only after actual endpoint equality proof; no numerical
+contribution is added. Whole direct substitutions retain their identity-map
+optimization. A contiguous part-select shortcut requires a direct root endpoint
+with one use; a shared projected child view instead keeps the full bus so later
+scalar selection cannot become an invalid selection of a part-select.
+
+### Focused relation acceptance and actual output
+
+The six new public methods pass: four capture/ownership/forged-root methods and
+two configured native/target methods. All 14 selected boundary/generated
+predecessor methods also pass; the six native-containing methods were replayed
+on the final matched tools. Exact selectors are retained in
+`.work/scala-validation/conservative-relations-validation.sh`; final replay logs
+are `.work/scala-validation/conservative-relations-native-replay.log`,
+`.work/scala-validation/conservative-relations-boundary-native-replay.log` and
+`.work/scala-validation/conservative-relations-generated-native-replay.log`.
+Eight models produce 16 actual VA/AMS
+profiles: adjacent child slices, dependent-default columns with late overrides,
+missing derived parent-DAG materialization, child/child joins, scalar complete
+partitions, noncontiguous local joins, generated partitions and two-million-lane
+compact relations. Exact missing/overlapping coverage negatives retain
+`NODAL-SHAPE-043-009`. Configured logs are
+`.work/scala-validation/conservative-relations-capture-final.log` and
+`.work/scala-validation/conservative-relations-native-final.log`.
+
+Native focused results: relation matrix 54, region unit 45, node-array unit 187,
+storage unit 21, parameter/connectivity units, boundary predecessors 49 and
+generated-topology predecessors 50 all pass. Backend results: new relations 140,
+boundary arrays 54, generated topology 107, generated persistent state 151,
+hierarchy parser 236, event reparser 308 and the affected aggregate backend pass.
+The nested-family before-change unexpected success is retained alongside the
+exact rejection after repair; the symbolic row false rejection now passes without
+broad algebra changes. The final affected generated predecessor exposed an
+overconservative family rejection for `taps.at(lane, 0)` and `taps.at(lane, 1)`
+wired to fresh child ports. The shared fresh-tree proof above restores that
+unchanged positive; three causal native controls and all 26 generated predecessor
+profile inputs pass plain native and default gates, while the repeated-family
+short still rejects. A runner typo rejects rather than succeeding with zero
+selected cases. The formerly rejected child projection is now a positive; the
+unchanged malformed child body retains its exact earlier structural diagnostic.
+
+Same-source target repeats remain byte-identical including comments. One
+inherited equivalence test for differently authored direct/composed views now
+compares exact semantic HDL while independently asserting each truthful source
+record; their distinct authored provenance cannot correctly have identical
+comments. Forged potential records, removed source relations and independent
+left/right target mutations reject transactionally. Removing correspondence
+comments does not grant or remove semantic target acceptance.
+
+Reproduction commands and complete selected unit lists are retained in
+`.work/conservative-relations-native-handoff.md` and
+`.work/conservative-relations-backend-handoff.md`:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 tests/compiler/fixtures/increment43/run_conservative_relation_matrix.py --nodalc .work/native-release/bin/nodalc --work-dir .work/conservative-relation-native-final
+bash .work/check-conservative-relations-backend.sh
+PYTHONDONTWRITEBYTECODE=1 NODAL_PUBLIC_NATIVE_SOURCE=.work/conservative-relations-public-final NODAL_PUBLIC_NATIVE_GLOB='Increment43*.source.mlir' NODAL_PUBLIC_NATIVE_OUTPUT=.work/conservative-relations-public-native-final python3 .work/check-generated-topology-public.py
+PYTHONDONTWRITEBYTECODE=1 python3 .work/check-boundary-array-targets.py .work/conservative-relations-public-final .work/conservative-relations-public-target-final
+```
+
+All 16 actual public sources pass the default gate and stable native replay.
+Their generated targets pass exact direct/repeat/default-gate/renamed-transport
+parity. Actual source/normalized/target files and per-case logs are in those named
+output directories. Matched tool hashes are:
+
+- `nodalc`: `d3d1103e9935431179c1de259479495f85f3a59afe214e7763ed67bae4b73397`
+- `nodal-translate`: `85f25a51fdeb78f1a4bf1c64a2853c4292de8929b459c2af542735fad6ef4447`
+
+The two-million-lane public target is 6,583 bytes; the million-occurrence generated
+partition target is 3,836 bytes. These are compact output-size observations,
+not runtime measurements. New mapped carriers retain the signed32 structural
+Integer target profile; independently valid direct signed64 paths remain.
+Acceptance is the selected generic VAMS2023 compiler/structural profile. No
+simulator, OpenVAF electrical-vector or alias-helper execution is claimed. The
+previously executed Real-array OpenVAF limitation remains a distinct F48 handoff.
+
+For an actual source example, `Increment43RelationSplit` in
+`core/scala/testkit/test/src/nodal/internal/testkit/Increment43ConservativeRelationTests.scala`
+captures two child slices before the final override:
+
+```scala
+val taps = node(Electrical, 4)
+val child = instance(new Increment43RelationChild)
+val lower = child(_.p.slice(0, 2))
+val upper = child(_.p).slice(2, 4)
+taps.slice(0, 2) <> lower
+upper <> taps.slice(2, 4)
+child.param(_.count, 4.integer)
+```
+
+Its actual `Increment43RelationSplit.va.target` declares one full
+`electrical [0:(4 - 1)] binding_child_instance_p_bus`, emits two compact two-lane
+alias maps (offsets zero and two), and binds the child once:
+
+```verilog
+child #(.count(4)) child_instance(.p(binding_child_instance_p_bus));
+```
+
+The complete generated module, including both actual map expressions and source
+records, is retained with the public target artifacts. The child definition and
+its physical equations are emitted once; no per-lane module specialization is
+introduced. F43 remains open, with the generated-probe repair above as the next
+concrete shared-scope implementation.
+
+Changed native files pass pinned clang-format22.1.8; changed Scala formatting and
+API inventory/reference checks pass. The four changed Markdown files, exact
+intended-file contribution-policy check and Git diff checks pass. The gate uses
+separate scope markers required by the policy parser. No CI or broad
+qualification was executed, and no F43 checklist state is changed.

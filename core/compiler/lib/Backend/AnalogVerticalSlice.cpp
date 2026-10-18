@@ -166,6 +166,11 @@ struct ModuleRenderState {
   llvm::DenseMap<Value, StaticNodeArrayLayout> nodeArrays;
   llvm::SmallVector<std::pair<std::string, std::string>> nodeMapConstants;
   unsigned nodeMapOrdinal = 0;
+  llvm::DenseMap<Value, std::string> childArrayActuals;
+  llvm::DenseMap<Value, std::string> relationScalarActuals;
+  llvm::DenseMap<Operation *, std::string> directRelations;
+  llvm::SmallVector<Value> childArrayDeclarations;
+  llvm::SmallVector<std::string> childScalarDeclarations;
   bool structuralScope = false;
   llvm::DenseMap<Value, TargetShapeExpression> structuralIndices;
   llvm::StringSet<> visibleTargetNames;
@@ -657,6 +662,35 @@ LogicalResult orderParametersByDependency(Operation *definition,
   return success();
 }
 
+FailureOr<StaticNodeArrayLayout> resolveConservativeLayout(Operation *definition, ShapedType shaped,
+                                                           llvm::StringRef name) {
+  if (failed(inferStaticShapeMaximumCardinality(definition, shaped.getDimensions())))
+    return failure();
+  StaticNodeArrayLayout result;
+  result.name = name.str();
+  result.extent = "1";
+  llvm::SmallVector<llvm::StringRef> dimensions;
+  shaped.getDimensions().split(dimensions, ',', -1, true);
+  for (llvm::StringRef token : dimensions) {
+    auto dimension = resolveStaticShapeDimension(definition, token);
+    if (failed(dimension))
+      return failure();
+    FailureOr<std::string> text = std::to_string(dimension->literal);
+    if (dimension->parameter)
+      text = symbolName(dimension->parameter).str();
+    else if (dimension->expression)
+      text = renderParameterConstantExpression(dimension->expression);
+    if (failed(text))
+      return failure();
+    auto extent = staticTargetArithmetic(result.extent, '*', *text);
+    if (failed(extent))
+      return failure();
+    result.extent = *extent;
+    result.dimensions.push_back(*text);
+    result.bounds.push_back(dimension->bounds);
+  }
+  return result;
+}
 FailureOr<StaticNodeArrayLayout> resolveStaticNodeArray(Operation *operation,
                                                         Operation *definition) {
   auto shaped = operation->getNumResults() == 1
@@ -681,32 +715,7 @@ FailureOr<StaticNodeArrayLayout> resolveStaticNodeArray(Operation *operation,
     return failure();
   if (failed(resolveConservativeShape(operation->getResult(0), operation)))
     return failure();
-  if (failed(inferStaticShapeMaximumCardinality(definition, shaped.getDimensions())))
-    return failure();
-  StaticNodeArrayLayout result;
-  result.name = name.getValue().str();
-  result.extent = "1";
-  llvm::SmallVector<llvm::StringRef> dimensions;
-  shaped.getDimensions().split(dimensions, ',', -1, true);
-  for (llvm::StringRef token : dimensions) {
-    auto dimension = resolveStaticShapeDimension(definition, token);
-    if (failed(dimension))
-      return failure();
-    FailureOr<std::string> text = std::to_string(dimension->literal);
-    if (dimension->parameter)
-      text = symbolName(dimension->parameter).str();
-    else if (dimension->expression)
-      text = renderParameterConstantExpression(dimension->expression);
-    if (failed(text))
-      return failure();
-    auto extent = staticTargetArithmetic(result.extent, '*', *text);
-    if (failed(extent))
-      return failure();
-    result.extent = *extent;
-    result.dimensions.push_back(*text);
-    result.bounds.push_back(dimension->bounds);
-  }
-  return result;
+  return resolveConservativeLayout(definition, shaped, name.getValue());
 }
 
 FailureOr<std::string> renderStaticNodeSelection(Operation *operation, Operation *definition,
@@ -822,6 +831,9 @@ bool requiresStructuralGenerate(Operation *generate) {
   return false;
 }
 
+LogicalResult prepareConservativeRelationRoots(Operation *scope, ModuleRenderState &state);
+void renderConservativeRootDeclarations(ModuleRenderState &state, llvm::raw_ostream &output);
+
 LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state,
                                  llvm::SmallVectorImpl<Operation *> &parameters,
                                  llvm::SmallVectorImpl<Operation *> &ports,
@@ -838,6 +850,17 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
       if (auto name = operation->getAttrOfType<StringAttr>(key))
         state.eventState.reserved.insert(name.getValue());
   });
+  // Establish local physical roots before child-port roots and projected uses.
+  for (Operation &operation : region.front())
+    if (llvm::isa<NodeArrayOp, TerminalArrayOp>(operation)) {
+      auto layout = resolveStaticNodeArray(&operation, definition);
+      if (failed(layout))
+        return emitMappedFailure(&operation, "NODAL-BACKEND-SHAPE-001",
+                                 "node array requires owned bounded electrical dimensions");
+      state.nodeArrays.try_emplace(operation.getResult(0), std::move(*layout));
+    }
+  if (failed(prepareConservativeRelationRoots(definition, state)))
+    return failure();
   for (Operation &operation : region.front()) {
     llvm::StringRef name = operation.getName().getStringRef();
     if (name == "nodal.parameter") {
@@ -859,14 +882,9 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
         return failure();
       state.terminals.try_emplace(operation.getResult(0), *nodeName);
     } else if (name == "nodal.node_array" || name == "nodal.terminal_array") {
-      auto layout = resolveStaticNodeArray(&operation, definition);
-      if (failed(layout))
-        return emitMappedFailure(&operation, "NODAL-BACKEND-SHAPE-001",
-                                 "node array requires owned bounded electrical dimensions");
       nodeArrays.push_back(&operation);
       if (name == "nodal.terminal_array")
         ports.push_back(&operation);
-      state.nodeArrays.try_emplace(operation.getResult(0), std::move(*layout));
     } else if (llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(operation)) {
       auto reference = operation.getNumResults() == 1
                            ? resolveConservativeShape(operation.getResult(0), &operation)
@@ -874,7 +892,8 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
       if (failed(reference))
         return emitMappedFailure(&operation, "NODAL-BACKEND-SHAPE-002",
                                  "structural view requires a verified owned node array map");
-      if (llvm::isa<TerminalType>(operation.getResult(0).getType())) {
+      if (llvm::isa<TerminalType>(operation.getResult(0).getType()) &&
+          !state.terminals.count(operation.getResult(0))) {
         auto endpoint = renderConservativeNodeSelection(&operation, definition, state);
         if (failed(endpoint))
           return emitMappedFailure(&operation, "NODAL-BACKEND-SHAPE-002",
@@ -1136,39 +1155,163 @@ std::string reserveStructuralName(ModuleRenderState &state, llvm::StringRef base
   return name;
 }
 
-void renderConservativeBindingMap(const ConservativeArrayBinding &binding, llvm::StringRef actual,
-                                  llvm::StringRef helper, llvm::StringRef scope,
-                                  const ShapedProjectionProgram *program, llvm::raw_ostream &output,
-                                  llvm::StringRef targetInstance = {}) {
-  auto sourcePath = [](Operation *operation) -> std::string {
-    if (auto path = operation->getAttrOfType<StringAttr>("source_path"))
-      return path.getValue().str();
-    if (auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata"))
-      if (auto path = metadata.getAs<StringAttr>("semantic_path"))
-        return path.getValue().str();
+LogicalResult prepareConservativeRelationRoots(Operation *scope, ModuleRenderState &state) {
+  auto topology = resolveConservativeStructuralScope(scope);
+  auto module = llvm::dyn_cast<ModuleOp>(scope);
+  if (!module)
+    module = scope->getParentOfType<ModuleOp>();
+  if (failed(topology) || !module)
+    return failure();
+  llvm::DenseMap<Value, llvm::SmallVector<const ConservativeRelation *, 2>> incident;
+  for (const auto &relation : topology->relations) {
+    incident[relation.left.shape.projection.root].push_back(&relation);
+    if (relation.right.shape.projection.root != relation.left.shape.projection.root)
+      incident[relation.right.shape.projection.root].push_back(&relation);
+  }
+  for (Operation &operation : scope->getRegion(0).front()) {
+    if (!llvm::isa<InstanceTerminalArrayOp>(operation))
+      continue;
+    auto endpoint = resolveConservativeEndpoint(operation.getResult(0), &operation);
+    if (failed(endpoint) || !endpoint->instance || !endpoint->port)
+      return failure();
+    Value root = endpoint->shape.projection.root;
+    if (state.childArrayActuals.count(root))
+      continue;
+    auto shaped = llvm::dyn_cast<ShapedType>(root.getType());
+    auto port = endpoint->port->getAttrOfType<StringAttr>("name");
+    if (!shaped || !port)
+      return failure();
+    std::string actual;
+    // A direct full-root substitution is the identity flat map, including
+    // future scalar consumers. A part-select shortcut is only used when the
+    // full child root has no other projected/consumer use at all.
+    for (const auto *occurrence : incident[root]) {
+      const auto &relation = *occurrence;
+      const ConservativeEndpoint *child = nullptr, *other = nullptr;
+      if (relation.left.shape.projection.root == root) {
+        child = &relation.left;
+        other = &relation.right;
+      } else if (relation.right.shape.projection.root == root) {
+        child = &relation.right;
+        other = &relation.left;
+      }
+      if (!child || !child->shape.projection.wholeRoot || other->instance ||
+          !llvm::isa<ShapedType>(other->value.getType()))
+        continue;
+      const auto &projection = other->shape.projection;
+      auto local = state.nodeArrays.find(projection.root);
+      if (local == state.nodeArrays.end())
+        continue;
+      if (projection.wholeRoot)
+        actual = local->second.name;
+      else if (child->value == root && root.hasOneUse() && projection.contiguousLiteralRegion &&
+               projection.literalFirstOffset && projection.literalLastOffset)
+        actual = local->second.name + "[" + std::to_string(*projection.literalFirstOffset) + ":" +
+                 std::to_string(*projection.literalLastOffset) + "]";
+      if (!actual.empty()) {
+        state.directRelations[relation.operation] = actual;
+        break;
+      }
+    }
+    bool declaration = actual.empty();
+    if (declaration)
+      actual = reserveStructuralName(
+          state,
+          ("binding_" + symbolName(endpoint->instance) + "_" + port.getValue() + "_bus").str());
+    auto layout = resolveConservativeLayout(module, shaped, actual);
+    if (failed(layout))
+      return failure();
+    state.nodeArrays[root] = std::move(*layout);
+    state.childArrayActuals[root] = actual;
+    if (declaration)
+      state.childArrayDeclarations.push_back(root);
+  }
+  for (const auto &relation : topology->relations)
+    for (const auto *endpoint : {&relation.left, &relation.right}) {
+      Value root = endpoint->shape.projection.root;
+      if (!endpoint->instance || !llvm::isa<TerminalType>(root.getType()) ||
+          state.relationScalarActuals.count(root))
+        continue;
+      auto port = endpoint->port->getAttrOfType<StringAttr>("name");
+      if (!port)
+        return failure();
+      const auto &other = endpoint == &relation.left ? relation.right : relation.left;
+      if (root.hasOneUse() && !other.instance &&
+          isNodeArraySelection(other.value.getDefiningOp())) {
+        auto actual = renderConservativeNodeSelection(
+            other.value.getDefiningOp(), other.value.getDefiningOp()->getParentOp(), state);
+        if (failed(actual))
+          return failure();
+        state.terminals[other.value] = *actual;
+        state.relationScalarActuals[root] = *actual;
+        state.terminals[root] = *actual;
+        state.directRelations[relation.operation] = *actual;
+      } else {
+        auto actual = reserveStructuralName(
+            state,
+            ("binding_" + symbolName(endpoint->instance) + "_" + port.getValue() + "_net").str());
+        state.relationScalarActuals[root] = actual;
+        state.terminals[root] = actual;
+        state.childScalarDeclarations.push_back(actual);
+      }
+    }
+  return success();
+}
+
+void renderConservativeRootDeclarations(ModuleRenderState &state, llvm::raw_ostream &output) {
+  for (Value root : state.childArrayDeclarations) {
+    const auto &layout = state.nodeArrays.find(root)->second;
+    output << "  electrical [0:(" << layout.extent << " - 1)] " << layout.name << ";\n";
+  }
+  for (const auto &name : state.childScalarDeclarations)
+    output << "  electrical " << name << ";\n";
+}
+
+std::string conservativeSourcePath(Operation *operation) {
+  if (!operation)
     return {};
-  };
-  llvm::json::Array projections;
-  for (Operation *projection : binding.actual.projection.projections)
-    projections.push_back(llvm::json::Object{{"operation", projection->getName().getStringRef()},
-                                             {"source", sourcePath(projection)}});
+  if (auto path = operation->getAttrOfType<StringAttr>("source_path"))
+    return path.getValue().str();
+  if (auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata"))
+    if (auto path = metadata.getAs<StringAttr>("semantic_path"))
+      return path.getValue().str();
+  return {};
+}
+
+llvm::json::Array conservativeMapStages(const ShapedProjectionProgram *program) {
   llvm::json::Array stages;
   if (program)
     for (const auto &stage : program->steps)
       stages.push_back(llvm::json::Object{{"name", stage.destination},
                                           {"expression", stage.expression},
-                                          {"source", sourcePath(stage.projection)}});
+                                          {"source", conservativeSourcePath(stage.projection)}});
+  return stages;
+}
+llvm::json::Array conservativeMapProjections(const ConservativeEndpoint &endpoint) {
+  llvm::json::Array projections;
+  for (Operation *projection : endpoint.shape.projection.projections)
+    projections.push_back(llvm::json::Object{{"operation", projection->getName().getStringRef()},
+                                             {"source", conservativeSourcePath(projection)}});
+  return projections;
+}
+
+void renderConservativeRelationMap(const ConservativeRelation &relation, llvm::StringRef leftActual,
+                                   llvm::StringRef rightActual, llvm::StringRef helper,
+                                   llvm::StringRef scope,
+                                   const ShapedProjectionProgram *leftProgram,
+                                   const ShapedProjectionProgram *rightProgram,
+                                   ModuleRenderState &state, llvm::raw_ostream &output) {
   // Parser locations can name a different transport temporary on every run.
   // Only retained authored source-map fields belong in deterministic target text.
   std::string location = "unknown";
-  auto rootModule = binding.operation->getParentOfType<mlir::ModuleOp>();
+  auto rootModule = relation.operation->getParentOfType<mlir::ModuleOp>();
   auto sourceMap =
       rootModule ? rootModule->getAttrOfType<ArrayAttr>("nodal.bridge.source_map") : ArrayAttr();
   if (sourceMap)
     for (Attribute attribute : sourceMap) {
       auto entry = llvm::dyn_cast<DictionaryAttr>(attribute);
       auto semantic = entry ? entry.getAs<StringAttr>("semantic_path") : StringAttr();
-      if (!semantic || semantic.getValue() != sourcePath(binding.operation))
+      if (!semantic || semantic.getValue() != conservativeSourcePath(relation.operation))
         continue;
       auto path = entry.getAs<StringAttr>("source_path");
       auto line = entry.getAs<IntegerAttr>("source_line");
@@ -1184,90 +1327,147 @@ void renderConservativeBindingMap(const ConservativeArrayBinding &binding, llvm:
                        .str();
       break;
     }
+  auto describe = [&](const ConservativeEndpoint &endpoint, llvm::StringRef actual,
+                      const ShapedProjectionProgram *program) {
+    auto shaped = llvm::dyn_cast<ShapedType>(endpoint.value.getType());
+    auto rootShape = llvm::dyn_cast<ShapedType>(endpoint.shape.projection.root.getType());
+    auto rootMetadata = endpoint.shape.declaration->getAttrOfType<DictionaryAttr>("metadata");
+    auto rootPath = rootMetadata ? rootMetadata.getAs<StringAttr>("semantic_path") : StringAttr();
+    auto incidence = endpoint.shape.declaration->getAttrOfType<StringAttr>("flow_orientation");
+    llvm::json::Object result{
+        {"root_reference", rootPath ? rootPath.getValue() : llvm::StringRef()},
+        {"root_shape", rootShape ? rootShape.getDimensions() : llvm::StringRef()},
+        {"flow_orientation", incidence ? incidence.getValue() : llvm::StringRef("local")},
+        {"root", conservativeSourcePath(endpoint.shape.declaration)},
+        {"reference", conservativeSourcePath(endpoint.value.getDefiningOp())},
+        {"instance", endpoint.instance ? symbolName(endpoint.instance) : llvm::StringRef()},
+        {"instance_source", conservativeSourcePath(endpoint.instance)},
+        {"formal", conservativeSourcePath(endpoint.port)},
+        {"effective_shape", shaped ? shaped.getDimensions() : llvm::StringRef()},
+        {"projections", conservativeMapProjections(endpoint)},
+        {"target_actual", actual},
+        {"stages", conservativeMapStages(program)}};
+    if (endpoint.instance) {
+      auto target = state.targetInstanceNames.find(endpoint.instance);
+      if (target != state.targetInstanceNames.end() &&
+          target->second != symbolName(endpoint.instance))
+        result["target_instance"] = target->second;
+    }
+    return result;
+  };
+  const bool childRight = relation.right.instance != nullptr;
+  const auto &child = childRight ? relation.right : relation.left;
+  const auto &local = childRight ? relation.left : relation.right;
+  auto shaped = llvm::dyn_cast<ShapedType>(relation.left.value.getType());
+  auto actual = childRight ? rightActual : leftActual;
+  if (child.instance && state.childArrayActuals.count(child.shape.projection.root))
+    actual = state.childArrayActuals.find(child.shape.projection.root)->second;
   llvm::json::Object record{
-      {"binding", sourcePath(binding.operation)},
+      {"binding", conservativeSourcePath(relation.operation)},
       {"source_location", location},
-      {"instance", symbolName(binding.instance)},
-      {"instance_source", sourcePath(binding.instance)},
-      {"formal", sourcePath(binding.port)},
-      {"effective_shape", llvm::cast<ShapedType>(binding.child.getType()).getDimensions()},
-      {"root", sourcePath(binding.actual.declaration)},
-      {"projections", std::move(projections)},
-      {"flow_orientation", "out_of_component"},
+      {"instance", child.instance ? symbolName(child.instance) : llvm::StringRef()},
+      {"instance_source", conservativeSourcePath(child.instance)},
+      {"formal", conservativeSourcePath(child.port)},
+      {"effective_shape", shaped ? shaped.getDimensions() : llvm::StringRef()},
+      {"root", conservativeSourcePath(local.shape.declaration)},
+      {"projections", conservativeMapProjections(local)},
+      {"flow_orientation", child.instance ? "out_of_component" : "local"},
       {"target_actual", actual},
       {"alias_helper", helper},
       {"generated_scope", scope},
-      {"stages", std::move(stages)}};
-  if (auto generated = llvm::dyn_cast<GenerateOp>(binding.operation->getParentOp()))
+      {"stages", conservativeMapStages(childRight ? leftProgram : rightProgram)},
+      {"left", describe(relation.left, leftActual, leftProgram)},
+      {"right", describe(relation.right, rightActual, rightProgram)}};
+  if (auto generated = llvm::dyn_cast<GenerateOp>(relation.operation->getParentOp()))
     record["source_scope"] = generated->getAttrOfType<StringAttr>("region_id").getValue();
-  if (!targetInstance.empty() && targetInstance != symbolName(binding.instance))
-    record["target_instance"] = targetInstance;
-  // JSON escapes source newlines and control characters. A standalone line
-  // comment makes even comment-delimiter characters harmless target text.
+  if (child.instance) {
+    auto target = state.targetInstanceNames.find(child.instance);
+    if (target != state.targetInstanceNames.end() && target->second != symbolName(child.instance))
+      record["target_instance"] = target->second;
+  }
+  // JSON escapes source controls; a line comment makes delimiters harmless.
   output << "  // nodal.array_binding " << llvm::json::Value(std::move(record)) << "\n";
 }
 
-FailureOr<std::string> renderConservativeArrayActual(const ConservativeArrayBinding &binding,
-                                                     ModuleRenderState &state,
-                                                     llvm::StringRef aliasHelper,
-                                                     llvm::raw_ostream &output) {
-  auto name = state.targetInstanceNames.find(binding.instance);
-  const llvm::StringRef targetInstance = name == state.targetInstanceNames.end()
-                                             ? symbolName(binding.instance)
-                                             : llvm::StringRef(name->second);
-  const auto &projection = binding.actual.projection;
-  auto root = state.nodeArrays.find(projection.root);
-  if (root == state.nodeArrays.end())
-    return failure();
-  if (projection.wholeRoot) {
-    renderConservativeBindingMap(binding, root->second.name, "", "", nullptr, output,
-                                 targetInstance);
-    return root->second.name;
+LogicalResult renderConservativeRelation(const ConservativeRelation &relation, unsigned ordinal,
+                                         ModuleRenderState &state, llvm::StringRef aliasHelper,
+                                         llvm::raw_ostream &output) {
+  if (auto direct = state.directRelations.find(relation.operation);
+      direct != state.directRelations.end()) {
+    renderConservativeRelationMap(relation, direct->second, direct->second, "", "", nullptr,
+                                  nullptr, state, output);
+    return success();
   }
-  if (!requiresConservativeAdapter(projection)) {
-    std::string actual = root->second.name + "[" + std::to_string(*projection.literalFirstOffset) +
-                         ":" + std::to_string(*projection.literalLastOffset) + "]";
-    renderConservativeBindingMap(binding, actual, "", "", nullptr, output, targetInstance);
-    return actual;
+  if (aliasHelper.empty())
+    return failure();
+  auto shape = llvm::dyn_cast<ShapedType>(relation.left.value.getType());
+  auto module = relation.operation->getParentOfType<ModuleOp>();
+  auto layout = shape ? resolveTargetShapedLayout(module, shape.getDimensions())
+                      : FailureOr<TargetShapedLayout>(TargetShapedLayout{{}, {"1", {1, 1}}});
+  if (failed(layout))
+    return failure();
+  std::string prefix = "relation_" + std::to_string(ordinal);
+  // Keep established whole-child adapter names when the actual root identity
+  // gives that unique namespace; partial and symmetric relations use ordinal names.
+  if (!relation.left.instance && relation.right.instance &&
+      relation.right.shape.projection.wholeRoot) {
+    auto port = relation.right.port->getAttrOfType<StringAttr>("name");
+    if (port)
+      prefix = ("binding_" + symbolName(relation.right.instance) + "_" + port.getValue()).str();
   }
-
-  auto shape = llvm::dyn_cast<ShapedType>(binding.child.getType());
-  auto module = binding.operation->getParentOfType<nodal::ModuleOp>();
-  auto layout = shape && module ? resolveTargetShapedLayout(module, shape.getDimensions())
-                                : FailureOr<TargetShapedLayout>(failure());
-  if (failed(layout) || aliasHelper.empty())
-    return failure();
-  auto portName = binding.port->getAttrOfType<StringAttr>("name");
-  if (!portName)
-    return failure();
-  const std::string prefix =
-      ("binding_" + symbolName(binding.instance) + "_" + portName.getValue()).str();
-  const std::string bus = reserveStructuralName(state, prefix + "_bus");
-  const std::string lane = reserveStructuralName(state, prefix + "_lane");
-  const std::string scope = reserveStructuralName(state, prefix + "_map");
-  auto program = renderShapedProjectionProgram(
-      projection, lane,
-      [&](unsigned stage) {
-        return reserveStructuralName(state, prefix + "_stage_" + std::to_string(stage));
-      },
-      [&](Value index, Operation *use) { return renderScopedShapeIndex(state, index, use); });
-  if (failed(program) || program->root != projection.root)
-    return failure();
-  renderConservativeBindingMap(binding, bus, aliasHelper, scope, &*program, output, targetInstance);
-  output << "  electrical [0:(" << layout->count.text << " - 1)] " << bus << ";\n"
-         << "  genvar " << lane << ";\n";
-  if (!state.structuralScope)
-    output << "  generate\n";
-  output << "    for (" << lane << " = 0; " << lane << " < " << layout->count.text << "; " << lane
-         << " = " << lane << " + 1) begin : " << scope << "\n";
-  for (const auto &step : program->steps)
-    output << "      localparam integer " << step.destination << " = " << step.expression << ";\n";
-  output << "      " << aliasHelper << " link(.lhs(" << root->second.name << "[" << program->result
-         << "]), .rhs(" << bus << "[" << lane << "]));\n"
-         << "    end\n";
-  if (!state.structuralScope)
-    output << "  endgenerate\n";
-  return bus;
+  const std::string lane = shape ? reserveStructuralName(state, prefix + "_lane") : "0";
+  const std::string scope = shape ? reserveStructuralName(state, prefix + "_map") : "";
+  ShapedProjectionProgram programs[2];
+  std::string actuals[2];
+  unsigned side = 0;
+  for (const auto *endpoint : {&relation.left, &relation.right}) {
+    const auto &projection = endpoint->shape.projection;
+    if (llvm::isa<ShapedType>(projection.root.getType())) {
+      auto root = state.nodeArrays.find(projection.root);
+      if (root == state.nodeArrays.end())
+        return failure();
+      auto program = renderShapedProjectionProgram(
+          projection, lane,
+          [&](unsigned stage) {
+            return reserveStructuralName(state, prefix + (side == 0 ? "_stage_" : "_right_stage_") +
+                                                    std::to_string(stage));
+          },
+          [&](Value index, Operation *use) { return renderScopedShapeIndex(state, index, use); });
+      if (failed(program) || program->root != projection.root)
+        return failure();
+      programs[side] = std::move(*program);
+      actuals[side] = root->second.name + "[" + programs[side].result + "]";
+    } else {
+      auto terminal = state.terminals.find(endpoint->value);
+      if (terminal == state.terminals.end())
+        return failure();
+      actuals[side] = terminal->second;
+    }
+    ++side;
+  }
+  renderConservativeRelationMap(relation, actuals[0], actuals[1], aliasHelper, scope, &programs[0],
+                                &programs[1], state, output);
+  if (shape) {
+    output << "  genvar " << lane << ";\n";
+    if (!state.structuralScope)
+      output << "  generate\n";
+    output << "    for (" << lane << " = 0; " << lane << " < " << layout->count.text << "; " << lane
+           << " = " << lane << " + 1) begin : " << scope << "\n";
+  }
+  llvm::StringRef indent = shape ? "      " : "  ";
+  for (const auto &program : programs)
+    for (const auto &step : program.steps)
+      output << indent << "localparam integer " << step.destination << " = " << step.expression
+             << ";\n";
+  output << indent << aliasHelper << " "
+         << (shape ? "link" : reserveStructuralName(state, prefix + "_link")) << "(.lhs("
+         << actuals[0] << "), .rhs(" << actuals[1] << "));\n";
+  if (shape) {
+    output << "    end\n";
+    if (!state.structuralScope)
+      output << "  endgenerate\n";
+  }
+  return success();
 }
 
 LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
@@ -1319,7 +1519,7 @@ LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
                                "instance identity, target, or domain profile is unsupported");
     rendered[instance] = HierarchyInstanceRender{child, {}, {}};
   }
-  if (instances.empty() && !state.structuralScope)
+  if (instances.empty() && topology->relations.empty() && !state.structuralScope)
     return emitMappedFailure(definition, "NODAL-BACKEND-HIERARCHY-002",
                              "hierarchy endpoints or connections require an instance");
 
@@ -1371,6 +1571,11 @@ LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
     auto reference = terminal->getAttrOfType<FlatSymbolRefAttr>("instance");
     Operation *instance = resolveStructuralInstance(terminal, reference);
     auto port = terminal->getAttrOfType<StringAttr>("port");
+    if (terminal->getNumResults() == 1) {
+      auto relationActual = state.relationScalarActuals.find(terminal->getResult(0));
+      if (relationActual != state.relationScalarActuals.end())
+        childActuals.try_emplace(terminal->getResult(0), relationActual->second);
+    }
     auto actual = terminal->getNumResults() == 1 ? childActuals.find(terminal->getResult(0))
                                                  : childActuals.end();
     if (!instance || !rendered.count(instance) || !port || actual == childActuals.end() ||
@@ -1379,25 +1584,24 @@ LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
                                "child port requires one verified scoped connection");
   }
 
-  llvm::DenseSet<Value> boundArrays;
-  for (Operation *connection : arrayConnections) {
-    auto binding = resolveConservativeArrayBinding(connection);
-    if (failed(binding) || !rendered.count(binding->instance) ||
-        !boundArrays.insert(binding->child).second)
-      return emitMappedFailure(connection, "NODAL-BACKEND-HIERARCHY-011",
-                               "array binding requires an exactly verified immediate child port");
-    auto actual = renderConservativeArrayActual(*binding, state, aliasHelper, output);
-    auto port = binding->port->getAttrOfType<StringAttr>("name");
-    if (failed(actual) || !port ||
-        !rendered[binding->instance].ports.emplace(port.getValue().str(), *actual).second)
-      return emitMappedFailure(connection, "NODAL-BACKEND-HIERARCHY-012",
-                               "array actual map is duplicated or exceeds the portable target "
-                               "structural Integer profile");
-  }
-  for (Operation *reference : instanceArrays)
-    if (reference->getNumResults() != 1 || !boundArrays.contains(reference->getResult(0)))
+  for (Operation *reference : instanceArrays) {
+    auto endpoint = resolveConservativeEndpoint(reference->getResult(0), reference);
+    auto actual = state.childArrayActuals.find(reference->getResult(0));
+    auto port = succeeded(endpoint) && endpoint->port
+                    ? endpoint->port->getAttrOfType<StringAttr>("name")
+                    : StringAttr();
+    if (failed(endpoint) || !rendered.count(endpoint->instance) || !port ||
+        actual == state.childArrayActuals.end() ||
+        !rendered[endpoint->instance].ports.emplace(port.getValue().str(), actual->second).second)
       return emitMappedFailure(reference, "NODAL-BACKEND-HIERARCHY-011",
-                               "child array reference requires one whole-port binding");
+                               "child array requires one verified full-port actual");
+  }
+  unsigned relationOrdinal = 0;
+  for (const auto &relation : topology->relations)
+    if (failed(renderConservativeRelation(relation, relationOrdinal++, state, aliasHelper, output)))
+      return emitMappedFailure(
+          relation.operation, "NODAL-BACKEND-HIERARCHY-012",
+          "conservative relation map exceeds the portable target structural Integer profile");
 
   for (Operation *instance : instances) {
     auto &entry = rendered[instance];
@@ -2846,6 +3050,8 @@ LogicalResult renderStructuralGenerate(Operation *generate, ModuleRenderState &p
   ModuleRenderState state = parentState;
   state.structuralScope = true;
   state.nodeMapConstants.clear();
+  state.childArrayDeclarations.clear();
+  state.childScalarDeclarations.clear();
   if (domain->induction)
     state.structuralIndices[domain->induction] = TargetShapeExpression{
         indexName, domain->attainedInductionBounds.value_or(domain->lower.bounds)};
@@ -2869,6 +3075,9 @@ LogicalResult renderStructuralGenerate(Operation *generate, ModuleRenderState &p
       return failure();
     state.targetInstanceNames[instance] = allocate(state, symbolName(instance));
   }
+  if (failed(prepareConservativeRelationRoots(generate, state)))
+    return failure();
+  renderConservativeRootDeclarations(state, body);
   llvm::SmallVector<Operation *> analogs, branches;
   for (Operation &operation : generate->getRegion(0).front()) {
     if (llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(operation)) {
@@ -2877,7 +3086,8 @@ LogicalResult renderStructuralGenerate(Operation *generate, ModuleRenderState &p
                            : FailureOr<ConservativeShape>(failure());
       if (failed(reference))
         return failure();
-      if (llvm::isa<TerminalType>(operation.getResult(0).getType())) {
+      if (llvm::isa<TerminalType>(operation.getResult(0).getType()) &&
+          !state.terminals.count(operation.getResult(0))) {
         auto terminal = renderConservativeNodeSelection(&operation, generate, state);
         if (failed(terminal))
           return emitMappedFailure(
@@ -3062,7 +3272,7 @@ LogicalResult renderDefinition(Operation *definition, llvm::StringRef aliasHelpe
 
     return success();
   };
-  if (nodeArrays.empty() && failed(renderNamedBranches()))
+  if (nodeArrays.empty() && state.childArrayDeclarations.empty() && failed(renderNamedBranches()))
     return failure();
 
   for (Operation *parameter : parameters) {
@@ -3130,9 +3340,11 @@ LogicalResult renderDefinition(Operation *definition, llvm::StringRef aliasHelpe
       output << "  " << terminalDirection(array) << " [0:" << upper << "] " << layout.name << ";\n";
     output << "  electrical [0:" << upper << "] " << layout.name << ";\n";
   }
+  renderConservativeRootDeclarations(state, output);
   for (const auto &[name, initializer] : state.nodeMapConstants)
     output << "  localparam integer " << name << " = " << initializer << ";\n";
-  if (!nodeArrays.empty() && failed(renderNamedBranches()))
+  if ((!nodeArrays.empty() || !state.childArrayDeclarations.empty()) &&
+      failed(renderNamedBranches()))
     return failure();
 
   llvm::StringSet<> generatedInductions;
@@ -3435,6 +3647,17 @@ LogicalResult verifyBackendOperations(mlir::ModuleOp module, const BackendProfil
         return;
       }
     }
+    if (auto equality = llvm::dyn_cast<PotentialEqualityOp>(operation)) {
+      auto owner = operation->getParentOfType<nodal::ModuleOp>();
+      if (owner && isPartialPhysicalComponent(owner) && succeeded(equality.verify()) &&
+          compareConservativeEndpoints(operation->getOperand(0), operation->getOperand(1),
+                                       operation) == ConservativeAlias::Equal)
+        return;
+      result =
+          emitMappedFailure(operation, "NODAL-BACKEND-HIERARCHY-013",
+                            "partial potential record requires an actual verified net relation");
+      return;
+    }
     if (llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(operation) &&
         operation->getNumResults() == 1 &&
         succeeded(resolveConservativeShape(operation->getResult(0), operation)))
@@ -3466,28 +3689,46 @@ LogicalResult renderBackendCandidate(llvm::ArrayRef<Operation *> definitions,
     moduleNames.insert(symbolName(definition));
     LogicalResult topologyResult = success();
     definition->walk([&](Operation *operation) {
-      if (failed(topologyResult))
+      if (failed(topologyResult) ||
+          !(operation == definition ||
+            (llvm::isa<GenerateOp>(operation) && requiresStructuralGenerate(operation))))
         return;
-      if (llvm::isa<ConnectArrayOp>(operation)) {
-        auto binding = resolveConservativeArrayBinding(operation);
-        if (failed(binding)) {
-          topologyResult = failure();
-          return;
-        }
-        requiresAlias |= requiresConservativeAdapter(binding->actual.projection);
+      auto scope = resolveConservativeStructuralScope(operation);
+      if (failed(scope)) {
+        topologyResult = failure();
+        return;
       }
-      if (llvm::isa<GenerateOp>(operation) && requiresStructuralGenerate(operation)) {
-        auto scope = resolveConservativeStructuralScope(operation);
-        if (failed(scope)) {
-          topologyResult = failure();
-          return;
+      for (const auto &relation : scope->relations) {
+        // Identity whole-child binding and an unobserved fixed contiguous
+        // actual need no helper. All other relations use real net aliases.
+        const ConservativeEndpoint *child = nullptr, *other = nullptr;
+        if (relation.right.instance && !relation.left.instance) {
+          child = &relation.right;
+          other = &relation.left;
+        } else if (relation.left.instance && !relation.right.instance) {
+          child = &relation.left;
+          other = &relation.right;
         }
-        for (const auto &group : scope->scalarGroups) {
-          unsigned anchors = llvm::count_if(group.members, [](Value member) {
-            return !llvm::isa_and_nonnull<InstanceTerminalOp>(member.getDefiningOp());
-          });
-          requiresAlias |= anchors > 1;
-        }
+        bool direct = child && llvm::isa<ShapedType>(child->shape.projection.root.getType()) &&
+                      child->shape.projection.root.getDefiningOp()->getParentOp() ==
+                          relation.operation->getParentOp() &&
+                      child->shape.projection.wholeRoot &&
+                      llvm::isa<ShapedType>(other->value.getType()) &&
+                      (other->shape.projection.wholeRoot ||
+                       (child->value == child->shape.projection.root &&
+                        child->shape.projection.root.hasOneUse() &&
+                        !requiresConservativeAdapter(other->shape.projection)));
+        if (child && llvm::isa<TerminalType>(child->shape.projection.root.getType()) &&
+            child->shape.projection.root.hasOneUse() && !other->instance &&
+            isNodeArraySelection(other->value.getDefiningOp()))
+          direct = true;
+        requiresAlias |= !direct;
+      }
+      for (const auto &group : scope->scalarGroups) {
+        unsigned anchors = llvm::count_if(group.members, [](Value member) {
+          return !llvm::isa_and_nonnull<InstanceTerminalOp>(member.getDefiningOp());
+        });
+        requiresAlias |= anchors > 1;
       }
     });
     if (failed(topologyResult))

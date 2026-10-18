@@ -2039,7 +2039,7 @@ LogicalResult nodal::InstanceTerminalArrayOp::verify() {
 }
 
 LogicalResult nodal::ConnectArrayOp::verify() {
-  return success(succeeded(resolveConservativeArrayBinding(getOperation())));
+  return success(succeeded(resolveConservativeRelation(getOperation())));
 }
 
 LogicalResult nodal::InterfaceOp::verify() {
@@ -2459,9 +2459,19 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
   auto owner = operation->getParentOfType<nodal::ModuleOp>();
   Operation *source = operation->getOperand(0).getDefiningOp();
   const bool procedural = isProceduralShapeProjection(operation);
+  const bool conservative = llvm::isa<nodal::TerminalType>(input.getElementType());
   if (procedural) {
     if (failed(verifyProceduralProjectionIdentity(operation)))
       return failure();
+  } else if (conservative) {
+    if (!owner || !source || source->getParentOfType<nodal::ModuleOp>() != owner ||
+        !llvm::isa<nodal::ModuleOp, nodal::GenerateOp>(operation->getParentOp()) ||
+        !llvm::isa<nodal::NodeArrayOp, nodal::TerminalArrayOp, nodal::InstanceTerminalArrayOp,
+                   nodal::ShapeIndexOp, nodal::ShapeViewOp, nodal::ShapeSliceOp>(source) ||
+        !isDeclaredBeforeStructuredUse(source, operation) ||
+        failed(verifyGeneratedStructuralOwnership(operation)))
+      return operation->emitOpError(
+          "NODAL-SHAPE-043-004: conservative slice requires an owned visible structural input");
   } else if (!owner || operation->getParentOp() != owner || !source ||
              source->getParentOp() != owner ||
              !llvm::isa<nodal::PortValueOp, nodal::NodeArrayOp, nodal::TerminalArrayOp,
@@ -2491,7 +2501,7 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
       !ownedPath(sourcePath) || !ownedPath(resultPath) || resultPath == sourcePath)
     return operation->emitOpError(
         "NODAL-SHAPE-043-004: slice requires owned source-mapped read-only structural identity");
-  for (Operation &candidate : owner->getRegion(0).front())
+  for (Operation &candidate : conservative ? *operation->getBlock() : owner->getRegion(0).front())
     if (&candidate != operation && metadataSemanticPath(&candidate) == resultPath)
       return operation->emitOpError("NODAL-SHAPE-043-004: slice semantic identity must be unique");
   if (llvm::isa<nodal::PortValueOp>(source)) {

@@ -7762,9 +7762,27 @@ int main() {
   replaceAll(hierarchyView, "ArrayNodes", "Top");
   hierarchyViewSource = replaceNodeSelection(hierarchyViewSource, "top_vin", hierarchyView);
   std::string hierarchyViewOutput;
+  auto physicalHierarchyText = [](std::string text) {
+    // Relations retain distinct authored projection provenance even when the
+    // complete emitted electrical/instance statements are physically identical.
+    const std::string marker = "  // nodal.array_binding ";
+    size_t start = 0;
+    while ((start = text.find(marker, start)) != std::string::npos)
+      text.erase(start, text.find('\n', start) - start + 1);
+    return text;
+  };
   if (!emitNodeView(hierarchyViewSource, hierarchyViewOutput) ||
-      hierarchyViewOutput != arrayHierarchyOutput)
-    return fail("composed local view changed the existing scalar child actual binding");
+      physicalHierarchyText(hierarchyViewOutput) != physicalHierarchyText(arrayHierarchyOutput) ||
+      llvm::StringRef(arrayHierarchyOutput).count("// nodal.array_binding ") != 1 ||
+      llvm::StringRef(hierarchyViewOutput).count("// nodal.array_binding ") != 1 ||
+      arrayHierarchyOutput.find("\"root_reference\":\"Top.taps\"") == std::string::npos ||
+      arrayHierarchyOutput.find("\"reference\":\"Top.taps.at(literal:1)\"") == std::string::npos ||
+      hierarchyViewOutput.find("\"reference\":\"Top.hier.at(literal:0,literal:1)\"") ==
+          std::string::npos ||
+      hierarchyViewOutput.find("\"operation\":\"nodal.shape_view\"") == std::string::npos ||
+      hierarchyViewOutput.find("\"root_reference\":\"Top.taps\"") == std::string::npos)
+    return fail(
+        "composed local view changed the existing scalar child actual binding or lost provenance");
 
   // Mutate after successful parsing so backend verification cannot rely on the
   // parser's verifier. Failed emission must leave the caller's output untouched.

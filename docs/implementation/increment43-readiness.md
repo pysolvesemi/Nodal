@@ -282,18 +282,36 @@ received focused architecture review. Commands, integration repairs and finite
 limits are recorded in the shape-contract note. Generated persistent shaped-state
 declaration lifetime is implemented under
 [NodalWritableRealArrays-DG-v0.6](../design-gates/NodalWritableRealArrays-DG-v0.6.md):
-five new public methods, 16 affected predecessors, 151 focused backend checks and
+the exact tested tree is published as
+`be57bd4cd206fd6f8b0a57af3462cce57c1b0d4a`, with zero Actions runs.
+Five new public methods, 16 affected predecessors, 151 focused backend checks and
 ten actual dual-target models pass. Actual generated scopes own source recorders,
 native procedure uniqueness and target declarations independently; ordinary
 procedure behavior and lexical entry copies remain intact. The next concrete
 shared-layer target is conservative array connection relations and exact partial
-child-port coverage. The shape-contract note records commands, ownership review,
+child-port coverage under
+[NodalConservativeNodeArrays-DG-v0.5](../design-gates/NodalConservativeNodeArrays-DG-v0.5.md).
+This integrates deferred finalized child shapes, two-sided physical maps and
+compact exact region coverage in the existing connectivity owner. The selected
+implementation passes six new public methods, 14 affected predecessors, 54 native
+relation cases, 140 relation backend checks and 16 actual dual-target profiles
+with exact native/target replay. Focused architecture review and changed-file
+format/document/contribution checks pass; publication retains `[skip ci]`.
+The shape-contract note records commands, ownership review,
 source/IR/target examples and remaining limits.
-Extra operator/state/result fan-out,
-cross-range storage, broader conservative bindings and remaining generated compositions also remain
-open where not implemented. No required
-child or parent is closed by these checkpoints. Do not silently treat an
-intentional current rejection as the final feature.
+The next required shared-owner repair is generated probe placement: derived
+probes must remain in the scope that dominates their generated endpoint operands
+(F-043.B.2/B.3). The shape-contract note retains the concrete failing flow
+reproducer. Generated local conservative-array declarations follow under
+F-043.B.1–B.3 and the approved topology gate. After those implementations,
+evaluate retained shared-live-fill consumption against the original shape,
+evaluation-count and lifetime obligations, then review every existing F-043 child
+and linked amendment against the implemented profile. Current operator fan-out,
+cross-range storage and other explicit capability rejections are inputs to that
+scope review, not automatic requirements for unlimited compositions and not
+implicit waivers of required semantics. ADR 0017, the original checklists and
+approved gates remain the authority. No required child or parent is closed by
+these checkpoints or by this wording.
 
 Use the existing shared owners, unified `hdlRange`, approved design gates and
 public witnesses. Add only affected positive/negative checks for each changed

@@ -283,9 +283,9 @@ int main() {
       return mlir::success();
     });
     auto flow = parse(duplicate + analog(access("same", "first", "second", true)));
-    check(bool(flow) && mlir::failed(nodal::normalizePotentialFlowAccess(*flow)) &&
-              diagnostics.find("NODAL-ACCESS-FORM-001") != std::string::npos,
-          "canonical identity must expose the existing oriented-flow self-access rejection");
+    check(!flow && diagnostics.find("NODAL-ACCESS-FORM-001") != std::string::npos,
+          "canonical identity must expose the existing oriented-flow self-access rejection during "
+          "verification");
   }
   {
     std::string symbolic = parameter("P", 0, 1) + parameter("Q", 2, 3) + array() +
@@ -388,9 +388,9 @@ int main() {
       return mlir::success();
     });
     auto flow = parse(rows + analog(access("self", "direct", "via_row", true)));
-    check(bool(flow) && mlir::failed(nodal::normalizePotentialFlowAccess(*flow)) &&
-              diagnostics.find("NODAL-ACCESS-FORM-001") != std::string::npos,
-          "view-equivalent flow endpoints must retain the oriented-flow self-access rejection");
+    check(!flow && diagnostics.find("NODAL-ACCESS-FORM-001") != std::string::npos,
+          "view-equivalent flow endpoints must retain the oriented-flow self-access rejection "
+          "during verification");
   }
   {
     const std::string planes =

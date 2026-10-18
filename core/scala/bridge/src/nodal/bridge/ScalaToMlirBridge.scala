@@ -234,7 +234,7 @@ private[nodal] object ScalaToMlirBridge:
         case index: KernelShapeIndexSnapshot => index.resultDimensions
       def scope: Option[KernelGeneratedScope] = record match
         case index: KernelShapeIndexSnapshot => index.generatedScope
-        case _ => None
+        case view: KernelShapeViewSnapshot => view.generatedScope
       def isView: Boolean = record.isInstanceOf[KernelShapeViewSnapshot]
       def isSlice: Boolean = record match
         case view: KernelShapeViewSnapshot => view.slice.nonEmpty
@@ -297,6 +297,9 @@ private[nodal] object ScalaToMlirBridge:
       ordered.result()
 
     private lazy val structuralShapesByOwner = structuralShapeOperations.groupBy(_.owner)
+    private val instanceArrayRootsByPath =
+      snapshot.instanceArrayRoots.map(root => root.path -> root).toMap
+    private val instanceArrayRootsByOwner = snapshot.instanceArrayRoots.groupBy(_.owner)
     private val conservativeArrayBindingsByOwner = snapshot.conservativeArrayBindings
       .groupBy(_.owner)
       .view
@@ -789,9 +792,9 @@ ${indent(body, 2)}
         "conservative array binding identity"
       )
       requireUnique(
-        snapshot.conservativeArrayBindings.map(binding => s"${binding.instance}:${binding.port}"),
+        snapshot.instanceArrayRoots.map(root => s"${root.instance}:${root.port}"),
         "NODAL-BRIDGE-050",
-        "conservative child array binding"
+        "conservative child array root"
       )
       val generatedByPath =
         snapshot.generatedRegions.map(region => region.path -> region).toMap
@@ -929,20 +932,38 @@ ${indent(body, 2)}
                 )
       snapshot.conservativeArrayBindings.foreach: binding =>
         validateScope(binding.generatedScope, binding.owner, binding.path)
-        val instance = modulesByPath.get(
-          binding.owner
-        ).toVector.flatMap(_.instances).find(_.path == binding.instance)
-          .getOrElse(fail(
-            "NODAL-BRIDGE-043",
-            "array binding has no actual instance",
-            Some(binding.path)
-          ))
-        if instance.generatedScope != binding.generatedScope then
-          fail(
-            "NODAL-BRIDGE-043",
-            "array binding crossed its child's exact generated scope",
-            Some(binding.path)
+      requireUnique(
+        snapshot.instanceArrayRoots.map(_.path),
+        "NODAL-BRIDGE-050",
+        "instance array root identity"
+      )
+      snapshot.instanceArrayRoots.foreach: root =>
+        validateScope(root.generatedScope, root.owner, root.path)
+        val module = modulesByPath.getOrElse(
+          root.owner,
+          fail("NODAL-BRIDGE-050", "instance array root has no owning Module", Some(root.path))
+        )
+        val instance = module.instances.find(_.path == root.instance).getOrElse(
+          fail("NODAL-BRIDGE-050", "instance array root has no exact instance", Some(root.path))
+        )
+        val port =
+          modulesByPath(instance.childModule).declarations.find(_.path == root.port).getOrElse(
+            fail("NODAL-BRIDGE-050", "instance array root has no declared port", Some(root.path))
           )
+        val expected = root.instance + ".array_port_" + port.name +
+          root.generatedScope.map(scope => s".in(${scope.owner})").getOrElse("")
+        if root.path != expected || !sourceByPath.contains(root.path) ||
+          module.declarations.exists(_.path == root.path)
+        then
+          fail(
+            "NODAL-BRIDGE-050",
+            "instance array root requires its unique canonical source identity",
+            Some(root.path)
+          )
+        try StructuralParameterBinding.validateRoot(snapshot, root)
+        catch
+          case error: IllegalArgumentException =>
+            fail("NODAL-BRIDGE-050", error.getMessage, Some(root.path))
       val generatedProcedures = snapshot.analogProcedural.filter(_.generatedOwner.nonEmpty)
       requireUnique(
         generatedProcedures.flatMap(_.generatedOwner),
@@ -1051,6 +1072,34 @@ ${indent(body, 2)}
         String,
         (String, Vector[String], Option[String], Vector[StructuralShapeCoordinates.Projection])
       ]
+      val conservativeRoots = mutable.HashMap.empty[String, String]
+      snapshot.instanceArrayRoots.foreach: root =>
+        conservativeRoots.update(root.path, root.path)
+        validatedShapes.update(
+          root.path,
+          (root.owner, root.dimensions, Some(root.path), Vector.empty)
+        )
+      val shapeScopes = structuralShapeOperations.map(shape => shape.path -> shape.scope).toMap
+      def validateShapeUse(
+          path: String,
+          scope: Option[KernelGeneratedScope],
+          root: Option[String],
+          consumer: String
+      ): Unit =
+        root.flatMap(instanceArrayRootsByPath.get).foreach: instanceRoot =>
+          if instanceRoot.generatedScope != scope then
+            fail(
+              "NODAL-BRIDGE-050",
+              "child array reference crossed its exact instance scope",
+              Some(consumer)
+            )
+        shapeScopes.get(path).flatten.foreach: captured =>
+          if !visibleInduction(scope, captured.induction) then
+            fail(
+              "NODAL-BRIDGE-050",
+              "conservative projection escaped its generated scope",
+              Some(consumer)
+            )
       def mapToken(module: KernelModuleSnapshot, value: String, path: String): String =
         value.toLongOption.map(_.toString).orElse(
           generatedByInduction.get(value).filter(_.owner == module.path).map(_.induction)
@@ -1086,12 +1135,6 @@ ${indent(body, 2)}
           fail(shape.code, "structural shape has no owning Module", Some(shape.path))
         )
         validateScope(shape.scope, shape.owner, shape.path)
-        if shape.scope.nonEmpty && !shape.isNodeSelection then
-          fail(
-            shape.code,
-            "generated structural projection must be a conservative scalar selection",
-            Some(shape.path)
-          )
         if !shape.path.startsWith(s"${shape.owner}.") || shape.path.trim != shape.path ||
           shape.input.trim != shape.input || !shape.input.startsWith(s"${shape.owner}.")
         then
@@ -1135,6 +1178,13 @@ ${indent(body, 2)}
                     "shape input must be an earlier captured shaped result in the same Module",
                     Some(shape.path)
                   )
+        validateShapeUse(shape.input, shape.scope, nodeRoot, shape.path)
+        if shape.scope.nonEmpty && nodeRoot.isEmpty then
+          fail(
+            shape.code,
+            "generated structural projection requires a conservative root",
+            Some(shape.path)
+          )
         if shape.isNodeSelection != (nodeRoot.nonEmpty && shape.dimensions.isEmpty) then
           fail(
             shape.code,
@@ -1205,11 +1255,12 @@ ${indent(body, 2)}
         if shape.isNodeSelection then
           val root = nodeRoot.get
           val rootShape =
-            module.declarations.find(_.path == root).get.conservativeDimensions.map(mapToken(
-              module,
-              _,
-              shape.path
-            ))
+            module.declarations.find(_.path == root).map(_.conservativeDimensions)
+              .getOrElse(instanceArrayRootsByPath(root).dimensions).map(mapToken(
+                module,
+                _,
+                shape.path
+              ))
           try
             val region = StructuralShapeCoordinates.scalarRegion(rootShape, chain)
             val axes = StructuralShapeCoordinates.rootCoordinates(rootShape, chain).map(
@@ -1245,21 +1296,34 @@ ${indent(body, 2)}
           catch
             case error: StructuralShapeCoordinates.InvalidCoordinate =>
               fail("NODAL-BRIDGE-048", error.getMessage, Some(shape.path))
+        nodeRoot.foreach(root => conservativeRoots.update(shape.path, root))
         if shape.dimensions.nonEmpty then
           validatedShapes.update(shape.path, (shape.owner, shape.dimensions, nodeRoot, chain))
+      val incidentRoots = (snapshot.conservativeArrayBindings.iterator.flatMap(relation =>
+        Iterator(relation.left, relation.right)
+      ) ++ snapshot.topology.iterator.flatMap(edge =>
+        Iterator(edge.left, edge.right)
+      )).flatMap(conservativeRoots.get).toSet
+      snapshot.instanceArrayRoots.foreach: root =>
+        if !incidentRoots.contains(root.path) then
+          fail(
+            "NODAL-BRIDGE-050",
+            "child array root has no actual incident array or scalar connection",
+            Some(root.path)
+          )
       modules.foreach: module =>
         module.instances.foreach: instance =>
           modulesByPath.get(instance.childModule).foreach: child =>
             child.declarations.filter(declaration =>
               isConservativeArray(declaration) && declaration.kind != "analog-node-array"
             ).foreach: port =>
-              if !snapshot.conservativeArrayBindings.exists(binding =>
-                  binding.owner == module.path && binding.instance == instance.path && binding.port == port.path
+              if !snapshot.instanceArrayRoots.exists(root =>
+                  root.owner == module.path && root.instance == instance.path && root.port == port.path
                 )
               then
                 fail(
                   "NODAL-BRIDGE-050",
-                  "child array port requires one whole binding",
+                  "child array port requires an actual full root and incident coverage",
                   Some(port.path)
                 )
       snapshot.conservativeArrayBindings.foreach: binding =>
@@ -1275,19 +1339,27 @@ ${indent(body, 2)}
             "array binding must have a distinct owned source-mapped identity",
             Some(binding.path)
           )
-        val dimensions = module.declarations.find(_.path == binding.actual) match
-          case Some(declaration) if isConservativeArray(declaration) =>
-            declaration.conservativeDimensions
-          case _ =>
-            validatedShapes.get(binding.actual) match
-              case Some((owner, dimensions, Some(_), _)) if owner == binding.owner => dimensions
-              case _ =>
-                fail(
-                  "NODAL-BRIDGE-050",
-                  "array binding actual must be an owned conservative root or shaped view",
-                  Some(binding.path)
-                )
-        try StructuralParameterBinding.validate(snapshot, binding, dimensions)
+        def dimensions(path: String): Vector[String] =
+          module.declarations.find(_.path == path) match
+            case Some(declaration) if isConservativeArray(declaration) =>
+              declaration.conservativeDimensions
+            case _ =>
+              validatedShapes.get(path) match
+                case Some((owner, dimensions, root @ Some(_), _)) if owner == binding.owner =>
+                  validateShapeUse(path, binding.generatedScope, root, binding.path)
+                  dimensions
+                case _ => fail(
+                    "NODAL-BRIDGE-050",
+                    "array relation endpoint must be an owned conservative root or shaped view",
+                    Some(binding.path)
+                  )
+        try
+          StructuralParameterBinding.validateRelation(
+            snapshot,
+            binding,
+            dimensions(binding.left),
+            dimensions(binding.right)
+          )
         catch
           case error: IllegalArgumentException =>
             fail("NODAL-BRIDGE-050", error.getMessage, Some(binding.path))
@@ -1532,6 +1604,57 @@ ${indent(body, 2)}
           shapeValues: mutable.LinkedHashMap[String, (String, String)],
           scope: Option[KernelGeneratedScope]
       ): Unit =
+        instanceArrayRootsByOwner.getOrElse(
+          module.path,
+          Vector.empty
+        ).filter(_.generatedScope == scope)
+          .zipWithIndex.foreach: (root, index) =>
+            root.dimensions.distinct.filter(expressionsByPath.contains).foreach: path =>
+              emitStaticValue(
+                path,
+                parameterSymbols,
+                declarationsByPath,
+                expressionsByPath,
+                body,
+                shapeStaticValues,
+                () => allocateShapeStaticValue(),
+                requireStructural = true
+              )
+            val instance = module.instances.find(_.path == root.instance).get
+            val declaration =
+              modulesByPath(instance.childModule).declarations.find(_.path == root.port).get
+            val elementType = "!nodal.terminal<\"electrical\">"
+            val resultType =
+              s"!nodal.shaped<${quoted(root.dimensions.mkString(","))}, $elementType>"
+            val result = if scope.isEmpty then s"%instance_terminal_array_$index"
+            else "%" + stableLocalSymbol("instance_terminal_array", root.path)
+            shapeBody += operation(
+              "nodal.instance_terminal_array",
+              results = Vector(result),
+              resultTypes = Vector(resultType),
+              attributes = Vector(
+                "instance" -> symbolReference(stableLocalSymbol(
+                  "instance",
+                  lastSegment(instance.path)
+                )),
+                "port" -> quoted(declaration.name),
+                "name" -> quoted(s"${lastSegment(instance.path)}.${declaration.name}"),
+                "direction" -> quoted(boundaryDirection(declaration)),
+                "flow_orientation" -> quoted("out_of_component"),
+                "source_path" -> quoted(declaration.path),
+                "metadata" -> bridgeMetadata(
+                  root.path,
+                  Vector(
+                    "instance_path" -> quoted(instance.path),
+                    "child_path" -> quoted(instance.childModule),
+                    "storage" -> quoted("structural")
+                  )
+                )
+              ) ++ scopeAttributes(scope),
+              semanticPath = root.path
+            )
+            shapeValues.update(root.path, result -> resultType)
+            emittedShapes.update(root.path, (result, resultType, elementType))
         structuralShapesByOwner.getOrElse(
           module.path,
           Vector.empty
@@ -1598,7 +1721,7 @@ ${indent(body, 2)}
                     shapeStaticValues.getOrElseUpdate(
                       s"literal:$literal", {
                         val result = allocateShapeStaticValue()
-                        shapeBody += operation(
+                        body += operation(
                           "nodal.const_literal",
                           results = Vector(result),
                           resultTypes = Vector("i64"),
@@ -1657,7 +1780,7 @@ ${indent(body, 2)}
                       "access" -> quoted("read_only")
                     )
                   )
-                ),
+                ) ++ scopeAttributes(view.generatedScope),
                 semanticPath = view.path
               )
             case view: KernelShapeViewSnapshot =>
@@ -1679,7 +1802,7 @@ ${indent(body, 2)}
                       "storage" -> quoted("structural")
                     ) ++ Option.when(conservative)("access" -> quoted("read_only"))
                   )
-                ),
+                ) ++ scopeAttributes(view.generatedScope),
                 semanticPath = view.path
               )
             case index: KernelShapeIndexSnapshot =>
@@ -1962,68 +2085,31 @@ ${indent(body, 2)}
           )
           scopeValues.update(path, result -> resultType)
 
-        conservativeArrayBindingsByOwner.getOrElse(
-          module.path,
-          Vector.empty
-        ).filter(_.generatedScope == scope)
-          .zipWithIndex.foreach: (binding, index) =>
-            val instance = module.instances.find(_.path == binding.instance).getOrElse(
-              fail("NODAL-BRIDGE-050", "array binding instance is unavailable", Some(binding.path))
-            )
-            val declaration = modulesByPath(instance.childModule).declarations
-              .find(_.path == binding.port).getOrElse(
-                fail("NODAL-BRIDGE-050", "array binding port is unavailable", Some(binding.path))
-              )
-            val (actualValue, resultType) = scopeValues.get(binding.actual)
-              .orElse(emittedShapes.get(binding.actual).map((value, dataType, _) =>
+        conservativeArrayBindingsByOwner.getOrElse(module.path, Vector.empty)
+          .filter(_.generatedScope == scope).foreach: binding =>
+            def endpoint(path: String): (String, String) =
+              scopeValues.get(path).orElse(emittedShapes.get(path).map((value, dataType, _) =>
                 value -> dataType
               ))
-              .getOrElse(fail(
-                "NODAL-BRIDGE-050",
-                "array binding actual was not emitted before its binding",
-                Some(binding.path)
-              ))
-            val result = if scope.isEmpty then s"%instance_terminal_array_$index"
-            else "%" + stableLocalSymbol("instance_terminal_array", binding.path)
-            scopeBody += operation(
-              "nodal.instance_terminal_array",
-              results = Vector(result),
-              resultTypes = Vector(resultType),
-              attributes = Vector(
-                "instance" -> symbolReference(stableLocalSymbol(
-                  "instance",
-                  lastSegment(instance.path)
-                )),
-                "port" -> quoted(declaration.name),
-                "name" -> quoted(s"${lastSegment(instance.path)}.${declaration.name}"),
-                "direction" -> quoted(boundaryDirection(declaration)),
-                "flow_orientation" -> quoted("out_of_component"),
-                "source_path" -> quoted(declaration.path),
-                "metadata" -> bridgeMetadata(
-                  binding.path,
-                  Vector(
-                    "instance_path" -> quoted(instance.path),
-                    "child_path" -> quoted(instance.childModule),
-                    "actual_path" -> quoted(binding.actual),
-                    "storage" -> quoted("structural")
-                  )
-                )
-              ) ++ scopeAttributes(scope),
-              semanticPath = binding.path
-            )
+                .getOrElse(fail(
+                  "NODAL-BRIDGE-050",
+                  "array relation endpoint was not emitted before its use",
+                  Some(binding.path)
+                ))
+            val left = endpoint(binding.left)
+            val right = endpoint(binding.right)
             scopeBody += operation(
               "nodal.connect_array",
-              operands = Vector(actualValue, result),
-              operandTypes = Vector(resultType, resultType),
+              operands = Vector(left._1, right._1),
+              operandTypes = Vector(left._2, right._2),
               attributes = Vector(
                 "connection_id" -> quoted(binding.path),
                 "source_path" -> quoted(binding.path),
                 "metadata" -> bridgeMetadata(
                   binding.path,
                   Vector(
-                    "instance_path" -> quoted(binding.instance),
-                    "port_path" -> quoted(binding.port),
-                    "actual_path" -> quoted(binding.actual)
+                    "left_path" -> quoted(binding.left),
+                    "right_path" -> quoted(binding.right)
                   )
                 )
               ) ++ scopeAttributes(scope),
@@ -4138,7 +4224,10 @@ ${indent(body, 2)}
               "semantic path has no owning Module",
               Some(path)
             )
-      resolve(path)
+      snapshot.shapeIndices.find(_.path == path).map(_.owner)
+        .orElse(snapshot.shapeViews.find(_.path == path).map(_.owner))
+        .orElse(snapshot.instanceArrayRoots.find(_.path == path).map(_.owner))
+        .getOrElse(resolve(path))
 
     private def parseType(text: String, path: String): String =
       text match

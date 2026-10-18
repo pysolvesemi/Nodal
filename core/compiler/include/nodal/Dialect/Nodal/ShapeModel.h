@@ -79,6 +79,70 @@ struct StaticShapeProjection {
 mlir::FailureOr<StaticShapeProjection> resolveStaticShapeProjection(mlir::Value reference,
                                                                     mlir::Operation *use);
 
+/// Exact, element-neutral images in one actual root. Boxes use half-open root
+/// coordinates; intervals use half-open root row-major ordinals. A reshape
+/// preserves the selected image and never makes a column into an interval.
+struct StaticShapeRegionAxis {
+  InstantiatedIntegerExpression lower, upperExclusive;
+};
+struct StaticShapeRegion {
+  enum class Kind { Whole, Box, Interval } kind = Kind::Whole;
+  mlir::Value root;
+  llvm::SmallVector<StaticShapeRegionAxis, 4> axes;
+  StaticShapeRegionAxis interval;
+  /// Retained actual map for scalar identity; coverage cuts alone do not
+  /// identify independently authored compound selector atoms.
+  std::optional<StaticShapeProjection> projection;
+};
+enum class ShapeRegionProofStatus { Proved, Unsupported, Invalid, ResourceLimit };
+struct ShapeRegionProofLimits {
+  uint64_t maximumWork = 200000;
+  uint64_t maximumStates = 16384;
+};
+/// All queries are read-only and transactional: outputs are assigned only after
+/// a proof succeeds. Limits count query-local cut/comparison/map work and active
+/// partition states, independently of the number of physical lanes.
+ShapeRegionProofStatus resolveStaticShapeRegion(const StaticShapeProjection &projection,
+                                                mlir::Operation *use, StaticShapeRegion &result,
+                                                ShapeRegionProofLimits limits = {});
+ShapeRegionProofStatus verifyStaticShapeRegionPartition(mlir::Value root,
+                                                        llvm::ArrayRef<StaticShapeRegion> regions,
+                                                        mlir::Operation *use,
+                                                        ShapeRegionProofLimits limits = {});
+
+/// One physical scalar. Coordinates and/or a flat ordinal are exact expressions;
+/// opaque selector atoms retain actual SSA identity, including active induction.
+struct StaticShapePoint {
+  mlir::Value root;
+  llvm::SmallVector<InstantiatedIntegerExpression, 4> coordinates;
+  std::optional<InstantiatedIntegerExpression> flatOrdinal;
+};
+enum class ShapeRegionMembership { Inside, Outside, Unknown };
+struct StaticShapeScalarLocation {
+  ShapeRegionProofStatus status = ShapeRegionProofStatus::Unsupported;
+  ShapeRegionMembership membership = ShapeRegionMembership::Unknown;
+  std::optional<InstantiatedIntegerExpression> ordinal;
+};
+ShapeRegionProofStatus resolveStaticShapePoint(const StaticShapeProjection &projection,
+                                               mlir::Operation *use, StaticShapePoint &result,
+                                               ShapeRegionProofLimits limits = {});
+StaticShapeScalarLocation locateStaticShapeScalar(const StaticShapeRegion &region,
+                                                  const StaticShapePoint &point,
+                                                  mlir::Operation *use,
+                                                  ShapeRegionProofLimits limits = {});
+StaticShapeScalarLocation locateStaticShapeScalar(const StaticShapeProjection &regionProjection,
+                                                  const StaticShapeProjection &scalarProjection,
+                                                  mlir::Operation *use,
+                                                  ShapeRegionProofLimits limits = {});
+ShapeRegionProofStatus mapStaticShapeOrdinal(const StaticShapeRegion &region,
+                                             const InstantiatedIntegerExpression &ordinal,
+                                             mlir::Operation *use, StaticShapePoint &result,
+                                             ShapeRegionProofLimits limits = {});
+ShapeRegionProofStatus mapStaticShapeOrdinal(const StaticShapeProjection &projection,
+                                             const InstantiatedIntegerExpression &ordinal,
+                                             mlir::Operation *use, StaticShapePoint &result,
+                                             ShapeRegionProofLimits limits = {});
+
 /// Local transformation proofs shared by operation and storage-map verification.
 /// These do not grant storage capability or establish initialization.
 mlir::LogicalResult verifyShapeIndexMapping(mlir::Operation *operation);

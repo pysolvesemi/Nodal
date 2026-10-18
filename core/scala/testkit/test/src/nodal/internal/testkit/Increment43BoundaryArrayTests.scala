@@ -75,6 +75,12 @@ final class Increment43DefaultArrayBinding extends Module:
   val child = instance(new Increment43DependentArrayChild)
   taps <> child(_.p)
 
+final class Increment43FlattenedChildArrayBinding extends Module:
+  val taps = node(Electrical, 3)
+  val child = instance(new Increment43DependentArrayChild)
+  val selected = child(_.p).flatten
+  taps <> selected
+
 final class Increment43ExpressionArrayChild extends Module:
   val count: Param[Integer] = param(2.integer, range = 2 to 5)
   val p = inout(Electrical, 2.integer * count)
@@ -141,7 +147,6 @@ final class Increment43BadArrayBinding(form: Int) extends Module:
     case 4 => connect(symbolic, child(_.p)); child.param(_.count, independent)
     case 5 => connect(symbolic, child(_.p)); child.param(_.count, wide)
     case 6 => connect(symbolic, child(_.p))
-    case 7 => connect(taps, child(_.p).flatten)
     case 8 => connect(taps, symbolic)
     case _ =>
       val wrong = node(Electrical, count + count)
@@ -180,6 +185,7 @@ object Increment43BoundaryArrayTests extends TestSuite:
     () => new Increment43NoncontiguousArrayBinding,
     () => new Increment43DependentArrayBinding,
     () => new Increment43DefaultArrayBinding,
+    () => new Increment43FlattenedChildArrayBinding,
     () => new Increment43ExpressionArrayBinding,
     () => new Increment43SharedExpressionArrayBinding,
     () => new Increment43LiteralArrayBinding,
@@ -196,9 +202,24 @@ object Increment43BoundaryArrayTests extends TestSuite:
       val rootText = ScalaToMlirBridge.fromSnapshot(roots).text
       assert(rootText.contains("nodal.terminal_array"), rootText.contains("nodal.shape_index"))
       val snapshot = ConstructionKernel.inspect(new Increment43WholeArrayBindings)
-      assert(snapshot.conservativeArrayBindings.size == 3)
+      assert(snapshot.conservativeArrayBindings.size == 3, snapshot.instanceArrayRoots.size == 3)
+      snapshot.instanceArrayRoots.foreach: root =>
+        assert(
+          root.owner == snapshot.root,
+          root.instance.contains(".child"),
+          root.dimensions == Vector("2", "3"),
+          root.generatedScope.isEmpty,
+          snapshot.sourceMap.exists(_.semanticPath == root.path)
+        )
       snapshot.conservativeArrayBindings.foreach: binding =>
-        assert(binding.owner == snapshot.root, binding.instance.contains(".child"))
+        val root = snapshot.instanceArrayRoots.find(root =>
+          Set(binding.left, binding.right).contains(root.path)
+        ).get
+        assert(
+          binding.owner == snapshot.root,
+          binding.generatedScope.isEmpty,
+          !Set(binding.left, binding.right).contains(root.port)
+        )
         val source = snapshot.sourceMap.find(_.semanticPath == binding.path).get.source
         assert(source.path.endsWith("Increment43BoundaryArrayTests.scala"), source.line > 0)
       val text = ScalaToMlirBridge.fromSnapshot(snapshot).text
@@ -303,17 +324,33 @@ object Increment43BoundaryArrayTests extends TestSuite:
         assert(sharedText.contains(path))
       )
 
+    test("flattened child arrays retain full roots and ordinary shape matching"):
+      val snapshot = ConstructionKernel.inspect(new Increment43FlattenedChildArrayBinding)
+      val root = snapshot.instanceArrayRoots.head
+      val view = snapshot.shapeViews.find(_.input == root.path).get
+      val binding = snapshot.conservativeArrayBindings.head
+      assert(
+        snapshot.instanceArrayRoots.size == 1,
+        root.dimensions == Vector("3"),
+        view.dimensions == Vector("3"),
+        Set(binding.left, binding.right).contains(view.path)
+      )
+      val text = ScalaToMlirBridge.fromSnapshot(snapshot).text
+      assert(text.contains("nodal.shape_view"), text.contains("nodal.connect_array"))
+
     test("rank extent independent defaults envelopes and unsupported ownership reject causally"):
       failure(new Increment43UnprovedAlgebraArrayBinding, "NODAL-SHAPE-043-007", "extent")
       failure(new Increment43BadArrayBinding(0), "NODAL-SHAPE-043-007", "extent")
       failure(new Increment43BadArrayBinding(1), "NODAL-SHAPE-043-007", "rank")
-      failure(new Increment43BadArrayBinding(2), "NODAL-HIERARCHY-043", "more than once")
-      failure(new Increment43BadArrayBinding(3), "NODAL-HIERARCHY-043", "whole binding")
+      failure(
+        new Increment43BadArrayBinding(3),
+        "NODAL-HIERARCHY-043",
+        "complete incident coverage"
+      )
       failure(new Increment43BadArrayBinding(4), "NODAL-SHAPE-043-007", "extent")
       failure(new Increment43BadArrayBinding(5), "NODAL-SHAPE-043-007", "envelope")
       failure(new Increment43BadArrayBinding(6), "NODAL-SHAPE-043-007", "extent")
-      failure(new Increment43BadArrayBinding(7), "NODAL-SHAPE-043-006", "local owned root")
-      failure(new Increment43BadArrayBinding(8), "NODAL-SHAPE-043-007", "whole port")
+      failure(new Increment43BadArrayBinding(8), "NODAL-SHAPE-043-007", "extent")
       failure(new Increment43BadArrayBinding(9), "NODAL-SHAPE-043-007", "extent")
 
     test("bridge independently rejects forged bindings defaults and substituted types"):
@@ -330,13 +367,11 @@ object Increment43BoundaryArrayTests extends TestSuite:
         ).contains(error.diagnostic.code))
       rejects(snapshot.copy(conservativeArrayBindings = Vector.empty))
       rejects(snapshot.copy(conservativeArrayBindings = Vector(binding.copy(owner = "foreign"))))
-      rejects(snapshot.copy(conservativeArrayBindings = Vector(binding.copy(instance = "foreign"))))
-      rejects(snapshot.copy(conservativeArrayBindings =
-        Vector(binding.copy(port = binding.actual))
-      ))
-      rejects(snapshot.copy(conservativeArrayBindings =
-        Vector(binding.copy(actual = binding.port))
-      ))
+      val root = snapshot.instanceArrayRoots.head
+      rejects(snapshot.copy(instanceArrayRoots = Vector(root.copy(instance = "foreign"))))
+      rejects(snapshot.copy(instanceArrayRoots = Vector(root.copy(dimensions = Vector("3")))))
+      rejects(snapshot.copy(instanceArrayRoots = Vector(root.copy(port = binding.left))))
+      rejects(snapshot.copy(conservativeArrayBindings = Vector(binding.copy(left = root.port))))
       rejects(snapshot.copy(conservativeArrayBindings =
         Vector(binding, binding.copy(path = binding.path + "_duplicate"))
       ))
@@ -365,9 +400,21 @@ object Increment43BoundaryArrayTests extends TestSuite:
         ConstructionKernel.inspect(new Increment43DependentArrayBinding)
       )
       assert(first == second)
-      assert(first.construction.contains("conservative_array_bindings"))
+      assert(
+        first.construction.contains("conservative_array_bindings"),
+        first.construction.contains("instance_array_roots"),
+        first.construction.contains("root_dimensions")
+      )
       val binding = snapshot.conservativeArrayBindings.head
-      Vector(binding.path, binding.instance, binding.port, binding.actual).foreach(value =>
+      val root = snapshot.instanceArrayRoots.head
+      Vector(
+        binding.path,
+        binding.left,
+        binding.right,
+        root.path,
+        root.instance,
+        root.port
+      ).foreach(value =>
         assert(first.construction.contains(value))
       )
       assert(first.manifest.text.contains("conservative-vector-row-major"))
@@ -377,7 +424,7 @@ object Increment43BoundaryArrayTests extends TestSuite:
       )
       val views = ConstructionKernel.inspect(new Increment43NoncontiguousArrayBinding)
       val viewArtifact = ReproducibilityContract.describe(views)
-      assert(viewArtifact.construction.contains("actual_projection_chain"))
+      assert(viewArtifact.construction.contains("projection_chain"))
       views.shapeViews.foreach(view =>
         assert(
           viewArtifact.construction.contains(view.path),
@@ -421,7 +468,16 @@ object Increment43BoundaryArrayTests extends TestSuite:
                     s"${span.path}:${span.line}:${span.column}-${span.endLine}:${span.endColumn}"
                   val record =
                     output.linesIterator.find(_.contains(s"\"binding\":\"${binding.path}\"")).get
-                  assert(record.contains(s"\"source_location\":\"$expected\""))
+                  assert(
+                    record.contains(s"\"source_location\":\"$expected\""),
+                    record.contains("\"left\":{"),
+                    record.contains("\"right\":{")
+                  )
+                snapshot.instanceArrayRoots.foreach: childRoot =>
+                  assert(
+                    output.contains(s"\"root_reference\":\"${childRoot.path}\""),
+                    output.contains(s"\"root_shape\":\"${childRoot.dimensions.mkString(",")}\"")
+                  )
                 if snapshot.root == "Increment43BoundaryDirections" then
                   assert(
                     output.contains("input [0:5] source"),
@@ -441,7 +497,7 @@ object Increment43BoundaryArrayTests extends TestSuite:
         case _ => ()
 
     test(
-      "native verifier rejects forged effective extents missing ports and missing whole bindings"
+      "native verifier rejects forged extents missing ports and missing or duplicate whole coverage"
     ):
       sys.env.get("NODAL_NODALC").foreach: nodalc =>
         val snapshot = ConstructionKernel.inspect(new Increment43DependentArrayBinding)
@@ -461,10 +517,15 @@ object Increment43BoundaryArrayTests extends TestSuite:
         val missingBinding = document.text.linesIterator.filterNot(_.contains(
           "\"nodal.connect_array\""
         )).mkString("\n") + "\n"
+        val duplicateSnapshot = ConstructionKernel.inspect(new Increment43BadArrayBinding(2))
+        assert(duplicateSnapshot.conservativeArrayBindings.size == 2)
+        assert(duplicateSnapshot.instanceArrayRoots.size == 1)
+        val duplicateBinding = ScalaToMlirBridge.fromSnapshot(duplicateSnapshot).text
         Vector(
           ("forged-effective-type", forgedType, "NODAL-SHAPE-043-008"),
           ("missing-child-port", missingPort, "NODAL-SHAPE-043-008"),
-          ("missing-whole-binding", missingBinding, "NODAL-VERIFY-HIERARCHY-012")
+          ("missing-whole-binding", missingBinding, "NODAL-VERIFY-HIERARCHY-012"),
+          ("duplicate-whole-binding", duplicateBinding, "NODAL-VERIFY-HIERARCHY-010")
         ).foreach: (name, text, code) =>
           assert(text != document.text)
           Files.writeString(root.resolve(name + ".mlir"), text)

@@ -215,8 +215,8 @@ def cases():
     yield 'duplicate_binding', design(fixed_child, fixed_parent + connect('2,3', path='second')), ['NODAL-VERIFY-HIERARCHY-010']
     yield 'missing_binding', design(fixed_child, array('Parent', 'nodes', '2,3') + instance()), ['NODAL-VERIFY-HIERARCHY-012']
     yield 'unbound_reference', design(fixed_child, array('Parent', 'nodes', '2,3') + instance() + reference('2,3')), ['NODAL-VERIFY-HIERARCHY-012']
-    yield 'child_projection_rejected', design(fixed_child, fixed_parent + literal('one', 1) +
-        prefix(base='ref')), [CODE]
+    yield 'child_projection_preserves_full_binding', design(fixed_child, fixed_parent + literal('one', 1) +
+        prefix(base='ref')), []
     yield 'distinct_equal_envelope_parameters', design(symbolic_child,
         parameter('Parent', 'N', 2, 6) + parameter('Parent', 'M', 2, 6) + array('Parent', 'nodes', 'M') +
         instance() + override('A', 'N') + reference('M') + connect('M')), [CODE]
@@ -249,7 +249,8 @@ def cases():
     malformed = design('', instance())
     malformed = malformed.replace(module('Child', ''), '')
     malformed = malformed[:-2] + '"nodal.module"() <{sym_name = "Child", metadata = {}}> ({}) : () -> ()\n}\n'
-    yield 'malformed_child_inventory', malformed, [CODE]
+    yield 'malformed_child_inventory', malformed, [
+        "text:'nodal.module' op region #0 ('body') failed to verify constraint: region with 1 blocks"]
     yield 'digital_profile_rejects_arrays', fixed.replace('nodal.target.profile = "analog"',
         'nodal.target.profile = "digital"'), ['gate:NODAL-VERIFY-CAPABILITY-003']
     digital = ('"nodal.domain"() <{sym_name = "clk", edge = "rising", reset_policy = "sync", metadata = {}}> : () -> ()\n'
@@ -270,6 +271,8 @@ def main():
         path.write_text(source)
         gate_negative = bool(expected and expected[0].startswith('gate:'))
         expected = [code.removeprefix('gate:') for code in expected]
+        expected_text = [code.removeprefix('text:') for code in expected if code.startswith('text:')]
+        expected_codes = [code for code in expected if not code.startswith('text:')]
         command = [args.nodalc]
         if gate_negative:
             command.append('--pass-pipeline=builtin.module(nodal-gate-default)')
@@ -277,7 +280,8 @@ def main():
         (directory / f'{name}.stdout').write_bytes(run.stdout)
         (directory / f'{name}.stderr').write_bytes(run.stderr)
         codes = sorted(set(re.findall(r'NODAL-[A-Z0-9-]+', run.stderr.decode())))
-        passed = run.returncode == (1 if expected else 0) and codes == expected
+        passed = (run.returncode == (1 if expected else 0) and codes == expected_codes
+                  and all(text in run.stderr.decode() for text in expected_text))
         if not expected and passed:
             replay = directory / f'{name}.roundtrip.mlir'
             replay.write_bytes(run.stdout)

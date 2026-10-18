@@ -2,12 +2,14 @@
 
 #include "nodal/Dialect/Nodal/NodalOps.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 
 #include <algorithm>
 #include <limits>
 #include <map>
+#include <set>
 #include <vector>
 
 using namespace mlir;
@@ -608,6 +610,871 @@ FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, O
     result.canonicalScalarKey = "offset:" + std::to_string(*result.literalRootFlatOffset);
   deriveScalarCoordinates(module, reference, result);
   return result;
+}
+
+namespace {
+using RegionStatus = ShapeRegionProofStatus;
+using IntegerExpression = InstantiatedIntegerExpression;
+using RegionAxis = StaticShapeRegionAxis;
+using RegionBox = llvm::SmallVector<RegionAxis, 4>;
+
+// One query owns its caches and a work budget. State expansion depends on
+// authored cuts, not cardinality; no algorithm below recurses with shape rank.
+class RegionQuery {
+public:
+  RegionQuery(Operation *use, ShapeRegionProofLimits limits)
+      : use(use), module(use ? use->getParentOfType<nodal::ModuleOp>() : nodal::ModuleOp()),
+        limits(limits) {}
+  bool spend(uint64_t amount = 1) {
+    if (amount > limits.maximumWork - std::min(work, limits.maximumWork)) {
+      status = RegionStatus::ResourceLimit;
+      return false;
+    }
+    work += amount;
+    return true;
+  }
+  bool equal(const IntegerExpression &a, const IntegerExpression &b) {
+    if (!a.root || !b.root || !spend())
+      return false;
+    auto key = std::make_pair(a.root, b.root);
+    auto found = equalities.find(key);
+    if (found != equalities.end())
+      return found->second;
+    bool result = equivalentInstantiatedIntegerExpressions(a, b);
+    equalities.emplace(key, result);
+    return result;
+  }
+  bool less(const IntegerExpression &a, const IntegerExpression &b, bool inclusive = false) {
+    if (!spend())
+      return false;
+    if (proveIntegerExpressionLess(a, b, inclusive))
+      return true;
+    if (!a.root || a.root->kind != InstantiatedIntegerNode::Kind::OpaqueValue || !a.root->identity)
+      return false;
+    auto induction = llvm::dyn_cast<BlockArgument>(a.root->identity);
+    auto generated = induction
+                         ? llvm::dyn_cast_or_null<GenerateOp>(induction.getOwner()->getParentOp())
+                         : GenerateOp();
+    if (!generated || !generated->isProperAncestor(use))
+      return false;
+    auto found = domains.find(generated.getOperation());
+    if (found == domains.end()) {
+      auto domain = resolveGeneratedDomain(generated);
+      found =
+          domains
+              .emplace(generated.getOperation(),
+                       succeeded(domain) ? std::optional<GeneratedDomain>(*domain) : std::nullopt)
+              .first;
+    }
+    const auto &domain = found->second;
+    return domain && domain->induction == induction && domain->attainedInductionBounds &&
+           proveIntegerExpressionLess(domain->upperExclusive, b, true);
+  }
+  std::optional<IntegerExpression> apply(llvm::StringRef opcode, const IntegerExpression &a,
+                                         const IntegerExpression &b) {
+    if (!spend())
+      return std::nullopt;
+    auto result = composeIntegerExpression(opcode, {a, b});
+    return succeeded(result) ? std::optional<IntegerExpression>(*result) : std::nullopt;
+  }
+  std::optional<llvm::SmallVector<IntegerExpression, 4>> dimensions(Type type) {
+    auto found = dimensionCache.find(type);
+    if (found != dimensionCache.end())
+      return found->second;
+    llvm::SmallVector<IntegerExpression, 4> result;
+    if (auto shaped = llvm::dyn_cast<ShapedType>(type)) {
+      llvm::SmallVector<llvm::StringRef> tokens;
+      shaped.getDimensions().split(tokens, ',', -1, true);
+      for (auto token : tokens) {
+        if (!spend())
+          return std::nullopt;
+        auto dimension = resolveStaticShapeDimension(module, token.trim());
+        if (failed(dimension))
+          return std::nullopt;
+        auto expression =
+            dimension->parameter ? resolveOwnedIntegerParameter(module, dimension->parameter)
+            : dimension->expression
+                ? resolveOwnedIntegerExpression(module, dimension->expression)
+                : FailureOr<IntegerExpression>(makeLiteralIntegerExpression(dimension->literal));
+        if (failed(expression) || expression->bounds.lower <= 0)
+          return std::nullopt;
+        result.push_back(*expression);
+      }
+    }
+    dimensionCache.try_emplace(type, result);
+    return result;
+  }
+  std::optional<IntegerExpression> selector(Value value, Operation *at, bool opaque) {
+    if (!spend())
+      return std::nullopt;
+    auto proof = resolveShapeIndexProof(value, at);
+    if (failed(proof) || !proof->attainedBounds)
+      return std::nullopt;
+    if (proof->identity.kind == StaticShapeIndexIdentity::Literal)
+      return makeLiteralIntegerExpression(proof->identity.literal);
+    if (proof->identity.kind == StaticShapeIndexIdentity::Parameter) {
+      auto expression = resolveOwnedIntegerParameter(module, proof->identity.root);
+      return succeeded(expression) ? std::optional<IntegerExpression>(*expression) : std::nullopt;
+    }
+    if (opaque || proof->identity.kind == StaticShapeIndexIdentity::Induction)
+      return makeOpaqueIntegerExpression(value, *proof->attainedBounds);
+    auto expression = resolveOwnedIntegerExpression(module, value);
+    return succeeded(expression) ? std::optional<IntegerExpression>(*expression) : std::nullopt;
+  }
+  std::optional<IntegerExpression> count(llvm::ArrayRef<IntegerExpression> dimensions) {
+    IntegerExpression result = one;
+    for (const auto &dimension : dimensions) {
+      auto next = apply("mul", result, dimension);
+      if (!next)
+        return std::nullopt;
+      result = *next;
+    }
+    return result;
+  }
+  RegionBox full(llvm::ArrayRef<IntegerExpression> dimensions) {
+    RegionBox result;
+    for (const auto &dimension : dimensions)
+      result.push_back({zero, dimension});
+    return result;
+  }
+  bool whole(llvm::ArrayRef<RegionAxis> box, llvm::ArrayRef<IntegerExpression> dimensions) {
+    if (box.size() != dimensions.size())
+      return false;
+    for (unsigned i = 0; i != box.size(); ++i)
+      if (!equal(box[i].lower, zero) || !equal(box[i].upperExclusive, dimensions[i]))
+        return false;
+    return true;
+  }
+  std::optional<RegionAxis> interval(llvm::ArrayRef<RegionAxis> box,
+                                     llvm::ArrayRef<IntegerExpression> dimensions) {
+    if (box.size() != dimensions.size())
+      return std::nullopt;
+    IntegerExpression offset = zero;
+    std::optional<unsigned> lastPartial;
+    bool varying = false;
+    for (unsigned axis = 0; axis != box.size(); ++axis) {
+      auto width = apply("sub", box[axis].upperExclusive, box[axis].lower);
+      if (!width || (varying && (!equal(box[axis].lower, zero) ||
+                                 !equal(box[axis].upperExclusive, dimensions[axis]))))
+        return std::nullopt;
+      varying |= !equal(*width, one);
+      if (!equal(box[axis].lower, zero) || !equal(box[axis].upperExclusive, dimensions[axis]))
+        lastPartial = axis;
+      auto shifted = apply("mul", offset, dimensions[axis]);
+      auto nextOffset = shifted ? apply("add", *shifted, box[axis].lower) : std::nullopt;
+      if (!nextOffset)
+        return std::nullopt;
+      offset = *nextOffset;
+    }
+    // Retain the authored upper boundary directly instead of offset+volume:
+    // e.g. [1,N)x[0,3) ends at N*3, without distributive algebra solving.
+    IntegerExpression end = zero;
+    if (!lastPartial) {
+      auto total = count(dimensions);
+      if (!total)
+        return std::nullopt;
+      end = *total;
+    } else {
+      for (unsigned axis = 0; axis != box.size(); ++axis) {
+        auto shifted = apply("mul", end, dimensions[axis]);
+        auto next = shifted;
+        if (shifted && axis <= *lastPartial)
+          next = apply("add", *shifted,
+                       axis == *lastPartial ? box[axis].upperExclusive : box[axis].lower);
+        if (!next)
+          return std::nullopt;
+        end = *next;
+      }
+    }
+    return RegionAxis{offset, end};
+  }
+  std::optional<RegionBox> box(const RegionAxis &interval,
+                               llvm::ArrayRef<IntegerExpression> dimensions) {
+    auto cardinality = count(dimensions);
+    if (cardinality && equal(interval.lower, zero) && equal(interval.upperExclusive, *cardinality))
+      return full(dimensions);
+    if (dimensions.size() == 1)
+      return RegionBox{interval};
+    auto width = apply("sub", interval.upperExclusive, interval.lower);
+    if (width && equal(*width, one) && cardinality && less(zero, interval.lower, true) &&
+        less(interval.lower, *cardinality)) {
+      RegionBox result(dimensions.size());
+      IntegerExpression remainder = interval.lower;
+      for (unsigned axis = dimensions.size(); axis > 0; --axis) {
+        std::optional<IntegerExpression> digit, next;
+        if (less(zero, remainder, true) && less(remainder, dimensions[axis - 1])) {
+          digit = remainder;
+          next = zero;
+        } else {
+          digit = apply("mod", remainder, dimensions[axis - 1]);
+          next = apply("div", remainder, dimensions[axis - 1]);
+        }
+        auto end = digit ? apply("add", *digit, one) : std::nullopt;
+        if (!digit || !next || !end)
+          return std::nullopt;
+        result[axis - 1] = {*digit, *end};
+        remainder = *next;
+      }
+      return result;
+    }
+    auto low = literal(interval.lower), high = literal(interval.upperExclusive);
+    llvm::SmallVector<int64_t> fixed;
+    for (const auto &dimension : dimensions) {
+      auto value = literal(dimension);
+      if (!value)
+        return std::nullopt;
+      fixed.push_back(*value);
+    }
+    if (!low || !high || *high <= *low)
+      return std::nullopt;
+    auto start = coordinates(*low, fixed), last = coordinates(*high - 1, fixed);
+    if (!start || !last)
+      return std::nullopt;
+    RegionBox result;
+    for (unsigned axis = 0; axis != dimensions.size(); ++axis)
+      result.push_back({makeLiteralIntegerExpression((*start)[axis]),
+                        makeLiteralIntegerExpression((*last)[axis] + 1)});
+    auto exact = this->interval(result, dimensions);
+    if (!exact || !equal(exact->lower, interval.lower) ||
+        !equal(exact->upperExclusive, interval.upperExclusive))
+      return std::nullopt;
+    return result;
+  }
+  static std::optional<int64_t> literal(const IntegerExpression &expression) {
+    return expression.root && expression.root->kind == InstantiatedIntegerNode::Kind::Literal
+               ? std::optional<int64_t>(expression.root->literal)
+               : std::nullopt;
+  }
+  RegionStatus failedStatus() const {
+    return status == RegionStatus::ResourceLimit ? status : RegionStatus::Unsupported;
+  }
+  Operation *use;
+  nodal::ModuleOp module;
+  ShapeRegionProofLimits limits;
+  RegionStatus status = RegionStatus::Proved;
+  uint64_t work = 0;
+  IntegerExpression zero = makeLiteralIntegerExpression(0);
+  IntegerExpression one = makeLiteralIntegerExpression(1);
+
+private:
+  llvm::DenseMap<Type, llvm::SmallVector<IntegerExpression, 4>> dimensionCache;
+  std::map<Operation *, std::optional<GeneratedDomain>> domains;
+  std::map<std::pair<std::shared_ptr<const InstantiatedIntegerNode>,
+                     std::shared_ptr<const InstantiatedIntegerNode>>,
+           bool>
+      equalities;
+};
+
+RegionStatus deriveRegion(const StaticShapeProjection &projection, RegionQuery &query,
+                          StaticShapeRegion &result, bool physicalSelectors = false,
+                          std::optional<IntegerExpression> logicalOrdinal = std::nullopt) {
+  if (!query.module || !projection.root)
+    return RegionStatus::Invalid;
+  if (!query.spend(projection.projections.size() + 1))
+    return query.failedStatus();
+  Value selected = projection.projections.empty() ? projection.root
+                                                  : projection.projections.back()->getResult(0);
+  // Recheck the supplied chain against actual SSA rather than accepting cached
+  // whole/contiguous flags or caller-authored coordinate summaries as evidence.
+  auto verified = resolveStaticShapeProjection(selected, query.use);
+  if (failed(verified) || verified->root != projection.root ||
+      verified->projections != projection.projections)
+    return RegionStatus::Invalid;
+  auto selectedDimensions = query.dimensions(selected.getType());
+  if (!selectedDimensions)
+    return query.failedStatus();
+  RegionBox currentBox = query.full(*selectedDimensions);
+  std::optional<RegionAxis> currentInterval;
+  if (logicalOrdinal) {
+    auto cardinality = query.count(*selectedDimensions);
+    auto end = query.apply("add", *logicalOrdinal, query.one);
+    if (!cardinality || !end || !query.less(query.zero, *logicalOrdinal, true) ||
+        !query.less(*logicalOrdinal, *cardinality))
+      return query.failedStatus();
+    currentInterval = RegionAxis{*logicalOrdinal, *end};
+    if (auto singleton = query.box(*currentInterval, *selectedDimensions)) {
+      currentBox = std::move(*singleton);
+      currentInterval.reset();
+    }
+  }
+  for (Operation *operation : llvm::reverse(projection.projections)) {
+    auto input = query.dimensions(operation->getOperand(0).getType());
+    auto output = query.dimensions(operation->getResult(0).getType());
+    if (!input || !output || !query.spend())
+      return query.failedStatus();
+    if (llvm::isa<ShapeViewOp>(operation)) {
+      if (!currentInterval && query.whole(currentBox, *output)) {
+        currentBox = query.full(*input);
+        continue;
+      }
+      if (!currentInterval)
+        currentInterval = query.interval(currentBox, *output);
+      if (!currentInterval)
+        return query.failedStatus();
+      if (auto mapped = query.box(*currentInterval, *input)) {
+        currentBox = std::move(*mapped);
+        currentInterval.reset();
+      }
+      continue;
+    }
+    if (currentInterval) {
+      if (auto converted = query.box(*currentInterval, *output)) {
+        currentBox = std::move(*converted);
+        currentInterval.reset();
+      }
+    }
+    if (llvm::isa<ShapeIndexOp>(operation)) {
+      RegionBox prefix;
+      IntegerExpression prefixOffset = query.zero;
+      unsigned axis = 0;
+      for (Value index : operation->getOperands().drop_front()) {
+        auto position = query.selector(index, operation, true);
+        auto end = position ? query.apply("add", *position, query.one) : std::nullopt;
+        if (!position || !end || axis >= input->size())
+          return query.failedStatus();
+        prefix.push_back({*position, *end});
+        auto shifted = query.apply("mul", prefixOffset, (*input)[axis++]);
+        auto next = shifted ? query.apply("add", *shifted, *position) : std::nullopt;
+        if (!next)
+          return query.failedStatus();
+        prefixOffset = *next;
+      }
+      if (currentInterval) {
+        auto stride = query.count(llvm::ArrayRef<IntegerExpression>(*input).drop_front(axis));
+        auto offset = stride ? query.apply("mul", prefixOffset, *stride) : std::nullopt;
+        auto low = offset ? query.apply("add", *offset, currentInterval->lower) : std::nullopt;
+        auto high =
+            offset ? query.apply("add", *offset, currentInterval->upperExclusive) : std::nullopt;
+        if (!low || !high)
+          return query.failedStatus();
+        currentInterval = RegionAxis{*low, *high};
+      } else {
+        prefix.append(currentBox.begin(), currentBox.end());
+        currentBox = std::move(prefix);
+      }
+      continue;
+    }
+    auto axisAttr = operation->getAttrOfType<IntegerAttr>("axis");
+    if (!axisAttr || axisAttr.getInt() < 0 ||
+        static_cast<uint64_t>(axisAttr.getInt()) >= input->size())
+      return RegionStatus::Invalid;
+    unsigned axis = axisAttr.getInt();
+    auto lower = query.selector(operation->getOperand(1), operation, physicalSelectors);
+    if (!lower)
+      return query.failedStatus();
+    if (currentInterval) {
+      for (unsigned prefix = 0; prefix < axis; ++prefix)
+        if (!query.equal((*input)[prefix], query.one))
+          return query.failedStatus();
+      auto stride = query.count(llvm::ArrayRef<IntegerExpression>(*input).drop_front(axis + 1));
+      auto offset = stride ? query.apply("mul", *lower, *stride) : std::nullopt;
+      auto low = offset ? query.apply("add", *offset, currentInterval->lower) : std::nullopt;
+      auto high =
+          offset ? query.apply("add", *offset, currentInterval->upperExclusive) : std::nullopt;
+      if (!low || !high)
+        return query.failedStatus();
+      currentInterval = RegionAxis{*low, *high};
+    } else {
+      if (axis >= currentBox.size())
+        return RegionStatus::Invalid;
+      auto low = query.apply("add", *lower, currentBox[axis].lower);
+      auto high = query.apply("add", *lower, currentBox[axis].upperExclusive);
+      if (!low || !high)
+        return query.failedStatus();
+      currentBox[axis] = {*low, *high};
+    }
+  }
+  auto rootDimensions = query.dimensions(projection.root.getType());
+  if (!rootDimensions)
+    return query.failedStatus();
+  StaticShapeRegion region;
+  region.root = projection.root;
+  if (!physicalSelectors && !logicalOrdinal)
+    region.projection = std::move(*verified);
+  if (currentInterval) {
+    region.kind = StaticShapeRegion::Kind::Interval;
+    region.interval = *currentInterval;
+  } else {
+    region.kind = query.whole(currentBox, *rootDimensions) ? StaticShapeRegion::Kind::Whole
+                                                           : StaticShapeRegion::Kind::Box;
+    region.axes = std::move(currentBox);
+  }
+  if (query.status != RegionStatus::Proved)
+    return query.status;
+  result = std::move(region);
+  return RegionStatus::Proved;
+}
+
+std::optional<RegionBox> regionBox(const StaticShapeRegion &region, RegionQuery &query,
+                                   llvm::ArrayRef<IntegerExpression> dimensions) {
+  if (region.kind == StaticShapeRegion::Kind::Whole)
+    return query.full(dimensions);
+  if (region.kind == StaticShapeRegion::Kind::Box)
+    return region.axes;
+  return query.box(region.interval, dimensions);
+}
+std::optional<RegionAxis> regionInterval(const StaticShapeRegion &region, RegionQuery &query,
+                                         llvm::ArrayRef<IntegerExpression> dimensions) {
+  if (region.kind == StaticShapeRegion::Kind::Interval)
+    return region.interval;
+  auto box = regionBox(region, query, dimensions);
+  return box ? query.interval(*box, dimensions) : std::nullopt;
+}
+
+// Split a fixed flat interval into at most 2*rank+1 exact boxes. Prefix/suffix
+// boundary fragments are represented by boxes, never enumerated as lanes.
+std::optional<std::vector<RegionBox>> splitInterval(const RegionAxis &interval,
+                                                    llvm::ArrayRef<IntegerExpression> dimensions,
+                                                    RegionQuery &query) {
+  if (auto box = query.box(interval, dimensions))
+    return std::vector<RegionBox>{*box};
+  auto low = RegionQuery::literal(interval.lower),
+       high = RegionQuery::literal(interval.upperExclusive);
+  llvm::SmallVector<int64_t> fixed;
+  for (const auto &dimension : dimensions) {
+    auto number = RegionQuery::literal(dimension);
+    if (!number)
+      return std::nullopt;
+    fixed.push_back(*number);
+  }
+  if (!low || !high || *low < 0 || *high <= *low)
+    return std::nullopt;
+  auto start = coordinates(*low, fixed), last = coordinates(*high - 1, fixed);
+  if (!start || !last)
+    return std::nullopt;
+  std::vector<RegionBox> result;
+  unsigned differing = 0;
+  while (differing < fixed.size() && (*start)[differing] == (*last)[differing])
+    ++differing;
+  if (differing == fixed.size())
+    return std::nullopt;
+  auto make = [&](llvm::ArrayRef<int64_t> point, unsigned axis, int64_t lower, int64_t upper) {
+    RegionBox box;
+    for (unsigned i = 0; i != fixed.size(); ++i) {
+      int64_t lo = i < axis ? point[i] : i == axis ? lower : 0;
+      int64_t hi = i < axis ? point[i] + 1 : i == axis ? upper : fixed[i];
+      box.push_back({makeLiteralIntegerExpression(lo), makeLiteralIntegerExpression(hi)});
+    }
+    result.push_back(std::move(box));
+  };
+  // The first and last rows at the differing axis contribute only boundary
+  // suffixes; all intervening rows form one rectangular middle slab.
+  if ((*start)[differing] + 1 < (*last)[differing])
+    make(*start, differing, (*start)[differing] + 1, (*last)[differing]);
+  for (unsigned axis = differing + 1; axis < fixed.size(); ++axis) {
+    if (!query.spend(fixed.size()))
+      return std::nullopt;
+    if ((*start)[axis] + 1 < fixed[axis])
+      make(*start, axis, (*start)[axis] + 1, fixed[axis]);
+    if ((*last)[axis] > 0)
+      make(*last, axis, 0, (*last)[axis]);
+  }
+  make(*start, fixed.size() - 1, start->back(), start->back() + 1);
+  make(*last, fixed.size() - 1, last->back(), last->back() + 1);
+  return result;
+}
+} // namespace
+
+ShapeRegionProofStatus resolveStaticShapeRegion(const StaticShapeProjection &projection,
+                                                Operation *use, StaticShapeRegion &result,
+                                                ShapeRegionProofLimits limits) {
+  RegionQuery query(use, limits);
+  return deriveRegion(projection, query, result);
+}
+
+ShapeRegionProofStatus verifyStaticShapeRegionPartition(Value root,
+                                                        llvm::ArrayRef<StaticShapeRegion> regions,
+                                                        Operation *use,
+                                                        ShapeRegionProofLimits limits) {
+  RegionQuery query(use, limits);
+  if (!root || !query.module || !root.getDefiningOp() ||
+      root.getDefiningOp()->getParentOfType<nodal::ModuleOp>() != query.module)
+    return RegionStatus::Invalid;
+  auto dimensions = query.dimensions(root.getType());
+  if (!dimensions)
+    return query.failedStatus();
+  // Keep exact coordinate boundaries when they are already available. An
+  // ordinal conversion may otherwise demand unrelated algebra such as N < 2*N
+  // for two plainly adjacent rows of [2,N]. Normalization is an optimization,
+  // not permission to discard the stronger original coordinate certificate.
+  std::vector<RegionBox> boxes;
+  bool allBoxes = true;
+  for (const auto &region : regions) {
+    if (region.root != root)
+      return RegionStatus::Invalid;
+    auto box = regionBox(region, query, *dimensions);
+    if (!box) {
+      allBoxes = false;
+      break;
+    }
+    boxes.push_back(*box);
+  }
+  if (!allBoxes) {
+    boxes.clear();
+    // A common ordinal space still handles exact nonrectangular flat images
+    // without decomposing them. Preserve coordinate/decomposition fallback.
+    bool allIntervals = true;
+    std::vector<RegionAxis> intervals;
+    for (const auto &region : regions) {
+      if (region.root != root)
+        return RegionStatus::Invalid;
+      auto interval = regionInterval(region, query, *dimensions);
+      if (!interval) {
+        allIntervals = false;
+        break;
+      }
+      intervals.push_back(*interval);
+    }
+    if (allIntervals) {
+      auto cardinality = query.count(*dimensions);
+      if (!cardinality)
+        return query.failedStatus();
+      *dimensions = {*cardinality};
+      for (const auto &interval : intervals)
+        boxes.push_back({interval});
+    } else {
+      for (const auto &region : regions) {
+        if (region.root != root)
+          return RegionStatus::Invalid;
+        if (auto box = regionBox(region, query, *dimensions)) {
+          boxes.push_back(*box);
+        } else {
+          auto split = splitInterval(region.interval, *dimensions, query);
+          if (!split)
+            return query.failedStatus();
+          for (auto &box : *split)
+            boxes.push_back(std::move(box));
+        }
+        if (boxes.size() > limits.maximumStates)
+          return RegionStatus::ResourceLimit;
+      }
+    }
+  }
+  if (!query.spend(boxes.size() + dimensions->size()))
+    return query.failedStatus();
+  if (boxes.empty())
+    return RegionStatus::Invalid;
+  // Cuts are deduplicated by actual exact expression identity and must admit
+  // one all-legal strict ordering. Overlapping envelopes are never defaults.
+  std::vector<std::vector<IntegerExpression>> cuts(dimensions->size());
+  for (unsigned axis = 0; axis != dimensions->size(); ++axis) {
+    auto &axisCuts = cuts[axis];
+    axisCuts = {query.zero, (*dimensions)[axis]};
+    for (const auto &box : boxes) {
+      if (box.size() != dimensions->size())
+        return RegionStatus::Invalid;
+      const auto &range = box[axis];
+      if (!query.less(query.zero, range.lower, true) ||
+          !query.less(range.lower, range.upperExclusive) ||
+          !query.less(range.upperExclusive, (*dimensions)[axis], true))
+        return query.failedStatus();
+      for (const auto &bound : {range.lower, range.upperExclusive}) {
+        bool present = false;
+        for (const auto &cut : axisCuts)
+          if (query.equal(bound, cut)) {
+            present = true;
+            break;
+          }
+        if (present)
+          continue;
+        unsigned position = 0;
+        while (position < axisCuts.size() && query.less(axisCuts[position], bound))
+          ++position;
+        if (position < axisCuts.size() && !query.less(bound, axisCuts[position]))
+          return query.failedStatus();
+        axisCuts.insert(axisCuts.begin() + position, bound);
+      }
+    }
+  }
+  // Memoize (axis, active boxes): different authored cells often induce the
+  // same suffix problem. An iterative worklist avoids rank-proportional stack.
+  using State = std::pair<unsigned, std::vector<unsigned>>;
+  std::vector<State> pending;
+  std::set<State> visited;
+  std::vector<unsigned> all;
+  for (unsigned i = 0; i != boxes.size(); ++i)
+    all.push_back(i);
+  pending.emplace_back(0, std::move(all));
+  while (!pending.empty()) {
+    State state = std::move(pending.back());
+    pending.pop_back();
+    if (!visited.insert(state).second)
+      continue;
+    if (visited.size() > limits.maximumStates || pending.size() > limits.maximumStates)
+      return RegionStatus::ResourceLimit;
+    if (!query.spend())
+      return query.failedStatus();
+    unsigned axis = state.first;
+    if (axis == dimensions->size()) {
+      if (state.second.size() != 1)
+        return RegionStatus::Invalid;
+      continue;
+    }
+    const auto &axisCuts = cuts[axis];
+    for (unsigned cut = 1; cut < axisCuts.size(); ++cut) {
+      std::vector<unsigned> active;
+      for (unsigned index : state.second) {
+        const auto &range = boxes[index][axis];
+        if (query.less(range.lower, axisCuts[cut - 1], true) &&
+            query.less(axisCuts[cut], range.upperExclusive, true))
+          active.push_back(index);
+      }
+      if (query.status != RegionStatus::Proved)
+        return query.status;
+      if (active.empty())
+        return RegionStatus::Invalid;
+      pending.emplace_back(axis + 1, std::move(active));
+      if (pending.size() > limits.maximumStates)
+        return RegionStatus::ResourceLimit;
+    }
+  }
+  return RegionStatus::Proved;
+}
+
+namespace {
+std::optional<IntegerExpression> pointFlat(const StaticShapePoint &point, RegionQuery &query,
+                                           llvm::ArrayRef<IntegerExpression> dimensions) {
+  if (point.flatOrdinal)
+    return point.flatOrdinal;
+  if (point.coordinates.size() != dimensions.size())
+    return std::nullopt;
+  IntegerExpression result = query.zero;
+  for (unsigned axis = 0; axis != dimensions.size(); ++axis) {
+    auto shifted = query.apply("mul", result, dimensions[axis]);
+    auto next = shifted ? query.apply("add", *shifted, point.coordinates[axis]) : std::nullopt;
+    if (!next)
+      return std::nullopt;
+    result = *next;
+  }
+  return result;
+}
+std::optional<llvm::SmallVector<IntegerExpression, 4>>
+pointCoordinates(const StaticShapePoint &point, RegionQuery &query,
+                 llvm::ArrayRef<IntegerExpression> dimensions) {
+  if (point.coordinates.size() == dimensions.size())
+    return point.coordinates;
+  if (!point.flatOrdinal)
+    return std::nullopt;
+  llvm::SmallVector<IntegerExpression, 4> result(dimensions.size());
+  IntegerExpression remainder = *point.flatOrdinal;
+  for (unsigned axis = dimensions.size(); axis > 0; --axis) {
+    if (query.less(query.zero, remainder, true) && query.less(remainder, dimensions[axis - 1])) {
+      result[axis - 1] = remainder;
+      remainder = query.zero;
+      continue;
+    }
+    auto digit = query.apply("mod", remainder, dimensions[axis - 1]);
+    auto next = query.apply("div", remainder, dimensions[axis - 1]);
+    if (!digit || !next)
+      return std::nullopt;
+    result[axis - 1] = *digit;
+    remainder = *next;
+  }
+  return result;
+}
+StaticShapeScalarLocation locate(const StaticShapeRegion &region, const StaticShapePoint &point,
+                                 RegionQuery &query) {
+  auto reject = [&](ShapeRegionMembership membership = ShapeRegionMembership::Unknown) {
+    return StaticShapeScalarLocation{
+        membership == ShapeRegionMembership::Unknown ? query.failedStatus() : RegionStatus::Proved,
+        membership, std::nullopt};
+  };
+  if (!region.root || !point.root || !query.module)
+    return {RegionStatus::Invalid, ShapeRegionMembership::Unknown, std::nullopt};
+  if (region.root != point.root)
+    return reject(ShapeRegionMembership::Outside);
+  auto dimensions = query.dimensions(region.root.getType());
+  if (!dimensions)
+    return reject();
+  if (region.kind == StaticShapeRegion::Kind::Interval) {
+    auto flat = pointFlat(point, query, *dimensions);
+    if (!flat)
+      return reject();
+    if (query.less(*flat, region.interval.lower) ||
+        query.less(region.interval.upperExclusive, *flat, true))
+      return reject(ShapeRegionMembership::Outside);
+    auto width = query.apply("sub", region.interval.upperExclusive, region.interval.lower);
+    if (!width || (width->bounds.lower == 1 && width->bounds.upper == 1 &&
+                   !query.equal(*flat, region.interval.lower)))
+      return reject();
+    if (!query.less(region.interval.lower, *flat, true) ||
+        !query.less(*flat, region.interval.upperExclusive))
+      return reject();
+    auto ordinal = query.apply("sub", *flat, region.interval.lower);
+    return ordinal ? StaticShapeScalarLocation{RegionStatus::Proved, ShapeRegionMembership::Inside,
+                                               *ordinal}
+                   : reject();
+  }
+  auto box = regionBox(region, query, *dimensions);
+  auto pointCoords = pointCoordinates(point, query, *dimensions);
+  if (!box || !pointCoords || box->size() != pointCoords->size())
+    return reject();
+  IntegerExpression ordinal = query.zero;
+  bool uncertain = false;
+  for (unsigned axis = 0; axis != box->size(); ++axis) {
+    const auto &range = (*box)[axis];
+    const auto &coordinate = (*pointCoords)[axis];
+    if (query.less(coordinate, range.lower) || query.less(range.upperExclusive, coordinate, true))
+      return reject(ShapeRegionMembership::Outside);
+    uncertain |=
+        !query.less(range.lower, coordinate, true) || !query.less(coordinate, range.upperExclusive);
+    auto width = query.apply("sub", range.upperExclusive, range.lower);
+    if (width && width->bounds.lower == 1 && width->bounds.upper == 1 &&
+        !query.equal(coordinate, range.lower))
+      uncertain = true;
+    auto relative = query.apply("sub", coordinate, range.lower);
+    auto shifted = width ? query.apply("mul", ordinal, *width) : std::nullopt;
+    auto next = shifted && relative ? query.apply("add", *shifted, *relative) : std::nullopt;
+    if (!next)
+      return reject();
+    ordinal = *next;
+  }
+  return uncertain || query.status != RegionStatus::Proved
+             ? reject()
+             : StaticShapeScalarLocation{RegionStatus::Proved, ShapeRegionMembership::Inside,
+                                         ordinal};
+}
+RegionStatus pointFromRegion(const StaticShapeRegion &region, RegionQuery &query,
+                             StaticShapePoint &result) {
+  auto dimensions = query.dimensions(region.root.getType());
+  if (!dimensions)
+    return query.failedStatus();
+  StaticShapePoint point;
+  point.root = region.root;
+  if (region.kind == StaticShapeRegion::Kind::Interval) {
+    auto width = query.apply("sub", region.interval.upperExclusive, region.interval.lower);
+    if (!width || !query.equal(*width, query.one))
+      return query.failedStatus();
+    point.flatOrdinal = region.interval.lower;
+  } else {
+    auto box = regionBox(region, query, *dimensions);
+    if (!box)
+      return query.failedStatus();
+    for (const auto &range : *box) {
+      auto width = query.apply("sub", range.upperExclusive, range.lower);
+      if (!width || !query.equal(*width, query.one))
+        return query.failedStatus();
+      point.coordinates.push_back(range.lower);
+    }
+    point.flatOrdinal = pointFlat(point, query, *dimensions);
+  }
+  if (query.status != RegionStatus::Proved)
+    return query.status;
+  result = std::move(point);
+  return RegionStatus::Proved;
+}
+
+} // namespace
+
+ShapeRegionProofStatus resolveStaticShapePoint(const StaticShapeProjection &projection,
+                                               Operation *use, StaticShapePoint &result,
+                                               ShapeRegionProofLimits limits) {
+  RegionQuery query(use, limits);
+  Value selected = projection.projections.empty() ? projection.root
+                                                  : projection.projections.back()->getResult(0);
+  if (!selected || llvm::isa<ShapedType>(selected.getType()))
+    return RegionStatus::Invalid;
+  StaticShapeRegion region;
+  auto status = deriveRegion(projection, query, region, true);
+  if (status != RegionStatus::Proved)
+    return status;
+  return pointFromRegion(region, query, result);
+}
+
+StaticShapeScalarLocation locateStaticShapeScalar(const StaticShapeRegion &region,
+                                                  const StaticShapePoint &point, Operation *use,
+                                                  ShapeRegionProofLimits limits) {
+  RegionQuery query(use, limits);
+  if (region.projection) {
+    StaticShapeRegion physical;
+    auto status = deriveRegion(*region.projection, query, physical, true);
+    if (status != RegionStatus::Proved)
+      return {status, ShapeRegionMembership::Unknown, std::nullopt};
+    return locate(physical, point, query);
+  }
+  return locate(region, point, query);
+}
+StaticShapeScalarLocation locateStaticShapeScalar(const StaticShapeProjection &regionProjection,
+                                                  const StaticShapeProjection &scalarProjection,
+                                                  Operation *use, ShapeRegionProofLimits limits) {
+  StaticShapeRegion region;
+  auto status = resolveStaticShapeRegion(regionProjection, use, region, limits);
+  if (status != RegionStatus::Proved)
+    return {status, ShapeRegionMembership::Unknown, std::nullopt};
+  StaticShapePoint point;
+  status = resolveStaticShapePoint(scalarProjection, use, point, limits);
+  if (status != RegionStatus::Proved)
+    return {status, ShapeRegionMembership::Unknown, std::nullopt};
+  return locateStaticShapeScalar(region, point, use, limits);
+}
+
+ShapeRegionProofStatus mapStaticShapeOrdinal(const StaticShapeRegion &region,
+                                             const InstantiatedIntegerExpression &ordinal,
+                                             Operation *use, StaticShapePoint &result,
+                                             ShapeRegionProofLimits limits) {
+  RegionQuery query(use, limits);
+  if (!region.root || !query.module || !ordinal.root)
+    return RegionStatus::Invalid;
+  if (region.projection) {
+    StaticShapeRegion singleton;
+    auto status = deriveRegion(*region.projection, query, singleton, true, ordinal);
+    return status == RegionStatus::Proved ? pointFromRegion(singleton, query, result) : status;
+  }
+  auto dimensions = query.dimensions(region.root.getType());
+  if (!dimensions)
+    return query.failedStatus();
+  StaticShapePoint point;
+  point.root = region.root;
+  if (region.kind == StaticShapeRegion::Kind::Interval) {
+    auto width = query.apply("sub", region.interval.upperExclusive, region.interval.lower);
+    if (!width || !query.less(query.zero, ordinal, true) || !query.less(ordinal, *width))
+      return query.failedStatus();
+    point.flatOrdinal = query.apply("add", region.interval.lower, ordinal);
+    if (!point.flatOrdinal)
+      return query.failedStatus();
+  } else {
+    auto box = regionBox(region, query, *dimensions);
+    if (!box || box->size() != dimensions->size())
+      return RegionStatus::Invalid;
+    llvm::SmallVector<IntegerExpression, 4> widths;
+    for (const auto &range : *box) {
+      auto width = query.apply("sub", range.upperExclusive, range.lower);
+      if (!width || width->bounds.lower <= 0)
+        return query.failedStatus();
+      widths.push_back(*width);
+    }
+    auto count = query.count(widths);
+    if (!count || !query.less(query.zero, ordinal, true) || !query.less(ordinal, *count))
+      return query.failedStatus();
+    // A singleton selection retains its exact opaque scalar atom. More general
+    // row-major re-radixing is checked DAG arithmetic, not lane expansion.
+    StaticShapePoint relative;
+    relative.flatOrdinal = ordinal;
+    auto coordinates = pointCoordinates(relative, query, widths);
+    if (!coordinates)
+      return query.failedStatus();
+    for (unsigned axis = 0; axis != widths.size(); ++axis) {
+      auto coordinate = query.apply("add", (*box)[axis].lower, (*coordinates)[axis]);
+      if (!coordinate)
+        return query.failedStatus();
+      point.coordinates.push_back(*coordinate);
+    }
+    point.flatOrdinal = pointFlat(point, query, *dimensions);
+  }
+  if (query.status != RegionStatus::Proved)
+    return query.status;
+  result = std::move(point);
+  return RegionStatus::Proved;
+}
+ShapeRegionProofStatus mapStaticShapeOrdinal(const StaticShapeProjection &projection,
+                                             const InstantiatedIntegerExpression &ordinal,
+                                             Operation *use, StaticShapePoint &result,
+                                             ShapeRegionProofLimits limits) {
+  StaticShapeRegion region;
+  auto status = resolveStaticShapeRegion(projection, use, region, limits);
+  return status == RegionStatus::Proved
+             ? mapStaticShapeOrdinal(region, ordinal, use, result, limits)
+             : status;
 }
 
 } // namespace nodal
